@@ -1,5 +1,6 @@
 'use client';
 
+import { GeneratedArtifactCards } from '@/components/chat/aui/GeneratedArtifactCards';
 import React, {
   createContext,
   useContext,
@@ -692,6 +693,7 @@ const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
 
 export function AuiAssistantMessage({
   message,
+  isLatestAssistant,
   onRetry,
   retryDisabled,
   onCitationClick,
@@ -701,6 +703,9 @@ export function AuiAssistantMessage({
    * usage), markdown + inline citations, and citation footer chips. When
    * absent (e.g. plain AuiMessages usage), falls back to primitive text. */
   message?: ChatPageMessage;
+  /** Last assistant row in the thread; anchors generated files whose
+   * message has not landed (or failed). */
+  isLatestAssistant?: boolean;
   onRetry?: () => void;
   /** True while a regenerate cannot be accepted (a turn is in flight). */
   retryDisabled?: boolean;
@@ -822,6 +827,10 @@ export function AuiAssistantMessage({
               </button>
             </div>
           ) : null}
+          <GeneratedArtifactCards
+            message={message}
+            isLatestAssistant={isLatestAssistant}
+          />
         </div>
       </MessagePrimitive.Root>
     );
@@ -858,6 +867,10 @@ export function AuiAssistantMessage({
         {draftTasks.map((task) => (
           <DraftTaskStatus key={`${task.projectId}:${task.taskId}`} {...task} />
         ))}
+        <GeneratedArtifactCards
+          message={message}
+          isLatestAssistant={isLatestAssistant}
+        />
         <MessageError />
         {/* Citations footer chips — provenance over assertion */}
         {visibleCitations.length > 0 && (
@@ -1010,6 +1023,9 @@ export class MessageByIndexBoundary extends React.Component<
  * context instead of through closures baked into freshly-created functions. */
 interface BoundMessageContextValue {
   message?: ChatPageMessage;
+  /** True for the last assistant row in the runtime thread, including a
+   * local error row with no persisted id. Anchors late generated files. */
+  isLatestAssistant?: boolean;
   onRetry?: () => void;
   retryDisabled?: boolean;
   onEdit?: (newContent: string) => void;
@@ -1031,11 +1047,17 @@ function BoundUserMessage(): ReactElement {
 }
 
 function BoundAssistantMessage(): ReactElement {
-  const { message, onRetry, retryDisabled, onCitationClick } =
-    useContext(BoundMessageContext);
+  const {
+    message,
+    isLatestAssistant,
+    onRetry,
+    retryDisabled,
+    onCitationClick,
+  } = useContext(BoundMessageContext);
   return (
     <AuiAssistantMessage
       message={message}
+      isLatestAssistant={isLatestAssistant}
       onRetry={onRetry}
       retryDisabled={retryDisabled}
       onCitationClick={onCitationClick}
@@ -1100,6 +1122,13 @@ export function AuiMessageByIndex({
       rowMessageId !== undefined &&
       t.messages.some((m) => m.id === rowMessageId)
   );
+  const isLatestAssistant = useThread((t) => {
+    for (let i = t.messages.length - 1; i >= 0; i -= 1) {
+      const row = t.messages[i];
+      if (row?.role === 'assistant') return row.id === rowMessageId;
+    }
+    return false;
+  });
 
   // The components map is module-level (stable identity); only the row's DATA
   // changes, and it travels by context so a message refresh re-renders the
@@ -1107,13 +1136,22 @@ export function AuiMessageByIndex({
   const bindings = useMemo<BoundMessageContextValue>(
     () => ({
       message,
+      isLatestAssistant,
       onRetry,
       retryDisabled,
       onEdit,
       editDisabled,
       onCitationClick,
     }),
-    [message, onRetry, retryDisabled, onEdit, editDisabled, onCitationClick]
+    [
+      message,
+      isLatestAssistant,
+      onRetry,
+      retryDisabled,
+      onEdit,
+      editDisabled,
+      onCitationClick,
+    ]
   );
 
   // Runtime empty and no row identity to address — render nothing for this

@@ -1,0 +1,67 @@
+{
+  "step": "F1-02-draft-citations",
+  "as": "owner",
+  "at": "2026-09-30T05:24:05.629961+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/a7460d29-feee-456b-abf2-441a8008921a/drafts/1f01336d-2c57-44cd-a4a5-2924533ab12d/citations",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "citations": [
+      {
+        "id": "ee9c7520-a240-4263-a8bb-0c4e182f9625",
+        "citation_index": 1,
+        "document_id": "74c232ea-e007-4a73-b8ed-df0f88bae654",
+        "citation_id": null,
+        "snippet": "Attention Is All You Need",
+        "context": "Referenced as [Doc 1]"
+      },
+      {
+        "id": "70ddeffb-0910-48cf-8ff9-c07093b92045",
+        "citation_index": 2,
+        "document_id": "20492039-b419-48a5-80d8-b4d8c69dca6e",
+        "citation_id": null,
+        "snippet": "Fixed Encoder Self-Attention Patterns in Transformer-Based Machine Translation",
+        "context": "Referenced as [Doc 2]"
+      },
+      {
+        "id": "4e6adae7-9880-4427-b192-0b2121c682fa",
+        "citation_index": 3,
+        "document_id": "1ddadd2f-8817-48ac-95b3-1a7a20b7e703",
+        "citation_id": null,
+        "snippet": "Weighted Transformer Network for Machine Translation",
+        "context": "Referenced as [Doc 3]"
+      },
+      {
+        "id": "728ab21b-5bdd-4a91-a801-c97e4e475cd5",
+        "citation_index": 4,
+        "document_id": "4f279d5b-35e3-4a6e-bfc1-38b7120dd1b9",
+        "citation_id": null,
+        "snippet": "Hierarchical Attention Transformer Architecture For Syntactic Spell Correction",
+        "context": "Referenced as [Doc 4]"
+      },
+      {
+        "id": "b39b5a6c-7f05-4664-8d80-0642330956c9",
+        "citation_index": 5,
+        "document_id": "8b220cbe-6d5f-459c-a435-b7c590694e51",
+        "citation_id": null,
+        "snippet": "Learnable Multi-Scale Wavelet Transformer: A Novel Alternative to Self-Attention",
+        "context": "Referenced as [Doc 5]"
+      },
+      {
+        "id": "525e084f-21ad-4522-9bcb-1b6ae88b1342",
+        "citation_index": 6,
+        "document_id": "1299ae5f-c4c2-4169-95b2-cf6b3206969c",
+        "citation_id": null,
+        "snippet": "DTMT: A Novel Deep Transition Architecture for Neural Machine Translation",
+        "context": "Referenced as [Doc 6]"
+      }
+    ],
+    "total": 6
+  }
+}

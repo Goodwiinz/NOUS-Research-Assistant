@@ -35,7 +35,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.core.database import AsyncSessionLocal
 from src.core.probes import PROBE_EXEMPT_PATHS
-from src.core.security import verify_token
+from src.core.security import TokenData, verify_token
 from src.core.user_provisioning import ensure_user_and_org
 from src.exceptions.analytics_exceptions import PermissionDeniedException
 from src.middleware.responses import error_response
@@ -151,6 +151,20 @@ def _is_cors_preflight(request: Request) -> bool:
     )
 
 
+def _verified_token_data(request: Request) -> Optional[TokenData]:
+    """Reject invalid credentials before opening a tenant-validation session."""
+    token = _bearer_token(request)
+    if token is None:
+        return None
+    try:
+        token_data = verify_token(token)
+    except Exception:
+        return None
+    if not token_data or not token_data.user_id:
+        return None
+    return token_data
+
+
 def _role_to_str(role: Any) -> str:
     """Normalize a DB User.role (UserRole enum) to the string the tenancy
     permission checks compare against; default to 'user'."""
@@ -191,45 +205,32 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+        token_data = _verified_token_data(request)
+        if token_data is None:
+            return error_response(
+                401,
+                "Could not validate credentials",
+                "authentication_error",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Resolve and validate the tenant in a session that is closed BEFORE the
+        # route runs. The route gets its own session from ``get_db``, whose
+        # lifetime FastAPI ties to the full response. Handing this session to
+        # the route (it used to be stashed on request state) let ``async with`` close it
+        # the moment ``call_next`` returned response headers, while a
+        # StreamingResponse body was still querying it: the close raised, the
+        # except below turned it into a 500, and a research run that the
+        # route had already claimed stayed RUNNING (dev D-01).
         try:
             async with AsyncSessionLocal() as db:
-                tenant_info = await self._extract_tenant_info(request, db)
-
-                if not tenant_info:
-                    # Audit I7 (fail-closed): a token that is absent-credentials
-                    # is handled above; here the token is present but fails
-                    # verification or tenant resolution. The downstream auth
-                    # dependencies (HTTPBearer(auto_error=True) +
-                    # get_current_user_token in core/security.py, get_current_user
-                    # in core/dependencies.py) would 401 on any route that
-                    # declares them — but the middleware cannot guarantee every
-                    # tenant-relevant route declares them (routes that only read
-                    # the ContextVar tenant context would run with a None
-                    # context). Tenant isolation must not be a per-endpoint
-                    # convention, so the middleware 401s here itself. Details of
-                    # the resolution failure stay server-side (logged below).
-                    return error_response(
-                        401,
-                        "Could not validate credentials",
-                        "authentication_error",
-                        headers={"WWW-Authenticate": "Bearer"},
+                tenant_info = await self._extract_tenant_info(
+                    request, db, token_data=token_data
+                )
+                if tenant_info:
+                    await self._validate_tenant_access(
+                        tenant_info["organization_id"], db
                     )
-                await self._validate_tenant_access(tenant_info["organization_id"], db)
-
-                request.state.db = db
-
-                with tenant_context_manager(
-                    organization_id=tenant_info["organization_id"],
-                    user_id=tenant_info["user_id"],
-                    user_role=tenant_info["role"],
-                ):
-                    request.state.tenant_id = tenant_info["organization_id"]
-                    request.state.user_id = tenant_info["user_id"]
-                    request.state.user_role = tenant_info["role"]
-                    sentry_sdk.set_user({"id": str(tenant_info["user_id"])})
-                    sentry_sdk.set_tag("tenant_id", str(tenant_info["organization_id"]))
-                    return await call_next(request)
-
         except PermissionDeniedException as e:
             return error_response(403, str(e))
         except Exception as e:
@@ -237,6 +238,30 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
             return error_response(
                 500, "Internal server error during tenant validation", "internal_error"
             )
+
+        if not tenant_info:
+            # Valid JWTs still require a live user and organization. Routes
+            # must never run with an unresolved tenant ContextVar.
+            return error_response(
+                401,
+                "Could not validate credentials",
+                "authentication_error",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Route exceptions are outside the try above: they reach the app's
+        # exception handlers instead of being mislabelled as tenant failures.
+        with tenant_context_manager(
+            organization_id=tenant_info["organization_id"],
+            user_id=tenant_info["user_id"],
+            user_role=tenant_info["role"],
+        ):
+            request.state.tenant_id = tenant_info["organization_id"]
+            request.state.user_id = tenant_info["user_id"]
+            request.state.user_role = tenant_info["role"]
+            sentry_sdk.set_user({"id": str(tenant_info["user_id"])})
+            sentry_sdk.set_tag("tenant_id", str(tenant_info["organization_id"]))
+            return await call_next(request)
 
     def _should_skip_tenant_validation(self, request: Request) -> bool:
         """Check if tenant validation should be skipped for this endpoint.
@@ -263,17 +288,16 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         return any(pattern.match(path) for pattern in _MIDDLEWARE_EXEMPT_PATH_REGEXES)
 
     async def _extract_tenant_info(
-        self, request: Request, db: Optional[AsyncSession] = None
+        self,
+        request: Request,
+        db: Optional[AsyncSession] = None,
+        *,
+        token_data: Optional[TokenData] = None,
     ) -> Optional[dict]:
         """Extract tenant information by verifying the Bearer JWT and resolving org via DB."""
-        token = _bearer_token(request)
-        if token is None:
-            return None
-        try:
-            token_data = verify_token(token)
-        except Exception:
-            return None
-        if not token_data or not token_data.user_id:
+        if token_data is None:
+            token_data = _verified_token_data(request)
+        if token_data is None:
             return None
 
         # The authenticated DB user record is the single source of truth for
@@ -293,6 +317,9 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         # dispatch() and become a 500, NOT None/401: clients treat 401 as
         # "token rejected" and log the user out, so a DB outage must not look
         # like a credential failure. Still fail-closed — the route never runs.
+        # A JIT failure is recoverable only if the subsequent DB lookup finds
+        # a live assigned user; otherwise preserve it as an operational failure.
+        provisioning_error: Optional[Exception] = None
         if token_data.organization_id:
             async with AsyncSessionLocal() as prov_db:
                 try:
@@ -300,19 +327,20 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
                     if provisioned:
                         await prov_db.commit()
                 except Exception as e:
-                    logger.debug("Fast-path JIT-provision skipped (non-fatal): %s", e)
+                    provisioning_error = e
+                    logger.debug("Fast-path JIT-provision failed: %s", e)
                     await prov_db.rollback()
                 user = (
                     (await prov_db.execute(select(User).where(*active_user)))
                     .scalars()
                     .first()
                 )
-            if not user:
-                return None  # inactive / deleted / unresolved -> no tenant context
+            if not user or not user.organization_id:
+                if provisioning_error is not None:
+                    raise provisioning_error
+                return None  # inactive / deleted / unassigned -> no tenant context
             return {
-                "organization_id": str(
-                    user.organization_id or token_data.organization_id
-                ),
+                "organization_id": str(user.organization_id),
                 "user_id": str(token_data.user_id),
                 "role": _role_to_str(user.role),
             }
@@ -329,10 +357,13 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
                     await ensure_user_and_org(prov_db, token_data)
                     await prov_db.commit()
             except Exception as e:
-                logger.debug("JIT-provision skipped (non-fatal): %s", e)
+                provisioning_error = e
+                logger.debug("JIT-provision failed: %s", e)
             result = await db.execute(select(User).where(*active_user))
             user = result.scalars().first()
         if not user or not user.organization_id:
+            if provisioning_error is not None:
+                raise provisioning_error
             return None
         return {
             "organization_id": str(user.organization_id),
@@ -377,21 +408,15 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         except PermissionDeniedException:
             raise
         except Exception as e:
-            # Audit I7: the internal exception text used to be embedded in the
-            # client-visible ``details`` (rendered by the analytics exception
-            # handler). Log it server-side instead; the client only sees the
-            # organization_id it supplied itself.
+            # Lookup outages are operational failures, not access denials.
+            # dispatch maps them to a stable 500 without internal details.
             logger.error(
                 "Error validating tenant access for org %s: %s",
                 organization_id,
                 e,
                 exc_info=True,
             )
-            raise PermissionDeniedException(
-                required_permission="organization_access",
-                user_role="unknown",
-                details={"organization_id": organization_id},
-            )
+            raise
 
 
 # Per-request tenant context accessors

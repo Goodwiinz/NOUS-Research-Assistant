@@ -61,6 +61,8 @@ async def decision_engine(
     )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        # GOO-302: screening_resolutions.event_id references the ledger.
+        await connection.exec_driver_sql("DROP TABLE screening_resolutions")
         await connection.exec_driver_sql("DROP TABLE research_decision_events")
         await connection.exec_driver_sql("DROP TABLE research_decision_streams")
         await connection.run_sync(_upgrade)
@@ -150,7 +152,7 @@ async def test_append_idempotency_replay_rollback_and_retention(
         protected = (
             await connection.execute(
                 text("""SELECT relname, relrowsecurity FROM pg_class
-                    WHERE relname IN (
+                    WHERE relnamespace = current_schema()::regnamespace AND relname IN (
                         'research_decision_streams','research_decision_events'
                     )""")
             )

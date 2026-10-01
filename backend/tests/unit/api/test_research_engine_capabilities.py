@@ -12,7 +12,9 @@ from src.core.config import settings
 
 
 @pytest.fixture
-def client(test_app: FastAPI) -> Iterator[TestClient]:
+def client(
+    test_app: FastAPI, test_auth_headers: dict[str, str]
+) -> Iterator[TestClient]:
     """Use the assembled application while suppressing external startup work."""
 
     @asynccontextmanager
@@ -22,7 +24,7 @@ def client(test_app: FastAPI) -> Iterator[TestClient]:
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app) as test_client:
+        with TestClient(test_app, headers=test_auth_headers) as test_client:
             yield test_client
     finally:
         test_app.router.lifespan_context = original_lifespan

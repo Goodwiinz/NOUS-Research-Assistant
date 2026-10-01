@@ -110,3 +110,36 @@ class ArtifactReference(BaseModel):
     message_id: Mapped[UUID | None] = mapped_column(
         GUID(), ForeignKey("chat_messages.id")
     )
+
+
+class ArtifactLifecycleOutbox(BaseModel):
+    """One announcement intent per committed version; delivered by the drain."""
+
+    id: Mapped[UUID] = mapped_column(GUID(), primary_key=True, default=uuid4, index=True)  # type: ignore[assignment]
+    __tablename__ = "artifact_lifecycle_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "version_id", "kind", name="uq_artifact_lifecycle_version_kind"
+        ),
+    )
+    organization_id: Mapped[UUID] = mapped_column(
+        GUID(), ForeignKey("organizations.id"), nullable=False
+    )
+    artifact_id: Mapped[UUID] = mapped_column(
+        GUID(), ForeignKey("artifacts.id"), nullable=False
+    )
+    version_id: Mapped[UUID] = mapped_column(
+        GUID(), ForeignKey("artifact_versions.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_runs.job_id")
+    )
+    thread_id: Mapped[UUID | None] = mapped_column(GUID(), ForeignKey("threads.id"))
+    # pending -> delivered (event appended) | skipped (no run, or run already closed)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", index=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(200))
