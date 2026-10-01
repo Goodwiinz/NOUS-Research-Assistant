@@ -337,3 +337,204 @@ def test_locked_check_serializes_against_cancellation() -> None:
                     worker2, str(env.job_id), expected_task_id="t", lock=True
                 )
             assert exc.value.reason == "cancelled"
+
+
+def _producer_late_queued_write(job: Any, doc: Any) -> None:
+    # processing_service.queue_processing_job sends the task, then writes
+    # QUEUED + the same task id; a fast worker may already have claimed it.
+    job.status = JobStatus.QUEUED
+
+
+def test_producer_late_queued_write_does_not_stop_live_run(
+    stubbed: pytest.MonkeyPatch,
+) -> None:
+    with _ingestion() as env:
+        extract = _FakePipeline.process_text_extraction
+
+        async def extract_after_producer_commit(
+            self: _FakePipeline, document: Document
+        ) -> dict:
+            with env.Session() as other:
+                job = other.get(ProcessingJob, env.job_id)
+                # keep the claimed task id, as the producer writes task.id
+                _producer_late_queued_write(job, None)
+                other.commit()
+            return await extract(self, document)
+
+        stubbed.setattr(
+            _FakePipeline, "process_text_extraction", extract_after_producer_commit
+        )
+
+        result = _run(env, stubbed).get()
+
+        assert result["status"] == "completed"
+        assert _state(env) == (JobStatus.COMPLETED, ProcessingStatus.COMPLETED, 2)
+
+
+def _wait_for_lock_waiter(env: SimpleNamespace, timeout: float = 5.0) -> None:
+    import time
+
+    from sqlalchemy import text
+
+    deadline = time.monotonic() + timeout
+    with env.Session() as probe:
+        while time.monotonic() < deadline:
+            waiting = probe.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE wait_event_type = 'Lock' AND datname = current_database()"
+                )
+            ).scalar()
+            if waiting:
+                return
+            probe.rollback()
+            time.sleep(0.05)
+    raise AssertionError("deleter never blocked on a row lock")
+
+
+def test_guard_does_not_deadlock_with_a_concurrent_delete() -> None:
+    """A stage that dirtied only the job must not take the job lock (via flush)
+    before the Document lock: a delete holding Document and waiting on the job
+    would deadlock with it. The guard locks Document -> Job first, like the
+    delete, so the delete simply waits for the worker's commit."""
+    with _ingestion() as env:
+        with env.Session() as setup:
+            setup.get(ProcessingJob, env.job_id).start_job(
+                worker_id="w", celery_task_id="t"
+            )
+            setup.commit()
+
+        errors: list[BaseException] = []
+        deleted = threading.Event()
+
+        def delete() -> None:
+            # The same lock order as FileService.soft_delete_documents.
+            try:
+                with env.Session() as d:
+                    doc = (
+                        d.query(Document)
+                        .filter(Document.id == env.doc_id)
+                        .with_for_update()
+                        .one()
+                    )
+                    job = (
+                        d.query(ProcessingJob)
+                        .filter(ProcessingJob.id == env.job_id)
+                        .with_for_update()
+                        .one()
+                    )
+                    job.cancel_job()
+                    doc.soft_delete()
+                    d.commit()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                deleted.set()
+
+        worker = env.Session()
+        worker.get(ProcessingJob, env.job_id).update_progress("Extracting", 50)
+        flush = worker.flush
+
+        def flush_then_race(*args: Any, **kwargs: Any) -> None:
+            flush(*args, **kwargs)
+            worker.flush = flush  # type: ignore[method-assign]
+            threading.Thread(target=delete).start()
+            _wait_for_lock_waiter(env)
+
+        worker.flush = flush_then_race  # type: ignore[method-assign]
+        try:
+            require_active_ingestion(
+                worker, str(env.job_id), expected_task_id="t", lock=True
+            )
+            worker.commit()
+        except BaseException as exc:  # noqa: BLE001
+            worker.rollback()
+            errors.append(exc)
+        finally:
+            assert deleted.wait(15)
+            worker.close()
+
+        assert errors == []
+        with env.Session() as check:
+            assert check.get(ProcessingJob, env.job_id).status == JobStatus.CANCELLED
+            assert check.get(Document, env.doc_id).is_deleted is True
+
+
+def test_entity_reset_does_not_deadlock_with_a_cascading_delete(
+    stubbed: pytest.MonkeyPatch,
+) -> None:
+    """The entity reset DELETE locks this document's old entity rows at once. A
+    delete that holds Document + job and cascades to those entities would wait
+    on the worker while the worker waits on its Document lock, unless the
+    worker took Document -> Job before the reset."""
+    from datetime import datetime, timezone
+
+    with _ingestion() as env:
+        with env.Session() as setup:  # a previous crashed run's entities
+            doc = setup.get(Document, env.doc_id)
+            setup.add(
+                Entity(
+                    entity_type=EntityType.PERSON,
+                    name="Ada Lovelace",
+                    extraction_method=ExtractionMethod.SPACY,
+                    extracted_at=datetime.now(timezone.utc),
+                    confidence=0.9,
+                    document_id=env.doc_id,
+                    organization_id=doc.organization_id,
+                )
+            )
+            setup.commit()
+
+        errors: list[BaseException] = []
+        deleted = threading.Event()
+
+        def delete() -> None:
+            # FileService.soft_delete_documents order: Document, job, entities.
+            try:
+                with env.Session() as d:
+                    doc = (
+                        d.query(Document)
+                        .filter(Document.id == env.doc_id)
+                        .with_for_update()
+                        .one()
+                    )
+                    job = (
+                        d.query(ProcessingJob)
+                        .filter(ProcessingJob.id == env.job_id)
+                        .with_for_update()
+                        .one()
+                    )
+                    job.cancel_job()
+                    d.query(Entity).filter(Entity.document_id == env.doc_id).update(
+                        {"is_deleted": True}, synchronize_session=False
+                    )
+                    doc.soft_delete()
+                    d.commit()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                deleted.set()
+
+        reset = pt._reset_pipeline_entities
+
+        def reset_then_race(db: Session, document_id: Any) -> int:
+            count = reset(db, document_id)
+            threading.Thread(target=delete).start()
+            _wait_for_lock_waiter(env)
+            return count
+
+        stubbed.setattr(pt, "_reset_pipeline_entities", reset_then_race)
+
+        result = _run(env, stubbed).get()
+        assert deleted.wait(15)
+
+        assert errors == []
+        assert result["status"] == "stopped"
+        with env.Session() as check:
+            live = (
+                check.query(Entity)
+                .filter(Entity.document_id == env.doc_id, Entity.is_deleted == False)
+                .count()
+            )
+            assert live == 0
+            assert check.get(ProcessingJob, env.job_id).status == JobStatus.CANCELLED

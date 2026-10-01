@@ -395,7 +395,13 @@ def process_document_ingestion(self, job_id: str):
             # Replay-safe write: drop any spaCy/regex entities left by a prior
             # crashed run for this document before inserting the fresh set, so an
             # acks_late reclaim replaces rather than duplicates them. The delete
-            # and the inserts commit in one transaction (all-or-nothing).
+            # and the inserts commit in one transaction (all-or-nothing). The
+            # DELETE runs immediately, so take the guard's Document -> Job locks
+            # first: a delete cascading to these entities must not wait on this
+            # worker while the worker waits on the delete's Document lock.
+            require_active_ingestion(
+                db, job_id, expected_task_id=self.request.id, lock=True
+            )
             _reset_pipeline_entities(db, document.id)
             for entity in entities:
                 db.add(entity)

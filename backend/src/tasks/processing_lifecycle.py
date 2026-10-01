@@ -45,12 +45,29 @@ def require_active_ingestion(
 ) -> tuple[ProcessingJob, Document]:
     """Return the fresh ``(job, document)`` if this attempt may still write.
 
-    Flushes first: the session runs with ``autoflush=False``, and the refresh
-    below would otherwise discard the caller's pending stage changes. The
+    With ``lock``, takes the Document -> ProcessingJob row locks BEFORE
+    flushing. Flushing first would let an UPDATE of a job-only change grab the
+    job lock ahead of the Document lock and deadlock with a delete that holds
+    Document and waits for the job. The lock selects read ids only, so they
+    leave the in-memory objects alone.
+
+    Then flushes, because the session runs with ``autoflush=False`` and the
+    refresh would otherwise discard the caller's pending stage changes. The
     flushed changes are only committed if the check passes. On
     ``ProcessingStopped`` the caller must roll back. The caller owns
     commit/rollback either way.
     """
+    if lock:
+        document_id = (
+            db.query(ProcessingJob.document_id)
+            .filter(ProcessingJob.id == job_id)
+            .scalar()
+        )
+        db.query(Document.id).filter(Document.id == document_id).with_for_update().all()
+        db.query(ProcessingJob.id).filter(
+            ProcessingJob.id == job_id
+        ).with_for_update().all()
+
     db.flush()
 
     job = (
@@ -61,29 +78,15 @@ def require_active_ingestion(
     )
     if job is None:
         raise ProcessingStopped("missing")
-
-    document_query = (
+    document = (
         db.query(Document)
         .filter(
             Document.id == job.document_id,
             Document.organization_id == job.organization_id,
         )
         .populate_existing()
+        .first()
     )
-    if lock:
-        document_query = document_query.with_for_update()
-        document = document_query.first()
-        job = (
-            db.query(ProcessingJob)
-            .filter(ProcessingJob.id == job_id)
-            .populate_existing()
-            .with_for_update()
-            .first()
-        )
-        if job is None:
-            raise ProcessingStopped("missing")
-    else:
-        document = document_query.first()
 
     if job.is_deleted or document is None or document.is_deleted:
         raise ProcessingStopped("deleted")
@@ -91,6 +94,12 @@ def require_active_ingestion(
     # different id means a newer attempt owns the job.
     if job.celery_task_id != expected_task_id:
         raise ProcessingStopped("superseded")
+    if job.status == JobStatus.QUEUED:
+        # ponytail: processing_service.queue_processing_job writes QUEUED +
+        # this same task id AFTER send_task, so a fast claim can be overwritten.
+        # Same id means that late producer write, not a cancel or retry: keep
+        # running. Drop this once GOO-355 reserves QUEUED before publishing.
+        job.status = JobStatus.RUNNING  # type: ignore[assignment]
     if job.status != JobStatus.RUNNING:
         raise ProcessingStopped(job.status.value)
     return job, document
