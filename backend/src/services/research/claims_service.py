@@ -95,6 +95,7 @@ NO_CHANGE = "No change"
 SPAN_MISMATCH = "Span does not match the source"
 CITATION_OTHER_DRAFT = "Citation belongs to another draft version"
 LEGACY_UNASSESSABLE = "Legacy links cannot be assessed"
+SYNTHESIS_NO_STANCE = "Synthesis links carry no model stance"
 NO_STANCE = (
     "No stance classification for this claim and source revision; "
     "run the evidence meter"
@@ -104,6 +105,7 @@ _REQUEST_FIELDS = {
     "extraction": ("accepted_value_id",),
     "source_span": ("document_id", "start_char", "end_char", "quote"),
     "legacy_unanchored": ("draft_citation_id",),
+    "synthesis_result": ("synthesis_result_id",),
 }
 _TARGET_FIELDS = (
     "accepted_value_id",
@@ -112,6 +114,7 @@ _TARGET_FIELDS = (
     "end_char",
     "quote",
     "draft_citation_id",
+    "synthesis_result_id",
 )
 # The meter's classifier fingerprint (``api/evidence/router._classifier_version``).
 _classifier = StanceClassifier()
@@ -654,6 +657,17 @@ async def _legacy_target(
     return {"draft_citation_id": citation.id, "document_id": citation.document_id}
 
 
+async def _synthesis_target(
+    db: AsyncSession, context: ProjectContext, synthesis_result_id: UUID
+) -> dict[str, Any]:
+    """GOO-311: only a computed, current result of this Collection."""
+    # Local import: synthesis_service reaches this module through the graph.
+    from src.services.research_engine import synthesis_service
+
+    row = await synthesis_service.current_result(db, _cid(context), synthesis_result_id)
+    return {"synthesis_result_id": row.id}
+
+
 async def link(
     db: AsyncSession,
     context: ProjectContext,
@@ -697,6 +711,9 @@ async def link(
         target = await _extraction_target(db, context, data.accepted_value_id)
     elif kind == "source_span":
         target = await _span_target(db, context, data)
+    elif kind == "synthesis_result":
+        assert data.synthesis_result_id is not None
+        target = await _synthesis_target(db, context, data.synthesis_result_id)
     else:
         assert data.draft_citation_id is not None
         target = await _legacy_target(db, version, data.draft_citation_id)
@@ -791,6 +808,8 @@ async def _live_link(
     row, version = found
     if row.kind == "legacy_unanchored":
         raise HTTPException(status_code=409, detail=LEGACY_UNASSESSABLE)
+    if row.kind == "synthesis_result":
+        raise HTTPException(status_code=422, detail=SYNTHESIS_NO_STANCE)
     superseded = (
         await db.execute(
             select(ResearchClaimEvidenceLink.id).where(
@@ -1020,7 +1039,9 @@ async def assess(
 
 async def _source_changed(db: AsyncSession, row: Any) -> bool:
     """GOO-305's derive-on-read rule for one link."""
-    if row.kind == "legacy_unanchored":
+    # ponytail: a synthesis link has no source of its own; a changed input
+    # shows as the result's ``stale`` flag and stales the release (GOO-311).
+    if row.kind in ("legacy_unanchored", "synthesis_result"):
         return False
     document: Any = await db.get(Document, row.document_id)
     current = anchors.text_sha256(None if document is None else document.content_text)

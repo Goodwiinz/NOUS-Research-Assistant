@@ -60,7 +60,8 @@ class UnitInput:
 
 @dataclass(frozen=True)
 class Exclusion:
-    """``unit is None`` marks a run-level failure."""
+    """Run-level failures carry ``unit=None`` and a reason in ``RUN_REASONS``
+    (GOO-310 table exclusions name no unit either, so use the reason)."""
 
     unit: str | None
     reason: str
