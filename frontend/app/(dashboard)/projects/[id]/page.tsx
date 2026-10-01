@@ -1347,7 +1347,11 @@ export default function ProjectDetailPage() {
 
         {/* Research engine workflow uses the same canonical Collection ID. */}
         {activeTab === 'workflow' && currentProject && (
-          <ProjectWorkflow key={currentProject.id} project={currentProject} />
+          <ProjectWorkflow
+            key={currentProject.id}
+            project={currentProject}
+            onOpenTab={handleTabChange}
+          />
         )}
 
         {/* Knowledge Tab */}

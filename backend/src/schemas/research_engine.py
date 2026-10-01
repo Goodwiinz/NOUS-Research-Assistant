@@ -761,6 +761,26 @@ class PrismaFlowResponse(BaseModel):
     body: PrismaFlowBody
 
 
+# --- Plan-to-write journey (GOO-308) -----------------------------------------
+
+JourneyStageKey = Literal["plan", "discover", "select", "extract", "write"]
+JourneyStatus = Literal["not_started", "in_progress", "attention", "complete"]
+
+
+class JourneyStage(BaseModel):
+    """Derived from persisted rows on every call (``journey.derive_stages``)."""
+
+    key: JourneyStageKey
+    status: JourneyStatus
+    facts: Dict[str, Union[int, bool, str, None]]
+    blockers: List[str]
+
+
+class JourneyResponse(BaseModel):
+    stages: List[JourneyStage]
+    current: Optional[JourneyStageKey] = None
+
+
 # --- Search import / corpus (GOO-300) --------------------------------------
 
 
