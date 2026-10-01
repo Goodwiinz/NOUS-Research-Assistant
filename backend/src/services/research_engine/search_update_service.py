@@ -838,8 +838,9 @@ async def _start(
     )
     terminal = [a for a in attempts if a.outcome in TERMINAL]
     if terminal:
+        outcome = cast(str, terminal[-1].outcome)
         await db.rollback()
-        return cast(str, terminal[-1].outcome), None
+        return outcome, None
     started = [a for a in attempts if a.outcome == "started"]
     if started and now - started[-1].created_at < STALE_EXECUTION:
         await db.rollback()
@@ -1119,7 +1120,10 @@ async def _notices(
 
 
 async def _chase(
-    db: AsyncSession, job: Mapping[str, Any], seeds: Sequence[str]
+    db: AsyncSession,
+    job: Mapping[str, Any],
+    seeds: Sequence[str],
+    connectors: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Citation chasing only when the protocol requires it (GOO-300's
     chase, one receipt per seed and direction, each committed)."""
@@ -1140,6 +1144,9 @@ async def _chase(
         )
     ]
     chased: list[dict[str, Any]] = []
+    # The run's OpenAlex connector (a fake in tests), never a fresh client.
+    openalex = connectors.get("openalex")
+    connector = openalex if hasattr(openalex, "citations") else None
     for seed in seeds[:MAX_CHASE_SEEDS]:
         for direction in directions:
             outcome: dict[str, Any] = {"seed_report_id": seed, "direction": direction}
@@ -1155,6 +1162,7 @@ async def _chase(
                             f"scheduled:{job['execution_id']}:{seed}:{direction}"
                         ),
                     ),
+                    connector=connector,
                 )
                 await db.commit()
                 outcome["receipt_id"] = str(receipt.id)
@@ -1367,7 +1375,7 @@ async def run_execution(
     notices, failed = await _notices(connectors, _dois(baseline, records))
     known = set((baseline.get("reports") or {}))
     seeds = sorted(rid for rid in records if rid not in known)
-    chasing = await _chase(db, job, seeds)
+    chasing = await _chase(db, job, seeds, connectors)
     return await _finish(
         db, job, worker, receipt_id, coverage, notices, failed, chasing
     )
