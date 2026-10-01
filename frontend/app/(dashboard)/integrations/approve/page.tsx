@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
@@ -98,6 +99,18 @@ function ApprovalContent(): React.JSX.Element {
               ? 'expired'
               : consent.status}
           </p>
+          {consent.scopes.includes('context:read') &&
+            (consent.status === 'approved' ||
+              consent.status === 'consumed') && (
+              <p>
+                <Link
+                  href={`/integrations/context/${encodeURIComponent(consent.id)}`}
+                  className="underline"
+                >
+                  Choose which project memories this device may read
+                </Link>
+              </p>
+            )}
           <div className="flex gap-3">
             <button
               type="button"

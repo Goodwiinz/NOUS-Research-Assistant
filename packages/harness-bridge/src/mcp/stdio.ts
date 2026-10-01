@@ -1,5 +1,6 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ArtifactHttpClient } from "../artifacts/client.ts";
+import { ContextHttpClient, readSelectedContextTool } from "../context/mcp.ts";
 import { artifactsPublishTool, unavailablePublishTool } from "../artifacts/mcp.ts";
 import { createArtifactPublisher } from "../artifacts/publisher.ts";
 import { grantedRoot } from "../artifacts/snapshot.ts";
@@ -42,6 +43,10 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
       local.push(unavailablePublishTool(session.outputRoot, reason));
     }
   }
+  if (session.context)
+    local.push(
+      readSelectedContextTool(new ContextHttpClient(session.apiOrigin, credentials)),
+    );
   const server = createNousMcpServer(
     new CapabilityClient(session.apiOrigin, credentials, keeper.fetch),
     local,
