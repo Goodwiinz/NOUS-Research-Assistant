@@ -614,6 +614,8 @@ async def delete_file(
                 detail="Failed to delete file",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
