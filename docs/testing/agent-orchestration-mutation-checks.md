@@ -1868,3 +1868,55 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
 | `graph_part` edge selection (`synthesis_service.py:229`) | every result linked to every claim link | Proof step 7 (`:425`): the unrelated draft's release is stamped too (`'research_synthesis' is None`). |
 | Stdlib-only rules (`synthesis_rules.py` imports) | `import numpy` added | `test_synthesis_boundary.py::test_rules_import_only_stdlib` fails. |
 | Narrative step untouched (`step_executor.py`) | `from src.services.research_engine import synthesis_service` appended | 2 boundary tests fail (automation scan and narrative-step check). |
+
+## GOO-312 run manifests, retained artifacts and figure lineage — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_run_manifest_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `b8e0c2d4f6a7`
+(connection URL from the environment; value omitted). The run executes
+through the real start and stream routes; only the sandbox is fake (it runs
+the plan's exact script with the local interpreter).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and assert byte equality.
+
+`git diff --quiet backend/src` succeeded afterwards. The proof (1 test), the
+manifest-rules, isolated-sandbox and analyze-step tests and the boundary
+guard (21 tests together) passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/manifest_rules.py`
+  `402db36964a8aa423af3fe86ffcfbae75bac1cfab3fdf65ab31e8b6f6982ba7d`
+- `backend/src/services/sandbox/e2b_sandbox_manager.py`
+  `de5622b495e74bfb7beb4f75311d1bf488ee1d76405cff79ef00b493f5eff8fe`
+- `backend/src/services/research_engine/step_executor.py`
+  `993d2be72f3eb1d5a3ddf0cab4124ec07f1448baf290877ca78db3dce738ed6f`
+- `backend/src/services/research_engine/experiment_service.py`
+  `4740d4cf2f18c605b40621a289f3747624bcee90a6519c3c693660c41d29cbc9`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_manifest_rules.py -k "completeness|legacy"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_sandbox_isolated.py -k thread_cache   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_step_executor_analyze.py -k checksum   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_run_manifest_postgres.py   # from backend/
+```
+
+| Guard | Mutation | Observed mutant failure |
+|---|---|---|
+| Completeness derivation (`manifest_rules.completeness`) | `return "complete", []` | `-k completeness`: `'complete' == 'incomplete'` (missing paths not listed). |
+| Legacy view invents nothing (`manifest_rules.legacy_view`) | adds `"environment": {"provider": "e2b"}` | `-k legacy`: `test_legacy_view_invents_nothing` finds `environment`. |
+| Thread-cache isolation (`SandboxManager.run_isolated`) | calls `self.get_or_create_sandbox("isolated")` before create | `-k thread_cache`: `get_or_create_sandbox called`. |
+| Input checksum check (`StepExecutor._execute_analyze`) | `if False:` | `-k checksum`: `DID NOT RAISE StepExecutionError` (the step completes). |
+| Secret rejection (`manifest_rules.assert_no_secrets`) | early `return` | Proof step 6 (`:484`): the run streams `step_complete` and completes with a manifest instead of `run_failed` / `manifest_secret_detected`. |
+| `graph_part` edge selection (`experiment_service.graph_part`) | every figure linked to every claim link | Proof step 7 (`:526`): the unrelated draft reads `stale` instead of `verified`. |
+| `invalidate_dependents` on a successor figure (`experiment_service.register_figure`) | `if False:` | Proof step 7 (`:535`): release 1 is never stamped (`None == 'research_experiment'`). |
+
+Not performed: "manifest in the run transaction" (commit the manifest after
+the status) needs a failure injected between the two writes, which the proof
+does not stage; the single-commit placement is reviewed in `runs.py`'s
+`run_complete` branch instead.
