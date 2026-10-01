@@ -151,9 +151,12 @@ def test_absent_year_omits_issued_and_py_and_reports() -> None:
     assert "PY" not in _ris([record])[0]
     text = B.format_ris([record], ["doc2"]) + B.format_csl_json([record], ["doc2"])
     assert "n.d." not in text
-    assert {"key": "doc2", "field": "year", "reason": "absent"} in B.omissions(
-        [record], ["doc2"]
-    )
+    assert {
+        "key": "doc2",
+        "field": "year",
+        "reason": "absent",
+        "value": None,
+    } in B.omissions([record], ["doc2"])
 
 
 def test_snippet_never_becomes_title() -> None:
@@ -164,9 +167,12 @@ def test_snippet_never_becomes_title() -> None:
     assert "TI" not in ris
     text = B.format_csl_json([record], ["doc4"]) + B.format_ris([record], ["doc4"])
     assert record["snippet"] not in text
-    assert {"key": "doc4", "field": "title", "reason": "absent"} in B.omissions(
-        [record], ["doc4"]
-    )
+    assert {
+        "key": "doc4",
+        "field": "title",
+        "reason": "absent",
+        "value": None,
+    } in B.omissions([record], ["doc4"])
 
 
 def test_unknown_type_is_document_gen_and_reported() -> None:

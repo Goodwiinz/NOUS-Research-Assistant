@@ -482,9 +482,10 @@ class BibliographyService:
     @staticmethod
     def omissions(records: Sequence[Any], keys: Sequence[str]) -> List[Dict[str, Any]]:
         """Every field a CSL/RIS export leaves out, so nothing is silently
-        dropped: ``{key, field, reason: absent}`` for a missing title,
-        authors, year, venue or identifier (DOI and arXiv id), and ``{key,
-        field: type, reason: type_unmapped, value}`` for a generic record."""
+        dropped: ``{key, field, reason: absent, value: None}`` for a missing
+        title, authors, year, venue or identifier (DOI and arXiv id), and
+        ``{key, field: type, reason: type_unmapped, value}`` for a generic
+        record."""
         out: List[Dict[str, Any]] = []
         for record, key in zip(records, _checked_keys(records, keys)):
             csl_type, _ris, unmapped = _types(record)
@@ -505,7 +506,7 @@ class BibliographyService:
                 "identifier": _get(record, "doi") or _get(record, "arxiv_id"),
             }
             out += [
-                {"key": key, "field": field, "reason": "absent"}
+                {"key": key, "field": field, "reason": "absent", "value": None}
                 for field, value in present.items()
                 if value in (None, "", [])
             ]
