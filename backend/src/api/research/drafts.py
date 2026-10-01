@@ -23,6 +23,7 @@ from src.core.dependencies import get_current_user
 from src.models import Collection, DraftReview, Workspace
 from src.models.user import User
 from src.services.research import claim_rules, draft_release_service
+from src.services.research.bibliography_service import REFERENCE_FILES
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
@@ -522,13 +523,17 @@ async def diff_drafts(
 async def export_draft(
     project_id: UUID,
     draft_id: UUID,
-    format: str = Query("markdown", description="Export format: markdown, latex"),
+    format: str = Query(
+        "markdown", description="Export format: markdown, latex, csl-json, ris"
+    ),
     include_bibliography: bool = Query(True, description="Include bibliography"),
     bib_format: str = Query("bibtex", description="Bibliography format"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export draft to LaTeX (.tex + .bib) or Markdown."""
+    """Export draft to LaTeX (.tex + .bib) or Markdown, or its references
+    alone as CSL JSON or RIS (GOO-317; ``X-Reference-Omissions`` counts the
+    fields left out because the record lacks them)."""
     # Validate project ownership
     await _validate_project_ownership(project_id, current_user, db)
 
@@ -551,6 +556,16 @@ async def export_draft(
             content=result.get("content", ""),
             media_type=result.get("mime_type", "text/markdown"),
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    if result.get("format") in REFERENCE_FILES:
+        return Response(
+            content=str(result["content"]).encode("utf-8"),
+            media_type=result["mime_type"],
+            headers={
+                "Content-Disposition": f'attachment; filename="{result["filename"]}"',
+                "X-Reference-Omissions": str(len(result["omissions"])),
+            },
         )
 
     if result.get("format") == "latex":

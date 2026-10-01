@@ -237,14 +237,10 @@ async def _references(
     records, keys = service._canonical_citation_records(citations)
     out = []
     for saved, record, key in zip(citations, records, keys):
-        metadata = (saved.document.document_metadata or {}) if saved.document else {}
-        kind = (saved.citation.document_type if saved.citation else None) or (
-            metadata.get("type")
-        )
         out.append(
             {
                 "key": key,
-                "type": _str(kind),
+                "type": _str(record.type),
                 "title": record.document_title,
                 "authors": list(record.authors or []),
                 "year": record.year,
