@@ -8,7 +8,7 @@ statements: legacy ``QualityMark`` checks are never backfilled. Downgrade
 drops the trigger, the table and the function; appraisals are lost.
 
 Revision ID: e2a4c6b8d0f1
-Revises: it01_integration_actions
+Revises: it02_merge_integration_heads
 """
 
 import sqlalchemy as sa
@@ -16,7 +16,7 @@ from alembic import op  # type: ignore[attr-defined]
 from sqlalchemy.dialects import postgresql
 
 revision = "e2a4c6b8d0f1"
-down_revision = "it01_integration_actions"
+down_revision = "it02_merge_integration_heads"
 branch_labels = None
 depends_on = None
 
