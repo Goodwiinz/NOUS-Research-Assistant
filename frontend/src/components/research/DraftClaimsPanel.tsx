@@ -20,7 +20,11 @@ import { Button } from '@/components/ui/button';
 import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import { draftClaimsQueryKey, useDraftClaims } from '@/hooks/useDraftClaims';
 import { projectService } from '@/services/projectService';
-import type { ResearchProjectRole } from '@/services/researchEngineService';
+import {
+  listSynthesis,
+  type ResearchProjectRole,
+  type SynthesisResult,
+} from '@/services/researchEngineService';
 import {
   getCellObservations,
   getMatrix,
@@ -38,6 +42,7 @@ const KIND_LABELS: Record<ApiClaimLinkKind, string> = {
   extraction: 'Extraction',
   source_span: 'Source span',
   legacy_unanchored: 'Legacy (unanchored)',
+  synthesis_result: 'Synthesis result',
 };
 const PASSAGE_CHARS = 160;
 
@@ -267,18 +272,22 @@ function ClaimControls({
   draftId,
   claim,
   targets,
+  results,
   adjudicator,
 }: {
   projectId: string;
   draftId: string;
   claim: ApiClaimSummary;
   targets: LinkTarget[];
+  /** GOO-311: current computed synthesis results a claim may cite. */
+  results: SynthesisResult[];
   adjudicator: boolean;
 }): ReactElement {
   const [linkKey, setLinkKey] = useState(newKey);
   const [observeKey, setObserveKey] = useState(newKey);
   const [assessKey, setAssessKey] = useState(newKey);
   const [target, setTarget] = useState('');
+  const [resultId, setResultId] = useState('');
   const [stance, setStance] = useState<ApiClaimAssessmentStance>('supporting');
   const [chosen, setChosen] = useState<string[]>([]);
   const [rationale, setRationale] = useState('');
@@ -307,6 +316,22 @@ function ClaimControls({
       });
     },
     () => setLinkKey(newKey())
+  );
+  const linkResult = useClaimWrite(
+    projectId,
+    draftId,
+    (synthesisResultId: string) =>
+      projectService.linkClaimEvidence(projectId, claim.claim_id, {
+        claim_version_id: claim.version.id,
+        kind: 'synthesis_result',
+        synthesis_result_id: synthesisResultId,
+        status: 'linked',
+        idempotency_key: linkKey,
+      }),
+    () => {
+      setLinkKey(newKey());
+      setResultId('');
+    }
   );
   const observe = useClaimWrite(
     projectId,
@@ -371,19 +396,49 @@ function ClaimControls({
         >
           Link evidence
         </Button>
-        {live.map((row) => (
-          <Button
-            key={row.id}
-            size="sm"
-            variant="ghost"
-            disabled={observe.isPending}
-            onClick={() => observe.mutate(row.id)}
-          >
-            Observe {KIND_LABELS[row.kind].toLowerCase()} link
-          </Button>
-        ))}
+        {results.length > 0 && (
+          <>
+            <label className="sr-only" htmlFor={`synthesis-${id}`}>
+              Synthesis result to link
+            </label>
+            <select
+              id={`synthesis-${id}`}
+              value={resultId}
+              onChange={(event) => setResultId(event.target.value)}
+              className="min-w-0 rounded-md border border-border bg-background px-2 py-1"
+            >
+              <option value="">Link a synthesis result…</option>
+              {results.map((r) => (
+                <option key={r.id} value={r.id}>
+                  SMD {r.estimate?.toFixed(2)} ({r.outcome_key}, {r.timepoint})
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!resultId || linkResult.isPending}
+              onClick={() => linkResult.mutate(resultId)}
+            >
+              Link result
+            </Button>
+          </>
+        )}
+        {live
+          .filter((row) => row.kind !== 'synthesis_result')
+          .map((row) => (
+            <Button
+              key={row.id}
+              size="sm"
+              variant="ghost"
+              disabled={observe.isPending}
+              onClick={() => observe.mutate(row.id)}
+            >
+              Observe {KIND_LABELS[row.kind].toLowerCase()} link
+            </Button>
+          ))}
       </div>
-      <WriteError error={link.error ?? observe.error} />
+      <WriteError error={link.error ?? linkResult.error ?? observe.error} />
       {adjudicator && (
         <fieldset className="space-y-1 rounded-md border border-border p-2">
           <legend className="px-1">Assess</legend>
@@ -489,6 +544,15 @@ export function DraftClaimsPanel({
     enabled: authoring,
     retry: false,
   });
+  const synthesis = useQuery({
+    queryKey: ['project', projectId, 'research-engine', 'synthesis'],
+    queryFn: () => listSynthesis(projectId),
+    enabled: authoring,
+    retry: false,
+  });
+  const results = (synthesis.data?.results ?? []).filter(
+    (r) => r.status === 'computed' && !r.stale && !r.superseded
+  );
   if (!capabilities.draftClaims || !claims.data) return null;
   const { items, counts } = claims.data;
   return (
@@ -529,6 +593,7 @@ export function DraftClaimsPanel({
                   draftId={draftId}
                   claim={claim}
                   targets={targets.data ?? []}
+                  results={results}
                   adjudicator={adjudicator}
                 />
               )}

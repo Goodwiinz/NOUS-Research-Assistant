@@ -6974,6 +6974,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/synthesis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Synthesis Route */
+        get: operations["list_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_get"];
+        put?: never;
+        /** Execute Synthesis Route */
+        post: operations["execute_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/synthesis/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Synthesis Route */
+        get: operations["export_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/synthesis/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Synthesis Route */
+        get: operations["preview_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/protocols/{protocol_id}": {
         parameters: {
             query?: never;
@@ -11854,8 +11906,9 @@ export interface components {
          *
          *     ``extraction`` takes ``accepted_value_id``; ``source_span`` takes
          *     ``document_id``, ``start_char``, ``end_char`` and ``quote``;
-         *     ``legacy_unanchored`` takes ``draft_citation_id``. The server copies the
-         *     source hashes. A ``withdrawn`` row supersedes a link and copies its target.
+         *     ``legacy_unanchored`` takes ``draft_citation_id``; ``synthesis_result``
+         *     (GOO-311) takes ``synthesis_result_id``. The server copies the source
+         *     hashes. A ``withdrawn`` row supersedes a link and copies its target.
          */
         ClaimLinkCreate: {
             /** Accepted Value Id */
@@ -11877,7 +11930,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "extraction" | "source_span" | "legacy_unanchored";
+            kind: "extraction" | "source_span" | "legacy_unanchored" | "synthesis_result";
             /** Quote */
             quote?: string | null;
             /** Start Char */
@@ -11890,6 +11943,8 @@ export interface components {
             status: "linked" | "withdrawn";
             /** Supersedes Link Id */
             supersedes_link_id?: string | null;
+            /** Synthesis Result Id */
+            synthesis_result_id?: string | null;
         };
         /** ClaimLinkResponse */
         ClaimLinkResponse: {
@@ -11925,7 +11980,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "extraction" | "source_span" | "legacy_unanchored";
+            kind: "extraction" | "source_span" | "legacy_unanchored" | "synthesis_result";
             latest_observation?: components["schemas"]["StanceObservationResponse"] | null;
             /** Quote */
             quote?: string | null;
@@ -11945,6 +12000,8 @@ export interface components {
             status: "linked" | "withdrawn";
             /** Supersedes Link Id */
             supersedes_link_id?: string | null;
+            /** Synthesis Result Id */
+            synthesis_result_id?: string | null;
             /** Text Sha256 */
             text_sha256?: string | null;
         };
@@ -19262,6 +19319,262 @@ export interface components {
         SuggestionsResponse: {
             /** Suggestions */
             suggestions: string[];
+        };
+        /**
+         * SynthesisExclusion
+         * @description A structured reason; run-level failures name no unit.
+         */
+        SynthesisExclusion: {
+            /** Detail */
+            detail: string;
+            /** Reason */
+            reason: string;
+            /** Report Ids */
+            report_ids: string[];
+            /** Unit */
+            unit?: string | null;
+        };
+        /** SynthesisExecute */
+        SynthesisExecute: {
+            /** Expected Input Hash */
+            expected_input_hash: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            roles: components["schemas"]["SynthesisRoles"];
+            /** Supersedes Result Id */
+            supersedes_result_id?: string | null;
+            /**
+             * Table Version Id
+             * Format: uuid
+             */
+            table_version_id: string;
+        };
+        /**
+         * SynthesisIncluded
+         * @description One analysis unit; ``g``, ``v`` and weights only once computed.
+         */
+        SynthesisIncluded: {
+            /** Accepted Value Ids */
+            accepted_value_ids: string[];
+            /** G */
+            g?: number | null;
+            inputs: components["schemas"]["SynthesisInputs"];
+            /** Report Ids */
+            report_ids: string[];
+            /** Unit */
+            unit: string;
+            /** V */
+            v?: number | null;
+            /** W Fixed */
+            w_fixed?: number | null;
+            /** W Random */
+            w_random?: number | null;
+        };
+        /** SynthesisInputs */
+        SynthesisInputs: {
+            /** Mean C */
+            mean_c: number;
+            /** Mean I */
+            mean_i: number;
+            /** N C */
+            n_c: number;
+            /** N I */
+            n_i: number;
+            /** Sd C */
+            sd_c: number;
+            /** Sd I */
+            sd_i: number;
+        };
+        /**
+         * SynthesisListResponse
+         * @description Every result, stale and failed ones included; staleness is derived.
+         */
+        SynthesisListResponse: {
+            /** Results */
+            results: components["schemas"]["SynthesisResultResponse"][];
+            selection?: components["schemas"]["SynthesisSelection"] | null;
+            /** Selection Error */
+            selection_error?: string | null;
+        };
+        /**
+         * SynthesisPreview
+         * @description Exactly the input set ``POST`` would use, with zero writes.
+         */
+        SynthesisPreview: {
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Config Hash */
+            config_hash: string;
+            /** Estimator Version */
+            estimator_version: string;
+            /** Excluded */
+            excluded: components["schemas"]["SynthesisExclusion"][];
+            /** Included */
+            included: components["schemas"]["SynthesisIncluded"][];
+            /** Input Hash */
+            input_hash: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Run Failures */
+            run_failures: components["schemas"]["SynthesisExclusion"][];
+            selection: components["schemas"]["SynthesisSelection"];
+            /**
+             * Table Version Id
+             * Format: uuid
+             */
+            table_version_id: string;
+            /** Tip Id */
+            tip_id?: string | null;
+            /** Tip Input Hash */
+            tip_input_hash?: string | null;
+        };
+        /** SynthesisResultResponse */
+        SynthesisResultResponse: {
+            /** Actor Role */
+            actor_role: string;
+            /** Ci High */
+            ci_high?: number | null;
+            /** Ci Low */
+            ci_low?: number | null;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Config Hash */
+            config_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Df */
+            df?: number | null;
+            /** Estimate */
+            estimate?: number | null;
+            /** Estimator Version */
+            estimator_version: string;
+            /** Excluded */
+            excluded: components["schemas"]["SynthesisExclusion"][];
+            /**
+             * Executed By Id
+             * Format: uuid
+             */
+            executed_by_id: string;
+            /** I2 */
+            i2?: number | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Included */
+            included: components["schemas"]["SynthesisIncluded"][];
+            /** Input Hash */
+            input_hash: string;
+            /** Measure */
+            measure: string;
+            /** Model */
+            model: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Q */
+            q?: number | null;
+            /** Result Hash */
+            result_hash: string;
+            /** Se */
+            se?: number | null;
+            /** Software */
+            software: {
+                [key: string]: unknown;
+            };
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "computed" | "validation_failed";
+            /**
+             * Superseded
+             * @default false
+             */
+            superseded: boolean;
+            /** Supersedes Result Id */
+            supersedes_result_id?: string | null;
+            /**
+             * Table Version Id
+             * Format: uuid
+             */
+            table_version_id: string;
+            /** Tau2 */
+            tau2?: number | null;
+            /** Timepoint */
+            timepoint: string;
+        };
+        /**
+         * SynthesisRoles
+         * @description Which evidence-table field carries each arm statistic.
+         */
+        SynthesisRoles: {
+            /**
+             * Mean C
+             * Format: uuid
+             */
+            mean_c: string;
+            /**
+             * Mean I
+             * Format: uuid
+             */
+            mean_i: string;
+            /**
+             * N C
+             * Format: uuid
+             */
+            n_c: string;
+            /**
+             * N I
+             * Format: uuid
+             */
+            n_i: string;
+            /**
+             * Sd C
+             * Format: uuid
+             */
+            sd_c: string;
+            /**
+             * Sd I
+             * Format: uuid
+             */
+            sd_i: string;
+        };
+        /** SynthesisSelection */
+        SynthesisSelection: {
+            /** Measure */
+            measure: string;
+            /** Model */
+            model: string;
+            /** Outcome Key */
+            outcome_key: string;
+            /** Timepoint */
+            timepoint: string;
         };
         /**
          * SystemMetricsResponse
@@ -32905,6 +33218,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreeningResolutionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SynthesisListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SynthesisExecute"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SynthesisResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description nous.academic.synthesis.v1 package (every result) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_synthesis_route_api_v1_research_engine_projects__project_id__synthesis_preview_get: {
+        parameters: {
+            query: {
+                table_version_id: string;
+                mean_i: string;
+                sd_i: string;
+                n_i: string;
+                mean_c: string;
+                sd_c: string;
+                n_c: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SynthesisPreview"];
                 };
             };
             /** @description Validation Error */
