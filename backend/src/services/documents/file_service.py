@@ -38,6 +38,19 @@ from src.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE_CONTENT_MIME_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "text/javascript",
+        "application/javascript",
+        "application/x-javascript",
+        "text/xml",
+        "application/xml",
+    }
+)
+
 
 class FileValidationError(Exception):
     """File validation related errors"""
@@ -355,6 +368,10 @@ class FileService:
             sniffed = magic.from_buffer(file_content, mime=True)
         except Exception:
             sniffed = None
+        # I10: content the browser would execute is never stored, whatever
+        # extension it claims (a .png that sniffs as HTML/SVG is XSS bait).
+        if sniffed in _ACTIVE_CONTENT_MIME_TYPES:
+            raise FileValidationError(f"File content type '{sniffed}' is not allowed")
         guessed = mimetypes.guess_type(file.filename)[0]
         mime_type = sniffed or guessed or "application/octet-stream"
 
