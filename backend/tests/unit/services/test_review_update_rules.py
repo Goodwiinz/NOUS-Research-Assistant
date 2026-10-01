@@ -281,6 +281,11 @@ def test_accounting_reconciles_and_rejects_mismatch() -> None:
         {"report_id": str(f["r5"]), "from": "include", "to": "not_included"}
     ]
     assert all(boxes["checks"].values())
+    # A parent include left undecided (needs attention) is withheld, never
+    # reported as an amended decision.
+    withheld = _accounting(f, withheld={str(f["r5"])})
+    assert withheld["amended_inclusion"] == []
+    assert withheld["withheld_reports"] == [str(f["r5"])]
     # A flow that disagrees with the decisions it should rest on is refused.
     wrong = derive_prisma_flow(f["successor"])
     wrong["counts"] = {**wrong["counts"], "included_studies": 5}

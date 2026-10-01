@@ -50,6 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.manuscript_release import ManuscriptRelease
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
+from src.models.research_import import ResearchImportRecord
 from src.models.research_project_role import (
     ResearchProjectRole,
     ResearchProjectRoleAssignment,
@@ -693,6 +694,7 @@ async def _accounting(
             parent_units=rules.included_units(parent_inputs),
             successor_units=rules.included_units(restricted),
             parent_reports=_ids(parent.report_ids),
+            withheld={str(a["report_id"]) for a in version.needs_attention},
         )
     except prisma.PrismaInconsistency as error:
         logger.warning("review accounting failed: %s", error)
@@ -917,6 +919,20 @@ async def _identity_changed(
                 UUID(payload["new_report_id"]),
             }
     return changed
+
+
+async def _receipt_keys(db: AsyncSession, receipts: Sequence[UUID]) -> set[str]:
+    """PRISMA record keys of the accepted delta's own import receipts (the
+    scheduled search and its citation chases): nothing imported elsewhere
+    joins the version, and a retried import reuses its receipt."""
+    ids = await _all(
+        db,
+        select(ResearchImportRecord.id).where(
+            ResearchImportRecord.receipt_id.in_(list(receipts)),
+            ResearchImportRecord.status == "accepted",
+        ),
+    )
+    return {f"import:{record_id}" for record_id in ids}
 
 
 async def _insert(
@@ -1149,8 +1165,15 @@ async def create_successor(
     kept = [p for p in parents if str(p.report_id) in candidate_ids]
     heads = _heads(inputs, collection_id)
     tips = [c["resolution_id"] for c in carried]
+    receipts = [delta.import_receipt_id] + [
+        UUID(c["receipt_id"])
+        for c in delta.citation_chasing.get("chases") or []
+        if c.get("receipt_id")
+    ]
+    keys = set(parent.input_versions["record_keys"]) | await _receipt_keys(db, receipts)
+    records = tuple(r for r in inputs.records if r.key in keys)
     input_versions = {
-        "record_keys": sorted(r.key for r in inputs.records),
+        "record_keys": sorted(r.key for r in records),
         "stream_heads": heads,
         "protocol_version_ids": inputs.versions["protocol_version_ids"],
         "decision_tips": tips,
@@ -1180,7 +1203,7 @@ async def create_successor(
     flow = prisma.derive_prisma_flow(
         replace(
             inputs,
-            records=inputs.records,
+            records=records,
             outcomes=state.decisions.outcomes(tips),
             versions={
                 "protocol_version_ids": inputs.versions["protocol_version_ids"],
@@ -1499,9 +1522,7 @@ async def export_version(
     parent_tips = list(version.input_versions.get("parent_decision_tips") or [])
     rows = await _resolution_rows(db, state, [*carried_ids, *work_tips, *parent_tips])
     reviewed = {
-        (str(rows[rid]["stage"]), str(rows[rid]["report_id"]))
-        for rid in work_tips
-        if rid in rows
+        (str(s.stage), str(report)) for s in work for report in s.required_report_ids
     }
     predecessors = [
         rows[rid]

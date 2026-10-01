@@ -200,6 +200,7 @@ def accounting(
     parent_units: Mapping[str, str],
     successor_units: Mapping[str, str],
     parent_reports: Collection[str],
+    withheld: Collection[str] = frozenset(),
 ) -> dict[str, Any]:
     """PRISMA 2020 boxes for an updated review; raises ``PrismaInconsistency``
     when the parent and successor do not reconcile."""
@@ -234,6 +235,7 @@ def accounting(
     amended = [
         {"report_id": report, "from": "include", "to": "not_included"}
         for report in sorted(set(parent_units) - set(successor_units))
+        if report not in withheld
     ] + [
         {"report_id": report, "from": "not_included", "to": "include"}
         for report in sorted(set(successor_units) - set(parent_units))
@@ -261,6 +263,8 @@ def accounting(
         "corrected_retracted": int(delta_counts.get("corrected_retracted", 0)),
         "carried_decisions": len(carried),
         "amended_inclusion": amended,
+        # Included in the parent, undecided here (needs attention).
+        "withheld_reports": sorted(set(parent_units) & set(withheld)),
         "amended_out": len(amended_out),
         "amended_in": len(reopened),
         "new_studies_included": len(new),
