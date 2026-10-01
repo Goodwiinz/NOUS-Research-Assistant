@@ -2,8 +2,8 @@
 
 Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
-``research_claims``, ``research_release``, ``research_appraisal``) registers
-its subject type, payload vocabulary, value validation and replay transition
+``research_claims``, ``research_release``, ``research_appraisal``,
+``research_evidence``) registers its subject type, payload vocabulary, value validation and replay transition
 rules in ``_FAMILIES``.
 
 Idempotency is scoped to one aggregate stream. Protocol approval derives one
@@ -29,7 +29,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.services.research import claim_rules, extraction_rules
-from src.services.research_engine import appraisal_rules, screening_rules
+from src.services.research_engine import (
+    appraisal_rules,
+    evidence_rules,
+    screening_rules,
+)
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PROTOCOL_AGGREGATE = "research_protocol"
@@ -364,10 +368,65 @@ _APPRAISAL_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
     ("appraisal.submitted", 1): _APPRAISAL_KEYS,
     ("appraisal.adjudicated", 1): _APPRAISAL_KEYS | {"resolves_assessment_ids"},
 }
+# GOO-310: evidence tables, contradiction chains and outcome certainty, one
+# stream per Collection. The subject of each event is the row it inserted.
+_EVIDENCE_AGGREGATE = "research_evidence"
+_EVIDENCE_SUBJECT = "evidence_outcome"
+_EVIDENCE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("evidence.table_versioned", 1): frozenset(
+        {
+            "collection_id",
+            "table_version_id",
+            "supersedes_table_id",
+            "outcome_key",
+            "timepoint",
+            "protocol_version_id",
+            "matrix_id",
+            "form_version_id",
+            "field_ids",
+            "content_hash",
+            "row_count",
+            "excluded_count",
+        }
+    ),
+    ("evidence.contradiction_recorded", 1): frozenset(
+        {
+            "collection_id",
+            "contradiction_id",
+            "row_id",
+            "previous_id",
+            "kind",
+            "table_version_id",
+            "field_id",
+            "accepted_value_ids",
+            "suggestion_ids",
+        }
+    ),
+    ("evidence.certainty_assessed", 1): frozenset(
+        {
+            "collection_id",
+            "certainty_id",
+            "supersedes_certainty_id",
+            "table_version_id",
+            "outcome_key",
+            "timepoint",
+            "method_key",
+            "method_version",
+            "starting_level",
+            "ratings",
+            "level",
+            "appraisal_assessment_ids",
+            "contradiction_ids",
+            "input_hash",
+        }
+    ),
+}
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "extraction.accepted",
     "claim.assessed",
     "appraisal.adjudicated",
+    "evidence.contradiction_recorded",
+    "evidence.certainty_assessed",
 }
 
 
@@ -1124,6 +1183,94 @@ def _validate_appraisal_payload(
             raise DecisionValidationError(
                 "resolves_assessment_ids must be 1+ unique ids"
             )
+
+
+def _validated_text(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise DecisionValidationError(f"evidence {field} is invalid")
+
+
+def _validated_unique_ids(value: Any, field: str, minimum: int) -> None:
+    ids = _validated_uuid_list(value, field)
+    if len(ids) < minimum or len(set(ids)) != len(ids):
+        raise DecisionValidationError(f"{field} must be {minimum}+ unique ids")
+
+
+def _validate_evidence_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    subject_key = {
+        "evidence.table_versioned": "table_version_id",
+        "evidence.contradiction_recorded": "row_id",
+        "evidence.certainty_assessed": "certainty_id",
+    }[event_type]
+    if _validated_payload_uuid(payload[subject_key], subject_key) != subject_id:
+        raise DecisionValidationError("evidence event subject is not its row")
+    _validated_payload_uuid(payload["table_version_id"], "table_version_id")
+    if event_type == "evidence.table_versioned":
+        _validated_optional_uuid(payload["supersedes_table_id"], "supersedes_table_id")
+        for key in ("protocol_version_id", "matrix_id", "form_version_id"):
+            _validated_payload_uuid(payload[key], key)
+        for key in ("outcome_key", "timepoint"):
+            _validated_text(payload[key], key)
+        _validated_unique_ids(payload["field_ids"], "field_ids", 1)
+        if len(payload["field_ids"]) > 50:
+            raise DecisionValidationError("field_ids must be at most 50 ids")
+        _validated_sha256(payload["content_hash"], "content_hash")
+        for key in ("row_count", "excluded_count"):
+            if not _is_int(payload[key]) or payload[key] < 0:
+                raise DecisionValidationError(f"evidence {key} is invalid")
+        return
+    if event_type == "evidence.contradiction_recorded":
+        _validated_payload_uuid(payload["contradiction_id"], "contradiction_id")
+        _validated_optional_uuid(payload["previous_id"], "previous_id")
+        _validated_payload_uuid(payload["field_id"], "field_id")
+        kind = payload["kind"]
+        if kind not in evidence_rules.CONTRADICTION_KINDS:
+            raise DecisionValidationError("evidence kind is invalid")
+        suggestions = _validated_uuid_list(payload["suggestion_ids"], "suggestion_ids")
+        if kind == "opened":
+            if payload["contradiction_id"] != payload["row_id"]:
+                raise DecisionValidationError("an opened row names its own group")
+            _validated_unique_ids(
+                payload["accepted_value_ids"], "accepted_value_ids", 2
+            )
+        elif payload["accepted_value_ids"] is not None or suggestions:
+            raise DecisionValidationError("only an opened row cites members")
+        return
+    _validated_optional_uuid(
+        payload["supersedes_certainty_id"], "supersedes_certainty_id"
+    )
+    for key in ("outcome_key", "timepoint", "method_key", "method_version"):
+        _validated_text(payload[key], key)
+    if payload["starting_level"] not in evidence_rules.STARTING_LEVELS:
+        raise DecisionValidationError("evidence starting_level is invalid")
+    ratings = payload["ratings"]
+    if (
+        not isinstance(ratings, dict)
+        or set(ratings) != set(evidence_rules.GRADE_DOMAINS)
+        or any(
+            value is not None and (not _is_int(value) or value not in (0, -1, -2))
+            for value in ratings.values()
+        )
+    ):
+        raise DecisionValidationError("evidence ratings are invalid")
+    level = payload["level"]
+    if level is not None and level not in evidence_rules.LEVELS:
+        raise DecisionValidationError("evidence level is invalid")
+    _validated_unique_ids(
+        payload["appraisal_assessment_ids"], "appraisal_assessment_ids", 0
+    )
+    _validated_unique_ids(payload["contradiction_ids"], "contradiction_ids", 0)
+    _validated_sha256(payload["input_hash"], "input_hash")
 
 
 async def _locked_stream(
@@ -2001,6 +2148,63 @@ def _validate_appraisal_transitions(
         adjudicated[key] = assessment
 
 
+def _validate_evidence_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Each table and certainty chain (per outcome and timepoint) and each
+    contradiction chain has one tip, and every successor names it; only an
+    adjudicator resolves or acknowledges; a certainty level is the derived
+    one and cites a table versioned earlier for the same outcome."""
+    table_tips: dict[tuple[str, str], str | None] = {}
+    certainty_tips: dict[tuple[str, str], str | None] = {}
+    chain_tips: dict[str, str] = {}
+    tables: dict[str, tuple[str, str]] = {}
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        role = event.actor_role
+        if event.event_type == "evidence.table_versioned":
+            key = (str(payload["outcome_key"]), str(payload["timepoint"]))
+            if role not in ("reviewer", "adjudicator"):
+                raise DecisionReplayError("evidence table needs a decision role")
+            if payload["supersedes_table_id"] != table_tips.get(key):
+                raise DecisionReplayError("evidence table supersedes a non-tip")
+            table = str(payload["table_version_id"])
+            if table in tables:
+                raise DecisionReplayError("evidence table id reused")
+            tables[table] = key
+            table_tips[key] = table
+        elif event.event_type == "evidence.contradiction_recorded":
+            group, row = str(payload["contradiction_id"]), str(payload["row_id"])
+            kind = payload["kind"]
+            if role not in ("reviewer", "adjudicator"):
+                raise DecisionReplayError("contradiction needs a decision role")
+            if kind in evidence_rules.DECIDING_KINDS and role != "adjudicator":
+                raise DecisionReplayError(f"contradiction {kind} needs an adjudicator")
+            if kind == "opened":
+                if group in chain_tips or payload["previous_id"] is not None:
+                    raise DecisionReplayError("contradiction opened twice")
+                if str(payload["table_version_id"]) not in tables:
+                    raise DecisionReplayError("contradiction cites an unknown table")
+            elif group not in chain_tips or payload["previous_id"] != chain_tips[group]:
+                raise DecisionReplayError("contradiction row follows a non-tip")
+            chain_tips[group] = row
+        else:
+            key = (str(payload["outcome_key"]), str(payload["timepoint"]))
+            if role != "reviewer":
+                raise DecisionReplayError("certainty assessment requires a reviewer")
+            if tables.get(str(payload["table_version_id"])) != key:
+                raise DecisionReplayError("certainty cites a table of another outcome")
+            if payload["supersedes_certainty_id"] != certainty_tips.get(key):
+                raise DecisionReplayError("certainty supersedes a non-tip")
+            if payload["level"] != evidence_rules.certainty_level(
+                str(payload["starting_level"]), payload["ratings"]
+            ):
+                raise DecisionReplayError("certainty level is not derived")
+            certainty_tips[key] = str(payload["certainty_id"])
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2083,6 +2287,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_APPRAISAL_PAYLOAD_KEYS,
         validate_payload=_validate_appraisal_payload,
         validate_transitions=_validate_appraisal_transitions,
+        requires_subject_version=False,
+    ),
+    _EVIDENCE_AGGREGATE: _Family(
+        subject_type=_EVIDENCE_SUBJECT,
+        payload_keys=_EVIDENCE_PAYLOAD_KEYS,
+        validate_payload=_validate_evidence_payload,
+        validate_transitions=_validate_evidence_transitions,
         requires_subject_version=False,
     ),
 }
