@@ -17,6 +17,7 @@ from src.services.research_decisions.ledger import (
     _validate_experiment_transitions,
     _validate_extraction_transitions,
     _validate_identity_transitions,
+    _validate_manuscript_transitions,
     _validate_peer_review_transitions,
     _validate_release_transitions,
     _validate_reproduction_transitions,
@@ -3124,3 +3125,103 @@ def test_peer_review_replay_rejects_forked_response_chain() -> None:
             p.comment(),
             (event_type, role, {**payload, "diff_sha256": None}),
         )
+
+
+# --- GOO-315: research_manuscript --------------------------------------------
+
+
+class _Manuscript:
+    """Hand-built events for one Collection's research_manuscript stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.candidate = uuid4()
+
+    def created(self, role: str = "editor") -> Event:
+        return (
+            "manuscript.candidate_created",
+            role,
+            {
+                "collection_id": str(self.collection_id),
+                "release_id": str(self.candidate),
+                "draft_id": str(uuid4()),
+                "draft_version": 1,
+                "content_hash": "a" * 64,
+                "snapshot_hash": "b" * 64,
+                "checks_hash": "c" * 64,
+                "package_sha256": "d" * 64,
+            },
+        )
+
+    def verified(self, role: str = "adjudicator", package: str = "d" * 64) -> Event:
+        return (
+            "manuscript.verified",
+            role,
+            {
+                "collection_id": str(self.collection_id),
+                "release_id": str(uuid4()),
+                "candidate_release_id": str(self.candidate),
+                "draft_release_id": str(uuid4()),
+                "content_hash": "a" * 64,
+                "snapshot_hash": "b" * 64,
+                "package_sha256": package,
+                "obligations": {"claim_support": "pass", "peer_review": "pass"},
+            },
+        )
+
+    def validate(self, event: Event) -> None:
+        event_type, _, payload = event
+        _validate_event(
+            aggregate_type="research_manuscript",
+            aggregate_id=self.collection_id,
+            event_type=event_type,
+            event_schema_version=1,
+            subject_type="manuscript_release",
+            subject_id=UUID(str(payload["release_id"])),
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(payload),
+            payload=payload,
+            request_fingerprint="e" * 64,
+        )
+
+    def replay(self, *events: Event) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_manuscript_transitions(stored, self.collection_id)
+
+
+def test_manuscript_payloads_validate() -> None:
+    m = _Manuscript()
+    m.validate(m.created())
+    m.validate(m.verified())
+    event_type, role, payload = m.verified()
+    with pytest.raises(DecisionValidationError, match="passing obligations"):
+        m.validate(
+            (event_type, role, {**payload, "obligations": {"claim_support": "fail"}})
+        )
+
+
+def test_manuscript_replay_rejects_verified_with_changed_package() -> None:
+    m = _Manuscript()
+    m.replay(m.created(), m.verified())
+    with pytest.raises(DecisionReplayError, match="differs from its candidate"):
+        m.replay(m.created(), m.verified(package="f" * 64))
+    with pytest.raises(DecisionReplayError, match="no recorded candidate"):
+        m.replay(m.verified())
+
+
+def test_manuscript_replay_rejects_double_promotion() -> None:
+    m = _Manuscript()
+    with pytest.raises(DecisionReplayError, match="already verified"):
+        m.replay(m.created(), m.verified(), m.verified("supervisor"))
+
+
+def test_manuscript_replay_rejects_editor_promotion() -> None:
+    m = _Manuscript()
+    with pytest.raises(DecisionReplayError, match="adjudicator or supervisor"):
+        m.replay(m.created(), m.verified("editor"))
+    with pytest.raises(DecisionReplayError, match="editor's"):
+        m.replay(m.created("adjudicator"))
