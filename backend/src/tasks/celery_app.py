@@ -190,6 +190,10 @@ celery_app.conf.update(
             "task": "src.tasks.research_run_tasks.sweep_stale_research_runs",
             "schedule": 1800.0,  # every 30 min; stale threshold is 2h
         },
+        "sweep-expired-reruns": {  # GOO-313: expired rerun leases
+            "task": "src.tasks.research_run_tasks.sweep_expired_reruns",
+            "schedule": 60.0,
+        },
         "reconcile-lost-processing-jobs": {
             "task": "src.tasks.reconcile_jobs.reconcile_lost_processing_jobs",
             "schedule": 600.0,  # every 10 min
