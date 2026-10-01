@@ -201,3 +201,18 @@ class ZenodoAdapter:
             ),
             "raw": body,
         }
+
+
+def from_settings() -> ZenodoAdapter | None:
+    """The configured adapter, or None without a token or account label.
+    The only reader of ``ZENODO_SANDBOX_TOKEN`` (protected configuration)."""
+    from src.core.config import settings
+
+    token = settings.ZENODO_SANDBOX_TOKEN
+    if (
+        token is None
+        or not token.get_secret_value()
+        or not settings.ZENODO_ACCOUNT_LABEL
+    ):
+        return None
+    return ZenodoAdapter(settings.ZENODO_BASE_URL, token)

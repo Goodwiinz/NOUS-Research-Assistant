@@ -2,7 +2,7 @@
 
 Mutation verification (docs/engineering/testing.md), full record in
 ``docs/testing/agent-orchestration-mutation-checks.md`` (GOO-318 section):
-``_reached`` trusting a succeeded publish attempt without the remote
+``reached`` trusting a succeeded publish attempt without the remote
 ``submitted`` flag and record id fails ``-k unpublished``; ``redact``
 returning its input fails ``-k redact``.
 """

@@ -41,7 +41,7 @@ class Attempt:
     files: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
 
 
-def _reached(chain: Sequence[Attempt]) -> str | None:
+def reached(chain: Sequence[Attempt]) -> str | None:
     """The highest phase the remote side confirmed."""
     reached = None
     for attempt in chain:
@@ -65,7 +65,7 @@ def operation_status(chain: Sequence[Attempt]) -> str:
         return "ambiguous"
     if last.outcome == "failed" and not last.retryable:
         return "failed"
-    return _reached(chain) or "failed"
+    return reached(chain) or "failed"
 
 
 def next_phase(chain: Sequence[Attempt]) -> str | None:
@@ -77,6 +77,13 @@ def next_phase(chain: Sequence[Attempt]) -> str | None:
     if status in ("failed", "verified"):
         return None
     return PHASES[PHASES.index(status) + 1]
+
+
+def phase_after(chain: Sequence[Attempt]) -> str:
+    """The phase after the highest confirmed one, whatever the tip's outcome
+    (``verified`` stays ``verified``)."""
+    index = PHASES.index(reached(chain) or "prepared")
+    return PHASES[min(index + 1, len(PHASES) - 1)]
 
 
 def latest_remote(chain: Sequence[Attempt]) -> Attempt | None:
@@ -175,3 +182,54 @@ def operation_marker(operation_id: UUID | str) -> str:
     """Stored in the draft's ``metadata.notes`` so a lost remote id can be
     found again before anything new is created."""
     return f"nous-operation:{operation_id}"
+
+
+# Zenodo licence ids for GOO-316's SPDX text licences.
+ZENODO_LICENSES = {
+    "CC-BY-4.0": "cc-by-4.0",
+    "CC-BY-SA-4.0": "cc-by-sa-4.0",
+    "CC0-1.0": "cc0-1.0",
+}
+
+
+def zenodo_metadata(
+    title: str | None,
+    package_sha256: str,
+    statements: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """(Zenodo deposition metadata, missing fields). Creators and the licence
+    come only from the release's approved GOO-316 ``statements.json`` body;
+    an unknown value stays unknown and blocks the deposit, never guessed."""
+    body = (statements or {}).get("statements") or {}
+    creators = [
+        {
+            "name": str(a["display_name"]),
+            **({"affiliation": a["affiliations"][0]} if a.get("affiliations") else {}),
+            **({"orcid": a["orcid"]} if a.get("orcid") else {}),
+        }
+        for a in body.get("authors") or []
+        if a.get("display_name")
+    ]
+    spdx = (body.get("licenses") or {}).get("text")
+    missing = [
+        name
+        for name, ok in (
+            ("title", bool(title)),
+            ("creators", bool(creators) and len(creators) == len(body["authors"])),
+            ("license", spdx in ZENODO_LICENSES),
+        )
+        if not ok
+    ]
+    metadata: dict[str, Any] = {
+        "upload_type": "publication",
+        "publication_type": "preprint",
+        "title": title,
+        "creators": creators,
+        "description": (
+            f"Manuscript release package (sha256 {package_sha256}) deposited "
+            "from NOUS."
+        ),
+        "access_right": "open",
+        "license": ZENODO_LICENSES.get(str(spdx)),
+    }
+    return metadata, missing
