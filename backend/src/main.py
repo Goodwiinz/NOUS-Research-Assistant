@@ -81,6 +81,7 @@ from src.api.research import (
 )
 from src.api.research_engine import (
     research_engine_acquisition_router,
+    research_engine_appraisals_router,
     research_engine_blueprints_router,
     research_engine_capabilities_router,
     research_engine_corpus_router,
@@ -696,6 +697,9 @@ app.include_router(
 app.include_router(
     research_engine_journey_router, prefix="/api/v1"
 )  # Research Engine plan-to-write journey + audit bundle (GOO-308)
+app.include_router(
+    research_engine_appraisals_router, prefix="/api/v1"
+)  # Research Engine study-design appraisal (GOO-309)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search

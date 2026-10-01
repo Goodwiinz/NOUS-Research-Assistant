@@ -184,7 +184,14 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
             *(row.interpretation_claim_version_ids or []),
         ]:
             edges.append((rules.node("claim_version", value), target))
+    # GOO-309: appraisals hang off accepted values, sources and protocols.
+    # Local import: appraisal_service reads this graph for its stale flags.
+    from src.services.research_engine import appraisal_service
+
+    part_edges, part_changed = await appraisal_service.graph_part(db, collection_id)
+    edges += part_edges
     changed = await _changed_sources(db, edges)
+    changed |= part_changed
     changed |= {
         rules.node("accepted", row.id)
         for row in accepted
