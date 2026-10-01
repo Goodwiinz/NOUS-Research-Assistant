@@ -2004,19 +2004,6 @@
       "nosec": 0,
       "skipped_tests": 0
     },
-    "backend/src/middleware/file_upload_security.py": {
-      "CONFIDENCE.HIGH": 3,
-      "CONFIDENCE.LOW": 0,
-      "CONFIDENCE.MEDIUM": 4,
-      "CONFIDENCE.UNDEFINED": 0,
-      "SEVERITY.HIGH": 0,
-      "SEVERITY.LOW": 7,
-      "SEVERITY.MEDIUM": 0,
-      "SEVERITY.UNDEFINED": 0,
-      "loc": 621,
-      "nosec": 0,
-      "skipped_tests": 0
-    },
     "backend/src/middleware/multi_tenancy.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,

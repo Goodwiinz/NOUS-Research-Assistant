@@ -87,6 +87,7 @@ export async function connect(
     label: string;
     tools?: boolean;
     publish?: boolean;
+    write?: boolean;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
@@ -95,10 +96,13 @@ export async function connect(
   // NOUS capabilities are opt-in and each scope is shown on the consent page.
   if (options.publish && !options.tools)
     throw new Error("--publish requires --tools");
+  if (options.write && !options.tools)
+    throw new Error("--write requires --tools");
   const scopes = [
     "harness:execute",
     ...(options.tools ? ["tools:read"] : []),
     ...(options.publish ? ["artifacts:publish"] : []),
+    ...(options.write ? ["tools:write"] : []),
   ];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
@@ -411,6 +415,7 @@ function mcpSession(
     ...(outputRoot && state.scopes?.includes("artifacts:publish")
       ? { outputRoot }
       : {}),
+    ...(state.scopes?.includes("tools:write") ? { actions: true } : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -502,10 +507,10 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools [--publish]] | workspace add --root PATH [--label NAME] | run
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools [--publish] [--write]] | workspace add --root PATH [--label NAME] | run
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
-  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish.
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
@@ -525,6 +530,8 @@ async function main(): Promise<void> {
       session: { type: "string" },
       tools: { type: "boolean" },
       publish: { type: "boolean" },
+      write: { type: "boolean" },
+      actions: { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -555,6 +562,7 @@ async function main(): Promise<void> {
       label: values.label,
       tools: values.tools,
       publish: values.publish,
+      write: values.write,
     });
   else if (positionals.join(" ") === "disconnect")
     await disconnect({ stateDir });
@@ -568,6 +576,7 @@ async function main(): Promise<void> {
       credentialHandle: values.session,
       stateDir: resolve(stateDir),
       ...(values.root ? { outputRoot: resolve(values.root) } : {}),
+      ...(values.actions ? { actions: true } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });

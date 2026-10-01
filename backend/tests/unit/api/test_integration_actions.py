@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Iterator
 from uuid import uuid4
@@ -14,7 +15,7 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.security import TokenData, get_current_user_token
 from src.schemas.integration_context import IntegrationContext
-from src.schemas.tool_actions import ActionStatus
+from src.schemas.tool_actions import ActionReview, ActionStatus
 from src.services.agent.tool_actions import (
     ActionConflict,
     ActionNotFound,
@@ -49,7 +50,7 @@ async def _completed(value: Any) -> Any:
 
 @pytest.fixture
 def calls() -> dict[str, list[Any]]:
-    return {"request": [], "decide": [], "status": []}
+    return {"request": [], "decide": [], "status": [], "review": []}
 
 
 @pytest.fixture
@@ -85,6 +86,24 @@ def app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]) -> FastAPI
         calls["status"].append((actor, invocation_id))
         return _completed(_status("succeeded"))
 
+    def get_action_for_review(_db: Any, user: Any, invocation_id: Any) -> Any:
+        calls["review"].append((user, invocation_id))
+        return _completed(
+            ActionReview(
+                invocation_id=INVOCATION,
+                state="awaiting_approval",
+                tool_name="create_project_note",
+                project_id=PROJECT,
+                project_label="Project",
+                project_available=True,
+                title="t",
+                content="c",
+                tags=[],
+                requested_at=datetime.now(timezone.utc),
+            )
+        )
+
+    monkeypatch.setattr(actions, "get_action_for_review", get_action_for_review)
     monkeypatch.setattr(actions, "request_action", request_action)
     monkeypatch.setattr(actions, "decide_action", decide_action)
     monkeypatch.setattr(actions, "get_action_status", get_action_status)
@@ -169,6 +188,20 @@ def test_browser_user_decides_once_without_a_grant_header(
         headers={"Authorization": "Bearer browser", **CLI_HEADERS},
     )
     assert with_grant.status_code == 403
+
+
+def test_review_is_browser_only(
+    app: FastAPI, client: TestClient, calls: dict[str, list[Any]]
+) -> None:
+    path = f"/api/v1/integrations/actions/{INVOCATION}/review"
+    for headers in (CLI_HEADERS, {"Authorization": "Bearer cli-jwt"}):
+        assert client.get(path, headers=headers).status_code == 403
+    assert calls["review"] == []
+    _as_browser(app)
+    ok = client.get(path, headers={"Authorization": "Bearer browser"})
+    assert ok.status_code == 200
+    assert ok.json()["title"] == "t" and ok.json()["project_label"] == "Project"
+    assert calls["review"][0][1] == INVOCATION
 
 
 def test_browser_token_cannot_request_or_read_as_a_harness(
