@@ -34,6 +34,10 @@ from ._errors import client_safe_error, extract_interrupt_confirmation
 logger = logging.getLogger(__name__)
 
 _CANCELLATION_POLL_SECONDS = 0.5
+# A Stop-marker read is advisory while the graph runs: one pool timeout or
+# connection blip must not cancel a turn mid-tool. Only this many consecutive
+# failed polls (~5 s at the default interval) escalate to a failed turn.
+_CANCELLATION_POLL_MAX_CONSECUTIVE_FAILURES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -2369,11 +2373,24 @@ async def _invoke_graph_with_cancellation_monitor(
     graph_task = asyncio.create_task(graph.ainvoke(graph_input, config=config))
 
     async def monitor() -> None:
+        consecutive_failures = 0
         while not graph_task.done():
             await asyncio.sleep(_CANCELLATION_POLL_SECONDS)
             if graph_task.done():
                 return
-            if await cancellation_requested():
+            try:
+                requested = await cancellation_requested()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Already logged by cancellation_requested(). The strict
+                # pre-start and post-return reads still fail closed.
+                consecutive_failures += 1
+                if consecutive_failures >= _CANCELLATION_POLL_MAX_CONSECUTIVE_FAILURES:
+                    raise
+                continue
+            consecutive_failures = 0
+            if requested:
                 graph_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await graph_task
@@ -2436,28 +2453,21 @@ async def _run_agent_graph(
             resolved_thread_id: Optional[str] = None
             thread_obj = None
             tombstones = TombstoneReport()
-            try:
-                thread_obj, _conversation_id = await _resolve_thread(
-                    db, current_user, request
-                )
-                if thread_obj is not None:
-                    resolved_thread_id = str(thread_obj.id)
-                    if request.thread_id != resolved_thread_id:
-                        request.thread_id = resolved_thread_id
-                    # Retry-once + observable-on-failure so a swallowed persist
-                    # can't silently diverge the two stores (audit D3 / P2.6).
-                    await _persist_user_message_guarded(
-                        db, current_user, request, tombstoned_out=tombstones
-                    )
-            except AgentThreadResolutionError:
-                # An explicit thread/workspace is authoritative. Access loss
-                # between edge validation and worker dispatch must fail the
-                # run, never continue against an ephemeral checkpoint.
-                raise
-            except Exception:
-                logger.warning(
-                    "Failed to persist user turn before agent graph run",
-                    exc_info=True,
+            # Any resolution failure (access loss or a DB error during the
+            # re-check) fails the run: continuing would run the graph on an
+            # unverified ``request.thread_id`` checkpoint labelled ephemeral.
+            # The persist below never raises (_persist_user_message_guarded).
+            thread_obj, _conversation_id = await _resolve_thread(
+                db, current_user, request
+            )
+            if thread_obj is not None:
+                resolved_thread_id = str(thread_obj.id)
+                if request.thread_id != resolved_thread_id:
+                    request.thread_id = resolved_thread_id
+                # Retry-once + observable-on-failure so a swallowed persist
+                # can't silently diverge the two stores (audit D3 / P2.6).
+                await _persist_user_message_guarded(
+                    db, current_user, request, tombstoned_out=tombstones
                 )
 
             # Configure LangSmith tracing if available
