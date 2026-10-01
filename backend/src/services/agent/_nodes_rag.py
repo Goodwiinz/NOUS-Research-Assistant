@@ -280,6 +280,50 @@ async def _verify_extracted_project_id(
     return extracted_pid if owned is True else None
 
 
+async def _bind_promoted_project(
+    project_id: Optional[str], state: AgentState, configurable: Dict[str, Any]
+) -> None:
+    """Persist a text-promoted project into the durable thread binding (R8-A6).
+
+    Each turn's input re-seeds ``current_project_id`` / ``page_context`` from
+    the request, so the in-state promotion alone is gone next turn. Binding
+    the thread lets ``_resolve_and_bind_project`` resolve it (path 2) on
+    every later turn. Routed through that same writer, so its owner-only
+    gate applies: a member-only project stays a turn-local promotion.
+    Best-effort — a failure here never fails the turn.
+    """
+    thread_id = configurable.get("thread_id")
+    user_id = configurable.get("user_id")
+    if not (
+        project_id
+        and thread_id
+        and user_id
+        and state.get("thread_persistence") == "durable"
+    ):
+        return
+    from src.services.agent.agent_execution_service import _resolve_and_bind_project
+    from src.services.agent.tool_session import resolve_tool_user, tool_session
+    from src.services.threads import workspace_access
+
+    try:
+        async with tool_session() as session:
+            user = await resolve_tool_user(
+                session, str(user_id), configurable.get("organization_id")
+            )
+            if user is None:
+                return
+            thread = await workspace_access.get_thread(
+                session, UUID(str(thread_id)), user.id, include_messages=False
+            )
+            if thread is None:
+                return
+            await _resolve_and_bind_project(
+                session, user, thread, {"project_id": project_id}
+            )
+    except Exception:  # noqa: BLE001 — binding is an optimisation, not a gate
+        logger.warning("promoted project could not be bound to thread", exc_info=True)
+
+
 def is_conversational(content: str) -> bool:
     """Return ``True`` when *content* is a bare greeting / acknowledgement.
 
@@ -1135,6 +1179,7 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
             # and takes precedence in ``_resolve_active_project_id`` anyway,
             # so skip the DB round trip when it won't change the outcome.
             extracted_pid = await _verify_extracted_project_id(extracted_pid, user_id)
+            await _bind_promoted_project(extracted_pid, state, configurable)
         resolved_pid: Optional[str] = _resolve_active_project_id(
             existing_project_id, extracted_pid
         )
@@ -1160,6 +1205,7 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
         # Gate the text-extraction path only (audit M3) — see the identical
         # comment in the conversational branch above.
         extracted_pid = await _verify_extracted_project_id(extracted_pid, user_id)
+        await _bind_promoted_project(extracted_pid, state, configurable)
 
     resolved_project_id: Optional[str] = _resolve_active_project_id(
         existing_project_id, extracted_pid
