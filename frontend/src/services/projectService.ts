@@ -38,6 +38,17 @@ import type {
   ApiPromoteRequest,
   ApiReleaseVerification,
 } from '@/types/api/manuscript-release-contract';
+import type {
+  ApiApproval,
+  ApiApprovalCreate,
+  ApiOrcidAuthentication,
+  ApiOrcidStart,
+  ApiStatementSet,
+  ApiStatementSetCreate,
+  ApiStatementsList,
+  ApiVenueCheck,
+  ApiVenueCheckList,
+} from '@/types/api/statements-contract';
 
 // Types
 export interface Project {
@@ -758,14 +769,82 @@ export const projectService = {
     );
   },
 
-  /** GOO-315: the stored package zip. */
+  /** GOO-315: the stored package zip (GOO-316: or its anonymized variant). */
   async downloadManuscriptPackage(
     projectId: string,
-    releaseId: string
+    releaseId: string,
+    variant: 'identified' | 'anonymized' = 'identified'
   ): Promise<void> {
+    const suffix = variant === 'identified' ? '' : `-${variant}`;
     await api.download(
-      `/projects/${projectId}/manuscript-releases/${releaseId}/package`,
-      `manuscript-release-${releaseId}.zip`
+      `/projects/${projectId}/manuscript-releases/${releaseId}/package?variant=${variant}`,
+      `manuscript-release-${releaseId}${suffix}.zip`
+    );
+  },
+
+  /** GOO-316: statement set tip and history, with ORCID states. */
+  async listStatements(projectId: string): Promise<ApiStatementsList> {
+    return api.get<ApiStatementsList>(`/projects/${projectId}/statements`);
+  },
+
+  /** GOO-316: a new statement set version (409 on a stale tip). */
+  async createStatementSet(
+    projectId: string,
+    data: ApiStatementSetCreate
+  ): Promise<ApiStatementSet> {
+    return api.post<ApiStatementSet>(`/projects/${projectId}/statements`, data);
+  },
+
+  /** GOO-316: one author's approval of the set's exact hash. */
+  async approveStatementSet(
+    projectId: string,
+    setId: string,
+    data: ApiApprovalCreate
+  ): Promise<ApiApproval> {
+    return api.post<ApiApproval>(
+      `/projects/${projectId}/statements/${setId}/approvals`,
+      data
+    );
+  },
+
+  /** GOO-316: run generic-icmje-credit/1 on a release's stored package. */
+  async runVenueCheck(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiVenueCheck> {
+    return api.post<ApiVenueCheck>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/venue-checks`,
+      { idempotency_key: crypto.randomUUID() }
+    );
+  },
+
+  /** GOO-316: venue check results with actionable items. */
+  async listVenueChecks(
+    projectId: string,
+    releaseId: string
+  ): Promise<ApiVenueCheckList> {
+    return api.get<ApiVenueCheckList>(
+      `/projects/${projectId}/manuscript-releases/${releaseId}/venue-checks`
+    );
+  },
+
+  /** GOO-316: the ORCID authorize URL (503 when ORCID is not configured). */
+  async orcidStart(): Promise<ApiOrcidStart> {
+    return api.get<ApiOrcidStart>('/auth/orcid/start');
+  },
+
+  /** GOO-316: finish the ORCID flow; returns the non-secret receipt. */
+  async completeOrcid(params: {
+    code?: string | null;
+    state?: string | null;
+    error?: string | null;
+  }): Promise<ApiOrcidAuthentication> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) query.set(key, value);
+    }
+    return api.get<ApiOrcidAuthentication>(
+      `/auth/orcid/callback?${query.toString()}`
     );
   },
 

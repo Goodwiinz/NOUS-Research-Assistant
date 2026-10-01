@@ -14,6 +14,8 @@ vi.mock('@/services/projectService', () => ({
     promoteManuscriptRelease: vi.fn(),
     downloadManuscriptPackage: vi.fn(),
     verifyManuscriptRelease: vi.fn(),
+    listVenueChecks: vi.fn(),
+    runVenueCheck: vi.fn(),
   },
 }));
 
@@ -189,5 +191,86 @@ describe('ManuscriptReleaseSection (GOO-315)', () => {
     expect(
       screen.getByRole('button', { name: 'Build candidate' })
     ).toBeEnabled();
+  });
+
+  it('anonymized download offered', async () => {
+    vi.mocked(projectService.listVenueChecks).mockResolvedValue({
+      checks: [
+        {
+          id: 'v1',
+          collection_id: 'project-1',
+          release_id: 'release-candidate-1',
+          profile_id: 'generic-icmje-credit',
+          profile_version: 1,
+          package_sha256: 'd'.repeat(64),
+          anonymized_sha256: 'e'.repeat(64),
+          status: 'fail',
+          rules: {
+            required: 'fail',
+            formatting: 'pass',
+            anonymization: 'pass',
+          },
+          items: [
+            {
+              rule: 'required',
+              field: 'ethics',
+              detail: 'The ethics statement is missing',
+              fix: 'Write the ethics statement',
+            },
+          ],
+          checked_by_id: 'me',
+          created_at: '2026-10-01T00:00:00Z',
+        },
+      ],
+    });
+    withReleases(
+      release({
+        anonymized_sha256: 'e'.repeat(64),
+        checks: {
+          ...release().checks,
+          statements: pass,
+          venue: { state: 'fail', items: [] },
+        },
+      })
+    );
+    render(
+      <ManuscriptReleaseSection
+        projectId="project-1"
+        draft={draft}
+        canPromote={false}
+      />
+    );
+    const anonymized = await screen.findByRole('button', {
+      name: 'Download anonymized package',
+    });
+    anonymized.click();
+    expect(projectService.downloadManuscriptPackage).toHaveBeenCalledWith(
+      'project-1',
+      'release-candidate-1',
+      'anonymized'
+    );
+    expect(
+      await screen.findByText('generic-icmje-credit/1:', { exact: false })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('ethics: Write the ethics statement')
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Venue profile: Fail')).toBeInTheDocument();
+  });
+
+  it('no anonymized download for a GOO-315 release', async () => {
+    withReleases(release({ anonymized_sha256: null }));
+    render(
+      <ManuscriptReleaseSection
+        projectId="project-1"
+        draft={draft}
+        canPromote={false}
+      />
+    );
+    await screen.findByLabelText('Release checks');
+    expect(
+      screen.queryByRole('button', { name: 'Download anonymized package' })
+    ).toBeNull();
+    expect(projectService.listVenueChecks).not.toHaveBeenCalled();
   });
 });

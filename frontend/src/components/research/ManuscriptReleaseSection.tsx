@@ -6,18 +6,26 @@
  * completeness and reproducibility are reported, never required. Promotion
  * is offered only to adjudicators and supervisors and stays disabled while
  * an obligation fails (the server re-checks everything anyway). Packaging
- * never authorizes an external submission.
+ * never authorizes an external submission. GOO-316 adds the statements and
+ * venue checks (obligations only when a statement set is bound), the
+ * venue-check results with actionable items, and the anonymized download.
  */
 
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, PackageCheck, ShieldCheck } from 'lucide-react';
+import {
+  ClipboardCheck,
+  Download,
+  PackageCheck,
+  ShieldCheck,
+} from 'lucide-react';
 import { projectService, type Draft } from '@/services/projectService';
 import type {
   ApiCheckState,
   ApiManuscriptRelease,
   ApiReleaseVerification,
 } from '@/types/api/manuscript-release-contract';
+import type { ApiVenueCheck } from '@/types/api/statements-contract';
 
 const CHECKS: { key: string; label: string }[] = [
   { key: 'claim_support', label: 'Claim support' },
@@ -26,6 +34,8 @@ const CHECKS: { key: string; label: string }[] = [
   { key: 'peer_review', label: 'Peer review' },
   { key: 'reporting_completeness', label: 'Reporting completeness' },
   { key: 'experiment_reproducibility', label: 'Experiment reproducibility' },
+  { key: 'statements', label: 'Author statements' },
+  { key: 'venue', label: 'Venue profile' },
 ];
 const LABEL: Record<string, string> = Object.fromEntries(
   CHECKS.map((c) => [c.key, c.label])
@@ -57,6 +67,70 @@ const BUTTON =
 
 export const manuscriptReleasesQueryKey = (projectId: string) =>
   ['project', projectId, 'manuscript-releases'] as const;
+
+const VenueChecks: React.FC<{ projectId: string; releaseId: string }> = ({
+  projectId,
+  releaseId,
+}) => {
+  const queryClient = useQueryClient();
+  const key = [...manuscriptReleasesQueryKey(projectId), releaseId, 'venue'];
+  const { data } = useQuery({
+    queryKey: key,
+    queryFn: () => projectService.listVenueChecks(projectId, releaseId),
+    retry: false,
+  });
+  const run = useMutation({
+    mutationFn: () => projectService.runVenueCheck(projectId, releaseId),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: key });
+      void queryClient.invalidateQueries({
+        queryKey: manuscriptReleasesQueryKey(projectId),
+      });
+    },
+  });
+  const checks = data?.checks ?? [];
+  const latest: ApiVenueCheck | undefined = checks[checks.length - 1];
+  return (
+    <div aria-label="Venue check" className="space-y-1 text-xs">
+      <div className="flex items-center gap-2">
+        {latest ? (
+          <span>
+            {latest.profile_id}/{latest.profile_version}:{' '}
+            <span className={`px-1 rounded ${STATE[latest.status].tone}`}>
+              {STATE[latest.status].label}
+            </span>{' '}
+            <span className="text-muted-foreground">
+              package {latest.package_sha256.slice(0, 12)}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground">No venue check yet</span>
+        )}
+        <button
+          type="button"
+          onClick={() => run.mutate()}
+          disabled={run.isPending}
+          className={BUTTON}
+        >
+          <ClipboardCheck className="h-3 w-3" />
+          Run venue check
+        </button>
+      </div>
+      {latest && (latest.items ?? []).length > 0 && (
+        <ul
+          aria-label="Venue items"
+          className="ml-4 list-disc text-muted-foreground"
+        >
+          {(latest.items ?? []).map((item) => (
+            <li key={`${item.rule}-${item.field}`}>
+              {item.field}: {item.fix}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 const ReleaseCard: React.FC<{
   projectId: string;
@@ -155,6 +229,22 @@ const ReleaseCard: React.FC<{
           <Download className="h-3 w-3" />
           Download package
         </button>
+        {release.anonymized_sha256 && (
+          <button
+            type="button"
+            onClick={() =>
+              void projectService.downloadManuscriptPackage(
+                projectId,
+                release.id,
+                'anonymized'
+              )
+            }
+            className={BUTTON}
+          >
+            <Download className="h-3 w-3" />
+            Download anonymized package
+          </button>
+        )}
         <button
           type="button"
           onClick={() => verify.mutate()}
@@ -165,6 +255,13 @@ const ReleaseCard: React.FC<{
           Verify
         </button>
       </div>
+      {release.checks.statements &&
+        release.checks.statements.state !== 'not_applicable' && (
+          <VenueChecks
+            projectId={projectId}
+            releaseId={release.candidate_release_id ?? release.id}
+          />
+        )}
       {canPromote && release.stage === 'candidate' && failing.length > 0 && (
         <p className="text-xs text-muted-foreground">
           Failing obligations:{' '}
