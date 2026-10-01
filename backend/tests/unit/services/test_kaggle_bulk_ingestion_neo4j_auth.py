@@ -1,6 +1,6 @@
 """I9: Kaggle bulk ingestion must not fall back to a literal Neo4j password."""
 
-import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,17 +13,17 @@ REQUIRED_MESSAGE = "NEO4J_PASSWORD must be set for Neo4j ingestion"
 
 
 class _FakeResult:
-    async def single(self):
+    async def single(self) -> None:
         return None
 
-    def __aiter__(self):
+    def __aiter__(self) -> "_FakeResult":
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> None:
         raise StopAsyncIteration
 
 
-def _make_driver_ctor():
+def _make_driver_ctor() -> MagicMock:
     session = MagicMock()
     session.run = AsyncMock(return_value=_FakeResult())
     session_cm = MagicMock()
@@ -36,14 +36,18 @@ def _make_driver_ctor():
 
 
 class TestKaggleBulkNeo4jAuth:
-    def test_constructor_raises_when_password_unset(self, monkeypatch, tmp_path):
+    def test_constructor_raises_when_password_unset(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
 
         with pytest.raises(RuntimeError, match=REQUIRED_MESSAGE):
             KaggleBulkIngestionService()
 
-    async def test_explicit_credentials_do_not_require_env(self, monkeypatch, tmp_path):
+    async def test_explicit_credentials_do_not_require_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
         ctor = _make_driver_ctor()
@@ -62,7 +66,9 @@ class TestKaggleBulkNeo4jAuth:
         assert ctor.call_args.args[0] == "bolt://explicit:7687"
         assert ctor.call_args.kwargs.get("auth") == ("explicit-user", "explicit-secret")
 
-    async def test_env_credentials_used_when_params_absent(self, monkeypatch, tmp_path):
+    async def test_env_credentials_used_when_params_absent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("NEO4J_URI", "bolt://env-uri:7687")
         monkeypatch.setenv("NEO4J_USER", "env-user")

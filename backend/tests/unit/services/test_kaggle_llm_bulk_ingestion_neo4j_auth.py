@@ -12,14 +12,18 @@ REQUIRED_MESSAGE = "NEO4J_PASSWORD must be set for Neo4j ingestion"
 
 
 class TestKaggleLlmBulkNeo4jAuth:
-    async def test_get_driver_raises_when_password_unset(self, monkeypatch):
+    async def test_get_driver_raises_when_password_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
         service = KaggleLLMBulkIngestionService()
 
         with pytest.raises(RuntimeError, match=REQUIRED_MESSAGE):
             await service._get_neo4j_driver()
 
-    async def test_get_driver_receives_env_credentials(self, monkeypatch):
+    async def test_get_driver_receives_env_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from unittest.mock import MagicMock
 
         import neo4j
