@@ -3,3 +3,5 @@
 # The current fixture uses LEAK_MARKER; the original commit remains in PR history.
 # Ignore only this commit/file/rule/line finding, not other credentials or tests.
 9a9684c51c04553ba4065474f37657d9941d2379:backend/tests/unit/api/test_i8_error_sanitization.py:generic-api-key:28
+32bd2d301cbd0bd31e8e3681c981958a611965fc:backend/tests/integration/test_run_manifest_postgres.py:generic-api-key:90
+3ba8e567b79787c8bf8f86de443b4c89c66a6fc1:backend/tests/unit/services/test_manifest_rules.py:generic-api-key:190

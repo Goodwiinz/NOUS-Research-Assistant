@@ -1,0 +1,536 @@
+{
+  "schema": "nous.synthesis-gold.v1",
+  "measure": "smd_hedges_g",
+  "model": "random_effects_dl",
+  "tolerance": {
+    "abs": 1e-08
+  },
+  "expert_reviewed": false,
+  "reviewer": null,
+  "arm_order": [
+    "mean_i",
+    "sd_i",
+    "n_i",
+    "mean_c",
+    "sd_c",
+    "n_c"
+  ],
+  "direction": "intervention_minus_control",
+  "outcome_key": "depressive_symptoms",
+  "timepoint": "12 weeks",
+  "recorded": "2026-09-30: pure-Python and numpy/scipy (norm.ppf(0.975)) implementations; largest disagreement 1.1e-16",
+  "fields": {
+    "mean_i": {
+      "type": "number",
+      "unit": "GDS-15 points",
+      "timepoint": "12 weeks"
+    },
+    "sd_i": {
+      "type": "number",
+      "unit": "GDS-15 points",
+      "timepoint": "12 weeks"
+    },
+    "n_i": {
+      "type": "number",
+      "unit": "participants",
+      "timepoint": "12 weeks"
+    },
+    "mean_c": {
+      "type": "number",
+      "unit": "GDS-15 points",
+      "timepoint": "12 weeks"
+    },
+    "sd_c": {
+      "type": "number",
+      "unit": "GDS-15 points",
+      "timepoint": "12 weeks"
+    },
+    "n_c": {
+      "type": "number",
+      "unit": "participants",
+      "timepoint": "12 weeks"
+    }
+  },
+  "cases": [
+    {
+      "id": "heterogeneous",
+      "studies": [
+        {
+          "unit": "study:A",
+          "reports": [
+            "A-r1"
+          ],
+          "arms": [
+            4.1,
+            2.6,
+            60,
+            5.3,
+            2.9,
+            60
+          ]
+        },
+        {
+          "unit": "study:B",
+          "reports": [
+            "B-r1"
+          ],
+          "arms": [
+            6.0,
+            3.1,
+            45,
+            6.4,
+            3.0,
+            47
+          ]
+        },
+        {
+          "unit": "study:C",
+          "reports": [
+            "C-r1"
+          ],
+          "arms": [
+            3.2,
+            2.2,
+            30,
+            5.1,
+            2.5,
+            28
+          ]
+        },
+        {
+          "unit": "study:D",
+          "reports": [
+            "D-r1"
+          ],
+          "arms": [
+            5.5,
+            2.8,
+            80,
+            5.6,
+            2.7,
+            82
+          ]
+        }
+      ],
+      "expected": {
+        "g": [
+          -0.4329406845,
+          -0.1300815131,
+          -0.7978273216,
+          -0.0361951586
+        ],
+        "v": [
+          0.0336910474,
+          0.0428668189,
+          0.072689646,
+          0.0244678307
+        ],
+        "q": 7.3067910677,
+        "df": 3,
+        "tau2": 0.0558459463,
+        "i2": 0.5894230487,
+        "estimate": -0.3084711364,
+        "se": 0.1551738785,
+        "ci_low": -0.6126063496,
+        "ci_high": -0.0043359232
+      },
+      "independent": {
+        "g": [
+          -0.432940684481,
+          -0.130081513123,
+          -0.79782732164,
+          -0.036195158637
+        ],
+        "v": [
+          0.033691047354,
+          0.042866818871,
+          0.072689645973,
+          0.024467830675
+        ],
+        "q": 7.306791067694,
+        "df": 3,
+        "tau2": 0.055845946322,
+        "i2": 0.589423048749,
+        "estimate": -0.308471136392,
+        "se": 0.155173878482,
+        "ci_low": -0.612606349558,
+        "ci_high": -0.004335923225
+      }
+    },
+    {
+      "id": "homogeneous",
+      "studies": [
+        {
+          "unit": "study:E",
+          "reports": [
+            "E-r1"
+          ],
+          "arms": [
+            5.0,
+            3.0,
+            50,
+            5.9,
+            3.0,
+            50
+          ]
+        },
+        {
+          "unit": "study:F",
+          "reports": [
+            "F-r1"
+          ],
+          "arms": [
+            5.1,
+            3.0,
+            50,
+            6.0,
+            3.0,
+            50
+          ]
+        }
+      ],
+      "expected": {
+        "g": [
+          -0.2976982097,
+          -0.2976982097
+        ],
+        "v": [
+          0.0398316652,
+          0.0398316652
+        ],
+        "q": 0.0,
+        "df": 1,
+        "tau2": 0.0,
+        "i2": 0.0,
+        "estimate": -0.2976982097,
+        "se": 0.1411234657,
+        "ci_low": -0.5742951199,
+        "ci_high": -0.0211012995
+      },
+      "independent": {
+        "g": [
+          -0.297698209719,
+          -0.297698209719
+        ],
+        "v": [
+          0.039831665151,
+          0.039831665151
+        ],
+        "q": 0.0,
+        "df": 1,
+        "tau2": 0.0,
+        "i2": 0.0,
+        "estimate": -0.297698209719,
+        "se": 0.141123465716,
+        "ci_low": -0.574295119895,
+        "ci_high": -0.021101299542
+      }
+    },
+    {
+      "id": "duplicate_report",
+      "studies": [
+        {
+          "unit": "study:A",
+          "reports": [
+            "A-r1",
+            "A-r2"
+          ],
+          "arms": [
+            4.1,
+            2.6,
+            60,
+            5.3,
+            2.9,
+            60
+          ]
+        },
+        {
+          "unit": "study:B",
+          "reports": [
+            "B-r1"
+          ],
+          "arms": [
+            6.0,
+            3.1,
+            45,
+            6.4,
+            3.0,
+            47
+          ]
+        },
+        {
+          "unit": "study:C",
+          "reports": [
+            "C-r1"
+          ],
+          "arms": [
+            3.2,
+            2.2,
+            30,
+            5.1,
+            2.5,
+            28
+          ]
+        },
+        {
+          "unit": "study:D",
+          "reports": [
+            "D-r1"
+          ],
+          "arms": [
+            5.5,
+            2.8,
+            80,
+            5.6,
+            2.7,
+            82
+          ]
+        }
+      ],
+      "expected_same_as": "heterogeneous",
+      "expected_excluded": []
+    },
+    {
+      "id": "missing_variance",
+      "studies": [
+        {
+          "unit": "study:A",
+          "reports": [
+            "A-r1"
+          ],
+          "arms": [
+            4.1,
+            2.6,
+            60,
+            5.3,
+            2.9,
+            60
+          ]
+        },
+        {
+          "unit": "study:B",
+          "reports": [
+            "B-r1"
+          ],
+          "arms": [
+            6.0,
+            3.1,
+            45,
+            6.4,
+            3.0,
+            47
+          ]
+        },
+        {
+          "unit": "study:C",
+          "reports": [
+            "C-r1"
+          ],
+          "arms": [
+            3.2,
+            2.2,
+            30,
+            5.1,
+            2.5,
+            28
+          ]
+        },
+        {
+          "unit": "study:D",
+          "reports": [
+            "D-r1"
+          ],
+          "arms": [
+            5.5,
+            2.8,
+            80,
+            5.6,
+            2.7,
+            82
+          ]
+        },
+        {
+          "unit": "study:G",
+          "reports": [
+            "G-r1"
+          ],
+          "arms": [
+            5.0,
+            3.0,
+            40,
+            5.5,
+            0.0,
+            40
+          ]
+        }
+      ],
+      "expected_same_as": "heterogeneous",
+      "expected_excluded": [
+        {
+          "unit": "study:G",
+          "reason": "invalid_variance:c"
+        }
+      ]
+    },
+    {
+      "id": "unit_mismatch",
+      "studies": [
+        {
+          "unit": "study:A",
+          "reports": [
+            "A-r1"
+          ],
+          "arms": [
+            4.1,
+            2.6,
+            60,
+            5.3,
+            2.9,
+            60
+          ]
+        },
+        {
+          "unit": "study:B",
+          "reports": [
+            "B-r1"
+          ],
+          "arms": [
+            6.0,
+            3.1,
+            45,
+            6.4,
+            3.0,
+            47
+          ]
+        },
+        {
+          "unit": "study:C",
+          "reports": [
+            "C-r1"
+          ],
+          "arms": [
+            3.2,
+            2.2,
+            30,
+            5.1,
+            2.5,
+            28
+          ]
+        },
+        {
+          "unit": "study:D",
+          "reports": [
+            "D-r1"
+          ],
+          "arms": [
+            5.5,
+            2.8,
+            80,
+            5.6,
+            2.7,
+            82
+          ]
+        }
+      ],
+      "field_overrides": {
+        "mean_c": {
+          "unit": "%"
+        }
+      },
+      "expected_run_failures": [
+        "unit_mismatch"
+      ]
+    },
+    {
+      "id": "timepoint_mismatch",
+      "studies": [
+        {
+          "unit": "study:A",
+          "reports": [
+            "A-r1"
+          ],
+          "arms": [
+            4.1,
+            2.6,
+            60,
+            5.3,
+            2.9,
+            60
+          ]
+        },
+        {
+          "unit": "study:B",
+          "reports": [
+            "B-r1"
+          ],
+          "arms": [
+            6.0,
+            3.1,
+            45,
+            6.4,
+            3.0,
+            47
+          ]
+        },
+        {
+          "unit": "study:C",
+          "reports": [
+            "C-r1"
+          ],
+          "arms": [
+            3.2,
+            2.2,
+            30,
+            5.1,
+            2.5,
+            28
+          ]
+        },
+        {
+          "unit": "study:D",
+          "reports": [
+            "D-r1"
+          ],
+          "arms": [
+            5.5,
+            2.8,
+            80,
+            5.6,
+            2.7,
+            82
+          ]
+        }
+      ],
+      "field_overrides": {
+        "sd_i": {
+          "timepoint": "6 weeks"
+        }
+      },
+      "expected_run_failures": [
+        "timepoint_mismatch"
+      ]
+    },
+    {
+      "id": "single_study",
+      "studies": [
+        {
+          "unit": "study:A",
+          "reports": [
+            "A-r1"
+          ],
+          "arms": [
+            4.1,
+            2.6,
+            60,
+            5.3,
+            2.9,
+            60
+          ]
+        }
+      ],
+      "expected_run_failures": [
+        "insufficient_studies"
+      ]
+    }
+  ]
+}
