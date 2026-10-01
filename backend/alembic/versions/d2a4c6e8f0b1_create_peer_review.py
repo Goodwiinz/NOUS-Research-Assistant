@@ -241,7 +241,7 @@ def upgrade() -> None:
         sa.CheckConstraint(_DECISION_SHAPE, name="ck_peer_review_decisions_shape"),
     )
     op.execute("""
-        CREATE UNIQUE INDEX uq_peer_review_decisions_initial
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_peer_review_decisions_initial
         ON peer_review_decisions (comment_root_id, (kind = 'assigned'))
         WHERE supersedes_decision_id IS NULL
         """)
