@@ -10018,6 +10018,101 @@
         "title": "JobStatusResponse",
         "type": "object"
       },
+      "JourneyResponse": {
+        "properties": {
+          "current": {
+            "anyOf": [
+              {
+                "enum": [
+                  "plan",
+                  "discover",
+                  "select",
+                  "extract",
+                  "write"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/JourneyStage"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages"
+        ],
+        "title": "JourneyResponse",
+        "type": "object"
+      },
+      "JourneyStage": {
+        "description": "Derived from persisted rows on every call (``journey.derive_stages``).",
+        "properties": {
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "facts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Facts",
+            "type": "object"
+          },
+          "key": {
+            "enum": [
+              "plan",
+              "discover",
+              "select",
+              "extract",
+              "write"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "not_started",
+              "in_progress",
+              "attention",
+              "complete"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "status",
+          "facts",
+          "blockers"
+        ],
+        "title": "JourneyStage",
+        "type": "object"
+      },
       "KeyRotationRequest": {
         "description": "Request model for key rotation",
         "properties": {
@@ -41212,6 +41307,50 @@
         ]
       }
     },
+    "/api/v1/research-engine/projects/{project_id}/audit-bundle": {
+      "get": {
+        "operationId": "audit_bundle_route_api_v1_research_engine_projects__project_id__audit_bundle_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Offline-verifiable audit bundle (manifest + SHA256SUMS)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Audit Bundle Route",
+        "tags": [
+          "research-engine-journey"
+        ]
+      }
+    },
     "/api/v1/research-engine/projects/{project_id}/citation-chases": {
       "post": {
         "description": "OpenAlex citation chase; the service checks EDIT before and after I/O.",
@@ -41750,6 +41889,55 @@
         "summary": "Get Import Route",
         "tags": [
           "research-engine-corpus"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/journey": {
+      "get": {
+        "description": "Stage facts and derived status; reports state, never enforces order.",
+        "operationId": "journey_route_api_v1_research_engine_projects__project_id__journey_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JourneyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Journey Route",
+        "tags": [
+          "research-engine-journey"
         ]
       }
     },

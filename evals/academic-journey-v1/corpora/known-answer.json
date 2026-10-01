@@ -1,0 +1,34 @@
+{
+  "id": "known-answer",
+  "note": "Synthetic, frozen held-out corpus. The runner and principals may read this file; the gold answers are in known-answer.gold.json, which only the collector reads.",
+  "question": "Does supervised exercise reduce depressive symptoms in adults aged 65 or older compared with usual care?",
+  "criteria": {
+    "include": ["randomized controlled trial", "participants aged 65 or older", "supervised exercise intervention", "validated depressive-symptom outcome"],
+    "full_text_exclusion_reasons": ["wrong population", "wrong design"]
+  },
+  "fields": [
+    {"name": "sample_size", "type": "integer", "description": "Participants randomized"},
+    {"name": "mean_age", "type": "number", "description": "Mean age at baseline in years"},
+    {"name": "intervention_weeks", "type": "integer", "description": "Duration of the supervised programme in weeks"}
+  ],
+  "documents": [
+    {"id": "KA-01", "doi": "10.5555/ka.01", "title": "Supervised walking and late-life depression: a randomized trial", "abstract": "A randomized controlled trial of supervised walking in adults aged 65 and over, with depressive symptoms measured by the GDS-15."},
+    {"id": "KA-02", "doi": "10.5555/KA.01", "title": "Supervised walking and late-life depression: a randomized trial (conference abstract)", "abstract": "Conference abstract reporting the same trial as the journal article with the same registration number."},
+    {"id": "KA-03", "doi": "10.5555/ka.03", "title": "Group resistance training for depressive symptoms in older adults", "abstract": "A randomized trial of group resistance training; the full text is not available from any library source."},
+    {"id": "KA-04", "doi": "10.5555/ka.04", "title": "Exercise for depressive symptoms in middle-aged adults", "abstract": "A randomized trial of supervised exercise in adults aged 40 to 60."},
+    {"id": "KA-05", "doi": "10.5555/ka.05", "title": "Exercise habits and mood in retirement communities: a cohort study", "abstract": "A prospective cohort of residents aged 65 or older; no randomization."},
+    {"id": "KA-06", "doi": "10.5555/ka.06", "title": "Tai chi versus usual care for late-life depression", "abstract": "A randomized controlled trial in adults aged 65 or older.", "full_text": "Methods. We randomized 120 participants. The mean age at baseline was 71.4 years. The supervised programme ran for 12 weeks. Results. Depressive symptoms fell more in the tai chi arm than with usual care."},
+    {"id": "KA-07", "doi": "10.5555/ka.07", "title": "Aquatic exercise and depressive symptoms in older women", "abstract": "A randomized trial of supervised aquatic exercise in women aged 65 or older."},
+    {"id": "KA-08", "doi": "10.5555/ka.08", "title": "Home-based supervised exercise after hospital discharge in older adults", "abstract": "A randomized trial with depressive symptoms as a secondary outcome."},
+    {"id": "KA-09", "doi": "10.5555/ka.09", "title": "Dietary fibre and cognition in older adults", "abstract": "A trial of a dietary intervention with cognitive outcomes."},
+    {"id": "KA-10", "doi": "10.5555/ka.10", "title": "Exercise capacity in adolescents with asthma", "abstract": "A trial in adolescents; no depressive-symptom outcome."}
+  ],
+  "manuscript_claims": [
+    {"id": "C1", "text": "The tai chi trial randomized 120 participants."},
+    {"id": "C2", "text": "Participants in the tai chi trial had a mean age of 71.4 years."},
+    {"id": "C3", "text": "The supervised programme lasted 12 weeks."},
+    {"id": "C4", "text": "Tai chi reduced depressive symptoms by 40 percent."},
+    {"id": "C5", "text": "Tai chi did not change depressive symptoms compared with usual care."},
+    {"id": "C6", "text": "Depressive symptoms fell more with tai chi than with usual care."}
+  ]
+}
