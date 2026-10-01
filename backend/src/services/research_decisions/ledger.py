@@ -3,7 +3,8 @@
 Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_screening``, ``research_acquisition``, ``research_extraction``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
-``research_evidence``, ``research_synthesis``, ``research_experiment``)
+``research_evidence``, ``research_synthesis``, ``research_experiment``,
+``research_reproduction``)
 registers its subject type, payload vocabulary, value validation and replay
 transition rules in ``_FAMILIES``.
 
@@ -20,7 +21,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 from uuid import UUID, uuid4
 
@@ -490,6 +491,47 @@ _EXPERIMENT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
             "run_id",
             "manifest_id",
             "supersedes_figure_id",
+        }
+    ),
+}
+# GOO-313: fresh reruns of a manifested run, one stream per Collection. The
+# subject of every event is the rerun; attempts are numbered within it.
+_REPRODUCTION_AGGREGATE = "research_reproduction"
+_REPRODUCTION_SUBJECT = "experiment_rerun"
+_RERUN_STATUSES = frozenset(
+    {
+        "restoration_failed",
+        "environment_unavailable",
+        "execution_failed",
+        "cancelled",
+        "interrupted",
+        "executed",
+    }
+)
+_REPRODUCTION_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("rerun.admitted", 1): frozenset(
+        {
+            "collection_id",
+            "rerun_id",
+            "run_id",
+            "manifest_id",
+            "manifest_hash",
+            "rule_hash",
+        }
+    ),
+    ("rerun.attempt_started", 1): frozenset(
+        {"collection_id", "rerun_id", "attempt", "lease_expires_at"}
+    ),
+    ("rerun.attempt_finished", 1): frozenset(
+        {
+            "collection_id",
+            "rerun_id",
+            "attempt",
+            "status",
+            "reproduction",
+            "comparison_hash",
+            "output_sha256s",
+            "reasons",
         }
     ),
 }
@@ -2447,6 +2489,100 @@ def _validate_experiment_transitions(
         tips[key] = figure
 
 
+def _validate_reproduction_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    if _validated_payload_uuid(payload["rerun_id"], "rerun_id") != subject_id:
+        raise DecisionValidationError("rerun event subject is not its rerun")
+    if event_type == "rerun.admitted":
+        _validated_payload_uuid(payload["run_id"], "run_id")
+        _validated_payload_uuid(payload["manifest_id"], "manifest_id")
+        _validated_sha256(payload["manifest_hash"], "manifest_hash")
+        _validated_sha256(payload["rule_hash"], "rule_hash")
+        return
+    attempt = payload["attempt"]
+    if not _is_int(attempt) or attempt < 1:
+        raise DecisionValidationError("rerun attempt must be a positive integer")
+    if event_type == "rerun.attempt_started":
+        try:
+            datetime.fromisoformat(payload["lease_expires_at"])
+        except (TypeError, ValueError):
+            raise DecisionValidationError("rerun lease is not a timestamp") from None
+        return
+    if payload["status"] not in _RERUN_STATUSES:
+        raise DecisionValidationError("rerun status is invalid")
+    if payload["reproduction"] not in (None, "reproduced", "not_reproduced"):
+        raise DecisionValidationError("rerun reproduction is invalid")
+    if (payload["status"] == "executed") != (payload["reproduction"] is not None):
+        raise DecisionValidationError("reproduction requires an executed attempt")
+    _validated_optional_sha256(payload["comparison_hash"], "comparison_hash")
+    digests = payload["output_sha256s"]
+    if not isinstance(digests, list):
+        raise DecisionValidationError("output_sha256s must be a list")
+    for digest in digests:
+        _validated_sha256(digest, "output_sha256s")
+    reasons = payload["reasons"]
+    if not isinstance(reasons, list) or not all(
+        isinstance(r, str) and r for r in reasons
+    ):
+        raise DecisionValidationError("rerun reasons must be strings")
+
+
+def _validate_reproduction_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """A reviewer admits each rerun once; its attempts start in order
+    (1, 2, ...) after the previous one finished, each finishes at most once
+    (an attempt may finish without starting: a cancel or a lifecycle stop
+    before the worker claimed it), a reproduction verdict exists iff the
+    attempt executed, and nothing starts after an executed attempt."""
+    admitted: set[str] = set()
+    started: dict[str, set[int]] = {}
+    finished: dict[str, set[int]] = {}
+    executed: set[str] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        rerun = str(payload["rerun_id"])
+        if event.event_type == "rerun.admitted":
+            if event.actor_role != "reviewer":
+                raise DecisionReplayError("rerun admission requires a reviewer")
+            if rerun in admitted:
+                raise DecisionReplayError("rerun admitted twice")
+            admitted.add(rerun)
+            started[rerun], finished[rerun] = set(), set()
+            continue
+        if rerun not in admitted:
+            raise DecisionReplayError("rerun attempt names no admitted rerun")
+        if event.actor_role not in ("machine", "reviewer"):
+            raise DecisionReplayError("rerun attempt actor is invalid")
+        attempt = int(payload["attempt"])
+        current = max(finished[rerun], default=0) + 1
+        if rerun in executed:
+            raise DecisionReplayError("rerun attempt after an executed attempt")
+        if attempt != current:
+            raise DecisionReplayError("rerun attempts out of order")
+        if event.event_type == "rerun.attempt_started":
+            if attempt in started[rerun]:
+                raise DecisionReplayError("rerun attempt started twice")
+            started[rerun].add(attempt)
+            continue
+        if (payload["status"] == "executed") != (payload["reproduction"] is not None):
+            raise DecisionReplayError("reproduction without an executed attempt")
+        finished[rerun].add(attempt)
+        if payload["status"] == "executed":
+            executed.add(rerun)
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -2550,6 +2686,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_EXPERIMENT_PAYLOAD_KEYS,
         validate_payload=_validate_experiment_payload,
         validate_transitions=_validate_experiment_transitions,
+        requires_subject_version=False,
+    ),
+    _REPRODUCTION_AGGREGATE: _Family(
+        subject_type=_REPRODUCTION_SUBJECT,
+        payload_keys=_REPRODUCTION_PAYLOAD_KEYS,
+        validate_payload=_validate_reproduction_payload,
+        validate_transitions=_validate_reproduction_transitions,
         requires_subject_version=False,
     ),
 }
