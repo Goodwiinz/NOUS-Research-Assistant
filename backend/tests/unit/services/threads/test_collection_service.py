@@ -190,3 +190,69 @@ async def test_delete_collection_not_found_vs_forbidden(
 
     with pytest.raises(PermissionError):
         await collection_service.delete_collection(db_session, collection.id, viewer.id)
+
+
+async def _link_row(db_session: AsyncSession, collection_id: UUID, doc_id: UUID):
+    from sqlalchemy import select
+
+    from src.models.collection import CollectionDocument
+
+    return (
+        await db_session.execute(
+            select(CollectionDocument)
+            .where(
+                CollectionDocument.collection_id == collection_id,
+                CollectionDocument.document_id == doc_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+
+
+async def test_re_adding_removed_document_restores_link(
+    db_session: AsyncSession, user_factory: Callable[..., Awaitable[User]]
+) -> None:
+    """R6-M7 / R8-B3: remove then re-add revives the soft-deleted junction row
+    on both the REST path and the agent link helper, instead of raising on
+    ``uq_collection_documents`` or reporting ``already_linked``."""
+    from src.services.agent.tool_helpers import _link_documents_to_project
+
+    owner = await user_factory()
+    ws = await _make_workspace(db_session, owner)
+    doc = await _make_document(db_session, owner.organization_id, owner)
+    collection = await collection_service.create_collection(
+        db_session,
+        CollectionCreate(workspace_id=ws.id, name="c", document_ids=[doc.id]),
+        owner.id,
+    )
+    assert collection is not None
+    original_row_id = collection.documents[0].id
+
+    # REST: remove → re-add.
+    await collection_service.remove_documents_from_collection(
+        db_session, collection.id, [doc.id], owner.id
+    )
+    await collection_service.add_documents_to_collection(
+        db_session, collection.id, [doc.id], owner.id
+    )
+    row = await _link_row(db_session, collection.id, doc.id)
+    assert row.id == original_row_id
+    assert row.is_deleted is False
+    assert row.deleted_at is None
+
+    # Agent helper: remove → link.
+    await collection_service.remove_documents_from_collection(
+        db_session, collection.id, [doc.id], owner.id
+    )
+    result = await _link_documents_to_project(
+        db_session, collection, [str(doc.id), str(doc.id)]
+    )
+    assert result == {"linked": 1, "already_linked": 0, "restored": [str(doc.id)]}
+    row = await _link_row(db_session, collection.id, doc.id)
+    assert row.id == original_row_id
+    assert row.is_deleted is False
+    assert row.deleted_at is None
+
+    # An active link stays already_linked.
+    again = await _link_documents_to_project(db_session, collection, [str(doc.id)])
+    assert again == {"linked": 0, "already_linked": 1, "restored": []}

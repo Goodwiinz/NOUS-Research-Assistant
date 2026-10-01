@@ -781,3 +781,139 @@ async def test_injected_mutation_without_operation_scope_fails_closed(
     dispatch.assert_not_awaited()
     assert result["error_category"] == "operation_context_invalid"
     assert result["automatic_retry_allowed"] is False
+
+
+def _install_external_claim(
+    monkeypatch: pytest.MonkeyPatch, claim: Any
+) -> tuple[Any, AsyncMock]:
+    """Serve ``claim`` from the claim store and record any real dispatch."""
+    import contextlib
+    from types import SimpleNamespace
+
+    from src.services.agent import tool_operations, tool_session, tools_impl
+
+    @contextlib.asynccontextmanager
+    async def _scope() -> Any:
+        yield SimpleNamespace(begin=contextlib.nullcontext)
+
+    monkeypatch.setattr(tool_session, "tool_session", _scope)
+    monkeypatch.setattr(
+        tool_operations, "claim_operation", AsyncMock(return_value=claim)
+    )
+    dispatch = AsyncMock()
+    monkeypatch.setattr(tools_impl, "_dispatch_tool", dispatch)
+    return tools_impl, dispatch
+
+
+async def _run_external(tools_impl: Any, call_id: str) -> dict[str, Any]:
+    from src.services.agent.tool_operations import ToolOperationKey
+
+    args = {"paper_ids": ["2401.12345"], "project_id": None}
+    key = ToolOperationKey.from_context(
+        organization_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        thread_id="thread-b5",
+        turn_id="turn-b5",
+        tool_call_id=call_id,
+        tool_name="ingest_arxiv_papers",
+        arguments=args,
+    )
+    return cast(
+        dict[str, Any],
+        await tools_impl._execute_external_operation(
+            key,
+            tool_name="ingest_arxiv_papers",
+            args=args,
+            user_id=str(key.user_id),
+            current_user=cast(Any, object()),
+            thread_id=key.thread_id,
+            runtime_snapshot_id="",
+            project_id="",
+            organization_id=str(key.organization_id),
+            dispatch_session=cast(Any, object()),
+        ),
+    )
+
+
+async def test_external_barrier_replay_of_prior_error_is_marked_no_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R8-B5: a new call id replaying another call's error says so."""
+    from src.services.agent.tool_operations import OperationClaim
+
+    stored = {"error": "arXiv request timed out", "error_category": "transient"}
+    tools_impl, dispatch = _install_external_claim(
+        monkeypatch,
+        OperationClaim(
+            "completed", "prior-op", result=dict(stored), same_identity=False
+        ),
+    )
+
+    replay = await _run_external(tools_impl, "call-2")
+
+    dispatch.assert_not_awaited()
+    assert replay["error"] == stored["error"]
+    assert replay["replayed_from_operation"] == "prior-op"
+    assert replay["automatic_retry_allowed"] is False
+
+
+async def test_external_same_identity_replay_returns_saved_result_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.agent.tool_operations import OperationClaim
+
+    stored = {"status": "success", "document_ids": ["d1"]}
+    tools_impl, dispatch = _install_external_claim(
+        monkeypatch,
+        OperationClaim("completed", "own-op", result=dict(stored), same_identity=True),
+    )
+
+    assert await _run_external(tools_impl, "call-1") == stored
+    dispatch.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_increment"),
+    [
+        ({"error": "arXiv request timed out"}, 0),
+        (
+            {
+                "error": "arXiv request timed out",
+                "replayed_from_operation": "prior-op",
+                "automatic_retry_allowed": False,
+            },
+            1,
+        ),
+    ],
+)
+async def test_replayed_transient_error_counts_toward_error_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+    expected_increment: int,
+) -> None:
+    """R8-B5: a fresh transient failure is free; its replay is not."""
+    from src.services.agent import _nodes_tools, graph
+
+    async def _execute(**_kwargs: Any) -> dict[str, Any]:
+        return dict(payload)
+
+    monkeypatch.setattr(graph, "_get_execute_tool", lambda: _execute)
+    result = await _nodes_tools._execute_single_tool(
+        {
+            "name": "ingest_arxiv_papers",
+            "id": "call-2",
+            "args": {"paper_ids": ["2401.12345"]},
+        },
+        {
+            "configurable": {
+                "user_id": str(uuid.uuid4()),
+                "organization_id": str(uuid.uuid4()),
+                "thread_id": "thread-b5",
+            }
+        },
+        {},
+        {"tool_operation_protocol_version": 1, "tool_operation_turn_id": "turn-b5"},
+    )
+
+    assert result["execution"]["status"] == "failed"
+    assert result["error_increment"] == expected_increment

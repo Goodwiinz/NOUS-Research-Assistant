@@ -2261,3 +2261,75 @@ async def test_postgres_uncertain_external_effect_blocks_new_call_id_replay(
             operations = list(await verify.scalars(select(AgentToolOperation)))
             assert len(operations) == 1
             assert operations[0].state == "unknown"
+
+
+async def test_postgres_errored_external_replay_is_marked_and_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R8-B5: a new call id replaying a same-turn failure is marked and counted."""
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+
+    from src.services.agent import _nodes_tools, graph, tools_impl
+
+    async with _postgres_tool_schema(dsn) as database:
+        dispatch_calls = 0
+
+        async def _timeout(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            nonlocal dispatch_calls
+            dispatch_calls += 1
+            return {"error": "arXiv request timed out"}
+
+        monkeypatch.setattr(tools_impl, "_dispatch_tool", _timeout)
+        monkeypatch.setattr(graph, "_get_execute_tool", lambda: tools_impl.execute_tool)
+        config = cast(
+            RunnableConfig,
+            {
+                "configurable": {
+                    "user_id": str(database.user_id),
+                    "organization_id": str(database.organization_id),
+                    "thread_id": "b5-thread",
+                }
+            },
+        )
+        operation_context = {
+            "tool_operation_protocol_version": 1,
+            "tool_operation_turn_id": "b5-turn",
+        }
+        args = {"paper_ids": ["2401.12345"]}
+
+        with patch(
+            "src.services.agent.tool_session.tool_session",
+            _tool_session_scope(database.session_factory),
+        ):
+            fresh = await _nodes_tools._execute_single_tool(
+                {"name": "ingest_arxiv_papers", "id": "b5-call-1", "args": args},
+                config,
+                {},
+                operation_context,
+            )
+            replay = await _nodes_tools._execute_single_tool(
+                {"name": "ingest_arxiv_papers", "id": "b5-call-2", "args": args},
+                config,
+                {},
+                operation_context,
+            )
+
+        first_key = _operation_key(
+            database=database,
+            tool_name="ingest_arxiv_papers",
+            arguments=args,
+            call_id="b5-call-1",
+            turn_id="b5-turn",
+            thread_id="b5-thread",
+        )
+        assert dispatch_calls == 1
+        assert fresh["error_increment"] == 0  # transient: free the first time
+        assert "replayed_from_operation" not in fresh["execution"]["result"]
+        assert replay["execution"]["status"] == "failed"
+        assert replay["error_increment"] == 1
+        replayed = replay["execution"]["result"]
+        assert replayed["error"] == "arXiv request timed out"
+        assert replayed["replayed_from_operation"] == first_key.operation_id
+        assert replayed["automatic_retry_allowed"] is False

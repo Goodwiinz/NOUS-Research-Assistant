@@ -137,8 +137,8 @@ class TestAddDocumentToProject:
 
         tool_db = MockAsyncSession()
         # The already-linked branch keys off the existence SELECT returning
-        # rows: _link_documents_to_project reads row[0] per row.
-        tool_db.set_query_result([(str(doc.id),)])
+        # rows: _link_documents_to_project reads (document_id, is_deleted).
+        tool_db.set_query_result([(str(doc.id), False)])
 
         with (
             patch(
@@ -159,6 +159,23 @@ class TestAddDocumentToProject:
             )
 
         assert result["status"] == "already_linked"
+
+    async def test_soft_deleted_link_is_restored_not_already_linked(self):
+        """R8-B3: a soft-deleted link is revived by the upsert, never skipped."""
+        from sqlalchemy.dialects import postgresql
+
+        from src.services.agent.tool_helpers import _link_documents_to_project
+
+        doc_id = str(uuid4())
+        db = MockAsyncSession()
+        db.set_query_result([(doc_id, True)])
+
+        result = await _link_documents_to_project(db, _mock_project(), [doc_id])
+
+        assert result == {"linked": 1, "already_linked": 0, "restored": [doc_id]}
+        upsert = str(db.execute_calls[-1][0].compile(dialect=postgresql.dialect()))
+        assert "ON CONFLICT (collection_id, document_id) DO UPDATE SET" in upsert
+        assert "is_deleted" in upsert.split("DO UPDATE SET")[1]
 
     async def test_missing_document_id_returns_error(self):
         """Tool should reject calls without document_id."""

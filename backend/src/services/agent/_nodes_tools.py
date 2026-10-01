@@ -751,8 +751,14 @@ async def _execute_single_tool(
                 # payload as a successful result and suppress a retry — a tool
                 # that returns {"error": <transient>} is retried on re-plan
                 # (retry_transient only retries raised exceptions, not returned
-                # payloads).
-                error_increment = 1 if tool_error.category != "transient" else 0
+                # payloads). A barrier replay of an earlier failure is not a
+                # fresh transient attempt, so it always counts (R8-B5).
+                error_increment = (
+                    1
+                    if tool_error.category != "transient"
+                    or result.get("replayed_from_operation")
+                    else 0
+                )
         except Exception as e:
             tool_error = classify_error(tool_name, e)
             logger.error(
