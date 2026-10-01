@@ -317,6 +317,11 @@ async def _bind_promoted_project(
             )
             if thread is None:
                 return
+            # get_thread admits viewers/public readers; binding mutates the
+            # thread, so require the same edit right the request path does.
+            if not thread.conversation.workspace.can_user_edit(str(user.id)):
+                logger.debug("promoted project not bound: no edit right on thread")
+                return
             await _resolve_and_bind_project(
                 session, user, thread, {"project_id": project_id}
             )

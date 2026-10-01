@@ -62,11 +62,19 @@ def _turn_one(persistence: str = "durable") -> tuple[dict, dict]:
 
 
 async def _run_turn_one(
-    *, persistence: str = "durable", owner_row: Any = (PROJECT_ID, "Thesis")
+    *,
+    persistence: str = "durable",
+    owner_row: Any = (PROJECT_ID, "Thesis"),
+    can_edit: bool = True,
 ) -> tuple[dict, SimpleNamespace, AsyncMock, MagicMock]:
     from src.services.agent._nodes_rag import rag_node
 
-    thread = SimpleNamespace(id=THREAD_ID, source_project_id=None)
+    workspace = SimpleNamespace(can_user_edit=lambda user_id: can_edit)
+    thread = SimpleNamespace(
+        id=THREAD_ID,
+        source_project_id=None,
+        conversation=SimpleNamespace(workspace=workspace),
+    )
     db = MagicMock()
     db.execute = AsyncMock(return_value=_result(first=owner_row))
     db.commit = AsyncMock()
@@ -153,3 +161,12 @@ async def test_ephemeral_turn_never_opens_a_binding_session() -> None:
     assert update["current_project_id"] == PROJECT_ID
     sessions.assert_not_called()
     attach.assert_not_awaited()
+
+
+async def test_viewer_only_thread_is_never_bound() -> None:
+    """get_thread admits viewers; binding mutates the thread, so needs edit."""
+    update, thread, attach, _ = await _run_turn_one(can_edit=False)
+
+    assert update["current_project_id"] == PROJECT_ID
+    attach.assert_not_awaited()
+    assert thread.source_project_id is None
