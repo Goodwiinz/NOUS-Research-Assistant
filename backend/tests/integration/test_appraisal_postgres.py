@@ -380,10 +380,14 @@ async def _list(w: Any, user: str) -> dict[tuple[str, str, str], Any]:
     return {(r.target_key, r.outcome_key, r.timepoint): r for r in listing.results}
 
 
-def _migration(connection: Connection, direction: str) -> None:
-    spec = importlib.util.spec_from_file_location(
-        "appraisal_migration", VERSIONS / "e2a4c6b8d0f1_create_appraisal_assessments.py"
-    )
+_APPRAISAL_MIGRATION = "e2a4c6b8d0f1_create_appraisal_assessments.py"
+# GOO-310's triggers depend on the function this migration owns: step down
+# through it first and back up after.
+_EVIDENCE_MIGRATION = "f4b6d8a0c2e3_create_evidence_certainty.py"
+
+
+def _migration(connection: Connection, direction: str, filename: str) -> None:
+    spec = importlib.util.spec_from_file_location(filename[:-3], VERSIONS / filename)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -392,9 +396,15 @@ def _migration(connection: Connection, direction: str) -> None:
 
 
 async def _run_migration(factory: Factory, direction: str) -> None:
+    order = [_EVIDENCE_MIGRATION, _APPRAISAL_MIGRATION]
+    if direction == "upgrade":
+        order.reverse()
     async with factory() as db:
         connection = await db.connection()
-        await connection.run_sync(lambda sync: _migration(sync, direction))
+        for filename in order:
+            await connection.run_sync(
+                lambda sync, name=filename: _migration(sync, direction, name)
+            )
         await db.commit()
 
 
@@ -714,7 +724,7 @@ async def test_appraisal_independence_adjudication_and_staleness(
         "appraisal.adjudicated",
     ]
 
-    # 14. Downgrade drops only the table and the trigger function.
+    # 14. Downgrade (through GOO-310 first) drops the table and the function.
     await _run_migration(factory, "downgrade")
     async with factory() as db:
         tables = set((await db.execute(text("""SELECT tablename FROM pg_tables

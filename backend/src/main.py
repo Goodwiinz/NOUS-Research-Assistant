@@ -85,6 +85,7 @@ from src.api.research_engine import (
     research_engine_blueprints_router,
     research_engine_capabilities_router,
     research_engine_corpus_router,
+    research_engine_evidence_router,
     research_engine_identities_router,
     research_engine_journey_router,
     research_engine_projects_router,
@@ -694,6 +695,9 @@ app.include_router(
 app.include_router(
     research_engine_appraisals_router, prefix="/api/v1"
 )  # Research Engine study-design appraisal (GOO-309)
+app.include_router(
+    research_engine_evidence_router, prefix="/api/v1"
+)  # Research Engine evidence tables, contradictions and certainty (GOO-310)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search

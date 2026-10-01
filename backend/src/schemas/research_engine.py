@@ -931,6 +931,305 @@ class AppraisalListResponse(BaseModel):
     results: List[AppraisalResult]
 
 
+# --- Evidence tables, contradictions and outcome certainty (GOO-310) ----------
+
+EvidenceCellState = Literal["value", "missingness", "missing", "conflict"]
+ContradictionKind = Literal["opened", "resolved", "acknowledged", "dissent"]
+ContradictionStatus = Literal["unresolved", "resolved", "acknowledged"]
+CertaintyLevel = Literal["very_low", "low", "moderate", "high"]
+CertaintyRating = Optional[Literal[0, -1, -2]]
+
+
+class EvidenceTip(BaseModel):
+    """One accepted value behind a cell, pinned to its source revision."""
+
+    accepted_value_id: UUID
+    document_id: UUID
+    report_id: UUID
+    source_hash: str
+    text_sha256: Optional[str] = None
+    value: Any = None
+    missingness: Optional[str] = None
+
+
+class EvidenceCell(BaseModel):
+    """``missing`` (no accepted value) is its own state, never a blank."""
+
+    state: EvidenceCellState
+    value: Any = None
+    missingness: Optional[str] = None
+    tips: List[EvidenceTip]
+
+
+class EvidenceRow(BaseModel):
+    """Exactly one row per analysis unit (``study:<id>`` or ``report:<id>``)."""
+
+    row_key: str
+    unit: str
+    report_ids: List[UUID]
+    cells: Dict[str, EvidenceCell]
+
+
+class EvidenceExcluded(BaseModel):
+    document_id: UUID
+    report_id: Optional[UUID] = None
+    reason: Literal["study_link_unresolved", "no_report_identity"]
+
+
+class EvidenceUnreviewedCell(BaseModel):
+    """A machine or legacy matrix cell: shown, never written into a version."""
+
+    document_id: UUID
+    field_id: UUID
+    column_name: str
+    value: Any = None
+    missingness: Optional[str] = None
+    source: Literal["machine", "legacy"]
+    review_state: Literal["unreviewed"] = "unreviewed"
+
+
+class StanceSuggestion(BaseModel):
+    id: UUID
+    source_id: UUID
+    stance: str
+    confidence: float
+    model_version: str
+    inference_model_version: Optional[str] = None
+
+
+class StanceSuggestionGroup(BaseModel):
+    """Model output grouped by claim; it never creates or resolves anything."""
+
+    claim_hash: str
+    claim_text: Optional[str] = None
+    review_state: Literal["unreviewed_model_suggestion"]
+    suggestions: List[StanceSuggestion]
+
+
+class EvidenceTablePreview(BaseModel):
+    protocol_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    matrix_id: UUID
+    form_version_id: UUID
+    field_ids: List[UUID]
+    rows: List[EvidenceRow]
+    excluded: List[EvidenceExcluded]
+    content_hash: str
+    tip_id: Optional[UUID] = None
+    differs_from_tip: bool
+    unreviewed_cells: List[EvidenceUnreviewedCell]
+    stance_suggestions: List[StanceSuggestionGroup]
+
+
+class EvidenceTableCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome_key: str = Field(..., min_length=1, max_length=100)
+    timepoint: str = Field(..., min_length=1, max_length=100)
+    matrix_id: UUID
+    field_ids: List[UUID] = Field(..., min_length=1, max_length=50)
+    supersedes_table_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @field_validator("field_ids")
+    @classmethod
+    def unique_fields(cls, value: List[UUID]) -> List[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("field_ids must be unique")
+        return value
+
+
+class EvidenceTableResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    protocol_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    matrix_id: UUID
+    form_version_id: UUID
+    field_ids: List[UUID]
+    rows: List[EvidenceRow]
+    excluded: List[EvidenceExcluded]
+    content_hash: str
+    created_by_id: UUID
+    supersedes_table_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class ContradictionCreate(BaseModel):
+    """``opened`` names a table version, a field and 2+ of its cell values;
+    every later row names its group and the chain tip it follows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: ContradictionKind
+    contradiction_id: Optional[UUID] = None
+    previous_id: Optional[UUID] = None
+    table_version_id: Optional[UUID] = None
+    field_id: Optional[UUID] = None
+    accepted_value_ids: Optional[List[UUID]] = Field(None, max_length=50)
+    stance_classification_ids: List[UUID] = Field(default_factory=list, max_length=20)
+    explanation: str = Field(..., min_length=1, max_length=4000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def shape(self) -> "ContradictionCreate":
+        if self.kind == "opened":
+            members = self.accepted_value_ids or []
+            if (
+                self.table_version_id is None
+                or self.field_id is None
+                or len(members) < 2
+                or len(set(members)) != len(members)
+            ):
+                raise ValueError(
+                    "An opened contradiction names a table version, a field"
+                    " and 2+ distinct accepted values"
+                )
+            if self.contradiction_id is not None or self.previous_id is not None:
+                raise ValueError("An opened contradiction starts a new chain")
+        else:
+            if self.contradiction_id is None or self.previous_id is None:
+                raise ValueError("Name the contradiction and the row it follows")
+            if (
+                self.table_version_id is not None
+                or self.field_id is not None
+                or self.accepted_value_ids is not None
+                or self.stance_classification_ids
+            ):
+                raise ValueError("Only an opened contradiction cites members")
+        return self
+
+
+class ContradictionRowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    contradiction_id: UUID
+    table_version_id: UUID
+    field_id: UUID
+    accepted_value_ids: Optional[List[UUID]] = None
+    kind: ContradictionKind
+    explanation: str
+    actor_id: UUID
+    actor_name: Optional[str] = None
+    actor_role: str
+    suggestion: Optional[Dict[str, Any]] = None
+    previous_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class ContradictionDissent(BaseModel):
+    """A dissent row, or a resolution a later one superseded."""
+
+    id: UUID
+    contradiction_id: UUID
+    kind: ContradictionKind
+    actor_id: UUID
+    actor_role: str
+    explanation: str
+    superseded: bool
+
+
+class ContradictionResponse(BaseModel):
+    """One group: the derived status, every row and the dissent kept visible."""
+
+    contradiction_id: UUID
+    table_version_id: UUID
+    field_id: UUID
+    status: ContradictionStatus
+    rows: List[ContradictionRowResponse]
+    dissent: List[ContradictionDissent]
+    stale: bool = False
+
+
+class CertaintyRatings(BaseModel):
+    """GRADE's five downgrade domains; ``None`` is unknown, never derived."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    risk_of_bias: CertaintyRating = None
+    inconsistency: CertaintyRating = None
+    indirectness: CertaintyRating = None
+    imprecision: CertaintyRating = None
+    publication_bias: CertaintyRating = None
+
+
+class CertaintyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table_version_id: UUID
+    starting_level: Literal["high", "low"]
+    ratings: CertaintyRatings
+    level: Optional[CertaintyLevel] = None
+    appraisal_assessment_ids: List[UUID] = Field(default_factory=list, max_length=200)
+    contradiction_ids: List[UUID] = Field(default_factory=list, max_length=200)
+    rationale: str = Field(..., min_length=1, max_length=4000)
+    supersedes_certainty_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class CertaintyResponse(BaseModel):
+    """Certainty only; agreement (contradictions) and model confidence live
+    elsewhere. Unresolved contradictions and dissent ride along, always."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    table_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    method_key: str
+    method_version: str
+    starting_level: str
+    domains: Dict[str, CertaintyRating]
+    level: Optional[CertaintyLevel] = None
+    appraisal_assessment_ids: List[UUID]
+    contradiction_ids: List[UUID]
+    rationale: str
+    assessed_by_id: UUID
+    assessor_name: Optional[str] = None
+    actor_role: str
+    input_hash: str
+    supersedes_certainty_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+    unresolved_contradictions: List[UUID] = Field(default_factory=list)
+    dissent: List[ContradictionDissent] = Field(default_factory=list)
+
+
+class EvidenceOutcome(BaseModel):
+    outcome_key: str
+    timepoint: str
+    tables: List[EvidenceTableResponse]
+    contradictions: List[ContradictionResponse]
+    certainty: List[CertaintyResponse]
+
+
+class EvidenceCertaintyMethod(BaseModel):
+    method: str
+    version: str
+    domains: List[str]
+    levels: List[str]
+    starting_levels: List[str]
+
+
+class EvidenceOutcomeListResponse(BaseModel):
+    """Every version, chain and stale flag; staleness is derived on read."""
+
+    protocol_version_id: Optional[UUID] = None
+    certainty_method: Optional[EvidenceCertaintyMethod] = None
+    outcomes: List[EvidenceOutcome]
+
+
 # --- Search import / corpus (GOO-300) --------------------------------------
 
 
