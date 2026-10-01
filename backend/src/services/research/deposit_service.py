@@ -23,6 +23,13 @@ ids, so a retry can never create a second deposition. A timeout or 5xx is
 recorded as outcome ``unknown`` (the remote side may have acted), never
 ``failed``. Protocol registration (``protocol_service``) is a separate
 receipt table; this module copies its idempotency rule, not its code.
+
+# ponytail: out of scope, each added at its seam when needed: production
+# Zenodo (``ZENODO_SANDBOX_ONLY``), new-version deposits for a superseding
+# release (``POST /deposit/depositions/{id}/actions/newversion``, GOO-320),
+# editing published metadata, embargo/restricted access, per-user Zenodo
+# OAuth (one service-account label today), and deleting a remote draft on
+# revocation (revocation only blocks further remote calls).
 """
 
 import hashlib
