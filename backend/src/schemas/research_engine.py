@@ -2381,3 +2381,21 @@ class SearchDeltaResponse(BaseModel):
     items: List[SearchDeltaItem]
     coverage: Dict[str, Any]
     citation_chasing: Dict[str, Any]
+
+
+class SearchDeltaExportBody(SearchDeltaResponse):
+    filter: Optional[Dict[str, str]] = None
+    schedule_version: SearchScheduleVersionResponse
+    statement: str
+
+
+class SearchDeltaExport(BaseModel):
+    """The sealed ``nous.academic.search-delta.v1`` attachment:
+    ``body_sha256`` is the SHA-256 of ``body`` as canonical JSON."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    package_schema: str = Field(alias="schema")
+    exported_at: str
+    body_sha256: str
+    body: SearchDeltaExportBody
