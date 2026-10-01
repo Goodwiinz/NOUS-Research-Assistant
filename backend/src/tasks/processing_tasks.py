@@ -31,6 +31,7 @@ from src.services.search.fulltext_search_service import fulltext_search_service
 from src.shared.enums import SatelliteSyncStatus
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
+from src.tasks.processing_lifecycle import ProcessingStopped, require_active_ingestion
 from src.tasks.replay_guard import claim_job_for_processing
 
 logger = logging.getLogger(__name__)
@@ -202,11 +203,22 @@ class ProcessingTask(Task):
             job_id = args[0]
             db = SessionLocal()
             try:
-                job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+                job = (
+                    db.query(ProcessingJob)
+                    .filter(ProcessingJob.id == job_id)
+                    .with_for_update()
+                    .first()
+                )
 
-                if job:
+                # Never overwrite a finished job (cancelled, swept, already
+                # failed by the task) or one a newer attempt has claimed.
+                if (
+                    job
+                    and not job.is_finished
+                    and job.celery_task_id in (None, task_id)
+                ):
                     job.fail_job(str(exc))
-                    db.commit()
+                db.commit()
             except Exception as e:
                 logger.error(f"Failed to update job status: {str(e)}")
             finally:
@@ -298,16 +310,27 @@ def process_document_ingestion(self, job_id: str):
                 "skipped": claim.reason,
             }
 
+        # Every stage commit re-checks, under Document -> ProcessingJob row
+        # locks, that this attempt is still the live one: the document can be
+        # deleted, the job cancelled or swept, or a retry started while this
+        # worker parses or calls models. A stale attempt rolls back instead of
+        # writing (GOO-357). Slow work stays outside the locks.
+        def commit_if_active() -> None:
+            require_active_ingestion(
+                db, job_id, expected_task_id=self.request.id, lock=True
+            )
+            db.commit()
+
         # Initialize processing service
         processing_service = ProcessingPipeline(db)
 
         # Update document status (claim already moved the job to RUNNING).
         document.update_processing_status(ProcessingStatus.PROCESSING)
-        db.commit()
+        commit_if_active()
 
         # Step 1: Text Extraction
         job.update_progress("Extracting text content", 20)
-        db.commit()
+        commit_if_active()
 
         # Run async function in a managed event loop
         text_extraction_result = asyncio.run(
@@ -323,7 +346,7 @@ def process_document_ingestion(self, job_id: str):
             document.add_metadata(
                 "character_count", text_extraction_result["character_count"]
             )
-        db.commit()
+        commit_if_active()
 
         # Step 1b: Figure extraction (optional, flag-gated; never fails ingestion)
         if (
@@ -337,13 +360,15 @@ def process_document_ingestion(self, job_id: str):
                 )
 
                 job.update_progress("Extracting figures", 35)
-                db.commit()
+                commit_if_active()
                 fig_result = extract_figures_for_document(db, document)
                 if fig_result.get("captions_text"):
                     document.content_text = merge_captions_into_text(
                         document.content_text, fig_result["captions_text"]
                     )
-                db.commit()
+                commit_if_active()
+            except ProcessingStopped:
+                raise
             except Exception as fig_err:  # optional step, mirrors Neo4j tolerance above
                 db.rollback()
                 logger.warning(
@@ -352,7 +377,7 @@ def process_document_ingestion(self, job_id: str):
 
         # Step 2: Entity Extraction
         job.update_progress("Extracting entities", 50)
-        db.commit()
+        commit_if_active()
 
         if document.content_text:
             # Run entity extraction in event loop
@@ -374,7 +399,7 @@ def process_document_ingestion(self, job_id: str):
             _reset_pipeline_entities(db, document.id)
             for entity in entities:
                 db.add(entity)
-            db.commit()
+            commit_if_active()
 
             # Index entities into Neo4j knowledge graph. Best-effort (a Neo4j
             # outage never fails ingestion) but no longer silent: the helper
@@ -383,10 +408,10 @@ def process_document_ingestion(self, job_id: str):
             # 'pending' first so a worker killed mid-fan-out is visible too.
             job.update_progress("Indexing knowledge graph", 60)
             document.neo4j_index_status = SatelliteSyncStatus.PENDING.value
-            db.commit()
+            commit_if_active()
 
             _index_entities_to_graph(document, entities)
-            db.commit()
+            commit_if_active()
 
         # Step 3: Embedding Generation — push the document to DO KB, the
         # retrieval backend (replaces the dead Qdrant write). Idempotent and
@@ -394,24 +419,26 @@ def process_document_ingestion(self, job_id: str):
         # no-op so ingestion still completes — but the outcome is recorded in
         # do_kb_sync_status (audit D1) so a failed sync is reconcilable.
         job.update_progress("Generating embeddings", 75)
-        db.commit()
+        commit_if_active()
 
         if document.content_text:
             if settings.DO_KB_ENABLED:
                 # Visible in-flight marker; overwritten by the outcome below.
                 document.do_kb_sync_status = SatelliteSyncStatus.PENDING.value
-                db.commit()
+                commit_if_active()
             ds_uuid = _sync_document_to_kb_blocking(document)
             if ds_uuid:
                 document.is_embedded = True
             _record_do_kb_sync_outcome(document, ds_uuid)
-        db.commit()
+        commit_if_active()
 
         # Step 4: Generate Search Vector
         job.update_progress("Creating search index", 90)
-        db.commit()
+        commit_if_active()
 
-        # Update search vector for full-text search
+        # Update search vector for full-text search. The service commits its own
+        # raw UPDATE of search_vector only (no stale ORM state); the guarded
+        # finalize below still refuses to complete a lost attempt.
         search_vector_ok = False
         try:
             fulltext_search_service.update_document_search_vector(str(document.id), db)
@@ -424,7 +451,12 @@ def process_document_ingestion(self, job_id: str):
 
         # Step 5: Finalize
         job.update_progress("Finalizing", 95)
-        db.commit()
+
+        # Progress, document and job complete in one guarded commit. Check
+        # before mutating status so the flush cannot mask a cancellation.
+        require_active_ingestion(
+            db, job_id, expected_task_id=self.request.id, lock=True
+        )
 
         # Mark document as processed. is_indexed must reflect ACTUAL full-text
         # searchability: if the search-vector build above failed the document has
@@ -434,9 +466,6 @@ def process_document_ingestion(self, job_id: str):
         # re-index can be triggered for the not-yet-searchable docs.
         document.update_processing_status(ProcessingStatus.COMPLETED)
         document.is_indexed = search_vector_ok
-        db.commit()
-
-        # Complete job
         job.complete_job(
             result={
                 "text_extracted": bool(document.content_text),
@@ -459,6 +488,17 @@ def process_document_ingestion(self, job_id: str):
             "processing_time": job.duration_seconds,
         }
 
+    except ProcessingStopped as stop:
+        # Cancelled, deleted, swept or superseded mid-run: whoever did that
+        # already wrote the state, so drop this attempt's writes and stop.
+        db.rollback()
+        logger.info(
+            "Ingestion job %s stopped mid-run (%s); discarding stale writes",
+            job_id,
+            stop.reason,
+        )
+        return {"status": "stopped", "job_id": job_id, "skipped": stop.reason}
+
     except Exception as e:
         logger.error(f"Document ingestion failed for job {job_id}: {str(e)}")
 
@@ -469,20 +509,19 @@ def process_document_ingestion(self, job_id: str):
         # content-hash dedup from ever re-uploading it.
         db.rollback()
 
-        # Update document and job status
+        # Record the failure only if this attempt still owns the job; never
+        # overwrite a cancellation, deletion, sweep or newer attempt.
         try:
-            document = (
-                db.query(Document)
-                .filter(Document.id == job.parameters["document_id"])
-                .first()
-            )
-
-            if document:
+            try:
+                job, document = require_active_ingestion(
+                    db, job_id, expected_task_id=self.request.id, lock=True
+                )
+            except ProcessingStopped:
+                db.rollback()
+            else:
                 document.update_processing_status(ProcessingStatus.FAILED, str(e))
-
-            if job:
                 job.fail_job(str(e))
-            db.commit()
+                db.commit()
 
         except Exception as update_error:
             logger.error(f"Failed to update failure status: {str(update_error)}")
