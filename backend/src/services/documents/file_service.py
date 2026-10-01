@@ -46,8 +46,16 @@ _ACTIVE_CONTENT_MIME_TYPES = frozenset(
         "text/javascript",
         "application/javascript",
         "application/x-javascript",
-        "text/xml",
-        "application/xml",
+        # Executables: no supported document type is a binary program.
+        "application/x-dosexec",
+        "application/x-msdownload",
+        "application/x-executable",
+        "application/x-sharedlib",
+        "application/x-mach-binary",
+        "application/x-pie-executable",
+        "application/vnd.microsoft.portable-executable",
+        # XML deliberately absent: XML-bodied .txt/.md/.csv sniff as
+        # text/xml, and downloads already downgrade it to octet-stream + sandbox.
     }
 )
 

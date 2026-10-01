@@ -22,10 +22,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[3]
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 
-def _validate(sniffed: str, content: bytes = PNG_BYTES) -> dict[str, Any]:
+def _validate(
+    sniffed: str, content: bytes = PNG_BYTES, filename: str = "x.png"
+) -> dict[str, Any]:
     service = FileService.__new__(FileService)
     upload = SimpleNamespace(
-        filename="x.png", size=len(content), file=io.BytesIO(content)
+        filename=filename, size=len(content), file=io.BytesIO(content)
     )
     org = SimpleNamespace(max_file_size_bytes=10**6, can_upload_file=lambda _n: True)
     with patch(
@@ -38,6 +40,16 @@ def _validate(sniffed: str, content: bytes = PNG_BYTES) -> dict[str, Any]:
 def test_png_named_active_content_is_rejected(sniffed: str) -> None:
     with pytest.raises(FileValidationError, match=re.escape(sniffed)):
         _validate(sniffed, b"<html><script>alert(1)</script></html>")
+
+
+def test_pdf_named_executable_is_rejected() -> None:
+    with pytest.raises(FileValidationError, match="application/x-dosexec"):
+        _validate("application/x-dosexec", b"MZ\x90\x00" + b"\x00" * 60, "report.pdf")
+
+
+def test_xml_bodied_txt_is_still_accepted() -> None:
+    result = _validate("text/xml", b"<?xml version='1.0'?><a/>", "notes.txt")
+    assert result["mime_type"] == "text/xml"
 
 
 def test_genuine_png_still_passes() -> None:
