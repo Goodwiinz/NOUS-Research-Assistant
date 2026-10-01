@@ -51,6 +51,8 @@ awsRdsSecret:
 # Backend
 # ──────────────────────────────────────────────
 backend:
+  migrations:
+    enabled: true
   enabled: true
   # DO writers are frozen; PostgreSQL and Neo4j were verified on AWS.
   replicaCount: 1
@@ -255,7 +257,7 @@ backend:
   initContainers:
     waitForPostgres: true
     waitForRedis: false
-    runMigrations: true
+    runMigrations: false
     waitForNeo4j: false
 # ──────────────────────────────────────────────
 # All databases are external (AWS-managed on EKS: RDS Postgres, ElastiCache

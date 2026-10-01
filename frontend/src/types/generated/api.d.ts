@@ -6279,6 +6279,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/audit-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Audit Bundle Route */
+        get: operations["audit_bundle_route_api_v1_research_engine_projects__project_id__audit_bundle_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/citation-chases": {
         parameters: {
             query?: never;
@@ -6414,6 +6431,26 @@ export interface paths {
         };
         /** Get Import Route */
         get: operations["get_import_route_api_v1_research_engine_projects__project_id__imports__receipt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/journey": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Journey Route
+         * @description Stage facts and derived status; reports state, never enforces order.
+         */
+        get: operations["journey_route_api_v1_research_engine_projects__project_id__journey_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14131,6 +14168,35 @@ export interface components {
             tool_executions?: {
                 [key: string]: unknown;
             }[] | null;
+        };
+        /** JourneyResponse */
+        JourneyResponse: {
+            /** Current */
+            current?: ("plan" | "discover" | "select" | "extract" | "write") | null;
+            /** Stages */
+            stages: components["schemas"]["JourneyStage"][];
+        };
+        /**
+         * JourneyStage
+         * @description Derived from persisted rows on every call (``journey.derive_stages``).
+         */
+        JourneyStage: {
+            /** Blockers */
+            blockers: string[];
+            /** Facts */
+            facts: {
+                [key: string]: number | boolean | string | null;
+            };
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "plan" | "discover" | "select" | "extract" | "write";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_started" | "in_progress" | "attention" | "complete";
         };
         /**
          * KeyRotationRequest
@@ -30259,6 +30325,37 @@ export interface operations {
             };
         };
     };
+    audit_bundle_route_api_v1_research_engine_projects__project_id__audit_bundle_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Offline-verifiable audit bundle (manifest + SHA256SUMS) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     chase_citations_route_api_v1_research_engine_projects__project_id__citation_chases_post: {
         parameters: {
             query?: never;
@@ -30568,6 +30665,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportReceiptDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    journey_route_api_v1_research_engine_projects__project_id__journey_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneyResponse"];
                 };
             };
             /** @description Validation Error */
