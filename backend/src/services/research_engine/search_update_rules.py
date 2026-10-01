@@ -212,11 +212,16 @@ def _publication(
         return {"check": "failed", "source": "crossref", "doi": doi}
     if doi not in notices:
         return {"check": "not_performed", "reason": "check_capped", "doi": doi}
+    # Only correction/retraction types count; e.g. ``new_version`` is kept
+    # as an other update, never as a correction.
     return {
         "check": "performed",
         "source": "crossref",
         "doi": doi,
-        "notices": [dict(n) for n in notices[doi]],
+        "notices": [dict(n) for n in notices[doi] if n["type"] in NOTICE_TYPES],
+        "other_updates": [
+            dict(n) for n in notices[doi] if n["type"] not in NOTICE_TYPES
+        ],
     }
 
 
