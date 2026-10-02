@@ -52,8 +52,8 @@ test is `xfail(strict=True, raises=AssertionError)` and will fail loudly
 | S1+ | C | `POST /api/v1/documents/search` | finds org-b rows (positive control) | pass |
 | CI1 | A → `b-cit` (foreign private) | `GET /api/v1/citations/{id}`, `POST /api/v1/citations/export` | 404 / no title or quote | pass |
 | CI1+ | A → `a-cit` | `GET /api/v1/citations/{id}` | 200 | pass |
-| CI2 | A → `b-pub-cit` (foreign `is_public`) | detail, list + `total`, export | 404 / absent / `total == 1` | **xfail GOO-349** |
-| CI3 | A → `a-old-org-cit` (A uploaded it in org-b) | detail, list + `total`, export | 404 / absent | **xfail GOO-349** |
+| CI2 | A → `b-pub-cit` (foreign `is_public`) | detail, list + `total`, export | 404 / absent / `total == 1` | pass (GOO-349) |
+| CI3 | A → `a-old-org-cit` (A uploaded it in org-b) | detail, list + `total`, export | 404 / absent | pass (GOO-349) |
 | CI4 | C → `b-cit` (same org, private) | citation reads | Today: denied (uploader-or-public rule, stricter than D2). GOO-349 decides the intended rule. | not covered |
 | CI5 | any | project bibliography fallback (`citations.py` export by `project_id`) | org-guarded | not covered (GOO-349) |
 | S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | not covered: PostgreSQL full-text only (SQLite cannot run them); GOO-351 owns the fail-closed service guard |
@@ -77,14 +77,14 @@ workspace list, and the owner-only `GET /api/v1/agent/threads/{id}/messages`.
 | W7 | A, member then removed by B via `DELETE .../members/{id}` | all reads denied, including a B-only message added after removal | pass |
 | X1 | A (other org) → B's thread | single, stream and batch export in markdown/json/html: 404 or absent from the ZIP | pass |
 | X2 | B → own thread after its conversation is soft-deleted | export 404 | pass |
-| X3 | A, removed member who created a thread in `b` | single + stream export (md/json/html), preview, batch ZIP + non-ZIP: no B-only message, 404 | **xfail GOO-348** |
+| X3 | A, removed member who created a thread in `b` | single + stream export (md/json/html), preview, batch ZIP + non-ZIP: no B-only message, 404 | pass (GOO-348) |
 | X4 | any | PDF export | not covered: needs a PDF renderer in CI |
 | X5 | B → own thread | export returns content (positive control) | pass |
 
 Note: thread export is creator-based, so a current member who did not create
 a thread cannot export it, and neither can a reader of a public workspace.
-That is stricter than reads and is the current documented behavior until
-GOO-348 lands.
+That is stricter than reads. Since GOO-348 the creator must also still have
+current workspace access, so a creator removed from the workspace cannot export.
 
 ### Browser account switching (GOO-354)
 

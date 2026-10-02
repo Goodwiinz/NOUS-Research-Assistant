@@ -24,12 +24,6 @@ from tests.integration.two_account.conftest import (
 
 pytestmark = pytest.mark.integration
 
-GOO_349 = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="GOO-349: citation access ignores document organization "
-    "(is_public / old-org uploader bypass)",
-)
 
 DOC_READ_ROUTES = (
     "/api/v1/files/{id}",
@@ -158,7 +152,6 @@ async def test_own_citation_is_readable(clients: Clients) -> None:
     assert canary("a-cit-quote") in r.text
 
 
-@GOO_349
 @pytest.mark.parametrize("cit", ["b-pub-cit", "a-old-org-cit"])
 async def test_foreign_org_citation_detail_is_404(clients: Clients, cit: str) -> None:
     r = await clients("A").get(f"/api/v1/citations/{sid(cit)}")
@@ -166,7 +159,6 @@ async def test_foreign_org_citation_detail_is_404(clients: Clients, cit: str) ->
     assert_no_canary(r.content, f"{cit}-title", f"{cit}-quote")
 
 
-@GOO_349
 async def test_citation_list_and_count_exclude_foreign_org(clients: Clients) -> None:
     r = await clients("A").get("/api/v1/citations")
     assert r.status_code == 200
@@ -174,7 +166,6 @@ async def test_citation_list_and_count_exclude_foreign_org(clients: Clients) -> 
     assert r.json()["total"] == 1
 
 
-@GOO_349
 @pytest.mark.parametrize("cit", ["b-pub-cit", "a-old-org-cit"])
 async def test_citation_export_excludes_foreign_org(clients: Clients, cit: str) -> None:
     r = await clients("A").post(

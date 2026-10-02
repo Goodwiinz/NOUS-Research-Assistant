@@ -28,13 +28,6 @@ from tests.integration.two_account.conftest import (
 
 pytestmark = pytest.mark.integration
 
-GOO_348 = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="GOO-348: thread export authorizes by creator id, not current "
-    "workspace access",
-)
-
 
 def chat_routes(key: str) -> list:
     """Every read route that can return ``key``'s workspace chain content."""
@@ -226,7 +219,6 @@ async def test_creator_can_export_own_thread(clients: Clients) -> None:
 EXPORT_FORMATS = ["markdown", "json", "html"]  # pdf needs a renderer: NOT RUN
 
 
-@GOO_348
 @pytest.mark.parametrize("fmt", EXPORT_FORMATS)
 async def test_removed_member_single_export(
     removed_member: AsyncClient, fmt: str
@@ -238,7 +230,6 @@ async def test_removed_member_single_export(
     assert r.status_code == 404
 
 
-@GOO_348
 @pytest.mark.parametrize("fmt", EXPORT_FORMATS)
 async def test_removed_member_stream_export(
     removed_member: AsyncClient, fmt: str
@@ -250,13 +241,11 @@ async def test_removed_member_stream_export(
     assert r.status_code == 404
 
 
-@GOO_348
 async def test_removed_member_preview(removed_member: AsyncClient) -> None:
     r = await removed_member.post(f"/api/v1/export/preview/{sid('a-in-b-thread')}")
     assert r.status_code == 404
 
 
-@GOO_348
 @pytest.mark.parametrize("fmt", EXPORT_FORMATS)
 async def test_removed_member_batch_zip(removed_member: AsyncClient, fmt: str) -> None:
     """Batch packs authorized threads; the revoked one must be absent."""
@@ -275,7 +264,6 @@ async def test_removed_member_batch_zip(removed_member: AsyncClient, fmt: str) -
     assert_no_canary(body, AFTER)
 
 
-@GOO_348
 async def test_removed_member_batch_single(removed_member: AsyncClient) -> None:
     r = await removed_member.post(
         "/api/v1/export/batch",
