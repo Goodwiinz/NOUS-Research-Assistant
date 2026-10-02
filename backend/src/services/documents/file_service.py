@@ -18,6 +18,7 @@ from fastapi import Depends, HTTPException, UploadFile, status
 from PIL import Image
 from pypdf import PdfReader
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Optional pandas import for spreadsheet processing
@@ -37,6 +38,18 @@ from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
+
+# Partial unique index on documents(organization_id, checksum_sha256) WHERE live;
+# see alembic/versions/uq_documents_org_checksum.py (INDEX_NAME).
+_CHECKSUM_UNIQUE_INDEX = "uq_documents_org_checksum_live"
+
+
+def _duplicate_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Identical file already exists in this organization",
+    )
+
 
 _ACTIVE_CONTENT_MIME_TYPES = frozenset(
     {
@@ -164,37 +177,31 @@ class FileService:
         """Calculate SHA-256 hash from raw bytes."""
         return hashlib.sha256(data).hexdigest()
 
-    def _assert_not_duplicate(self, file_hash: str, organization_id: str) -> None:
+    async def _assert_not_duplicate(self, file_hash: str, organization_id: str) -> None:
         """R2-L13: reject a live duplicate before any storage/quota work.
 
-        The base upload path computed file_hash but never checked it — the
-        same file could be uploaded twice and billed against quota twice.
+        Org-scoped; matches the ``checksum_sha256`` column and the
+        ``document_metadata.file_hash`` key that pre-column rows carry. This is
+        the fast path; two racing uploads can both pass it, and the partial
+        unique index ``uq_documents_org_checksum_live`` rejects the loser's
+        insert, which ``upload_file`` also maps to 409.
         """
-        # Best-effort pre-check: session quirks (tests use minimal doubles)
-        # must not break uploads — the authoritative hash uniqueness is
-        # enforced at the DB layer.
-        try:
-            dup = (
-                self.db.query(Document.id)
-                .filter(
-                    Document.organization_id == organization_id,
-                    Document.checksum_sha256 == file_hash,
-                    Document.is_deleted.is_(False),
-                )
-                .first()
-            )
-        except Exception:
-            return
-        # isinstance guard: generic test doubles return Mock rows; only a
-        # real Document.id (str/UUID) counts as a hit.
-        dup_id = getattr(dup, "id", None) if dup is not None else None
-        if isinstance(dup_id, (str, uuid_module.UUID)):
-            from fastapi import HTTPException as _HE
+        from sqlalchemy import or_
 
-            raise _HE(
-                status_code=409,
-                detail="Identical file already exists in this organization",
+        result = await self.db.execute(
+            select(Document.id)
+            .where(
+                Document.organization_id == organization_id,
+                Document.is_deleted.isnot(True),
+                or_(
+                    Document.checksum_sha256 == file_hash,
+                    Document.document_metadata["file_hash"].as_string() == file_hash,
+                ),
             )
+            .limit(1)
+        )
+        if result.first() is not None:
+            raise _duplicate_conflict()
 
     async def _spool_and_hash(self, file: UploadFile) -> tuple[str, str]:
         """Stream the upload to a temp spool while hashing (R2-L12).
@@ -501,8 +508,8 @@ class FileService:
                 # R2-L12: stream via spool instead of materializing up to
                 # max-file-size bytes in memory per upload.
                 spool_path, file_hash = await self._spool_and_hash(file)
-                self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
                     with open(spool_path, "rb") as fh:
                         self.s3_helper.upload_fileobj(fh, s3_key, mime_type)
                 finally:
@@ -540,8 +547,8 @@ class FileService:
 
                 # R2-L12: streamed spool (see s3 branch)
                 spool_path, file_hash = await self._spool_and_hash(file)
-                self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
                     with open(spool_path, "rb") as fh:
                         storage_key = self.storage_helper.upload_fileobj(
                             fh, bucket, key, mime_type
@@ -577,7 +584,12 @@ class FileService:
                 file_path_with_ext = f"{file_path}{original_ext}"
                 saved_path = await self.save_file(file, file_path_with_ext)
                 file_hash = self.calculate_file_hash(saved_path)
-                self._assert_not_duplicate(file_hash, str(organization.id))
+                try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
+                except Exception:
+                    # Nothing references the saved file yet; don't orphan it.
+                    Path(saved_path).unlink(missing_ok=True)
+                    raise
 
                 document = Document(
                     title=title,
@@ -612,7 +624,14 @@ class FileService:
             document.add_metadata("original_filename", file.filename)
 
             self.db.add(document)
-            await self.db.commit()
+            try:
+                await self.db.commit()
+            except IntegrityError as exc:
+                # Lost the dedup race: the outer handler rolls back and deletes
+                # the stored object (nothing else is committed yet).
+                if _CHECKSUM_UNIQUE_INDEX in str(exc.orig):
+                    raise _duplicate_conflict() from exc
+                raise
             await self.db.refresh(document)
             document_committed = True
 
