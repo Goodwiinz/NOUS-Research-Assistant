@@ -8,6 +8,8 @@ from uuid import uuid4
 import pytest
 from langchain_core.messages import AIMessageChunk
 
+from src.services.agent.runtime_snapshot import empty_runtime_snapshot
+
 pytestmark = pytest.mark.integration
 
 
@@ -442,16 +444,10 @@ async def test_ineligible_turn_keeps_langgraph_path(
         ),
         patch(
             "src.services.agent.runtime_snapshot.create_runtime_snapshot",
-            new=AsyncMock(
-                return_value=SimpleNamespace(
-                    id="",
-                    tool_registry_hash="",
-                    tool_registry_version="",
-                    tool_metadata={},
-                    project_skill_catalog=[],
-                    loaded_skill_versions=[],
-                )
-            ),
+            # The real projection type: a hand-rolled stub drifted when
+            # RuntimeSnapshot gained ``tool_names`` (#1716) and silently
+            # turned this test into an error-path run.
+            new=AsyncMock(return_value=empty_runtime_snapshot()),
         ),
     ):
         _events = [
