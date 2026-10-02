@@ -279,38 +279,48 @@ async def _link_documents_to_project(
 ) -> Dict[str, Any]:
     """Idempotently link documents to a project.
 
-    Uses ``INSERT ... ON CONFLICT DO NOTHING`` against the
-    ``(collection_id, document_id)`` unique constraint so concurrent
-    ingests of the same paper don't race the existence check, and so we
-    avoid an N+1 ``SELECT`` per document.
+    Upserts against the ``(collection_id, document_id)`` unique constraint so
+    concurrent ingests of the same paper don't race the existence check, and
+    so a soft-deleted link (REST remove) is revived rather than silently
+    skipped (R8-B3).
 
-    Returns ``{"linked": int, "already_linked": int}`` — caller decides
-    how to surface the result.
+    Returns ``{"linked": int, "already_linked": int, "restored": [ids]}``;
+    ``linked`` counts new and revived links — caller decides how to surface it.
     """
-    ids = [str(d) for d in document_ids if d]
+    # Deduped: ON CONFLICT DO UPDATE rejects a row proposed twice in one INSERT.
+    ids = list(dict.fromkeys(str(d) for d in document_ids if d))
     if not ids:
-        return {"linked": 0, "already_linked": 0}
+        return {"linked": 0, "already_linked": 0, "restored": []}
 
-    existing_stmt = select(CollectionDocument.document_id).where(
+    existing_stmt = select(
+        CollectionDocument.document_id, CollectionDocument.is_deleted
+    ).where(
         CollectionDocument.collection_id == project.id,
         CollectionDocument.document_id.in_(ids),
     )
-    existing = {str(row[0]) for row in (await db.execute(existing_stmt)).all()}
+    is_deleted = {
+        str(row[0]): bool(row[1]) for row in (await db.execute(existing_stmt)).all()
+    }
+    to_link = [doc_id for doc_id in ids if is_deleted.get(doc_id, True)]
 
-    new_rows = [
-        {"collection_id": project.id, "document_id": doc_id}
-        for doc_id in ids
-        if doc_id not in existing
-    ]
-
-    if new_rows:
+    if to_link:
+        stmt = pg_insert(CollectionDocument).values(
+            [{"collection_id": project.id, "document_id": d} for d in to_link]
+        )
         await db.execute(
-            pg_insert(CollectionDocument)
-            .values(new_rows)
-            .on_conflict_do_nothing(index_elements=["collection_id", "document_id"])
+            stmt.on_conflict_do_update(
+                index_elements=["collection_id", "document_id"],
+                set_={
+                    "is_deleted": False,
+                    "deleted_at": None,
+                    "updated_at": func.now(),
+                },
+                where=CollectionDocument.is_deleted.is_(True),
+            )
         )
 
     return {
-        "linked": len(new_rows),
-        "already_linked": len(existing),
+        "linked": len(to_link),
+        "already_linked": len(ids) - len(to_link),
+        "restored": [d for d in to_link if d in is_deleted],
     }

@@ -35,6 +35,7 @@ _EXPECTED_KEYS = {
     "reconcile-satellite-indexes",  # celery_app (reconcile_tasks)
     "reconcile-lost-processing-jobs",  # celery_app (reconcile_jobs, Task 1.4)
     "drain-deposits",  # celery_app (deposit_tasks, GOO-318)
+    "search-updates-tick",  # celery_app (search_update_tasks, GOO-319)
 }
 
 
@@ -65,6 +66,7 @@ def test_scheduled_tasks_resolve_to_registered_tasks():
     import src.tasks.reconcile_jobs  # noqa: F401
     import src.tasks.reconcile_tasks  # noqa: F401
     import src.tasks.retention_tasks  # noqa: F401
+    import src.tasks.search_update_tasks  # noqa: F401
     from src.tasks.celery_app import celery_app
 
     for key in _EXPECTED_KEYS:

@@ -182,9 +182,36 @@ def configure_langsmith():
         os.environ.setdefault("LANGSMITH_ENDPOINT", endpoint)
         os.environ.setdefault("LANGCHAIN_ENDPOINT", endpoint)
 
+    if hide_io:
+        _enforce_hide_io_on_client()
+
     logger.info(
         "LangSmith tracing enabled (project: %s, hide_io: %s)", project, hide_io
     )
+
+
+def _enforce_hide_io_on_client() -> None:
+    """Make the shared LangSmith client honour hide-IO (R8-C8).
+
+    The env writes above are not enough: langsmith caches ``get_env_var``
+    with ``lru_cache`` and reads the hide flags once in ``Client.__init__``.
+    In a Celery worker another traced task can build the process-wide client
+    before this runs, and that client keeps uploading inputs and outputs.
+    Clear the env cache so a client built later reads the new values, and
+    replace a non-hiding client with one given the flags explicitly. A client
+    that already hides is kept: this runs on every agent turn.
+    """
+    from langsmith import Client, run_trees
+    from langsmith import utils as ls_utils
+
+    ls_utils.get_env_var.cache_clear()
+    client = run_trees._CLIENT  # noqa: SLF001 - langsmith exposes no getter
+    if client is None or (
+        getattr(client, "_hide_inputs", None) is True
+        and getattr(client, "_hide_outputs", None) is True
+    ):
+        return
+    run_trees.configure(client=Client(hide_inputs=True, hide_outputs=True))
 
 
 def get_langsmith_base_url() -> str:

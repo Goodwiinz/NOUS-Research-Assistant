@@ -41,7 +41,7 @@ async def test_batch_forwards_real_background_tasks_not_none():
     ):
         data_path.glob.return_value = [_fake_pdf()]
 
-        await arxiv_local.process_batch_local_papers(
+        await arxiv_local.process_batch_local_papers.__wrapped__(
             background_tasks=bt,
             batch_size=10,
             offset=0,

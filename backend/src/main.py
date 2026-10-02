@@ -97,9 +97,11 @@ from src.api.research_engine import (
     research_engine_projects_router,
     research_engine_protocols_router,
     research_engine_reruns_router,
+    research_engine_review_versions_router,
     research_engine_reviews_router,
     research_engine_runs_router,
     research_engine_screening_router,
+    research_engine_search_updates_router,
     research_engine_steps_router,
     research_engine_synthesis_router,
 )
@@ -705,6 +707,12 @@ app.include_router(
 app.include_router(
     research_engine_corpus_router, prefix="/api/v1"
 )  # Research Engine search import, citation chase, corpus export (GOO-300)
+app.include_router(
+    research_engine_search_updates_router, prefix="/api/v1"
+)  # Research Engine scheduled search updates and corpus deltas (GOO-319)
+app.include_router(
+    research_engine_review_versions_router, prefix="/api/v1"
+)  # Research Engine superseding review versions and update accounting (GOO-320)
 app.include_router(
     research_engine_acquisition_router, prefix="/api/v1"
 )  # Research Engine full-text acquisition + PRISMA flow (GOO-303)

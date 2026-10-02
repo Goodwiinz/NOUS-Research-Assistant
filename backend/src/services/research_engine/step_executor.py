@@ -417,6 +417,20 @@ class StepExecutor:
                 "semantic_scholar" if name == "web" else name for name in sources
             )
         )
+        if self._is_daily_brief_context(context):
+            # GOO-331: the executed search may narrow, never widen, the scope
+            # the researcher confirmed, whatever the resolved parameters say.
+            scope = context["scope_confirmation"]
+            confirmed_providers = scope.get("providers")
+            confirmed_limit = scope.get("limit_per_provider")
+            if not isinstance(confirmed_providers, list) or not set(
+                canonical_sources
+            ).issubset(confirmed_providers):
+                raise ValueError(
+                    "search providers exceed the confirmed Daily Brief scope"
+                )
+            if type(confirmed_limit) is not int or max_results > confirmed_limit:
+                raise ValueError("search limit exceeds the confirmed Daily Brief scope")
         strategy = {
             "schema_version": "nous.academic.search-strategy.v1",
             "project_id": self.strategy_context.get("canonical_project_id"),

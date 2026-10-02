@@ -261,7 +261,6 @@ async def add_documents_to_collection(
                     select(CollectionDocument).where(
                         CollectionDocument.collection_id == collection_id,
                         CollectionDocument.document_id == doc_id,
-                        CollectionDocument.is_deleted == False,  # noqa: E712
                     )
                 )
             )
@@ -276,6 +275,11 @@ async def add_documents_to_collection(
                     sort_order=max_order + i + 1,
                 )
             )
+        elif existing.is_deleted:
+            # Revive the soft-deleted row; a second insert would violate
+            # uq_collection_documents (R6-M7).
+            existing.restore()
+            existing.sort_order = max_order + i + 1
 
     await db.flush()
     # The rows above were added by FK only, and `collection.documents` is
