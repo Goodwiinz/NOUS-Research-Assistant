@@ -59,6 +59,12 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
         "after claim/projection failures; the durable confirmation claim "
         "should own it in agent_run_service."
     ),
+    ("execute", "resume_stream", "txn"): (
+        "2026-10-02: R8-D2 (#1818) rolls back the request-scoped session's "
+        "read transaction before each StreamingResponse so the connection is "
+        "not held for the stream's life; belongs in a dependency or a "
+        "services-side resume helper that ends its own reads."
+    ),
     ("streaming", "stream_event_generator", "session"): _STREAMING_DEBT,
     ("streaming", "stream_event_generator", "txn"): _STREAMING_DEBT,
     ("streaming", "stream_event_generator", "router_import"): (
