@@ -23,7 +23,9 @@ from typing import Any, Callable, Iterator
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 import src.models  # noqa: F401  register every table on Base.metadata
 from src.models.base import Base
@@ -91,7 +93,19 @@ def _ingestion() -> Iterator[SimpleNamespace]:
                 )
             )
             db.commit()
-        yield SimpleNamespace(Session=factory, doc_id=doc_id, job_id=job_id)
+        # NullPool: the DO KB bridge runs each call on its own event loop.
+        async_engine = create_async_engine(
+            _dsn().replace("+psycopg2", "+asyncpg"),
+            connect_args={"server_settings": {"search_path": schema}},
+            poolclass=NullPool,
+        )
+        yield SimpleNamespace(
+            Session=factory,
+            AsyncSession=async_sessionmaker(async_engine, expire_on_commit=False),
+            doc_id=doc_id,
+            job_id=job_id,
+            org_id=org_id,
+        )
     finally:
         engine.dispose()
         with admin.begin() as conn:
@@ -538,3 +552,140 @@ def test_entity_reset_does_not_deadlock_with_a_cascading_delete(
             )
             assert live == 0
             assert check.get(ProcessingJob, env.job_id).status == JobStatus.CANCELLED
+
+
+# ---------------------------------------------------------------------------
+# Remote (DO KB / Neo4j) writes that finish after deletion (GOO-358)
+# ---------------------------------------------------------------------------
+
+
+def _write_late_data_source(env: SimpleNamespace, ds_uuid: str) -> None:
+    """What sync_document_to_kb's own commit does once the remote call returns:
+    store the uuid on the row, which the delete has already soft-deleted."""
+    with env.Session() as other:
+        other.get(Document, env.doc_id).do_kb_data_source_uuid = ds_uuid
+        other.commit()
+
+
+def _fake_unsync(ok: bool) -> Any:
+    calls: list[str] = []
+
+    async def unsync(session: Any, document: Document) -> bool:
+        calls.append(document.do_kb_data_source_uuid)
+        if ok:
+            document.do_kb_data_source_uuid = None
+            await session.commit()
+        return ok
+
+    unsync.calls = calls  # type: ignore[attr-defined]
+    return unsync
+
+
+@pytest.mark.parametrize("cleanup_ok", [True, False])
+def test_late_do_kb_success_is_compensated(
+    stubbed: pytest.MonkeyPatch, cleanup_ok: bool
+) -> None:
+    """The document is deleted while the DO KB call is in flight; the call then
+    succeeds. The data source is removed at once, or left on the deleted row
+    for the reconciler. The row is never resurrected."""
+    from src.tasks.reconcile_tasks import _reconcilable_filters
+
+    with _ingestion() as env:
+
+        def sync_racing_delete(document: Document, **_: Any) -> str:
+            _interfere(env, _delete)
+            _write_late_data_source(env, "ds-late")
+            return "ds-late"
+
+        unsync = _fake_unsync(cleanup_ok)
+        stubbed.setattr(pt, "_sync_document_to_kb_blocking", sync_racing_delete)
+        stubbed.setattr("src.core.database.AsyncSessionLocal", env.AsyncSession)
+        stubbed.setattr("src.services.do_kb.unsync_document_from_kb", unsync)
+
+        result = _run(env, stubbed).get()
+
+        assert result["skipped"] == "deleted"
+        assert unsync.calls == ["ds-late"]
+        with env.Session() as check:
+            doc = check.get(Document, env.doc_id)
+            assert doc.is_deleted is True
+            if cleanup_ok:
+                assert doc.do_kb_data_source_uuid is None
+            else:
+                assert doc.do_kb_data_source_uuid == "ds-late"
+                assert (
+                    check.query(Document.id)
+                    .filter(*_reconcilable_filters(), Document.id == env.doc_id)
+                    .count()
+                    == 1
+                )
+
+
+@pytest.mark.parametrize("cleanup_ok", [True, False])
+def test_late_graph_write_is_compensated(
+    stubbed: pytest.MonkeyPatch, cleanup_ok: bool
+) -> None:
+    from unittest.mock import MagicMock
+
+    from src.tasks.reconcile_tasks import _reconcilable_filters
+
+    with _ingestion() as env:
+
+        def index_racing_delete(document: Document, entities: Any) -> int:
+            _interfere(env, _delete)
+            return len(entities)
+
+        kg = MagicMock()
+        if not cleanup_ok:
+            kg.delete_document_graph.side_effect = RuntimeError("neo4j down")
+        stubbed.setattr(pt, "_index_entities_to_graph", index_racing_delete)
+        stubbed.setattr(
+            "src.services.knowledge_graph.knowledge_graph_service."
+            "KnowledgeGraphService",
+            lambda: kg,
+        )
+
+        result = _run(env, stubbed).get()
+
+        assert result["skipped"] == "deleted"
+        kg.delete_document_graph.assert_called_once_with(
+            str(env.doc_id), str(env.org_id)
+        )
+        with env.Session() as check:
+            doc = check.get(Document, env.doc_id)
+            assert doc.is_deleted is True
+            assert doc.neo4j_index_status == ("completed" if cleanup_ok else "failed")
+            selected = (
+                check.query(Document.id)
+                .filter(*_reconcilable_filters(), Document.id == env.doc_id)
+                .count()
+            )
+            assert selected == (0 if cleanup_ok else 1)
+
+
+def test_stale_snapshot_does_not_revert_state_through_do_kb_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bridge used to merge() the caller's stale Document and commit it,
+    writing every loaded column back over concurrent changes."""
+    with _ingestion() as env:
+        worker = env.Session()
+        stale = worker.get(Document, env.doc_id)  # PENDING, kept in memory
+        with env.Session() as other:  # e.g. the sweeper fails it meanwhile
+            other.get(Document, env.doc_id).processing_status = ProcessingStatus.FAILED
+            other.commit()
+
+        async def fake_sync(session: Any, document: Document, **_: Any) -> str:
+            document.do_kb_data_source_uuid = "ds-1"
+            return "ds-1"
+
+        monkeypatch.setattr("src.core.database.AsyncSessionLocal", env.AsyncSession)
+        monkeypatch.setattr("src.services.do_kb.sync_document_to_kb", fake_sync)
+
+        assert pt._sync_document_to_kb_blocking(stale) == "ds-1"
+        worker.close()
+
+        with env.Session() as check:
+            doc = check.get(Document, env.doc_id)
+            assert doc.processing_status == ProcessingStatus.FAILED
+            assert doc.do_kb_data_source_uuid == "ds-1"

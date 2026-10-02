@@ -70,9 +70,11 @@ def _sync_document_to_kb_blocking(
 
     DO KB (DigitalOcean Knowledge Base) is the retrieval backend after Qdrant
     was dropped. ``sync_document_to_kb`` is async and needs an async session,
-    while these tasks hold a sync ``SessionLocal`` — bridge the sync-loaded ORM
-    object into a fresh ``AsyncSessionLocal`` via async ``merge()``, mirroring
-    ``api/agent/tools_impl.py``.
+    while these tasks hold a sync ``SessionLocal``, so it runs on a fresh
+    ``AsyncSessionLocal`` against a freshly loaded, org-scoped copy of the row.
+    It used to ``merge()`` the caller's object instead, and committing that
+    wrote every stale loaded column back (e.g. reverting a sweep's FAILED
+    status). The sync only owns the DO KB columns it sets (GOO-358).
 
     ``trigger_indexing=False`` registers the data source without kicking the
     org-level indexing job — the satellite reconciler uses it to batch one
@@ -87,9 +89,11 @@ def _sync_document_to_kb_blocking(
         from src.services.do_kb import sync_document_to_kb
 
         async with AsyncSessionLocal() as kb_db:
-            merged = await kb_db.merge(document)
+            current = await kb_db.get(Document, document.id)
+            if current is None or current.organization_id != document.organization_id:
+                return None
             data_source_uuid = await sync_document_to_kb(
-                kb_db, merged, trigger_indexing=trigger_indexing
+                kb_db, current, trigger_indexing=trigger_indexing
             )
             await kb_db.commit()
             return data_source_uuid
@@ -187,6 +191,49 @@ def _record_do_kb_sync_outcome(document, ds_uuid) -> None:
         document.do_kb_sync_status = SatelliteSyncStatus.FAILED.value
 
 
+def _compensate_late_remote_writes(
+    db, document_id, organization_id, writes: set[str]
+) -> None:
+    """Undo DO KB / Neo4j writes that finished after their document was deleted.
+
+    The delete's own satellite cleanup ran before these writes existed, so
+    nothing else would remove them. Cleanup is attempted now. If it fails, the
+    retry marker stays durable on the deleted row, where the satellite
+    reconciler picks it up: the data-source uuid for DO KB, or
+    ``neo4j_index_status=failed`` for Neo4j. Never raises; the task is already
+    stopping.
+    """
+    from src.tasks.reconcile_tasks import (
+        _cleanup_deleted_do_kb_document,
+        _cleanup_deleted_document_graph,
+    )
+
+    try:
+        current = (
+            db.query(Document)
+            .filter(
+                Document.id == document_id,
+                Document.organization_id == organization_id,
+            )
+            .populate_existing()
+            .first()
+        )
+        if current is None or not current.is_deleted:
+            return
+        if "graph" in writes:
+            _cleanup_deleted_document_graph(current)
+        if "do_kb" in writes:
+            _cleanup_deleted_do_kb_document(current)
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning(
+            "Cleanup of late satellite writes failed for deleted document %s",
+            document_id,
+            exc_info=True,
+        )
+
+
 class ProcessingTask(Task):
     """Base class for processing tasks"""
 
@@ -266,6 +313,10 @@ def _safe_relationship_type(raw_type: str) -> GraphRelationshipType:
 def process_document_ingestion(self, job_id: str):
     """Process complete document ingestion pipeline"""
     db = SessionLocal()
+    # Remote satellites this attempt wrote to; cleaned up if the document turns
+    # out to have been deleted while the write was in flight (GOO-358).
+    remote_writes: set[str] = set()
+    document_ids: tuple[Any, Any] | None = None
     try:
         # Get job and document
         job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
@@ -281,6 +332,7 @@ def process_document_ingestion(self, job_id: str):
 
         if not document:
             raise ValueError(f"Document not found for job {job_id}")
+        document_ids = (document.id, document.organization_id)
 
         # Atomic idempotency claim for acks_late redelivery. The Celery app sets
         # task_acks_late, so a worker killed mid-run never acks and the broker
@@ -416,6 +468,7 @@ def process_document_ingestion(self, job_id: str):
             document.neo4j_index_status = SatelliteSyncStatus.PENDING.value
             commit_if_active()
 
+            remote_writes.add("graph")
             _index_entities_to_graph(document, entities)
             commit_if_active()
 
@@ -434,6 +487,7 @@ def process_document_ingestion(self, job_id: str):
                 commit_if_active()
             ds_uuid = _sync_document_to_kb_blocking(document)
             if ds_uuid:
+                remote_writes.add("do_kb")
                 document.is_embedded = True
             _record_do_kb_sync_outcome(document, ds_uuid)
         commit_if_active()
@@ -503,6 +557,8 @@ def process_document_ingestion(self, job_id: str):
             job_id,
             stop.reason,
         )
+        if stop.reason == "deleted" and remote_writes and document_ids:
+            _compensate_late_remote_writes(db, *document_ids, remote_writes)
         return {"status": "stopped", "job_id": job_id, "skipped": stop.reason}
 
     except Exception as e:

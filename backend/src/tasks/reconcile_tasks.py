@@ -11,7 +11,8 @@ human noticed.
 
 Every 30 minutes (beat entry in ``celery_app.py``) it scans COMPLETED,
 non-deleted documents whose either satellite status is ``'failed'``, plus
-deleted documents whose DO KB data-source deletion still needs retry. It
+deleted documents whose DO KB data-source deletion or Neo4j subgraph cleanup
+still needs retry. It
 iterates org-by-org with a bounded keyset cursor and a hard per-run rate cap.
 
 Two-stage safety (values-controllable, no image rebuild):
@@ -62,7 +63,7 @@ def _reconcilable_filters():
     Only COMPLETED active documents are re-driven: a PROCESSING document's
     pipeline is still running, and a FAILED document needs reprocessing.
     Deleted documents are selected separately only while a DO KB deletion
-    handle remains.
+    handle remains or their Neo4j cleanup is marked failed.
     """
     return [
         or_(
@@ -78,6 +79,10 @@ def _reconcilable_filters():
                 Document.is_deleted == True,  # noqa: E712
                 Document.do_kb_data_source_uuid.is_not(None),
                 Document.do_kb_data_source_uuid != "",
+            ),
+            and_(
+                Document.is_deleted == True,  # noqa: E712
+                Document.neo4j_index_status == _FAILED,
             ),
         ),
     ]
@@ -210,6 +215,35 @@ def _cleanup_deleted_do_kb_document(document) -> bool:
         return False
 
 
+def _cleanup_deleted_document_graph(document) -> bool:
+    """Remove a soft-deleted document's Neo4j subgraph and record the outcome.
+
+    Sets ``neo4j_index_status`` to completed on success and failed otherwise;
+    a failed row stays selected by ``_reconcilable_filters`` so the next run
+    retries. Only deletes (relationships, then orphaned nodes, org-scoped);
+    never re-indexes. The caller owns the commit.
+    """
+    from src.services.knowledge_graph.knowledge_graph_service import (
+        KnowledgeGraphService,
+    )
+
+    try:
+        KnowledgeGraphService().delete_document_graph(
+            str(document.id), str(document.organization_id)
+        )
+    except Exception as exc:  # noqa: BLE001 - cleanup must remain retryable
+        document.neo4j_index_status = _FAILED
+        logger.warning(
+            "reconciler: Neo4j cleanup failed for deleted document %s (org %s): %s",
+            document.id,
+            document.organization_id,
+            exc,
+        )
+        return False
+    document.neo4j_index_status = _COMPLETED
+    return True
+
+
 @current_app.task(name="src.tasks.reconcile_tasks.reconcile_satellite_indexes")
 def reconcile_satellite_indexes() -> dict:
     """Beat task: reconcile documents whose satellite indexes drifted."""
@@ -235,6 +269,8 @@ def reconcile_satellite_indexes() -> dict:
         "do_kb_still_failed": 0,
         "do_kb_cleanup_succeeded": 0,
         "do_kb_cleanup_failed": 0,
+        "kg_cleanup_succeeded": 0,
+        "kg_cleanup_failed": 0,
         "do_kb_skipped_disabled": 0,
     }
     report: list[dict] = []
@@ -287,6 +323,9 @@ def reconcile_satellite_indexes() -> dict:
                         cleanup_pending = bool(
                             doc.is_deleted and doc.do_kb_data_source_uuid
                         )
+                        graph_cleanup_pending = bool(
+                            doc.is_deleted and doc.neo4j_index_status == _FAILED
+                        )
                         needs_kg = (
                             not doc.is_deleted and doc.neo4j_index_status == _FAILED
                         )
@@ -310,6 +349,7 @@ def reconcile_satellite_indexes() -> dict:
                                     "neo4j_index_status": doc.neo4j_index_status,
                                     "do_kb_sync_status": doc.do_kb_sync_status,
                                     "do_kb_cleanup_pending": cleanup_pending,
+                                    "kg_cleanup_pending": graph_cleanup_pending,
                                 }
                             )
                             continue
@@ -321,6 +361,12 @@ def reconcile_satellite_indexes() -> dict:
                                 summary["do_kb_cleanup_succeeded"] += 1
                             else:
                                 summary["do_kb_cleanup_failed"] += 1
+
+                        if graph_cleanup_pending:
+                            if _cleanup_deleted_document_graph(doc):
+                                summary["kg_cleanup_succeeded"] += 1
+                            else:
+                                summary["kg_cleanup_failed"] += 1
 
                         if needs_kg:
                             if _redrive_neo4j(doc, extraction):

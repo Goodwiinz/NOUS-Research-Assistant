@@ -12,7 +12,9 @@ Contract under test:
   (completed on a data-source uuid, stays failed on None), one org-level
   indexing kick per touched org.
 - rate cap: at most RECONCILER_MAX_DOCS_PER_RUN documents per run.
-- healthy / terminal / deleted / still-processing documents are untouched.
+- healthy / terminal / still-processing documents are untouched; deleted
+  documents are only cleaned up (DO KB data source, Neo4j subgraph), never
+  re-indexed.
 """
 
 from __future__ import annotations
@@ -164,10 +166,11 @@ def test_report_only_lists_without_acting(session_factory):
     org_a, org_b = uuid.uuid4(), uuid.uuid4()
     kg_failed = _seed_doc(session_factory, org_id=org_a, neo4j=FAILED)
     kb_failed = _seed_doc(session_factory, org_id=org_b, do_kb=FAILED)
+    # A deleted doc with neo4j=failed is a pending graph cleanup (GOO-358).
+    deleted = _seed_doc(session_factory, org_id=org_a, neo4j=FAILED, is_deleted=True)
     # Must all be ignored:
     healthy = _seed_doc(session_factory, org_id=org_a, neo4j=COMPLETED, do_kb=COMPLETED)
     never_attempted = _seed_doc(session_factory, org_id=org_a)
-    deleted = _seed_doc(session_factory, org_id=org_a, neo4j=FAILED, is_deleted=True)
     in_flight = _seed_doc(
         session_factory, org_id=org_a, neo4j=FAILED, status=ProcessingStatus.PROCESSING
     )
@@ -178,15 +181,17 @@ def test_report_only_lists_without_acting(session_factory):
     result, mocks = _run(session_factory, _settings(apply=False))
 
     assert result["mode"] == "report-only"
-    assert result["eligible"] == 2
-    assert result["scanned"] == 2
+    assert result["eligible"] == 3
+    assert result["scanned"] == 3
     reported = {entry["document_id"] for entry in result["report"]}
-    assert reported == {str(kg_failed), str(kb_failed)}
+    assert reported == {str(kg_failed), str(kb_failed), str(deleted)}
     # Every report entry names the org and the drifted satellite.
     by_id = {entry["document_id"]: entry for entry in result["report"]}
     assert by_id[str(kg_failed)]["organization_id"] == str(org_a)
     assert by_id[str(kg_failed)]["neo4j_index_status"] == FAILED
     assert by_id[str(kb_failed)]["do_kb_sync_status"] == FAILED
+    assert by_id[str(deleted)]["kg_cleanup_pending"] is True
+    assert by_id[str(kg_failed)]["kg_cleanup_pending"] is False
 
     # Report-only touched nothing and called no re-drive core.
     mocks.repair.assert_not_called()
@@ -387,3 +392,40 @@ def test_beat_entry_registered_and_resolves():
     assert entry["task"] == "src.tasks.reconcile_tasks.reconcile_satellite_indexes"
     assert entry["task"] in celery_app.tasks
     assert "src.tasks.reconcile_tasks" in celery_app.conf.include
+
+
+def test_apply_retries_deleted_document_graph_cleanup(session_factory):
+    """A deleted document marked neo4j=failed (a late graph write whose
+    cleanup failed) gets its subgraph deleted, never re-indexed (GOO-358)."""
+    org_id = uuid.uuid4()
+    doc_id = _seed_doc(session_factory, org_id=org_id, neo4j=FAILED, is_deleted=True)
+    kg = MagicMock()
+
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+        return_value=kg,
+    ):
+        result, mocks = _run(session_factory, _settings(apply=True))
+
+    assert result["kg_cleanup_succeeded"] == 1
+    kg.delete_document_graph.assert_called_once_with(str(doc_id), str(org_id))
+    mocks.repair.assert_not_called()
+    mocks.kb_sync.assert_not_called()
+    doc = _get(session_factory, doc_id)
+    assert doc.neo4j_index_status == COMPLETED
+    assert doc.is_deleted is True
+
+
+def test_failed_deleted_document_graph_cleanup_remains_retryable(session_factory):
+    doc_id = _seed_doc(session_factory, neo4j=FAILED, is_deleted=True)
+    kg = MagicMock()
+    kg.delete_document_graph.side_effect = RuntimeError("neo4j down")
+
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+        return_value=kg,
+    ):
+        result, _ = _run(session_factory, _settings(apply=True))
+
+    assert result["kg_cleanup_failed"] == 1
+    assert _get(session_factory, doc_id).neo4j_index_status == FAILED
