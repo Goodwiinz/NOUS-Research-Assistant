@@ -159,6 +159,12 @@ from .research_deposit import (
     ArchiveDepositAttempt,
     ArchiveDepositOutbox,
 )
+from .research_search_update import (
+    ResearchSearchExecution,
+    ResearchSearchExecutionAttempt,
+    ResearchSearchExecutionResult,
+    ResearchSearchSchedule,
+)
 from .manuscript_statements import (
     ManuscriptStatementApproval,
     ManuscriptStatementSet,
@@ -352,6 +358,10 @@ __all__ = [
     "ArchiveDepositApproval",
     "ArchiveDepositAttempt",
     "ArchiveDepositOutbox",
+    "ResearchSearchSchedule",
+    "ResearchSearchExecution",
+    "ResearchSearchExecutionAttempt",
+    "ResearchSearchExecutionResult",
     "ResearchClaim",
     "ResearchClaimVersion",
     "ResearchClaimEvidenceLink",
