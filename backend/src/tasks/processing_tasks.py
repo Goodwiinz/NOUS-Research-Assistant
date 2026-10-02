@@ -578,8 +578,12 @@ def process_document_ingestion(self, job_id: str):
                 job, document = require_active_ingestion(
                     db, job_id, expected_task_id=self.request.id, lock=True
                 )
-            except ProcessingStopped:
+            except ProcessingStopped as stop:
                 db.rollback()
+                # A remote write may have landed before the document was
+                # deleted and the stage then failed for an unrelated reason.
+                if stop.reason == "deleted" and remote_writes and document_ids:
+                    _compensate_late_remote_writes(db, *document_ids, remote_writes)
             else:
                 document.update_processing_status(ProcessingStatus.FAILED, str(e))
                 job.fail_job(str(e))

@@ -429,3 +429,53 @@ def test_failed_deleted_document_graph_cleanup_remains_retryable(session_factory
 
     assert result["kg_cleanup_failed"] == 1
     assert _get(session_factory, doc_id).neo4j_index_status == FAILED
+
+
+def test_redrive_racing_a_delete_cleans_up_instead_of_completing(session_factory):
+    """The document is deleted while the reconciler re-drives its graph; the
+    deleter's cleanup has already run. The re-driven graph must be removed, not
+    recorded as completed on the deleted row (GOO-358 review)."""
+    org_id = uuid.uuid4()
+    doc_id = _seed_doc(session_factory, org_id=org_id, neo4j=FAILED)
+
+    def repair_while_deleted(doc, **kw):
+        with session_factory() as other:
+            other.query(Document).filter(Document.id == doc_id).update(
+                {"is_deleted": True}
+            )
+            other.commit()
+        return _ok_outcome(doc.id)
+
+    kg = MagicMock()
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+        return_value=kg,
+    ):
+        result, _ = _run(
+            session_factory,
+            _settings(apply=True),
+            repair=MagicMock(side_effect=repair_while_deleted),
+        )
+
+    kg.delete_document_graph.assert_called_once_with(str(doc_id), str(org_id))
+    assert result["kg_repaired"] == 0
+    doc = _get(session_factory, doc_id)
+    assert doc.is_deleted is True
+    assert doc.neo4j_index_status == COMPLETED  # cleanup done, nothing to retry
+
+
+def test_deleted_document_left_pending_is_cleaned_up(session_factory):
+    """A worker killed between the graph fan-out and its compensation leaves
+    neo4j=pending on the deleted row; that is a cleanup candidate too."""
+    doc_id = _seed_doc(
+        session_factory, neo4j=SatelliteSyncStatus.PENDING.value, is_deleted=True
+    )
+    kg = MagicMock()
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+        return_value=kg,
+    ):
+        result, _ = _run(session_factory, _settings(apply=True))
+
+    assert result["kg_cleanup_succeeded"] == 1
+    assert _get(session_factory, doc_id).neo4j_index_status == COMPLETED

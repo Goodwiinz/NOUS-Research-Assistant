@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 _FAILED = SatelliteSyncStatus.FAILED.value
 _COMPLETED = SatelliteSyncStatus.COMPLETED.value
+_PENDING = SatelliteSyncStatus.PENDING.value
 
 
 def _reconcilable_filters():
@@ -63,7 +64,8 @@ def _reconcilable_filters():
     Only COMPLETED active documents are re-driven: a PROCESSING document's
     pipeline is still running, and a FAILED document needs reprocessing.
     Deleted documents are selected separately only while a DO KB deletion
-    handle remains or their Neo4j cleanup is marked failed.
+    handle remains or their Neo4j cleanup is marked failed (or left pending by a
+    worker that died before compensating).
     """
     return [
         or_(
@@ -82,7 +84,9 @@ def _reconcilable_filters():
             ),
             and_(
                 Document.is_deleted == True,  # noqa: E712
-                Document.neo4j_index_status == _FAILED,
+                # pending: a worker died between its graph fan-out and the
+                # compensation that would have removed it.
+                Document.neo4j_index_status.in_((_FAILED, _PENDING)),
             ),
         ),
     ]
@@ -129,9 +133,16 @@ class _LazyExtractionService:
         return self._service
 
 
-def _redrive_neo4j(document, extraction) -> bool:
+def _redrive_neo4j(db, document, extraction) -> bool:
     """Re-drive one document's Neo4j index; returns True when repaired."""
     outcome = repair_document_graph(document, extraction_service=extraction.get())
+    # A delete that landed during the repair ran its graph cleanup before these
+    # upserts existed; remove them instead of recording the deleted row as
+    # indexed, which would hide the orphan for good (GOO-358).
+    db.refresh(document, attribute_names=["is_deleted"])
+    if document.is_deleted:
+        _cleanup_deleted_document_graph(document)
+        return False
     if outcome.ok:
         document.neo4j_index_status = _COMPLETED
         document.neo4j_indexed_at = datetime.now(timezone.utc)
@@ -324,7 +335,8 @@ def reconcile_satellite_indexes() -> dict:
                             doc.is_deleted and doc.do_kb_data_source_uuid
                         )
                         graph_cleanup_pending = bool(
-                            doc.is_deleted and doc.neo4j_index_status == _FAILED
+                            doc.is_deleted
+                            and doc.neo4j_index_status in (_FAILED, _PENDING)
                         )
                         needs_kg = (
                             not doc.is_deleted and doc.neo4j_index_status == _FAILED
@@ -369,7 +381,7 @@ def reconcile_satellite_indexes() -> dict:
                                 summary["kg_cleanup_failed"] += 1
 
                         if needs_kg:
-                            if _redrive_neo4j(doc, extraction):
+                            if _redrive_neo4j(db, doc, extraction):
                                 summary["kg_repaired"] += 1
                             else:
                                 summary["kg_still_failed"] += 1

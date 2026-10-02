@@ -689,3 +689,34 @@ def test_stale_snapshot_does_not_revert_state_through_do_kb_sync(
             doc = check.get(Document, env.doc_id)
             assert doc.processing_status == ProcessingStatus.FAILED
             assert doc.do_kb_data_source_uuid == "ds-1"
+
+
+def test_late_graph_write_is_compensated_when_the_stage_then_crashes(
+    stubbed: pytest.MonkeyPatch,
+) -> None:
+    """The graph write lands, the document is deleted, and the stage then fails
+    with an ordinary error (deadlock, timeout, dropped connection) rather than
+    ProcessingStopped. The failure path must still clean up the graph."""
+    from unittest.mock import MagicMock
+
+    with _ingestion() as env:
+
+        def index_delete_then_crash(document: Document, entities: Any) -> int:
+            _interfere(env, _delete)
+            raise RuntimeError("connection dropped")
+
+        kg = MagicMock()
+        stubbed.setattr(pt, "_index_entities_to_graph", index_delete_then_crash)
+        stubbed.setattr(
+            "src.services.knowledge_graph.knowledge_graph_service."
+            "KnowledgeGraphService",
+            lambda: kg,
+        )
+
+        _run(env, stubbed)
+
+        kg.delete_document_graph.assert_called_once_with(
+            str(env.doc_id), str(env.org_id)
+        )
+        with env.Session() as check:
+            assert check.get(Document, env.doc_id).neo4j_index_status == "completed"
