@@ -20,6 +20,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from src.models.document import Document, DocumentType
 from src.models.organization import Organization
@@ -196,3 +198,53 @@ async def test_correlated_failure_preserves_object_as_orphan(quota_deltas):
 
     # reversal did not commit → object must NOT be deleted (would orphan a live row)
     svc._delete_stored_object.assert_not_called()
+
+
+def _integrity_error(constraint: str) -> IntegrityError:
+    orig = Exception(f'duplicate key value violates unique constraint "{constraint}"')
+    return IntegrityError("INSERT INTO documents ...", {}, orig)
+
+
+@pytest.mark.asyncio
+async def test_racing_duplicate_unique_index_returns_409_and_cleans_object(
+    quota_deltas, soft_deleted
+):
+    """Two identical uploads both pass the SELECT dup check; the loser's
+    Document commit hits uq_documents_org_checksum_live → 409 (not a 400
+    FileStorageError), object deleted, no quota touched."""
+    db = _FakeDB()
+    svc = _make_service(db)
+    org, user = _org_user()
+
+    async def _commit():
+        raise _integrity_error("uq_documents_org_checksum_live")
+
+    db.commit = _commit
+
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.upload_file(_FakeUpload(b"hello world"), "Doc", user, org)
+
+    assert exc_info.value.status_code == 409
+    assert db.rollbacks >= 1
+    svc._delete_stored_object.assert_called_once()
+    assert soft_deleted == []
+    assert quota_deltas == []
+
+
+@pytest.mark.asyncio
+async def test_unrelated_integrity_error_is_not_mapped_to_409(quota_deltas):
+    """Only the checksum index maps to 409; other constraint failures stay
+    on the generic FileStorageError path (still compensated)."""
+    db = _FakeDB()
+    svc = _make_service(db)
+    org, user = _org_user()
+
+    async def _commit():
+        raise _integrity_error("documents_pkey")
+
+    db.commit = _commit
+
+    with pytest.raises(FileStorageError):
+        await svc.upload_file(_FakeUpload(b"hello world"), "Doc", user, org)
+
+    svc._delete_stored_object.assert_called_once()

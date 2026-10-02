@@ -18,6 +18,7 @@ from fastapi import Depends, HTTPException, UploadFile, status
 from PIL import Image
 from pypdf import PdfReader
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Optional pandas import for spreadsheet processing
@@ -37,6 +38,18 @@ from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
+
+# Partial unique index on documents(organization_id, checksum_sha256) WHERE live;
+# see alembic/versions/uq_documents_org_checksum.py (INDEX_NAME).
+_CHECKSUM_UNIQUE_INDEX = "uq_documents_org_checksum_live"
+
+
+def _duplicate_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Identical file already exists in this organization",
+    )
+
 
 _ACTIVE_CONTENT_MIME_TYPES = frozenset(
     {
@@ -160,8 +173,10 @@ class FileService:
         """R2-L13: reject a live duplicate before any storage/quota work.
 
         Org-scoped; matches the ``checksum_sha256`` column and the
-        ``document_metadata.file_hash`` key that pre-column rows carry. There is
-        no DB uniqueness on the hash, so this check is the only guard (409).
+        ``document_metadata.file_hash`` key that pre-column rows carry. This is
+        the fast path; two racing uploads can both pass it, and the partial
+        unique index ``uq_documents_org_checksum_live`` rejects the loser's
+        insert, which ``upload_file`` also maps to 409.
         """
         from sqlalchemy import or_
 
@@ -178,10 +193,7 @@ class FileService:
             .limit(1)
         )
         if result.first() is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="Identical file already exists in this organization",
-            )
+            raise _duplicate_conflict()
 
     async def _spool_and_hash(self, file: UploadFile) -> tuple[str, str]:
         """Stream the upload to a temp spool while hashing (R2-L12).
@@ -596,7 +608,14 @@ class FileService:
             document.add_metadata("original_filename", file.filename)
 
             self.db.add(document)
-            await self.db.commit()
+            try:
+                await self.db.commit()
+            except IntegrityError as exc:
+                # Lost the dedup race: the outer handler rolls back and deletes
+                # the stored object (nothing else is committed yet).
+                if _CHECKSUM_UNIQUE_INDEX in str(exc.orig):
+                    raise _duplicate_conflict() from exc
+                raise
             await self.db.refresh(document)
             document_committed = True
 
