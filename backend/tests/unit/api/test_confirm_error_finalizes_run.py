@@ -149,3 +149,7 @@ async def test_post_event_error_finalizes_run_with_valid_payload() -> None:
     # The exact regression: this constructor rejected the old payload shape
     # ({reason, error, request_id}) and rolled the finalize back.
     RunFailedPayload(**kwargs["payload"])
+    # R8-D8 drift: the run row's error columns must be populated too, like
+    # /stream's FAILED finalize, or /jobs reports a failed run with no error.
+    assert kwargs["error_code"] == "confirm_error"
+    assert kwargs["error"] == kwargs["payload"]["message"]

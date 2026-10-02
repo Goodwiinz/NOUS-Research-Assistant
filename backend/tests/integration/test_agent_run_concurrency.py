@@ -18,6 +18,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.sql.dml import Update
 
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.agent_run_event import AgentRunEvent
 from src.models.thread import Thread, ThreadStatus
@@ -93,6 +94,7 @@ async def _postgres_run_schema(
                 await conn.run_sync(Thread.__table__.create)
                 await conn.run_sync(AgentRun.__table__.create)
                 await conn.run_sync(AgentRunEvent.__table__.create)
+                await conn.run_sync(AgentOutbox.__table__.create)
 
             factory = async_sessionmaker(scoped_engine, expire_on_commit=False)
             user_id = uuid.uuid4()
@@ -961,6 +963,7 @@ async def test_real_sweeper_consumes_stop_or_completion_winning_after_refresh(
         monkeypatch.setattr(job_store, "get_job_fresh", get_job)
         monkeypatch.setattr(job_store, "set_job", set_job)
         original_upsert = agent_run_service.upsert_run
+        original_terminalize = agent_run_service.terminalize_stale_run
 
         async def pause_before_stale_failure(
             db: AsyncSession,
@@ -972,10 +975,14 @@ async def test_real_sweeper_consumes_stop_or_completion_winning_after_refresh(
             if job_id == target_job_id and status is JobStatus.FAILED:
                 reached.set()
                 await release.wait()
-            return await original_upsert(db, job_id=job_id, status=status, **kwargs)
+            return await original_terminalize(
+                db, job_id=job_id, status=status, **kwargs
+            )
 
         target_job_id = job_id
-        monkeypatch.setattr(agent_run_service, "upsert_run", pause_before_stale_failure)
+        monkeypatch.setattr(
+            agent_run_service, "terminalize_stale_run", pause_before_stale_failure
+        )
         sweep_task = asyncio.create_task(
             agent_run_tasks._sweep_stale_agent_runs(lease_owner="sweeper:race-test")
         )

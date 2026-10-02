@@ -7,7 +7,6 @@ swallowed and surfaced as `error` field.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +15,6 @@ from uuid import UUID
 import pytest
 
 from src.models.user import User
-from src.services.agent import tools as tools_module
 from src.services.agent import tools_impl
 from src.services.agent.tools import do_kb_retrieve
 from src.services.agent.tools_impl import (
@@ -97,21 +95,19 @@ def test_decorated_schema_exposes_optional_document_ids_not_config():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_wrapper_forwards_document_ids_with_positional_config(monkeypatch):
+async def test_execute_tool_forwards_document_ids_and_page_project(monkeypatch):
+    """The production path, not the schema-only ``@tool`` wrapper (R8-B1/B2)."""
     db = MagicMock()
     user = SimpleNamespace(id="user-1", organization_id="org-1")
     captured = AsyncMock(return_value={"chunks": [], "total": 0})
-
-    @asynccontextmanager
-    async def fake_context(_config):
-        yield db, user, {}
-
-    monkeypatch.setattr(tools_module, "_tool_context", fake_context)
     monkeypatch.setattr(tools_impl, "_tool_do_kb_retrieve", captured)
-    config = {"configurable": {"user_id": "user-1"}}
 
-    result = await do_kb_retrieve.coroutine(
-        "attention mechanisms", 6, config, document_ids=[str(TARGET_ID)]
+    result = await tools_impl.execute_tool(
+        "do_kb_retrieve",
+        {"query": "attention mechanisms", "top_k": 6, "document_ids": [str(TARGET_ID)]},
+        project_id="project-1",
+        db=db,
+        current_user=user,  # type: ignore[arg-type]
     )
 
     assert result == {"chunks": [], "total": 0}
@@ -123,22 +119,22 @@ async def test_wrapper_forwards_document_ids_with_positional_config(monkeypatch)
         },
         db,
         user,
+        project_id="project-1",
     )
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_wrapper_preserves_explicit_empty_document_scope(monkeypatch):
+async def test_execute_tool_preserves_explicit_empty_document_scope(monkeypatch):
     captured = AsyncMock(return_value={"chunks": [], "total": 0})
-
-    @asynccontextmanager
-    async def fake_context(_config):
-        yield MagicMock(), SimpleNamespace(id="user-1", organization_id="org-1"), {}
-
-    monkeypatch.setattr(tools_module, "_tool_context", fake_context)
     monkeypatch.setattr(tools_impl, "_tool_do_kb_retrieve", captured)
 
-    await do_kb_retrieve.coroutine("attention", document_ids=[])
+    await tools_impl.execute_tool(
+        "do_kb_retrieve",
+        {"query": "attention", "document_ids": []},
+        db=MagicMock(),
+        current_user=SimpleNamespace(id="user-1", organization_id="org-1"),  # type: ignore[arg-type]
+    )
 
     assert captured.await_args.args[0]["document_ids"] == []
 
