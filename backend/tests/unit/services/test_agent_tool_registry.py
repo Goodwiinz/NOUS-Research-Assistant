@@ -330,7 +330,7 @@ class TestProductionToolRegistryParity:
                 "do_kb_retrieve",
             },
             "data": {
-                # list_project_documents' _missing_project_error names this.
+                # list_project_documents needs a project_id; this finds one.
                 "list_projects",
                 "extract_entities",
                 "search_knowledge_graph",
