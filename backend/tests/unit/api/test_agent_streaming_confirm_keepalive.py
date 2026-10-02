@@ -155,9 +155,9 @@ async def test_graph_keepalive_polls_durable_stop_while_next_event_is_pending(
 
     cleaned = asyncio.Event()
     graph = _token_then_hang(cleaned)
-    request = SimpleNamespace(
-        is_disconnected=AsyncMock(side_effect=[False, False]),
-    )
+    # Stop polls are time-gated (R8-D1), so the disconnect check may run more
+    # often than the poll; only the poll sequence is pinned here.
+    request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     stop_requested = AsyncMock(side_effect=[False, False, True])
     monkeypatch.setattr(st, "_SSE_KEEPALIVE_SECONDS", 0.2)
     monkeypatch.setattr(st, "_SSE_DISCONNECT_POLL_SECONDS", 0.01, raising=False)
