@@ -1693,3 +1693,647 @@ backend/.venv/bin/python -m pytest -q -p no:cacheprovider evals/academic-writing
 | Guard (line) | Mutation | Observed mutant failure |
 |---|---|---|
 | `model_only` rule in `_factual_code` (`release_rules.py:169`) | `return "model_only" if ...` replaced with `return None if ...` (a model stance counts as accepted) | `[dev-unsupported-number]` fails with `assert [] == [('model_only', ...)]`: the seeded unsupported number would promote. The other three conditions still block. |
+
+## GOO-308 plan-to-write journey, audit bundle and collector — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_audit_bundle_postgres.py`.
+It ran against local PostgreSQL 14 on GOO-301's `screening_factory` schema,
+whose chain still ends at `d7f9b1c3e5a8` (connection URL from the environment;
+value omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`filecmp` against the copy and `git diff --quiet` on the mutated file both
+succeeded for every mutant, on committed files. Every suite passed again
+afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/journey.py`
+  `8cf5f6c09a49d77250ec1a1b0d62f5ff47edee106bb0b4c7a03a0acba75d0f8f`
+- `backend/src/services/research_engine/corpus_export.py`
+  `740d1c3a8a9e4e3e5c2434c86d40b9d6c9e951403bd90e9a73b191ccaf84ce84`
+- `backend/src/services/research_engine/audit_bundle.py`
+  `a0317391e22f3acb591639423da3a7c78798c84932cc26ca51425f4bc67586f4`
+- `frontend/src/components/research/DraftClaimsPanel.tsx`
+  `660467d0842e1e24090f07bfce1cb774e2060bcacce4c97db312cfd97efbc5d9`
+- `evals/academic-journey-v1/collect.py`
+  `8e299f145056200e0283c9816625abf9c0d0a066041dbd1828c6d60565a390a3`
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_audit_bundle_postgres.py   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_audit_bundle.py -k tampered   # from backend/
+pnpm --dir frontend exec vitest run src/components/research/__tests__/DraftClaimsPanel.test.tsx -t "code points"
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider evals/academic-journey-v1/tests -k <tampered|refuses>
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` in `begin_read_snapshot` (`journey.py:215`) | replaced with `pass` | The PG proof fails at step 2, earlier than the plan predicted (step 7): `RuntimeError: load PRISMA inputs outside a writing transaction`. Without the caller's snapshot, GOO-299's `replay_decisions` (called by the corpus part) takes a `FOR SHARE` row lock. That lock assigns a transaction id, so `load_inputs` refuses to open its own snapshot, and no bundle is produced at all. |
+| Resolutions-only Select count (`journey.py:345`) | `resolved_reports` counts `screening_observations` for the live queues instead of resolution tips | Step 8's blind-review assertion fails: R's journey JSON differs after R2's unrevealed submission on a report R has not screened. |
+| GOO-300's restricted `raw` strip, reached through the bundle (`corpus_export.py:485`) | `"raw": record.raw if allowed else None` replaced with `"raw": record.raw` | Step 4 fails with `AssertionError: corpus.json`: `RESTRICTED-7f3a` appears in `corpus.json`. |
+| `SHA256SUMS` comparison in `verify_bundle` (`audit_bundle.py:410`) | `return {}` inserted before the loop | `test_verify_bundle_rejects_tampered_member` fails: `DID NOT RAISE BundleError`. |
+| UTF-16 to code-point conversion (`DraftClaimsPanel.tsx:202`) | `start_char: codePoints(content, start)` replaced with `start_char: start` | `selection offsets are code points` fails: the posted `start_char` is 9, where 8 was expected (the leading "📊" is two UTF-16 units). |
+| Collector `SHA256SUMS` recomputation (`collect.py:89`) | the comparison replaced with `if False:` | `test_tampered_bundle_member_rejected` fails because the message changes to `bundle member claims.json does not match the manifest`. The tampered bundle is still refused, by the manifest's own `sha256` check and then by the body hash. The plan predicted acceptance, but these are defence in depth, and the test pins the `SHA256SUMS` check specifically. |
+| Collector refusal on missing evidence (`collect.py:409`) | the `is_file()` check replaced with `if False:` | Both `test_refuses_trial_without_bundle_or_trace` cases fail. The missing bundle surfaces as an unhandled `FileNotFoundError`. The missing trace is refused later, with a different message (`cannot read retained artifact`). No report is written in either case, but the declared refusal no longer names the missing evidence. |
+
+## GOO-309 study-design appraisal: blind review, adjudication and staleness — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_appraisal_postgres.py`. It
+ran against local PostgreSQL 14 on GOO-301's `screening_factory` schema, whose
+chain now ends at `e2a4c6b8d0f1` (connection URL from the environment; value
+omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`filecmp` against the copy and `git diff --quiet` on the mutated file both
+succeeded for every mutant, on committed files. The proof (3 tests) and the
+gold test (7 tests) passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/appraisal_service.py`
+  `80c312e586229b9a1186024148ac53d3b4e3255dbe91fb2f9595e150e145f449`
+- `backend/src/services/research_engine/appraisal_rules.py`
+  `bce3798dcec5f49f8368196cb64e27d39fd9d6921db269d25c791e502272c392`
+- `backend/alembic/versions/e2a4c6b8d0f1_create_appraisal_assessments.py`
+  `960b3012ce6ae3f1c60056397803cb0605f98633ef45fb883c59037c7a5a97e5`
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_appraisal_postgres.py -k staleness   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_appraisal_gold.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| The reveal predicate `_visible`, behind `visible_appraisal_ids` and every read (`appraisal_service.py:373`) | `return {every row id}` inserted before the filter | Step 4: B's list for S holds A's unrevealed row (`assert [AppraisalResponse(...)] == []`). |
+| The revealed-edit refusal in `_write` (`:551`) | `if False:` | Step 5: `DID NOT RAISE HTTPException`; A's post-reveal successor is recorded instead of `409 Revealed; changes go through adjudication`. |
+| The `resolves_assessment_ids == tips` check (`:564`) | `if False:` | Step 6: `DID NOT RAISE HTTPException`; J's adjudication naming A's superseded row is recorded instead of `409 Appraisal is stale; reload`. |
+| The self-adjudication check (`:575`) | `if False:` | Step 7: `DID NOT RAISE HTTPException`; J2 adjudicates R3, which J2 assessed. |
+| `graph_part` edge selection (`:433`) | each row walks every row's cited evidence | Step 10: A's R3 row (which cites nothing on D1) is reported stale after the D1 `Blinding` value is superseded. |
+| The insert-only trigger (`e2a4c6b8d0f1…py:166`) | the function body's `RAISE … '55000'` replaced with `RETURN NEW;` (the plan's `DROP TRIGGER` would also break step 2's downgrade/upgrade) | Step 9: `DID NOT RAISE DBAPIError`; the UPDATE succeeds. A first run with an unfiltered UPDATE failed on `ck_appraisal_not_applicable_overall` (SQLSTATE 23514) instead, so step 9 now updates applicable rows only and pins the trigger. |
+| The `overall` null-while-unknown rule (`appraisal_rules.py:197`) | both overall checks replaced by `if floor is not None and _rank(overall) < _rank(floor):` | `test_overall_below_floor_or_over_unknown_is_rejected`: `DID NOT RAISE ValueError`; gold case `d3_unknown` validates with a non-null overall. |
+
+## GOO-310 evidence tables, contradiction review and outcome certainty — 2026-09-30
+
+PostgreSQL proof: `backend/tests/integration/test_evidence_certainty_postgres.py`.
+It ran against local PostgreSQL 14 on GOO-301's `screening_factory` schema,
+whose chain now ends at `f4b6d8a0c2e3` (connection URL from the environment;
+value omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`filecmp` against the copy and `git diff --quiet` on the mutated file both
+succeeded for every mutant, on committed files. The proof (1 test), the rules
+tests (10) and the boundary guard (4) passed again afterwards. No mutant was
+committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/evidence_rules.py`
+  `e4e12bb23b930bef1997085b150cd14848afefdb1be8defd6cdcfe9b196a68ed`
+- `backend/src/services/research_engine/evidence_service.py`
+  `3e6101f45b833bb9a559b8160f9001454cae1e500dd9bcdf4eaf1d691f84403c`
+
+```sh
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider -x tests/integration/test_evidence_certainty_postgres.py   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_evidence_rules.py -k "one_study or missing"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_evidence_boundary.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| One row per analysis unit in `build_rows` (`evidence_rules.py:139`) | a row per report of each unit (`for unit in sorted(units) for _report in units[unit]`) | `-k one_study`: the unit list holds S twice. Proof step 2 (`:412`): `assert 2 == 1`, study S appears twice. |
+| The `missing` cell state (`evidence_rules.py:84`) | `return "value"` when no tip | `-k missing`: the tip-less cell reports `state: value`, i.e. agreement. |
+| Adjudicator-only resolution in `record_contradiction` (`evidence_service.py:898`) | `if False:` | Step 4: reviewer A's `resolved` row reaches the insert, where only the `ck_evidence_contradiction_decider` CHECK refuses it (`IntegrityError`, not the expected 403). The database backstop holds; the service guard is what turns it into a 403. |
+| Stale-tip exclusion in `_tips` (`evidence_service.py:286`) | the `stale_nodes` filter removed | Step 9 (`:711`): the rebuilt T2 still carries D3's source-changed `Mean age` tip (`'value' == 'missing'`). The plan named T1's superseded value here, but `_is_tip()` already drops a superseded row, so only a source-changed tip reaches this filter; the proof asserts that case. |
+| Risk-of-bias resolved check in `check_certainty` (`evidence_rules.py:232`) | `if False:` | Step 5: `DID NOT RAISE HTTPException`; a `risk_of_bias: -1` assessment is accepted while R3's appraisal is still awaiting. A first run failed on the inconsistency rule instead, so step 5's RoB request now cites the contradiction too and pins this check. |
+| `graph_part` edge selection (`evidence_service.py:543`) | every table walks every table's cell tips | Step 7 (`:659`): T2 (mean age) reads stale after D1's intervention value is superseded (`[True] == [False]`). |
+| Organization filter on the stance query (`evidence_service.py:638`) | the `organization_id ==` clause removed | Step 2 (`:430`): the org-B row joins the suggestion group. |
+| Organization filter on the suggestion snapshot (`evidence_service.py:876`) | the `organization_id ==` clause removed | Step 4: `DID NOT RAISE HTTPException`; citing the org-B stance row is snapshotted instead of 404. |
+| Certainty/model-confidence separation (`evidence_rules.py:203`) | `values.append(ratings.get("confidence"))` in `certainty_level` | `test_evidence_boundary.py::test_certainty_rules_never_name_model_signals`: `evidence_rules.py:204 names 'confidence'`; the rules tests' level derivations fail too. |
+
+## GOO-311 one bounded quantitative synthesis (SMD Hedges' g, DerSimonian-Laird) — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_synthesis_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `a6c8e0b2d4f5`
+(connection URL from the environment; value omitted).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy.
+
+`diff -q` against the copy succeeded for every mutant, and `git diff --quiet
+backend/src` succeeded afterwards. The proof (1 test), the rules tests (15)
+and the boundary guard (4) passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/synthesis_rules.py`
+  `3e0701e9485dc03d0200361ea32130970dd9532cf9ac7454fbef7c4b980978f0`
+- `backend/src/services/research_engine/synthesis_service.py`
+  `5db24233599d375702031b6222bb38f7424e8281a747078f09b0acfd0a740cda`
+- `backend/src/services/research_engine/step_executor.py`
+  `dceca02850f5bcf6bb8c72140f238f7af16047a2291bdf36a559f91872c225c9`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_synthesis_rules.py -k "gold|homogeneous|duplicate|missing_variance"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_synthesis_boundary.py   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_synthesis_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Small-sample factor J in `hedges_g` (`synthesis_rules.py:230`) | `j = 1` | `-k gold`: 2 failed, gold comparison off by ~1e-3 (beyond the declared 1e-8). |
+| tau2 clamp in `pool_dl` (`synthesis_rules.py:252`) | `tau2 = (q - df) / c` | `-k homogeneous`: tau2 < 0 instead of the clamped 0. |
+| One input per table row in `select_inputs` (`synthesis_rules.py:204`) | one input per report id of each row | `-k duplicate`: study A weighted twice (1 failed). |
+| `invalid_variance` check (`synthesis_rules.py:169`) | `if False:` | `-k missing_variance`: unit G with sd_c = 0 enters the pool (1 failed). |
+| Unchanged-input short-circuit in `execute` (`synthesis_service.py:403`) | `if False:` | Proof step 4 (`:369`): the re-execution reaches the tip check and is refused `409 Synthesis result is stale; reload` instead of returning the tip with zero writes. |
+| `invalidate_dependents` on a successor (`synthesis_service.py:478`) | `if False:` | Proof step 7 (`:424`): release 1 is never stamped (`None == 'research_synthesis'`). |
+| `graph_part` edge selection (`synthesis_service.py:229`) | every result linked to every claim link | Proof step 7 (`:425`): the unrelated draft's release is stamped too (`'research_synthesis' is None`). |
+| Stdlib-only rules (`synthesis_rules.py` imports) | `import numpy` added | `test_synthesis_boundary.py::test_rules_import_only_stdlib` fails. |
+| Narrative step untouched (`step_executor.py`) | `from src.services.research_engine import synthesis_service` appended | 2 boundary tests fail (automation scan and narrative-step check). |
+
+## GOO-312 run manifests, retained artifacts and figure lineage — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_run_manifest_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `b8e0c2d4f6a7`
+(connection URL from the environment; value omitted). The run executes
+through the real start and stream routes; only the sandbox is fake (it runs
+the plan's exact script with the local interpreter).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and assert byte equality.
+
+`git diff --quiet backend/src` succeeded afterwards. The proof (1 test), the
+manifest-rules, isolated-sandbox and analyze-step tests and the boundary
+guard (21 tests together) passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/manifest_rules.py`
+  `402db36964a8aa423af3fe86ffcfbae75bac1cfab3fdf65ab31e8b6f6982ba7d`
+- `backend/src/services/sandbox/e2b_sandbox_manager.py`
+  `de5622b495e74bfb7beb4f75311d1bf488ee1d76405cff79ef00b493f5eff8fe`
+- `backend/src/services/research_engine/step_executor.py`
+  `993d2be72f3eb1d5a3ddf0cab4124ec07f1448baf290877ca78db3dce738ed6f`
+- `backend/src/services/research_engine/experiment_service.py`
+  `4740d4cf2f18c605b40621a289f3747624bcee90a6519c3c693660c41d29cbc9`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_manifest_rules.py -k "completeness|legacy"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_sandbox_isolated.py -k thread_cache   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_step_executor_analyze.py -k checksum   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_run_manifest_postgres.py   # from backend/
+```
+
+| Guard | Mutation | Observed mutant failure |
+|---|---|---|
+| Completeness derivation (`manifest_rules.completeness`) | `return "complete", []` | `-k completeness`: `'complete' == 'incomplete'` (missing paths not listed). |
+| Legacy view invents nothing (`manifest_rules.legacy_view`) | adds `"environment": {"provider": "e2b"}` | `-k legacy`: `test_legacy_view_invents_nothing` finds `environment`. |
+| Thread-cache isolation (`SandboxManager.run_isolated`) | calls `self.get_or_create_sandbox("isolated")` before create | `-k thread_cache`: `get_or_create_sandbox called`. |
+| Input checksum check (`StepExecutor._execute_analyze`) | `if False:` | `-k checksum`: `DID NOT RAISE StepExecutionError` (the step completes). |
+| Secret rejection (`manifest_rules.assert_no_secrets`) | early `return` | Proof step 6 (`:484`): the run streams `step_complete` and completes with a manifest instead of `run_failed` / `manifest_secret_detected`. |
+| `graph_part` edge selection (`experiment_service.graph_part`) | every figure linked to every claim link | Proof step 7 (`:526`): the unrelated draft reads `stale` instead of `verified`. |
+| `invalidate_dependents` on a successor figure (`experiment_service.register_figure`) | `if False:` | Proof step 7 (`:535`): release 1 is never stamped (`None == 'research_experiment'`). |
+
+Not performed: "manifest in the run transaction" (commit the manifest after
+the status) needs a failure injected between the two writes, which the proof
+does not stage; the single-commit placement is reviewed in `runs.py`'s
+`run_complete` branch instead.
+
+## GOO-313 fresh reruns from a run manifest — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_experiment_rerun_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `c0f2a4b6d8e9`
+(connection URL from the environment; value omitted). The original run is
+GOO-312's seed. The rerun goes through the real routes, the real
+`execute_attempt` worker and the real `SandboxManager.run_isolated` restore
+mode; only the e2b `AsyncSandbox` is fake (a temporary directory whose
+`sha256sum` really hashes the restored files and whose command runs the
+archived script with the local interpreter).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and assert byte equality.
+
+`git diff --quiet` on every mutated file succeeded afterwards. The proof
+(1 test), the rules (8), isolated-sandbox (9), route (3) and boundary (5)
+tests passed again afterwards. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research_engine/rerun_rules.py`
+  `d5050ab80abcf86cce5f6e7e75e158dc2301b8dc74f34235b7a30c4cb4d130e9`
+- `backend/src/services/sandbox/e2b_sandbox_manager.py`
+  `4d5daa36432861ced7be728cdc60c9d23c48bd72c5b483755f05058de2aecdbd`
+- `backend/src/services/research_engine/rerun_service.py`
+  `e52c1c08bab4498e1a984f1860e4ec1a8959ba76d691dd997028476ac4d78674`
+- `backend/alembic/versions/c0f2a4b6d8e9_create_experiment_reruns.py`
+  `10a8b596f355c50d7ab319962c11a1c25519e5e22719ac16b0373762fec8a8ac`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_rerun_rules.py -k cover   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_sandbox_isolated.py -k input_hash   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_experiment_rerun_postgres.py   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_rerun_boundary.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Rule covers every output (`rerun_rules.py:95`) | `if False:` | `-k cover` (`:73`): `DID NOT RAISE ValueError`; the partial rule is accepted. |
+| In-sandbox re-hash (`e2b_sandbox_manager.py:369`) | `mismatched: List[str] = []` | `-k input_hash` (`:316`): `('completed', ()) == ('restoration_failed', ('input_mismatch:data.csv',))`; the command runs. |
+| `UNIQUE(rerun_id, attempt)` publication (`rerun_service.py:485`, `:891`) | a unique loss returns `True` and the loser keeps its blobs | Proof step 5 (`:561`): three output blobs exist for the cancelled attempt. |
+| Lease sweep (`rerun_service.py:646`) | `return 0` first | Proof step 6 (`:576`): `assert 0 == 1`; no `interrupted` row. |
+| `require_run_conformance` at admission (`rerun_service.py:499`) | call removed | Proof step 9 (`:674`): `202 == 409`; the copy with a drifted plan hash is admitted. `test_rerun_boundary.py::test_admission_goes_through_retained_plan_conformance` fails too. |
+| Reproduction CHECK (`c0f2a4b6d8e9:124`) | `ck_experiment_rerun_attempts_executed` removed from the migration | Proof step 3 (`:516`): `DID NOT RAISE IntegrityError`; a `restoration_failed` row with `reproduced` is accepted. |
+
+The first run of the rules mutant failed with `KeyError` instead of the
+intended "partial rule accepted": the normalization indexed every manifest
+output. `validate_rule` now normalizes only declared entries, so the
+coverage check is the only thing refusing a partial rule.
+
+Not performed: a live E2B rerun (needs `E2B_API_KEY` and authorization to
+spend sandbox minutes) and a Celery worker restart mid-attempt on a real
+broker. The fake sandbox proves the state machine only.
+
+## GOO-314 peer-review responses against manuscript revisions — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_peer_review_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `d2a4c6e8f0b1`
+(connection URL from the environment; value omitted). The five peer-review
+tables, their CHECKs, the partial unique initial indexes and the insert-only
+triggers come from the migration. Every write goes through the real
+`resolve_project` and the real service; the race in step 8 is two sessions
+under `asyncio.gather`.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty (and the SHA-256 below matches).
+
+The rules (9), route (4), boundary (3) and proof (1) tests passed again
+after every restore. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/peer_review_rules.py`
+  `c4ccc03fe31036c5063cd3f663d16966cb859803fc8ef604ba189b9b3f9fb38e`
+- `backend/src/services/research/peer_review_service.py`
+  `8837fe1067400ff403bd5873c2f496fd7cf5aa399e554470231ca9c325fe4b2d`
+- `backend/alembic/versions/d2a4c6e8f0b1_create_peer_review.py`
+  `02cf32d1eeb9bd84aa4c5852399a6668693c30d385c9957a94c1e612f262f19d`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_peer_review_rules.py -k ambiguous   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_peer_review_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Exact-once re-anchoring (`peer_review_rules.py:65`) | `if first == -1:` (accept the first match) | `-k ambiguous`: `('carried', 0, 12) == ('unresolved_anchor', None, None)`; an ambiguous quote is carried. |
+| Change-or-rationale CHECK (`d2a4c6e8f0b1:205`) | `ck_peer_review_responses_rationale` removed from the migration | Proof step 4 (`:360`): `DID NOT RAISE IntegrityError`; a whitespace-only no-change rationale is stored. |
+| Response tip check (`peer_review_service.py:607`) plus `UNIQUE(supersedes_response_id)` (`d2a4c6e8f0b1:198`) | `if False:` and the unique constraint removed | Proof step 8 (`:448`): both concurrent responses succeed; two tips on C2. |
+| ADJUDICATE on resolution (`peer_review_service.py:95`, `:664`) | `decision_action` returns EDIT and the service's adjudicator check is `if False:` | Proof step 5 (`:364`): `DID NOT RAISE HTTPException`; the role-less owner resolves C1. |
+| `touches` overlap (`peer_review_rules.py:110`) | `return True` first | Proof step 3 (`:291`): `DID NOT RAISE HTTPException`; the v3 revision that only edits another sentence is accepted for C1. |
+
+Backstop check (not a failing mutant, by design): with only the tip check
+removed, the `UNIQUE(supersedes_response_id)` hit is mapped by
+`_flush_or_stale` to the same 409 naming the winner, and the proof passes.
+The ADJUDICATE guard is two layers (route action and service role check),
+so the mutant neutralizes both; either layer alone refuses the owner (by construction, not mutated separately).
+
+Not performed: a real journal review import (no pilot round exists; the
+proof uses a synthetic round) and the live journey (needs a deployed stack
+at `d2a4c6e8f0b1`).
+
+## GOO-315 immutable candidate and verified manuscript releases — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_manuscript_release_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `e4c6a8b0d2f3`
+(connection URL from the environment; value omitted). `manuscript_releases`,
+its CHECKs, `UNIQUE(candidate_release_id)` and the insert-only trigger come
+from the migration. Every write goes through the real `resolve_project` and
+the real service; the concurrent promotion in step 2 is two sessions under
+`asyncio.gather`. Package bytes go to a temporary `LocalArtifactStorage`.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty (and the SHA-256 below matches).
+
+The rules (9), ledger (103), route (7) and proof (1) tests passed again
+after every restore. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/manuscript_release_service.py`
+  `8b4a352b00b7fc328d6729cdc7967b589a50d707a1dfca82052a0f8b1d5d1fa5`
+- `backend/src/services/research/manuscript_rules.py`
+  `a889507aaa3ece161870f75a580897f50d3c2390aa2d4d8b1eeb2bb662bd4e1d`
+- `backend/alembic/versions/e4c6a8b0d2f3_create_manuscript_releases.py`
+  `47af4e3d09cec7c4794047be12248fa54d75da0516b5978706651edfd1fccea9`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_manuscript_rules.py -k claim_support   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/api/test_manuscript_release_routes.py -k reevaluates   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_manuscript_release_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Fresh re-evaluation at promotion (`manuscript_release_service.py:905`) | `checks = candidate.checks` (trust the stored checks) | `-k reevaluates` (`test_manuscript_release_routes.py:325`): `assert 500 == 409`; a candidate whose stored checks pass, with an equal rebuilt snapshot but no live draft release, is not refused. |
+| Snapshot rebuild equality (`manuscript_release_service.py:903`) | `if False:` | Proof step 5 (`:485`): `ObligationsNotMet` instead of the 409 `Candidate is stale; rebuild`; the stale candidate C reaches the obligation check. |
+| Live `draft_release` same-hash rule (`manuscript_rules.py:121`) | the `content_hash` comparison removed (any live release for the draft passes) | `-k claim_support` (`test_manuscript_rules.py:56`): `'pass' == 'fail'`; another version's release passes. |
+| Existing-verified check (`manuscript_release_service.py:898`) plus `UNIQUE(candidate_release_id)` (`e4c6a8b0d2f3:100`) | `existing = None` and the unique constraint removed from the migration | Proof step 2 (`:404`): `[False, False] == [False, True]`; both concurrent promotions insert a verified row for candidate B. |
+| Snapshotted references (`manuscript_release_service.py:1026`) | `verify` rebuilds `references.bib` from the live `Citation`/`Document` rows | Proof step 4 (`:451`): `references_ok` is false after the citation title edit; B's package no longer reconciles with its snapshot. |
+
+Backstop and masking checks (not failing mutants, by design):
+
+- With only the existing-verified check removed, the
+  `UNIQUE(candidate_release_id)` hit is mapped to the winner (replayed) and
+  the proof passes; the constraint alone keeps one verified row.
+- With only "trust the stored checks" applied, the PostgreSQL proof passes:
+  the snapshot binds every obligation input it can (the live draft release
+  id, claim ids, runs, deviations, open review comments), so any change to
+  them makes the rebuilt snapshot differ and step 5's stale refusal fires
+  first. The focused route test isolates the fresh re-evaluation.
+
+Not performed: the methods-expert signoff on the obligation set (none is
+available), a GOO-311 synthesis link in the proof (the synthesis seed needs a
+full evidence-table chain; the synthesis snapshot and package paths are
+covered only by review), and the live journey (needs a deployed stack at
+`e4c6a8b0d2f3`).
+
+## GOO-316 statements, ORCID identity states, venue profile and anonymization — 2026-10-01
+
+PostgreSQL proof: `backend/tests/integration/test_statements_venue_postgres.py`.
+It ran against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema, whose chain now ends at `f6a8c0d2e4b5`
+(connection URL from the environment; value omitted). The four tables, the
+approval's composite `(statement_set_id, set_hash)` FK and the insert-only
+triggers come from the migration. Every write goes through the real
+`resolve_project` and the real services; package bytes go to a temporary
+`LocalArtifactStorage`. Step 8 (legacy, no statement set) runs first,
+because any later statement set changes the rebuilt snapshot by design.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted one match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty (and the SHA-256 below matches).
+
+The proof (1), venue rules (9), statements service (3), manuscript rules,
+route and boundary tests passed again after every restore. No mutant was
+committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/venue_rules.py`
+  `62600064d86290b33f419695925ecfab3d86a03c4a283546f91d77c11dcb9351`
+- `backend/src/services/research/statements_service.py`
+  `8191cbe62fb51223c333d6f831f4eeb357131daa56ec75659595adb6f1358011`
+- `backend/src/services/research/manuscript_release_service.py`
+  `8c032e3ce77b356e10007527a6e4ce7f4219b4f7375502961d85acd1cdfc12fc`
+- `backend/src/services/research/manuscript_rules.py`
+  `875a73873ddfc93e8798e9a90d1f5d9bfd479694011a73dc4a4826e8ec25a38d`
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_venue_rules.py -k orcid   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_statements_service.py -k leak   # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_statements_venue_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| ORCID status needs a receipt (`venue_rules.py:322`) | `return "authenticated", None` when no receipt matches (any iD authenticates) | `-k orcid`: 2 failed; `test_orcid_name_match_is_not_authenticated` and `:132` `'authenticated' == 'unauthenticated'` (B, typed iD, shows authenticated). |
+| Token stripping in `record_orcid` (`statements_service.py:803`) | `name_claim=str(dict(token_response))[:255]` (store the whole response) | Proof step 2 (`:591`): `assert 1 == 0`; the access token is found in `orcid_authentications`. |
+| Leak scan post-condition (`manuscript_release_service.py:946`) plus reviewer identities (`statements_service.py:266`) | `leaks: list[str] = []` and the reviewer display names dropped from `identities` | Proof step 5 (`:665`): `('manuscript.md', 'Rosalind Featherstonehaugh')` is in the anonymized bytes. |
+| Leak scan alone (`manuscript_release_service.py:946`) | `leaks: list[str] = []` | `-k leak` (`test_statements_service.py:131`): `DID NOT RAISE HTTPException`; a binary member carrying a reviewer name is packaged. |
+| Venue check bound to the package hash (`manuscript_rules.py:277`) | the `package_sha256` comparison removed (any check of the release/project counts) | Proof step 7 (`:715`): `DID NOT RAISE ObligationsNotMet`; candidate 3 promotes on candidate 2's replayed passing check. |
+| Approval `set_hash` binding (`statements_service.py:193`) | `if True` (approvals of any set count) | Proof step 6 (`:677`): `'pass' == 'fail'`; v1's approvals carry over to the v2-bound candidate. |
+
+Backstop and masking checks (not failing mutants, by design):
+
+- With only the scan skipped, the PostgreSQL proof passes: redaction removes
+  every identity it knows about from text members, so the scan is a
+  post-condition backstop. The focused unit test isolates it with a binary
+  member that redaction cannot reach.
+- With only the reviewer display names dropped from `identities`, the proof
+  fails at step 5 as above: the scan uses the same identity list, so it
+  never compensates for a missing identity source (the proof's own
+  independent string list does).
+
+Not performed: live ORCID OAuth (sandbox or production; needs a registered
+ORCID app and a sandbox account), the venue-profile expert review of the
+ICMJE/CRediT mapping (none is available), and the live journey (needs a
+deployed stack at `f6a8c0d2e4b5`).
+
+## GOO-317 validated CSL JSON and RIS reference exports — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_reference_exports.py` (CSL
+JSON validated by the vendored official CSL-data schema, RIS parsed by the
+independent `backend/tests/fixtures/references/ris_reader.py`). PostgreSQL
+proof: `backend/tests/integration/test_reference_exports_postgres.py`, run
+against a disposable local PostgreSQL 14 on GOO-301's `screening_factory`
+schema (chain head `f6a8c0d2e4b5`; connection URL from the environment,
+value omitted). Releases are built by the real `create_candidate`; the
+release and draft downloads go through the real routes.
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted a match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty, then rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k corporate     # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k absent_year   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k snippet       # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_reference_exports.py -k ris           # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_reference_exports_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| No name splitting (`bibliography_service.py:88`) | a string author split on its last space into `{family, given}` | `-k corporate` (`test_reference_exports.py:138`): `[{'family': ..., 'given': 'World Health'}] == [{'literal': 'World Health Organization'}]`. |
+| Omit-not-invent dates (`bibliography_service.py:465`) | `PY  - n.d.` emitted when the year is absent | `-k absent_year` (`:151`): `assert 'PY' not in {...}` for `doc2`. |
+| Snippet exclusion (`bibliography_service.py:454`, RIS title) | `title = _get(record, "title") or _get(record, "snippet")` | `-k snippet` (`:167`): `assert 'TI' not in {... 'TI': ['This evidence snippet must never become a title.'] ...}`. |
+| RIS line grammar (`bibliography_service.py:448`) | `f"{tag} - {text}"` (one space before the hyphen) | `-k ris`: 3 failed; the independent reader raises `RisError: line 1: not 'TAG  - value': 'TY - JOUR'`, and `reference_mapping` rejects the `ID` lines (`references.ris ids do not match`). |
+| Snapshot-only release source (`manuscript_release_service.py:625`) | `release_references` rebuilds the references from the live draft citations (`_references(db, ..., live draft)`) | Proof step 3 (`test_reference_exports_postgres.py:229`): `AssertionError: csl-json`; after the `Citation` edit the release's CSL JSON bytes change. |
+
+All five selectors passed again after each restore. No mutant was
+committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/bibliography_service.py`
+  `ffef01dbaf89b7ebb0a130e8b882ebc3a33263928ce2c0fc40847bfafe96cf25`
+- `backend/src/services/research/manuscript_release_service.py`
+  `430e19966eecfb7a58260f17b5a169ff776baca0923abba6727944a3f772d83a`
+
+Not performed: import into a desktop reference manager (Zotero/EndNote; no
+desktop app available, and it never substitutes for the schema and reader
+checks), and the live journey (needs a deployed stack at `f6a8c0d2e4b5`).
+
+## GOO-318 resumable archive deposit with verified receipts (Zenodo sandbox) — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_deposit_rules.py` (derived
+status, approval validity, read-back, redaction) and
+`backend/tests/unit/architecture/test_deposit_boundary.py`. PostgreSQL
+proof: `backend/tests/integration/test_archive_deposit_postgres.py`, run
+against a disposable local PostgreSQL 14 on GOO-301's `screening_factory`
+schema (chain head `b0e2a4c6d8f9`; connection URL from the environment,
+value omitted). The remote side is a fake Zenodo behind the real
+`ZenodoAdapter` (`httpx.MockTransport`); it times out after creating a
+draft, crashes the worker mid-upload, corrupts one read-back md5 and
+echoes the caller's token in link query strings. The live Zenodo sandbox
+run is NOT RUN (no `ZENODO_SANDBOX_TOKEN`).
+
+Procedure for each mutant:
+
+1. Apply it as an exact-string replacement that asserted a single match.
+2. Run the named selector.
+3. Restore the file from a private copy and confirm `git diff` on it is
+   empty, then rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_deposit_rules.py -k unpublished   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_deposit_rules.py -k redact        # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_deposit_boundary.py           # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_archive_deposit_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Lookup before the only remote create (`deposit_service.py:958`) | `found = None` (skip `find_by_operation`) | Proof step 4 (`test_archive_deposit_postgres.py:583`): `AssertionError: a retry created a second deposition`. |
+| Timeout is `unknown` (`deposit_service.py:825`) | `outcome = "failed"` (retryable kept) | Step 4 (`:579`): `assert ('prepared' == 'ambiguous' ...)`; the timed-out create never reads ambiguous. |
+| Published needs remote `submitted` + record id (`deposit_rules.py:50`) | `if False and attempt.phase == "published" ...` (trust our own publish call) | `-k unpublished` (`test_deposit_rules.py:33`): `assert 'published' == 'files_uploaded'`. |
+| Worker approval recheck before every remote call (`deposit_service.py:736`) | `if False and (approval is None ...)` | Step 6 (`:620`): `assert (None == 'approval_invalid')`; the worker went on to publish after the revocation. |
+| Requester is never the approver (`deposit_service.py:602`) | `if False:` | Step 2 (`:538`): `Failed: DID NOT RAISE HTTPException`; S's request on S's own approval was accepted. |
+| Read-back compare (`deposit_rules.py:143`) | `return []` before any comparison | Step 8 (`:671`): `assert ('verified' == 'failed' ...)`; the corrupted md5 verified. |
+| `redact` (`deposit_rules.py:170`) | `return obj` | `-k redact` (`test_deposit_rules.py:150`): token found in the redacted value; step 10 (`:689`): the echoed token found in `archive_deposit_attempts`. |
+| `uq_deposit_live` (`b0e2a4c6d8f9_create_archive_deposits.py:162`) | the `op.create_index("uq_deposit_live", ...)` call replaced by a no-op | Step 3 (`:549`): `assert UUID(...) == UUID(...)`; two concurrent requests created two operations. |
+| Only the adapter talks HTTP (`test_deposit_boundary.py`) | `import httpx` added to `deposit_service.py` | `-k http`: `['deposit_service.py', 'zenodo.py'] == ['zenodo.py']`. |
+| Evidence rows are insert-only in code (`test_deposit_boundary.py`) | a function running `update(ArchiveDepositAttempt)` appended to `deposit_service.py` | `-k evidence`: `assert ['update:1135'] == []`. |
+
+All selectors passed again after each restore. No mutant was committed.
+
+Pre-mutation SHA-256 of each mutated file:
+
+- `backend/src/services/research/deposit_service.py`
+  `8ac2663c6ef7bc311c3b2e347024288b2cc110f498ad87f7a2d7f248c8582da0`
+- `backend/src/services/research/deposit_rules.py`
+  `67cfb1c39f4e82dfa0e3fd3d24e23d590fc07ebd45a4bbf7bf7d944466f91bbb`
+- `backend/alembic/versions/b0e2a4c6d8f9_create_archive_deposits.py`
+  `6938f9924d00d0a0f4a42a8ff533626b082f49ba7a2695d6cfd0ba73a22f471a`
+
+Not performed: the live Zenodo sandbox run (upload, interruption, resume,
+publish, `GET /records/{id}` read-back tied to the package hashes; needs
+`ZENODO_SANDBOX_TOKEN` with `deposit:write deposit:actions`), and the live
+journey (needs a deployed stack at `b0e2a4c6d8f9` with the token in
+Infisical). The fake adapter cannot close the ticket.
+
+## GOO-319 scheduled search updates and classified corpus deltas — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_search_update_rules.py`
+(fires, DST, coalescing, strategy hash, delta classes) and
+`backend/tests/unit/architecture/test_search_update_boundary.py`.
+PostgreSQL proof: `backend/tests/integration/test_search_updates_postgres.py`,
+run against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema (chain head `c2f4b6d8e0a1`; connection URL from
+the environment, value omitted). Providers are fake connectors behind the
+real `discovery.search_sources`; live Crossref/PubMed/OpenAlex, a real beat
+across a worker restart and the deployed journey are NOT RUN.
+
+Procedure for each mutant: apply it as an exact-string replacement that
+asserted a single match, run the named selector, restore the file from a
+private copy, confirm `git diff` is empty, rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_search_update_rules.py -k "coalesces or disappeared"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_search_update_boundary.py                       # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_search_updates_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Fire claim idempotency: `ON CONFLICT DO NOTHING` (`search_update_service.py:747`) + `uq_research_search_executions_fire` (`c2f4b6d8e0a1_create_search_schedules.py:134`) | plain INSERT and the unique key dropped from the migration | Step 3 (`test_search_updates_postgres.py:533`): `assert UUID('…') is None`; the lost-lock insert claimed the same fire twice. (The concurrent `claim_due` pair still yields one row: `SKIP LOCKED` is the first guard.) |
+| Missed-tick coalescing (`search_update_rules.py:133`) | `return due[0], to_utc(due[0], tz), 0` | `-k coalesces` (`test_search_update_rules.py:53`): `assert datetime(2026, 1, 5, 6, 0) == datetime(2026, 1, 26, 6, 0)`; step 5 (`:651`): `assert 0 == 2`. |
+| A missing work is `unknown` (`search_update_rules.py:377`) | `item["class"] = "corrected_retracted"` | `-k disappeared` (`test_search_update_rules.py:117`): `'corrected_retracted' == 'unknown'`; step 6 (`:593`): D read as retracted. |
+| A failed notice check is not "no notice" (`search_update_service.py:1118`) | `found = {doi: [] for doi in checked}` | Step 7 (`:657`): `assert not [{… 'class': 'unchanged' …}]`; works read unchanged after the Crossref outage. |
+| Owner access recheck at execution (`search_update_service.py:904`) | `ResearchAction.EDIT` → `ResearchAction.VIEW` (no lifecycle check) | Step 10 (`:743`): `assert 'succeeded' == 'failed'`; the archived project ran. |
+| Protocol recheck at execution (`search_update_service.py:913`) | `if False:` | Step 10 (`:790`): `assert 'succeeded' == 'failed'`; the amended protocol ran the old plan. |
+| `dedup_key` per execution (`search_update_service.py:1031`) | `dedup_key=f"scheduled:{uuid4()}"` | Step 8 (`:578`): `assert 3 == 2`; the retry after a post-import crash searched again and wrote a second receipt. |
+| Classification reads no withdrawal (`search_update_rules.py`, guard `test_search_update_boundary.py:70`) | `if record.get("is_retracted"): fields["withdrawn"] = True` in `record_fields` | `assert not {'is_retracted'}`. |
+| No insert-only row mutation (guard `test_search_update_boundary.py:96`) | an `update(ResearchSearchExecution)` helper in the service | `assert ['services/re…y:update:789'] == []`. |
+
+Every restore left `git diff` empty; the selectors were green again after
+each restore.
+
+## GOO-320 superseding review versions and reconciled update accounting — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_review_update_rules.py`
+(carry-forward, required work, needs-attention, missing history,
+accounting) and `backend/tests/unit/architecture/test_review_update_boundary.py`.
+PostgreSQL proof: `backend/tests/integration/test_review_versions_postgres.py`,
+run against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema (chain head `d4a6c8e0f2b3`; connection URL from
+the environment, value omitted). Deltas are real GOO-319 executions over a
+fake Crossref connector; live providers, the methods-expert review of the
+accounting boxes and the deployed journey are NOT RUN.
+
+Procedure for each mutant: apply it as an exact-string replacement that
+asserted a single match, run the named selector, restore the file from a
+private copy, confirm `git diff` is empty, rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_review_update_rules.py -k "criteria or unknown or reconciles"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_review_update_boundary.py                               # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_review_versions_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Carry only `unchanged` (`review_update_rules.py:87`, `:91`) | `changed` neither required nor sent to attention, so it is carried | Step 4 (`test_review_versions_postgres.py:944`): the carried map gains R4's title/abstract and full-text resolutions. |
+| Criteria-hash check (`review_update_rules.py:99`) | `if report in identity_changed:` | `-k criteria` (`test_review_update_rules.py:113`): `['title_abstract', 'full_text'] == ['title_abstract']`; step 8 (`:1106`): `assert [ReviewDecisionRef(…), …] == []`, decisions carried across the amended criteria. |
+| `unknown` -> needs attention (`review_update_rules.py:90`) | `flagged = cls == "unknown"` (every unknown carried) | `-k unknown` (`test_review_update_rules.py:134`): needs-attention emptied, R3 carried; step 4 (`:944`): R3's resolutions in the carried map. |
+| Accounting reconciliation (`review_update_rules.py:230`) | `if False:` | `-k reconciles` (`test_review_update_rules.py:292`): `DID NOT RAISE PrismaInconsistency`; a successor flow claiming 5 studies was accepted. |
+| `graph_part` edges only for changed/corrected reports (`review_update_service.py:741`) | `if True` (every delta report) | Step 7 (`:1032`): `('link', …) not in stale` fails; R1's claim link went stale. |
+| `UNIQUE(parent_review_version_id)` (`d4a6c8e0f2b3_create_review_versions.py:103`) | the constraint dropped from the migration | Step 5 (`:911`): `assert (2 == 1)`; both concurrent successors of the root were committed. |
+| Superseded-release check (`review_update_service.py:1381`) | `if False:` | Step 9 (`:1144`): `DID NOT RAISE HTTPException`; P2 linked to the successor without superseding P. |
+| Screening rows only through `screening_service` (guard `test_review_update_boundary.py:69`) | a `ScreeningQueue(id=uuid4())` helper in the service | `-k screening`: `assert ['builds ScreeningQueue:…'] == []`. |
+| No insert-only row mutation (guard `test_review_update_boundary.py:112`) | an `update(V)` helper in the service | `-k insert_only`: `assert ['services/re…y:update:…'] == []`. |
+
+Every restore left `git diff` empty; the proof, the rules tests and the
+boundary guard were green again after the last restore (12 passed).

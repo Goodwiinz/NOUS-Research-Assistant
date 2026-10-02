@@ -2,6 +2,7 @@
 API Key Management endpoints for administrators
 """
 
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -66,8 +67,8 @@ async def create_api_key(
             created_by=f"{current_user.email} ({current_user.id})",
             expires_at=expires_at,
             allowed_endpoints=(
-                str(api_key_create.allowed_endpoints)
-                if api_key_create.allowed_endpoints
+                json.dumps(api_key_create.allowed_endpoints)
+                if api_key_create.allowed_endpoints is not None
                 else None
             ),
             organization_id=str(current_user.organization_id),

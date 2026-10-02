@@ -10,6 +10,12 @@ from src.schemas.research_engine import BlueprintStepDefinition
 from src.services.research_engine.blueprints.loader import BlueprintLoader
 
 
+@pytest.fixture(autouse=True)
+def _daily_brief_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GOO-338: the flag defaults off; these tests exercise the enabled feature."""
+    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", True)
+
+
 @pytest.fixture
 def loader() -> BlueprintLoader:
     """Create a BlueprintLoader with the default templates directory."""
@@ -55,13 +61,13 @@ class TestListTemplates:
         with pytest.raises(FileNotFoundError):
             disabled.load_template("daily_research_brief")
 
-    def test_daily_brief_release_setting_defaults_true_and_env_can_disable(
+    def test_daily_brief_release_setting_defaults_false_and_env_can_enable(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        assert Settings.model_fields["DAILY_RESEARCH_BRIEF_ENABLED"].default is True
+        assert Settings.model_fields["DAILY_RESEARCH_BRIEF_ENABLED"].default is False
 
-        monkeypatch.setenv("DAILY_RESEARCH_BRIEF_ENABLED", "false")
-        assert Settings(_env_file=None).DAILY_RESEARCH_BRIEF_ENABLED is False
+        monkeypatch.setenv("DAILY_RESEARCH_BRIEF_ENABLED", "true")
+        assert Settings(_env_file=None).DAILY_RESEARCH_BRIEF_ENABLED is True
 
     def test_list_templates_rejects_invalid_bundled_template(self, tmp_path) -> None:
         """Invalid bundled YAML must fail before metadata reaches callers."""

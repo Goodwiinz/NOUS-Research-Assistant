@@ -24,7 +24,7 @@ from sqlalchemy.orm import selectinload
 
 from src.core.config import settings
 from src.core.database import AsyncSessionLocal
-from src.core.dependencies import get_current_user
+from src.core.dependencies import get_current_user, require_platform_operator
 from src.core.security import TokenData
 from src.core.user_provisioning import ensure_user_and_org
 from src.core.websocket_auth import WebSocketAuthenticator, WebSocketAuthError
@@ -113,6 +113,63 @@ async def _resolve_ws_role(
     except Exception as e:  # DB failure must NOT silently grant admin access
         logger.error("WebSocket role resolution failed for user %s: %s", user_id, e)
     return UserRole.USER.value
+
+
+# client_info bounds (audit I11): it is stored on the connection for its whole
+# lifetime, so cap the raw size and keep only a small flat dict of scalars.
+CLIENT_INFO_MAX_CHARS = 4096
+CLIENT_INFO_MAX_KEYS = 32
+CLIENT_INFO_MAX_VALUE_CHARS = 256
+
+
+def _parse_client_info(raw: str) -> Dict[str, Any]:
+    """Parse the client_info query param into a bounded flat dict; {} if invalid."""
+    if not raw:
+        return {}
+    if len(raw) > CLIENT_INFO_MAX_CHARS:
+        logger.warning("client_info too long (%d chars), ignoring", len(raw))
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Invalid client_info JSON, ignoring")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    scalars = {
+        k: v[:CLIENT_INFO_MAX_VALUE_CHARS] if isinstance(v, str) else v
+        for k, v in parsed.items()
+        if v is None or isinstance(v, (str, int, float, bool))
+    }
+    return dict(list(scalars.items())[:CLIENT_INFO_MAX_KEYS])
+
+
+async def _get_user_organization_id(
+    user_id: str,
+    session_factory=AsyncSessionLocal,
+) -> Optional[str]:
+    """Fetch a user's organization_id from the DB (I6 tenant scoping).
+
+    Scopes ADMIN cross-user access on the HTTP inspection endpoints:
+    ``role==ADMIN`` is a per-org role, not a platform superuser, so an admin
+    may only act on users inside their own organization. Returns None when
+    the user does not exist or is inactive, or on any DB error; callers deny
+    with the same 403 as a foreign-org target so the response cannot be used
+    to probe which IDs are live users of other tenants (fail closed).
+    """
+    stmt = select(User.organization_id).where(
+        User.id == user_id,
+        User.is_active == True,  # noqa: E712 - mirror get_current_user liveness filters
+        User.is_deleted == False,  # noqa: E712
+    )
+    try:
+        async with session_factory() as db:
+            org_id = (await db.execute(stmt)).scalars().first()
+            if org_id is not None:
+                return str(org_id)
+    except Exception as e:  # DB failure must NOT silently grant cross-tenant access
+        logger.error("User organization lookup failed for %s: %s", user_id, e)
+    return None
 
 
 router = APIRouter(prefix="/api/v2/ws", tags=["websocket-v2"])
@@ -232,6 +289,11 @@ async def websocket_connect_v2_secure(
     - unsubscribe: Unsubscribe from channel
     - status_update: Update connection status or message filter
 
+    Inbound limits (audit I11):
+    - A frame over 64 KiB closes the socket with 1009 (message too big).
+    - More than 60 frames in 10 s sends one `rate_limited` error, then closes
+      with 1008 (policy violation).
+
     Server-to-Client Messages:
     - pong: Heartbeat response
     - document_processing: Document processing status updates
@@ -277,13 +339,8 @@ async def websocket_connect_v2_secure(
     # gating must not trust it.
     db_role = await _resolve_ws_role(user_id)
 
-    # Parse client information
-    client_info_dict = {}
-    if client_info:
-        try:
-            client_info_dict = json.loads(client_info)
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid client_info JSON: {client_info}")
+    # Parse client information (bounded; server-stamped keys added below win)
+    client_info_dict = _parse_client_info(client_info)
 
     # Parse channels
     channel_list = (
@@ -394,6 +451,10 @@ async def websocket_connect_v2_secure(
                 await connection_manager.handle_client_message(
                     connection_id, raw_message
                 )
+                # The manager closed + dropped the socket (inbound cap, audit
+                # I11); receiving again would raise on every iteration.
+                if connection_id not in connection_manager.active_connections:
+                    break
 
             except WebSocketDisconnect:
                 logger.info(f"WebSocket client disconnected: {connection_id}")
@@ -427,13 +488,19 @@ async def websocket_connect_v2_secure(
 
 
 @router.get("/status", response_model=Dict[str, Any])
-async def get_websocket_status(current_user: User = Depends(get_current_user)):
+async def get_websocket_status(
+    current_user: User = Depends(require_platform_operator),
+):
     """
     Get WebSocket service status and statistics
 
     Returns comprehensive statistics about WebSocket connections,
     including active connections, channel subscriptions, and system health.
     """
+    # I6: these are platform-wide ops metrics (total connections, per-channel
+    # subscribers, org/user counts, job throughput across ALL tenants).
+    # role==ADMIN is a per-org role, so the gate is the platform-operator
+    # allowlist (require_platform_operator), same as /workers/*.
     try:
         # Get connection manager statistics
         conn_stats = connection_manager.get_connection_stats()
@@ -509,13 +576,27 @@ async def get_user_connections(
     Only the user themselves or admin users can access this information.
     """
     try:
-        # Verify authorization (user can only see their own connections unless admin)
-        if str(current_user.id) != user_id and not current_user.has_permission(
-            UserRole.ADMIN
-        ):
-            raise HTTPException(
-                status_code=403, detail="Not authorized to view these connections"
-            )
+        # Verify authorization (user can only see their own connections unless
+        # a same-org admin — role==ADMIN is a per-org role, not a platform
+        # superuser, so an admin cannot inspect users of another tenant; I6).
+        if str(current_user.id) != user_id:
+            if not current_user.has_permission(UserRole.ADMIN):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to view these connections",
+                )
+            target_org_id = await _get_user_organization_id(user_id)
+            # Missing/inactive target and foreign-org target share one
+            # response: no 404 oracle for other tenants' user IDs.
+            if (
+                target_org_id is None
+                or current_user.organization_id is None
+                or str(current_user.organization_id) != target_org_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to view these connections",
+                )
 
         # Get user's connections
         connection_ids = connection_manager.get_user_connections(user_id)
@@ -636,12 +717,27 @@ async def test_websocket_connection(
             raise HTTPException(status_code=404, detail="Connection not found")
 
         conn_info = connection_manager.active_connections[connection_id]
-        if str(conn_info.user_id) != str(
-            current_user.id
-        ) and not current_user.has_permission(UserRole.ADMIN):
-            raise HTTPException(
-                status_code=403, detail="Not authorized to access this connection"
-            )
+        # Same-org admin rule as /connections/{user_id} (I6): role==ADMIN is a
+        # per-org role, so an admin may only message connections owned by
+        # users of their own tenant.
+        if str(conn_info.user_id) != str(current_user.id):
+            if not current_user.has_permission(UserRole.ADMIN):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this connection",
+                )
+            target_org_id = await _get_user_organization_id(str(conn_info.user_id))
+            # Missing/inactive target and foreign-org target share one
+            # response: no 404 oracle for other tenants' user IDs.
+            if (
+                target_org_id is None
+                or current_user.organization_id is None
+                or str(current_user.organization_id) != target_org_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this connection",
+                )
 
         # Send test message
         test_message = WebSocketMessage(

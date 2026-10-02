@@ -84,6 +84,7 @@ def test_daily_brief_schemas_publish_bounds_pause_state_and_exact_vocabularies()
         "synthesize",
         "verify",
         "export",
+        "analyze",  # GOO-312
     ]
     assert schemas["src__schemas__research_engine__ExportFormat"]["enum"] == [
         "markdown",
