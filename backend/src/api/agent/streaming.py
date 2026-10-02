@@ -4247,8 +4247,12 @@ async def stream_confirm_event_generator(
                 if await durable_stop_requested():
                     await cancel_confirm_stream(reason="user_requested")
                 else:
+                    durable_claimed = False
                     await emitter.finish()
                 return
+            # This producer has parked. Transport cleanup no longer owns the
+            # run, even if disconnect interrupts publication of the next card.
+            durable_claimed = False
             confirmation_payload = {
                 "thread_id": request_body.thread_id,
                 "confirmation": confirmation_details,
@@ -4453,8 +4457,11 @@ async def stream_confirm_event_generator(
             if await durable_stop_requested():
                 await cancel_confirm_stream(reason="user_requested")
             else:
+                durable_claimed = False
                 await emitter.finish()
             return
+        # Completion is committed before emit() can suspend or be cancelled.
+        durable_claimed = False
         frame = await emitter.emit(AgentStreamEvent.DONE, done_payload)
         terminal_frame_sent = True
         if not client_disconnected:
@@ -4491,6 +4498,15 @@ async def stream_confirm_event_generator(
                     event_type=RunEventType.RUN_CANCELLED,
                     payload=cancelled_payload,
                 )
+
+            # A run lookup is not ownership. Claim losers and producers that
+            # already parked/completed may close only their own transport.
+            if not durable_claimed:
+                await _run_cancel_cleanup(
+                    ("close_confirm_events", close_confirm_events),
+                    ("finish_emitter", emitter.finish),
+                )
+                return
 
             await _run_cancel_cleanup(
                 ("close_confirm_events", close_confirm_events),
