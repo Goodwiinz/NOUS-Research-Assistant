@@ -27,7 +27,7 @@ So this plan does not rebuild anything. Each task:
 | Connector registry | `services/research_engine/connectors/registry.py` (`CONNECTOR_CAPABILITIES`, `normalize_connector_selection(daily_brief_only=True)`, `safe_capability_projection`, `build_connectors`) | Daily Brief allows 1 to 4 eligible providers. `rag_store` and the `web` alias are refused. |
 | Exact-plan binding | `services/research_engine/run_conformance.py` (`create_approved_run`, `require_run_conformance`) | Every run binds to an approved protocol version. `parameters_override` is refused, and blueprints are immutable once run. There is no blueprint update route. |
 | Typed stages | `contracts.py` (envelopes, `resolve_parameters`, `merge_stage_output`), `step_executor.py`, `prompt_context.py` (`PromptContextBuilder`), `prompt_batches.py` | Each Daily Brief stage reads only its immediate upstream envelope (`_daily_brief_prompt_context`, `step_executor.py:833`). |
-| Search and dedupe | `discovery.py` (`search_sources` raises on unknown names; `prepare_sources`), `search_receipts.py`, `source_persistence.py` | Execution ids are uuid5 over run, step and strategy, so replays are deterministic. |
+| Search and dedupe | `discovery.py` (`search_sources` raises on unknown names; `prepare_sources`), `search_receipts.py`, `source_persistence.py` | Execution ids are uuid5 over run, step and strategy, so identifiers are stable on replay. Search evidence is not: `retrieved_at` is wall-clock and a retry re-queries live providers (see Task 1). |
 | Reviews | `models/research_stage_review.py`, `review_service.py`, `api/research_engine/reviews.py`, migration `20260927_daily_research_brief_reviews.py` | Append-only and hash-bound to the output the reviewer saw. |
 | Verification and export | `verification.py`, `report_rendering.py`, `export_service.py`, `audit_bundle.py` | Markdown, JSON and CSV, with attestation hashes. |
 | Academic R0–R8 machinery (GOO-297..320) | `identity_service.py`/`report_identity.py` (GOO-299), `manifest_rules.py`/`experiment_service.py` (GOO-312), `evidence_*`, `screening_*`, `synthesis_*`, `rerun_*`, `prisma*`, the decision ledger | Composes with Daily Brief through the same `ResearchRun`. Don't add a parallel provenance or manifest store. |
@@ -66,16 +66,20 @@ GOO-334 and GOO-335 can run in parallel after GOO-331 review. GOO-336 needs both
 | Scope confirmation precedes provider search | `start_run` returns 422 without `scope_confirmation`; the server computes the hash; resume injects `scope_confirmation` and `provider_manifest` into the engine context (`runs.py:658-663`) | Holds |
 | Template topology cannot be altered | `create_blueprint` replaces steps with the canonical template steps (`blueprints.py:185`); there is no update route; `_verify_plan` requires the blueprint plan to equal the approved protocol plan | Holds |
 | Parameters cannot be overridden after confirmation | `create_approved_run` refuses `parameters_override`; `require_run_conformance` re-checks it | Holds |
+| **Search query is the confirmed research question** | `resolve_parameters` resolves `{research_question}` to the literal user text, then `_execute_search` runs `_safe_render` on it again (`step_executor.py:411`). A question containing `$providers` or `{limit_per_provider}` is substituted a second time, so providers receive a query that differs from the one the user confirmed. | **Gap: confirmed query not enforced** |
 | **Search step stays inside the confirmed providers and limit** | Holds **only by construction across three modules**: the blueprint parameters were confirmed, the search resolves `{providers}`/`{limit_per_provider}` from the same parameters, and the stream builds the **full** legacy registry (`_build_connectors` → `build_connectors(rag_search)` includes `rag_store`, `pubmed` and `web`). Nothing at the execution boundary compares the executed search with `scope_confirmation`. | **Gap: no fail-closed check at the chokepoint** |
 | Unknown connector is a typed failure | `search_sources` raises `Unknown research source` (`discovery.py:171`) | Holds |
-| Deterministic replay | uuid5 execution ids over run, step and `strategy_version`; `prepare_sources` is deterministic (an oracle test exists in `test_paper_discovery.py`) | Holds |
+| Deterministic replay | uuid5 execution ids over run, step and `strategy_version` make execution and source **identifiers** stable. The persisted evidence is not: `prepare_sources` stamps `datetime.now()` into every provenance record (`discovery.py:75-81`), `search_sources` adds another current `retrieved_at` (`discovery.py:242`), and a retry calls the mutable external providers again. The `test_paper_discovery.py` oracle freezes time and compares the optimized and reference implementations once, so it does not prove replay stability. | **Holds for identifiers only; replay of search evidence is not deterministic** |
 
 **Change (one PR, stacked on this plan):**
 - `backend/src/services/research_engine/step_executor.py` `_execute_search`: when `_is_daily_brief_context(context)` is true, fail closed if the canonical providers are not a subset of `scope_confirmation.providers`, or if the effective per-provider limit exceeds `scope_confirmation.limit_per_provider`. That makes the search step itself enforce the confirmed scope, whatever future context or template drift happens upstream.
-- Tests: `backend/tests/unit/services/test_daily_brief_search_scope.py` covers an undeclared provider, a widened limit, and the in-scope case still searching only the confirmed providers. Mutation check: remove each guard, confirm its test fails with the named defect, restore it.
+- Same file, same branch: when `_is_daily_brief_context(context)` is true, do not run `_safe_render` a second time on the already-resolved query, and fail closed if the executed query differs from `scope_confirmation.research_question`. Legacy templates carry no `contract_version`, so their rendering is unchanged.
+- Tests: `backend/tests/unit/services/test_daily_brief_search_scope.py` covers an undeclared provider, a widened limit, the in-scope case still searching only the confirmed providers, and a confirmed question containing `$providers`/`{limit_per_provider}` that must reach the connector verbatim. Mutation check: remove each guard, confirm its test fails with the named defect, restore it.
+- PR #1827 lands the provider and limit guard. The confirmed-query guard is a fast-follow on the same GOO-331 branch, and GOO-331 does not close until it merges.
+- Replay claim: narrow the acceptance criterion to deterministic identifiers. Search evidence (provider responses and `retrieved_at`) is captured once, and a retry is a new observation. Add a repeatability test only if a later task needs byte-stable search replay; that would mean replaying the checkpointed provider response instead of calling providers again.
 
 **Follow-ups to file (not fixed in GOO-331):**
-- F1: `_execute_search` runs `_safe_render` on a query that `resolve_parameters` already resolved. A research question containing `$name` text (for example `$providers`) is substituted with context values before it reaches providers. The fix is to skip the second render for v1 contracts. That is a behavior change for legacy templates, so it needs its own review.
+- F1: (moved into Task 1 scope above; it is a confirmed-scope violation, and the Daily Brief-only skip does not change legacy-template rendering.)
 - F2: optional hardening. Instantiate only the confirmed connectors for Daily Brief runs (`build_connectors(rag_search, connector_ids=scope.providers)` already supports subsets). It is redundant once the Task 1 guard lands, so file it only if review wants defense in depth.
 
 **Checks:** ruff, black and isort on changed files; mypy on the added test file; `pytest -q backend/tests/unit/architecture backend/tests/unit/api`; the focused `pytest -q backend/tests/unit/services/test_daily_brief_search_scope.py backend/tests/unit/services/test_paper_discovery.py backend/tests/unit/services/test_step_executor.py`. No schema, OpenAPI or migration change.
@@ -87,7 +91,7 @@ GOO-334 and GOO-335 can run in parallel after GOO-331 review. GOO-336 needs both
 **Work:**
 - Prove that every exported claim resolves to a source span or an explicit unresolved state: a property test over the eval fixture in `backend/tests/eval/test_daily_research_brief_eval.py` asserting that no claim in the JSON or CSV export lacks `evidence_ids` unless its status is `unresolved`/`unsupported`.
 - Prove the stability of hashes across reruns: export the same persisted run twice and assert byte-identical Markdown, JSON and CSV plus equal attestation hashes. Extend `backend/tests/unit/services/test_export_service.py`.
-- Prove that no internal identifiers leak: assert that exports contain no DB primary keys beyond the documented `run_id`/`blueprint_id`, no `owner_id`, and no `organization_id`. Extend `test_export_service.py`.
+- Prove that no tenant identifiers leak: assert that exports contain no `owner_id` and no `organization_id`. The review audit's `review_id` and `reviewer_id` are required evidence: `_review_audit` and `_verified_download_envelope` emit them, the final attestation hash binds them, and `test_verified_json_wraps_immutable_report_with_complete_approval_audit` and `test_verified_csv_exposes_complete_review_and_final_attestation` require them. Do not strip them. Extend `test_export_service.py`.
 - Prove that the final gate is mandatory: no `export` output is releasable without an `approve` row for `review_kind=final` on the current `outputs_hash`. There is existing coverage in `test_research_review_service.py`; add a mutation check if it is missing.
 
 **Touch list:** tests only, unless a check fails. A failure becomes a scoped fix in `export_service.py` or `review_service.py`.
@@ -98,7 +102,7 @@ GOO-334 and GOO-335 can run in parallel after GOO-331 review. GOO-336 needs both
 
 **Work:**
 - Assert that Daily Brief create, start, review, export and resume all route through `resolve_engine_project_context`/`require_*` with the same `ResearchAction`, with negative tests for a foreign owner and a soft-deleted project. Extend `backend/tests/unit/api/test_research_template_security.py`.
-- Verify migrations with a fresh upgrade to head, a branch-specific downgrade of `20260927_daily_research_brief_reviews`, and a re-upgrade, using the Postgres integration fixture (`backend/tests/integration/conftest.py` `postgres_container`). Add it to `backend/tests/unit/ci/test_daily_research_brief_migration.py` if it is not already covered. Run `(cd backend && python ../scripts/ci/check_alembic.py)`.
+- Verify migrations with a fresh upgrade to head, a branch-specific downgrade of `20260927_daily_research_brief_reviews`, and a re-upgrade, using the Postgres integration fixture (`backend/tests/integration/conftest.py` `postgres_container`). That fixture is only visible to tests under `backend/tests/integration/`, so the round-trip goes in `backend/tests/integration/test_daily_research_brief_postgres.py` (or `test_academic_wave_migrations.py` if it already covers it), not in `backend/tests/unit/ci/test_daily_research_brief_migration.py`, which stays a static contract test. A run without Docker is `NOT RUN`. Run `(cd backend && python ../scripts/ci/check_alembic.py)`.
 - Confirm that `backend/openapi.json` and `frontend/src/types/generated/api.d.ts` have no drift (`python scripts/ci/generate_openapi.py --check`).
 
 **Touch list:** tests only, unless a check fails.
@@ -124,7 +128,7 @@ GOO-334 and GOO-335 can run in parallel after GOO-331 review. GOO-336 needs both
 - remote candidate-SHA checks;
 - production configuration inspection.
 
-Each item gets current evidence or an explicit owner waiver.
+Each item gets current passing evidence. A waiver is not evidence: the ledger's ship gate stays closed until every `FAILED`, `BLOCKED` and release-critical `NOT RUN` item is cleared. If the owner wants to ship with an item open, that is a change to the release policy, recorded as its own separately approved amendment before Task 6, not a line in this list.
 
 **Touch list:** `docs/testing/daily-research-brief-verification.md` and a new `docs/testing/evidence/daily-research-brief-<date>/README.md`.
 
@@ -133,8 +137,11 @@ Each item gets current evidence or an explicit owner waiver.
 **Code change (one small PR):**
 - `backend/src/core/config.py:555`: set `DAILY_RESEARCH_BRIEF_ENABLED: bool = False` and update the comment.
 - `backend/tests/unit/services/test_blueprint_loader.py:58-64`: assert the default is `False` and that an environment value of `true` enables it.
+- Every test that relies on the enabled default must opt in, because no shared test environment sets the flag: an autouse fixture that sets `settings.DAILY_RESEARCH_BRIEF_ENABLED = True` in `test_blueprint_loader.py` (which covers `test_daily_brief_is_visible_by_default_and_hidden_when_disabled`), `backend/tests/unit/api/test_research_template_security.py` (enabled-path list, detail and create tests) and `backend/tests/unit/api/test_research_engine_endpoints.py`. The disabled-path tests keep their explicit `False` patch. PR #1834 implements this.
 - `infrastructure/helm/knowledge-graph-analytics/values-aws.yaml`: add `- name: DAILY_RESEARCH_BRIEF_ENABLED` / `value: "true"` next to `DO_KB_ENABLED`, so dev keeps current behavior explicitly.
 - `frontend/e2e/research-engine/daily-research-brief.spec.ts:256` already sets `'true'` explicitly, so no change is needed there.
+
+**Precondition:** the GOO-337 ledger amendment shows every release gate passing (see Task 5). Without that, the flag stays off.
 
 **Live steps (user-side, after the PR merges and the GitOps PR deploys):**
 1. Inspect the deployed environment (`kubectl -n multimodal-rag-system get deploy … -o yaml`) and confirm the flag value.
