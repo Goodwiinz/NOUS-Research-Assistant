@@ -931,7 +931,7 @@ class TestSearchArxivRecencyParams:
             assert {"recency_days", "chronological"} <= set(params)
 
     async def test_search_arxiv_passes_recency_through(self, monkeypatch):
-        from src.services.agent.tools import search_arxiv
+        from src.services.agent.tools_impl import execute_tool
 
         captured: dict = {}
 
@@ -944,8 +944,8 @@ class TestSearchArxivRecencyParams:
             fake_tool_search_arxiv,
         )
 
-        await search_arxiv.ainvoke(
-            {"query": "q", "recency_days": 0, "chronological": True}
+        await execute_tool(
+            "search_arxiv", {"query": "q", "recency_days": 0, "chronological": True}
         )
 
         assert captured["recency_days"] == 0
