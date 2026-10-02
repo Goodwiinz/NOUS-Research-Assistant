@@ -4,18 +4,16 @@ Test API key authentication security for public endpoints.
 Uses FastAPI dependency_overrides for proper dependency injection mocking.
 """
 
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock
-from datetime import datetime, timedelta
 
-from src.main import app
-from src.core.api_key_auth import (
-    APIKeyData, generate_api_key, get_api_key_data,
-)
+from src.core.api_key_auth import APIKeyData, generate_api_key, get_api_key_data
 from src.core.database import get_db
 from src.core.dependencies import require_admin
-
+from src.main import app
 
 client = TestClient(app)
 
@@ -222,10 +220,11 @@ class TestAPIKeyAuthentication:
         )
         assert response.status_code == 401
 
-    def test_old_public_endpoint_removed(self):
-        """Test that old public endpoint is no longer accessible"""
+    def test_old_public_endpoint_removed(self, test_app, test_auth_headers):
+        """Authenticated callers still get 404 for the removed public route."""
         response = client.post(
             "/api/v1/search/public/hybrid",
+            headers=test_auth_headers,
             json={
                 "query": "test search",
                 "search_type": "HYBRID",
@@ -252,7 +251,7 @@ class TestAPIKeyAuthentication:
     def test_health_check_without_auth(self):
         """Test health check fails without authentication"""
         response = client.get("/api/v1/search/public/health")
-        assert response.status_code == 404
+        assert response.status_code == 401  # fail-closed gate precedes route lookup
 
         response = client.get("/api/v1/search/authenticated/health")
         assert response.status_code in [401, 403]
@@ -264,7 +263,7 @@ class TestAPIKeyManagement:
     def teardown_method(self):
         app.dependency_overrides.clear()
 
-    def test_create_api_key_admin_only(self):
+    def test_create_api_key_admin_only(self, test_app, test_auth_headers):
         """Test API key creation succeeds for admin with organization"""
         mock_admin = MagicMock()
         mock_admin.id = "admin-user-id"
@@ -285,7 +284,7 @@ class TestAPIKeyManagement:
 
         response = client.post(
             "/api/v1/api-keys/",
-            headers={"Authorization": "Bearer admin-token"},
+            headers=test_auth_headers,
             json={
                 "name": "Test API Key",
                 "description": "Test key for security testing",
@@ -299,7 +298,7 @@ class TestAPIKeyManagement:
         assert data["name"] == "Test API Key"
         assert data["organization_id"] == "test-org-id"
 
-    def test_create_api_key_non_admin_denied(self):
+    def test_create_api_key_non_admin_denied(self, test_app, test_auth_headers):
         """Test API key creation denied for non-admin users"""
         from fastapi import HTTPException
 
@@ -313,7 +312,7 @@ class TestAPIKeyManagement:
 
         response = client.post(
             "/api/v1/api-keys/",
-            headers={"Authorization": "Bearer user-token"},
+            headers=test_auth_headers,
             json={
                 "name": "Test API Key",
                 "description": "Unauthorized attempt",
@@ -390,14 +389,18 @@ class TestSecurityLogging:
 class TestVulnerabilityRegression:
     """Test that original vulnerability is fixed"""
 
-    def test_public_search_blocked(self):
-        """Ensure public search without authentication is blocked"""
+    def test_public_search_blocked(self, test_app, test_auth_headers):
+        """Gate rejects anonymous callers; removed routes remain 404 with auth."""
         test_cases = [
             "/api/v1/search/public/hybrid",
             "/api/v1/search/public/health",
         ]
         for endpoint in test_cases:
             response = client.post(endpoint, json={"query": "test"})
+            assert response.status_code == 401, f"Endpoint {endpoint} allowed anonymity"
+            response = client.post(
+                endpoint, headers=test_auth_headers, json={"query": "test"}
+            )
             assert response.status_code == 404, f"Endpoint {endpoint} should not exist"
 
     def test_data_isolation_with_api_key(self):
@@ -413,9 +416,12 @@ class TestVulnerabilityRegression:
         ]
         for endpoint in search_endpoints:
             response = client.post(endpoint, json={"query": "test"})
-            assert response.status_code in [401, 403, 422, 500], (
-                f"Endpoint {endpoint} allows anonymous access"
-            )
+            assert response.status_code in [
+                401,
+                403,
+                422,
+                500,
+            ], f"Endpoint {endpoint} allows anonymous access"
 
 
 if __name__ == "__main__":

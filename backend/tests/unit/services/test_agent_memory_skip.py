@@ -46,3 +46,14 @@ class TestMemoryRetrievalFastPath:
         )
         assert mock_search.called is True
         assert result["user_memories"]
+
+    async def test_runs_search_when_real_query_contains_small_talk_words(
+        self, monkeypatch
+    ):
+        """R8-A1 (GOO-362): "no"/"good"/"what model" inside a question recall."""
+        for q in (
+            "Do my papers find no effect of LoRA on good calibration?",
+            "what model does the paper propose",
+        ):
+            mock_search, _ = await self._run(monkeypatch, q)
+            assert mock_search.called is True, q

@@ -37,6 +37,7 @@ from langchain_core.runnables import RunnableConfig
 
 from src.services.agent.observability import track_node_execution
 from src.services.agent.state import AgentState
+from src.services.agent.tool_registry import _BARE_GREETINGS, is_bare_greeting_text
 from src.services.do_kb.postprocess import drop_low_relevance_chunks
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,7 @@ _CONVERSATIONAL_PATTERNS: frozenset[str] = frozenset(
         "how are you",
         "thank",
         "thanks",
+        "thank you",
         "ok",
         "okay",
         "yes",
@@ -123,6 +125,21 @@ _CONVERSATIONAL_PATTERNS: frozenset[str] = frozenset(
         "hey",
         "hi",
     }
+)
+
+# R8-A1: the WHOLE message must be small talk — one or more conversational
+# phrases (plus the bare greetings) separated only by punctuation/whitespace,
+# e.g. "ok cool", "thanks!", "hi there". A per-word search let "no", "good" or
+# "what model" inside a real question skip retrieval AND memory recall.
+_CONVERSATIONAL_RE = re.compile(
+    r"\W*(?:(?:"
+    + "|".join(
+        re.escape(pattern)
+        for pattern in sorted(
+            _CONVERSATIONAL_PATTERNS | _BARE_GREETINGS, key=len, reverse=True
+        )
+    )
+    + r")\b\W*)+"
 )
 
 # Length threshold (in whitespace-delimited tokens) below which a query is
@@ -280,6 +297,55 @@ async def _verify_extracted_project_id(
     return extracted_pid if owned is True else None
 
 
+async def _bind_promoted_project(
+    project_id: Optional[str], state: AgentState, configurable: Dict[str, Any]
+) -> None:
+    """Persist a text-promoted project into the durable thread binding (R8-A6).
+
+    Each turn's input re-seeds ``current_project_id`` / ``page_context`` from
+    the request, so the in-state promotion alone is gone next turn. Binding
+    the thread lets ``_resolve_and_bind_project`` resolve it (path 2) on
+    every later turn. Routed through that same writer, so its owner-only
+    gate applies: a member-only project stays a turn-local promotion.
+    Best-effort — a failure here never fails the turn.
+    """
+    thread_id = configurable.get("thread_id")
+    user_id = configurable.get("user_id")
+    if not (
+        project_id
+        and thread_id
+        and user_id
+        and state.get("thread_persistence") == "durable"
+    ):
+        return
+    from src.services.agent.agent_execution_service import _resolve_and_bind_project
+    from src.services.agent.tool_session import resolve_tool_user, tool_session
+    from src.services.threads import workspace_access
+
+    try:
+        async with tool_session() as session:
+            user = await resolve_tool_user(
+                session, str(user_id), configurable.get("organization_id")
+            )
+            if user is None:
+                return
+            thread = await workspace_access.get_thread(
+                session, UUID(str(thread_id)), user.id, include_messages=False
+            )
+            if thread is None:
+                return
+            # get_thread admits viewers/public readers; binding mutates the
+            # thread, so require the same edit right the request path does.
+            if not thread.conversation.workspace.can_user_edit(str(user.id)):
+                logger.debug("promoted project not bound: no edit right on thread")
+                return
+            await _resolve_and_bind_project(
+                session, user, thread, {"project_id": project_id}
+            )
+    except Exception:  # noqa: BLE001 — binding is an optimisation, not a gate
+        logger.warning("promoted project could not be bound to thread", exc_info=True)
+
+
 def is_conversational(content: str) -> bool:
     """Return ``True`` when *content* is a bare greeting / acknowledgement.
 
@@ -288,14 +354,11 @@ def is_conversational(content: str) -> bool:
     (``memory_retrieval_node``). Both hot-path nodes share this predicate so
     they agree on what counts as conversational. Empty / whitespace-only
     input counts as conversational — there is nothing to retrieve or recall.
+    The whole message must match (R8-A1): "no thanks" is small talk, "find
+    papers with no replication" is not.
     """
-    if not content or not content.strip():
-        return True
-    lowered = content.lower().strip()
-    return any(
-        re.search(r"\b" + re.escape(pattern) + r"\b", lowered)
-        for pattern in _CONVERSATIONAL_PATTERNS
-    )
+    normalized = " ".join((content or "").lower().split())
+    return not normalized or _CONVERSATIONAL_RE.fullmatch(normalized) is not None
 
 
 def _is_retrieval_query(content: str) -> bool:
@@ -308,7 +371,7 @@ def _is_retrieval_query(content: str) -> bool:
     prefix is treated as retrieval to avoid degrading recall.
 
     Rules (a query is treated as NON-retrieval when ANY of these hold):
-      0. lowercased content matches a ``_CONVERSATIONAL_PATTERNS`` entry
+      0. the whole message is small talk (:func:`is_conversational`)
 
     Otherwise treated as retrieval when ANY of these hold:
       1. token count >= ``_SHORT_QUERY_TOKEN_LIMIT`` (8)
@@ -1096,6 +1159,9 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
         and state.get("thread_persistence") == "durable"
         and bool(configurable.get("thread_id"))
         and not configurable.get("search_fn")
+        # R8-A10: a greeting needs no file text, and loading it would also
+        # block llm_node's zero-LLM greeting reply (requires no retrieval).
+        and not is_bare_greeting_text(last_user_msg or "")
     )
     if should_load_attachment_scope:
         attachment_contexts, attachment_status = await _load_attachment_contexts(
@@ -1135,6 +1201,7 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
             # and takes precedence in ``_resolve_active_project_id`` anyway,
             # so skip the DB round trip when it won't change the outcome.
             extracted_pid = await _verify_extracted_project_id(extracted_pid, user_id)
+            await _bind_promoted_project(extracted_pid, state, configurable)
         resolved_pid: Optional[str] = _resolve_active_project_id(
             existing_project_id, extracted_pid
         )
@@ -1160,6 +1227,7 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
         # Gate the text-extraction path only (audit M3) — see the identical
         # comment in the conversational branch above.
         extracted_pid = await _verify_extracted_project_id(extracted_pid, user_id)
+        await _bind_promoted_project(extracted_pid, state, configurable)
 
     resolved_project_id: Optional[str] = _resolve_active_project_id(
         existing_project_id, extracted_pid

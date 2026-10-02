@@ -429,6 +429,153 @@ async def test_cancel_race_emits_one_terminal() -> None:
         )
 
 
+async def test_transient_stop_poll_error_does_not_fail_the_turn() -> None:
+    """R8-C1: one failed Stop-marker read mid-turn is advisory, not fatal.
+
+    Mutation check: make ``monitor()`` in
+    ``agent_execution_service._invoke_graph_with_cancellation_monitor``
+    re-raise on the first poll error (drop the consecutive-failure budget) and
+    ``pytest -q backend/tests/unit/services/test_agent_cancellation.py
+    -k transient_stop_poll`` fails with ``['failed']`` instead of
+    ``['completed']``.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    graph = _SlowFinishingGraph()
+    terminal_writes: list[dict[str, Any]] = []
+    sessions: list[Any] = []
+    calls = 0
+
+    async def check(_db: Any, *_scope: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # first monitor poll; the pre-start check is call 1
+            raise OperationalError("SELECT agent_runs", {}, Exception("blip"))
+        return False
+
+    async with _start_test_runner(
+        "initial", graph, [check], terminal_writes, sessions
+    ) as (task, _main_db, _job_id, _user):
+        await asyncio.wait_for(task, timeout=2)
+
+    assert [write["status"] for write in terminal_writes] == ["completed"]
+    assert graph.finished is True
+    assert calls > 2, "the monitor must keep polling after one failed read"
+
+
+async def test_persistent_stop_poll_errors_still_fail_the_turn() -> None:
+    """R8-C1: an unreadable Stop marker cannot be ignored forever."""
+    from sqlalchemy.exc import OperationalError
+
+    graph = _BlockedGraph()
+    terminal_writes: list[dict[str, Any]] = []
+    sessions: list[Any] = []
+    calls = 0
+
+    async def check(_db: Any, *_scope: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return False
+        raise OperationalError("SELECT agent_runs", {}, Exception("down"))
+
+    async with _start_test_runner(
+        "initial", graph, [check], terminal_writes, sessions
+    ) as (task, _main_db, _job_id, _user):
+        await asyncio.wait_for(task, timeout=2)
+
+    assert graph.cancelled.is_set()
+    assert [write["status"] for write in terminal_writes] == ["failed"]
+
+
+async def test_thread_reresolution_db_error_fails_the_run() -> None:
+    """R8-C6: a DB error re-checking thread access must not fall through to an
+    unverified checkpoint run labelled ephemeral."""
+    from sqlalchemy.exc import OperationalError
+
+    from src.api.agent.execute import AgentExecuteRequest, _get_job, _set_job
+    from src.services.agent.agent_execution_service import _run_agent_graph
+
+    job_id = str(uuid4())
+    user = _make_mock_user()
+    db = _make_mock_db()
+    thread_id = str(uuid4())
+    request = AgentExecuteRequest(
+        messages=[{"role": "user", "content": "hi"}],
+        page_context={"type": "unknown"},
+        model="model-router",
+        use_rag=True,
+        max_context_docs=5,
+        thread_id=thread_id,
+    )
+    _set_job(
+        job_id,
+        {
+            "status": "running",
+            "tool_executions": [],
+            "user_id": str(user.id),
+            "request": request.model_dump(mode="json"),
+        },
+    )
+
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value={"messages": []})
+    mock_graph.aget_state = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "src.services.threads.workspace_access.get_thread",
+            AsyncMock(
+                side_effect=OperationalError(
+                    "SELECT threads", {}, Exception("pool timeout")
+                )
+            ),
+        ),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer", new_callable=AsyncMock
+        ),
+        patch("src.services.agent.graph.compile_agent_graph", return_value=mock_graph),
+        patch(
+            "src.services.agent.agent_execution_service.AsyncSessionLocal",
+            new=lambda: _async_session_yielding(db),
+        ),
+        patch(
+            "src.services.agent.agent_run_service.is_run_cancellation_requested",
+            AsyncMock(return_value=False),
+        ),
+    ):
+        await _run_agent_graph(job_id, request, user)
+
+    mock_graph.ainvoke.assert_not_awaited()
+    job = _get_job(job_id)
+    assert job is not None
+    assert job["status"] == "failed"
+    assert job["error"] == "The request could not be completed. Please retry."
+
+
+class _SlowFinishingGraph:
+    """Finishes after enough wall time for the monitor to poll repeatedly."""
+
+    def __init__(self) -> None:
+        self.finished = False
+
+    async def ainvoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        await asyncio.sleep(0.1)
+        self.finished = True
+        return {
+            "messages": [
+                HumanMessage(content="current request"),
+                AIMessage(content="answer"),
+            ],
+            "tool_executions": [],
+        }
+
+    async def aget_state(self, _config: dict[str, Any]) -> None:
+        return None
+
+
 class _BlockedGraph:
     def __init__(self, resume: bool = False, owner_id: str = "") -> None:
         self.resume = resume
