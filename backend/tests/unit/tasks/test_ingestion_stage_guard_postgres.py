@@ -570,7 +570,7 @@ def _write_late_data_source(env: SimpleNamespace, ds_uuid: str) -> None:
 def _fake_unsync(ok: bool) -> Any:
     calls: list[str] = []
 
-    async def unsync(session: Any, document: Document) -> bool:
+    async def unsync(session: Any, document: Any) -> bool:
         calls.append(document.do_kb_data_source_uuid)
         if ok:
             document.do_kb_data_source_uuid = None
@@ -675,7 +675,7 @@ def test_stale_snapshot_does_not_revert_state_through_do_kb_sync(
             other.get(Document, env.doc_id).processing_status = ProcessingStatus.FAILED
             other.commit()
 
-        async def fake_sync(session: Any, document: Document, **_: Any) -> str:
+        async def fake_sync(session: Any, document: Any, **_: Any) -> str:
             document.do_kb_data_source_uuid = "ds-1"
             return "ds-1"
 
