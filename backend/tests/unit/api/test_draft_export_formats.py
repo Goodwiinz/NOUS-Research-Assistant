@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -125,6 +126,31 @@ def test_markdown_and_latex_bytes_unchanged(client: TestClient) -> None:
         assert archive.namelist() == ["Draft_1.tex", "references.bib"]
         assert _sha(archive.read("Draft_1.tex")) == GOLDEN["latex.tex"]
         assert _sha(archive.read("references.bib")) == GOLDEN["latex.bib"]
+
+
+def test_latex_zip_bytes_do_not_depend_on_build_clock(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GOO-394: two LaTeX exports built 3 s apart are byte-identical.
+
+    ``zipfile`` stamps a member written by bare name with the build time
+    (2 s DOS resolution), so the Postgres reference-export test flaked when
+    its two exports straddled a tick. The clock is stubbed in ``zipfile`` only.
+
+    Mutation verification (docs/engineering/testing.md): reverting the
+    pinned ``ZipInfo`` in ``export_draft`` (``drafts.py`` LaTeX branch) to
+    ``zip_file.writestr(name, content)`` fails this test with differing zip
+    bytes (DOS mod-time fields); restored, it passes.
+    ``pytest -q backend/tests/unit/api/test_draft_export_formats.py -k clock``
+    """
+    now = [1_790_000_000.0]
+    clock = SimpleNamespace(time=lambda: now[0], localtime=time.localtime)
+    monkeypatch.setattr(zipfile, "time", clock)
+    first = _export(client, "format=latex")
+    now[0] += 3
+    second = _export(client, "format=latex")
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content
 
 
 def test_unknown_format_still_400(client: TestClient) -> None:
