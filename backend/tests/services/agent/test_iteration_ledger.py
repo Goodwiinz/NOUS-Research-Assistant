@@ -254,3 +254,75 @@ def test_config_initial_query_is_redacted(ledger_dir: Path):
 
     config = json.loads((ledger_dir / "thread-cfg" / "config.json").read_text())
     assert "bob@example.com" not in config["initial_query"]
+
+
+@pytest.mark.unit
+def test_ledger_redacts_plan_page_context_and_errors(ledger_dir: Path):
+    """R8-C7: the R7-L4 redaction covered messages and tool executions only.
+
+    ``plan``, ``page_context``, ``last_error``/``last_error_info`` and the
+    reflection issues were written raw to iterations/, config.json and
+    final.json. UUID ids stay raw at any depth: ``project_report.py``
+    filters final.json on current_project_id, and replay_ledger compares
+    page_context, so ``<uuid>`` everywhere would hide real drift.
+    """
+    from src.services.agent.iteration_ledger import write_iteration
+
+    project_id = "6f1c2d3e-4a5b-4c6d-8e7f-0123456789ab"
+    paper_id = "1d2e3f40-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+    ws_thread_id = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+    state = _state_with_one_turn()
+    state["current_project_id"] = project_id
+    state["plan"] = [
+        {"step": 1, "tool": "send_mail", "args_hint": "mail carol@example.com"}
+    ]
+    state["page_context"] = {
+        "type": "project",
+        "project_id": project_id,
+        "paper_id": paper_id,
+        "label": "notes for dave@example.com",
+        "metadata": {
+            "workspace_thread_id": ws_thread_id,
+            "selection": "ping dave@example.com",
+        },
+    }
+    state["tool_executions"][0]["args"] = {"document_id": "hal@example.com"}
+    state["last_error"] = "SMTP rejected erin@example.com"
+    state["last_error_info"] = {
+        "category": "tool_error",
+        "message": "bounce for erin@example.com",
+    }
+    state["_reflection_result"] = {
+        "passed": False,
+        "issues": ["cites frank@example.com"],
+        "severity": "low",
+    }
+    doc_id = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+    state["retrieved_contexts"] = [
+        {"document_id": doc_id, "title": "CV of gina@example.com", "score": 0.9}
+    ]
+
+    path = write_iteration("thread-c7", state)
+    assert path is not None
+    thread_dir = ledger_dir / "thread-c7"
+    for written in (path, thread_dir / "config.json", thread_dir / "final.json"):
+        assert "@" not in written.read_text(), written.name
+
+    record = json.loads(path.read_text())
+    snapshot = record["state_snapshot"]
+    assert snapshot["plan"][0]["args_hint"] == "mail <email>"
+    page_context = snapshot["page_context"]
+    assert page_context["type"] == "project"
+    assert page_context["project_id"] == project_id
+    assert page_context["paper_id"] == paper_id
+    assert page_context["metadata"]["workspace_thread_id"] == ws_thread_id
+    assert page_context["metadata"]["selection"] == "ping <email>"
+    # Only UUIDs are kept under id keys; anything else is still redacted.
+    assert snapshot["tool_executions"][0]["args"]["document_id"] == "<email>"
+    assert snapshot["current_project_id"] == project_id
+    assert snapshot["retrieved_contexts"][0]["document_id"] == doc_id
+    final = json.loads((thread_dir / "final.json").read_text())
+    assert final["current_project_id"] == project_id
+    config = json.loads((thread_dir / "config.json").read_text())
+    assert config["current_project_id"] == project_id
+    assert config["page_context"]["metadata"]["workspace_thread_id"] == ws_thread_id

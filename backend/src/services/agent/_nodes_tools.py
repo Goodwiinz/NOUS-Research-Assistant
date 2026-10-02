@@ -37,6 +37,7 @@ from typing import List
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
+from pydantic import ValidationError
 
 from src.services.agent._pii_redact import redact_pii
 from src.services.agent.error_recovery import (
@@ -599,6 +600,15 @@ async def _execute_single_tool(
                 arguments=effective_args,
             )
             tool_args = effective_args
+        except ValidationError as exc:
+            # A mistyped argument is the model's to fix, not a broken turn
+            # (R8-B6). Same category and wording as execute_tool's check.
+            operation_error = {
+                "error": f"Invalid arguments for {tool_name}: {exc}",
+                "error_category": "invalid_tool_arguments",
+                "automatic_retry_allowed": True,
+                "retry_guidance": "Correct the arguments and call the tool again.",
+            }
         except (TypeError, ValueError) as exc:
             category = (
                 "legacy_operation_result_unavailable"
