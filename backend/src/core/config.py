@@ -30,6 +30,41 @@ MEMORY_FALLBACK_ENVIRONMENTS = frozenset(
 )
 
 
+def _is_strict_environment(env: Optional[str]) -> bool:
+    """Strict = anything not explicitly a throwaway local/CI environment.
+
+    Replaces the old exact-match ``env in ("production", "staging")`` guard
+    (audit I24): unknown spellings like "prod", "prod-eu", "Production" or
+    custom shared-env names now fail closed instead of receiving the
+    repo-public fallback secrets (audit I1). An empty value is NOT unset —
+    it is an unknown environment name, so it is strict too; only a true
+    None/missing field defaults to the throwaway "development".
+    """
+    value = "development" if env is None else env
+    value = value.strip().lower()
+    return value not in MEMORY_FALLBACK_ENVIRONMENTS
+
+
+# Operator-facing allowlist appended to strict-env error messages: a message
+# that only says "non-throwaway environments" forces the operator to read
+# source to learn which values are exempt (audit I1 review).
+_THROWAWAY_ENVS_HINT = (
+    "(local/CI environments allowed: "
+    + ", ".join(sorted(MEMORY_FALLBACK_ENVIRONMENTS))
+    + ")"
+)
+
+
+def _env_is_strict(info: ValidationInfo) -> bool:
+    """Whether the ENVIRONMENT validated so far is strict (audit I1/I24).
+
+    Single derivation shared by every field-level guard so the missing-field
+    default (throwaway "development") and the fail-closed empty-string
+    handling of ``_is_strict_environment`` cannot drift between validators.
+    """
+    return _is_strict_environment(str(info.data.get("ENVIRONMENT", "development")))
+
+
 def _longest_literal_hostname_run(pattern: str) -> int:
     """Longest contiguous literal hostname segment (project slug specificity)."""
     pattern = re.sub(r"\[[^\]]+\](?:[+*?]|\{[^}]+\})?", "", pattern)
@@ -109,7 +144,7 @@ class Settings(BaseSettings):
         re-deriving an env allowlist — a drifted second/third list is how the
         live ``ENVIRONMENT=dev`` deployment slips through the wrong branch.
         """
-        return self.ENVIRONMENT.strip().lower() in MEMORY_FALLBACK_ENVIRONMENTS
+        return not _is_strict_environment(self.ENVIRONMENT)
 
     @property
     def require_durable_agent_state(self) -> bool:
@@ -237,11 +272,14 @@ class Settings(BaseSettings):
         if not pattern.startswith("^") or not pattern.endswith("$"):
             raise ValueError("CORS_ORIGIN_REGEX must be anchored with ^ and $")
 
-        env = str(info.data.get("ENVIRONMENT", "development"))
-        if env in ("production", "staging"):
+        # Audit I24: strict = anything not an explicit throwaway, so
+        # "prod"/"Production" spellings can't bypass the https-only rule the
+        # way the old exact-match ("production", "staging") gate allowed.
+        if _env_is_strict(info):
             if not pattern.startswith("^https://"):
                 raise ValueError(
-                    "CORS_ORIGIN_REGEX must use ^https:// in production/staging"
+                    "CORS_ORIGIN_REGEX must use ^https:// in non-throwaway "
+                    f"environments {_THROWAWAY_ENVS_HINT}"
                 )
         elif not (pattern.startswith("^https://") or pattern.startswith("^http://")):
             raise ValueError("CORS_ORIGIN_REGEX must start with ^https:// or ^http://")
@@ -349,8 +387,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_debug_off_in_prod(self):
-        """Never allow DEBUG=True in production or staging."""
-        if self.ENVIRONMENT in ("production", "staging"):
+        """Never allow DEBUG=True outside throwaway local/CI environments.
+
+        Audit I24: the old exact-match ``ENVIRONMENT in ("production",
+        "staging")`` gate let any other spelling of a shared environment
+        ("prod", "Production", "dev", unknown names) keep DEBUG=True — the
+        same fail-open-by-spelling bug class as the secret guards. Strict
+        (non-throwaway) environments are force-cleared; the five throwaway
+        names keep local DEBUG behavior.
+        """
+        if _is_strict_environment(self.ENVIRONMENT):
             self.DEBUG = False
         return self
 
@@ -367,12 +413,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DATABASE_URL must start with postgresql:// or postgresql+asyncpg://"
             )
+        # Audit I24: strict = anything not an explicit throwaway, so
+        # "prod"/"Production" spellings can't point a shared environment at
+        # a localhost database the way the old exact-match gate allowed.
         if (
-            self.ENVIRONMENT in ("production", "staging")
+            _is_strict_environment(self.ENVIRONMENT)
             and "localhost" in self.DATABASE_URL
         ):
             raise ValueError(
-                "DATABASE_URL must not point to localhost in production/staging"
+                "DATABASE_URL must not point to localhost in non-throwaway "
+                f"environments {_THROWAWAY_ENVS_HINT}"
             )
         return self
 
@@ -392,10 +442,12 @@ class Settings(BaseSettings):
         )
 
         if is_weak:
-            env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _env_is_strict(info):
                 raise ValueError(
-                    "SECRET_KEY must be set to a strong value in production/staging"
+                    "SECRET_KEY must be set to a strong value in non-throwaway "
+                    f"environments {_THROWAWAY_ENVS_HINT}. "
+                    "Generate one with: python -c 'import secrets; "
+                    "print(secrets.token_urlsafe(48))'"
                 )
             return _LOCAL_SECRET_KEY
         if len(v) < 32:
@@ -418,11 +470,12 @@ class Settings(BaseSettings):
         )
 
         if is_weak:
-            env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _env_is_strict(info):
                 raise ValueError(
-                    "JWT_SECRET_KEY must be set to a strong value in production/staging. "
-                    "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+                    "JWT_SECRET_KEY must be set to a strong value in non-throwaway "
+                    f"environments {_THROWAWAY_ENVS_HINT}. "
+                    "Generate one with: python -c 'import secrets; "
+                    "print(secrets.token_urlsafe(48))'"
                 )
             return _LOCAL_JWT_SECRET_KEY
         if len(v) < 32:
@@ -434,10 +487,10 @@ class Settings(BaseSettings):
     def validate_neo4j_password(cls, v, info: ValidationInfo):
         """Validate NEO4J_PASSWORD - require in production."""
         if not v or v == "neo4jpassword":
-            env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _env_is_strict(info):
                 raise ValueError(
-                    "NEO4J_PASSWORD must be set via environment variable in production/staging"
+                    "NEO4J_PASSWORD must be set via environment variable in "
+                    f"non-throwaway environments {_THROWAWAY_ENVS_HINT}"
                 )
             return "neo4jpassword"  # Default for local development
         return v
@@ -973,6 +1026,10 @@ class Settings(BaseSettings):
         env_file = "../.env"
         case_sensitive = True
         extra = "ignore"
+        # Fail-closed secret guards crash the boot: keep the rejected value
+        # (a real-but-short secret) out of the ValidationError text that
+        # lands in pod logs / Sentry.
+        hide_input_in_errors = True
 
 
 # Create settings instance

@@ -63,9 +63,11 @@ def make_capability_terminal_message(state: Mapping[str, Any]) -> AIMessage:
     executions = state.get("tool_executions")
     if isinstance(executions, list):
         for execution in executions:
+            # tool_node records "completed" / "failed" / "deduped"; the old
+            # "success" check matched nothing, so the list never rendered.
             if (
                 not isinstance(execution, Mapping)
-                or execution.get("status") != "success"
+                or execution.get("status") != "completed"
             ):
                 continue
             name = execution.get("tool_name")
