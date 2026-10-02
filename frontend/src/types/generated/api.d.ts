@@ -260,7 +260,7 @@ export interface paths {
         };
         /**
          * List Agent Threads
-         * @description List threads for the current user, ordered by most recently updated.
+         * @description List agent threads the caller can reach, most recently updated first.
          */
         get: operations["list_agent_threads_api_v1_agent_threads_get"];
         put?: never;
@@ -17650,7 +17650,10 @@ export interface components {
              * @description Current page label (e.g., 'Documents', 'Notes')
              */
             label?: string | null;
-            /** Metadata */
+            /**
+             * Metadata
+             * @description Free-form page metadata, sanitized on receipt (long strings truncated, keys and depth capped). Rejected above 256 KB raw, 8 levels of nesting, or 8 KB once sanitized.
+             */
             metadata?: {
                 [key: string]: unknown;
             } | null;

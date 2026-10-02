@@ -54,6 +54,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.conversation import Conversation
 from src.models.thread import Thread, ThreadStatus
+from src.models.workspace import Workspace
 from src.schemas.chat import ThreadCreate, ThreadUpdate
 from src.services.threads import workspace_access
 from src.tasks.enqueue import enqueue_after_commit
@@ -207,6 +208,37 @@ async def list_threads(
         threads = list((await db.execute(stmt)).scalars().all())
 
     return threads, total, previews
+
+
+AGENT_THREAD_MARKER = {"source": "agent"}
+
+
+async def list_agent_threads(
+    db: AsyncSession, user_id: UUID, *, limit: int = 50
+) -> Tuple[List[Thread], int]:
+    """Agent-sidebar feed: agent threads below live ancestors the caller can reach.
+
+    Ancestors are re-checked here because a workspace/conversation soft-delete
+    never cascades to its threads (R8-D3). Membership follows the access
+    funnel, so an editor sees the agent threads they created in a shared
+    workspace. ``total`` comes from a window count over the same filters.
+    """
+    rows = (
+        await db.execute(
+            select(Thread, func.count().over().label("total"))
+            .join(Conversation, Thread.conversation_id == Conversation.id)
+            .join(Workspace, Conversation.workspace_id == Workspace.id)
+            .where(
+                Thread.is_deleted == False,  # noqa: E712
+                Conversation.is_deleted == False,  # noqa: E712
+                workspace_access.member_or_owner_workspace_clause(user_id),
+                Thread.rag_document_scope.contains(AGENT_THREAD_MARKER),
+            )
+            .order_by(desc(Thread.updated_at))
+            .limit(limit)
+        )
+    ).all()
+    return [row[0] for row in rows], (rows[0][1] if rows else 0)
 
 
 async def list_workspace_threads(
