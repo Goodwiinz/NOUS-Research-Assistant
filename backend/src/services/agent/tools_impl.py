@@ -2017,6 +2017,15 @@ async def _execute_external_operation(
         )
 
     if claim.status == "completed":
+        if not claim.same_identity and claim.result is not None:
+            # Another call id already failed with these args this turn (R8-B5).
+            # Mark the replay so the model stops instead of looping on it.
+            return {
+                **claim.result,
+                "replayed_from_operation": claim.operation_id,
+                "automatic_retry_allowed": False,
+                "retry_guidance": "This identical call already failed in this turn; do not repeat it.",
+            }
         return claim.result or _operation_error(
             "The completed operation result is unavailable.",
             "operation_result_unavailable",
