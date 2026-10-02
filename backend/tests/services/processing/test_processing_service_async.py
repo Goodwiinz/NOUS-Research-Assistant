@@ -16,11 +16,13 @@ import inspect
 import sys
 import uuid
 from collections.abc import Iterable
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.models.document import ProcessingStatus
+from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.services.processing.processing_service import ProcessingPipeline
 
 pytestmark = pytest.mark.unit
@@ -31,6 +33,7 @@ def _async_db() -> MagicMock:
     db.execute = AsyncMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
+    db.rollback = AsyncMock()
     return db
 
 
@@ -120,26 +123,106 @@ def test_queue_processing_job_missing_job_no_send() -> None:
         asyncio.run(pipeline.queue_processing_job("job-1"))
 
     celery_mod.celery_app.send_task.assert_not_called()
-    db.commit.assert_not_awaited()
+    db.commit.assert_awaited_once()
 
 
 def test_queue_processing_job_sends_and_commits() -> None:
-    from src.models.processing import JobType
-
-    job = MagicMock()
-    job.job_type = JobType.DOCUMENT_INGESTION
+    job = _pending_job()
     db = _async_db()
     db.execute.return_value = _result(scalar=job)
     pipeline = _pipeline(db)
 
     celery_mod = MagicMock()
-    celery_mod.celery_app.send_task.return_value.id = "task-1"
+    events = []
+    db.commit.side_effect = lambda: events.append("commit")
+
+    def send(*args: object, **kwargs: object) -> SimpleNamespace:
+        events.append("send")
+        return SimpleNamespace(id="task-1")
+
+    celery_mod.celery_app.send_task.side_effect = send
     with patch.dict(sys.modules, {"src.tasks.celery_app": celery_mod}):
         asyncio.run(pipeline.queue_processing_job("job-1"))
 
-    assert job.celery_task_id == "task-1"
-    job.queue_job.assert_called_once()
+    assert events == ["commit", "send"]
+    assert uuid.UUID(job.celery_task_id)
+    assert job.status == JobStatus.QUEUED
+    assert job.queue_name == "document_processing"
+    celery_mod.celery_app.send_task.assert_called_once_with(
+        "process_document_ingestion",
+        args=["job-1"],
+        queue="document_processing",
+        task_id=job.celery_task_id,
+    )
     db.commit.assert_awaited_once()
+
+
+def _pending_job(**kwargs: object) -> ProcessingJob:
+    values = {
+        "id": uuid.uuid4(),
+        "organization_id": uuid.uuid4(),
+        "job_type": JobType.DOCUMENT_INGESTION,
+        "status": JobStatus.PENDING,
+        "is_deleted": False,
+        "retry_count": 0,
+    }
+    values.update(kwargs)
+    return ProcessingJob(**values)
+
+
+@pytest.mark.parametrize("status", [JobStatus.PENDING, JobStatus.RETRYING])
+def test_queue_processing_job_reserves_fresh_attempt(status: JobStatus) -> None:
+    job = _pending_job(status=status)
+    if status == JobStatus.RETRYING:
+        job.celery_task_id = "previous-attempt"
+        job.retry_count = 1
+    db = _async_db()
+    db.execute.return_value = _result(scalar=job)
+    celery_mod = MagicMock()
+    with patch.dict(sys.modules, {"src.tasks.celery_app": celery_mod}):
+        asyncio.run(_pipeline(db).queue_processing_job(str(job.id)))
+    assert job.status == JobStatus.QUEUED
+    assert job.celery_task_id != "previous-attempt"
+    assert db.execute.call_args.args[0]._for_update_arg is not None
+    assert db.execute.call_args.args[0].get_execution_options()["populate_existing"]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"status": status}
+        for status in (
+            JobStatus.QUEUED,
+            JobStatus.RUNNING,
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+        )
+    ]
+    + [{"is_deleted": True}, {"celery_task_id": "already-dispatched"}],
+)
+def test_queue_processing_job_rejects_dispatched_or_deleted(values: dict) -> None:
+    job = _pending_job(**values)
+    db = _async_db()
+    db.execute.return_value = _result(scalar=job)
+    celery_mod = MagicMock()
+    with patch.dict(sys.modules, {"src.tasks.celery_app": celery_mod}):
+        asyncio.run(_pipeline(db).queue_processing_job(str(job.id)))
+    celery_mod.celery_app.send_task.assert_not_called()
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+def test_reservation_commit_failure_dispatches_nothing() -> None:
+    db = _async_db()
+    db.execute.return_value = _result(scalar=_pending_job())
+    db.commit.side_effect = RuntimeError("reservation commit failed")
+    celery_mod = MagicMock()
+    with patch.dict(sys.modules, {"src.tasks.celery_app": celery_mod}):
+        with pytest.raises(RuntimeError, match="reservation commit failed"):
+            asyncio.run(_pipeline(db).queue_processing_job("job-1"))
+    celery_mod.celery_app.send_task.assert_not_called()
+    db.rollback.assert_awaited_once()
 
 
 # --- get_processing_status --------------------------------------------------
