@@ -39,15 +39,17 @@ class _ChunkedUpload:
 
 
 class _UploadDB:
-    def __init__(self) -> None:
+    """AsyncSession-shaped double: no sync ``.query`` (GOO-333)."""
+
+    def __init__(self, duplicate_row: Any = None) -> None:
         self.commit_calls = 0
         self.rollback_calls = 0
+        self.added: list[Any] = []
+        self.statements: list[Any] = []
+        self.duplicate_row = duplicate_row
 
-    def add(self, _obj: Any) -> None:
-        pass
-
-    def query(self, *_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("query is intentionally unavailable in this unit test")
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
 
     async def commit(self) -> None:
         self.commit_calls += 1
@@ -55,8 +57,10 @@ class _UploadDB:
     async def refresh(self, _obj: Any) -> None:
         pass
 
-    async def execute(self, _statement: Any) -> Any:
-        return SimpleNamespace(rowcount=1)
+    async def execute(self, statement: Any) -> Any:
+        self.statements.append(statement)
+        row = self.duplicate_row
+        return SimpleNamespace(rowcount=1, first=lambda: row)
 
     async def rollback(self) -> None:
         self.rollback_calls += 1
@@ -244,3 +248,53 @@ async def test_safe_upload_errors_survive_service_cleanup(
 
     assert str(exc_info.value) == str(safe_error)
     assert getattr(service.db, "rollback_calls") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["s3", "supabase", "local"])
+async def test_duplicate_upload_returns_409_before_storage_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend: str
+) -> None:
+    """GOO-333: the async session must reach the 409 (was a swallowed .query)."""
+    db = _UploadDB(duplicate_row=SimpleNamespace(id=uuid.uuid4()))
+    service = _make_service(monkeypatch, tmp_path, backend)
+    setattr(service, "db", db)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    _S3Recorder.instances = []
+    _SupabaseRecorder.instances = []
+    monkeypatch.setattr("src.core.s3_client.S3StorageHelper", _S3Recorder)
+    _patch_supabase_helper(monkeypatch, _SupabaseRecorder)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.upload_file(
+            cast(Any, _ChunkedUpload(b"same bytes twice")),
+            "Sample",
+            cast(Any, SimpleNamespace(id=uuid.uuid4())),
+            cast(Any, SimpleNamespace(id=uuid.uuid4())),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert db.added == [] and db.commit_calls == 0
+    assert not any(r.uploads for r in _S3Recorder.instances)
+    assert not any(r.uploads for r in _SupabaseRecorder.instances)
+    assert not list(tmp_path.glob("upload_*.bin"))
+    assert not [p for p in (tmp_path / "uploads").rglob("*") if p.is_file()]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_lookup_is_org_scoped_and_matches_legacy_hash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from sqlalchemy.dialects import postgresql
+
+    db = _UploadDB()
+    service = _make_service(monkeypatch, tmp_path, "s3")
+    setattr(service, "db", db)
+
+    await service._assert_not_duplicate("a" * 64, str(uuid.uuid4()))
+
+    sql = str(db.statements[0].compile(dialect=postgresql.dialect()))
+    assert "documents.organization_id" in sql
+    assert "documents.checksum_sha256" in sql
+    assert "documents.document_metadata ->> " in sql
+    assert "is_deleted IS NOT true" in sql

@@ -156,6 +156,26 @@ def _executions(
                 "requests": requests,
             }
     for receipt in imports:
+        if receipt["kind"] == "scheduled_search":
+            # GOO-319: each provider of a scheduled execution, from the
+            # GOO-298 receipts its import retained.
+            coverage = receipt["observed"].get("coverage") or {}
+            for provider, item in (coverage.get("providers") or {}).items():
+                key = str(item.get("execution_id") or f"{receipt['id']}:{provider}")
+                out[key] = {
+                    "kind": "provider_search",
+                    "run_id": None,
+                    "receipt_id": receipt["id"],
+                    "provider": provider,
+                    "status": item.get("status"),
+                    "completion": item.get("completion"),
+                    "limit": item.get("limit", item.get("requested_limit")),
+                    "returned": item.get("returned", item.get("returned_count")),
+                    "error_type": item.get("error_type"),
+                    "started_at": item.get("started_at"),
+                    "requests": [p.get("request") for p in item.get("pages") or []],
+                }
+            continue
         if receipt["kind"] != "citation_chase":
             continue
         observed = receipt["observed"]
@@ -220,6 +240,8 @@ def _coverage(
     performed: set[str] = set()
     for receipt in imports:
         declared = receipt["declared"]
+        if receipt["kind"] == "scheduled_search":
+            continue  # its providers are listed with the searches above
         if receipt["kind"] == "file_import":
             search_date = declared.get("search_date") or _NOT_DECLARED
             searched.append(
