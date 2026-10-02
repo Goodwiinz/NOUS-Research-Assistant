@@ -20,7 +20,7 @@ from src.core.dependencies import get_current_user
 from src.services.arxiv.arxiv_kg_integration import ArXivKnowledgeGraphIntegration
 from src.services.arxiv.arxiv_service import ArXivIngestionService
 from src.services.arxiv.persistence import persist_arxiv_documents
-from src.services.expensive_work_admission import require_expensive_work_admission
+from src.services.expensive_work_admission import metered_expensive_work
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -71,7 +71,8 @@ async def get_arxiv_service():
         raise HTTPException(status_code=503, detail="ArXiv service unavailable")
 
 
-@router.post("/bulk-ingest", dependencies=[Depends(require_expensive_work_admission)])
+@router.post("/bulk-ingest")
+@metered_expensive_work
 async def bulk_ingest_with_kg(
     request: BulkIngestionRequest,
     current_user: dict = Depends(get_current_user),

@@ -16,7 +16,7 @@ from src.core.dependencies import get_current_user
 from src.models.user import User
 from src.services.arxiv.arxiv_kg_integration import ArXivKnowledgeGraphIntegration
 from src.services.arxiv.arxiv_service import ArXivIngestionService
-from src.services.expensive_work_admission import require_expensive_work_admission
+from src.services.expensive_work_admission import metered_expensive_work
 from src.services.processing.entity_extraction_service import EntityExtractionService
 
 logger = logging.getLogger(__name__)
@@ -97,9 +97,8 @@ def _serialize_entities(entities: List[Any]) -> Dict[str, Any]:
     return {"entities": serialized, "relationships": [], "count": len(serialized)}
 
 
-@router.post(
-    "/extract-features", dependencies=[Depends(require_expensive_work_admission)]
-)
+@router.post("/extract-features")
+@metered_expensive_work
 async def extract_paper_features(
     request: ExtractionRequest,
     background_tasks: BackgroundTasks,
@@ -406,7 +405,8 @@ async def get_extracted_features(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/bulk-extract", dependencies=[Depends(require_expensive_work_admission)])
+@router.post("/bulk-extract")
+@metered_expensive_work
 async def bulk_extract_features(
     request: dict, current_user: User = Depends(get_current_user)
 ):

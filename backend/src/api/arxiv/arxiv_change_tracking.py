@@ -13,7 +13,7 @@ from src.core.dependencies import get_current_user
 from src.models.user import User
 from src.services.arxiv.arxiv_change_tracker import change_tracker, track_arxiv_changes
 from src.services.arxiv.arxiv_service import IngestionError
-from src.services.expensive_work_admission import require_expensive_work_admission
+from src.services.expensive_work_admission import metered_expensive_work
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -69,9 +69,8 @@ class ChangeHistoryResponse(BaseModel):
     metadata: Dict[str, Any]
 
 
-@router.post(
-    "/track-categories", dependencies=[Depends(require_expensive_work_admission)]
-)
+@router.post("/track-categories")
+@metered_expensive_work
 async def track_category_changes(
     request: CategoryTrackingRequest,
     current_user: User = Depends(get_current_user),
@@ -131,7 +130,8 @@ async def track_category_changes(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/track-all", dependencies=[Depends(require_expensive_work_admission)])
+@router.get("/track-all")
+@metered_expensive_work
 async def track_all_changes(
     days_back: int = Query(default=1, ge=1, le=30, description="Days to look back"),
     current_user: User = Depends(get_current_user),
@@ -269,7 +269,8 @@ async def cleanup_old_state(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/force-sync", dependencies=[Depends(require_expensive_work_admission)])
+@router.post("/force-sync")
+@metered_expensive_work
 async def force_sync_paper(
     paper_id: str = Body(..., embed=True, description="arXiv paper ID to sync"),
     current_user: User = Depends(get_current_user),

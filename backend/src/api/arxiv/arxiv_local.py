@@ -59,7 +59,7 @@ class LocalExtractionResponse(BaseModel):
 
 from src.models.vector import EmbeddingRequest  # noqa: E402
 from src.services.embedding.embedding_service import EmbeddingService  # noqa: E402
-from src.services.expensive_work_admission import require_expensive_work_admission
+from src.services.expensive_work_admission import metered_expensive_work
 
 _shared_embedding_service = None
 
@@ -123,9 +123,8 @@ async def list_local_papers(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post(
-    "/extract-local-features", dependencies=[Depends(require_expensive_work_admission)]
-)
+@router.post("/extract-local-features")
+@metered_expensive_work
 async def extract_features_from_local_pdfs(
     request: LocalExtractionRequest,
     background_tasks: BackgroundTasks,
@@ -596,7 +595,8 @@ async def get_local_papers_stats(current_user: dict = Depends(get_current_user))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/process-batch", dependencies=[Depends(require_expensive_work_admission)])
+@router.post("/process-batch")
+@metered_expensive_work
 async def process_batch_local_papers(
     background_tasks: BackgroundTasks,
     batch_size: int = Query(
