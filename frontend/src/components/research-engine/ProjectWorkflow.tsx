@@ -29,6 +29,7 @@ import { ProtocolPanel } from './ProtocolPanel';
 import { ReportIdentityPanel } from './ReportIdentityPanel';
 import { ScreeningConflictsPanel } from './ScreeningConflictsPanel';
 import { ScreeningQueuePanel } from './ScreeningQueuePanel';
+import { SearchSchedulePanel } from './SearchSchedulePanel';
 
 interface ProjectWorkflowProps {
   project: Project;
@@ -225,6 +226,11 @@ export function ProjectWorkflow({
       <Stage id="discover" title="Discover">
         <ReportIdentityPanel projectId={project.id} readOnly={archived} />
         <CorpusPanel projectId={project.id} readOnly={archived} />
+        <SearchSchedulePanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
       </Stage>
       <Stage id="select" title="Select">
         <ScreeningQueuePanel

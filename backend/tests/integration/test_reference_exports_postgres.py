@@ -137,6 +137,11 @@ async def _seed_draft(w: Any) -> tuple[UUID, dict[str, UUID]]:
         return cast(UUID, draft.id), citations
 
 
+def _zip_members(data: bytes) -> dict[str, bytes]:
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return {name: archive.read(name) for name in sorted(archive.namelist())}
+
+
 async def _download(client: AsyncClient, base: str, fmt: str) -> bytes:
     response = await client.get(f"{base}?format={fmt}")
     assert response.status_code == 200, response.text
@@ -210,7 +215,9 @@ async def test_release_and_draft_reference_exports_reconcile_and_stay_immutable(
     # pre-GOO-317 golden and equals the release's references.bib.
     async with _client(w) as client:
         assert (await client.post(f"{exports}?format=markdown")).content == markdown
-        assert (await client.post(f"{exports}?format=latex")).content == latex
+        latex_again = (await client.post(f"{exports}?format=latex")).content
+    # Zip local headers carry a 2-second DOS mtime, so compare the members.
+    assert _zip_members(latex_again) == _zip_members(latex)
     with zipfile.ZipFile(io.BytesIO(latex)) as archive:
         assert _sha(archive.read("references.bib")) == BIB_GOLDEN
         assert archive.read("references.bib") == bib_before

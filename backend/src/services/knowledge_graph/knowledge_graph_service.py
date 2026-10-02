@@ -2361,32 +2361,47 @@ class KnowledgeGraphService:
                 else:
                     avg_degree = 0.0
 
-                # Approximate connected components with a lightweight Cypher query
-                # (GDS procedures are skipped — they OOM in constrained containers)
+                # Exact (weakly) connected components via union-find over the
+                # scoped edge list. GDS procedures are skipped — they OOM in
+                # constrained containers. Neighbours outside the scope are
+                # ignored so components never span tenants/projects.
+                # ponytail: pulls every scoped edge into memory, O(E); move to
+                # GDS WCC on a dedicated instance if org graphs get huge.
                 connected_components = 0
                 largest_component_size = 0
                 clustering_coefficient = 0.0
 
                 try:
-                    # Count isolated vs connected entities as a lightweight proxy
-                    iso_filter = (
-                        "AND " + " AND ".join(scope_preds).format(alias="e")
-                        if scope_preds
-                        else ""
-                    )
-                    iso_result = session.run(
+                    rows = session.run(
                         f"""
-                        MATCH (e:Entity)
-                        WHERE NOT (e)-[:RELATED_TO]-() {iso_filter}
-                        RETURN count(e) AS isolated
+                        MATCH (e:Entity) {entity_where}
+                        OPTIONAL MATCH (e)-[:RELATED_TO]->(t:Entity)
+                        RETURN e.id AS id, collect(t.id) AS neighbors
                         """,
                         params,
-                    ).single()
-                    isolated = iso_result["isolated"] if iso_result else 0
-                    connected_components = max(1, total_entities - isolated)
-                    largest_component_size = total_entities - isolated
-                except Exception:
-                    pass
+                    )
+                    adjacency = {row["id"]: row["neighbors"] for row in rows}
+                    parent = {node: node for node in adjacency}
+
+                    def _find(node: Any) -> Any:
+                        while parent[node] != node:
+                            parent[node] = parent[parent[node]]
+                            node = parent[node]
+                        return node
+
+                    for node, neighbors in adjacency.items():
+                        for neighbor in neighbors:
+                            if neighbor in parent:
+                                parent[_find(node)] = _find(neighbor)
+
+                    sizes: Dict[Any, int] = {}
+                    for node in parent:
+                        root = _find(node)
+                        sizes[root] = sizes.get(root, 0) + 1
+                    connected_components = len(sizes)
+                    largest_component_size = max(sizes.values(), default=0)
+                except Exception as exc:
+                    logger.warning(f"Graph component analysis failed: {exc}")
 
                 return GraphAnalytics(
                     total_entities=total_entities,

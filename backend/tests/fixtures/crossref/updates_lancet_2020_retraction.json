@@ -1,0 +1,391 @@
+{
+ "message": {
+  "items": [
+   {
+    "DOI": "10.1016/s0140-6736(20)31249-6",
+    "URL": "https://doi.org/10.1016/s0140-6736(20)31249-6",
+    "container-title": [
+     "The Lancet"
+    ],
+    "deposited": {
+     "date-parts": [
+      [
+       2025,
+       9,
+       26
+      ]
+     ],
+     "date-time": "2025-09-26T00:13:44Z",
+     "timestamp": 1758845624000
+    },
+    "indexed": {
+     "date-parts": [
+      [
+       2025,
+       12,
+       31
+      ]
+     ],
+     "date-time": "2025-12-31T02:44:37Z",
+     "timestamp": 1767149077136,
+     "version": "build-2238731810"
+    },
+    "publisher": "Elsevier BV",
+    "title": [
+     "Department of Error"
+    ],
+    "type": "journal-article",
+    "update-to": [
+     {
+      "DOI": "10.1016/s0140-6736(20)31180-6",
+      "label": "Correction",
+      "record-id": "23528",
+      "source": "retraction-watch",
+      "type": "correction",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         5,
+         30
+        ]
+       ],
+       "date-time": "2020-05-30T00:00:00Z",
+       "timestamp": 1590796800000
+      }
+     },
+     {
+      "DOI": "10.1016/s0140-6736(20)31180-6",
+      "label": "Erratum",
+      "source": "publisher",
+      "type": "erratum",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         5,
+         30
+        ]
+       ],
+       "date-time": "2020-05-30T00:00:00Z",
+       "timestamp": 1590796800000
+      }
+     }
+    ]
+   },
+   {
+    "DOI": "10.1016/s0140-6736(20)31174-0",
+    "URL": "https://doi.org/10.1016/s0140-6736(20)31174-0",
+    "container-title": [
+     "The Lancet"
+    ],
+    "deposited": {
+     "date-parts": [
+      [
+       2025,
+       9,
+       26
+      ]
+     ],
+     "date-time": "2025-09-26T00:13:40Z",
+     "timestamp": 1758845620000
+    },
+    "indexed": {
+     "date-parts": [
+      [
+       2026,
+       9,
+       24
+      ]
+     ],
+     "date-time": "2026-09-24T16:11:54Z",
+     "timestamp": 1790266314372,
+     "version": "4.1.0"
+    },
+    "publisher": "Elsevier BV",
+    "title": [
+     "RETRACTED: Chloroquine or hydroxychloroquine for COVID-19: why might they be hazardous?"
+    ],
+    "type": "journal-article",
+    "update-to": [
+     {
+      "DOI": "10.1016/s0140-6736(20)31180-6",
+      "label": "Retraction",
+      "source": "publisher",
+      "type": "retraction",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         5,
+         22
+        ]
+       ],
+       "date-time": "2020-05-22T00:00:00Z",
+       "timestamp": 1590105600000
+      }
+     },
+     {
+      "DOI": "10.1016/s0140-6736(20)31528-2",
+      "label": "Retraction",
+      "source": "publisher",
+      "type": "retraction",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         5,
+         22
+        ]
+       ],
+       "date-time": "2020-05-22T00:00:00Z",
+       "timestamp": 1590105600000
+      }
+     }
+    ]
+   },
+   {
+    "DOI": "10.1016/s0140-6736(20)31324-6",
+    "URL": "https://doi.org/10.1016/s0140-6736(20)31324-6",
+    "container-title": [
+     "The Lancet"
+    ],
+    "deposited": {
+     "date-parts": [
+      [
+       2025,
+       9,
+       26
+      ]
+     ],
+     "date-time": "2025-09-26T00:19:31Z",
+     "timestamp": 1758845971000
+    },
+    "indexed": {
+     "date-parts": [
+      [
+       2026,
+       9,
+       27
+      ]
+     ],
+     "date-time": "2026-09-27T18:26:15Z",
+     "timestamp": 1790533575312,
+     "version": "4.1.0"
+    },
+    "publisher": "Elsevier BV",
+    "title": [
+     "Retraction\u2014Hydroxychloroquine or chloroquine with or without a macrolide for treatment of COVID-19: a multinational registry analysis"
+    ],
+    "type": "journal-article",
+    "update-to": [
+     {
+      "DOI": "10.1016/s0140-6736(20)31180-6",
+      "label": "Retraction",
+      "record-id": "23529",
+      "source": "retraction-watch",
+      "type": "retraction",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         6,
+         5
+        ]
+       ],
+       "date-time": "2020-06-05T00:00:00Z",
+       "timestamp": 1591315200000
+      }
+     },
+     {
+      "DOI": "10.1016/s0140-6736(20)31180-6",
+      "label": "Erratum",
+      "source": "publisher",
+      "type": "erratum",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         6,
+         13
+        ]
+       ],
+       "date-time": "2020-06-13T00:00:00Z",
+       "timestamp": 1592006400000
+      }
+     },
+     {
+      "DOI": "10.1016/s0140-6736(20)31290-3",
+      "label": "Erratum",
+      "source": "publisher",
+      "type": "erratum",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         6,
+         13
+        ]
+       ],
+       "date-time": "2020-06-13T00:00:00Z",
+       "timestamp": 1592006400000
+      }
+     }
+    ]
+   },
+   {
+    "DOI": "10.1016/s0140-6736(20)31290-3",
+    "URL": "https://doi.org/10.1016/s0140-6736(20)31290-3",
+    "container-title": [
+     "The Lancet"
+    ],
+    "deposited": {
+     "date-parts": [
+      [
+       2025,
+       9,
+       26
+      ]
+     ],
+     "date-time": "2025-09-26T00:18:52Z",
+     "timestamp": 1758845932000
+    },
+    "indexed": {
+     "date-parts": [
+      [
+       2026,
+       7,
+       8
+      ]
+     ],
+     "date-time": "2026-07-08T03:06:27Z",
+     "timestamp": 1783479987876,
+     "version": "3.55.0"
+    },
+    "publisher": "Elsevier BV",
+    "title": [
+     "Expression of concern: Hydroxychloroquine or chloroquine with or without a macrolide for treatment of COVID-19: a multinational registry analysis"
+    ],
+    "type": "journal-article",
+    "update-to": [
+     {
+      "DOI": "10.1016/s0140-6736(20)31180-6",
+      "label": "Expression of concern",
+      "record-id": "23527",
+      "source": "retraction-watch",
+      "type": "expression_of_concern",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         6,
+         3
+        ]
+       ],
+       "date-time": "2020-06-03T00:00:00Z",
+       "timestamp": 1591142400000
+      }
+     }
+    ]
+   },
+   {
+    "DOI": "10.1016/s0140-6736(20)31528-2",
+    "URL": "https://doi.org/10.1016/s0140-6736(20)31528-2",
+    "container-title": [
+     "The Lancet"
+    ],
+    "deposited": {
+     "date-parts": [
+      [
+       2025,
+       9,
+       26
+      ]
+     ],
+     "date-time": "2025-09-26T00:19:40Z",
+     "timestamp": 1758845980000
+    },
+    "indexed": {
+     "date-parts": [
+      [
+       2026,
+       9,
+       24
+      ]
+     ],
+     "date-time": "2026-09-24T08:24:35Z",
+     "timestamp": 1790238275454,
+     "version": "4.1.0"
+    },
+    "publisher": "Elsevier BV",
+    "title": [
+     "Retraction and republication: cardiac toxicity of hydroxychloroquine in COVID-19"
+    ],
+    "type": "journal-article",
+    "update-to": [
+     {
+      "DOI": "10.1016/s0140-6736(20)31174-0",
+      "label": "Retraction",
+      "record-id": "23719",
+      "source": "retraction-watch",
+      "type": "retraction",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         7,
+         9
+        ]
+       ],
+       "date-time": "2020-07-09T00:00:00Z",
+       "timestamp": 1594252800000
+      }
+     },
+     {
+      "DOI": "10.1016/s0140-6736(20)31174-0",
+      "label": "Erratum",
+      "source": "publisher",
+      "type": "erratum",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         7,
+         18
+        ]
+       ],
+       "date-time": "2020-07-18T00:00:00Z",
+       "timestamp": 1595030400000
+      }
+     },
+     {
+      "DOI": "10.1016/s0140-6736(20)31180-6",
+      "label": "Erratum",
+      "source": "publisher",
+      "type": "erratum",
+      "updated": {
+       "date-parts": [
+        [
+         2020,
+         7,
+         18
+        ]
+       ],
+       "date-time": "2020-07-18T00:00:00Z",
+       "timestamp": 1595030400000
+      }
+     }
+    ]
+   }
+  ],
+  "items-per-page": 5,
+  "query": {
+   "search-terms": null,
+   "start-index": 0
+  },
+  "total-results": 5
+ },
+ "message-type": "work-list",
+ "message-version": "1.0.0",
+ "status": "ok"
+}
