@@ -7,8 +7,10 @@ All task modules should import celery_app from this module:
 
 import logging
 import ssl
+from typing import Any
 
 from celery import Celery
+from celery.signals import worker_process_init
 
 from src.core.config import settings
 
@@ -218,3 +220,19 @@ celery_app.conf.update(
 )
 
 logger.info(f"Celery app configured with broker: {settings.REDIS_URL[:20]}...")
+
+
+@worker_process_init.connect
+def _configure_langsmith_in_worker(**_kwargs: Any) -> None:
+    """Apply the LangSmith hide-IO guard in each worker child (R8-C8).
+
+    The API process does this at startup; without it here, a non-agent task
+    could trace (and build the shared client) before any agent turn ran
+    ``configure_langsmith``.
+    """
+    try:
+        from src.services.agent.observability import configure_langsmith
+
+        configure_langsmith()
+    except Exception:
+        logger.warning("LangSmith configuration failed in worker", exc_info=True)
