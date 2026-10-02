@@ -58,6 +58,11 @@ vi.mock('../ReportIdentityPanel', () => ({
     <div>Reports for {projectId}</div>
   ),
 }));
+vi.mock('../SearchSchedulePanel', () => ({
+  SearchSchedulePanel: ({ projectId }: { projectId: string }) => (
+    <div>Search schedules for {projectId}</div>
+  ),
+}));
 vi.mock('../CorpusPanel', () => ({
   CorpusPanel: ({
     projectId,

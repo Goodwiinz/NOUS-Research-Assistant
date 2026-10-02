@@ -1,7 +1,8 @@
 """Immutable receipts for externally imported search results (GOO-300).
 
-One receipt per imported file or citation chase; one record row per parsed
-chunk, accepted or rejected, with its original text. Nothing is ever deleted or
+One receipt per imported file, citation chase or scheduled search execution
+(GOO-319); one record row per parsed chunk, accepted or rejected, with its
+original text. Nothing is ever deleted or
 overwritten: changed file contents become a new receipt version in the same
 lineage.
 """
@@ -66,7 +67,8 @@ class ResearchImportReceipt(Base):
             "collection_id", "dedup_key", name="uq_research_import_receipt_dedup"
         ),
         CheckConstraint(
-            "kind IN ('file_import','citation_chase')",
+            # GOO-319 adds scheduled search executions.
+            "kind IN ('file_import','citation_chase','scheduled_search')",
             name="ck_research_import_receipt_kind",
         ),
         CheckConstraint("version >= 1", name="ck_research_import_receipt_version"),

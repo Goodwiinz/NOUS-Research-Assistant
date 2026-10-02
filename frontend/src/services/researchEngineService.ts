@@ -38,6 +38,14 @@ import type {
 } from '@/types/api/research-corpus-contract';
 import type { ApiJourneyResponse } from '@/types/api/research-journey-contract';
 import type {
+  ApiSearchDeltaExport,
+  ApiSearchExecutionList,
+  ApiSearchSchedule,
+  ApiSearchScheduleCreate,
+  ApiSearchScheduleList,
+  ApiSearchScheduleVersionCreate,
+} from '@/types/api/research-search-update-contract';
+import type {
   ApiRerun,
   ApiRerunCreate,
   ApiRerunEligibility,
@@ -488,6 +496,67 @@ export const downloadCorpus = (
 ): Promise<void> =>
   api.download(
     `/research-engine/projects/${projectId}/corpus/export?${new URLSearchParams({ format })}`
+  );
+
+// --- Scheduled search updates and corpus deltas (GOO-319) -------------------
+
+export type {
+  ApiSearchDeltaExport as SearchDeltaExport,
+  ApiSearchDeltaItem as SearchDeltaItem,
+  ApiSearchExecution as SearchExecution,
+  ApiSearchSchedule as SearchSchedule,
+  ApiSearchScheduleList as SearchScheduleList,
+  ApiSearchStrategyOption as SearchStrategyOption,
+} from '@/types/api/research-search-update-contract';
+
+const schedules = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/search-schedules`;
+
+export const listSearchSchedules = (
+  projectId: string
+): Promise<ApiSearchScheduleList> =>
+  api.get<ApiSearchScheduleList>(schedules(projectId));
+
+export const createSearchSchedule = (
+  projectId: string,
+  data: ApiSearchScheduleCreate
+): Promise<ApiSearchSchedule> =>
+  api.post<ApiSearchSchedule>(schedules(projectId), data);
+
+export const versionSearchSchedule = (
+  projectId: string,
+  scheduleId: string,
+  data: ApiSearchScheduleVersionCreate
+): Promise<ApiSearchSchedule> =>
+  api.post<ApiSearchSchedule>(
+    `${schedules(projectId)}/${scheduleId}/versions`,
+    data
+  );
+
+export const listSearchExecutions = (
+  projectId: string,
+  scheduleId: string
+): Promise<ApiSearchExecutionList> =>
+  api.get<ApiSearchExecutionList>(
+    `${schedules(projectId)}/${scheduleId}/executions`
+  );
+
+/** The sealed delta export, read for display. */
+export const getSearchDelta = (
+  projectId: string,
+  executionId: string
+): Promise<ApiSearchDeltaExport> =>
+  api.get<ApiSearchDeltaExport>(
+    `${schedules(projectId)}/executions/${executionId}/delta`
+  );
+
+/** The same sealed delta export, saved as a file. */
+export const exportSearchDelta = (
+  projectId: string,
+  executionId: string
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/search-schedules/executions/${executionId}/delta`
   );
 
 // --- Plan-to-write journey + audit bundle (GOO-308) -------------------------
