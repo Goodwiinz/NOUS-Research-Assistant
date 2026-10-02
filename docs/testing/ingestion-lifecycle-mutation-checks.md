@@ -86,3 +86,22 @@ Both defects were reproduced on PostgreSQL before the fix: a real
 | G10 lock before flush, `processing_lifecycle.py:71` | `db.flush()` moved back above the lock selects | `test_guard_does_not_deadlock_with_a_concurrent_delete` | `DeadlockDetected` |
 | G11 lock before entity reset, `processing_tasks.py:402` | guard call replaced by a no-op | `test_entity_reset_does_not_deadlock_with_a_cascading_delete` | `DeadlockDetected` |
 | G12 late producer QUEUED, `processing_lifecycle.py:97` | `if False:` | `test_producer_late_queued_write_does_not_stop_live_run` | `'stopped' == 'completed'` |
+
+## GOO-358: remote writes that land after deletion are cleaned up
+
+Verified in the GOO-358 PR against local PostgreSQL 2026-10-02. Task-level
+tests are in `tests/unit/tasks/test_ingestion_stage_guard_postgres.py`;
+reconciler tests are in `tests/unit/tasks/test_reconcile_tasks.py`.
+
+**Red before the fix:** with the pre-fix `processing_tasks.py` and
+`reconcile_tasks.py` from the GOO-357 branch, all 5 new task-level tests fail.
+A late DO KB data source was never removed (`[] == ['ds-late']`). A late graph
+write was never cleaned up. The DO KB bridge's `merge()` reverted a swept
+FAILED document to PENDING.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G13 fresh row in DO KB bridge, `processing_tasks.py:92` | `kb_db.get` → `kb_db.merge(document)` | `test_stale_snapshot_does_not_revert_state_through_do_kb_sync` | `PENDING == FAILED` |
+| G14 compensation on deletion stop, `processing_tasks.py:560` | condition → `False` | `test_late_do_kb_success_is_compensated[*]`, `test_late_graph_write_is_compensated[*]` | no unsync / no graph delete |
+| G15 reconciler selects deleted + neo4j failed, `reconcile_tasks.py` `_reconcilable_filters` | clause → `False` | `test_late_graph_write_is_compensated[False]`, `test_apply_retries_deleted_document_graph_cleanup` | `0 == 1` |
+| G16 failure marker, `reconcile_tasks.py:148` | `_FAILED` → `_COMPLETED` | `test_late_graph_write_is_compensated[False]`, `test_failed_deleted_document_graph_cleanup_remains_retryable` | `'completed' == 'failed'` |
