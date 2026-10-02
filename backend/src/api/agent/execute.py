@@ -1395,17 +1395,19 @@ async def resume_stream(
                 stream_harness_run,
             )
 
+            external_run_id = _uuid.UUID(external_run.job_id)
             external_context = await context_for_accepted_run(
-                db, run_id=_uuid.UUID(external_run.job_id), current_user=current_user
+                db, run_id=external_run_id, current_user=current_user
             )
+            # R8-D2: the request-scoped session lives until the streamed body
+            # ends. Its reads are done; release the connection before streaming.
+            await db.rollback()
             return StreamingResponse(
                 stream_harness_run(
                     request,
-                    _uuid.UUID(external_run.job_id),
+                    external_run_id,
                     external_context,
-                    after_seq=external_resume_cursor(
-                        after, stream, _uuid.UUID(external_run.job_id)
-                    ),
+                    after_seq=external_resume_cursor(after, stream, external_run_id),
                 ),
                 media_type="text/event-stream",
                 headers=_SSE_HEADERS,
@@ -1468,6 +1470,7 @@ async def resume_stream(
             db=db,
         )
         if frame is not None:
+            await db.rollback()  # R8-D2: see the harness branch above.
             return StreamingResponse(
                 _single_frame(frame),
                 media_type="text/event-stream",
@@ -1475,6 +1478,9 @@ async def resume_stream(
             )
         return Response(status_code=204)
 
+    # R8-D2: the replay can follow for ~10 minutes; do not hold the
+    # request-scoped session's read transaction (and connection) through it.
+    await db.rollback()
     return StreamingResponse(
         replay_buffered_stream(
             request,

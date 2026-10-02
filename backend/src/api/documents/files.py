@@ -641,6 +641,8 @@ async def delete_file(
                 detail="Failed to delete file",
             )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to delete file", exc_info=True)
         raise HTTPException(

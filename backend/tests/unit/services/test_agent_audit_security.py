@@ -87,20 +87,10 @@ def test_client_safe_error_respects_custom_fallback():
 async def test_search_knowledge_graph_scopes_to_caller_org():
     """The KG search tool must pass the caller's org to the service so a
     user in org A cannot read entities from org B."""
-    from contextlib import asynccontextmanager
-
-    from src.services.agent import tools
+    from src.services.agent import tools_impl
 
     org_id = uuid4()
     current_user = SimpleNamespace(id=uuid4(), organization_id=org_id)
-    # Ids-only configurable (audit B8) — the wrapper resolves the user via
-    # _tool_context; patch that seam so no real session/user load happens.
-    config = {
-        "configurable": {
-            "user_id": str(current_user.id),
-            "organization_id": str(org_id),
-        }
-    }
 
     captured: dict = {}
 
@@ -110,19 +100,13 @@ async def test_search_knowledge_graph_scopes_to_caller_org():
 
     fake_service = SimpleNamespace(search_entities=_fake_search_entities)
 
-    @asynccontextmanager
-    async def _fake_tool_context(_config):
-        yield MagicMock(), current_user, {}
-
-    with (
-        patch.object(tools, "_tool_context", _fake_tool_context),
-        patch(
-            "src.services.knowledge_graph.knowledge_graph_service.knowledge_graph_service",
-            fake_service,
-        ),
+    # The production dispatcher, not the schema-only @tool wrapper.
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.knowledge_graph_service",
+        fake_service,
     ):
-        await tools.search_knowledge_graph.ainvoke(
-            {"query": "neurons", "config": config}
+        await tools_impl._dispatch_tool(
+            "search_knowledge_graph", {"query": "neurons"}, current_user=current_user
         )
 
     assert captured.get("organization_id") == str(

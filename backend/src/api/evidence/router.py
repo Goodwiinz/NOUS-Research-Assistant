@@ -133,6 +133,16 @@ def _classifier_version() -> str:
     return str(getattr(stance_classifier, "model_version"))
 
 
+def _batch_classification_limit_detail() -> str:
+    """Expose the authored limit reason, never text from the caught exception."""
+    limit = stance_classifier.max_batch_sources
+    # Use only the configured integer so the public reason follows limit changes
+    # without admitting arbitrary configuration or exception text into responses.
+    if type(limit) is not int or limit < 1:
+        return "Batch classification limit exceeded"
+    return f"Maximum {limit} sources allowed per batch classification request"
+
+
 def _parse_source_id(value: object) -> UUID:
     """Parse classify request IDs while preserving the endpoint's 400 contract."""
     try:
@@ -327,7 +337,7 @@ async def get_evidence_meter(
         except BatchClassificationLimitError as e:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400, detail=_batch_classification_limit_detail()
             ) from e
 
         loaded = _load_sources_or_http_error(
@@ -376,7 +386,7 @@ async def get_evidence_meter(
         except BatchClassificationLimitError:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400, detail=_batch_classification_limit_detail()
             )
         except BatchClassificationTimeoutError:
             logger.warning("Batch classification timed out", exc_info=True)
@@ -602,7 +612,7 @@ async def classify_sources_for_claim(
         except BatchClassificationLimitError as e:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400, detail=_batch_classification_limit_detail()
             ) from e
 
         loaded = _load_sources_or_http_error(
@@ -626,7 +636,7 @@ async def classify_sources_for_claim(
         except BatchClassificationLimitError:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400, detail=_batch_classification_limit_detail()
             )
         except BatchClassificationTimeoutError:
             logger.warning("Batch classification timed out", exc_info=True)

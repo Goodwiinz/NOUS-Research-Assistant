@@ -22,6 +22,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from src.models.document import Document
 from src.models.processing import JobStatus, ProcessingJob
 
 # A RUNNING job older than this is treated as abandoned (its worker died) and is
@@ -45,7 +46,7 @@ class ClaimResult:
 
     ``proceed`` is True when the caller owns the job and must process it;
     ``reason`` names the branch that was taken ("claimed", "reclaimed_stale",
-    "terminal", "running", "missing") for logging + the task's skip response.
+    "deleted", "terminal", "running", "missing") for logging + the task's skip response.
     """
 
     proceed: bool
@@ -84,6 +85,7 @@ def claim_job_for_processing(
     Re-reads the job under a row lock (``SELECT ... FOR UPDATE``) so concurrent
     redeliveries cannot both claim it, then:
 
+    * the job or its document is soft-deleted -> skip; the user deleted it.
     * terminal (COMPLETED/FAILED/CANCELLED) -> skip; the work is already done.
     * RUNNING younger than ``stale_after_seconds`` -> skip; assumed live on
       another worker.
@@ -118,6 +120,19 @@ def claim_job_for_processing(
     if locked is None:
         db.rollback()
         return ClaimResult(False, "missing")
+
+    # Deletion commits before broker revocation, which is best effort, so the
+    # message can still arrive. A document deleted with cascade=False leaves its
+    # job row live, hence the document check.
+    if locked.is_deleted or (
+        locked.document_id is not None
+        and db.query(Document.id)
+        .filter(Document.id == locked.document_id, Document.is_deleted == True)
+        .first()
+        is not None
+    ):
+        db.rollback()
+        return ClaimResult(False, "deleted")
 
     if locked.status in _TERMINAL_STATUSES:
         db.rollback()

@@ -1021,6 +1021,112 @@ class FileService:
                 exc_info=True,
             )
 
+    async def soft_delete_documents(
+        self,
+        organization_id: Any,
+        document_ids: List[Any],
+        *,
+        cascade: bool = True,
+    ) -> List[Document]:
+        """Soft-delete live documents, cancel their unfinished jobs and release
+        their quota, in one committed transaction.
+
+        Rows are locked Document -> ProcessingJob and re-read, so a concurrent
+        delete of the same document waits, then finds it already deleted and
+        releases nothing twice. ``cascade`` additionally soft-deletes the
+        documents' entities and jobs; unfinished jobs are cancelled either way.
+        Celery revocation runs after the commit and is best effort: the
+        committed state plus the claim-time check in ``replay_guard`` are what
+        stop the worker. Returns the documents this call deleted. Physical and
+        satellite cleanup stay with the caller.
+        """
+        from datetime import datetime
+
+        from src.models.entity import Entity
+
+        try:
+            documents = list(
+                (
+                    await self.db.execute(
+                        select(Document)
+                        .where(
+                            Document.id.in_(document_ids),
+                            Document.organization_id == organization_id,
+                            Document.is_deleted == False,
+                        )
+                        .order_by(Document.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not documents:
+                return []
+            locked_ids = [d.id for d in documents]
+
+            jobs = (
+                (
+                    await self.db.execute(
+                        select(ProcessingJob)
+                        .where(
+                            ProcessingJob.document_id.in_(locked_ids),
+                            ProcessingJob.is_deleted == False,
+                        )
+                        .order_by(ProcessingJob.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            task_ids = []
+            for job in jobs:
+                if not job.is_finished:
+                    job.cancel_job()
+                    job.error_message = "Document deleted"
+                    if job.celery_task_id:
+                        task_ids.append(job.celery_task_id)
+                if cascade:
+                    job.soft_delete()
+
+            if cascade:
+                await self.db.execute(
+                    update(Entity)
+                    .where(
+                        Entity.document_id.in_(locked_ids),
+                        Entity.is_deleted == False,
+                    )
+                    .values(is_deleted=True, deleted_at=datetime.utcnow())
+                )
+            for document in documents:
+                document.soft_delete()
+            await self.db.execute(
+                Organization.storage_usage_update(
+                    organization_id,
+                    -sum(d.file_size_bytes or 0 for d in documents),
+                )
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        for task_id in task_ids:
+            try:
+                from src.tasks.processing_tasks import current_app
+
+                current_app.control.revoke(task_id, terminate=True)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to revoke Celery task %s of a deleted document",
+                    task_id,
+                    exc_info=True,
+                )
+        return documents
+
     async def delete_file(self, document: Document, user: User) -> bool:
         """Delete file and update storage.
 
@@ -1055,34 +1161,16 @@ class FileService:
         # still counted). With this order a failure leaves at worst a sweepable
         # orphan object, never a live row whose backing file is gone.
         try:
-            from datetime import datetime
-
-            from src.models.entity import Entity
-
-            await self.db.execute(
-                update(Entity)
-                .where(Entity.document_id == document.id, Entity.is_deleted == False)
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
+            deleted = await self.soft_delete_documents(
+                document.organization_id, [document.id]
             )
-            await self.db.execute(
-                update(ProcessingJob)
-                .where(
-                    ProcessingJob.document_id == document.id,
-                    ProcessingJob.is_deleted == False,
-                )
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
-            )
-
-            document.soft_delete()
-            await self.db.execute(
-                Organization.storage_usage_update(
-                    document.organization_id, -document.file_size_bytes
-                )
-            )
-            await self.db.commit()
         except Exception as e:
-            await self.db.rollback()
             raise FileStorageError(f"Failed to delete file: {str(e)}")
+        if not deleted:
+            # A concurrent delete won; its commit already released the quota.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+            )
 
         # Best-effort physical delete AFTER the commit. A failure here must NOT
         # roll back the committed soft-delete — log it as a recoverable orphan.

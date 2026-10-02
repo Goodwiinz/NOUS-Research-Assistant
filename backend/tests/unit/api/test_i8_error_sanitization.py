@@ -16,8 +16,11 @@ Two layers:
 import ast
 import re
 from collections.abc import Iterator
+from importlib import import_module
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -497,6 +500,82 @@ def test_evidence_health_json_error_leak_free(
     assert response.status_code == 200
     assert response.json() == {"status": "unhealthy", "error": "Health check failed"}
     assert LEAK_MARKER not in response.text
+    assert any(
+        record.exc_info and str(record.exc_info[1]) == LEAK_MARKER
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("endpoint", ["meter", "classify"])
+@pytest.mark.parametrize("phase", ["validate", "classify"])
+@pytest.mark.parametrize("limit", [100, 7, "i8-private-limit"])
+async def test_evidence_batch_limit_detail_is_curated(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    endpoint: str,
+    phase: str,
+    limit: object,
+) -> None:
+    evidence = import_module("src.api.evidence.router")
+    monkeypatch.setattr(evidence.stance_classifier, "max_batch_sources", limit)
+    monkeypatch.setattr(
+        evidence.stance_classifier,
+        "validate_batch_size",
+        MagicMock(
+            side_effect=(
+                evidence.BatchClassificationLimitError(LEAK_MARKER)
+                if phase == "validate"
+                else None
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        evidence.stance_classifier,
+        "classify_sources_batch",
+        _raising_async(evidence.BatchClassificationLimitError(LEAK_MARKER)),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_load_sources_or_http_error",
+        MagicMock(
+            return_value=SimpleNamespace(
+                sources=[], revisions=[], withdrawn_source_ids=[]
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        evidence.cache_service, "get_evidence_meter", AsyncMock(return_value=None)
+    )
+    source_id = uuid4()
+    user, db = MagicMock(organization_id=uuid4()), MagicMock()
+
+    with pytest.raises(HTTPException) as exc:
+        if endpoint == "meter":
+            await evidence.get_evidence_meter(
+                claim="A claim with enough length",
+                source_ids=str(source_id),
+                query_id=None,
+                _rate_limit=True,
+                current_user=user,
+                db=db,
+            )
+        else:
+            await evidence.classify_sources_for_claim(
+                claim="A claim with enough length",
+                source_ids=[source_id],
+                current_user=user,
+                db=db,
+            )
+
+    expected = (
+        f"Maximum {limit} sources allowed per batch classification request"
+        if isinstance(limit, int)
+        else "Batch classification limit exceeded"
+    )
+    assert exc.value.status_code == 400
+    assert exc.value.detail == expected
+    assert LEAK_MARKER not in exc.value.detail
+    assert "i8-private-limit" not in exc.value.detail
     assert any(
         record.exc_info and str(record.exc_info[1]) == LEAK_MARKER
         for record in caplog.records
