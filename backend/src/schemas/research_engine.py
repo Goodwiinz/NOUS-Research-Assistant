@@ -2399,3 +2399,162 @@ class SearchDeltaExport(BaseModel):
     exported_at: str
     body_sha256: str
     body: SearchDeltaExportBody
+
+
+# --- GOO-320: superseding review versions ----------------------------------
+
+ReviewWorkState = Literal[
+    "none", "queued", "queue_missing", "queue_mismatch", "waiting_on_title_abstract"
+]
+
+
+class ReviewVersionCreate(BaseModel):
+    """A root version (no parent) or a successor accepting one GOO-319 delta
+    by ``(execution_id, delta_hash)``. ``carry_with_uncertainty`` names
+    ``unknown`` reports whose parent decision is carried with an explicit
+    flag (the rationale covers it)."""
+
+    parent_review_version_id: Optional[UUID] = None
+    execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reviewer_user_ids: List[UUID] = Field(default_factory=list, max_length=20)
+    carry_with_uncertainty: List[UUID] = Field(default_factory=list, max_length=10_000)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+    @model_validator(mode="after")
+    def _successor_shape(self) -> "ReviewVersionCreate":
+        given = (
+            self.parent_review_version_id is not None,
+            self.execution_id is not None,
+            self.delta_hash is not None,
+        )
+        if len(set(given)) != 1:
+            raise ValueError(
+                "A successor names its parent, execution_id and delta_hash together"
+            )
+        if not given[0] and self.carry_with_uncertainty:
+            raise ValueError("A root version carries nothing with uncertainty")
+        return self
+
+
+class ReviewReleaseLinkCreate(BaseModel):
+    release_id: UUID
+    supersedes_release_id: Optional[UUID] = None
+    idempotency_key: _IdempotencyKey
+
+
+class ReviewDecisionRef(BaseModel):
+    """A decision carried by reference: attribution resolves via ``event_id``."""
+
+    report_id: UUID
+    stage: ScreeningStage
+    resolution_id: UUID
+    event_id: UUID
+    outcome: Optional[str] = None
+    basis: str
+    uncertain: bool = False
+
+
+class ReviewNeedsAttention(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    report_id: UUID
+    delta_class: Optional[DeltaClass] = Field(default=None, alias="class")
+    reason: Optional[str] = None
+
+
+class ReviewMissingHistory(BaseModel):
+    report_id: UUID
+    stage: ScreeningStage
+    kind: Literal["decision_missing", "attribution_missing"]
+
+
+class ReviewWorkStatus(BaseModel):
+    """Derived on read: the targeted GOO-301/302 queue for one stage."""
+
+    stage: ScreeningStage
+    status: ReviewWorkState
+    required_report_ids: List[UUID]
+    queue_id: Optional[UUID] = None
+    assigned_reviewer_ids: List[UUID] = Field(default_factory=list)
+    resolved_count: int = 0
+    unresolved_count: int = 0
+
+
+class ReviewReleaseLinkResponse(BaseModel):
+    id: UUID
+    review_version_id: UUID
+    release_id: UUID
+    supersedes_release_id: Optional[UUID] = None
+    package_sha256: str
+    linked_by_id: UUID
+    created_at: datetime
+
+
+class ReviewDeltaOption(BaseModel):
+    """A succeeded GOO-319 execution a successor of the tip may accept."""
+
+    execution_id: UUID
+    schedule_id: UUID
+    scheduled_local: str
+    baseline_execution_id: Optional[UUID] = None
+    delta_hash: str
+    counts: Dict[DeltaClass, int]
+
+
+class ReviewVersionResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    version_number: int
+    parent_review_version_id: Optional[UUID] = None
+    accepted_execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = None
+    protocol_version_id: UUID
+    strategy_version: Optional[str] = None
+    report_ids: List[UUID]
+    carried: List[ReviewDecisionRef]
+    required_work: Dict[ScreeningStage, List[UUID]]
+    needs_attention: List[ReviewNeedsAttention]
+    missing_history: List[ReviewMissingHistory]
+    prisma_body_hash: str
+    content_hash: str
+    rationale: str
+    created_by_id: UUID
+    created_at: datetime
+    is_tip: bool
+    work: List[ReviewWorkStatus]
+    release: Optional[ReviewReleaseLinkResponse] = None
+    # Only the tip's accepted delta stales anything (GOO-307 walk); counts
+    # by node kind.
+    stale_counts: Dict[str, int] = Field(default_factory=dict)
+
+
+class ReviewVersionListResponse(BaseModel):
+    versions: List[ReviewVersionResponse]
+    deltas: List[ReviewDeltaOption]
+
+
+class UpdateAccountingResponse(BaseModel):
+    """PRISMA 2020 for updated reviews: both flows plus the update boxes.
+    ``boxes`` is None (and ``error`` set) while the version does not
+    reconcile, e.g. its new work is unresolved."""
+
+    review_version_id: UUID
+    parent_review_version_id: Optional[UUID] = None
+    boxes: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    parent_flow: Optional[Dict[str, Any]] = None
+    flow: Dict[str, Any]
+    flow_matches_frozen_hash: bool
+
+
+class ReviewVersionExport(BaseModel):
+    """The sealed ``nous.academic.review-version.v1`` attachment."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    package_schema: str = Field(alias="schema")
+    exported_at: str
+    body_sha256: str
+    body: Dict[str, Any]

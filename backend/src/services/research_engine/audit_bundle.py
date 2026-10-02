@@ -400,6 +400,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _manuscript_releases,
         _deposits,
         _search_updates,
+        _review_versions,
         _prisma,
     ):
         parts.extend(await build(db, context))
@@ -606,3 +607,19 @@ def verify_bundle(data: bytes, *, schema: str = SCHEMA) -> dict[str, Any]:
         "parts": sorted(listed),
         "corpus_body_sha256": corpus.body_sha256,
     }
+
+
+async def _review_versions(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-320: every review version with its carried references, derived
+    work status and release link."""
+    from src.services.research_engine import review_update_service
+
+    body = await review_update_service.export_part(db, context)
+    return [
+        _sealed_part(
+            "review-versions.json",
+            review_update_service.BUNDLE_SCHEMA,
+            body,
+            not body["versions"],
+        )
+    ]

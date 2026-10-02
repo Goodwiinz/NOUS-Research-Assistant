@@ -12,6 +12,7 @@ from .journey import router as research_engine_journey_router
 from .projects import router as research_engine_projects_router
 from .protocols import router as research_engine_protocols_router
 from .reruns import router as research_engine_reruns_router
+from .review_versions import router as research_engine_review_versions_router
 from .reviews import router as research_engine_reviews_router
 from .runs import router as research_engine_runs_router
 from .screening import router as research_engine_screening_router
@@ -38,4 +39,5 @@ __all__ = [
     "research_engine_reruns_router",
     "research_engine_steps_router",
     "research_engine_search_updates_router",
+    "research_engine_review_versions_router",
 ]

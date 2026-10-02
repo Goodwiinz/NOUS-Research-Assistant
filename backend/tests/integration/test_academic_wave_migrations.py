@@ -488,6 +488,11 @@ _SCREENING_TABLES = (
     "screening_queues",
 )
 _IMPORT_TABLES = ("research_import_records", "research_import_receipts")
+# GOO-320: review versions reference accepted execution results.
+_REVIEW_VERSION_TABLES = (
+    "research_review_release_links",
+    "research_review_versions",
+)
 # GOO-319: execution results reference import receipts; drop before them.
 _SEARCH_UPDATE_TABLES = (
     "research_search_execution_results",
@@ -514,6 +519,7 @@ def test_report_identity_migration_upgrade_downgrade_round_trip(
         *_ACQUISITION_TABLES,
         *_RESOLUTION_TABLES,
         *_SCREENING_TABLES,
+        *_REVIEW_VERSION_TABLES,
         *_SEARCH_UPDATE_TABLES,
         *_IMPORT_TABLES,
         *_IDENTITY_TABLES,
@@ -548,7 +554,7 @@ def test_search_import_migration_upgrade_downgrade_round_trip(
 ) -> None:
     """GOO-300 tables are created by d4e6f8a0b2c3 itself, with RLS enabled."""
     connection = pre_wave_connection
-    for table in (*_SEARCH_UPDATE_TABLES, *_IMPORT_TABLES):
+    for table in (*_REVIEW_VERSION_TABLES, *_SEARCH_UPDATE_TABLES, *_IMPORT_TABLES):
         connection.exec_driver_sql(f'DROP TABLE "{table}"')
     migration = _load_migration("d4e6f8a0b2c3_create_search_imports.py")
     assert migration.down_revision == "c9d1e2f3a4b5"
