@@ -58,10 +58,17 @@ def test_tracking_surfaces_upstream_rate_limits_as_service_unavailable(
     )
 
     try:
-        with patch(
-            "src.api.arxiv.arxiv_change_tracking.change_tracker.track_category_changes",
-            new=AsyncMock(
-                side_effect=IngestionError("ArXiv rate limit reached after retries")
+        # GOO-289: the route consumes a shared admission slot first.
+        with (
+            patch(
+                "src.services.expensive_work_admission.admit_expensive_work",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "src.api.arxiv.arxiv_change_tracking.change_tracker.track_category_changes",
+                new=AsyncMock(
+                    side_effect=IngestionError("ArXiv rate limit reached after retries")
+                ),
             ),
         ):
             response = test_client.post(
