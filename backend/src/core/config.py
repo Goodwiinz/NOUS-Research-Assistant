@@ -608,7 +608,7 @@ class Settings(BaseSettings):
     # repository default exposes new work; operators can set this false as a
     # disable-first rollback. Existing runs remain readable/exportable while
     # disabled; only discovery and new work are gated.
-    DAILY_RESEARCH_BRIEF_ENABLED: bool = True
+    DAILY_RESEARCH_BRIEF_ENABLED: bool = False  # GOO-338: opt-in per environment
     AGENT_FAST_PATH_DEPLOYMENT: str = "gpt-5.6-luna"
     AGENT_FAST_PATH_MAX_INPUT_CHARS: int = 8_000
     AGENT_FAST_PATH_MAX_OUTPUT_TOKENS: int = 768

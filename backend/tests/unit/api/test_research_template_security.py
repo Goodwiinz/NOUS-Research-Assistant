@@ -21,6 +21,12 @@ from src.core.dependencies import get_current_user
 from src.services.research_engine.blueprints.loader import BlueprintLoader
 
 
+@pytest.fixture(autouse=True)
+def _daily_brief_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GOO-338: the flag defaults off; these tests exercise the enabled feature."""
+    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", True)
+
+
 @dataclass
 class TemplateAPI:
     client: TestClient
