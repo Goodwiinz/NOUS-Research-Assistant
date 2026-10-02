@@ -389,10 +389,15 @@ async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
         branch="main",
         messages=sanitized,
     )
+    from src.services.agent.reflection import reflection_revision_messages
+
     messages = [
         SystemMessage(content=_LLM_NODE_STATIC_PROMPT),
         SystemMessage(content=dynamic_context),
         *sanitized,
+        # R8-A2: on a reflection "revise" pass, hand the review issues back.
+        # Transient — never returned, so never checkpointed.
+        *reflection_revision_messages(state),
     ]
     # parallel_tool_calls=False forces gpt-5 to emit one tool_call per turn.
     # Trace 019e18f0 showed 13+ parallel search_arxiv calls when this was
@@ -439,7 +444,8 @@ async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
 
 @track_node_execution("force_synthesis_node")
 async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dict:
-    """Final-answer LLM call when the main-graph tool-loop ceiling was hit.
+    """Final-answer LLM call when the main-graph tool-loop ceiling was hit
+    (or a fully-deduped batch left nothing new to run).
 
     Mirrors ``research_force_synthesis_node`` in the research subgraph:
     when ``should_continue`` sees ``tool_loop_count >= MAX_TOOL_LOOPS`` but
@@ -458,9 +464,13 @@ async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dic
     from src.services.agent.graph import _sanitize_messages
     from src.services.agent.llm_factory import build_synthesis_llm
 
-    # Degraded-answer signal: reaching this node means the tool-loop ceiling
-    # was hit and we're synthesizing from partial results.
-    record_loop_exhaustion(state.get("intent", "general"), "main")
+    # Two routes land here: the tool-loop ceiling (degraded answer from
+    # partial results) and a fully-deduped batch (route_after_tool_node — the
+    # model only repeated finished calls). Only the ceiling is an exhaustion
+    # (R8-A8).
+    deduped = bool(state.get("tools_all_deduped"))
+    if not deduped:
+        record_loop_exhaustion(state.get("intent", "general"), "main")
 
     messages = list(state["messages"])
     # Drop trailing AIMessage with unanswered tool_calls so the synthesis
@@ -472,6 +482,7 @@ async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dic
     llm = build_synthesis_llm(max_tokens=4096)
     from src.services.agent.llm_factory import get_synthesis_model_name
     from src.services.agent.runtime_context import (
+        DEDUPED_BATCH_SYNTHESIS_GUIDANCE,
         forced_synthesis_static_prompt,
         render_dynamic_context,
     )
@@ -484,8 +495,12 @@ async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dic
         branch="main",
         messages=sanitized,
         server_guidance=(
-            f"Final synthesis reached the per-turn budget after {state.get('tool_loop_count', 0)} tool calls.",
-            "Use completed tool results only. An unanswered or pending tool request is not completion evidence. State clearly what could not be completed.",
+            DEDUPED_BATCH_SYNTHESIS_GUIDANCE
+            if deduped
+            else (
+                f"Final synthesis reached the per-turn budget after {state.get('tool_loop_count', 0)} tool calls.",
+                "Use completed tool results only. An unanswered or pending tool request is not completion evidence. State clearly what could not be completed.",
+            )
         ),
     )
     full = [

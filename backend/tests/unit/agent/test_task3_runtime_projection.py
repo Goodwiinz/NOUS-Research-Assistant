@@ -497,7 +497,11 @@ def test_plan_validation_rejects_unavailable_short_plan_and_bad_edges() -> None:
     assert malformed.plan is None
 
 
-def test_plan_validation_signals_unregistered_tool_without_echoing_its_name() -> None:
+def test_plan_validation_treats_unregistered_tool_as_malformed() -> None:
+    """R8-A5: a name unknown to the registry is planner noise, not a missing
+    capability. The plan is dropped (continue without a plan) instead of
+    ending the turn with a capability limitation, and the name never reaches
+    the terminal renderer."""
     from src.services.agent.planner import validate_plan
 
     result = validate_plan(
@@ -511,9 +515,86 @@ def test_plan_validation_signals_unregistered_tool_without_echoing_its_name() ->
         {"search_documents"},
     )
 
-    assert result.unsupported is True
+    assert result.unsupported is False
+    assert result.malformed is True
     assert result.unavailable_tools == ()
     assert result.plan is None
+
+
+def test_plan_validation_accepts_na_tool_as_a_no_tool_step() -> None:
+    """R8-A5: "N/A" is the model's no-tool marker (summarise / present step);
+    the plan stays valid and the marker is normalised to an empty tool."""
+    from src.services.agent.planner import validate_plan
+
+    result = validate_plan(
+        [
+            {"step": 1, "description": "Search arXiv", "tool": "search_arxiv"},
+            {
+                "step": 2,
+                "description": "Ingest the top papers",
+                "tool": "ingest_arxiv_papers",
+                "depends_on": [1],
+            },
+            {
+                "step": 3,
+                "description": "Summarise the findings",
+                "tool": "N/A",
+                "depends_on": [2],
+            },
+        ],
+        {"search_arxiv", "ingest_arxiv_papers"},
+    )
+
+    assert result.unsupported is False
+    assert result.malformed is False
+    assert result.plan is not None
+    assert [step["tool"] for step in result.plan] == [
+        "search_arxiv",
+        "ingest_arxiv_papers",
+        "",
+    ]
+
+
+def test_plan_validation_registered_unavailable_tool_wins_over_noise() -> None:
+    """A registered tool outside this branch is still a real capability gap,
+    even when another step carries planner noise."""
+    from src.services.agent.planner import validate_plan
+
+    result = validate_plan(
+        [
+            {"step": 1, "description": "Hallucinated", "tool": "private_tool_xyz"},
+            {"step": 2, "description": "Save a draft", "tool": "create_draft"},
+        ],
+        {"search_documents"},
+    )
+
+    assert result.unsupported is True
+    assert result.unavailable_tools == ("create_draft",)
+    assert result.plan is None
+
+
+async def test_planner_continues_without_plan_for_unregistered_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.services.agent import planner
+
+    generate = AsyncMock()
+    monkeypatch.setattr(planner, "generate_plan", generate)
+    node = planner.make_planner_node(["search_documents"])
+    result = await node(
+        {
+            "messages": [HumanMessage(content="Find sources")],
+            "page_context": {"type": "project"},
+            "plan": [
+                {"step": 1, "description": "Hallucinated", "tool": "private_tool_xyz"},
+            ],
+        },
+        {},
+    )
+
+    generate.assert_not_awaited()
+    assert result == {"plan": [], "plan_reasoning": ""}
+    assert "capability_limitation" not in result
 
 
 def test_plan_validation_rejects_boolean_step_before_integer_coercion() -> None:
@@ -884,16 +965,27 @@ async def test_compiled_driver_terminates_unsupported_plan_without_llm_retry(
     ("intent", "stored_plan"),
     [("general", False), ("writing", True)],
 )
-async def test_compiled_driver_terminates_unregistered_tool_plan_without_echo_or_retry(
+async def test_compiled_driver_continues_without_plan_for_unregistered_tool(
     monkeypatch: pytest.MonkeyPatch,
     intent: str,
     stored_plan: bool,
 ) -> None:
-    from src.services.agent import _builders, planner
+    """R8-A5: a plan naming a tool the registry has never heard of is planner
+    noise. The turn continues without a plan and the executor answers; it no
+    longer ends in a capability-limitation terminal (the previous contract of
+    this test). The bogus name still never reaches the model or the user."""
+    from src.services.agent import _builders, graph, llm_factory, planner
 
     planner_calls = 0
-    llm_calls = 0
-    guarded_calls = _guard_model_and_reflection_calls(monkeypatch)
+    model_calls: list[list[Any]] = []
+
+    class _AnsweringModel:
+        def bind_tools(self, tools: list[Any], **kwargs: Any) -> _AnsweringModel:
+            return self
+
+        async def ainvoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
+            model_calls.append(list(messages))
+            return AIMessage(content="Here is a direct answer.")
 
     async def preprocess(state: dict[str, Any]) -> dict[str, Any]:
         return {"intent": intent}
@@ -913,14 +1005,16 @@ async def test_compiled_driver_terminates_unregistered_tool_plan_without_echo_or
             ]
         )
 
-    async def unexpected_llm(state: Any) -> NoReturn:
-        nonlocal llm_calls
-        llm_calls += 1
-        raise AssertionError("unregistered plan must not reach the executor model")
-
     monkeypatch.setattr(_builders, "preprocessing_node", preprocess)
-    monkeypatch.setattr(_builders, "llm_node", unexpected_llm)
     monkeypatch.setattr(planner, "generate_plan", generated_plan)
+    monkeypatch.setattr(graph, "_build_llm", lambda *args, **kwargs: _AnsweringModel())
+    monkeypatch.setattr(
+        llm_factory, "build_synthesis_llm", lambda **kwargs: _AnsweringModel()
+    )
+    monkeypatch.setattr(
+        llm_factory, "resolve_chat_deployment", lambda model_override=None: "main"
+    )
+    monkeypatch.setattr(llm_factory, "get_synthesis_model_name", lambda: "synth")
     state = _compiled_driver_state()
     state["intent"] = intent
     if stored_plan:
@@ -931,29 +1025,13 @@ async def test_compiled_driver_terminates_unregistered_tool_plan_without_echo_or
                 "tool": "private_tool_xyz",
             }
         ]
-    graph = _builders.build_agent_graph().compile()
+    agent_graph = _builders.build_agent_graph().compile()
 
-    result = await graph.ainvoke(state, {"recursion_limit": 30})
+    result = await agent_graph.ainvoke(state, {"recursion_limit": 30})
 
     assert planner_calls == (0 if stored_plan else 1)
-    assert llm_calls == 0
-    assert guarded_calls == {"model": 0, "reflection": 0}
+    assert len(model_calls) == 1
     assert result["plan"] == []
-    assert result["capability_limitation"]["branch"] == (
-        "writing" if intent == "writing" else "main"
-    )
-    final_message = result["messages"][-1]
-    assert isinstance(final_message, AIMessage)
-    assert "cannot represent" in str(final_message.content).lower()
-    assert "private_tool_xyz" not in final_message.content
-    terminal_answers = [
-        message
-        for message in result["messages"]
-        if isinstance(message, AIMessage)
-        and "cannot represent" in str(message.content).lower()
-    ]
-    assert terminal_answers == [final_message]
-    assert [type(message) for message in result["messages"]] == [
-        HumanMessage,
-        AIMessage,
-    ]
+    assert not result.get("capability_limitation")
+    assert result["messages"][-1].content == "Here is a direct answer."
+    assert not any("private_tool_xyz" in str(m.content) for m in model_calls[0])
