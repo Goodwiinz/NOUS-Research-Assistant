@@ -254,10 +254,10 @@ def validate_plan(
         )
     except Exception:
         return PlanValidation(plan=None, malformed=True)
+    from src.services.agent.tools import TOOL_REGISTRY
+
     if parsed.outcome != "supported":
         if parsed.outcome == "unsupported":
-            from src.services.agent.tools import TOOL_REGISTRY
-
             known = tuple(
                 sorted(
                     {
@@ -276,6 +276,8 @@ def validate_plan(
     seen: set[int] = set()
     previous = 0
     unavailable: set[str] = set()
+    unregistered = False
+    validated: list[dict[str, Any]] = []
     for step in steps:
         if (
             isinstance(step.step, bool)
@@ -298,17 +300,26 @@ def validate_plan(
         ):
             return PlanValidation(plan=None, malformed=True)
         tool_name = step.tool.strip()
+        # "N/A" is the model's no-tool marker for a summarise/present step.
+        if tool_name.upper() == "N/A":
+            tool_name = ""
         if tool_name and tool_name not in allowed_names:
-            unavailable.add(tool_name)
+            # R8-A5: only a REGISTERED tool missing from this branch is a real
+            # capability gap. A name the registry has never heard of is
+            # planner noise — drop the plan, don't end the turn.
+            if TOOL_REGISTRY.descriptor(tool_name) is None:
+                unregistered = True
+            else:
+                unavailable.add(tool_name)
+        validated.append({**step.model_dump(), "tool": tool_name})
     if unavailable:
         # Only canonical tool names are returned to the terminal renderer.
-        from src.services.agent.tools import TOOL_REGISTRY
-
-        known = tuple(
-            sorted(name for name in unavailable if TOOL_REGISTRY.descriptor(name))
+        return PlanValidation(
+            plan=None, unavailable_tools=tuple(sorted(unavailable)), unsupported=True
         )
-        return PlanValidation(plan=None, unavailable_tools=known, unsupported=True)
-    return PlanValidation(plan=[step.model_dump() for step in steps])
+    if unregistered:
+        return PlanValidation(plan=None, malformed=True)
+    return PlanValidation(plan=validated)
 
 
 # ---------------------------------------------------------------------------

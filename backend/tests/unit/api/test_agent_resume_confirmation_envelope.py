@@ -246,6 +246,9 @@ async def test_resume_confirmation_response_uses_sse_headers() -> None:
         async def execute(self, *_args: Any, **_kwargs: Any) -> _FakeResult:
             return _FakeResult()
 
+        async def rollback(self) -> None:
+            return None
+
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     frame = "id: 1\nevent: confirmation\ndata: {}\n\n"
 
