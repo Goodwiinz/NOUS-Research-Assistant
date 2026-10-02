@@ -1270,3 +1270,51 @@ class TestFabricatedKgSearchMultiTurn:
 
     def test_prior_non_kg_tool_call_does_not_suppress(self):
         assert _detect_fabricated_kg_search(self._state("create_project")) is not None
+
+
+class TestSameTurnFailedReadDoesNotSuppressGuard:
+    """R8-A7: a read tool_call made THIS turn is not a prior-turn read.
+
+    ``_prior_turn_read_happened`` must only scan history before the latest
+    HumanMessage. A same-turn read that failed leaves ``executed_search``
+    False, and must not be mistaken for a truthful earlier retrieval.
+    """
+
+    @staticmethod
+    def _state(tool_name: str, final_text: str) -> dict:
+        return {
+            "messages": [
+                HumanMessage(content="Search my documents for RAG evaluation"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": tool_name, "args": {}, "id": "call_1"}],
+                ),
+                ToolMessage(
+                    content='{"error": "search backend unavailable"}',
+                    tool_call_id="call_1",
+                    status="error",
+                ),
+                AIMessage(content=final_text),
+            ],
+            "tool_executions": [
+                {"id": "call_1", "tool_name": tool_name, "status": "failed"}
+            ],
+            "retrieved_contexts": [],
+            "intent": "research",
+            "reflection_count": 0,
+        }
+
+    def test_doc_guard_fires_after_same_turn_failed_search(self):
+        state = self._state(
+            "search_documents",
+            "I searched your documents and found two passages on RAG evaluation.",
+        )
+        assert _detect_fabricated_doc_search(state) is not None
+
+    def test_kg_guard_fires_after_same_turn_failed_search(self):
+        state = self._state(
+            "search_knowledge_graph",
+            "I searched the knowledge graph and found the entity "
+            "Retrieval-Augmented Generation linked to vector databases.",
+        )
+        assert _detect_fabricated_kg_search(state) is not None
