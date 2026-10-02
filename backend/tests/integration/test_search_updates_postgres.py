@@ -413,14 +413,19 @@ async def _downgrade_on_fresh_schema() -> None:
     )
 
     def downgrade(connection: Connection) -> None:
-        spec = importlib.util.spec_from_file_location(
-            "search_migration", VERSIONS / "c2f4b6d8e0a1_create_search_schedules.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        setattr(module, "op", Operations(MigrationContext.configure(connection)))
-        module.downgrade()
+        # GOO-320's empty review versions reference executions: off first.
+        for filename in (
+            "d4a6c8e0f2b3_create_review_versions.py",
+            "c2f4b6d8e0a1_create_search_schedules.py",
+        ):
+            spec = importlib.util.spec_from_file_location(
+                filename[:-3], VERSIONS / filename
+            )
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            setattr(module, "op", Operations(MigrationContext.configure(connection)))
+            module.downgrade()
 
     try:
         async with engine.begin() as connection:

@@ -2300,3 +2300,40 @@ RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python
 
 Every restore left `git diff` empty; the selectors were green again after
 each restore.
+
+## GOO-320 superseding review versions and reconciled update accounting — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_review_update_rules.py`
+(carry-forward, required work, needs-attention, missing history,
+accounting) and `backend/tests/unit/architecture/test_review_update_boundary.py`.
+PostgreSQL proof: `backend/tests/integration/test_review_versions_postgres.py`,
+run against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema (chain head `d4a6c8e0f2b3`; connection URL from
+the environment, value omitted). Deltas are real GOO-319 executions over a
+fake Crossref connector; live providers, the methods-expert review of the
+accounting boxes and the deployed journey are NOT RUN.
+
+Procedure for each mutant: apply it as an exact-string replacement that
+asserted a single match, run the named selector, restore the file from a
+private copy, confirm `git diff` is empty, rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_review_update_rules.py -k "criteria or unknown or reconciles"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_review_update_boundary.py                               # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_review_versions_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Carry only `unchanged` (`review_update_rules.py:87`, `:91`) | `changed` neither required nor sent to attention, so it is carried | Step 4 (`test_review_versions_postgres.py:944`): the carried map gains R4's title/abstract and full-text resolutions. |
+| Criteria-hash check (`review_update_rules.py:99`) | `if report in identity_changed:` | `-k criteria` (`test_review_update_rules.py:113`): `['title_abstract', 'full_text'] == ['title_abstract']`; step 8 (`:1106`): `assert [ReviewDecisionRef(…), …] == []`, decisions carried across the amended criteria. |
+| `unknown` -> needs attention (`review_update_rules.py:90`) | `flagged = cls == "unknown"` (every unknown carried) | `-k unknown` (`test_review_update_rules.py:134`): needs-attention emptied, R3 carried; step 4 (`:944`): R3's resolutions in the carried map. |
+| Accounting reconciliation (`review_update_rules.py:230`) | `if False:` | `-k reconciles` (`test_review_update_rules.py:292`): `DID NOT RAISE PrismaInconsistency`; a successor flow claiming 5 studies was accepted. |
+| `graph_part` edges only for changed/corrected reports (`review_update_service.py:741`) | `if True` (every delta report) | Step 7 (`:1032`): `('link', …) not in stale` fails; R1's claim link went stale. |
+| `UNIQUE(parent_review_version_id)` (`d4a6c8e0f2b3_create_review_versions.py:103`) | the constraint dropped from the migration | Step 5 (`:911`): `assert (2 == 1)`; both concurrent successors of the root were committed. |
+| Superseded-release check (`review_update_service.py:1381`) | `if False:` | Step 9 (`:1144`): `DID NOT RAISE HTTPException`; P2 linked to the successor without superseding P. |
+| Screening rows only through `screening_service` (guard `test_review_update_boundary.py:69`) | a `ScreeningQueue(id=uuid4())` helper in the service | `-k screening`: `assert ['builds ScreeningQueue:…'] == []`. |
+| No insert-only row mutation (guard `test_review_update_boundary.py:112`) | an `update(V)` helper in the service | `-k insert_only`: `assert ['services/re…y:update:…'] == []`. |
+
+Every restore left `git diff` empty; the proof, the rules tests and the
+boundary guard were green again after the last restore (12 passed).
