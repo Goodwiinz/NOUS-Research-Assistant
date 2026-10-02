@@ -36,8 +36,11 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
-from src.shared.enums import JobStatus
+from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
+from src.services.agent.run_event_types import RunEventType
+from src.shared.enums import AgentOutboxStatus, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +558,101 @@ async def _transition_existing_run(
 
     if not transitioned:
         return None
+    return await _reload_run(db, job_id)
+
+
+_SWEEP_TERMINAL_EVENTS: dict[JobStatus, RunEventType] = {
+    JobStatus.COMPLETED: RunEventType.RUN_COMPLETED,
+    JobStatus.FAILED: RunEventType.RUN_FAILED,
+    JobStatus.CANCELLED: RunEventType.RUN_CANCELLED,
+}
+
+
+def _sweep_event_payload(status: JobStatus, error: Optional[str]) -> dict[str, Any]:
+    if status is JobStatus.FAILED:
+        return {
+            "code": "stale_run_swept",
+            "message": (error or "Agent run failed.")[:1000],
+        }
+    if status is JobStatus.CANCELLED:
+        return {"reason": "stale_producer_lease"}
+    return {}
+
+
+async def terminalize_stale_run(
+    db: AsyncSession,
+    *,
+    job_id: str,
+    status: JobStatus,
+    organization_id: Any,
+    user_id: Any,
+    error: Optional[str],
+) -> Optional[AgentRun]:
+    """Sweeper terminalization: status, terminal ledger event and outbox
+    retirement in ONE transaction. Commits.
+
+    ``upsert_run`` only moves the status, which left a swept run's ledger open
+    (artifact announcements kept appending to it) and its ``pending`` dispatch
+    intent live for a future relay (R8-C4). This mirrors
+    ``fail_queued_submission``. Guarded by the same transition predicate as
+    ``upsert_run``; returns the reloaded row whatever the outcome so the
+    caller derives the effective decision from durable state.
+    """
+    if not status.is_terminal:
+        raise ValueError("terminalize_stale_run requires a terminal status")
+    now = _utcnow()
+    try:
+        claimed = (
+            await db.execute(
+                update(AgentRun)
+                .where(
+                    AgentRun.job_id == job_id,
+                    AgentRun.execution_provider == "nous",
+                    AgentRun.organization_id == _coerce_uuid(organization_id),
+                    AgentRun.user_id == _coerce_uuid(user_id),
+                    _transition_predicate(status),
+                )
+                .values(
+                    status=status.value,
+                    error=error,
+                    completed_at=now,
+                    updated_at=now,
+                )
+                .returning(AgentRun.job_id)
+                .execution_options(synchronize_session=False)
+            )
+        ).first()
+        if claimed is not None:
+            await db.execute(
+                update(AgentOutbox)
+                .where(
+                    AgentOutbox.run_id == job_id,
+                    AgentOutbox.status == AgentOutboxStatus.PENDING.value,
+                )
+                .values(
+                    status=(
+                        AgentOutboxStatus.DISPATCHED.value
+                        if status is JobStatus.COMPLETED
+                        else AgentOutboxStatus.FAILED.value
+                    ),
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            try:
+                await append_event(
+                    db,
+                    run_id=job_id,
+                    event_type=_SWEEP_TERMINAL_EVENTS[status],
+                    payload=_sweep_event_payload(status, error),
+                    organization_id=organization_id,
+                )
+            except RunAlreadyTerminalError:
+                logger.debug("terminalize_stale_run: ledger already closed %s", job_id)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     return await _reload_run(db, job_id)
 
 
