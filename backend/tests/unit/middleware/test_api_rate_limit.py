@@ -251,17 +251,30 @@ def test_auth_routes_count_against_default_bucket() -> None:
 
 @pytest.mark.parametrize("_repeat", range(2))
 def test_shared_app_limits_requests_without_leaking_between_tests(
-    test_client: TestClient, _repeat: int
+    test_client: TestClient, test_auth_headers: dict[str, str], _repeat: int
 ) -> None:
-    """Each test gets a fresh budget; requests within one test still count."""
-    path = "/api/v1/research-engine/capabilities"
-    for _ in range(60):
-        assert test_client.get(path).status_code == 200
+    """Real main stack keeps one quota across bearer casing, with CORS on 429.
 
-    response = test_client.get(path)
-    assert response.status_code == 429
-    assert response.headers["X-RateLimit-Limit"] == "60"
-    assert response.json()["error"]["type"] == "rate_limit_error"
+    Each test gets a fresh budget; requests within one test still count.
+    Removing main's ApiRateLimitMiddleware mount makes request 61 return 200;
+    moving CORS inside the limiter removes the 429's allow-origin header.
+    """
+    path = "/api/v1/research-engine/capabilities"
+    origin = settings.cors_origins_list[0]
+    headers = {"Origin": origin}
+    for _ in range(60):
+        assert test_client.get(path, headers=headers).status_code == 200
+
+    token = test_auth_headers["Authorization"].partition(" ")[2]
+    for scheme in ("Bearer", "bearer", "BEARER", "bEaReR"):
+        response = test_client.get(
+            path, headers={**headers, "Authorization": f"{scheme} {token}"}
+        )
+        assert response.status_code == 429
+        assert response.headers["X-RateLimit-Limit"] == "60"
+        assert response.json()["error"]["type"] == "rate_limit_error"
+        assert response.headers["access-control-allow-origin"] == origin
+        assert "origin" in response.headers.get("vary", "").lower()
 
 
 def test_health_and_docs_not_limited() -> None:
