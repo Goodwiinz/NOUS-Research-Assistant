@@ -5,7 +5,7 @@ Each aggregate family (``research_protocol``, ``research_identity``,
 ``research_claims``, ``research_release``, ``research_appraisal``,
 ``research_evidence``, ``research_synthesis``, ``research_experiment``,
 ``research_reproduction``, ``research_peer_review``, ``research_manuscript``,
-``research_statements``, ``research_deposit``)
+``research_statements``, ``research_deposit``, ``research_search_update``)
 registers its subject type, payload vocabulary, value validation and replay
 transition rules in ``_FAMILIES``.
 
@@ -697,6 +697,44 @@ _DEPOSIT_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
 }
 _DEPOSIT_PHASES = ("draft_created", "files_uploaded", "published", "verified")
 _DEPOSIT_OUTCOMES = ("succeeded", "failed", "unknown")
+# GOO-319: scheduled search updates, one stream per Collection. A supervisor
+# versions a schedule; the worker records each succeeded execution as
+# ``machine`` on the schedule owner's behalf.
+_SEARCH_UPDATE_AGGREGATE = "research_search_update"
+_SEARCH_UPDATE_SUBJECT = "search_schedule"
+_SEARCH_UPDATE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {
+    ("search_update.schedule_versioned", 1): frozenset(
+        {
+            "collection_id",
+            "schedule_id",
+            "schedule_version_id",
+            "supersedes_schedule_version_id",
+            "protocol_version_id",
+            "strategy_version",
+            "cron",
+            "timezone",
+            "enabled",
+        }
+    ),
+    ("search_update.executed", 1): frozenset(
+        {
+            "collection_id",
+            "schedule_id",
+            "schedule_version_id",
+            "execution_id",
+            "scheduled_local",
+            "import_receipt_id",
+            "baseline_execution_id",
+            "delta_hash",
+            "counts",
+        }
+    ),
+}
+_SEARCH_UPDATE_CLASSES = frozenset(
+    {"new", "changed", "corrected_retracted", "unchanged", "unknown"}
+)
+_STRATEGY_VERSION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_SCHEDULED_LOCAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 _RATIONALE_EVENTS = _SCREENING_RATIONALE_EVENTS | {
     "extraction.accepted",
     "claim.assessed",
@@ -3180,6 +3218,103 @@ def _validate_deposit_transitions(
             state["uploaded"] = True
 
 
+def _validate_search_update_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+    aggregate_id: UUID,
+    subject_version_id: UUID | None,
+    subject_id: UUID,
+) -> None:
+    if _validated_payload_uuid(payload["collection_id"], "collection_id") != (
+        aggregate_id
+    ):
+        raise DecisionValidationError("decision payload belongs to another collection")
+    _validated_payload_uuid(payload["schedule_id"], "schedule_id")
+    version = _validated_payload_uuid(
+        payload["schedule_version_id"], "schedule_version_id"
+    )
+    if event_type == "search_update.schedule_versioned":
+        if version != subject_id:
+            raise DecisionValidationError("schedule event subject is not its version")
+        _validated_optional_uuid(
+            payload["supersedes_schedule_version_id"], "supersedes_schedule_version_id"
+        )
+        _validated_payload_uuid(payload["protocol_version_id"], "protocol_version_id")
+        if not isinstance(payload["strategy_version"], str) or not (
+            _STRATEGY_VERSION_RE.fullmatch(payload["strategy_version"])
+        ):
+            raise DecisionValidationError("strategy_version is invalid")
+        for field in ("cron", "timezone"):
+            _optional_text(payload[field], field, 64)
+            if payload[field] is None:
+                raise DecisionValidationError(f"{field} is invalid")
+        if not isinstance(payload["enabled"], bool):
+            raise DecisionValidationError("enabled must be a boolean")
+        return
+    if _validated_payload_uuid(payload["execution_id"], "execution_id") != subject_id:
+        raise DecisionValidationError("execution event subject is not its execution")
+    if not isinstance(payload["scheduled_local"], str) or not (
+        _SCHEDULED_LOCAL_RE.fullmatch(payload["scheduled_local"])
+    ):
+        raise DecisionValidationError("scheduled_local is invalid")
+    _validated_payload_uuid(payload["import_receipt_id"], "import_receipt_id")
+    _validated_optional_uuid(payload["baseline_execution_id"], "baseline_execution_id")
+    _validated_sha256(payload["delta_hash"], "delta_hash")
+    counts = payload["counts"]
+    if (
+        not isinstance(counts, dict)
+        or set(counts) != _SEARCH_UPDATE_CLASSES
+        or not all(_is_int(v) and v >= 0 for v in counts.values())
+    ):
+        raise DecisionValidationError("counts must give every delta class")
+
+
+def _validate_search_update_transitions(
+    events: Sequence[ResearchDecisionEvent], aggregate_id: UUID
+) -> None:
+    """Schedule chains are linear and a supervisor's. An execution is the
+    worker's, names a recorded version of its schedule, is recorded at most
+    once per (schedule, local fire), and its baseline is the previous
+    executed fire of the same schedule (none for the first)."""
+    tips: dict[str, str] = {}
+    versions: dict[str, str] = {}
+    last_executed: dict[str, str] = {}
+    fires: set[tuple[str, str]] = set()
+    for event in events:
+        payload = cast(dict[str, Any], event.payload)
+        if _payload_uuid(payload["collection_id"], "collection_id") != aggregate_id:
+            raise DecisionReplayError("decision payload belongs to another collection")
+        schedule = str(payload["schedule_id"])
+        version = str(payload["schedule_version_id"])
+        if event.event_type == "search_update.schedule_versioned":
+            if event.actor_role != "supervisor":
+                raise DecisionReplayError("schedule versions are a supervisor's")
+            supersedes = payload["supersedes_schedule_version_id"]
+            expected = tips.get(schedule)
+            if (
+                version in versions
+                or (None if supersedes is None else str(supersedes)) != expected
+            ):
+                raise DecisionReplayError("schedule version does not extend the tip")
+            if expected is None and version != schedule:
+                raise DecisionReplayError("a schedule's root version is its id")
+            tips[schedule] = version
+            versions[version] = schedule
+            continue
+        if event.actor_role != "machine":
+            raise DecisionReplayError("scheduled executions are the worker's")
+        if versions.get(version) != schedule:
+            raise DecisionReplayError("execution names no version of its schedule")
+        fire = (schedule, str(payload["scheduled_local"]))
+        if fire in fires:
+            raise DecisionReplayError("scheduled fire already executed")
+        fires.add(fire)
+        baseline = payload["baseline_execution_id"]
+        if (None if baseline is None else str(baseline)) != last_executed.get(schedule):
+            raise DecisionReplayError("execution baseline is not the previous run")
+        last_executed[schedule] = str(payload["execution_id"])
+
+
 def _check_accepted_anchor(
     payload: Mapping[str, Any], anchors: Mapping[UUID, Mapping[str, Any]]
 ) -> None:
@@ -3318,6 +3453,13 @@ _FAMILIES: dict[str, _Family] = {
         payload_keys=_DEPOSIT_PAYLOAD_KEYS,
         validate_payload=_validate_deposit_payload,
         validate_transitions=_validate_deposit_transitions,
+        requires_subject_version=False,
+    ),
+    _SEARCH_UPDATE_AGGREGATE: _Family(
+        subject_type=_SEARCH_UPDATE_SUBJECT,
+        payload_keys=_SEARCH_UPDATE_PAYLOAD_KEYS,
+        validate_payload=_validate_search_update_payload,
+        validate_transitions=_validate_search_update_transitions,
         requires_subject_version=False,
     ),
 }

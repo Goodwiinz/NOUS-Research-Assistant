@@ -398,6 +398,7 @@ _MANUSCRIPT_MIGRATION = "e4c6a8b0d2f3_create_manuscript_releases.py"
 # checks reference manuscript releases).
 _STATEMENTS_MIGRATION = "f6a8c0d2e4b5_create_statements_venue.py"
 _DEPOSITS_MIGRATION = "b0e2a4c6d8f9_create_archive_deposits.py"  # GOO-318
+_SCHEDULES_MIGRATION = "c2f4b6d8e0a1_create_search_schedules.py"  # GOO-319
 
 
 def _migration(connection: Connection, direction: str, filename: str) -> None:
@@ -411,6 +412,7 @@ def _migration(connection: Connection, direction: str, filename: str) -> None:
 
 async def _run_migration(factory: Factory, direction: str) -> None:
     order = [
+        _SCHEDULES_MIGRATION,
         _DEPOSITS_MIGRATION,
         _STATEMENTS_MIGRATION,
         _MANUSCRIPT_MIGRATION,

@@ -187,6 +187,9 @@ class Settings(BaseSettings):
     ZENODO_ACCOUNT_LABEL: str = ""
     ZENODO_SANDBOX_ONLY: bool = True
 
+    # GOO-319: the scheduled search beat tick self-skips until enabled.
+    SEARCH_UPDATES_ENABLED: bool = False
+
     # CORS Configuration (comma-separated string from env, parsed to list)
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Optional regex pattern (e.g. ^https://nous-platform-[a-z0-9-]+\.vercel\.app$).
