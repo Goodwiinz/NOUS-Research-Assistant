@@ -42,7 +42,7 @@ class TestStepType:
         assert StepType.EXPORT == "export"
 
     def test_all_values(self):
-        assert len(StepType) == 6
+        assert len(StepType) == 7  # GOO-312 adds analyze
 
 
 class TestExecutionMode:

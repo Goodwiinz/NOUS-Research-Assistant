@@ -69,8 +69,11 @@ def test_commit_happens_before_physical_delete():
     order = []
     db = MagicMock()
     db.execute = AsyncMock(return_value=_result(document))
-    db.commit = AsyncMock(side_effect=lambda: order.append("commit"))
     file_service = MagicMock()
+    # The commit happens inside soft_delete_documents.
+    file_service.soft_delete_documents = AsyncMock(
+        side_effect=lambda *a, **k: order.append("commit") or [document]
+    )
     file_service.delete_physical_file = MagicMock(
         side_effect=lambda d: order.append("physical")
     )
@@ -84,13 +87,15 @@ def test_commit_failure_leaves_object_untouched():
     document = _doc()
     db = MagicMock()
     db.execute = AsyncMock(return_value=_result(document))
-    db.commit = AsyncMock(side_effect=RuntimeError("pool gone"))
-    db.rollback = AsyncMock()
     file_service = MagicMock()
+    file_service.soft_delete_documents = AsyncMock(
+        side_effect=RuntimeError("pool gone")
+    )
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(_delete(document, db, file_service))
     assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to delete document"  # no raw error text
     # The rolled-back row is still live, so its object must NOT be deleted.
     file_service.delete_physical_file.assert_not_called()
 
@@ -99,8 +104,8 @@ def test_physical_delete_failure_does_not_fail_the_delete():
     document = _doc()
     db = MagicMock()
     db.execute = AsyncMock(return_value=_result(document))
-    db.commit = AsyncMock()
     file_service = MagicMock()
+    file_service.soft_delete_documents = AsyncMock(return_value=[document])
     file_service.delete_physical_file = MagicMock(side_effect=RuntimeError("s3 down"))
 
     resp = asyncio.run(_delete(document, db, file_service))

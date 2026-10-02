@@ -18,6 +18,7 @@ from fastapi import Depends, HTTPException, UploadFile, status
 from PIL import Image
 from pypdf import PdfReader
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Optional pandas import for spreadsheet processing
@@ -37,6 +38,39 @@ from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
+
+# Partial unique index on documents(organization_id, checksum_sha256) WHERE live;
+# see alembic/versions/uq_documents_org_checksum.py (INDEX_NAME).
+_CHECKSUM_UNIQUE_INDEX = "uq_documents_org_checksum_live"
+
+
+def _duplicate_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Identical file already exists in this organization",
+    )
+
+
+_ACTIVE_CONTENT_MIME_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "text/javascript",
+        "application/javascript",
+        "application/x-javascript",
+        # Executables: no supported document type is a binary program.
+        "application/x-dosexec",
+        "application/x-msdownload",
+        "application/x-executable",
+        "application/x-sharedlib",
+        "application/x-mach-binary",
+        "application/x-pie-executable",
+        "application/vnd.microsoft.portable-executable",
+        # XML deliberately absent: XML-bodied .txt/.md/.csv sniff as
+        # text/xml, and downloads already downgrade it to octet-stream + sandbox.
+    }
+)
 
 
 class FileValidationError(Exception):
@@ -135,37 +169,31 @@ class FileService:
         """Calculate SHA-256 hash from raw bytes."""
         return hashlib.sha256(data).hexdigest()
 
-    def _assert_not_duplicate(self, file_hash: str, organization_id: str) -> None:
+    async def _assert_not_duplicate(self, file_hash: str, organization_id: str) -> None:
         """R2-L13: reject a live duplicate before any storage/quota work.
 
-        The base upload path computed file_hash but never checked it — the
-        same file could be uploaded twice and billed against quota twice.
+        Org-scoped; matches the ``checksum_sha256`` column and the
+        ``document_metadata.file_hash`` key that pre-column rows carry. This is
+        the fast path; two racing uploads can both pass it, and the partial
+        unique index ``uq_documents_org_checksum_live`` rejects the loser's
+        insert, which ``upload_file`` also maps to 409.
         """
-        # Best-effort pre-check: session quirks (tests use minimal doubles)
-        # must not break uploads — the authoritative hash uniqueness is
-        # enforced at the DB layer.
-        try:
-            dup = (
-                self.db.query(Document.id)
-                .filter(
-                    Document.organization_id == organization_id,
-                    Document.checksum_sha256 == file_hash,
-                    Document.is_deleted.is_(False),
-                )
-                .first()
-            )
-        except Exception:
-            return
-        # isinstance guard: generic test doubles return Mock rows; only a
-        # real Document.id (str/UUID) counts as a hit.
-        dup_id = getattr(dup, "id", None) if dup is not None else None
-        if isinstance(dup_id, (str, uuid_module.UUID)):
-            from fastapi import HTTPException as _HE
+        from sqlalchemy import or_
 
-            raise _HE(
-                status_code=409,
-                detail="Identical file already exists in this organization",
+        result = await self.db.execute(
+            select(Document.id)
+            .where(
+                Document.organization_id == organization_id,
+                Document.is_deleted.isnot(True),
+                or_(
+                    Document.checksum_sha256 == file_hash,
+                    Document.document_metadata["file_hash"].as_string() == file_hash,
+                ),
             )
+            .limit(1)
+        )
+        if result.first() is not None:
+            raise _duplicate_conflict()
 
     async def _spool_and_hash(self, file: UploadFile) -> tuple[str, str]:
         """Stream the upload to a temp spool while hashing (R2-L12).
@@ -355,6 +383,10 @@ class FileService:
             sniffed = magic.from_buffer(file_content, mime=True)
         except Exception:
             sniffed = None
+        # I10: content the browser would execute is never stored, whatever
+        # extension it claims (a .png that sniffs as HTML/SVG is XSS bait).
+        if sniffed in _ACTIVE_CONTENT_MIME_TYPES:
+            raise FileValidationError(f"File content type '{sniffed}' is not allowed")
         guessed = mimetypes.guess_type(file.filename)[0]
         mime_type = sniffed or guessed or "application/octet-stream"
 
@@ -460,8 +492,8 @@ class FileService:
                 # R2-L12: stream via spool instead of materializing up to
                 # max-file-size bytes in memory per upload.
                 spool_path, file_hash = await self._spool_and_hash(file)
-                self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
                     with open(spool_path, "rb") as fh:
                         self.s3_helper.upload_fileobj(fh, s3_key, mime_type)
                 finally:
@@ -499,8 +531,8 @@ class FileService:
 
                 # R2-L12: streamed spool (see s3 branch)
                 spool_path, file_hash = await self._spool_and_hash(file)
-                self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
                     with open(spool_path, "rb") as fh:
                         storage_key = self.storage_helper.upload_fileobj(
                             fh, bucket, key, mime_type
@@ -536,7 +568,12 @@ class FileService:
                 file_path_with_ext = f"{file_path}{original_ext}"
                 saved_path = await self.save_file(file, file_path_with_ext)
                 file_hash = self.calculate_file_hash(saved_path)
-                self._assert_not_duplicate(file_hash, str(organization.id))
+                try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
+                except Exception:
+                    # Nothing references the saved file yet; don't orphan it.
+                    Path(saved_path).unlink(missing_ok=True)
+                    raise
 
                 document = Document(
                     title=title,
@@ -571,7 +608,14 @@ class FileService:
             document.add_metadata("original_filename", file.filename)
 
             self.db.add(document)
-            await self.db.commit()
+            try:
+                await self.db.commit()
+            except IntegrityError as exc:
+                # Lost the dedup race: the outer handler rolls back and deletes
+                # the stored object (nothing else is committed yet).
+                if _CHECKSUM_UNIQUE_INDEX in str(exc.orig):
+                    raise _duplicate_conflict() from exc
+                raise
             await self.db.refresh(document)
             document_committed = True
 
@@ -979,6 +1023,112 @@ class FileService:
                 exc_info=True,
             )
 
+    async def soft_delete_documents(
+        self,
+        organization_id: Any,
+        document_ids: List[Any],
+        *,
+        cascade: bool = True,
+    ) -> List[Document]:
+        """Soft-delete live documents, cancel their unfinished jobs and release
+        their quota, in one committed transaction.
+
+        Rows are locked Document -> ProcessingJob and re-read, so a concurrent
+        delete of the same document waits, then finds it already deleted and
+        releases nothing twice. ``cascade`` additionally soft-deletes the
+        documents' entities and jobs; unfinished jobs are cancelled either way.
+        Celery revocation runs after the commit and is best effort: the
+        committed state plus the claim-time check in ``replay_guard`` are what
+        stop the worker. Returns the documents this call deleted. Physical and
+        satellite cleanup stay with the caller.
+        """
+        from datetime import datetime
+
+        from src.models.entity import Entity
+
+        try:
+            documents = list(
+                (
+                    await self.db.execute(
+                        select(Document)
+                        .where(
+                            Document.id.in_(document_ids),
+                            Document.organization_id == organization_id,
+                            Document.is_deleted == False,
+                        )
+                        .order_by(Document.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not documents:
+                return []
+            locked_ids = [d.id for d in documents]
+
+            jobs = (
+                (
+                    await self.db.execute(
+                        select(ProcessingJob)
+                        .where(
+                            ProcessingJob.document_id.in_(locked_ids),
+                            ProcessingJob.is_deleted == False,
+                        )
+                        .order_by(ProcessingJob.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            task_ids = []
+            for job in jobs:
+                if not job.is_finished:
+                    job.cancel_job()
+                    job.error_message = "Document deleted"
+                    if job.celery_task_id:
+                        task_ids.append(job.celery_task_id)
+                if cascade:
+                    job.soft_delete()
+
+            if cascade:
+                await self.db.execute(
+                    update(Entity)
+                    .where(
+                        Entity.document_id.in_(locked_ids),
+                        Entity.is_deleted == False,
+                    )
+                    .values(is_deleted=True, deleted_at=datetime.utcnow())
+                )
+            for document in documents:
+                document.soft_delete()
+            await self.db.execute(
+                Organization.storage_usage_update(
+                    organization_id,
+                    -sum(d.file_size_bytes or 0 for d in documents),
+                )
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        for task_id in task_ids:
+            try:
+                from src.tasks.processing_tasks import current_app
+
+                current_app.control.revoke(task_id, terminate=True)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to revoke Celery task %s of a deleted document",
+                    task_id,
+                    exc_info=True,
+                )
+        return documents
+
     async def delete_file(self, document: Document, user: User) -> bool:
         """Delete file and update storage.
 
@@ -1013,34 +1163,16 @@ class FileService:
         # still counted). With this order a failure leaves at worst a sweepable
         # orphan object, never a live row whose backing file is gone.
         try:
-            from datetime import datetime
-
-            from src.models.entity import Entity
-
-            await self.db.execute(
-                update(Entity)
-                .where(Entity.document_id == document.id, Entity.is_deleted == False)
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
+            deleted = await self.soft_delete_documents(
+                document.organization_id, [document.id]
             )
-            await self.db.execute(
-                update(ProcessingJob)
-                .where(
-                    ProcessingJob.document_id == document.id,
-                    ProcessingJob.is_deleted == False,
-                )
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
-            )
-
-            document.soft_delete()
-            await self.db.execute(
-                Organization.storage_usage_update(
-                    document.organization_id, -document.file_size_bytes
-                )
-            )
-            await self.db.commit()
         except Exception as e:
-            await self.db.rollback()
             raise FileStorageError(f"Failed to delete file: {str(e)}")
+        if not deleted:
+            # A concurrent delete won; its commit already released the quota.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+            )
 
         # Best-effort physical delete AFTER the commit. A failure here must NOT
         # roll back the committed soft-delete — log it as a recoverable orphan.

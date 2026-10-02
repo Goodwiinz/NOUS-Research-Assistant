@@ -22,18 +22,20 @@ module honestly reflects the real mechanism.
 """
 
 import logging
+import re
 from contextvars import ContextVar
 from typing import Any, Callable, Optional
 
 import sentry_sdk
 from fastapi import HTTPException, Request, Response, status
+from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.core.database import AsyncSessionLocal
 from src.core.probes import PROBE_EXEMPT_PATHS
-from src.core.security import verify_token
+from src.core.security import TokenData, verify_token
 from src.core.user_provisioning import ensure_user_and_org
 from src.exceptions.analytics_exceptions import PermissionDeniedException
 from src.middleware.responses import error_response
@@ -41,6 +43,127 @@ from src.models.organization import Organization
 from src.models.user import User
 
 logger = logging.getLogger(__name__)
+
+# Audit I7: the skip list used bare ``startswith``, so look-alike paths such as
+# ``/docs<anything>`` or ``/api/v1/auth/refreshXYZ`` bypassed tenant validation.
+# All patterns below are anchored. Two separate lists, two separate policies:
+#
+# ``_SKIP_PATH_REGEXES`` — auth-establishment routes. These run BEFORE a tenant
+# context can exist (login/register/refresh, CLI device flow). Skipping tenant
+# resolution for them is required for auth to work at all.
+# Trailing-slash variants (e.g. ``/api/v1/auth/login/``) match none of these
+# exact entries and fail closed with a 401 — the app sets
+# ``redirect_slashes=False``, so no slash-normalizing 307 happens first.
+#
+# ``_MIDDLEWARE_EXEMPT_PATH_REGEXES`` — routes exempt from middleware tenant
+# resolution because they perform their own authentication (public metadata OR
+# endpoint-level API-key auth). Everything NOT listed here is fail-closed: no
+# Authorization header => 401, unresolvable token => 401. Do not add entries
+# without verifying the route authenticates itself (endpoint-level auth
+# dependency) or exposes only public, tenant-free metadata.
+_SKIP_PATH_REGEXES = (
+    # POST /api/v1/auth/login — establishes identity; no tenant context yet.
+    re.compile(r"^/api/v1/auth/login$"),
+    # POST /api/v1/auth/register — same as login.
+    re.compile(r"^/api/v1/auth/register$"),
+    # POST /api/v1/auth/refresh — exchanges a refresh token for a new JWT.
+    re.compile(r"^/api/v1/auth/refresh$"),
+    # /api/v1/cli-auth/* — CLI device-flow router (api/auth/cli_auth.py) is
+    # pre-auth by design; every route under it starts an unauthenticated flow.
+    re.compile(r"^/api/v1/cli-auth/"),
+)
+
+# Routes exempt from middleware tenant resolution because they perform their
+# own authentication: either deliberately anonymous public metadata, or
+# endpoint-level auth that is not the middleware's Bearer JWT (e.g. API keys).
+# Each entry: one route, one reason it is exempt. Anchored on purpose — a
+# prefix match here would re-open the I7 look-alike bypass for every sibling
+# route.
+_MIDDLEWARE_EXEMPT_PATH_REGEXES = (
+    # GET / — static welcome/version metadata served by main.py (no tenant data).
+    re.compile(r"^/$"),
+    # GET /docs — Swagger UI page served by FastAPI (static HTML).
+    re.compile(r"^/docs$"),
+    # GET /docs/oauth2-redirect — Swagger UI OAuth2 helper page (static HTML).
+    re.compile(r"^/docs/oauth2-redirect$"),
+    # GET /redoc — ReDoc page served by FastAPI (static HTML).
+    re.compile(r"^/redoc$"),
+    # GET /openapi.json — generated API schema (service metadata).
+    re.compile(r"^/openapi\.json$"),
+    # POST /api/v1/arxiv/search — anonymous arXiv literature discovery
+    # (api/arxiv/core.py:145, no auth dependency by design; external data only).
+    re.compile(r"^/api/v1/arxiv/search$"),
+    # GET /api/v1/arxiv/tracking/stats — aggregate change-tracking counts;
+    # docstring declares it public and deliberately omits per-tenant detail.
+    re.compile(r"^/api/v1/arxiv/tracking/stats$"),
+    # GET /api/v1/agent/health — agent service health (static ok payload).
+    re.compile(r"^/api/v1/agent/health$"),
+    # GET /api/v1/evaluation/health — evaluation service health (static).
+    re.compile(r"^/api/v1/evaluation/health$"),
+    # GET /api/v1/search-quality/health — search-quality service health.
+    re.compile(r"^/api/v1/search-quality/health$"),
+    # GET /api/v1/search-quality/metrics/types — static catalog of metric
+    # enum types/descriptions (no user or tenant data).
+    re.compile(r"^/api/v1/search-quality/metrics/types$"),
+    # GET /api/v1/analytics/quality/health — quality-metrics service health.
+    re.compile(r"^/api/v1/analytics/quality/health$"),
+    # GET /api/v1/analytics/behavior/health — behavior-analytics service health.
+    re.compile(r"^/api/v1/analytics/behavior/health$"),
+    # GET /api/v1/analytics/performance/health — performance dashboard health.
+    re.compile(r"^/api/v1/analytics/performance/health$"),
+    # GET /api/v1/analytics/recommendations/health — recommendations health.
+    re.compile(r"^/api/v1/analytics/recommendations/health$"),
+    # POST /api/v1/search/authenticated/hybrid — endpoint-level API-key auth
+    # (Depends(get_api_key_data), src/core/api_key_auth.py), not a JWT Bearer
+    # token; the middleware's JWT verification would 401 every valid API-key
+    # request. The dependency fully authenticates (prefix + hash + active +
+    # expiry + rate limit) and the endpoint enforces org scoping itself.
+    re.compile(r"^/api/v1/search/authenticated/hybrid$"),
+    # GET /api/v1/search/authenticated/health — same endpoint-level API-key
+    # auth contract as /authenticated/hybrid.
+    re.compile(r"^/api/v1/search/authenticated/health$"),
+)
+
+
+def _bearer_token(request: Request) -> Optional[str]:
+    """Return the Bearer credential, or None. The scheme is matched
+    case-insensitively (RFC 7235), exactly as FastAPI's ``HTTPBearer`` parses
+    it downstream, so the gate and the route dependencies agree."""
+    scheme, token = get_authorization_scheme_param(
+        request.headers.get("Authorization", "")
+    )
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token
+
+
+def _is_cors_preflight(request: Request) -> bool:
+    """A CORS preflight exactly as Starlette's ``CORSMiddleware`` defines it
+    (OPTIONS + Origin + Access-Control-Request-Method). Browsers never attach
+    credentials to a preflight, and ``CORSMiddleware`` answers it itself
+    without dispatching to a route — so letting it through exposes no tenant
+    data. (In main.py CORS runs outside this middleware and answers preflights
+    first; this exemption keeps the gate correct under any ordering.) Any other OPTIONS request is
+    still gated."""
+    return (
+        request.method == "OPTIONS"
+        and "origin" in request.headers
+        and "access-control-request-method" in request.headers
+    )
+
+
+def _verified_token_data(request: Request) -> Optional[TokenData]:
+    """Reject invalid credentials before opening a tenant-validation session."""
+    token = _bearer_token(request)
+    if token is None:
+        return None
+    try:
+        token_data = verify_token(token)
+    except Exception:
+        return None
+    if not token_data or not token_data.user_id:
+        return None
+    return token_data
 
 
 def _role_to_str(role: Any) -> str:
@@ -63,31 +186,52 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request and set tenant context"""
 
-        if self._should_skip_tenant_validation(request):
+        if self._should_skip_tenant_validation(request) or _is_cors_preflight(request):
             return await call_next(request)
 
+        # Audit I7 (fail-closed): a request with no Authorization header can
+        # never carry tenant context. The old code fell through to
+        # ``call_next`` here, so tenant isolation depended on every endpoint
+        # separately raising 401. Return 401 immediately — BEFORE the
+        # per-request DB session below is opened. Only the Bearer scheme can
+        # proceed (JWT routes and the exempt-listed API-key routes both carry
+        # Bearer credentials); any other scheme (``Basic``, a bare ``Bearer``
+        # with no token, ...) could never resolve a tenant anyway, so it is
+        # rejected here rather than after opening the session.
+        if _bearer_token(request) is None:
+            return error_response(
+                401,
+                "Not authenticated",
+                "authentication_error",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        token_data = _verified_token_data(request)
+        if token_data is None:
+            return error_response(
+                401,
+                "Could not validate credentials",
+                "authentication_error",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Resolve and validate the tenant in a session that is closed BEFORE the
+        # route runs. The route gets its own session from ``get_db``, whose
+        # lifetime FastAPI ties to the full response. Handing this session to
+        # the route (it used to be stashed on request state) let ``async with`` close it
+        # the moment ``call_next`` returned response headers, while a
+        # StreamingResponse body was still querying it: the close raised, the
+        # except below turned it into a 500, and a research run that the
+        # route had already claimed stayed RUNNING (dev D-01).
         try:
             async with AsyncSessionLocal() as db:
-                tenant_info = await self._extract_tenant_info(request, db)
-
-                if not tenant_info:
-                    return await call_next(request)
-                await self._validate_tenant_access(tenant_info["organization_id"], db)
-
-                request.state.db = db
-
-                with tenant_context_manager(
-                    organization_id=tenant_info["organization_id"],
-                    user_id=tenant_info["user_id"],
-                    user_role=tenant_info["role"],
-                ):
-                    request.state.tenant_id = tenant_info["organization_id"]
-                    request.state.user_id = tenant_info["user_id"]
-                    request.state.user_role = tenant_info["role"]
-                    sentry_sdk.set_user({"id": str(tenant_info["user_id"])})
-                    sentry_sdk.set_tag("tenant_id", str(tenant_info["organization_id"]))
-                    return await call_next(request)
-
+                tenant_info = await self._extract_tenant_info(
+                    request, db, token_data=token_data
+                )
+                if tenant_info:
+                    await self._validate_tenant_access(
+                        tenant_info["organization_id"], db
+                    )
         except PermissionDeniedException as e:
             return error_response(403, str(e))
         except Exception as e:
@@ -95,6 +239,30 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
             return error_response(
                 500, "Internal server error during tenant validation", "internal_error"
             )
+
+        if not tenant_info:
+            # Valid JWTs still require a live user and organization. Routes
+            # must never run with an unresolved tenant ContextVar.
+            return error_response(
+                401,
+                "Could not validate credentials",
+                "authentication_error",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Route exceptions are outside the try above: they reach the app's
+        # exception handlers instead of being mislabelled as tenant failures.
+        with tenant_context_manager(
+            organization_id=tenant_info["organization_id"],
+            user_id=tenant_info["user_id"],
+            user_role=tenant_info["role"],
+        ):
+            request.state.tenant_id = tenant_info["organization_id"]
+            request.state.user_id = tenant_info["user_id"]
+            request.state.user_role = tenant_info["role"]
+            sentry_sdk.set_user({"id": str(tenant_info["user_id"])})
+            sentry_sdk.set_tag("tenant_id", str(tenant_info["organization_id"]))
+            return await call_next(request)
 
     def _should_skip_tenant_validation(self, request: Request) -> bool:
         """Check if tenant validation should be skipped for this endpoint.
@@ -105,34 +273,35 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         ``/api/v1/auth/...``. Matching ``/auth/login`` here never fired and
         forced every login/register/refresh request through tenant
         resolution (issue #1003).
+
+        Audit I7: matching is done with anchored regexes (see
+        ``_SKIP_PATH_REGEXES`` and ``_MIDDLEWARE_EXEMPT_PATH_REGEXES``) instead
+        of ``startswith`` so look-alike paths (``/docsX``,
+        ``/api/v1/auth/refreshXYZ``, ...) can never bypass tenant validation.
+        Probe paths stay an exact-match set lookup.
         """
-        if request.url.path in PROBE_EXEMPT_PATHS:
+        # Match the raw ``scope["path"]`` Starlette routes on, NOT
+        # ``request.url.path``: URL parsing drops tab/CR/LF, so a look-alike
+        # such as "/heal\tth" would otherwise match an exempt path.
+        path = request.scope["path"]
+        if path in PROBE_EXEMPT_PATHS:
             return True
 
-        skip_paths = [
-            "/api/v1/auth/login",
-            "/api/v1/auth/register",
-            "/api/v1/auth/refresh",
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-        ]
-
-        return any(request.url.path.startswith(path) for path in skip_paths)
+        if any(pattern.match(path) for pattern in _SKIP_PATH_REGEXES):
+            return True
+        return any(pattern.match(path) for pattern in _MIDDLEWARE_EXEMPT_PATH_REGEXES)
 
     async def _extract_tenant_info(
-        self, request: Request, db: Optional[AsyncSession] = None
+        self,
+        request: Request,
+        db: Optional[AsyncSession] = None,
+        *,
+        token_data: Optional[TokenData] = None,
     ) -> Optional[dict]:
         """Extract tenant information by verifying the Bearer JWT and resolving org via DB."""
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return None
-        token = auth_header[7:]
-        try:
-            token_data = verify_token(token)
-        except Exception:
-            return None
-        if not token_data or not token_data.user_id:
+        if token_data is None:
+            token_data = _verified_token_data(request)
+        if token_data is None:
             return None
 
         # The authenticated DB user record is the single source of truth for
@@ -148,55 +317,63 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
 
         # Fast path: org_id already embedded in JWT (CLI tokens). JIT-provision,
         # then validate against the DB in the same session.
+        # Infrastructure failures (the user lookup raising) propagate to
+        # dispatch() and become a 500, NOT None/401: clients treat 401 as
+        # "token rejected" and log the user out, so a DB outage must not look
+        # like a credential failure. Still fail-closed — the route never runs.
+        # A JIT failure is recoverable only if the subsequent DB lookup finds
+        # a live assigned user; otherwise preserve it as an operational failure.
+        provisioning_error: Optional[Exception] = None
         if token_data.organization_id:
-            try:
-                async with AsyncSessionLocal() as prov_db:
+            async with AsyncSessionLocal() as prov_db:
+                try:
                     provisioned = await ensure_user_and_org(prov_db, token_data)
                     if provisioned:
                         await prov_db.commit()
-                    user = (
-                        (await prov_db.execute(select(User).where(*active_user)))
-                        .scalars()
-                        .first()
-                    )
-            except Exception as e:
-                logger.debug("Fast-path user resolve failed (non-fatal): %s", e)
-                user = None
-            if not user:
-                return None  # inactive / deleted / unresolved -> no tenant context
-            return {
-                "organization_id": str(
-                    user.organization_id or token_data.organization_id
-                ),
-                "user_id": str(token_data.user_id),
-                "role": _role_to_str(user.role),
-            }
-
-        # Fallback: resolve org from DB (current Supabase JWTs don't embed org_id).
-        # Reuses the caller's session — no extra connection needed.
-        try:
-            result = await db.execute(select(User).where(*active_user))
-            user = result.scalars().first()
-            if not user:
-                # User doesn't exist yet — JIT-provision, then re-query.
-                try:
-                    async with AsyncSessionLocal() as prov_db:
-                        await ensure_user_and_org(prov_db, token_data)
-                        await prov_db.commit()
                 except Exception as e:
-                    logger.debug("JIT-provision skipped (non-fatal): %s", e)
-                result = await db.execute(select(User).where(*active_user))
-                user = result.scalars().first()
+                    provisioning_error = e
+                    logger.debug("Fast-path JIT-provision failed: %s", e)
+                    await prov_db.rollback()
+                user = (
+                    (await prov_db.execute(select(User).where(*active_user)))
+                    .scalars()
+                    .first()
+                )
             if not user or not user.organization_id:
-                return None
+                if provisioning_error is not None:
+                    raise provisioning_error
+                return None  # inactive / deleted / unassigned -> no tenant context
             return {
                 "organization_id": str(user.organization_id),
                 "user_id": str(token_data.user_id),
                 "role": _role_to_str(user.role),
             }
-        except Exception as e:
-            logger.error(f"Error resolving tenant from token: {e}")
+
+        # Fallback: resolve org from DB (current Supabase JWTs don't embed org_id).
+        # Reuses the caller's session — no extra connection needed. As above,
+        # lookup failures propagate (-> 500), never collapse into None (-> 401).
+        result = await db.execute(select(User).where(*active_user))
+        user = result.scalars().first()
+        if not user:
+            # User doesn't exist yet — JIT-provision, then re-query.
+            try:
+                async with AsyncSessionLocal() as prov_db:
+                    await ensure_user_and_org(prov_db, token_data)
+                    await prov_db.commit()
+            except Exception as e:
+                provisioning_error = e
+                logger.debug("JIT-provision failed: %s", e)
+            result = await db.execute(select(User).where(*active_user))
+            user = result.scalars().first()
+        if not user or not user.organization_id:
+            if provisioning_error is not None:
+                raise provisioning_error
             return None
+        return {
+            "organization_id": str(user.organization_id),
+            "user_id": str(token_data.user_id),
+            "role": _role_to_str(user.role),
+        }
 
     async def _validate_tenant_access(
         self,
@@ -235,12 +412,15 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
         except PermissionDeniedException:
             raise
         except Exception as e:
-            logger.error(f"Error validating tenant access: {e}")
-            raise PermissionDeniedException(
-                required_permission="organization_access",
-                user_role="unknown",
-                details={"organization_id": organization_id, "error": str(e)},
+            # Lookup outages are operational failures, not access denials.
+            # dispatch maps them to a stable 500 without internal details.
+            logger.error(
+                "Error validating tenant access for org %s: %s",
+                organization_id,
+                e,
+                exc_info=True,
             )
+            raise
 
 
 # Per-request tenant context accessors

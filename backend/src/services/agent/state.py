@@ -12,10 +12,10 @@ THREAD_PERSISTENCE_EPHEMERAL = "ephemeral"
 class AgentState(TypedDict):
     """Full agent state passed through the graph.
 
-    All fields must be provided in the initial state dict passed to
-    ``graph.ainvoke()`` / ``graph.astream_events()``.  See
-    ``_run_agent_graph`` and ``event_generator`` in ``execute.py``
-    for the canonical initial-state construction.
+    Every required field is provided in the initial state dict passed to
+    ``graph.ainvoke()`` / ``graph.astream_events()``; ``NotRequired`` fields
+    carry across turns through the checkpoint instead. Per-turn resets come
+    from ``runtime_snapshot.turn_reset_fields``.
     """
 
     messages: Annotated[list, add_messages]
@@ -36,7 +36,8 @@ class AgentState(TypedDict):
     thread_persistence: Literal["durable", "ephemeral"]
     # preprocessing_node increments once per fresh turn. Plain last-value state
     # prevents compiled specialist subgraphs from adding the value again.
-    turn_index: int
+    # Never seeded by the turn input: the checkpoint carries it (R8-A3).
+    turn_index: NotRequired[int]
     tool_loop_count: int
     error_count: int
     last_error: str

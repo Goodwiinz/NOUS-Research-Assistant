@@ -15,6 +15,10 @@ import { RewriteDiffView } from './RewriteDiffView';
 import { WriterToolbar } from './WriterToolbar';
 import { InsertPreview } from './InsertPreview';
 import { OutlineDialog } from './OutlineDialog';
+import { DraftReleasePanel, ReleaseBadge } from './DraftReleasePanel';
+import { PeerReviewPanel, type PassageTarget } from './PeerReviewPanel';
+import { useDraftRelease } from '@/hooks/useDraftRelease';
+import { useBackendCapabilities } from '@/hooks/useBackendCapabilities';
 import type {
   RewriteResponse,
   WriteResponse,
@@ -23,6 +27,8 @@ import type {
 
 export interface DraftViewerProps {
   draft: Draft;
+  /** GOO-307: enables the release badge, stale banner and promote action. */
+  projectId?: string;
   versions?: Array<{ version: number; created_at: string }>;
   documentIds?: string[];
   onVersionChange?: (version: number) => void;
@@ -32,6 +38,7 @@ export interface DraftViewerProps {
 
 export const DraftViewer: React.FC<DraftViewerProps> = ({
   draft,
+  projectId,
   versions,
   documentIds,
   onVersionChange,
@@ -52,7 +59,13 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
     left: number;
   } | null>(null);
   const [writeResult, setWriteResult] = useState<WriteResponse | null>(null);
+  // Captured at click time: reading contentRef during render is not allowed.
+  const [cursorContext, setCursorContext] = useState('');
   const [showOutlineDialog, setShowOutlineDialog] = useState(false);
+  // GOO-314: a peer-review "Old text / New text" link opens that version.
+  const [passage, setPassage] = useState<PassageTarget | null>(null);
+  const capabilities = useBackendCapabilities(Boolean(projectId));
+  const release = useDraftRelease(projectId, draft.id, draft.version);
 
   const handleTextSelect = useCallback((event: React.MouseEvent) => {
     const selection = window.getSelection();
@@ -72,6 +85,7 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
       const containerRect = contentRef.current.getBoundingClientRect();
       const surroundingText = contentRef.current.textContent || '';
       if (surroundingText.trim().length > 0) {
+        setCursorContext(surroundingText);
         setWriterToolbarPos({
           top: event.clientY - containerRect.top - 44,
           left: event.clientX - containerRect.left,
@@ -156,8 +170,17 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
           <div>
             <h3 className="font-semibold text-foreground">{draft.title}</h3>
             <p className="text-xs text-muted-foreground">
-              Version {draft.version} • {draft.word_count} words •{' '}
-              {draft.citation_count} citations
+              Version {draft.version}
+              {projectId && capabilities.draftRelease && (
+                <ReleaseBadge
+                  status={
+                    release.data?.release_status ??
+                    draft.release_status ??
+                    'candidate'
+                  }
+                />
+              )}{' '}
+              • {draft.word_count} words • {draft.citation_count} citations
             </p>
           </div>
         </div>
@@ -202,6 +225,32 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
           )}
         </div>
       </div>
+
+      {projectId && capabilities.draftRelease && (
+        <DraftReleasePanel projectId={projectId} draft={draft} />
+      )}
+      {projectId && capabilities.draftRelease && (
+        <PeerReviewPanel
+          projectId={projectId}
+          draft={draft}
+          onOpenPassage={(target) => {
+            setPassage(target);
+            if (
+              target.version !== undefined &&
+              target.version !== draft.version
+            ) {
+              onVersionChange?.(target.version);
+            }
+          }}
+        />
+      )}
+      {passage && (
+        <p role="status" className="px-4 py-2 border-b border-border text-xs">
+          Passage
+          {passage.version !== undefined ? ` in v${passage.version}` : ''} (
+          {passage.start}–{passage.end}): “{passage.text}”
+        </p>
+      )}
 
       {/* Themes */}
       {draft.themes && draft.themes.length > 0 && (
@@ -276,7 +325,7 @@ export const DraftViewer: React.FC<DraftViewerProps> = ({
           !writeResult &&
           !rewriteResult && (
             <WriterToolbar
-              cursorContext={contentRef.current?.textContent || ''}
+              cursorContext={cursorContext}
               position={writerToolbarPos}
               documentIds={documentIds}
               onInsert={handleWriteInsert}

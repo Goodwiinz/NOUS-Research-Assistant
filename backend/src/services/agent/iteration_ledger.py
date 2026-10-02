@@ -23,7 +23,9 @@ when the user doesn't want it.
 
 Everything written here goes through ``_pii_redact`` first (R7-L4): the
 records are plain files on a shared volume that outlive the run, and they
-carry raw prompts, model output and tool arguments.
+carry raw prompts, model output and tool arguments. ``state_snapshot`` and
+``config.json`` are redacted whole (R8-C7), so a new field cannot slip past;
+only UUID values under the id keys in ``_ID_KEYS`` stay raw.
 """
 
 from __future__ import annotations
@@ -38,9 +40,50 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.core.config import get_settings
-from src.services.agent._pii_redact import redact_nested_pii, redact_pii
+from src.services.agent._pii_redact import _UUID_RE, redact_nested_pii, redact_pii
 
 logger = logging.getLogger(__name__)
+
+# Identifier keys, at any depth. redact_pii rewrites every UUID to "<uuid>",
+# which would break project_report.py (it filters final.json on
+# current_project_id) and make distinct page contexts look identical to
+# replay_ledger. A UUID under one of these keys stays raw; anything else
+# under them (an email the model put in a tool arg) is still redacted.
+_ID_KEYS = frozenset(
+    {
+        "thread_id",
+        "user_id",
+        "current_project_id",
+        "project_id",
+        "paper_id",
+        "workspace_id",
+        "workspace_thread_id",
+        "document_id",
+        "document_ids",
+    }
+)
+
+
+def _is_uuid(value: Any) -> bool:
+    if isinstance(value, list):
+        return all(_is_uuid(item) for item in value)
+    return isinstance(value, str) and _UUID_RE.fullmatch(value) is not None
+
+
+def _redact_keeping_ids(value: Any) -> Any:
+    """``redact_nested_pii`` that keeps UUID identifiers readable (R8-C7)."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                item
+                if key in _ID_KEYS and _is_uuid(item)
+                else _redact_keeping_ids(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_keeping_ids(item) for item in value]
+    return redact_nested_pii(value)
 
 
 def _ledger_root() -> Path | None:
@@ -169,7 +212,7 @@ def _build_record(state: dict, turn: int) -> dict:
         if isinstance(m, AIMessage) and m.content:
             ai_content = redact_pii(m.content)[:4000]
 
-    tool_executions = redact_nested_pii(list(state.get("tool_executions") or []))
+    tool_executions = list(state.get("tool_executions") or [])
 
     # Compact retrieved_contexts: titles + scores only, drop full chunk text.
     retrieved = state.get("retrieved_contexts") or []
@@ -203,23 +246,25 @@ def _build_record(state: dict, turn: int) -> dict:
             "tools_used": [te.get("tool_name") for te in tool_executions[-5:]],
             "ai_response_chars": len(ai_content),
         },
-        "state_snapshot": {
-            "messages": [_serialize_message(m) for m in in_turn_msgs],
-            "page_context": state.get("page_context"),
-            "current_project_id": state.get("current_project_id"),
-            "model": state.get("model"),
-            "plan": state.get("plan") or [],
-            "tool_executions": tool_executions,
-            "retrieved_contexts": retrieved_summary,
-            "user_memories_keys": [
-                m.get("key") for m in (state.get("user_memories") or [])
-            ],
-            "reflection_result": reflection,
-            "last_error": state.get("last_error") or None,
-            "last_error_info": state.get("last_error_info") or None,
-            "compaction_count": state.get("compaction_count"),
-            "reflection_count": state.get("reflection_count"),
-        },
+        "state_snapshot": _redact_keeping_ids(
+            {
+                "messages": [_serialize_message(m) for m in in_turn_msgs],
+                "page_context": state.get("page_context"),
+                "current_project_id": state.get("current_project_id"),
+                "model": state.get("model"),
+                "plan": state.get("plan") or [],
+                "tool_executions": tool_executions,
+                "retrieved_contexts": retrieved_summary,
+                "user_memories_keys": [
+                    m.get("key") for m in (state.get("user_memories") or [])
+                ],
+                "reflection_result": reflection,
+                "last_error": state.get("last_error") or None,
+                "last_error_info": state.get("last_error_info") or None,
+                "compaction_count": state.get("compaction_count"),
+                "reflection_count": state.get("reflection_count"),
+            }
+        ),
     }
 
 
@@ -247,15 +292,17 @@ def _maybe_write_config(thread_dir: Path, state: dict) -> None:
         if isinstance(m, HumanMessage) and m.content:
             first_user = redact_pii(m.content)[:1000]
             break
-    config = {
-        "thread_id": (state.get("thread_id") or thread_dir.name),
-        "user_id": state.get("user_id"),
-        "page_context": state.get("page_context"),
-        "current_project_id": state.get("current_project_id"),
-        "model": state.get("model"),
-        "initial_query": first_user,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+    config = _redact_keeping_ids(
+        {
+            "thread_id": (state.get("thread_id") or thread_dir.name),
+            "user_id": state.get("user_id"),
+            "page_context": state.get("page_context"),
+            "current_project_id": state.get("current_project_id"),
+            "model": state.get("model"),
+            "initial_query": first_user,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
     try:
         _atomic_write_json(config_path, config)
     except Exception as exc:  # noqa: BLE001 - observability only

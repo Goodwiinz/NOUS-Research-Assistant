@@ -21,6 +21,8 @@ from typing import (
 )
 from uuid import NAMESPACE_URL, uuid5
 
+from src.services.artifacts.storage import get_artifact_storage
+from src.services.research_engine import manifest_rules
 from src.services.research_engine.connectors.base import (
     SourceConnector,
     SourceDocument,
@@ -59,6 +61,11 @@ from src.services.research_engine.verification import (
     QualityMark,
     run_source_grounding_check,
 )
+from src.services.sandbox.e2b_sandbox_manager import IsolatedSpec, get_sandbox_manager
+
+# GOO-312: loads one declared ``analyze`` input org-scoped and returns
+# ``(bytes, recorded_sha256, media_type)``; ``LookupError`` when absent.
+AnalyzeInputLoader = Callable[[Mapping[str, Any]], Awaitable[tuple[bytes, Any, str]]]
 
 MAX_CONNECTOR_FANOUT = 4
 MAX_CONNECTOR_RESULTS = 50
@@ -190,11 +197,13 @@ class StepExecutor:
         providers: Dict[str, LLMProvider],
         strategy_context: Optional[Dict[str, Any]] = None,
         on_search_page: Optional[Callable[..., Awaitable[None]]] = None,
+        analyze_inputs: Optional[AnalyzeInputLoader] = None,
     ) -> None:
         self.connectors = connectors
         self.providers = providers
         self.strategy_context = strategy_context or {}
         self.on_search_page = on_search_page
+        self.analyze_inputs = analyze_inputs
         self._last_call_accounting: tuple[int, int, List[Dict[str, Any]]] = (0, 0, [])
 
     async def execute(
@@ -206,6 +215,8 @@ class StepExecutor:
     ) -> StepResult:
         """Execute a step based on its type, dispatching to the appropriate handler."""
         step_type = step_def.get("type", "")
+        if step_type == manifest_rules.STEP_TYPE:
+            return await self._execute_analyze(step_def, context)
         params = self._get_params(step_def)
         contract_version = params.get(
             "contract_version", context.get("contract_version")
@@ -227,6 +238,125 @@ class StepExecutor:
     def _get_params(self, step_def: Dict) -> Dict:
         """Get step parameters, checking both 'params' and 'parameters' keys."""
         return step_def.get("params") or step_def.get("parameters") or {}
+
+    async def _execute_analyze(self, step_def: Dict, context: Dict) -> StepResult:
+        """GOO-312: run the approved plan's code once in an isolated sandbox.
+
+        Inputs are loaded org-scoped and must hash to the plan's digest (and
+        a document's recorded checksum). Every byte blob (code, inputs, the
+        environment lock, outputs) is written content-addressed to private
+        artifact storage; the step output carries digests only, so no storage
+        key or URL reaches a step response. ``run_manifest`` rows are written
+        by ``experiment_service.record_manifest`` at terminal run status."""
+        params = self._get_params(step_def)
+        try:
+            spec = manifest_rules.parse_analyze_step(params)
+        except ValueError as error:
+            raise StepExecutionError(str(error)) from None
+        loader = self.analyze_inputs
+        organization_id = self.strategy_context.get("organization_id")
+        run_id = self.strategy_context.get("run_id")
+        if loader is None or not organization_id or not run_id:
+            raise StepExecutionError("analyze_unavailable")
+        code_bytes = spec.code.encode("utf-8")
+        blobs: list[tuple[bytes, str]] = [(code_bytes, "text/x-python")]
+        files: Dict[str, bytes] = {manifest_rules.CODE_NAME: code_bytes}
+        inputs: List[Dict[str, Any]] = []
+        for item in spec.inputs:
+            try:
+                data, recorded, media_type = await loader(item)
+            except LookupError:
+                raise StepExecutionError("input_not_found") from None
+            digest = manifest_rules.sha256_hex(data)
+            if digest != item["sha256"] or recorded != item["sha256"]:
+                raise StepExecutionError("input_checksum_mismatch")
+            files[f"in/{item['name']}"] = data
+            blobs.append((data, media_type))
+            inputs.append(
+                {
+                    "name": item["name"],
+                    "kind": item["kind"],
+                    "ref_id": item["id"],
+                    "sha256": digest,
+                    "byte_size": len(data),
+                    "media_type": media_type,
+                }
+            )
+        result = await get_sandbox_manager().run_isolated(
+            IsolatedSpec(
+                template=spec.template,
+                requirements=spec.requirements,
+                files=files,
+                command=spec.command,
+                output_names=tuple(o["name"] for o in spec.outputs),
+            )
+        )
+        if result.status != "completed" or result.lock is None:
+            raise StepExecutionError(f"analyze_{result.status}")
+        outputs: List[Dict[str, Any]] = []
+        metrics: Any = None
+        for declared in spec.outputs:
+            data = result.outputs[declared["name"]]
+            if declared["role"] == "metrics":
+                try:
+                    metrics = manifest_rules.parse_metrics(data)
+                except ValueError as error:
+                    raise StepExecutionError(str(error)) from None
+            blobs.append((data, declared["media_type"]))
+            outputs.append(
+                {
+                    **declared,
+                    "sha256": manifest_rules.sha256_hex(data),
+                    "byte_size": len(data),
+                }
+            )
+        blobs.append((result.lock, "text/plain"))
+        storage = get_artifact_storage()
+        for data, media_type in blobs:
+            key = manifest_rules.artifact_key(
+                str(organization_id), str(run_id), manifest_rules.sha256_hex(data)
+            )
+            await storage.put(key, data, media_type)
+        declared_code = {
+            key: params.get(key) if isinstance(params.get(key), str) else None
+            for key in ("repository", "commit")
+        }
+        output = {
+            "analyze": {
+                "status": "completed",
+                "template": spec.template,
+                "code": {
+                    "sha256": manifest_rules.sha256_hex(code_bytes),
+                    "byte_size": len(code_bytes),
+                    **declared_code,
+                },
+                "environment": {
+                    "provider": "e2b",
+                    "template_id": result.template_id,
+                    "sandbox_id": result.sandbox_id,
+                    "python": result.python,
+                    "os_release_sha256": (
+                        None
+                        if result.os_release is None
+                        else manifest_rules.sha256_hex(result.os_release)
+                    ),
+                    "lock_sha256": manifest_rules.sha256_hex(result.lock),
+                    "lock_byte_size": len(result.lock),
+                    "image_digest": dict(manifest_rules.NO_DIGEST),
+                },
+                "inputs": inputs,
+                "outputs": outputs,
+                "metrics": metrics,
+                "started_at": result.started_at.isoformat(),
+                "completed_at": result.completed_at.isoformat(),
+            }
+        }
+        return StepResult(
+            output=output,
+            inputs_hash=manifest_rules.manifest_hash({"inputs": inputs}),
+            outputs_hash=manifest_rules.manifest_hash(output),
+            seed=spec.seed,
+        )
 
     async def _execute_search(
         self, step_def: Dict, context: Dict, *, contract_version: Optional[int] = None
@@ -287,6 +417,20 @@ class StepExecutor:
                 "semantic_scholar" if name == "web" else name for name in sources
             )
         )
+        if self._is_daily_brief_context(context):
+            # GOO-331: the executed search may narrow, never widen, the scope
+            # the researcher confirmed, whatever the resolved parameters say.
+            scope = context["scope_confirmation"]
+            confirmed_providers = scope.get("providers")
+            confirmed_limit = scope.get("limit_per_provider")
+            if not isinstance(confirmed_providers, list) or not set(
+                canonical_sources
+            ).issubset(confirmed_providers):
+                raise ValueError(
+                    "search providers exceed the confirmed Daily Brief scope"
+                )
+            if type(confirmed_limit) is not int or max_results > confirmed_limit:
+                raise ValueError("search limit exceeds the confirmed Daily Brief scope")
         strategy = {
             "schema_version": "nous.academic.search-strategy.v1",
             "project_id": self.strategy_context.get("canonical_project_id"),

@@ -430,21 +430,26 @@ def _object_response(signed_url: str, document: Document) -> StreamingResponse:
     embedding are disabled. The viewer renders an object URL built from the
     blob, so `attachment` costs it nothing.
     """
+    media_type, headers = _hardened_download(document)
+    return StreamingResponse(
+        _iter_signed_url(signed_url), media_type=media_type, headers=headers
+    )
+
+
+def _hardened_download(document: Document) -> tuple[str, dict[str, str]]:
+    """Media type + headers every download branch serves (I10: the local
+    branch used to echo the stored mime_type inline with no hardening)."""
     filename = document.filename or "download"
     mime_type = (document.mime_type or "").split(";")[0].strip().lower()
     if mime_type not in _SERVEABLE_MIME_TYPES:
         mime_type = "application/octet-stream"
-    return StreamingResponse(
-        _iter_signed_url(signed_url),
-        media_type=mime_type,
-        headers={
-            # RFC 5987 form so non-ASCII filenames survive the header; quote()
-            # also keeps CR/LF in a stored filename out of the response headers.
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; sandbox",
-        },
-    )
+    return mime_type, {
+        # RFC 5987 form so non-ASCII filenames survive the header; quote()
+        # also keeps CR/LF in a stored filename out of the response headers.
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    }
 
 
 @router.get("/{file_id}/download")
@@ -514,11 +519,8 @@ async def download_file(
             status_code=status.HTTP_404_NOT_FOUND, detail="File not found on disk"
         )
 
-    return FileResponse(
-        path=document.file_path,
-        filename=document.filename,
-        media_type=document.mime_type,
-    )
+    media_type, headers = _hardened_download(document)
+    return FileResponse(path=document.file_path, media_type=media_type, headers=headers)
 
 
 @router.put("/{file_id}")
@@ -612,6 +614,8 @@ async def delete_file(
                 detail="Failed to delete file",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 

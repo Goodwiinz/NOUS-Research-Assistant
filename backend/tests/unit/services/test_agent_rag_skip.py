@@ -38,6 +38,46 @@ class TestIsRetrievalQuery:
         assert len(q.split()) >= 8
         assert _is_retrieval_query(q) is True
 
+    def test_small_talk_words_inside_a_real_query_do_not_skip_retrieval(self):
+        """R8-A1 (GOO-362): one conversational WORD is not a conversational turn.
+
+        The old word-boundary search treated any message containing "no",
+        "good", "great", "what model", ... as small talk, so ``rag_node`` and
+        ``memory_retrieval_node`` both skipped on substantive questions.
+        """
+        from src.services.agent.graph import _is_retrieval_query, is_conversational
+
+        assert _is_retrieval_query(
+            "find papers with no replication of these good results"
+        )
+        assert is_conversational("what model does the paper propose") is False
+        for q in (
+            "Do my papers find no effect of LoRA on good calibration?",
+            "Find papers with great results on GLUE",
+            "yes, search arxiv for diffusion models",
+            "ok now compare the two methods",
+        ):
+            assert is_conversational(q) is False, q
+            assert _is_retrieval_query(q) is True, q
+
+    def test_whole_message_small_talk_is_still_conversational(self):
+        from src.services.agent.graph import is_conversational
+
+        for q in (
+            "hi",
+            "thanks!",
+            "Thank you!",
+            "ok cool",
+            "hi there",
+            "Good morning!",
+            "no thanks",
+            "ok, got it.",
+            "  Yes!! ",
+            "what model?",
+            "",
+        ):
+            assert is_conversational(q) is True, q
+
     def test_tool_name_prefix_returns_true(self):
         from src.services.agent.graph import _is_retrieval_query
 
@@ -94,6 +134,62 @@ class TestRagNodeFastPath:
         await rag_node(state, config)
 
         assert mock_search.called is True
+
+    @pytest.mark.parametrize("greeting", ["hi", "Good morning!"])
+    async def test_greeting_in_attachment_thread_skips_attachment_scope(
+        self, monkeypatch, greeting
+    ):
+        """R8-A10 (GOO-380): a greeting must not load the thread's file text.
+
+        Loading it filled ``retrieved_contexts``, which also disabled the
+        zero-LLM greeting reply in ``llm_node``.
+        """
+        from unittest.mock import AsyncMock
+
+        from langchain_core.messages import HumanMessage
+
+        from src.services.agent import _nodes_rag
+
+        load_attachments = AsyncMock(return_value=([{"content": "file"}], []))
+        monkeypatch.setattr(_nodes_rag, "_load_attachment_contexts", load_attachments)
+        thread_id = "33333333-3333-4333-8333-333333333333"
+        state = {
+            "messages": [HumanMessage(content=greeting)],
+            "page_context": {},
+            "retrieved_contexts": [],
+            "thread_id": thread_id,
+            "thread_persistence": "durable",
+            "use_rag": True,
+        }
+        config = {"configurable": {"thread_id": thread_id, "user_id": "u-1"}}
+
+        result = await _nodes_rag.rag_node(state, config)
+
+        load_attachments.assert_not_awaited()
+        assert result["retrieved_contexts"] == []
+
+    async def test_explicit_attachment_wins_over_greeting(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from langchain_core.messages import HumanMessage
+
+        from src.services.agent import _nodes_rag
+
+        context = {"content": "file", "context_origin": "attachment"}
+        load_attachments = AsyncMock(return_value=([context], []))
+        monkeypatch.setattr(_nodes_rag, "_load_attachment_contexts", load_attachments)
+        state = {
+            "messages": [HumanMessage(content="hi")],
+            "page_context": {},
+            "retrieved_contexts": [],
+            "attachment_ids": ["11111111-1111-4111-8111-111111111111"],
+            "use_rag": True,
+        }
+
+        result = await _nodes_rag.rag_node(state, {"configurable": {}})
+
+        load_attachments.assert_awaited_once()
+        assert result["retrieved_contexts"] == [context]
 
     async def test_rag_node_grounds_the_current_turn_attachment_without_broad_search(
         self, monkeypatch
