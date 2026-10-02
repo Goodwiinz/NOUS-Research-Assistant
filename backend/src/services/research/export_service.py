@@ -30,6 +30,8 @@ from src.models.chat_message import ChatMessage, MessageRole
 from src.models.citation import Citation
 from src.models.conversation import Conversation
 from src.models.thread import Thread
+from src.models.workspace import Workspace
+from src.services.threads.workspace_access import user_can_access_workspace
 from src.shared.export_schemas import (
     CitationExport,
     ExportFormat,
@@ -729,7 +731,10 @@ class ExportService:
                 selectinload(Thread.messages).selectinload(ChatMessage.attachments),
                 # Load conversation (+ its workspace, for the soft-delete
                 # cascade check below) for ownership + soft-delete checks.
-                selectinload(Thread.conversation).selectinload(Conversation.workspace),
+                # (+ members, for the current-access check below).
+                selectinload(Thread.conversation)
+                .selectinload(Conversation.workspace)
+                .selectinload(Workspace.members),
             )
             # R5-M12: a soft-deleted thread must not be exportable. Neither
             # delete cascades to children (see workspace_access.py), so the
@@ -748,6 +753,18 @@ class ExportService:
         # export access to the thread even though its own is_deleted stayed
         # False (same convention as workspace_access.get_thread).
         if thread.conversation.is_deleted or thread.conversation.workspace.is_deleted:
+            return None
+
+        # GOO-348: authorship alone is not current access. A former member of
+        # a private workspace must lose export access to threads they created
+        # (incl. messages appended after their removal), same predicate as
+        # workspace_access.get_thread.
+        if not user_can_access_workspace(thread.conversation.workspace, user_id):
+            logger.warning(
+                "Thread export denied: no current workspace access",
+                thread_id=thread_id,
+                user_id=user_id,
+            )
             return None
 
         # Authorization check: Verify user owns the thread or has admin privileges

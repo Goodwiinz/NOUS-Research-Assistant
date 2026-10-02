@@ -377,6 +377,7 @@ async def test_audit_bundle_matches_rows_scope_and_snapshot(
     assert statuses.pop("peer_review.json") == "empty"  # GOO-314
     assert statuses.pop("manuscript-releases.json") == "empty"  # GOO-315
     assert statuses.pop("deposits.json") == "empty"  # GOO-318
+    assert statuses.pop("search-updates.json") == "empty"  # GOO-319
     assert set(statuses.values()) == {"ok"}
 
     # 3. Hashes match rows.

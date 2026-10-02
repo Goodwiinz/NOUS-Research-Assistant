@@ -206,11 +206,18 @@ async def test_list_messages_page_and_count_are_in_lockstep(
     _assert_filters_superseded(db.statements[1], "list_messages page")
 
 
-async def test_get_thread_messages_full_history_excludes_superseded() -> None:
+async def test_get_thread_messages_full_history_excludes_superseded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.api.agent.execute import get_thread_messages
+    from src.services.threads import workspace_access
 
-    thread = SimpleNamespace(id=uuid4())
-    db = _CapturingDB([_Result(value=thread), _Result(rows=[])])
+    async def _thread(*a: Any, **k: Any) -> Any:
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(workspace_access, "get_thread", _thread)
+
+    db = _CapturingDB([_Result(rows=[])])
     await get_thread_messages(
         thread_id=uuid4(),
         limit=None,
@@ -218,16 +225,23 @@ async def test_get_thread_messages_full_history_excludes_superseded() -> None:
         current_user=SimpleNamespace(id=uuid4()),
         db=db,
     )
-    # statements[0] is the ownership chain; [1] is the message page.
-    _assert_filters_superseded(db.statements[1], "get_thread_messages full history")
+    # Access goes through workspace_access (stubbed); [0] is the message page.
+    _assert_filters_superseded(db.statements[0], "get_thread_messages full history")
 
 
-async def test_get_thread_messages_window_page_and_count_agree() -> None:
+async def test_get_thread_messages_window_page_and_count_agree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Same-filters rule: a drifted count over-reports total + has_more."""
     from src.api.agent.execute import get_thread_messages
+    from src.services.threads import workspace_access
 
-    thread = SimpleNamespace(id=uuid4())
-    db = _CapturingDB([_Result(value=thread), _Result(rows=[]), _Result(value=0)])
+    async def _thread(*a: Any, **k: Any) -> Any:
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(workspace_access, "get_thread", _thread)
+
+    db = _CapturingDB([_Result(rows=[]), _Result(value=0)])
     await get_thread_messages(
         thread_id=uuid4(),
         limit=10,
@@ -235,8 +249,8 @@ async def test_get_thread_messages_window_page_and_count_agree() -> None:
         current_user=SimpleNamespace(id=uuid4()),
         db=db,
     )
-    _assert_filters_superseded(db.statements[1], "get_thread_messages window page")
-    _assert_filters_superseded(db.statements[2], "get_thread_messages window count")
+    _assert_filters_superseded(db.statements[0], "get_thread_messages window page")
+    _assert_filters_superseded(db.statements[1], "get_thread_messages window count")
 
 
 async def test_thread_summarization_query_excludes_superseded() -> None:
