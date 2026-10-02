@@ -235,6 +235,27 @@ def test_claim_reads_freshly_locked_row_not_stale_cache(session_factory):
     db.close()
 
 
+@pytest.mark.parametrize("deleted", ["job", "document"])
+def test_claim_refuses_deleted_ingestion(session_factory, deleted):
+    """A message delivered after its job or document was deleted must not start
+    work, even while the job row itself still says QUEUED (GOO-356)."""
+    db = session_factory()
+    org_id, doc_id, job_id = uuid4(), uuid4(), uuid4()
+    doc = _seed_document(db, doc_id=doc_id, org_id=org_id, content_text=None)
+    job = _seed_job(
+        db, job_id=job_id, doc_id=doc_id, org_id=org_id, status=JobStatus.QUEUED
+    )
+    (job if deleted == "job" else doc).soft_delete()
+    db.commit()
+
+    result = claim_job_for_processing(db, job, worker_id="w1")
+
+    assert result.proceed is False
+    assert result.reason == "deleted"
+    assert job.status == JobStatus.QUEUED
+    db.close()
+
+
 # ---------------------------------------------------------------------------
 # _reset_pipeline_entities scoping
 # ---------------------------------------------------------------------------

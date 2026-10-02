@@ -730,10 +730,17 @@ jobs:
   # Integration Tests (Require Services)
   # ==========================================================================
   integration-tests:
-    name: Integration Tests
+    name: Integration Tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [unit-tests, frontend-tests]
+    strategy:
+      # One red shard must not hide the others' results.
+      fail-fast: false
+      matrix:
+        # File-level split by size (scripts/ci/shard_tests.py). Add a shard
+        # when a leg approaches the 30 minute cap.
+        shard: [1, 2, 3]
     services:
       postgres:
         image: postgres:15
@@ -780,14 +787,22 @@ jobs:
       - name: Run integration tests
         run: |
           mkdir -p test-results
+          files=$(python scripts/ci/shard_tests.py backend/tests/integration \
+            --shard "$SHARD" --of "$SHARDS")
+          if [ -z "$files" ]; then
+            echo "No integration test files in this shard - skipping"
+            exit 0
+          fi
+
           set +e
-          pytest backend/tests/integration/ \
+          # shellcheck disable=SC2086 # one test file path per word, no spaces
+          pytest $files \
             -c backend/pytest.ini \
             -m "integration" \
             --cov=backend/src \
             --cov-report=xml \
             --cov-report=term-missing \
-            --junitxml=test-results/integration.xml \
+            --junitxml="test-results/integration-$SHARD.xml" \
             -v
           exit_code=$?
           set -e
@@ -800,6 +815,8 @@ jobs:
           exit "$exit_code"
         env:
           ENVIRONMENT: testing
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
           DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
       - name: Upload coverage
@@ -807,12 +824,12 @@ jobs:
         with:
           files: coverage.xml
           flags: integration
-          name: integration-tests
+          name: integration-tests-${{ matrix.shard }}
       - name: Upload test results to Codecov (integration)
         if: always()
         uses: ./.github/actions/codecov-test-results
         with:
-          file: test-results/integration.xml
+          file: test-results/integration-${{ matrix.shard }}.xml
           flags: integration
           token: ${{ secrets.CODECOV_TOKEN }}
   # ==========================================================================

@@ -137,8 +137,8 @@ class TestAddDocumentToProject:
 
         tool_db = MockAsyncSession()
         # The already-linked branch keys off the existence SELECT returning
-        # rows: _link_documents_to_project reads row[0] per row.
-        tool_db.set_query_result([(str(doc.id),)])
+        # rows: _link_documents_to_project reads (document_id, is_deleted).
+        tool_db.set_query_result([(str(doc.id), False)])
 
         with (
             patch(
@@ -159,6 +159,33 @@ class TestAddDocumentToProject:
             )
 
         assert result["status"] == "already_linked"
+
+    async def test_soft_deleted_link_is_restored_not_already_linked(self):
+        """R8-B3: a soft-deleted link is revived by the upsert, never skipped.
+
+        Guard: ``services/agent/tool_helpers.py:_link_documents_to_project``
+        (~L311, ``on_conflict_do_update(... is_deleted=False ...)``).
+        Mutation check: replace the ``on_conflict_do_update(...)`` call with
+        ``on_conflict_do_nothing(index_elements=["collection_id", "document_id"])``
+        and ``pytest -q backend/tests/unit/services/test_agent_tools.py -k
+        soft_deleted_link_is_restored`` fails on ``assert 'ON CONFLICT
+        (collection_id, document_id) DO UPDATE SET' in ...`` (pre-fix code
+        failed earlier on ``{'linked': 0, 'already_linked': 1} == ...``).
+        """
+        from sqlalchemy.dialects import postgresql
+
+        from src.services.agent.tool_helpers import _link_documents_to_project
+
+        doc_id = str(uuid4())
+        db = MockAsyncSession()
+        db.set_query_result([(doc_id, True)])
+
+        result = await _link_documents_to_project(db, _mock_project(), [doc_id])
+
+        assert result == {"linked": 1, "already_linked": 0, "restored": [doc_id]}
+        upsert = str(db.execute_calls[-1][0].compile(dialect=postgresql.dialect()))
+        assert "ON CONFLICT (collection_id, document_id) DO UPDATE SET" in upsert
+        assert "is_deleted" in upsert.split("DO UPDATE SET")[1]
 
     async def test_missing_document_id_returns_error(self):
         """Tool should reject calls without document_id."""
@@ -931,7 +958,7 @@ class TestSearchArxivRecencyParams:
             assert {"recency_days", "chronological"} <= set(params)
 
     async def test_search_arxiv_passes_recency_through(self, monkeypatch):
-        from src.services.agent.tools import search_arxiv
+        from src.services.agent.tools_impl import execute_tool
 
         captured: dict = {}
 
@@ -944,8 +971,8 @@ class TestSearchArxivRecencyParams:
             fake_tool_search_arxiv,
         )
 
-        await search_arxiv.ainvoke(
-            {"query": "q", "recency_days": 0, "chronological": True}
+        await execute_tool(
+            "search_arxiv", {"query": "q", "recency_days": 0, "chronological": True}
         )
 
         assert captured["recency_days"] == 0
