@@ -103,5 +103,18 @@ FAILED document to PENDING.
 | --- | --- | --- | --- |
 | G13 fresh row in DO KB bridge, `processing_tasks.py:92` | `kb_db.get` → `kb_db.merge(document)` | `test_stale_snapshot_does_not_revert_state_through_do_kb_sync` | `PENDING == FAILED` |
 | G14 compensation on deletion stop, `processing_tasks.py:560` | condition → `False` | `test_late_do_kb_success_is_compensated[*]`, `test_late_graph_write_is_compensated[*]` | no unsync / no graph delete |
-| G15 reconciler selects deleted + neo4j failed, `reconcile_tasks.py` `_reconcilable_filters` | clause → `False` | `test_late_graph_write_is_compensated[False]`, `test_apply_retries_deleted_document_graph_cleanup` | `0 == 1` |
-| G16 failure marker, `reconcile_tasks.py:148` | `_FAILED` → `_COMPLETED` | `test_late_graph_write_is_compensated[False]`, `test_failed_deleted_document_graph_cleanup_remains_retryable` | `'completed' == 'failed'` |
+| G15 reconciler selects deleted + neo4j failed, `reconcile_tasks.py:89` `_reconcilable_filters` | clause → `False` | `test_late_graph_write_is_compensated[False]`, `test_apply_retries_deleted_document_graph_cleanup` | `0 == 1` |
+| G16 cleanup failure marker, `reconcile_tasks.py:246` `_cleanup_deleted_document_graph` | `_FAILED` → `_COMPLETED` | `test_late_graph_write_is_compensated[False]`, `test_failed_deleted_document_graph_cleanup_remains_retryable` | `'completed' == 'failed'` |
+
+### GOO-358 review fixes
+
+The independent review found three more gaps, and each was reproduced red
+first. The CodeRabbit review flagged the wrong G16 line number above, which is
+now corrected.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G17 compensation on the generic failure path, `processing_tasks.py:585` | removed | `test_late_graph_write_is_compensated_when_the_stage_then_crashes` | no graph delete |
+| G18 re-drive re-checks deletion, `reconcile_tasks.py:143` `_redrive_neo4j` | check removed | `test_redrive_racing_a_delete_cleans_up_instead_of_completing` | no graph delete; row marked completed |
+| G19 deleted + neo4j pending selected, `reconcile_tasks.py:89` | `(_FAILED, _PENDING)` → `(_FAILED,)` | `test_deleted_document_left_pending_is_cleaned_up` | `0 == 1` |
+
