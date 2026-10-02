@@ -17,6 +17,9 @@ file it as a proposal instead.
   the Node/pnpm toolchain.
 - **[testing.md](testing.md)** — test layout, how to move a quality floor,
   and the mutation-verification rule for race/idempotency tests.
+- **[data-isolation-matrix.md](data-isolation-matrix.md)** — the
+  two-account allow/deny matrix for documents, citations, search, chat and
+  exports, row by row, with the test (or open issue) behind each row.
 - **[api-contracts.md](api-contracts.md)** — the OpenAPI → generated
   TypeScript pipeline and the adopt-on-touch migration rule.
 - **[gotchas.md](gotchas.md)** — operational invariants preserved from the
