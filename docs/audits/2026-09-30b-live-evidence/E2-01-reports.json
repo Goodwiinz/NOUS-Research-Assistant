@@ -1,0 +1,292 @@
+{
+  "step": "E2-01-reports",
+  "as": "reviewer",
+  "at": "2026-09-30T21:07:00.155703+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/reports",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "id": "0642117c-91a3-4ca4-ba56-9eeda4a5d48f",
+      "title_snapshot": "Record three",
+      "identifiers": {},
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "97292c82-8ba0-4971-a81f-b1a787066866",
+          "receipt_id": "add02549-aa45-481b-8750-0f840ecacc53",
+          "match_method": "new",
+          "evidence": {
+            "observed": {},
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+      "title_snapshot": "Record one",
+      "identifiers": {
+        "doi": [
+          "10.1000/one"
+        ]
+      },
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "9bec5d75-6b4d-493b-b8fe-8bd794c914e8",
+          "receipt_id": "add02549-aa45-481b-8750-0f840ecacc53",
+          "match_method": "new",
+          "evidence": {
+            "observed": {
+              "doi": "10.1000/one"
+            },
+            "conflicts": []
+          }
+        },
+        {
+          "import_record_id": "b7165f60-8584-4f0d-842f-58ee60e2ec5b",
+          "receipt_id": "80d0b3df-262f-4906-9c9a-ef168259b67a",
+          "match_method": "doi",
+          "evidence": {
+            "matched": {
+              "kind": "doi",
+              "value": "10.1000/one"
+            },
+            "observed": {
+              "doi": "10.1000/one"
+            },
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "e7d1f299-47ea-4861-821a-fe8f591a81cb",
+      "title_snapshot": "Record two",
+      "identifiers": {
+        "doi": [
+          "10.1000/two"
+        ]
+      },
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "1b3686e1-3379-4617-993f-455635d14f47",
+          "receipt_id": "add02549-aa45-481b-8750-0f840ecacc53",
+          "match_method": "new",
+          "evidence": {
+            "observed": {
+              "doi": "10.1000/two"
+            },
+            "conflicts": []
+          }
+        },
+        {
+          "import_record_id": "782ca2ab-1952-479e-89ac-ccb20c07d57d",
+          "receipt_id": "80d0b3df-262f-4906-9c9a-ef168259b67a",
+          "match_method": "doi",
+          "evidence": {
+            "matched": {
+              "kind": "doi",
+              "value": "10.1000/two"
+            },
+            "observed": {
+              "doi": "10.1000/two"
+            },
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "3ae08aad-08f0-484e-ae02-d4db7cca1a1c",
+      "title_snapshot": "Closed-book language models hallucinate under distribution shift",
+      "identifiers": {
+        "doi": [
+          "10.5555/eval-0930b-gamma"
+        ]
+      },
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "1c80a238-a371-4952-92e9-49ba642e2405",
+          "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+          "match_method": "new",
+          "evidence": {
+            "observed": {
+              "doi": "10.5555/eval-0930b-gamma"
+            },
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+      "title_snapshot": "Opinion: retrieval is not enough",
+      "identifiers": {
+        "doi": [
+          "10.5555/eval-0930b-delta"
+        ]
+      },
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "50055dfe-40ca-4142-a8e1-52ae952cf4dc",
+          "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+          "match_method": "new",
+          "evidence": {
+            "observed": {
+              "doi": "10.5555/eval-0930b-delta"
+            },
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+      "title_snapshot": "Retrieval augmentation reduces hallucination in open-domain QA",
+      "identifiers": {
+        "doi": [
+          "10.5555/eval-0930b-alpha"
+        ]
+      },
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "240976ca-9def-4214-9b00-e03cb44b5c5e",
+          "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+          "match_method": "new",
+          "evidence": {
+            "observed": {
+              "doi": "10.5555/eval-0930b-alpha"
+            },
+            "conflicts": []
+          }
+        },
+        {
+          "import_record_id": "db8b8a03-1034-4cf3-8ac3-59db06857323",
+          "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+          "match_method": "doi",
+          "evidence": {
+            "matched": {
+              "kind": "doi",
+              "value": "10.5555/eval-0930b-alpha"
+            },
+            "observed": {
+              "doi": "10.5555/eval-0930b-alpha"
+            },
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+      "title_snapshot": "Grounded generation with verified citations",
+      "identifiers": {
+        "doi": [
+          "10.5555/eval-0930b-beta"
+        ]
+      },
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "93d9da87-dd7e-44de-81ef-308533d25da3",
+          "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+          "match_method": "new",
+          "evidence": {
+            "observed": {
+              "doi": "10.5555/eval-0930b-beta"
+            },
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "284229e8-49e8-4da4-b8fc-c802fed20f8f",
+      "title_snapshot": "Record three",
+      "identifiers": {},
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "159b34ed-5df7-421f-9dbe-c653c87b0bec",
+          "receipt_id": "80d0b3df-262f-4906-9c9a-ef168259b67a",
+          "match_method": "new",
+          "evidence": {
+            "observed": {},
+            "conflicts": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "83966411-87c0-4f0e-b523-4dc642be9747",
+      "title_snapshot": "Record six added in edit",
+      "identifiers": {
+        "doi": [
+          "10.1000/six"
+        ]
+      },
+      "study_id": null,
+      "study_link_status": null,
+      "study_link_rationale": null,
+      "merged_into_report_id": null,
+      "observations": [],
+      "imported_records": [
+        {
+          "import_record_id": "b265ec70-cf7f-4508-9a63-031b12b738c0",
+          "receipt_id": "80d0b3df-262f-4906-9c9a-ef168259b67a",
+          "match_method": "new",
+          "evidence": {
+            "observed": {
+              "doi": "10.1000/six"
+            },
+            "conflicts": []
+          }
+        }
+      ]
+    }
+  ]
+}

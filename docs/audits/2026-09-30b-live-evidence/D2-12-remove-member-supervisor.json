@@ -1,0 +1,15 @@
+{
+  "step": "D2-12-remove-member-supervisor",
+  "as": "owner",
+  "at": "2026-09-30T21:05:15.484540+00:00",
+  "request": {
+    "method": "DELETE",
+    "path": "/api/v2/workspaces/d7612a30-602e-488b-b6ee-6a3bf9e9f94d/members/d0a0dd30-0cba-4802-821e-b74ce646e2c0",
+    "body": null
+  },
+  "status": 204,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": ""
+}
