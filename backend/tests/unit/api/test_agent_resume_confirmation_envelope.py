@@ -118,6 +118,7 @@ async def test_resume_confirmation_carries_durable_run_id_after_reload() -> None
     """A cold-load confirmation must retain the exact Stop identity."""
     from src.api.agent import execute as execute_mod
     from src.api.agent.execute import _pending_confirmation_frame
+    from src.shared.enums import JobStatus
 
     thread_id = str(_uuid.uuid4())
     run_id = str(_uuid.uuid4())
@@ -134,7 +135,11 @@ async def test_resume_confirmation_carries_durable_run_id_after_reload() -> None
         patch.object(
             execute_mod,
             "get_active_run_for_thread",
-            new=AsyncMock(return_value=SimpleNamespace(job_id=run_id)),
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    job_id=run_id, status=JobStatus.AWAITING_CONFIRMATION.value
+                )
+            ),
         ),
     ):
         frame = await _pending_confirmation_frame(thread_id, current_user, db=db)  # type: ignore[arg-type]

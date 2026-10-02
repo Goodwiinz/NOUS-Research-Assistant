@@ -378,6 +378,22 @@ def _page_context_to_dict(
     )
 
 
+def stored_request_payload(request: Any) -> Dict[str, Any]:
+    """The request as every job-store publication and Celery message carries it.
+
+    R8-D4: page context is stored in its sanitized form, never the raw client
+    blob; ``workspace_id`` is kept. Sanitizing is idempotent and only shrinks
+    values, so the payload re-validates as an ``AgentExecuteRequest`` on the
+    confirm and worker paths. Use this for every write of ``"request"``.
+    """
+    payload: Dict[str, Any] = request.model_dump(mode="json")
+    payload["page_context"] = {
+        **_page_context_to_dict(request.page_context),
+        "workspace_id": (payload.get("page_context") or {}).get("workspace_id"),
+    }
+    return payload
+
+
 def _get_latest_user_content(messages: List[Any]) -> Optional[str]:
     """Return the latest user or human message content from graph state."""
     for message in reversed(messages):
@@ -2654,7 +2670,7 @@ async def _run_agent_graph(
                             "status": JobStatus.AWAITING_CONFIRMATION,
                             "confirmation": confirmation_details,
                             "tool_executions": [],
-                            "request": request.model_dump(mode="json"),
+                            "request": stored_request_payload(request),
                         },
                         current_user,
                         thread_id=resolved_thread_id,
@@ -2669,7 +2685,7 @@ async def _run_agent_graph(
                         "status": JobStatus.AWAITING_CONFIRMATION,
                         "confirmation": confirmation_details,
                         "tool_executions": [],
-                        "request": request.model_dump(mode="json"),
+                        "request": stored_request_payload(request),
                     },
                     current_user,
                     thread_id=resolved_thread_id,
@@ -3088,7 +3104,7 @@ async def _resume_agent_graph(
                         "confirmation": confirmation_details,
                         "tool_executions": list(final_state.get("tool_executions", [])),
                         "request": (
-                            original_request.model_dump(mode="json")
+                            stored_request_payload(original_request)
                             if original_request
                             else None
                         ),
@@ -3238,7 +3254,7 @@ async def _resume_agent_graph(
                     # match _run_agent_graph and reset the per-turn executions.
                     "tool_executions": [],
                     "request": (
-                        original_request.model_dump(mode="json")
+                        stored_request_payload(original_request)
                         if original_request
                         else None
                     ),

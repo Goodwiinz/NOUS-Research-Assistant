@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -53,10 +53,8 @@ class TestThreadMessagesCountFilterParity:
             call_num = len(captured)
             result = MagicMock()
             if call_num == 1:
-                # Ownership check.
-                result.scalar_one_or_none = MagicMock(return_value=thread)
-            elif call_num == 2:
-                # Page query.
+                # Page query (access runs through workspace_access.get_thread,
+                # patched in each test).
                 result.scalars = MagicMock(
                     return_value=MagicMock(all=MagicMock(return_value=[]))
                 )
@@ -78,12 +76,16 @@ class TestThreadMessagesCountFilterParity:
         user = MagicMock()
         user.id = uuid4()
 
-        await get_thread_messages(
-            thread_id=thread_id, limit=10, before=before, current_user=user, db=db
-        )
+        with patch(
+            "src.api.agent.execute.workspace_access.get_thread",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            await get_thread_messages(
+                thread_id=thread_id, limit=10, before=before, current_user=user, db=db
+            )
 
-        assert len(captured) == 3, captured
-        page_sql, count_sql = captured[1], captured[2]
+        assert len(captured) == 2, captured
+        page_sql, count_sql = captured[0], captured[1]
 
         # The bug: the count statement was built independently of the page
         # query and never picked up the ``before`` predicate.
@@ -108,11 +110,15 @@ class TestThreadMessagesCountFilterParity:
         user = MagicMock()
         user.id = uuid4()
 
-        response = await get_thread_messages(
-            thread_id=thread_id, limit=None, before=None, current_user=user, db=db
-        )
+        with patch(
+            "src.api.agent.execute.workspace_access.get_thread",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            response = await get_thread_messages(
+                thread_id=thread_id, limit=None, before=None, current_user=user, db=db
+            )
 
-        assert len(captured) == 2  # ownership check + single messages query
+        assert len(captured) == 1  # single messages query
         assert response.total == 0
         assert response.messages == []
 
