@@ -42,17 +42,10 @@ def test_duplicate_ids_counted_once() -> None:
     doc.do_kb_data_source_uuid = None
     doc.soft_delete = MagicMock()
 
-    doc_result = MagicMock()
-    doc_result.scalars.return_value.all.return_value = [doc]
-
     db = MagicMock()
-    # First execute = the document lookup; subsequent execute calls (quota
-    # revert etc.) just need to be awaitable.
-    db.execute = AsyncMock(side_effect=[doc_result, MagicMock()])
-    db.commit = AsyncMock()
-    db.rollback = AsyncMock()
 
     file_service = MagicMock()
+    file_service.soft_delete_documents = AsyncMock(return_value=[doc])
     file_service.delete_physical_file = MagicMock()
 
     request = BulkDocumentRequest(document_ids=[dup_id, dup_id, missing_id])
@@ -69,6 +62,11 @@ def test_duplicate_ids_counted_once() -> None:
         )
     )
 
+    # The service sees each id once, so it cannot lock or bill a row twice.
+    assert file_service.soft_delete_documents.await_args.args[1] == [
+        dup_id,
+        missing_id,
+    ]
     # The duplicate must appear exactly once in `successful`, not twice.
     assert resp.successful == [dup_id]
     assert resp.success_count == 1

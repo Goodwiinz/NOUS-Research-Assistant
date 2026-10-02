@@ -34,6 +34,10 @@ from ._errors import client_safe_error, extract_interrupt_confirmation
 logger = logging.getLogger(__name__)
 
 _CANCELLATION_POLL_SECONDS = 0.5
+# A Stop-marker read is advisory while the graph runs: one pool timeout or
+# connection blip must not cancel a turn mid-tool. Only this many consecutive
+# failed polls (~5 s at the default interval) escalate to a failed turn.
+_CANCELLATION_POLL_MAX_CONSECUTIVE_FAILURES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -865,7 +869,8 @@ async def _clear_stale_pending_confirmation(
     resets these on a normal turn entry, but clearing them here makes the
     invariant local to this function so future graph refactors that bypass
     ``preprocessing_node`` cannot silently inherit a stale counter from the
-    abandoned turn.
+    abandoned turn. Separate from ``turn_reset_fields`` because a pending
+    interrupt task survives any input dict; only a checkpoint write clears it.
 
     Returns the list of dropped tool name(s) when state was cleared, or None
     when nothing needed clearing, so callers can observe the drop.
@@ -2384,11 +2389,24 @@ async def _invoke_graph_with_cancellation_monitor(
     graph_task = asyncio.create_task(graph.ainvoke(graph_input, config=config))
 
     async def monitor() -> None:
+        consecutive_failures = 0
         while not graph_task.done():
             await asyncio.sleep(_CANCELLATION_POLL_SECONDS)
             if graph_task.done():
                 return
-            if await cancellation_requested():
+            try:
+                requested = await cancellation_requested()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Already logged by cancellation_requested(). The strict
+                # pre-start and post-return reads still fail closed.
+                consecutive_failures += 1
+                if consecutive_failures >= _CANCELLATION_POLL_MAX_CONSECUTIVE_FAILURES:
+                    raise
+                continue
+            consecutive_failures = 0
+            if requested:
                 graph_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await graph_task
@@ -2451,28 +2469,21 @@ async def _run_agent_graph(
             resolved_thread_id: Optional[str] = None
             thread_obj = None
             tombstones = TombstoneReport()
-            try:
-                thread_obj, _conversation_id = await _resolve_thread(
-                    db, current_user, request
-                )
-                if thread_obj is not None:
-                    resolved_thread_id = str(thread_obj.id)
-                    if request.thread_id != resolved_thread_id:
-                        request.thread_id = resolved_thread_id
-                    # Retry-once + observable-on-failure so a swallowed persist
-                    # can't silently diverge the two stores (audit D3 / P2.6).
-                    await _persist_user_message_guarded(
-                        db, current_user, request, tombstoned_out=tombstones
-                    )
-            except AgentThreadResolutionError:
-                # An explicit thread/workspace is authoritative. Access loss
-                # between edge validation and worker dispatch must fail the
-                # run, never continue against an ephemeral checkpoint.
-                raise
-            except Exception:
-                logger.warning(
-                    "Failed to persist user turn before agent graph run",
-                    exc_info=True,
+            # Any resolution failure (access loss or a DB error during the
+            # re-check) fails the run: continuing would run the graph on an
+            # unverified ``request.thread_id`` checkpoint labelled ephemeral.
+            # The persist below never raises (_persist_user_message_guarded).
+            thread_obj, _conversation_id = await _resolve_thread(
+                db, current_user, request
+            )
+            if thread_obj is not None:
+                resolved_thread_id = str(thread_obj.id)
+                if request.thread_id != resolved_thread_id:
+                    request.thread_id = resolved_thread_id
+                # Retry-once + observable-on-failure so a swallowed persist
+                # can't silently diverge the two stores (audit D3 / P2.6).
+                await _persist_user_message_guarded(
+                    db, current_user, request, tombstoned_out=tombstones
                 )
 
             # Configure LangSmith tracing if available
@@ -2557,6 +2568,7 @@ async def _run_agent_graph(
                 create_runtime_snapshot,
                 runtime_config_fields,
                 runtime_state_fields,
+                turn_reset_fields,
             )
 
             runtime_snapshot = await create_runtime_snapshot(
@@ -2570,34 +2582,18 @@ async def _run_agent_graph(
             initial_state = {
                 "messages": messages,
                 "page_context": page_context,
-                "retrieved_contexts": [],
+                **turn_reset_fields(),
                 "attachment_ids": [
                     str(document_id)
                     for document_id in (getattr(request, "attachment_ids", None) or [])
                 ],
-                "attachment_status": [],
-                "tool_executions": [],
                 "thread_id": request.thread_id or "",
                 "thread_persistence": (
                     THREAD_PERSISTENCE_DURABLE
                     if resolved_thread_id is not None
                     else THREAD_PERSISTENCE_EPHEMERAL
                 ),
-                "turn_index": 0,
-                "tool_loop_count": 0,
-                "error_count": 0,
-                "last_error": "",
-                "pending_confirmation": {},
-                "user_confirmed": False,
-                "intent": "",
-                "user_memories": [],
                 "project_memories": project_memories,
-                "plan": [],
-                "plan_reasoning": "",
-                "reflection_count": 0,
-                "compaction_count": 0,
-                "intent_confidence": 0.0,
-                "last_error_info": {},
                 "user_id": str(current_user.id),
                 "model": request.model,
                 "use_rag": request.use_rag,
