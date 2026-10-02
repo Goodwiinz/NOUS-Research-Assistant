@@ -23269,6 +23269,278 @@
         "title": "SearchAnalyticsResponse",
         "type": "object"
       },
+      "SearchAttemptResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "started",
+              "succeeded",
+              "failed",
+              "skipped"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "worker": {
+            "title": "Worker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "worker",
+          "created_at"
+        ],
+        "title": "SearchAttemptResponse",
+        "type": "object"
+      },
+      "SearchDeltaExport": {
+        "description": "The sealed ``nous.academic.search-delta.v1`` attachment:\n``body_sha256`` is the SHA-256 of ``body`` as canonical JSON.",
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/SearchDeltaExportBody"
+          },
+          "body_sha256": {
+            "title": "Body Sha256",
+            "type": "string"
+          },
+          "exported_at": {
+            "title": "Exported At",
+            "type": "string"
+          },
+          "schema": {
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "exported_at",
+          "body_sha256",
+          "body"
+        ],
+        "title": "SearchDeltaExport",
+        "type": "object"
+      },
+      "SearchDeltaExportBody": {
+        "properties": {
+          "baseline_digest": {
+            "title": "Baseline Digest",
+            "type": "string"
+          },
+          "baseline_execution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Execution Id"
+          },
+          "citation_chasing": {
+            "additionalProperties": true,
+            "title": "Citation Chasing",
+            "type": "object"
+          },
+          "collection_id": {
+            "format": "uuid",
+            "title": "Collection Id",
+            "type": "string"
+          },
+          "corpus_snapshot_digest": {
+            "title": "Corpus Snapshot Digest",
+            "type": "string"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "new",
+                "changed",
+                "corrected_retracted",
+                "unchanged",
+                "unknown"
+              ]
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "title": "Coverage",
+            "type": "object"
+          },
+          "delta_hash": {
+            "title": "Delta Hash",
+            "type": "string"
+          },
+          "execution_id": {
+            "format": "uuid",
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter"
+          },
+          "import_receipt_id": {
+            "format": "uuid",
+            "title": "Import Receipt Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchDeltaItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "schedule_version": {
+            "$ref": "#/components/schemas/SearchScheduleVersionResponse"
+          },
+          "schedule_version_id": {
+            "format": "uuid",
+            "title": "Schedule Version Id",
+            "type": "string"
+          },
+          "scheduled_local": {
+            "title": "Scheduled Local",
+            "type": "string"
+          },
+          "statement": {
+            "title": "Statement",
+            "type": "string"
+          }
+        },
+        "required": [
+          "execution_id",
+          "collection_id",
+          "schedule_id",
+          "schedule_version_id",
+          "scheduled_local",
+          "baseline_digest",
+          "corpus_snapshot_digest",
+          "import_receipt_id",
+          "delta_hash",
+          "counts",
+          "items",
+          "coverage",
+          "citation_chasing",
+          "schedule_version",
+          "statement"
+        ],
+        "title": "SearchDeltaExportBody",
+        "type": "object"
+      },
+      "SearchDeltaItem": {
+        "properties": {
+          "class": {
+            "enum": [
+              "new",
+              "changed",
+              "corrected_retracted",
+              "unchanged",
+              "unknown"
+            ],
+            "title": "Class",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "publication": {
+            "additionalProperties": true,
+            "title": "Publication",
+            "type": "object"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "provider_failed",
+                  "provider_capped",
+                  "not_returned",
+                  "no_doi_publication_check_not_performed",
+                  "merge_unresolved"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "report_id": {
+            "title": "Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "class",
+          "evidence",
+          "publication"
+        ],
+        "title": "SearchDeltaItem",
+        "type": "object"
+      },
       "SearchEvaluationRequest": {
         "description": "Request for search evaluation",
         "properties": {
@@ -23363,6 +23635,148 @@
           "recommendations"
         ],
         "title": "SearchEvaluationResponse",
+        "type": "object"
+      },
+      "SearchExecutionListResponse": {
+        "properties": {
+          "executions": {
+            "items": {
+              "$ref": "#/components/schemas/SearchExecutionResponse"
+            },
+            "title": "Executions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "executions"
+        ],
+        "title": "SearchExecutionListResponse",
+        "type": "object"
+      },
+      "SearchExecutionResponse": {
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/SearchAttemptResponse"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "baseline_execution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Execution Id"
+          },
+          "counts": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "new",
+                    "changed",
+                    "corrected_retracted",
+                    "unchanged",
+                    "unknown"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counts"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "delta_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Hash"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "import_receipt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Receipt Id"
+          },
+          "missed_fires": {
+            "title": "Missed Fires",
+            "type": "integer"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "schedule_version_id": {
+            "format": "uuid",
+            "title": "Schedule Version Id",
+            "type": "string"
+          },
+          "scheduled_for": {
+            "format": "date-time",
+            "title": "Scheduled For",
+            "type": "string"
+          },
+          "scheduled_local": {
+            "title": "Scheduled Local",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "started",
+              "succeeded",
+              "failed",
+              "skipped"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "schedule_version_id",
+          "scheduled_local",
+          "scheduled_for",
+          "missed_fires",
+          "created_at",
+          "status",
+          "attempts"
+        ],
+        "title": "SearchExecutionResponse",
         "type": "object"
       },
       "SearchFilter": {
@@ -24074,6 +24488,349 @@
         "title": "SearchResultItem",
         "type": "object"
       },
+      "SearchScheduleCreate": {
+        "description": "Pin one GOO-298 strategy (from a completed run's search journal).",
+        "properties": {
+          "cron": {
+            "maxLength": 64,
+            "minLength": 9,
+            "title": "Cron",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "source_run_id": {
+            "format": "uuid",
+            "title": "Source Run Id",
+            "type": "string"
+          },
+          "step_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Step Id",
+            "type": "string"
+          },
+          "strategy_version": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Strategy Version",
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_run_id",
+          "step_id",
+          "strategy_version",
+          "cron",
+          "timezone",
+          "idempotency_key"
+        ],
+        "title": "SearchScheduleCreate",
+        "type": "object"
+      },
+      "SearchScheduleListResponse": {
+        "properties": {
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/SearchScheduleResponse"
+            },
+            "title": "Schedules",
+            "type": "array"
+          },
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/SearchStrategyOption"
+            },
+            "title": "Strategies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schedules",
+          "strategies"
+        ],
+        "title": "SearchScheduleListResponse",
+        "type": "object"
+      },
+      "SearchScheduleResponse": {
+        "properties": {
+          "last_execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchExecutionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_fire_local": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Fire Local"
+          },
+          "next_fire_utc": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Fire Utc"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "disabled",
+              "scheduled",
+              "running",
+              "blocked",
+              "failed",
+              "ok"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tip": {
+            "$ref": "#/components/schemas/SearchScheduleVersionResponse"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/SearchScheduleVersionResponse"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "tip",
+          "versions",
+          "status"
+        ],
+        "title": "SearchScheduleResponse",
+        "type": "object"
+      },
+      "SearchScheduleVersionCreate": {
+        "description": "Edit, enable or disable: a new version on top of ``expected_tip_id``.\nA new strategy needs all three of run, step and strategy version.",
+        "properties": {
+          "cron": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 9,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cron"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "expected_tip_id": {
+            "format": "uuid",
+            "title": "Expected Tip Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "step_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Id"
+          },
+          "strategy_version": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Version"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "expected_tip_id",
+          "idempotency_key"
+        ],
+        "title": "SearchScheduleVersionCreate",
+        "type": "object"
+      },
+      "SearchScheduleVersionResponse": {
+        "properties": {
+          "baseline_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Digest"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "cron": {
+            "title": "Cron",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "format": "uuid",
+            "title": "Protocol Version Id",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "source_run_id": {
+            "format": "uuid",
+            "title": "Source Run Id",
+            "type": "string"
+          },
+          "step_id": {
+            "title": "Step Id",
+            "type": "string"
+          },
+          "strategy_version": {
+            "title": "Strategy Version",
+            "type": "string"
+          },
+          "supersedes_schedule_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Schedule Version Id"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "owner_id",
+          "protocol_version_id",
+          "source_run_id",
+          "step_id",
+          "strategy_version",
+          "query",
+          "cron",
+          "timezone",
+          "enabled",
+          "created_at"
+        ],
+        "title": "SearchScheduleVersionResponse",
+        "type": "object"
+      },
       "SearchSortOrder": {
         "description": "Search result sort orders",
         "enum": [
@@ -24085,6 +24842,60 @@
         ],
         "title": "SearchSortOrder",
         "type": "string"
+      },
+      "SearchStrategyOption": {
+        "description": "A pinnable strategy from a completed run of this project.",
+        "properties": {
+          "current_protocol": {
+            "title": "Current Protocol",
+            "type": "boolean"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Id"
+          },
+          "providers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "source_run_id": {
+            "format": "uuid",
+            "title": "Source Run Id",
+            "type": "string"
+          },
+          "step_id": {
+            "title": "Step Id",
+            "type": "string"
+          },
+          "strategy_version": {
+            "title": "Strategy Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_run_id",
+          "step_id",
+          "strategy_version",
+          "query",
+          "providers",
+          "current_protocol"
+        ],
+        "title": "SearchStrategyOption",
+        "type": "object"
       },
       "SearchType": {
         "description": "Search types",
@@ -52967,6 +53778,323 @@
         "summary": "Reopen Screening Report Route",
         "tags": [
           "research-engine-screening"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/search-schedules": {
+      "get": {
+        "description": "Schedules (tip, versions, derived status, next fire, last execution)\nand the pinnable strategies of completed runs.",
+        "operationId": "list_schedules_api_v1_research_engine_projects__project_id__search_schedules_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchScheduleListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Schedules",
+        "tags": [
+          "research-engine-search-updates"
+        ]
+      },
+      "post": {
+        "description": "Pin one strategy to a schedule (SUPERVISE).",
+        "operationId": "create_schedule_api_v1_research_engine_projects__project_id__search_schedules_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchScheduleCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Replayed schedule"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchScheduleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Strategy built under a superseded protocol"
+          },
+          "422": {
+            "description": "Invalid cron, timezone or strategy hash"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Schedule",
+        "tags": [
+          "research-engine-search-updates"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/search-schedules/executions/{execution_id}/delta": {
+      "get": {
+        "description": "The classified delta of one succeeded execution (read-only).",
+        "operationId": "export_delta_api_v1_research_engine_projects__project_id__search_schedules_executions__execution_id__delta_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "execution_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Execution Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "class",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "new",
+                    "changed",
+                    "corrected_retracted",
+                    "unchanged",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Class"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchDeltaExport"
+                }
+              }
+            },
+            "description": "Sealed nous.academic.search-delta.v1 export"
+          },
+          "404": {
+            "description": "Unknown, foreign or unfinished execution"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Delta",
+        "tags": [
+          "research-engine-search-updates"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/search-schedules/{schedule_id}/executions": {
+      "get": {
+        "description": "Every execution of one schedule with all attempts (failures kept).",
+        "operationId": "list_executions_api_v1_research_engine_projects__project_id__search_schedules__schedule_id__executions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchExecutionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Executions",
+        "tags": [
+          "research-engine-search-updates"
+        ]
+      }
+    },
+    "/api/v1/research-engine/projects/{project_id}/search-schedules/{schedule_id}/versions": {
+      "post": {
+        "description": "Edit, enable or disable a schedule as a new version (SUPERVISE).",
+        "operationId": "version_schedule_api_v1_research_engine_projects__project_id__search_schedules__schedule_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchScheduleVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Replayed version"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchScheduleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Stale tip or superseded protocol"
+          },
+          "422": {
+            "description": "Invalid cron, timezone or strategy hash"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Version Schedule",
+        "tags": [
+          "research-engine-search-updates"
         ]
       }
     },

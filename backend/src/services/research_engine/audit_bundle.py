@@ -399,6 +399,7 @@ async def gather_parts(db: AsyncSession, context: ProjectContext) -> list[Part]:
         _peer_review,
         _manuscript_releases,
         _deposits,
+        _search_updates,
         _prisma,
     ):
         parts.extend(await build(db, context))
@@ -417,6 +418,22 @@ async def _deposits(db: AsyncSession, context: ProjectContext) -> list[Part]:
             deposit_service.EXPORT_SCHEMA,
             body,
             not body["deposits"] and not body["approvals"],
+        )
+    ]
+
+
+async def _search_updates(db: AsyncSession, context: ProjectContext) -> list[Part]:
+    """GOO-319: every search schedule version, execution and attempt, with
+    each succeeded execution's delta hash and class counts."""
+    from src.services.research_engine import search_update_service
+
+    body = await search_update_service.export_part(db, context)
+    return [
+        _sealed_part(
+            "search-updates.json",
+            search_update_service.EXPORT_SCHEMA,
+            body,
+            not body["schedules"],
         )
     ]
 
