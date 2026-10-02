@@ -132,7 +132,7 @@ async def test_execute_code_rejects_empty_thread_id() -> None:
     ["2401.12345", "2401.1234", "2303.15563v2", "math/0309136", "math.GT/0309136v1"],
 )
 def test_valid_arxiv_ids_accepted(paper_id: str) -> None:
-    from src.services.agent.tools import _reject_invalid_arxiv_ids
+    from src.services.agent.tool_helpers import _reject_invalid_arxiv_ids
 
     assert _reject_invalid_arxiv_ids([paper_id]) is None
 
@@ -150,7 +150,7 @@ def test_valid_arxiv_ids_accepted(paper_id: str) -> None:
     ],
 )
 def test_invalid_arxiv_ids_rejected(paper_id: str) -> None:
-    from src.services.agent.tools import _reject_invalid_arxiv_ids
+    from src.services.agent.tool_helpers import _reject_invalid_arxiv_ids
 
     rejected = _reject_invalid_arxiv_ids([paper_id])
     assert rejected is not None and "error" in rejected
