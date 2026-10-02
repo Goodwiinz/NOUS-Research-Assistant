@@ -58,7 +58,8 @@ class _FakeDB:
         pass
 
     async def execute(self, _stmt):
-        return SimpleNamespace(rowcount=1)
+        # rowcount for UPDATEs; first() → None = no duplicate (GOO-333 dup check)
+        return SimpleNamespace(rowcount=1, first=lambda: None)
 
     async def rollback(self):
         self.rollbacks += 1
