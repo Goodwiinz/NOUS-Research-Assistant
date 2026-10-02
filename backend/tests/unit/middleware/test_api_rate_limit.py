@@ -405,6 +405,39 @@ def test_main_registers_rate_limiter_inside_tenancy_inside_cors() -> None:
     )
 
 
+def test_control_char_lookalike_of_skipped_path_is_still_limited() -> None:
+    """URL parsing drops tab/CR/LF, so ``url.path`` of "/api/v1/hea\\tlth" is
+    the skipped "/api/v1/health". The limiter must key on the raw routed
+    ``scope["path"]`` (the tenancy gate's I7 rule) and still count it."""
+    from src.middleware.rate_limiting import ApiRateLimitMiddleware
+
+    async def noop_app(scope: Any, receive: Any, send: Any) -> None:
+        raise AssertionError("dispatch is called directly")
+
+    middleware = ApiRateLimitMiddleware(noop_app, limiter=_memory_limiter())
+    raw = "/api/v1/hea\tlth"
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": raw,
+            "raw_path": raw.encode(),
+            "query_string": b"",
+            "headers": [(b"host", b"testserver")],
+            "client": ("10.0.0.9", 1),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+    )
+    assert request.url.path == "/api/v1/health"  # the parsed look-alike
+
+    async def call_next(_req: Request) -> Response:
+        return Response("ok")
+
+    response = asyncio.run(middleware.dispatch(request, call_next))
+    assert response.headers["X-RateLimit-Limit"] == "600"
+
+
 def test_arxiv_bucket_limit_is_ten_per_minute() -> None:
     client = TestClient(_make_app(_memory_limiter()))
 

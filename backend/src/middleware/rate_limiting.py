@@ -447,7 +447,9 @@ class ApiRateLimitMiddleware(BaseHTTPMiddleware):
     # -- dispatch ---------------------------------------------------------
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        path = request.url.path
+        # Raw routed path, as in MultiTenancyMiddleware (audit I7): URL parsing
+        # drops tab/CR/LF, so url.path could disagree with the routed path.
+        path = request.scope["path"]
 
         # Only API routes count; CORS preflights carry no identity.
         if not path.startswith("/api/") or request.method == "OPTIONS":
