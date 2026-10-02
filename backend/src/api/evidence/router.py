@@ -327,7 +327,8 @@ async def get_evidence_meter(
         except BatchClassificationLimitError as e:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400,
+                detail="Maximum 100 sources allowed per batch classification request",
             ) from e
 
         loaded = _load_sources_or_http_error(
@@ -376,7 +377,8 @@ async def get_evidence_meter(
         except BatchClassificationLimitError:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400,
+                detail="Maximum 100 sources allowed per batch classification request",
             )
         except BatchClassificationTimeoutError:
             logger.warning("Batch classification timed out", exc_info=True)
@@ -602,7 +604,8 @@ async def classify_sources_for_claim(
         except BatchClassificationLimitError as e:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400,
+                detail="Maximum 100 sources allowed per batch classification request",
             ) from e
 
         loaded = _load_sources_or_http_error(
@@ -626,7 +629,8 @@ async def classify_sources_for_claim(
         except BatchClassificationLimitError:
             logger.warning("Batch classification limit exceeded", exc_info=True)
             raise HTTPException(
-                status_code=400, detail="Batch classification limit exceeded"
+                status_code=400,
+                detail="Maximum 100 sources allowed per batch classification request",
             )
         except BatchClassificationTimeoutError:
             logger.warning("Batch classification timed out", exc_info=True)
