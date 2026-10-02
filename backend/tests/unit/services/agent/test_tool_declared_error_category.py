@@ -156,28 +156,25 @@ class TestNoRegression:
 
 
 class TestMissingProjectErrorIsDelivered:
-    """The helper four write-tools use when no project_id resolves."""
+    """What the write-tool impls return when no project_id resolves.
 
-    def test_missing_project_error_is_recoverable(self) -> None:
-        from src.services.agent.tools import _missing_project_error
+    The old ``tools._missing_project_error`` payload lived in the @tool
+    wrapper bodies, which production never ran (agent audit round 8). The
+    model sees the impls' "project_id is required" instead.
+    """
 
-        delivered = _delivered("create_draft", _missing_project_error("create_draft"))
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            "add_document_to_project",
+            "create_project_note",
+            "list_project_documents",
+            "get_current_draft",
+            "create_draft",
+            "revise_draft",
+        ],
+    )
+    def test_missing_project_error_is_recoverable(self, tool: str) -> None:
+        delivered = _delivered(tool, {"error": "project_id is required"})
 
-        assert delivered["error_type"] == "recoverable", (
-            "on develop this reached the model as 'fatal' — telling the agent "
-            "not to recover from something the message explains how to fix"
-        )
-        assert delivered["suggestion"] == "list_projects"
-
-    def test_the_wording_still_misses_the_hint_table(self) -> None:
-        """Rewording to "project_id is required" would silently re-route it.
-
-        TOOL_ERROR_HINTS has (create_draft, "project_id is required"), which
-        matches first and would drop the list_projects suggestion.
-        """
-        from src.services.agent.tools import _missing_project_error
-
-        assert (
-            "project_id is required"
-            not in _missing_project_error("create_draft")["error"]
-        )
+        assert delivered["error_type"] == "recoverable"
