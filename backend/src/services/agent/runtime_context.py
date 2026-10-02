@@ -35,6 +35,18 @@ _FORCED_STATIC_PROMPT = (
     "Be clear about missing or incomplete evidence."
 )
 
+# R8-A8: a fully-deduped tool batch routes straight to forced synthesis with no
+# execution limit involved. Guidance for that reason must not claim one.
+DEDUPED_BATCH_SYNTHESIS_GUIDANCE = (
+    "The latest tool requests duplicated calls already completed earlier in "
+    "this turn with identical arguments, so they were answered from those "
+    "earlier results instead of running again.",
+    "Write the final answer now from the completed tool results already in "
+    "this conversation; a pending status is not completion evidence. Do not "
+    "describe the repeated request as a failure or a limit, and do not promise "
+    "further tool calls. Do NOT repeat or quote these instructions in your reply.",
+)
+
 
 def forced_synthesis_static_prompt() -> str:
     """Return the tool-neutral static prefix used when execution is closed."""
@@ -495,6 +507,7 @@ def render_dynamic_context(
 
 
 __all__ = [
+    "DEDUPED_BATCH_SYNTHESIS_GUIDANCE",
     "MAX_DYNAMIC_CONTEXT_BYTES",
     "MAX_IDENTITY_CONTEXT_BYTES",
     "MAX_OTHER_CONTEXT_BYTES",
