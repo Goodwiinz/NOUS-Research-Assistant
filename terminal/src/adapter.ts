@@ -166,11 +166,16 @@ export async function* streamReply(
       throw new Error(
         "Connection closed before completion. The request was not retried.",
       );
+    const approvalId = String(confirmation.details.approval_id ?? "");
+    if (!/^[a-f0-9]{64}$/.test(approvalId)) {
+      throw new Error("This approval has expired. Please start a new request.");
+    }
     const approved = await approve(confirmation.details, abortSignal);
     abortSignal.throwIfAborted();
     pendingApproval = undefined;
     yield snapshot();
     stream = streamConfirm(confirmation.threadId, approved, {
+      approvalId,
       signal: abortSignal,
       onThreadId: options.onThreadId,
     });

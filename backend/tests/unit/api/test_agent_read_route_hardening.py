@@ -237,6 +237,9 @@ async def test_parked_card_is_not_redelivered_for_a_non_parked_run(
 
 @pytest.mark.asyncio
 async def test_parked_card_is_redelivered_for_an_awaiting_run() -> None:
+    from src.services.agent.confirmation_service import pending_approval
+
+    thread_id = str(uuid.uuid4())
     current_user = Mock(id="user-1", organization_id="org-1")
     patches = _graph_patches(
         _snapshot_with_interrupt(_CONFIRMATION, user_id=current_user.id)
@@ -244,6 +247,14 @@ async def test_parked_card_is_redelivered_for_an_awaiting_run() -> None:
     active = SimpleNamespace(
         job_id=str(uuid.uuid4()), status=JobStatus.AWAITING_CONFIRMATION.value
     )
+    active.run_metadata = {
+        "approval_id": pending_approval(
+            _snapshot_with_interrupt(_CONFIRMATION, user_id=current_user.id),
+            thread_id=thread_id,
+            run_id=active.job_id,
+            user_id=current_user.id,
+        ).approval_id
+    }
     with (
         patches[0],
         patches[1],
@@ -253,7 +264,7 @@ async def test_parked_card_is_redelivered_for_an_awaiting_run() -> None:
         ),
     ):
         frame = await _pending_confirmation_frame(
-            str(uuid.uuid4()), current_user, db=object()  # type: ignore[arg-type]
+            thread_id, current_user, db=object()  # type: ignore[arg-type]
         )
     assert frame is not None
 

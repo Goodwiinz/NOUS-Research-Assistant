@@ -362,6 +362,7 @@ test('streamConfirm persists thread_id rotation from trace event', async () => {
   );
 
   for await (const _ of streamConfirm('stale-id', true, {
+    approvalId: 'a'.repeat(64),
     fetchFn: mockFetch as any,
   })) {
     // drain

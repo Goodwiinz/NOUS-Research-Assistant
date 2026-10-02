@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import AsyncSessionLocal
 from src.models.user import User
 
-from ._errors import client_safe_error, extract_interrupt_confirmation
+from ._errors import client_safe_error
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,11 @@ from src.services.agent import job_store as _job_store
 from src.services.agent._builders import RECURSION_LIMIT
 from src.services.agent._sanitize import current_turn_final_text, sanitize_page_context
 from src.services.agent.agent_run_service import RunStatusDecision, get_run
+from src.services.agent.confirmation_service import (
+    ApprovalExpired,
+    pending_confirmation,
+    require_approval,
+)
 from src.services.agent.job_store import _l1 as _jobs
 from src.services.agent.job_store import _l1_lock as _jobs_lock
 from src.services.agent.job_store import _write_to_redis_only
@@ -2660,8 +2665,11 @@ async def _run_agent_graph(
                 # Primary interrupt detection — see _extract_pending_interrupt.
                 # ainvoke() returning without raising does NOT mean the turn
                 # completed; the graph may have paused at interrupt_node.
-                confirmation_details = _extract_pending_interrupt(
-                    await graph.aget_state(config)
+                confirmation_details = pending_confirmation(
+                    await graph.aget_state(config),
+                    thread_id=config["configurable"]["thread_id"],
+                    run_id=job_id,
+                    user_id=current_user.id,
                 )
                 if confirmation_details is not None:
                     await _publish_producer_status(
@@ -2676,9 +2684,16 @@ async def _run_agent_graph(
                         thread_id=resolved_thread_id,
                     )
                     return
-            except GraphInterrupt as exc:
+            except GraphInterrupt:
                 # Defensive fallback — see _extract_pending_interrupt docstring.
-                confirmation_details = extract_interrupt_confirmation(exc)
+                confirmation_details = pending_confirmation(
+                    await graph.aget_state(config),
+                    thread_id=config["configurable"]["thread_id"],
+                    run_id=job_id,
+                    user_id=current_user.id,
+                )
+                if confirmation_details is None:
+                    raise ApprovalExpired()
                 await _publish_producer_status(
                     job_id,
                     {
@@ -2844,6 +2859,8 @@ async def _resume_agent_graph(
     job_id: str,
     confirmed: bool,
     current_user: User,
+    *,
+    approval_id: str,
 ):
     """Resume the agent graph after human confirmation."""
     from langgraph.errors import GraphInterrupt
@@ -2860,8 +2877,30 @@ async def _resume_agent_graph(
     AgentMessage = schemas["AgentMessage"]
 
     async with AsyncSessionLocal() as db:
+        verified_thread_id: Optional[str] = None
+        confirmation_claim_owned = False
         try:
-            verified_thread_id: Optional[str] = None
+            durable_run = await get_run(
+                db,
+                job_id,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            if asyncio.iscoroutine(
+                durable_run
+            ):  # fail closed on a malformed DB adapter
+                durable_run.close()
+                durable_run = None
+            # BackgroundTasks may start after another producer has advanced
+            # the run. Such a task owns nothing and must not fail/re-park it.
+            if (
+                durable_run is None
+                or getattr(durable_run, "status", None) != JobStatus.RUNNING.value
+                or (getattr(durable_run, "run_metadata", None) or {}).get("approval_id")
+                != approval_id
+            ):
+                return
+            confirmation_claim_owned = True
             # L1 first, then Redis: in Celery dispatch mode (or behind a
             # multi-replica API) the pod resuming the confirm may not be the
             # pod that dispatched, so the request payload only exists in
@@ -3021,17 +3060,28 @@ async def _resume_agent_graph(
                     )
                     return
 
-            durable_run = await get_run(
-                db,
-                job_id,
-                organization_id=getattr(current_user, "organization_id", None),
-                user_id=current_user.id,
-            )
-            if asyncio.iscoroutine(
-                durable_run
-            ):  # fail closed on a malformed DB adapter
-                durable_run.close()
-                durable_run = None
+            try:
+                approval = require_approval(
+                    snapshot,
+                    approval_id=approval_id,
+                    thread_id=resume_thread_id,
+                    run_id=job_id,
+                    user_id=current_user.id,
+                )
+            except ApprovalExpired:
+                from src.services.agent.agent_run_service import (
+                    release_confirmation_claim,
+                )
+
+                await release_confirmation_claim(
+                    db,
+                    job_id,
+                    approval_id=approval_id,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                return
+
             if (
                 durable_run is not None
                 and durable_run.thread_id is not None
@@ -3083,7 +3133,7 @@ async def _resume_agent_graph(
                             if runtime_state_update
                             else {}
                         ),
-                        resume={"confirmed": confirmed},
+                        resume=approval.resume(confirmed),
                     ),
                     config,
                     job_id,
@@ -3093,8 +3143,11 @@ async def _resume_agent_graph(
             # Primary interrupt detection (mirrors _run_agent_graph and the
             # pre-resume check above) — a multi-step destructive flow can
             # re-fire interrupt() during resume without raising GraphInterrupt.
-            confirmation_details = _extract_pending_interrupt(
-                await graph.aget_state(config)
+            confirmation_details = pending_confirmation(
+                await graph.aget_state(config),
+                thread_id=resume_thread_id,
+                run_id=job_id,
+                user_id=current_user.id,
             )
             if confirmation_details is not None:
                 await _publish_producer_status(
@@ -3235,7 +3288,7 @@ async def _resume_agent_graph(
                 current_user,
                 thread_id=verified_thread_id,
             )
-        except GraphInterrupt as exc:
+        except GraphInterrupt:
             # A multi-step destructive flow can re-fire interrupt() during the
             # resume (user confirms tool #1, the agent then issues tool #2).
             # Without this handler the second interrupt bubbles into the generic
@@ -3244,7 +3297,14 @@ async def _resume_agent_graph(
             # HITL on the job/poll path. Mirror _run_agent_graph: re-park the job
             # as awaiting_confirmation. Uses original_request (the resume path's
             # request), not ``request``.
-            confirmation_details = extract_interrupt_confirmation(exc)
+            confirmation_details = pending_confirmation(
+                await graph.aget_state(config),
+                thread_id=resume_thread_id,
+                run_id=job_id,
+                user_id=current_user.id,
+            )
+            if confirmation_details is None:
+                raise ApprovalExpired()
             await _publish_producer_status(
                 job_id,
                 {
@@ -3264,6 +3324,8 @@ async def _resume_agent_graph(
             )
             return
         except asyncio.CancelledError:
+            if not confirmation_claim_owned:
+                raise
             # See parallel handler in _run_agent_graph above — CancelledError
             # is a BaseException, so the ``except Exception`` below misses it.
             logger.warning("Agent graph resume cancelled", extra={"job_id": job_id})
@@ -3280,6 +3342,8 @@ async def _resume_agent_graph(
             )
             raise
         except asyncio.TimeoutError:
+            if not confirmation_claim_owned:
+                return
             logger.error("Agent graph resume timed out", extra={"job_id": job_id})
             await _publish_producer_status(
                 job_id,
@@ -3292,6 +3356,8 @@ async def _resume_agent_graph(
             )
         except Exception as e:
             logger.error("Agent graph resume failed", exc_info=e)
+            if not confirmation_claim_owned:
+                return
             await _publish_producer_status(
                 job_id,
                 {

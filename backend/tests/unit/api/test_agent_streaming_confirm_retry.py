@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+
 
 @pytest.fixture(autouse=True)
 def _reset_compiled_graph_cache():
@@ -89,7 +91,9 @@ async def test_confirm_does_not_resume_after_durable_stop_wins():
 
     graph = _GuardedGraph()
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-stopped", confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id="thread-stopped", confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
     claim = AsyncMock(return_value=False)
     redis_client = object()
@@ -200,7 +204,9 @@ async def test_confirm_retries_on_first_aget_state_miss():
     # is_disconnected() before each event, so True would (correctly) cancel
     # the resumed run instead of letting it complete normally.
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-abc", confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id="thread-abc", confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -262,7 +268,9 @@ async def test_confirm_returns_thread_not_found_after_both_attempts_fail():
         return _FakeGraphNotFound()
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=True))
-    body = SimpleNamespace(thread_id="thread-gone", confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id="thread-gone", confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -331,6 +339,7 @@ async def test_confirm_rejects_legacy_checkpoint_without_owned_thread():
         thread_id="11111111-1111-1111-1111-111111111111",
         confirmed=True,
         model="",
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 

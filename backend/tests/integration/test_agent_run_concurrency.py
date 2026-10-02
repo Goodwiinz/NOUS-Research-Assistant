@@ -25,6 +25,7 @@ from src.models.thread import Thread, ThreadStatus
 from src.models.user import User, UserRole
 from src.services.agent import agent_run_service as svc
 from src.services.agent.agent_submission_service import request_run_cancellation
+from src.services.agent.confirmation_service import pending_approval
 from src.shared.enums import JobStatus
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
@@ -255,6 +256,20 @@ class _PostMonitorGraph:
             HumanMessage(content="current question"),
             AIMessage(content="CURRENT TURN ANSWER"),
         ]
+        self.pending_snapshot = SimpleNamespace(
+            values={"user_id": self.user_id, "messages": self.messages},
+            config={"configurable": {"checkpoint_id": "resume-checkpoint"}},
+            tasks=[
+                SimpleNamespace(
+                    interrupts=[
+                        SimpleNamespace(
+                            id="post-monitor-approval",
+                            value={"tools": [], "message": "Continue the action?"},
+                        )
+                    ]
+                )
+            ],
+        )
 
     async def ainvoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"messages": self.messages, "tool_executions": []}
@@ -262,11 +277,7 @@ class _PostMonitorGraph:
     async def aget_state(self, _config: dict[str, Any]) -> Any:
         self.state_reads += 1
         if self.resume and self.state_reads == 1:
-            return SimpleNamespace(
-                values={"user_id": self.user_id, "messages": self.messages},
-                config={"configurable": {"checkpoint_id": "resume-checkpoint"}},
-                tasks=[SimpleNamespace(interrupts=[object()])],
-            )
+            return self.pending_snapshot
         self.post_monitor_reached.set()
         await self.release_post_monitor.wait()
         return None
@@ -372,6 +383,14 @@ async def _run_post_monitor_terminal_race(
         thread_id,
     ):
         job_id = str(uuid.uuid4())
+        graph = _PostMonitorGraph(resume=runner == "resume", user_id=user_id)
+        approval = pending_approval(
+            graph.pending_snapshot,
+            thread_id=str(thread_id),
+            run_id=job_id,
+            user_id=user_id,
+        )
+        assert approval is not None
         async with factory() as setup:
             initial = await svc.upsert_run(
                 setup,
@@ -380,6 +399,7 @@ async def _run_post_monitor_terminal_race(
                 user_id=user_id,
                 organization_id=organization_id,
                 thread_id=str(thread_id),
+                run_metadata={"approval_id": approval.approval_id},
             )
             assert initial is not None and initial.thread_id == thread_id
 
@@ -401,7 +421,6 @@ async def _run_post_monitor_terminal_race(
             role=UserRole.USER,
             is_active=True,
         )
-        graph = _PostMonitorGraph(resume=runner == "resume", user_id=user_id)
         live_payload: dict[str, Any] = {
             "status": (
                 JobStatus.AWAITING_CONFIRMATION.value
@@ -412,6 +431,7 @@ async def _run_post_monitor_terminal_race(
             "organization_id": str(organization_id),
             "thread_id": str(thread_id),
             "request": request.model_dump(mode="json"),
+            "confirmation": approval.confirmation(),
         }
         with job_store._l1_lock:
             job_store._l1[job_id] = live_payload
@@ -513,7 +533,9 @@ async def _run_post_monitor_terminal_race(
         runner_task = asyncio.create_task(
             execution_service._run_agent_graph(job_id, request, user)
             if runner == "initial"
-            else execution_service._resume_agent_graph(job_id, True, user)
+            else execution_service._resume_agent_graph(
+                job_id, True, user, approval_id=approval.approval_id
+            )
         )
         try:
             await asyncio.wait_for(graph.post_monitor_reached.wait(), timeout=5)

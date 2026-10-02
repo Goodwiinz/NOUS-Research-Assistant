@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from src.services.agent.stream_buffer import BufferedFrame
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_stream import frames_of_type, sse_seq
 
 
@@ -100,20 +101,23 @@ class _NestedInterruptGraph:
             ),
             SimpleNamespace(
                 values=values,
+                config={"configurable": {"checkpoint_id": "checkpoint-2"}},
                 tasks=(
                     SimpleNamespace(
                         interrupts=(
                             SimpleNamespace(
+                                id="test-interrupt",
                                 value={
                                     "tool_name": "create_note",
                                     "message": "Create this note?",
-                                }
+                                },
                             ),
                         )
                     ),
                 ),
             ),
         ]
+        self._snapshots.insert(1, self._snapshots[0])
         self.thread_id = thread_id
 
     async def astream_events(self, *args, **kwargs):
@@ -144,6 +148,7 @@ async def test_confirm_persists_only_assistant_row_not_user_row():
         thread_id="11111111-1111-1111-1111-111111111111",
         confirmed=True,
         model="gpt-5",
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 
@@ -224,6 +229,7 @@ async def test_confirm_derives_idempotent_assistant_cmid_from_user_row():
         thread_id="11111111-1111-1111-1111-111111111111",
         confirmed=True,
         model="gpt-5",
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 
@@ -302,7 +308,9 @@ async def test_legacy_cursor_confirm_receives_nested_approval_gate():
     fake_db = AsyncMock()
     fake_db.close = AsyncMock()
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id=thread_id, confirmed=True, model="gpt-5")
+    body = SimpleNamespace(
+        thread_id=thread_id, confirmed=True, model="gpt-5", approval_id="a" * 64
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -402,6 +410,7 @@ async def test_confirm_canonical_completion_requires_persisted_assistant(
         thread_id="11111111-1111-1111-1111-111111111111",
         confirmed=True,
         model="gpt-5",
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 

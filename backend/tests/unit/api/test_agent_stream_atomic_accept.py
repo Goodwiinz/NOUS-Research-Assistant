@@ -124,11 +124,13 @@ class _InterruptGraph:
 
     async def aget_state(self, _config: Any) -> Any:
         return SimpleNamespace(
-            values={"messages": []},
+            values={"messages": [], "user_id": _config["configurable"]["user_id"]},
+            config={"configurable": {"checkpoint_id": "saved-interrupt"}},
             tasks=(
                 SimpleNamespace(
                     interrupts=(
                         SimpleNamespace(
+                            id="interrupt-1",
                             value={"message": "Confirm this action"},
                         ),
                     )

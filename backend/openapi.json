@@ -7006,6 +7006,11 @@
       },
       "ConfirmationRequest": {
         "properties": {
+          "approval_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Approval Id",
+            "type": "string"
+          },
           "confirmed": {
             "description": "Whether the user confirms the action",
             "title": "Confirmed",
@@ -7013,6 +7018,7 @@
           }
         },
         "required": [
+          "approval_id",
           "confirmed"
         ],
         "title": "ConfirmationRequest",
@@ -25584,6 +25590,11 @@
       },
       "StreamConfirmRequest": {
         "properties": {
+          "approval_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Approval Id",
+            "type": "string"
+          },
           "confirmed": {
             "title": "Confirmed",
             "type": "boolean"
@@ -25595,6 +25606,7 @@
           }
         },
         "required": [
+          "approval_id",
           "thread_id",
           "confirmed"
         ],

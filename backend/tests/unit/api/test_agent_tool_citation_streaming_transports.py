@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_stream import frames_of_type, make_stream_request, sse_data
 
 pytestmark = pytest.mark.unit
@@ -159,6 +160,7 @@ async def _run_confirm(graph: _ConfirmCitationGraph) -> list[str]:
         thread_id="22222222-2222-2222-2222-222222221622",
         confirmed=True,
         model="gpt-5",
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
     fake_db = AsyncMock()

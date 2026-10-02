@@ -14,6 +14,7 @@ from uuid import UUID
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_stream import (
     make_stream_request,
     sse_event_name,
@@ -104,7 +105,7 @@ async def test_stream_confirm_event_generator_emits_trace_event_before_workflow_
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     thread_id = "11111111-1111-4111-8111-111111111624"
-    body = SimpleNamespace(thread_id=thread_id, confirmed=True)
+    body = SimpleNamespace(thread_id=thread_id, confirmed=True, approval_id="a" * 64)
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (

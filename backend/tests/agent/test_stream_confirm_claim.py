@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from src.services.agent.confirmation_service import pending_approval
 from tests.utils.agent_thread_access import editable_thread
 
 THREAD_ID = "11111111-1111-4111-8111-111111111611"
@@ -61,7 +62,13 @@ def _make_snapshot(checkpoint_id: str):
             "retrieved_contexts": [],
             "plan": [],
         },
-        tasks=(),
+        tasks=(
+            SimpleNamespace(
+                interrupts=(
+                    SimpleNamespace(id="test-interrupt", value={"message": "Approve?"}),
+                )
+            ),
+        ),
         config={"configurable": {"checkpoint_id": checkpoint_id}},
     )
 
@@ -141,7 +148,14 @@ def stream_confirm_harness(monkeypatch):
     )
 
     def make_confirm_generator():
-        body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="gpt-5")
+        body = SimpleNamespace(
+            thread_id=THREAD_ID,
+            confirmed=True,
+            model="gpt-5",
+            approval_id=pending_approval(
+                snapshot, thread_id=THREAD_ID, run_id="run-1", user_id="user-1"
+            ).approval_id,
+        )
         request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
         current_user = Mock(id="user-1", organization_id="org-1")
         return streaming_mod.stream_confirm_event_generator(body, request, current_user)

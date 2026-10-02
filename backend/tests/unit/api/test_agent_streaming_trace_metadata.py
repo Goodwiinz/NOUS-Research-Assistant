@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.models.user import User
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
 
@@ -496,9 +497,13 @@ async def test_streaming_confirmation_root_uses_owned_durable_run_metadata(
         state=SimpleNamespace(request_id=REQUEST_ID),
         is_disconnected=AsyncMock(return_value=False),
     )
-    body = SimpleNamespace(thread_id=str(THREAD_ID), confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=str(THREAD_ID), confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = cast(User, SimpleNamespace(id=USER_ID, organization_id=ORG_ID))
     durable_run = SimpleNamespace(
+        status="running",
+        run_metadata={"approval_id": "a" * 64},
         job_id=RUN_ID,
         thread_id=THREAD_ID,
         user_message_id=USER_MESSAGE_ID,
@@ -591,6 +596,8 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
     job_id = RUN_ID
     current_user = cast(User, SimpleNamespace(id=USER_ID, organization_id=ORG_ID))
     durable_run = SimpleNamespace(
+        status="running",
+        run_metadata={"approval_id": "a" * 64},
         job_id=job_id,
         thread_id=THREAD_ID,
         user_message_id=USER_MESSAGE_ID,
@@ -618,7 +625,9 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
         patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await execution_mod._resume_agent_graph(job_id, True, current_user)
+            await execution_mod._resume_agent_graph(
+                job_id, True, current_user, approval_id="a" * 64
+            )
 
     assert graph.invoke_config is not None
     assert graph.invoke_config["metadata"] == {
@@ -655,9 +664,13 @@ async def test_stream_confirmation_binds_buffer_to_durable_run_id(
         state=SimpleNamespace(request_id=REQUEST_ID),
         is_disconnected=AsyncMock(return_value=False),
     )
-    body = SimpleNamespace(thread_id=str(bind_thread_id), confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=str(bind_thread_id), confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = cast(User, SimpleNamespace(id=USER_ID, organization_id=ORG_ID))
     durable_run = SimpleNamespace(
+        status="running",
+        run_metadata={"approval_id": "a" * 64},
         job_id=RUN_ID,
         thread_id=str(bind_thread_id),
         user_message_id=USER_MESSAGE_ID,

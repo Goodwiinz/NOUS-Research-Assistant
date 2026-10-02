@@ -282,7 +282,9 @@ async def _confirm_denial_payload(
         frames = [
             frame
             async for frame in stream_confirm_event_generator(
-                SimpleNamespace(thread_id=thread_id, confirmed=True, model=""),
+                SimpleNamespace(
+                    thread_id=thread_id, confirmed=True, model="", approval_id="a" * 64
+                ),
                 SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
                 Mock(id="user-1", organization_id="org-1"),
             )
