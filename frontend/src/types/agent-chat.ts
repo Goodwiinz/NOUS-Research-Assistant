@@ -105,6 +105,8 @@ export interface PendingConfirmation {
    * resolve its id. */
   jobId: string;
   origin?: 'sse' | 'durable';
+  /** Native graph receipt; Trigger.dev approvals use waitTokenId instead. */
+  approvalId?: string;
   tools: Array<{ name: string; args: Record<string, unknown> }>;
   message: string;
   waitTokenId?: string;

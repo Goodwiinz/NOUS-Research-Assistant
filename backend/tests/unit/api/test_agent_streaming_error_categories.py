@@ -23,6 +23,7 @@ from openai import RateLimitError
 from src.api.agent.streaming import _stream_failure_category
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.shared.enums import AgentErrorCategory
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_stream import frames_of_type, make_stream_request, sse_data
 
 
@@ -110,7 +111,7 @@ async def _run_confirm(
     from src.api.agent.streaming import stream_confirm_event_generator
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id=thread_id, confirmed=True)
+    body = SimpleNamespace(thread_id=thread_id, confirmed=True, approval_id="a" * 64)
     current_user = Mock(id=user_id, organization_id="org-1")
     session = session or AsyncMock()
 
@@ -230,7 +231,7 @@ async def test_stream_confirm_hydrates_frozen_projection_into_resume_command() -
     assert session.get.await_args is not None
     assert session.get.await_args.args[1] == runtime_snapshot_id
     assert graph.resume_input is not None
-    assert graph.resume_input.resume == {"confirmed": True}
+    assert graph.resume_input.resume == {"test-interrupt": {"confirmed": True}}
     assert graph.resume_input.update["runtime_tool_names"] == list(
         TOOL_REGISTRY.available_descriptor_names()
     )

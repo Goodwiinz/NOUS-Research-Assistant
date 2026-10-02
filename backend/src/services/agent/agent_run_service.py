@@ -199,6 +199,7 @@ async def upsert_run(
     thread_id: Optional[str] = None,
     error: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    run_metadata: Optional[dict[str, Any]] = None,
 ) -> Optional[AgentRun]:
     """Create-or-update the projection row for *job_id*. Commits.
 
@@ -236,6 +237,7 @@ async def upsert_run(
         error=error,
         idempotency_key=idempotency_key,
         backfill_metadata=True,
+        run_metadata=run_metadata,
     )
     if run is not None:
         return run
@@ -270,6 +272,7 @@ async def upsert_run(
         status=normalized.value,
         error=error,
         idempotency_key=idempotency_key,
+        run_metadata=run_metadata,
     )
     db.add(run)
     try:
@@ -296,6 +299,7 @@ async def upsert_run(
                     error=error,
                     idempotency_key=idempotency_key,
                     backfill_metadata=True,
+                    run_metadata=run_metadata,
                 )
                 or existing
             )
@@ -335,6 +339,7 @@ async def upsert_run(
                 status=normalized.value,
                 error=error,
                 idempotency_key=idempotency_key,
+                run_metadata=run_metadata,
             )
             db.add(run)
             try:
@@ -370,6 +375,7 @@ async def upsert_run(
             status=normalized.value,
             error=error,
             idempotency_key=idempotency_key,
+            run_metadata=run_metadata,
         )
         db.add(run)
         try:
@@ -446,6 +452,7 @@ async def _transition_existing_run(
     error: Optional[str],
     idempotency_key: Optional[str],
     backfill_metadata: bool,
+    run_metadata: Optional[dict[str, Any]] = None,
 ) -> Optional[AgentRun]:
     predicates = [
         AgentRun.job_id == job_id,
@@ -467,6 +474,8 @@ async def _transition_existing_run(
         "error": error,
         "updated_at": _utcnow(),
     }
+    if run_metadata is not None:
+        values["run_metadata"] = run_metadata
     if backfill_metadata:
         if organization_id is not None:
             values["organization_id"] = func.coalesce(
@@ -544,6 +553,8 @@ async def _transition_existing_run(
                 "error": error,
                 "updated_at": _utcnow(),
             }
+            if run_metadata is not None:
+                fallback_values["run_metadata"] = run_metadata
             result = await db.execute(
                 update(AgentRun)
                 .where(*predicates)
@@ -769,12 +780,16 @@ async def claim_awaiting_run_for_confirmation(
     *,
     organization_id: Any,
     user_id: Any,
+    approval_id: str,
 ) -> bool:
-    """Atomically claim one caller-owned parked run for confirmation. Commits."""
+    """Claim only the exact caller-owned pending approval. Commits."""
     result = await db.execute(
         update(AgentRun)
         .where(
             AgentRun.job_id == job_id,
+            AgentRun.execution_provider == "nous",
+            AgentRun.cancel_requested_at.is_(None),
+            AgentRun.run_metadata["approval_id"].as_string() == approval_id,
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
             AgentRun.status == JobStatus.AWAITING_CONFIRMATION.value,
@@ -792,12 +807,16 @@ async def release_confirmation_claim(
     *,
     organization_id: Any,
     user_id: Any,
+    approval_id: str,
 ) -> bool:
     """Return a pre-execution confirmation claim to its parked state. Commits."""
     result = await db.execute(
         update(AgentRun)
         .where(
             AgentRun.job_id == job_id,
+            AgentRun.execution_provider == "nous",
+            AgentRun.cancel_requested_at.is_(None),
+            AgentRun.run_metadata["approval_id"].as_string() == approval_id,
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
             AgentRun.status == JobStatus.RUNNING.value,
@@ -1041,6 +1060,13 @@ async def record_job_status(
                 user_id=data.get("user_id"),
                 thread_id=_extract_thread_id(data),
                 error=data.get("error"),
+                run_metadata=(
+                    {"approval_id": data["confirmation"]["approval_id"]}
+                    if normalized == JobStatus.AWAITING_CONFIRMATION
+                    and isinstance(data.get("confirmation"), dict)
+                    and data["confirmation"].get("approval_id")
+                    else None
+                ),
             )
             decision = _decision_from_run(job_id, normalized, run)
             if decision is None and raise_on_error:

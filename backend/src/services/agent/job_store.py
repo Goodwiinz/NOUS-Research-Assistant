@@ -306,6 +306,7 @@ def _projection_payload(data: dict, fallback: Optional[dict] = None) -> dict:
     fallback_result = fallback.get("result")
     return {
         "status": data.get("status"),
+        **({"confirmation": data["confirmation"]} if "confirmation" in data else {}),
         "user_id": data.get("user_id"),
         "organization_id": data.get("organization_id"),
         "error": data.get("error"),

@@ -95,7 +95,10 @@ async def test_confirm_shares_the_turn_bucket(
 ) -> None:
     await _spend_turn_budget(turn_limiter, client.user_id)  # type: ignore[attr-defined]
 
-    response = client.post(f"/api/v1/agent/confirm/{uuid4()}", json={"confirmed": True})
+    response = client.post(
+        f"/api/v1/agent/confirm/{uuid4()}",
+        json={"approval_id": "a" * 64, "confirmed": True},
+    )
 
     assert response.status_code == 429
 

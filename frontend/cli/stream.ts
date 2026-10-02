@@ -281,8 +281,15 @@ export async function* streamAgent(
 export async function* streamConfirm(
   threadId: string,
   confirmed: boolean,
-  options: StreamOptions = {}
+  options: StreamOptions & { approvalId: string }
 ): AsyncGenerator<StreamEvent> {
+  if (!/^[a-f0-9]{64}$/.test(options.approvalId)) {
+    yield {
+      type: 'error',
+      message: 'This approval has expired. Please start a new request.',
+    };
+    return;
+  }
   const config = loadConfig();
   if (!config) throw new Error('Not logged in');
 
@@ -292,7 +299,11 @@ export async function* streamConfirm(
   const res = await fetchFn(`${getApiBase()}/agent/stream/confirm`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ thread_id: threadId, confirmed }),
+    body: JSON.stringify({
+      thread_id: threadId,
+      confirmed,
+      approval_id: options.approvalId,
+    } satisfies components['schemas']['StreamConfirmRequest']),
     signal,
   });
 

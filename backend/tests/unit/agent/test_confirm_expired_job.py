@@ -87,7 +87,10 @@ def test_expired_job_is_refused_without_claiming_the_run(
     claim = AsyncMock(return_value=True)
     monkeypatch.setattr(execute_mod, "claim_awaiting_run_for_confirmation", claim)
 
-    response = client.post(f"/api/v1/agent/confirm/{job_id}", json={"confirmed": True})
+    response = client.post(
+        f"/api/v1/agent/confirm/{job_id}",
+        json={"approval_id": "a" * 64, "confirmed": True},
+    )
 
     assert response.status_code == 409
     assert "expired" in response.json()["detail"].lower()
@@ -124,7 +127,10 @@ def test_live_job_payload_still_confirms(
     )
     monkeypatch.setattr(execute_mod, "_resume_agent_graph", MagicMock())
 
-    response = client.post(f"/api/v1/agent/confirm/{job_id}", json={"confirmed": True})
+    response = client.post(
+        f"/api/v1/agent/confirm/{job_id}",
+        json={"approval_id": "a" * 64, "confirmed": True},
+    )
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == JobStatus.RUNNING

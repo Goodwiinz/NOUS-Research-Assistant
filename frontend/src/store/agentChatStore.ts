@@ -484,6 +484,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       assistantMessageId: placeholderId,
                       jobId: threadId, // thread_id used as job identifier for SSE
                       origin: 'sse',
+                      approvalId: String(confirmation.approval_id ?? ''),
                       tools:
                         (confirmation.tools as Array<{
                           name: string;
@@ -699,6 +700,10 @@ export const useAgentChatStore = create<AgentChatStore>()(
                 assistantMessageId: placeholderId,
                 jobId: runId,
                 origin: 'durable',
+                approvalId: String(
+                  (meta.confirmation as Record<string, unknown>)?.approval_id ??
+                    ''
+                ),
                 tools:
                   ((meta.confirmation as Record<string, unknown>)?.tools as
                     | Array<{ name: string; args: Record<string, unknown> }>
@@ -914,7 +919,11 @@ export const useAgentChatStore = create<AgentChatStore>()(
 
         try {
           await agentChatService.streamConfirm(
-            { thread_id: jobId, confirmed },
+            {
+              thread_id: jobId,
+              confirmed,
+              approval_id: pendingConfirmation.approvalId ?? '',
+            },
             {
               onToken: (content: string) => {
                 if (!isCurrentGeneration()) return;
@@ -1077,6 +1086,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
                     assistantMessageId: targetMessageId,
                     jobId: threadId,
                     origin: 'sse',
+                    approvalId: String(confirmation.approval_id ?? ''),
                     tools:
                       (confirmation.tools as Array<{
                         name: string;
@@ -1279,7 +1289,11 @@ export const useAgentChatStore = create<AgentChatStore>()(
               'Confirmation stream failed and this confirmation has no durable job to fall back to'
             );
           }
-          await agentChatService.confirmAction(jobId, confirmed);
+          await agentChatService.confirmAction(
+            jobId,
+            confirmed,
+            pendingConfirmation.approvalId ?? ''
+          );
 
           const MAX_POLLS = 120;
           const POLL_INTERVAL_MS = 1500;

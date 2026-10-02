@@ -13491,6 +13491,8 @@ export interface components {
         };
         /** ConfirmationRequest */
         ConfirmationRequest: {
+            /** Approval Id */
+            approval_id: string;
             /**
              * Confirmed
              * @description Whether the user confirms the action
@@ -21559,6 +21561,8 @@ export interface components {
         };
         /** StreamConfirmRequest */
         StreamConfirmRequest: {
+            /** Approval Id */
+            approval_id: string;
             /** Confirmed */
             confirmed: boolean;
             /** Thread Id */

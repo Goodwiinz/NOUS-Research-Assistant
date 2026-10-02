@@ -235,7 +235,7 @@ describe('agentChatService stream resilience', () => {
     const onAuthRefreshSuccess = vi.fn();
 
     await agentChatService.streamConfirm(
-      { thread_id: 'thread-A', confirmed: true },
+      { thread_id: 'thread-A', confirmed: true, approval_id: 'a'.repeat(64) },
       { onAuthRefreshAttempt, onAuthRefreshSuccess }
     );
 

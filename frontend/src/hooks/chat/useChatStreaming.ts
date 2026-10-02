@@ -2775,7 +2775,13 @@ export function useChatStreaming(
 
         try {
           await agentChatService.streamConfirm(
-            { thread_id: pendingConfirmation.threadId, confirmed },
+            {
+              thread_id: pendingConfirmation.threadId,
+              confirmed,
+              approval_id: String(
+                pendingConfirmation.confirmation.approval_id ?? ''
+              ),
+            },
             {
               onToken: (content) => {
                 if (confirmFirstTokenAt === null) {

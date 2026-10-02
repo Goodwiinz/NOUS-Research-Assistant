@@ -24,6 +24,9 @@ from uuid import uuid4
 
 import pytest
 
+from tests.utils.agent_approval import isolated_claimed_confirmation  # noqa: F401
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+from tests.utils.agent_approval import claimed_run
 from tests.utils.agent_thread_access import editable_thread_getter
 
 pytestmark = pytest.mark.asyncio
@@ -199,7 +202,7 @@ async def test_resume_agent_graph_marks_job_cancelled_and_reraises():
         ),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await _resume_agent_graph(job_id, True, user)
+            await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
     job = _get_job(job_id)
     assert job is not None
@@ -315,7 +318,20 @@ async def test_resume_agent_graph_reparks_on_chained_interrupt():
     mock_graph.ainvoke = AsyncMock(
         side_effect=GraphInterrupt((Interrupt(value=confirmation, id="i2"),))
     )
-    mock_graph.aget_state = AsyncMock(return_value=None)
+    mock_graph.aget_state = AsyncMock(
+        side_effect=[
+            None,
+            SimpleNamespace(
+                values={"user_id": str(user.id)},
+                config={"configurable": {"checkpoint_id": "saved-nested"}},
+                tasks=(
+                    SimpleNamespace(
+                        interrupts=(Interrupt(value=confirmation, id="i2"),)
+                    ),
+                ),
+            ),
+        ]
+    )
 
     with (
         patch(
@@ -332,11 +348,12 @@ async def test_resume_agent_graph_reparks_on_chained_interrupt():
         ),
     ):
         # GraphInterrupt is control flow — caught, not re-raised.
-        await _resume_agent_graph(job_id, True, user)
+        await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
     job = _get_job(job_id)
     assert job is not None
     assert job["status"] == "awaiting_confirmation"
+    assert len(job["confirmation"].pop("approval_id")) == 64
     assert job["confirmation"] == confirmation
 
 
@@ -720,7 +737,7 @@ async def _start_test_runner(
             "src.services.agent.runtime_snapshot.resume_runtime_config_fields",
             return_value={},
         ),
-        patch.object(service, "get_run", AsyncMock(return_value=None)),
+        patch.object(service, "get_run", AsyncMock(return_value=claimed_run(job_id))),
         patch.object(
             agent_run_service, "is_run_cancellation_requested", cancellation_check
         ),
@@ -733,7 +750,7 @@ async def _start_test_runner(
         task = asyncio.create_task(
             service._run_agent_graph(job_id, request, user)
             if runner == "initial"
-            else service._resume_agent_graph(job_id, True, user)
+            else service._resume_agent_graph(job_id, True, user, approval_id="a" * 64)
         )
         await asyncio.sleep(0)
         try:

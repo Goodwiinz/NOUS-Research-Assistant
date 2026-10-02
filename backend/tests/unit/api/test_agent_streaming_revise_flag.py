@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_thread_access import editable_thread_getter
 
 
@@ -286,7 +287,9 @@ async def test_stream_confirm_event_generator_revising_true_when_major_fail_unde
     graph = _make_reflection_graph(passed=False, severity="major", reflection_count=1)
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     body = SimpleNamespace(
-        thread_id="11111111-1111-4111-8111-111111111621", confirmed=True
+        thread_id="11111111-1111-4111-8111-111111111621",
+        confirmed=True,
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 
@@ -330,7 +333,9 @@ async def test_stream_confirm_event_generator_revising_false_when_passed():
     graph = _make_reflection_graph(passed=True, severity="none", reflection_count=0)
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     body = SimpleNamespace(
-        thread_id="11111111-1111-4111-8111-111111111622", confirmed=True
+        thread_id="11111111-1111-4111-8111-111111111622",
+        confirmed=True,
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 

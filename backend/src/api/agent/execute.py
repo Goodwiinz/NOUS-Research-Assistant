@@ -229,10 +229,12 @@ AGENT_THREAD_MARKER = thread_service.AGENT_THREAD_MARKER
 
 
 class ConfirmationRequest(BaseModel):
+    approval_id: str = Field(..., pattern=r"^[a-f0-9]{64}$")
     confirmed: bool = Field(..., description="Whether the user confirms the action")
 
 
 class StreamConfirmRequest(BaseModel):
+    approval_id: str = Field(..., pattern=r"^[a-f0-9]{64}$")
     thread_id: StrictUUIDString
     confirmed: bool
 
@@ -790,6 +792,7 @@ async def confirm_agent_action(
         durable_claimed = await claim_awaiting_run_for_confirmation(
             db,
             job_id,
+            approval_id=request.approval_id,
             organization_id=current_user.organization_id,
             user_id=current_user.id,
         )
@@ -807,6 +810,7 @@ async def confirm_agent_action(
             await release_confirmation_claim(
                 db,
                 job_id,
+                approval_id=request.approval_id,
                 organization_id=current_user.organization_id,
                 user_id=current_user.id,
             )
@@ -867,6 +871,7 @@ async def confirm_agent_action(
         job_id,
         request.confirmed,
         current_user,
+        approval_id=request.approval_id,
     )
     return {"status": JobStatus.RUNNING, "job_id": job_id}
 
@@ -1263,14 +1268,21 @@ async def _pending_confirmation_frame(
                 )
                 return None
 
-        confirmation: Dict[str, Any] = {}
-        for task in snapshot.tasks or ():
-            for intr in getattr(task, "interrupts", ()) or ():
-                confirmation = getattr(intr, "value", {}) or {}
-                break
-            if confirmation:
-                break
-        if not confirmation:
+        from src.services.agent.confirmation_service import pending_confirmation
+
+        confirmation = pending_confirmation(
+            snapshot,
+            thread_id=thread_id,
+            run_id=str(active_run.job_id) if active_run is not None else None,
+            user_id=current_user.id,
+        )
+        if confirmation is None:
+            return None
+        if (
+            active_run is not None
+            and (active_run.run_metadata or {}).get("approval_id")
+            != confirmation["approval_id"]
+        ):
             return None
 
         payload = {"thread_id": thread_id, "confirmation": confirmation}
