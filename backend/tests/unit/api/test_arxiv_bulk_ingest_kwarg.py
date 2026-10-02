@@ -71,7 +71,7 @@ async def test_bulk_ingest_route_does_not_raise_typeerror(
 
     current_user = {"organization_id": "org-1", "id": "user-1"}
 
-    result = await bulk_ingest_with_kg(
+    result = await bulk_ingest_with_kg.__wrapped__(
         request=BulkIngestionRequest(query="cat:cs.AI", create_kg_entries=True),
         current_user=current_user,
         arxiv_service=arxiv_service,
@@ -109,7 +109,7 @@ async def test_bulk_ingest_rejects_user_without_organization(
     current_user = {"organization_id": None, "id": "user-1"}
 
     with pytest.raises(HTTPException) as exc_info:
-        await bulk_ingest_with_kg(
+        await bulk_ingest_with_kg.__wrapped__(
             request=BulkIngestionRequest(query="cat:cs.AI"),
             current_user=current_user,
             arxiv_service=arxiv_service,
