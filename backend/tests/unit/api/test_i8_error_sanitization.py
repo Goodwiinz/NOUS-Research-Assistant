@@ -587,6 +587,9 @@ def test_arxiv_extraction_json_error_leak_free(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    from functools import update_wrapper
+    from types import FunctionType
+
     from src.api.arxiv import arxiv_local
     from src.core.dependencies import get_current_user
 
@@ -597,8 +600,25 @@ def test_arxiv_extraction_json_error_leak_free(
         "_extract_topics_from_filename",
         _raising_async(RuntimeError(LEAK_MARKER)),
     )
+    # Admission is called inside the decorator, not resolved via Depends. Give
+    # only this app's copied callable a private allowance; the shared gate and the
+    # decorator's injected authentication dependency remain untouched.
+    endpoint = arxiv_local.extract_features_from_local_pdfs
+    allow = AsyncMock(side_effect=lambda current_user: current_user)
+    admitted_endpoint = FunctionType(
+        endpoint.__code__,
+        {**endpoint.__globals__, "require_expensive_work_admission": allow},
+        endpoint.__name__,
+        endpoint.__defaults__,
+        endpoint.__closure__,
+    )
+    update_wrapper(admitted_endpoint, endpoint)
     app = FastAPI()
-    app.include_router(arxiv_local.router, prefix="/api/v1/arxiv/local")
+    app.add_api_route(
+        "/api/v1/arxiv/local/extract-local-features",
+        admitted_endpoint,
+        methods=["POST"],
+    )
     app.dependency_overrides[get_current_user] = lambda: MagicMock()
 
     with TestClient(app) as client:
@@ -613,6 +633,7 @@ def test_arxiv_extraction_json_error_leak_free(
             },
         )
 
+    allow.assert_awaited_once()
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "success"
