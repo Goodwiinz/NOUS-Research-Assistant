@@ -68,7 +68,7 @@ def path_scope(name: str) -> str:
         return "full"
     if (
         path.name in SHARED_NAMES
-        or path.name.startswith(("requirements", "Dockerfile"))
+        or path.name.startswith(("requirements", "constraints", "Dockerfile"))
         or path.name.endswith(
             (".lock", ".lockb", "-lock.yaml", "-lock.yml", "-lock.json")
         )

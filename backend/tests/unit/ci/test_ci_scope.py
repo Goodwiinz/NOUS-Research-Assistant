@@ -233,6 +233,7 @@ def _select(
         (["scripts/ci/assert_required_jobs.py"], "full"),
         (["pnpm-lock.yaml"], "full"),
         (["backend/requirements.txt"], "full"),
+        (["backend/constraints-ci.txt"], "full"),
         (["frontend/package.json"], "full"),
         (["frontend/src/package.json"], "full"),
         (["frontend/src/types/generated/api.d.ts"], "full"),
@@ -319,7 +320,7 @@ def test_empty_diff_is_full_and_unresolved_base_blocks_detection(
 
 def test_cross_surface_rename_selects_both_sides(repository: tuple[Path, str]) -> None:
     repo, base = repository
-    (repo / "frontend/src").mkdir(parents=True)
+    (repo / "frontend/src").mkdir(parents=True, exist_ok=True)
     (repo / "backend/src/runtime.py").rename(repo / "frontend/src/runtime.ts")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "Move across surfaces")
