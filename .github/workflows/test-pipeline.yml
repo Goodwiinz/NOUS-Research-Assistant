@@ -37,12 +37,70 @@ permissions:
   contents: read
 
 jobs:
+  # Selection is PR-only. Protected-branch pushes and manual runs retain full CI
+  # because release-dev.yml uses a successful develop push as release evidence.
+  ci-plan:
+    name: CI Plan
+    runs-on: ubuntu-latest
+    outputs:
+      profile: ${{ steps.select.outputs.profile }}
+      backend: ${{ steps.select.outputs.backend }}
+      frontend: ${{ steps.select.outputs.frontend }}
+      integration: ${{ steps.select.outputs.integration }}
+      e2e: ${{ steps.select.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Select checks from the complete PR diff
+        id: select
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          python3 scripts/ci/select_ci_jobs.py \
+            --event-name "$CI_EVENT_NAME" \
+            --base "origin/$PR_BASE_REF" \
+            --head "$PR_HEAD_SHA" \
+            --head-branch "$PR_HEAD_BRANCH" \
+            --output-file "$GITHUB_OUTPUT"
+
+  lightweight-checks:
+    name: Lightweight Checks
+    runs-on: ubuntu-latest
+    needs: ci-plan
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install lightweight test dependencies
+        run: pip install pytest pytest-cov PyYAML
+      - name: Directory docs lint
+        run: python3 scripts/docs/check_dir_docs.py
+      - name: Script and NOUS instruction contracts
+        run: |
+          python3 -m pytest tests/unit/scripts/ \
+            --confcutdir=tests/unit/scripts -q -p no:cacheprovider --no-cov
+      - name: CI selection and Release Gate regressions
+        run: |
+          python3 -m pytest backend/tests/unit/ci/test_ci_scope.py \
+            backend/tests/unit/ci/test_release_gate.py \
+            --noconftest -c /dev/null -q -p no:cacheprovider --no-cov
+
   # ==========================================================================
   # Code Quality Checks (Fast - Run First)
   # ==========================================================================
   lint-backend:
     name: Lint Backend
     runs-on: ubuntu-latest
+    needs: ci-plan
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -140,6 +198,8 @@ jobs:
   lint-frontend:
     name: Lint Frontend
     runs-on: ubuntu-latest
+    needs: ci-plan
+    if: needs.ci-plan.outputs.frontend == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -219,6 +279,8 @@ jobs:
   migration-check:
     name: Alembic Migration Check
     runs-on: ubuntu-latest
+    needs: ci-plan
+    if: needs.ci-plan.outputs.backend == 'true'
     # Throwaway CI-local Postgres for the advisory execution probes. Credentials
     # are disposable (postgres/postgres) — no secrets, by design.
     services:
@@ -345,7 +407,8 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -429,7 +492,8 @@ jobs:
   golden-replay:
     name: Golden Replay
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -491,7 +555,8 @@ jobs:
   openapi-contract:
     name: OpenAPI Contract Ratchet
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -647,7 +712,8 @@ jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -672,7 +738,8 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    needs: lint-frontend
+    needs: [ci-plan, lint-frontend]
+    if: needs.ci-plan.outputs.frontend == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -733,7 +800,14 @@ jobs:
     name: Integration Tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [unit-tests, frontend-tests]
+    needs: [ci-plan, unit-tests, frontend-tests]
+    # Explicit status function avoids GitHub's implicit success() skipping this
+    # job when an unselected frontend dependency is intentionally skipped.
+    if: >-
+      !cancelled() && needs.ci-plan.result == 'success' &&
+      needs.ci-plan.outputs.integration == 'true' &&
+      needs.unit-tests.result == 'success' &&
+      (needs.frontend-tests.result == 'success' || needs.ci-plan.outputs.frontend == 'false')
     strategy:
       # One red shard must not hide the others' results.
       fail-fast: false
@@ -839,7 +913,8 @@ jobs:
     name: Resilience Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: unit-tests
+    needs: [ci-plan, unit-tests]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -910,7 +985,12 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     # Run on both push and PR, but use different test suites
-    needs: [integration-tests]
+    needs: [ci-plan, integration-tests, frontend-tests]
+    if: >-
+      !cancelled() && needs.ci-plan.result == 'success' &&
+      needs.ci-plan.outputs.e2e == 'true' &&
+      (needs.integration-tests.result == 'success' || needs.ci-plan.outputs.integration == 'false') &&
+      (needs.frontend-tests.result == 'success' || needs.ci-plan.outputs.frontend == 'false')
     # Backend image build/cache export can take ~33 minutes on a cold runner;
     # leave enough time for infrastructure startup and the actual Playwright run.
     timeout-minutes: 60
@@ -1348,6 +1428,8 @@ jobs:
     name: Release Gate
     runs-on: ubuntu-latest
     needs:
+      - ci-plan
+      - lightweight-checks
       - lint-backend
       - lint-frontend
       - migration-check
@@ -1362,9 +1444,11 @@ jobs:
     if: always()
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Require exact success from every blocking job
+      - name: Require successful selected checks and validate every skip
         env:
           REQUIRED_JOB_RESULTS: ${{ toJSON(needs) }}
+          CI_PROFILE: ${{ needs.ci-plan.outputs.profile }}
         run: |
           python3 scripts/ci/assert_required_jobs.py \
+            --profile "$CI_PROFILE" \
             --summary-file "$GITHUB_STEP_SUMMARY"
