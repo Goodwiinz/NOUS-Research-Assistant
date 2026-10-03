@@ -255,7 +255,9 @@ def test_release_protection_preflight_fails_closed() -> None:
     for job in ["prepare", "promote"]:
         step = _step_with_run(release, job, "check_release_protection.py")
         assert "gh api graphql" in step["run"]
-        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert (
+            step["env"]["GH_TOKEN"] == "${{ secrets.RELEASE_PR_TOKEN || github.token }}"
+        )
     assert (
         _step_with_run(release, "prepare", "check_release_protection.py")["if"]
         == "steps.source.outputs.needed == 'true'"
