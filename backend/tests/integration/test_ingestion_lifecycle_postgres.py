@@ -117,6 +117,7 @@ class _GraphTransport:
                 self.providers.graph[key] = dict(params)
                 existing = params
             record = {"resolved_id": existing["id"]}
+            self.providers.barrier("graph_accepted")
         elif "DELETE " in cypher:
             assert params.get("organization_id"), "cleanup must carry tenant scope"
             assert params.get("source_document_id"), "cleanup must carry document scope"
@@ -158,6 +159,7 @@ class _KBTransport:
             "kb_uuid": kb_uuid,
             "spaces_data_source": {"item_path": key},
         }
+        self.providers.barrier("do_kb_accepted")
         return SimpleNamespace(uuid=source_id)
 
     async def start_indexing(self, *, kb_uuid: str) -> None:
@@ -641,3 +643,68 @@ def test_worker_process_loss_recovers_atomically_and_requires_explicit_retry(
     _assert_completed(env, document_id)
     with env.Session() as db:
         assert db.get(ProcessingJob, old_job_id).status == JobStatus.FAILED
+
+
+@pytest.mark.parametrize("stage", ["graph", "do_kb"])
+def test_cleanup_survives_worker_loss_after_late_provider_acceptance(
+    lifecycle: SimpleNamespace, stage: str
+) -> None:
+    """Delete cleans the empty provider, then the old writer lands and dies."""
+    env = lifecycle
+    env.providers.controls["block"] = stage
+    worker = env.worker.start()
+    document_id = _upload(env)
+    assert env.providers.entered.wait(45), env.worker.diagnostics()
+    response = env.client.delete(f"/documents/{document_id}", headers=_headers(env))
+    assert response.status_code == 200, response.text
+    with env.Session() as db:
+        document = db.get(Document, document_id)
+        assert document.document_metadata["pending_satellite_writes"][stage]
+        if stage == "graph":
+            assert document.neo4j_index_status == "pending"
+    env.providers.entered.clear()
+    env.providers.controls["block"] = stage + "_accepted"
+    env.providers.release.set()
+    assert env.providers.entered.wait(45), env.worker.diagnostics()
+    worker.kill()
+    worker.join(10)
+    assert not worker.is_alive()
+    artifacts = env.providers.graph if stage == "graph" else env.providers.sources
+    assert artifacts, "provider must have accepted the late write before process loss"
+    result = rt.reconcile_satellite_indexes()
+    assert result["scanned"] == 1
+    assert not artifacts, "durable intent must locate accepted but unrecorded writes"
+    if stage == "do_kb":
+        assert not env.providers.objects
+
+
+@pytest.mark.parametrize("route", ["files", "documents"])
+def test_reprocess_rejects_an_overlapping_worker(
+    lifecycle: SimpleNamespace, route: str
+) -> None:
+    env = lifecycle
+    env.providers.controls["block"] = "graph"
+    env.worker.start()
+    document_id = _upload(env)
+    assert env.providers.entered.wait(45), env.worker.diagnostics()
+    job_id = _job(env, document_id)
+    foreign = env.client.post(
+        f"/{route}/{document_id}/reprocess", headers=_headers(env, other=True)
+    )
+    assert foreign.status_code == 404, foreign.text
+    anonymous = env.client.post(f"/{route}/{document_id}/reprocess")
+    assert anonymous.status_code in (401, 403)
+    response = env.client.post(
+        f"/{route}/{document_id}/reprocess?force_reprocess=true", headers=_headers(env)
+    )
+    assert response.status_code == 409, response.text
+    with env.Session() as db:
+        assert db.query(ProcessingJob).filter_by(document_id=document_id).count() == 1
+        assert db.get(ProcessingJob, job_id).status == JobStatus.RUNNING
+        assert (
+            db.get(Document, document_id).processing_status
+            == ProcessingStatus.PROCESSING
+        )
+    env.providers.release.set()
+    assert env.worker.completion()["status"] == "completed"
+    _assert_completed(env, document_id)

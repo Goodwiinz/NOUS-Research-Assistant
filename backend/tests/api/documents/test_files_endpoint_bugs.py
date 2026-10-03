@@ -50,7 +50,11 @@ def test_reprocess_creates_job_and_enqueues():
     document.mime_type = "application/pdf"
 
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_result(document))
+    selected = MagicMock()
+    selected.scalar_one_or_none.return_value = document
+    inactive = MagicMock()
+    inactive.first.return_value = None
+    db.execute = AsyncMock(side_effect=[selected, inactive])
     db.add = MagicMock()
     db.flush = AsyncMock()
     db.commit = AsyncMock()
