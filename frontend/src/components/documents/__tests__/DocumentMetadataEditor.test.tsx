@@ -62,4 +62,55 @@ describe('DocumentMetadataEditor', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  it('names an invalid date field instead of calling onSave', async () => {
+    const onSave = vi.fn();
+
+    render(
+      <DocumentMetadataEditor
+        document={document}
+        isOpen
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Field name'), {
+      target: { value: 'published' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Value'), {
+      target: { value: 'not a date' },
+    });
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'date' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /add custom field/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '"published" is not a valid date.'
+    );
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen with the previous save error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const props = {
+      document,
+      onClose: vi.fn(),
+      onSave: vi.fn().mockRejectedValue(new Error('500 internal')),
+    };
+    const { rerender } = render(<DocumentMetadataEditor {...props} isOpen />);
+
+    fireEvent.change(screen.getByPlaceholderText('Document title'), {
+      target: { value: 'New title' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByRole('alert');
+
+    rerender(<DocumentMetadataEditor {...props} isOpen={false} />);
+    rerender(<DocumentMetadataEditor {...props} isOpen />);
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });
