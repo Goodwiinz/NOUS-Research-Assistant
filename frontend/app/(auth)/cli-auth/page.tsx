@@ -13,19 +13,52 @@ function CliAuthPageContent(): React.JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session_id') ?? '';
-  const verificationCode = searchParams.get('code') ?? '';
+  // Older backends put the code in the query string; current ones use the fragment.
+  const legacyQueryCode = searchParams.get('code') ?? '';
+  const [verificationCode, setVerificationCode] = useState('');
+  // No code in the link or storage (e.g. storage blocked across the login
+  // redirect): the user types the code the terminal printed.
+  const [manualEntry, setManualEntry] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState('');
 
+  // Keep the code out of every URL a server sees: it is carried across the
+  // login redirect in sessionStorage and stripped from the address bar.
+  useEffect(() => {
+    const storageKey = `nous:cli-auth-code:${sessionId}`;
+    const urlCode =
+      new URLSearchParams(window.location.hash.slice(1)).get('code') ||
+      legacyQueryCode;
+    let code = urlCode;
+    try {
+      if (urlCode) {
+        sessionStorage.setItem(storageKey, urlCode);
+      } else {
+        code = sessionStorage.getItem(storageKey) ?? '';
+      }
+    } catch {
+      // Storage unavailable: the code only survives this page view.
+    }
+    // The fragment and sessionStorage only exist in the browser, after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVerificationCode((previous) => code || previous);
+    setManualEntry(!code);
+    if (urlCode) {
+      window.history.replaceState(
+        null,
+        '',
+        `/cli-auth?session_id=${encodeURIComponent(sessionId)}`
+      );
+    }
+  }, [sessionId, legacyQueryCode]);
+
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-      const next = `/cli-auth?session_id=${encodeURIComponent(sessionId)}&code=${encodeURIComponent(
-        verificationCode
-      )}`;
+      const next = `/cli-auth?session_id=${encodeURIComponent(sessionId)}`;
       router.push(`/login?next=${encodeURIComponent(next)}`);
     }
-  }, [isAuthenticated, isLoading, router, sessionId, verificationCode]);
+  }, [isAuthenticated, isLoading, router, sessionId]);
 
   const handleApprove = async (): Promise<void> => {
     if (!sessionId || !verificationCode || isSubmitting) {
@@ -41,6 +74,11 @@ function CliAuthPageContent(): React.JSX.Element {
         verification_code: verificationCode,
       });
       setIsConnected(true);
+      try {
+        sessionStorage.removeItem(`nous:cli-auth-code:${sessionId}`);
+      } catch {
+        // Storage unavailable: nothing was stored.
+      }
     } catch (approveError) {
       setError(
         approveError instanceof Error
@@ -92,7 +130,22 @@ function CliAuthPageContent(): React.JSX.Element {
               Verification code
             </dt>
             <dd className="mt-1.5 font-mono text-lg tracking-[0.3em] text-primary">
-              {verificationCode || 'Missing'}
+              {manualEntry ? (
+                <input
+                  type="text"
+                  aria-label="Verification code from your terminal"
+                  placeholder="Code from your terminal"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={verificationCode}
+                  onChange={(event) =>
+                    setVerificationCode(event.target.value.trim().toUpperCase())
+                  }
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-base tracking-widest text-foreground"
+                />
+              ) : (
+                verificationCode
+              )}
             </dd>
           </div>
         </dl>

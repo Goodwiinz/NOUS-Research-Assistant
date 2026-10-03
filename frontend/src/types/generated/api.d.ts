@@ -28517,10 +28517,13 @@ export interface operations {
     };
     get_cli_auth_status_api_v1_cli_auth_status__session_id__get: {
         parameters: {
-            query: {
-                poll_token: string;
+            query?: {
+                /** @description Deprecated: send the X-CLI-Poll-Token header instead. */
+                poll_token?: string | null;
             };
-            header?: never;
+            header?: {
+                "X-CLI-Poll-Token"?: string | null;
+            };
             path: {
                 session_id: string;
             };

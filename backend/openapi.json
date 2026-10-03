@@ -38756,12 +38756,37 @@
             }
           },
           {
+            "description": "Deprecated: send the X-CLI-Poll-Token header instead.",
             "in": "query",
             "name": "poll_token",
-            "required": true,
+            "required": false,
             "schema": {
-              "title": "Poll Token",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated: send the X-CLI-Poll-Token header instead.",
+              "title": "Poll Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CLI-Poll-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cli-Poll-Token"
             }
           }
         ],
