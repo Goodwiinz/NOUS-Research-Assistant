@@ -20,6 +20,12 @@ export function AppNavbar() {
 
   const workspaceItems: Navbar02NavItem['items'] = [
     {
+      href: '/chat',
+      label: 'Chat',
+      icon: 'MessageSquare',
+      description: 'Ask questions and synthesize answers from your workspace.',
+    },
+    {
       href: '/search',
       label: 'Semantic Search',
       icon: 'Search',
@@ -27,15 +33,8 @@ export function AppNavbar() {
         'Ask complex questions and retrieve answers with semantic understanding.',
     },
     {
-      href: '/chat',
-      label: 'WebLLM Chat',
-      icon: 'MessageSquare',
-      description:
-        'Chat with browser-hosted LLMs to synthesize insights from your corpus.',
-    },
-    {
       href: '/documents/upload',
-      label: 'Document Upload',
+      label: 'Documents',
       icon: 'FileText',
       description:
         'Ingest PDFs, images, audio, and video into your knowledge base.',
