@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +28,24 @@ from src.api.documents import documents as documents_mod
 # `_cleanup_document_graph` imports KnowledgeGraphService lazily from here, so
 # patching this attribute intercepts the call.
 KG_PATH = "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService"
+
+
+@pytest.fixture(autouse=True)
+def cleanup_session(monkeypatch):
+    """Transport tests isolate the cleanup session; PostgreSQL proves persistence."""
+    session = MagicMock()
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = SimpleNamespace(
+        document_metadata={"graph_cleanup_requested": True}
+    )
+    session.execute = AsyncMock(return_value=result)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=session)
+    context.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr("src.core.database.AsyncSessionLocal", lambda: context)
+    return session
 
 
 def _result(value):

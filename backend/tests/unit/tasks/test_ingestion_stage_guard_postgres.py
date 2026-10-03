@@ -33,6 +33,7 @@ from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.entity import Entity, EntityType, ExtractionMethod
 from src.models.organization import Organization
 from src.models.processing import JobStatus, JobType, ProcessingJob
+from src.models.user import User
 from src.tasks import processing_tasks as pt
 from src.tasks.processing_lifecycle import ProcessingStopped, require_active_ingestion
 
@@ -60,7 +61,16 @@ def _ingestion() -> Iterator[SimpleNamespace]:
         conn.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
     engine = create_engine(_dsn(), connect_args={"options": f"-csearch_path={schema}"})
     try:
-        Base.metadata.create_all(engine)
+        Base.metadata.create_all(
+            engine,
+            tables=[
+                Organization.__table__,
+                User.__table__,
+                Document.__table__,
+                ProcessingJob.__table__,
+                Entity.__table__,
+            ],
+        )
         factory = sessionmaker(engine, autocommit=False, autoflush=False)
         org_id, doc_id, job_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
         with factory() as db:
@@ -720,3 +730,47 @@ def test_late_graph_write_is_compensated_when_the_stage_then_crashes(
         )
         with env.Session() as check:
             assert check.get(Document, env.doc_id).neo4j_index_status == "completed"
+
+
+@pytest.mark.parametrize("cleanup_ok", [True, False])
+def test_non_cascade_late_graph_write_is_retained(stubbed, cleanup_ok):
+    """Retaining entities must also retain late graph writes and exclude retries."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from src.services.documents.file_service import FileService
+    from src.tasks.reconcile_tasks import _reconcilable_filters
+
+    with _ingestion() as env:
+
+        def index_racing_delete(document, entities):
+            async def delete():
+                async with env.AsyncSession() as session:
+                    await FileService(session).soft_delete_documents(
+                        env.org_id, [env.doc_id], cascade=False
+                    )
+
+            asyncio.run(delete())
+            return len(entities)
+
+        kg = MagicMock()
+        if not cleanup_ok:
+            kg.delete_document_graph.side_effect = RuntimeError("neo4j down")
+        stubbed.setattr(pt, "_index_entities_to_graph", index_racing_delete)
+        stubbed.setattr(
+            "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+            lambda: kg,
+        )
+        result = _run(env, stubbed).get()
+        assert result["skipped"] == "deleted"
+        kg.delete_document_graph.assert_not_called()
+        with env.Session() as check:
+            doc = check.get(Document, env.doc_id)
+            assert doc.is_deleted
+            assert check.query(Entity).filter(Entity.is_deleted == False).count() == 2
+            assert (
+                check.query(Document.id)
+                .filter(*_reconcilable_filters(), Document.id == env.doc_id)
+                .count()
+                == 0
+            )

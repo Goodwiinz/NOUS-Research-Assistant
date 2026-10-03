@@ -87,6 +87,9 @@ def _reconcilable_filters():
                 # pending: a worker died between its graph fan-out and the
                 # compensation that would have removed it.
                 Document.neo4j_index_status.in_((_FAILED, _PENDING)),
+                Document.document_metadata["graph_cleanup_requested"]
+                .as_boolean()
+                .is_distinct_from(False),
             ),
         ),
     ]
@@ -139,7 +142,7 @@ def _redrive_neo4j(db, document, extraction) -> bool:
     # A delete that landed during the repair ran its graph cleanup before these
     # upserts existed; remove them instead of recording the deleted row as
     # indexed, which would hide the orphan for good (GOO-358).
-    db.refresh(document, attribute_names=["is_deleted"])
+    db.refresh(document, attribute_names=["is_deleted", "document_metadata"])
     if document.is_deleted:
         _cleanup_deleted_document_graph(document)
         return False
@@ -237,6 +240,9 @@ def _cleanup_deleted_document_graph(document) -> bool:
     from src.services.knowledge_graph.knowledge_graph_service import (
         KnowledgeGraphService,
     )
+
+    if (document.document_metadata or {}).get("graph_cleanup_requested") is False:
+        return True
 
     try:
         KnowledgeGraphService().delete_document_graph(
@@ -337,6 +343,10 @@ def reconcile_satellite_indexes() -> dict:
                         graph_cleanup_pending = bool(
                             doc.is_deleted
                             and doc.neo4j_index_status in (_FAILED, _PENDING)
+                            and (doc.document_metadata or {}).get(
+                                "graph_cleanup_requested"
+                            )
+                            is not False
                         )
                         needs_kg = (
                             not doc.is_deleted and doc.neo4j_index_status == _FAILED

@@ -479,3 +479,57 @@ def test_deleted_document_left_pending_is_cleaned_up(session_factory):
 
     assert result["kg_cleanup_succeeded"] == 1
     assert _get(session_factory, doc_id).neo4j_index_status == COMPLETED
+
+
+@pytest.mark.parametrize("neo4j", [FAILED, "pending"])
+def test_non_cascade_deleted_graph_is_not_selected(session_factory, neo4j):
+    doc_id = _seed_doc(session_factory, neo4j=neo4j, is_deleted=True)
+    with session_factory() as db:
+        doc = db.get(Document, doc_id)
+        doc.document_metadata = {"graph_cleanup_requested": False}
+        db.commit()
+    result, mocks = _run(session_factory, _settings(apply=True))
+    assert result["eligible"] == 0
+    mocks.repair.assert_not_called()
+    mocks.kb_sync.assert_not_called()
+    assert _get(session_factory, doc_id).neo4j_index_status == neo4j
+
+
+def test_redrive_preserves_non_cascade_graph_after_concurrent_delete(session_factory):
+    doc_id = _seed_doc(session_factory, neo4j=FAILED)
+
+    def repair(document, **kwargs):
+        with session_factory() as other:
+            current = other.get(Document, doc_id)
+            current.is_deleted = True
+            current.document_metadata = {"graph_cleanup_requested": False}
+            other.commit()
+        return _ok_outcome(doc_id)
+
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService"
+    ) as kg:
+        result, _ = _run(session_factory, _settings(apply=True), repair=repair)
+    assert result["kg_repaired"] == 0
+    kg.return_value.delete_document_graph.assert_not_called()
+    assert _get(session_factory, doc_id).neo4j_index_status == FAILED
+
+
+def test_non_cascade_do_kb_cleanup_does_not_report_graph_cleanup(session_factory):
+    doc_id = _seed_doc(
+        session_factory, neo4j=FAILED, is_deleted=True, do_kb_uuid="ds-delete"
+    )
+    with session_factory() as db:
+        db.get(Document, doc_id).document_metadata = {"graph_cleanup_requested": False}
+        db.commit()
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService"
+    ) as kg:
+        result, mocks = _run(
+            session_factory,
+            _settings(apply=True),
+            kb_cleanup=MagicMock(return_value=True),
+        )
+    assert result["do_kb_cleanup_succeeded"] == 1
+    assert result["kg_cleanup_succeeded"] == 0
+    kg.return_value.delete_document_graph.assert_not_called()
