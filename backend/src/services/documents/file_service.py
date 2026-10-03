@@ -1396,73 +1396,79 @@ class FileService:
             KnowledgeGraphService,
         )
 
-        try:
-            document = (
-                (
-                    await self.db.execute(
-                        select(Document)
-                        .where(
-                            Document.id == document_id,
-                            Document.organization_id == organization_id,
-                            Document.is_deleted == True,
-                        )
-                        .execution_options(populate_existing=True, autoflush=False)
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            if (
-                document is None
-                or (document.document_metadata or {}).get("graph_cleanup_requested")
-                is False
-            ):
-                await self.db.rollback()
-                return True
-            await self.db.rollback()
-            cleanup_ok = True
+        # Cleanup owns a separate transaction: rollback releases its read before
+        # the provider call without expiring the request's response objects or
+        # committing unrelated pending work in its session.
+        async with AsyncSession(
+            bind=self.db.bind, expire_on_commit=False
+        ) as cleanup_db:
             try:
-                await asyncio.to_thread(
-                    lambda: KnowledgeGraphService().delete_document_graph(
-                        document_id, organization_id
+                document = (
+                    (
+                        await cleanup_db.execute(
+                            select(Document)
+                            .where(
+                                Document.id == document_id,
+                                Document.organization_id == organization_id,
+                                Document.is_deleted == True,
+                            )
+                            .execution_options(populate_existing=True, autoflush=False)
+                        )
                     )
+                    .scalars()
+                    .first()
                 )
+                if (
+                    document is None
+                    or (document.document_metadata or {}).get("graph_cleanup_requested")
+                    is False
+                ):
+                    await cleanup_db.rollback()
+                    return True
+                await cleanup_db.rollback()
+                cleanup_ok = True
+                try:
+                    await asyncio.to_thread(
+                        lambda: KnowledgeGraphService().delete_document_graph(
+                            document_id, organization_id
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    cleanup_ok = False
+                    logger.warning(
+                        "knowledge-graph cleanup on delete failed",
+                        extra={"document_id": document_id},
+                        exc_info=True,
+                    )
+                await cleanup_db.execute(
+                    update(Document)
+                    .where(
+                        Document.id == document_id,
+                        Document.organization_id == organization_id,
+                        Document.is_deleted == True,
+                        Document.document_metadata["graph_cleanup_requested"]
+                        .as_boolean()
+                        .is_distinct_from(False),
+                    )
+                    .values(
+                        neo4j_index_status=(
+                            SatelliteSyncStatus.COMPLETED.value
+                            if cleanup_ok
+                            else SatelliteSyncStatus.FAILED.value
+                        )
+                    )
+                    .execution_options(autoflush=False, synchronize_session=False)
+                )
+                await cleanup_db.commit()
+                return cleanup_ok
             except Exception:  # noqa: BLE001
-                cleanup_ok = False
+                await cleanup_db.rollback()
                 logger.warning(
-                    "knowledge-graph cleanup on delete failed",
+                    "Could not record deleted-document graph cleanup outcome",
                     extra={"document_id": document_id},
                     exc_info=True,
                 )
-            await self.db.execute(
-                update(Document)
-                .where(
-                    Document.id == document_id,
-                    Document.organization_id == organization_id,
-                    Document.is_deleted == True,
-                    Document.document_metadata["graph_cleanup_requested"]
-                    .as_boolean()
-                    .is_distinct_from(False),
-                )
-                .values(
-                    neo4j_index_status=(
-                        SatelliteSyncStatus.COMPLETED.value
-                        if cleanup_ok
-                        else SatelliteSyncStatus.FAILED.value
-                    )
-                )
-                .execution_options(autoflush=False, synchronize_session=False)
-            )
-            await self.db.commit()
-            return cleanup_ok
-        except Exception:  # noqa: BLE001
-            await self.db.rollback()
-            logger.warning(
-                "Could not record deleted-document graph cleanup outcome",
-                extra={"document_id": document_id},
-                exc_info=True,
-            )
-            return False
+                return False
 
     async def get_file_stats(self, organization_id: str) -> Dict[str, Any]:
         """Get file statistics for organization"""

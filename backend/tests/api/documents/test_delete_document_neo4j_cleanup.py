@@ -45,6 +45,9 @@ def cleanup_session(monkeypatch):
     context.__aenter__ = AsyncMock(return_value=session)
     context.__aexit__ = AsyncMock(return_value=False)
     monkeypatch.setattr("src.core.database.AsyncSessionLocal", lambda: context)
+    monkeypatch.setattr(
+        "src.services.documents.file_service.AsyncSession", lambda **kwargs: context
+    )
     return session
 
 

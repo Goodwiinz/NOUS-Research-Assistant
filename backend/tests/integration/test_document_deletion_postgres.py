@@ -799,6 +799,41 @@ async def test_delete_rechecks_owner_under_lock() -> None:
         assert _quota(env) == _QUOTA_BEFORE
 
 
+@pytest.mark.parametrize("outcome", ["success", "provider-error", "non-cascade"])
+async def test_graph_cleanup_preserves_caller_objects_and_pending_writes(
+    outcome: str,
+) -> None:
+    """A post-delete cleanup must not expire or commit its caller's objects."""
+    async with _schema() as env:
+        with env.sync() as seed:
+            document = seed.get(Document, env.ids.doc)
+            document.is_deleted = True
+            document.document_metadata = {
+                "graph_cleanup_requested": outcome != "non-cascade"
+            }
+            seed.commit()
+            original_name = seed.get(User, env.ids.user).first_name
+        kg = MagicMock()
+        if outcome == "provider-error":
+            kg.delete_document_graph.side_effect = OSError("synthetic outage")
+        async with env.async_() as db:
+            document = await db.get(Document, env.ids.doc)
+            user = await db.get(User, env.ids.user)
+            user.first_name = "Uncommitted caller change"
+            with patch(
+                "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+                return_value=kg,
+            ):
+                assert await FileService(db).cleanup_deleted_document_graph(
+                    str(env.ids.doc), str(env.ids.org)
+                ) is (outcome != "provider-error")
+            assert document.id == env.ids.doc
+            assert user.id == env.ids.user
+            assert user.first_name == "Uncommitted caller change"
+            with env.sync() as observer:
+                assert observer.get(User, env.ids.user).first_name == original_name
+
+
 @pytest.mark.parametrize("cleanup_ok", [False, True])
 def test_normal_delete_graph_cleanup_is_durable(cleanup_ok):
     """Delete commits retry intent; an outage remains selected until recovery."""
