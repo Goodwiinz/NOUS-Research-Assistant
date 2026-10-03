@@ -8,6 +8,7 @@ middleware-owned session rolls back on the error path). This module is
 transport + transaction-boundary only.
 """
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -29,6 +30,8 @@ from src.services.threads import collection_service, workspace_access
 
 from .dependencies import _get_collection_or_404
 from .presenters import _collection_to_detail_response, _collection_to_response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/workspaces", tags=["workspaces"])
 
@@ -57,8 +60,9 @@ async def create_collection(
         collection = await collection_service.create_collection(
             db, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -125,8 +129,9 @@ async def update_collection(
         collection = await collection_service.update_collection(
             db, collection_id, request, current_user.id, workspace_id=workspace_id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -149,8 +154,9 @@ async def delete_collection(
         deleted = await collection_service.delete_collection(
             db, collection_id, current_user.id, workspace_id=workspace_id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -177,8 +183,9 @@ async def add_documents_to_collection(
             current_user.id,
             workspace_id=workspace_id,
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -206,8 +213,9 @@ async def remove_documents_from_collection(
             current_user.id,
             workspace_id=workspace_id,
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -236,8 +244,9 @@ async def create_collection_standalone(
         collection = await collection_service.create_collection(
             db, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -277,8 +286,9 @@ async def update_collection_standalone(
         collection = await collection_service.update_collection(
             db, collection_id, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -299,8 +309,9 @@ async def delete_collection_standalone(
         deleted = await collection_service.delete_collection(
             db, collection_id, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -321,8 +332,9 @@ async def add_documents_to_collection_standalone(
         collection = await collection_service.add_documents_to_collection(
             db, collection_id, request.document_ids, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -344,8 +356,9 @@ async def remove_documents_from_collection_standalone(
         collection = await collection_service.remove_documents_from_collection(
             db, collection_id, request.document_ids, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 

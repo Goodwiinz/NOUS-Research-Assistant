@@ -75,11 +75,11 @@ def search_threads(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in thread search: {e}")
+    except Exception:
+        logger.error("Error in thread search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -175,11 +175,11 @@ def search_threads_get(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in thread search: {e}")
+    except Exception:
+        logger.error("Error in thread search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -214,11 +214,11 @@ def search_messages(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in message search: {e}")
+    except Exception:
+        logger.error("Error in message search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -317,11 +317,11 @@ def search_messages_get(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in message search: {e}")
+    except Exception:
+        logger.error("Error in message search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -362,11 +362,11 @@ def combined_search(
             db=db,
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in combined search: {e}")
+    except Exception:
+        logger.error("Error in combined search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
