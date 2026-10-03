@@ -52,7 +52,7 @@ What happens:
 1. CLI calls `POST /cli-auth/start` and gets a session + browser URL.
 2. Your default browser opens a consent page on `dev-api.goodwiinz.tech`.
 3. You sign in and click **Approve**.
-4. CLI polls `/cli-auth/status/{session_id}` until it flips to `approved`.
+4. CLI polls `/cli-auth/status/{session_id}` (poll token in the `X-CLI-Poll-Token` header, never the URL) until it flips to `approved`.
 5. Token, email, org ID, and expiry are written to `~/.nous/config.json`.
 
 If the browser doesn't open automatically, the URL is printed — paste it manually.

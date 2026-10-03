@@ -5,7 +5,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 import redis as redis_lib
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pydantic import BaseModel
 
 from src.core.config import settings
@@ -21,6 +30,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cli-auth", tags=["cli-auth"])
 
 _POLL_INTERVAL_SECONDS = 2
+POLL_TOKEN_HEADER = "X-CLI-Poll-Token"
 
 
 # Prefer Redis-backed store so sessions survive across Gunicorn workers.
@@ -75,9 +85,11 @@ async def start_cli_auth(
             detail="Too many CLI auth requests. Try again later.",
         )
     session = store.create_session()
+    # The code rides in the fragment, which browsers never send to a server,
+    # proxy or Referer, so it stays out of request logs.
     browser_url = (
         f"{_frontend_base_url()}/cli-auth"
-        f"?session_id={session.session_id}&code={session.verification_code}"
+        f"?session_id={session.session_id}#code={session.verification_code}"
     )
     return {
         "session_id": session.session_id,
@@ -92,10 +104,22 @@ async def start_cli_auth(
 @router.get("/status/{session_id}")
 async def get_cli_auth_status(
     session_id: str,
-    poll_token: str = Query(...),
+    response: Response,
+    header_poll_token: str | None = Header(default=None, alias=POLL_TOKEN_HEADER),
+    poll_token: str | None = Query(
+        default=None,
+        description=f"Deprecated: send the {POLL_TOKEN_HEADER} header instead.",
+    ),
     store: InMemoryCLIAuthSessionStore = Depends(get_cli_auth_session_store),
 ) -> dict[str, Any]:
-    session = store.get_session(session_id, poll_token)
+    response.headers["Cache-Control"] = "no-store"
+    token = header_poll_token
+    if token is None and poll_token is not None:
+        # Compat window for CLIs installed before the header existed; the token
+        # still reaches access logs here. Delete with the Query param (audit I22).
+        logger.warning("cli-auth: poll token sent in query string; client must upgrade")
+        token = poll_token
+    session = store.get_session(session_id, token) if token else None
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

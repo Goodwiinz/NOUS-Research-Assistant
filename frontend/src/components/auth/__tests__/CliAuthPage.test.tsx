@@ -13,7 +13,7 @@ const mockedAuth = {
   isLoading: false,
 };
 
-const mockSearchParams = new URLSearchParams(
+let mockSearchParams = new URLSearchParams(
   'session_id=session-1&code=ABCD-1234'
 );
 
@@ -50,6 +50,11 @@ describe('CliAuthPage', () => {
     vi.restoreAllMocks();
     mockedAuth.isAuthenticated = true;
     mockedAuth.isLoading = false;
+    mockSearchParams = new URLSearchParams(
+      'session_id=session-1&code=ABCD-1234'
+    );
+    window.sessionStorage.clear();
+    window.history.replaceState(null, '', '/');
   });
 
   it('shows approve action for authenticated browser session', async () => {
@@ -80,5 +85,51 @@ describe('CliAuthPage', () => {
         /cli connected\. you can return to your terminal/i
       )
     ).toBeInTheDocument();
+  });
+
+  it('reads the code from the URL fragment and strips it from the address bar', async () => {
+    mockSearchParams = new URLSearchParams('session_id=session-1');
+    window.history.replaceState(
+      null,
+      '',
+      '/cli-auth?session_id=session-1#code=WXYZ-9876'
+    );
+    const postSpy = vi
+      .spyOn(api, 'post')
+      .mockResolvedValue({ status: 'approved' } as never);
+
+    render(<CliAuthPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /approve/i }));
+
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith('/cli-auth/approve', {
+        session_id: 'session-1',
+        verification_code: 'WXYZ-9876',
+      })
+    );
+    expect(window.location.href).not.toContain('WXYZ-9876');
+  });
+
+  it('keeps the code out of the login redirect URL', async () => {
+    mockedAuth.isAuthenticated = false;
+    mockSearchParams = new URLSearchParams('session_id=session-1');
+    window.history.replaceState(
+      null,
+      '',
+      '/cli-auth?session_id=session-1#code=WXYZ-9876'
+    );
+
+    render(<CliAuthPage />);
+
+    await waitFor(() =>
+      expect(mockPush).toHaveBeenCalledWith(
+        `/login?next=${encodeURIComponent('/cli-auth?session_id=session-1')}`
+      )
+    );
+    expect(mockPush.mock.calls.flat().join(' ')).not.toContain('WXYZ-9876');
+    expect(window.sessionStorage.getItem('nous:cli-auth-code:session-1')).toBe(
+      'WXYZ-9876'
+    );
   });
 });
