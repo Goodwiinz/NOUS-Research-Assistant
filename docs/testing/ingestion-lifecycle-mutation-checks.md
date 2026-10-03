@@ -196,3 +196,26 @@ so an assertion cannot be swallowed as a revocation error.
 Additional PostgreSQL regressions verify both cancellation ID forms, broker
 failure, duplicate cancellation, foreign tenants, cascade semantics, a commit
 failure that rolls back once without revoking, and quota release exactly once.
+
+## GOO-358 follow-up verification — 2026-10-03
+Source repair: `abc4a2682`; merged develop baseline: `2a45aa50ce0db947ed91bdbb03534704107e5553`.
+Real PostgreSQL fixtures, with remote provider transports simulated. Focused suite: **90 passed**. Covers late writes, ordinary deletion, retry intent, and concurrent changes to cleanup scope. No deployed-provider health claim.
+Each guard below was removed in a runtime-only recompilation of its original function. All 15 named checks failed at the expected assertion, then passed with the original function restored. Tracked source was unchanged. A first harness attempt copied function globals and lost dependency patches; those results were discarded and all 15 checks rerun with live module globals.
+Run each selector with `ORCHESTRATION_TEST_DATABASE_URL` pointing to disposable PostgreSQL and the backend dependencies available: `PYTHONPATH=backend pytest -q -o addopts= <selector>`. Source line is the function entry; the guard label identifies the exact condition mutated.
+| Check | Guard | Source function line | Named selector | Result |
+|---|---|---|---|---|
+| T4-1 | Persist cascade intent | `backend/src/services/documents/file_service.py:1175` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_non_cascade_late_graph_write_is_retained` | FAIL → PASS |
+| T4-2 | Persist pending cleanup before provider | `backend/src/services/documents/file_service.py:1175` | `backend/tests/integration/test_document_deletion_postgres.py::test_normal_delete_graph_cleanup_is_durable` | FAIL → PASS |
+| T4-3 | Late graph cleanup respects cascade | `backend/src/tasks/reconcile_tasks.py:232` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_non_cascade_late_graph_write_is_retained` | FAIL → PASS |
+| T4-4 | Reconciler selection respects cascade | `backend/src/tasks/reconcile_tasks.py:57` | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_non_cascade_deleted_graph_is_not_selected` | FAIL → PASS |
+| T4-5 | Refresh cascade intent after re-drive | `backend/src/tasks/reconcile_tasks.py:139` | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_redrive_preserves_non_cascade_graph_after_concurrent_delete` | FAIL → PASS |
+| T4-6 | Pre-cleanup tenant scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_rechecks_scope_and_delete_intent[foreign]` | FAIL → PASS |
+| T4-7 | Pre-cleanup deletion scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_rechecks_scope_and_delete_intent[live]` | FAIL → PASS |
+| T4-8 | Pre-cleanup cascade scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_rechecks_scope_and_delete_intent[non-cascade]` | FAIL → PASS |
+| T4-9 | Cleanup-outcome tenant scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_outcome_does_not_overwrite_changed_row[foreign]` | FAIL → PASS |
+| T4-10 | Cleanup-outcome deletion scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_outcome_does_not_overwrite_changed_row[live]` | FAIL → PASS |
+| T4-11 | Cleanup-outcome cascade scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_outcome_does_not_overwrite_changed_row[non-cascade]` | FAIL → PASS |
+| T4-12 | Reload DO KB document rather than merge stale snapshot | `backend/src/tasks/processing_tasks.py:66` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_stale_snapshot_does_not_revert_state_through_do_kb_sync` | FAIL → PASS |
+| T4-13 | Do not report non-cascade graph cleanup | `backend/src/tasks/reconcile_tasks.py:264` | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_non_cascade_do_kb_cleanup_does_not_report_graph_cleanup` | FAIL → PASS |
+| T4-14 | Compensate late graph write | `backend/src/tasks/processing_tasks.py:194` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_graph_write_is_compensated` | FAIL → PASS |
+| T4-15 | Compensate late DO KB write | `backend/src/tasks/processing_tasks.py:194` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_do_kb_success_is_compensated` | FAIL → PASS |
