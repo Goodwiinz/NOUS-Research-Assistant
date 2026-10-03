@@ -16,6 +16,7 @@ import {
   loadConfig,
   saveConfig,
   clearConfig,
+  subscribeConfig,
   NousConfig,
 } from '../../auth/store';
 
@@ -50,6 +51,60 @@ test('clearConfig removes the file', () => {
   });
   clearConfig();
   expect(loadConfig()).toBeNull();
+});
+
+test('subscribers see committed changes and stop receiving them after unsubscribe', () => {
+  const config: NousConfig = {
+    token: 'dummy',
+    user_email: 'test@example.invalid',
+    organization_id: 'org',
+    expires_at: '2099-01-01',
+    thread_id: null,
+  };
+  const listener = vi.fn((snapshot: NousConfig | null) => {
+    expect(loadConfig()).toEqual(snapshot);
+  });
+  const unsubscribe = subscribeConfig(listener);
+  try {
+    saveConfig(config);
+    expect(listener).toHaveBeenLastCalledWith(config);
+    expect(listener.mock.calls[0][0]).not.toBe(config);
+    clearConfig();
+    expect(listener).toHaveBeenLastCalledWith(null);
+    unsubscribe();
+    saveConfig(config);
+    expect(listener).toHaveBeenCalledTimes(2);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('listener failures do not fail committed writes or skip other listeners', () => {
+  const config: NousConfig = {
+    token: 'dummy',
+    user_email: 'test@example.invalid',
+    organization_id: 'org',
+    expires_at: '2099-01-01',
+    thread_id: null,
+  };
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const unsubscribeBroken = subscribeConfig(() => {
+    throw new Error('listener failure');
+  });
+  const listener = vi.fn();
+  const unsubscribe = subscribeConfig(listener);
+  try {
+    expect(() => saveConfig(config)).not.toThrow();
+    expect(loadConfig()).toEqual(config);
+    expect(listener).toHaveBeenLastCalledWith(config);
+    expect(() => clearConfig()).not.toThrow();
+    expect(loadConfig()).toBeNull();
+    expect(listener).toHaveBeenLastCalledWith(null);
+    expect(warning).toHaveBeenCalledTimes(2);
+  } finally {
+    unsubscribeBroken();
+    unsubscribe();
+  }
 });
 
 test('restricts new credentials and repairs legacy permissions', () => {
@@ -89,9 +144,16 @@ test('a failed atomic replacement preserves existing credentials and removes the
   vi.mocked(fs.renameSync).mockImplementationOnce(() => {
     throw new Error('disk failure');
   });
-  expect(() => saveConfig({ ...config, token: 'replacement' })).toThrow(
-    'disk failure'
-  );
+  const listener = vi.fn();
+  const unsubscribe = subscribeConfig(listener);
+  try {
+    expect(() => saveConfig({ ...config, token: 'replacement' })).toThrow(
+      'disk failure'
+    );
+    expect(listener).not.toHaveBeenCalled();
+  } finally {
+    unsubscribe();
+  }
   expect(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).toBe(before);
   expect(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual(
     []
