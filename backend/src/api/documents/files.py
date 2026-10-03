@@ -742,74 +742,24 @@ async def cancel_upload(
                 detail="Invalid upload ID format. Must be a valid UUID.",
             )
 
-        # First, check if upload_id exists in processing jobs
-
-        job_stmt = select(ProcessingJob).where(
-            ProcessingJob.celery_task_id == upload_id, ProcessingJob.is_deleted == False
-        )
-        job_result = await db.execute(job_stmt)
-        processing_job = job_result.scalars().first()
-
-        if processing_job:
-            # Handle processing job cancellation
-            # Check if user owns this job
-            if processing_job.created_by_user_id != current_user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You can only cancel your own uploads",
-                )
-
-            # Check if job can be cancelled. JobStatus is a plain PyEnum, so the
-            # old `status not in ["pending", "running"]` compared enum members
-            # to strings — always True, so every cancel early-returned and the
-            # block below was dead (and would have written the raw string
-            # "cancelled" into the enum column). Compare against enum members.
-            if processing_job.status not in (
-                JobStatus.PENDING,
-                JobStatus.QUEUED,
-                JobStatus.RUNNING,
-                JobStatus.RETRYING,
-            ):
+        cancellation = await file_service.cancel_upload_job(upload_id, current_user)
+        if cancellation is not None:
+            if not cancellation.cancelled:
                 return {
-                    "message": f"Cannot cancel job in {processing_job.status.value} state",
+                    "message": f"Cannot cancel job in {cancellation.status.value} state",
                     "upload_id": upload_id,
-                    "job_status": processing_job.status.value,
+                    "job_status": cancellation.status.value,
                 }
-
-            # cancel_job() sets status=CANCELLED + completed_at + duration.
-            processing_job.cancel_job()
-            processing_job.error_message = "Upload cancelled by user"
-            await db.commit()
-
-            # Also revoke the Celery task if one was dispatched, mirroring
-            # processing.py's cancel path — otherwise the worker keeps
-            # running the job after the DB row says cancelled. Best-effort:
-            # the cancel is already committed, so a broker hiccup here must
-            # not turn the response into a 500 (and roll nothing back).
-            if processing_job.celery_task_id:
-                try:
-                    from src.tasks.processing_tasks import current_app
-
-                    current_app.control.revoke(
-                        processing_job.celery_task_id, terminate=True
-                    )
-                except Exception as revoke_exc:
-                    logger.warning(
-                        "Failed to revoke Celery task %s for cancelled job %s: %s",
-                        processing_job.celery_task_id,
-                        processing_job.id,
-                        revoke_exc,
-                    )
-
             return {
                 "message": "Upload cancelled successfully",
                 "upload_id": upload_id,
-                "job_id": processing_job.id,
+                "job_id": cancellation.job_id,
             }
 
         # If no processing job found, check if it's a document ID
         doc_stmt = select(Document).where(
             Document.id == upload_id,
+            Document.organization_id == current_user.organization_id,
             Document.uploaded_by_user_id == current_user.id,
             Document.is_deleted == False,
         )
@@ -849,7 +799,6 @@ async def cancel_upload(
     except HTTPException:
         raise
     except Exception as e:
-        await db.rollback()
         logger.error(f"Failed to cancel upload: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
