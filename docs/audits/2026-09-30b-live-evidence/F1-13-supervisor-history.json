@@ -1,0 +1,75 @@
+{
+  "step": "F1-13-supervisor-history",
+  "as": "approver",
+  "at": "2026-09-30T21:09:03.762008+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/c3b56c4c-6b21-40fc-bbe1-19357e91b428/history",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "seq": 1,
+      "event_type": "screening.queue_created",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "stage": "title_abstract",
+        "queue_id": "c3b56c4c-6b21-40fc-bbe1-19357e91b428",
+        "report_ids": [
+          "3ae08aad-08f0-484e-ae02-d4db7cca1a1c",
+          "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+          "5d6149b8-5d7c-402a-9b80-353bf84d9154"
+        ],
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "criteria_hash": "d8a2fd5e8c76d24aafbfefcf42322a60625a3c4fe01daf22697d9e0472cc0705",
+        "reviewer_mode": "single",
+        "exclusion_reasons": [],
+        "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177",
+        "suggestions_skipped": null,
+        "supersedes_queue_id": null
+      },
+      "occurred_at": "2026-09-30T21:08:43.310160Z",
+      "redacted": false
+    },
+    {
+      "seq": 2,
+      "event_type": "screening.assigned",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "queue_id": "c3b56c4c-6b21-40fc-bbe1-19357e91b428",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "8a67c8c8-870d-40d3-98a1-d6fe2b7bc596",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652"
+      },
+      "occurred_at": "2026-09-30T21:08:58.980539Z",
+      "redacted": false
+    },
+    {
+      "seq": 3,
+      "event_type": "screening.observed",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": "eval include",
+      "payload": {
+        "decision": "include",
+        "queue_id": "c3b56c4c-6b21-40fc-bbe1-19357e91b428",
+        "report_id": "3ae08aad-08f0-484e-ae02-d4db7cca1a1c",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "8a67c8c8-870d-40d3-98a1-d6fe2b7bc596",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "135665f7-a2b5-4b4b-83e2-ecabfc35af7b",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:08:59.902138Z",
+      "redacted": false
+    }
+  ]
+}

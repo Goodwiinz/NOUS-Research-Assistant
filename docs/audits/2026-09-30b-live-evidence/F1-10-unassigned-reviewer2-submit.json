@@ -1,0 +1,27 @@
+{
+  "step": "F1-10-unassigned-reviewer2-submit",
+  "as": "reviewer2",
+  "at": "2026-09-30T21:09:01.798814+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/c3b56c4c-6b21-40fc-bbe1-19357e91b428/observations",
+    "body": {
+      "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+      "assignment_id": "8a67c8c8-870d-40d3-98a1-d6fe2b7bc596",
+      "criteria_hash": "d8a2fd5e8c76d24aafbfefcf42322a60625a3c4fe01daf22697d9e0472cc0705",
+      "decision": "include",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 403,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Not assigned to this queue",
+      "status_code": 403,
+      "type": "http_error"
+    }
+  }
+}

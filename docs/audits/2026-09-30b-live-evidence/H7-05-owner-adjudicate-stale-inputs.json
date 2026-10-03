@@ -1,0 +1,31 @@
+{
+  "step": "H7-05-owner-adjudicate-stale-inputs",
+  "as": "owner",
+  "at": "2026-09-30T21:10:15.024463+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/55fe3b95-e69b-4bd2-a3de-b59c251b0737/reports/a80f493a-45ed-46be-9d39-1bca35dddb07/adjudicate",
+    "body": {
+      "resolution_id": "8857aab0-089c-588d-b453-58284da16d1e",
+      "input_observation_ids": [
+        "26ea3684-27de-4ce7-949c-8cc4dc5079cf",
+        "f32c09fb-fb6f-4abf-99d4-10f541bd9e17"
+      ],
+      "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+      "decision": "include",
+      "rationale": "stale replay",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Adjudication inputs are stale",
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}
