@@ -1,0 +1,21 @@
+{
+  "step": "B4-03-foreign-run-manifest",
+  "as": "foreign",
+  "at": "2026-09-30T21:03:10.890393+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/a90c3860-2ed5-4e98-9a8c-390516f16fd3/manifest",
+    "body": null
+  },
+  "status": 404,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Project not found",
+      "status_code": 404,
+      "type": "http_error"
+    }
+  }
+}

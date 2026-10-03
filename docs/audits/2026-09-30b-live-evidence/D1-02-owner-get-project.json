@@ -1,0 +1,95 @@
+{
+  "step": "D1-02-owner-get-project",
+  "as": "owner",
+  "at": "2026-09-30T21:03:33.426337+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/a7460d29-feee-456b-abf2-441a8008921a",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "a7460d29-feee-456b-abf2-441a8008921a",
+    "research_engine_project_id": null,
+    "can_edit": true,
+    "can_manage": true,
+    "workspace_archived": false,
+    "workspace_id": "d7612a30-602e-488b-b6ee-6a3bf9e9f94d",
+    "name": "Attention Is All You Need",
+    "description": "Research project for studying the Transformer architecture and the paper “Attention Is All You Need.”",
+    "project_type": "research",
+    "research_status": "active",
+    "research_goals": "Understand self-attention, multi-head attention, positional encoding, and the Transformer architecture.",
+    "deadline": null,
+    "tags": [
+      "attention",
+      "transformers",
+      "deep learning",
+      "NLP"
+    ],
+    "color": null,
+    "icon": null,
+    "is_private": true,
+    "document_count": 6,
+    "note_count": 0,
+    "draft_count": 0,
+    "created_at": "2026-08-20T22:33:54.738638Z",
+    "updated_at": "2026-08-20T22:33:54.738644Z",
+    "documents": [
+      {
+        "id": "74c232ea-e007-4a73-b8ed-df0f88bae654",
+        "filename": "1706.03762v7.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-08-20T22:33:07.700745+00:00",
+        "sort_order": 0
+      },
+      {
+        "id": "20492039-b419-48a5-80d8-b4d8c69dca6e",
+        "filename": "2002.10260v3.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-08-21T23:18:25.872225+00:00",
+        "sort_order": 0
+      },
+      {
+        "id": "1ddadd2f-8817-48ac-95b3-1a7a20b7e703",
+        "filename": "1711.02132v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-08-21T23:18:26.419653+00:00",
+        "sort_order": 0
+      },
+      {
+        "id": "4f279d5b-35e3-4a6e-bfc1-38b7120dd1b9",
+        "filename": "2005.04876v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-08-21T23:18:26.896088+00:00",
+        "sort_order": 0
+      },
+      {
+        "id": "8b220cbe-6d5f-459c-a435-b7c590694e51",
+        "filename": "2504.08801v1.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-08-21T23:18:27.372835+00:00",
+        "sort_order": 0
+      },
+      {
+        "id": "1299ae5f-c4c2-4169-95b2-cf6b3206969c",
+        "filename": "1812.07807v2.pdf",
+        "file_type": "pdf",
+        "status": "completed",
+        "created_at": "2026-08-21T23:18:27.852118+00:00",
+        "sort_order": 0
+      }
+    ],
+    "notes": [],
+    "recent_notes": [],
+    "recent_drafts": []
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "step": "G1-02-approver-approve-v2",
+  "as": "approver",
+  "at": "2026-09-30T21:09:26.045144+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/protocols/4a88e789-e605-400f-ac8c-7437f8f59072/versions/94d8590a-34d7-4bce-bed8-b2810b9cc2c2/approve",
+    "body": {
+      "expected_protocol_version": 2,
+      "expected_content_hash": "bb5c1ac39e08e72f0f2050c0bfdaaeb8fbd135cbef95a47efd716f41428f4fca",
+      "reason": "eval-2026-09-30b dual review amendment",
+      "idempotency_key": "<redacted>",
+      "expected_current_approved_version_id": "d38ab741-2deb-4c29-aae2-679754b74177"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "decision_id": "0aa2fe06-4fe3-419c-8477-d33c9bb0d214",
+    "protocol_id": "4a88e789-e605-400f-ac8c-7437f8f59072",
+    "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+    "content_hash": "bb5c1ac39e08e72f0f2050c0bfdaaeb8fbd135cbef95a47efd716f41428f4fca",
+    "actor_user_id": "4d2e5308-01b5-4e71-99e4-2e01295eb3a4",
+    "actor_role": "supervisor",
+    "reason": "eval-2026-09-30b dual review amendment",
+    "approved_at": "2026-09-30T21:09:25.805697Z"
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "step": "K2-02-prisma-after-replay",
+  "as": "owner",
+  "at": "2026-09-30T21:12:07.226548+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/prisma/export?format=json",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "body": {
+      "amendments": [
+        {
+          "aggregate_type": "research_screening",
+          "event_id": "6ca4a7b3-b7bf-4aa6-8907-8afa096c884d",
+          "from": "conflict",
+          "kind": "full_text.adjudicated",
+          "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+          "seq": 6,
+          "to": "exclude"
+        },
+        {
+          "aggregate_type": "research_screening",
+          "event_id": "46072f07-46fb-4cfb-9ad2-28f055a276f3",
+          "from": "conflict",
+          "kind": "title_abstract.adjudicated",
+          "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+          "seq": 12,
+          "to": "exclude"
+        },
+        {
+          "aggregate_type": "research_screening",
+          "event_id": "1a6c8025-7dfc-434d-ade0-03e9a7e848f0",
+          "from": "include",
+          "kind": "title_abstract.reopened",
+          "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+          "seq": 13,
+          "to": "reopened"
+        },
+        {
+          "aggregate_type": "research_screening",
+          "event_id": "2cb45ba5-4254-4678-b6a6-f1a55e5a1875",
+          "from": "conflict",
+          "kind": "title_abstract.adjudicated",
+          "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+          "seq": 16,
+          "to": "include"
+        }
+      ],
+      "checks": {
+        "assessed_within_retrieved": true,
+        "included_plus_excluded_equals_assessed": true,
+        "screened_plus_awaiting_equals_unique": true
+      },
+      "counts": {
+        "duplicates_removed": 4,
+        "import_rejected": 4,
+        "included_reports": 1,
+        "included_studies": 1,
+        "records_awaiting_screening": 4,
+        "records_by_import": {
+          "Embase (Ovid)": 7,
+          "eval-2026-09-30b synthetic": 5
+        },
+        "records_by_source": {},
+        "records_excluded": 1,
+        "records_identified": 12,
+        "records_screened": 4,
+        "reports_assessed": 2,
+        "reports_awaiting_retrieval": 1,
+        "reports_excluded_by_reason": {
+          "wrong study design": 1
+        },
+        "reports_not_retrieved": 1,
+        "reports_sought": 4,
+        "unconfirmed_study_links": 0,
+        "unique_reports": 8
+      },
+      "excluded_from_flow": {
+        "workspace_documents": 0
+      },
+      "versions": {
+        "corpus_hash": "d3bddc6e06a0ea2883bd34c8bf39dad5601aec10cc794e39aa234980551315fd",
+        "protocol_version_ids": [
+          "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+          "d38ab741-2deb-4c29-aae2-679754b74177"
+        ],
+        "stream_heads": {
+          "research_acquisition:2f7056ed-b0fb-488a-8290-8bf1c8502652": 7,
+          "research_identity:2f7056ed-b0fb-488a-8290-8bf1c8502652": 3,
+          "research_protocol:4a88e789-e605-400f-ac8c-7437f8f59072": 3,
+          "research_screening:49931aa4-caf2-4013-b0bb-9806b039a615": 8,
+          "research_screening:55fe3b95-e69b-4bd2-a3de-b59c251b0737": 16,
+          "research_screening:c3b56c4c-6b21-40fc-bbe1-19357e91b428": 3
+        }
+      },
+      "warnings": []
+    },
+    "body_sha256": "9a5ada19709e5b6501dfc8fa15a6b792612320f19a6fec2c55e305db27e0cb04",
+    "generated_at": "2026-09-30T21:12:07.201656+00:00",
+    "schema": "nous.academic.prisma-flow.v1"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "step": "B4-04-foreign-run-steps",
+  "as": "foreign",
+  "at": "2026-09-30T21:03:11.077184+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/a90c3860-2ed5-4e98-9a8c-390516f16fd3/steps",
+    "body": null
+  },
+  "status": 404,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Project not found",
+      "status_code": 404,
+      "type": "http_error"
+    }
+  }
+}

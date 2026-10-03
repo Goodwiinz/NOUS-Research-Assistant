@@ -1,0 +1,330 @@
+{
+  "step": "H8-01-supervisor-history",
+  "as": "owner",
+  "at": "2026-09-30T21:10:15.676106+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/55fe3b95-e69b-4bd2-a3de-b59c251b0737/history",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "seq": 1,
+      "event_type": "screening.queue_created",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "stage": "title_abstract",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_ids": [
+          "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+          "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+          "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+          "a80f493a-45ed-46be-9d39-1bca35dddb07"
+        ],
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+        "reviewer_mode": "dual_independent",
+        "exclusion_reasons": [
+          "wrong study design",
+          "wrong population",
+          "not empirical"
+        ],
+        "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+        "suggestions_skipped": null,
+        "supersedes_queue_id": "c3b56c4c-6b21-40fc-bbe1-19357e91b428"
+      },
+      "occurred_at": "2026-09-30T21:09:48.079774Z",
+      "redacted": false
+    },
+    {
+      "seq": 2,
+      "event_type": "screening.assigned",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652"
+      },
+      "occurred_at": "2026-09-30T21:09:48.311658Z",
+      "redacted": false
+    },
+    {
+      "seq": 3,
+      "event_type": "screening.assigned",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+        "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652"
+      },
+      "occurred_at": "2026-09-30T21:09:49.050447Z",
+      "redacted": false
+    },
+    {
+      "seq": 4,
+      "event_type": "screening.observed",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": "SENTINEL-P2-NOTE-0930b include because empirical",
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "b6e995bc-e559-4ba3-a1c6-d125c1450e58",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:49.367666Z",
+      "redacted": false
+    },
+    {
+      "seq": 5,
+      "event_type": "screening.observed",
+      "actor_user_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "exclude",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+        "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+        "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "e2ccc9d5-0e40-4645-9031-43c9dfa482b7",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:50.084414Z",
+      "redacted": false
+    },
+    {
+      "seq": 6,
+      "event_type": "screening.observed",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "e685bc57-d866-409d-b535-fa272ed034fc",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:50.687691Z",
+      "redacted": false
+    },
+    {
+      "seq": 7,
+      "event_type": "screening.observed",
+      "actor_user_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+        "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+        "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "3294fbe6-f4f4-4ddd-b918-4001278b63e4",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:50.925499Z",
+      "redacted": false
+    },
+    {
+      "seq": 8,
+      "event_type": "screening.observed",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "0a4518e9-9464-42dc-b49d-f8e22c4b13a9",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:51.192665Z",
+      "redacted": false
+    },
+    {
+      "seq": 9,
+      "event_type": "screening.observed",
+      "actor_user_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+        "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+        "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "614522a0-5b35-4f0f-ae26-aef7bc2b756d",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:51.366983Z",
+      "redacted": false
+    },
+    {
+      "seq": 10,
+      "event_type": "screening.observed",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "f32c09fb-fb6f-4abf-99d4-10f541bd9e17",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:51.934865Z",
+      "redacted": false
+    },
+    {
+      "seq": 11,
+      "event_type": "screening.observed",
+      "actor_user_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+        "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+        "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "26ea3684-27de-4ce7-949c-8cc4dc5079cf",
+        "exclusion_reason": null
+      },
+      "occurred_at": "2026-09-30T21:09:52.150629Z",
+      "redacted": false
+    },
+    {
+      "seq": 12,
+      "event_type": "screening.adjudicated",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "adjudicator",
+      "reason": "Opinion piece; protocol excludes opinion pieces",
+      "payload": {
+        "decision": "exclude",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+        "resolution_id": "8203f41f-e1c9-486b-b8c2-ad5cb849390e",
+        "exclusion_reason": null,
+        "input_observation_ids": [
+          "b6e995bc-e559-4ba3-a1c6-d125c1450e58",
+          "e2ccc9d5-0e40-4645-9031-43c9dfa482b7"
+        ],
+        "conflict_resolution_id": "20b6d9f9-83c3-5e14-94f9-830e834b5725"
+      },
+      "occurred_at": "2026-09-30T21:10:13.411768Z",
+      "redacted": false
+    },
+    {
+      "seq": 13,
+      "event_type": "screening.reopened",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "adjudicator",
+      "reason": "eval: re-check r4 after reopen",
+      "payload": {
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "resolution_id": "456df32c-565d-4517-b840-1a78d1653983",
+        "reopened_resolution_id": "8857aab0-089c-588d-b453-58284da16d1e"
+      },
+      "occurred_at": "2026-09-30T21:10:13.866103Z",
+      "redacted": false
+    },
+    {
+      "seq": 14,
+      "event_type": "screening.superseded",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "5d9dac48-b5a1-42c0-8c5c-a9c0489f2b85",
+        "exclusion_reason": null,
+        "superseded_observation_id": "f32c09fb-fb6f-4abf-99d4-10f541bd9e17"
+      },
+      "occurred_at": "2026-09-30T21:10:14.259857Z",
+      "redacted": false
+    },
+    {
+      "seq": 15,
+      "event_type": "screening.superseded",
+      "actor_user_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "decision": "exclude",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+        "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+        "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "50064897-6343-429a-96ba-aa6f38b478fc",
+        "exclusion_reason": null,
+        "superseded_observation_id": "26ea3684-27de-4ce7-949c-8cc4dc5079cf"
+      },
+      "occurred_at": "2026-09-30T21:10:14.714320Z",
+      "redacted": false
+    },
+    {
+      "seq": 16,
+      "event_type": "screening.adjudicated",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "adjudicator",
+      "reason": "Empirical study within scope",
+      "payload": {
+        "decision": "include",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+        "resolution_id": "83b3718e-8cf4-4ce8-9a9c-91b9a624e8cc",
+        "exclusion_reason": null,
+        "input_observation_ids": [
+          "50064897-6343-429a-96ba-aa6f38b478fc",
+          "5d9dac48-b5a1-42c0-8c5c-a9c0489f2b85"
+        ],
+        "conflict_resolution_id": "5ed94681-e82b-5ba8-b979-87babb701bc4"
+      },
+      "occurred_at": "2026-09-30T21:10:15.349187Z",
+      "redacted": false
+    }
+  ]
+}

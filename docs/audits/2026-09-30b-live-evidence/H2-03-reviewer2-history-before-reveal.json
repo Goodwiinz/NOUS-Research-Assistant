@@ -1,0 +1,93 @@
+{
+  "step": "H2-03-reviewer2-history-before-reveal",
+  "as": "reviewer2",
+  "at": "2026-09-30T21:09:49.954629+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/55fe3b95-e69b-4bd2-a3de-b59c251b0737/history",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "seq": 1,
+      "event_type": "screening.queue_created",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "stage": "title_abstract",
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_ids": [
+          "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+          "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+          "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+          "a80f493a-45ed-46be-9d39-1bca35dddb07"
+        ],
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+        "reviewer_mode": "dual_independent",
+        "exclusion_reasons": [
+          "wrong study design",
+          "wrong population",
+          "not empirical"
+        ],
+        "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+        "suggestions_skipped": null,
+        "supersedes_queue_id": "c3b56c4c-6b21-40fc-bbe1-19357e91b428"
+      },
+      "occurred_at": "2026-09-30T21:09:48.079774Z",
+      "redacted": false
+    },
+    {
+      "seq": 2,
+      "event_type": "screening.assigned",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652"
+      },
+      "occurred_at": "2026-09-30T21:09:48.311658Z",
+      "redacted": false
+    },
+    {
+      "seq": 3,
+      "event_type": "screening.assigned",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "supervisor",
+      "reason": null,
+      "payload": {
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+        "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652"
+      },
+      "occurred_at": "2026-09-30T21:09:49.050447Z",
+      "redacted": false
+    },
+    {
+      "seq": 4,
+      "event_type": "screening.observed",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": null,
+      "payload": {
+        "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+        "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+        "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+        "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "observation_id": "b6e995bc-e559-4ba3-a1c6-d125c1450e58"
+      },
+      "occurred_at": "2026-09-30T21:09:49.367666Z",
+      "redacted": true
+    }
+  ]
+}

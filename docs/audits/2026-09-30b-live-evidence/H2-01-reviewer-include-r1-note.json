@@ -1,0 +1,34 @@
+{
+  "step": "H2-01-reviewer-include-r1-note",
+  "as": "reviewer",
+  "at": "2026-09-30T21:09:49.439163+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/55fe3b95-e69b-4bd2-a3de-b59c251b0737/observations",
+    "body": {
+      "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+      "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+      "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+      "decision": "include",
+      "idempotency_key": "<redacted>",
+      "note": "SENTINEL-P2-NOTE-0930b include because empirical"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "b6e995bc-e559-4ba3-a1c6-d125c1450e58",
+    "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+    "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+    "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+    "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+    "decision": "include",
+    "exclusion_reason": null,
+    "note": "SENTINEL-P2-NOTE-0930b include because empirical",
+    "supersedes_observation_id": null,
+    "created_at": "2026-09-30T21:09:49.367666Z",
+    "resolution": null
+  }
+}
