@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml  # type: ignore[import-untyped]
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -45,6 +47,73 @@ def _step_with_action(
         if str(step.get("uses", "")).startswith(action):
             return step
     raise AssertionError(f"{job_name!r} has no step using {action!r}")
+
+
+def _condition_value(node: ast.AST, context: dict[str, Any]) -> Any:
+    """Evaluate the release condition's Boolean/equality subset without eval.
+
+    This uses the actual workflow expression and rejects unsupported syntax;
+    the independent acceptance cases below define the release authority.
+    """
+    if isinstance(node, ast.Expression):
+        return _condition_value(node.body, context)
+    if isinstance(node, ast.BoolOp):
+        values = [_condition_value(value, context) for value in node.values]
+        if isinstance(node.op, ast.And):
+            return all(values)
+        if isinstance(node.op, ast.Or):
+            return any(values)
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.Eq)
+    ):
+        return _condition_value(node.left, context) == _condition_value(
+            node.comparators[0], context
+        )
+    if isinstance(node, ast.Attribute):
+        return _condition_value(node.value, context)[node.attr]
+    if isinstance(node, ast.Name):
+        return context[node.id]
+    if isinstance(node, ast.Constant):
+        return node.value
+    raise AssertionError(f"Unsupported release condition syntax: {ast.dump(node)}")
+
+
+@pytest.mark.parametrize(
+    ("event", "conclusion", "branch", "repository", "expected"),
+    [
+        ("push", "success", "develop", "owner/repo", True),
+        ("pull_request", "success", "develop", "owner/repo", False),
+        ("workflow_dispatch", "success", "develop", "owner/repo", False),
+        ("push", "failure", "develop", "owner/repo", False),
+        ("push", "cancelled", "develop", "owner/repo", False),
+        ("push", "success", "main", "owner/repo", False),
+        ("push", "success", "develop", "fork/repo", False),
+    ],
+)
+def test_release_requires_successful_protected_push(
+    event: str, conclusion: str, branch: str, repository: str, expected: bool
+) -> None:
+    release = _load_workflow(WORKFLOWS / "release-dev.yml")
+    condition = release["jobs"]["prepare"]["if"]
+    parsed = ast.parse(
+        condition.replace("&&", " and ").replace("||", " or "), mode="eval"
+    )
+    context = {
+        "github": {
+            "repository": "owner/repo",
+            "event": {
+                "workflow_run": {
+                    "event": event,
+                    "conclusion": conclusion,
+                    "head_branch": branch,
+                    "head_repository": {"full_name": repository},
+                }
+            },
+        }
+    }
+    assert _condition_value(parsed, context) is expected
 
 
 def test_reusable_docker_build_checks_out_and_asserts_a_full_sha() -> None:

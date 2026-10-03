@@ -1,7 +1,7 @@
 # CI and release workflows
 
-A successful Test Pipeline on `develop` starts `release-dev.yml`, which builds
-that exact source SHA and opens a digest-pinned GitOps pull request. PR creation
+A successful full Test Pipeline push on `develop` starts `release-dev.yml`,
+which builds that exact source SHA and opens a digest-pinned GitOps pull request. PR creation
 uses `RELEASE_PR_TOKEN` when configured so the PR's workflow checks start
 normally. PRs created with the built-in `GITHUB_TOKEN` require a human to approve
 their workflow runs; manually dispatched workflows do not satisfy the PR's
@@ -51,7 +51,7 @@ actually required by the repository.
 | Workflow | Trigger | Responsibility |
 | --- | --- | --- |
 | `test-pipeline.yml` | Push, pull request, or manual dispatch | Select affected PR checks; run full CI on protected-branch pushes and manual runs; publish the exact `Release Gate` result. |
-| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA, validate AWS values, retire superseded proposals, and request auto-merge of a checked `values-aws.yaml` promotion PR. |
+| `release-dev.yml` | Completed successful Test Pipeline push on `develop` | Build the tested SHA, validate AWS values, retire superseded proposals, and request auto-merge of a checked `values-aws.yaml` promotion PR. |
 | `docker-build.yml` | Reusable call or manual dispatch | Check out an explicit full SHA, assert `HEAD`, push the full-SHA trace tag, and return its digest. Called by `release-dev.yml`. |
 | `helm-validate.yml` | Push and pull request | Validate the Helm chart and environment values. |
 | `workflow-lint.yml` | Workflow changes | Run `actionlint` across all workflows. |
@@ -78,7 +78,7 @@ lines: a one-line dependency or workflow change still gets full CI.
 
 | PR profile | Changes | Blocking checks |
 | --- | --- | --- |
-| Documentation | Allowlisted root and directory docs, Markdown under `docs/`, and Claude command instructions | Directory-doc lint, script/NOUS contracts, CI selection and Release Gate regressions |
+| Documentation | Allowlisted root and directory docs, Markdown under `docs/`, and Claude command instructions | Directory-doc lint, script/NOUS contracts, CI selection, Release Gate and release-source regressions |
 | Frontend | Frontend files without shared dependency/build changes | Lightweight checks, frontend lint/types, frontend/terminal/harness tests, E2E smoke |
 | Backend | Backend files without shared dependency/build changes | Lightweight checks, backend lint, migration and OpenAPI contracts, security, unit/golden/integration/resilience tests, E2E smoke |
 | Full | Mixed frontend/backend changes, generated API contract artifacts, CI/scripts, shared dependencies/build files, infrastructure, unknown paths, or an empty diff | Lightweight checks and every existing blocking job |
@@ -89,7 +89,9 @@ always use full CI so the existing stale-source guard runs.
 
 Every push to `develop`/`main` and every manual dispatch also uses full CI.
 This preserves the successful `develop` push as the release workflow's source
-verification. The optimization currently applies to PRs only.
+verification. Release preparation explicitly rejects PR and manual runs even
+when their head branch is `develop`. The optimization currently applies to PRs
+only.
 
 Release Gate requires exact success from CI Plan, Lightweight Checks, and all
 selected jobs. Only explicitly unselected jobs may be skipped; their summary
@@ -102,6 +104,7 @@ Run the selection and gate regressions without backend services:
 ```bash
 python3 -m pytest backend/tests/unit/ci/test_ci_scope.py \
   backend/tests/unit/ci/test_release_gate.py \
+  backend/tests/unit/ci/test_release_workflow.py \
   --noconftest -c /dev/null -q -p no:cacheprovider --no-cov
 ```
 

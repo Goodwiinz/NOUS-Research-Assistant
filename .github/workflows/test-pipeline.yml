@@ -91,6 +91,7 @@ jobs:
         run: |
           python3 -m pytest backend/tests/unit/ci/test_ci_scope.py \
             backend/tests/unit/ci/test_release_gate.py \
+            backend/tests/unit/ci/test_release_workflow.py \
             --noconftest -c /dev/null -q -p no:cacheprovider --no-cov
 
   # ==========================================================================
