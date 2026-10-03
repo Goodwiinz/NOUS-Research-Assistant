@@ -219,3 +219,27 @@ Run each selector with `ORCHESTRATION_TEST_DATABASE_URL` pointing to disposable 
 | T4-13 | Do not report non-cascade graph cleanup | `backend/src/tasks/reconcile_tasks.py:264` | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_non_cascade_do_kb_cleanup_does_not_report_graph_cleanup` | FAIL → PASS |
 | T4-14 | Compensate late graph write | `backend/src/tasks/processing_tasks.py:194` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_graph_write_is_compensated` | FAIL → PASS |
 | T4-15 | Compensate late DO KB write | `backend/src/tasks/processing_tasks.py:194` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_do_kb_success_is_compensated` | FAIL → PASS |
+
+## GOO-358 cleanup session isolation — 2026-10-03
+
+The real worker/API check reproduced a committed cancellation followed by an
+HTTP 500 (`MissingGreenlet`). Three PostgreSQL regressions also reproduced
+expired caller objects before the repair. Cleanup now owns a separate
+`AsyncSession`; its rollback and commit do not expire caller objects, discard
+pending caller changes or commit them. The source repair is `e7c09db01`
+(original tested commit `27cbae1bf`; identical source).
+
+All T4-1 through T4-15 checks above were rerun against the isolated-session
+implementation: every mutant failed at the intended assertion and every
+restored selector passed. The added T4-16 check borrows the caller session
+instead of creating its own: `test_graph_cleanup_preserves_caller_objects_and_pending_writes[success]`
+fails with the expected `MissingGreenlet`, then passes after restoration.
+The initial harness expected only `AssertionError`; its classification was
+corrected for this exception reproduction and T4-16 was rerun. No mutant
+changed tracked source. The focused cleanup/worker suite passed **53 tests**.
+
+```bash
+ORCHESTRATION_TEST_DATABASE_URL='<disposable-postgres-url>' PYTHONPATH=backend \
+  pytest -q -o addopts= \
+  'backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_preserves_caller_objects_and_pending_writes'
+```
