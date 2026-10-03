@@ -747,13 +747,12 @@ app.include_router(health_router)
 
 
 # Health check endpoint
+# Unauthenticated: never add VERSION/ENVIRONMENT here or to `/` (audit I17).
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": settings.VERSION,
-        "environment": settings.ENVIRONMENT,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -764,7 +763,6 @@ async def root():
     """Root endpoint"""
     return {
         "message": f"Welcome to {settings.APP_NAME}",
-        "version": settings.VERSION,
         "docs_url": (
             "/docs" if settings.DEBUG else "Documentation not available in production"
         ),
