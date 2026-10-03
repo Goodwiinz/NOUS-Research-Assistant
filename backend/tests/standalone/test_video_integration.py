@@ -32,8 +32,6 @@ def test_health():
 
         health = response.json()
         print(f"✓ API Status: {health['status']}")
-        print(f"✓ Version: {health['version']}")
-        print(f"✓ Environment: {health['environment']}")
         return True
 
     except Exception as e:
