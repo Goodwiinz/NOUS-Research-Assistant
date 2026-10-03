@@ -16,6 +16,7 @@ message routes, not alongside the other standalone thread routes.
 that same later position.
 """
 
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -37,6 +38,8 @@ from src.services.threads import thread_service, workspace_access
 
 from .dependencies import _get_thread_or_404
 from .presenters import _thread_to_detail_response, _thread_to_response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/workspaces", tags=["workspaces"])
 
@@ -71,8 +74,9 @@ async def create_thread(
         thread = await thread_service.create_thread(
             db, request, current_user.id, workspace_id=workspace_id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not thread:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -222,8 +226,9 @@ async def update_thread(
             conversation_id=conversation_id,
             workspace_id=workspace_id,
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -252,8 +257,9 @@ async def delete_thread(
             workspace_id=workspace_id,
             stamp_deleted_at=True,
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -277,8 +283,9 @@ async def create_thread_standalone(
     """Create a new thread (standalone route - uses conversation_id from request body)"""
     try:
         thread = await thread_service.create_thread(db, request, current_user.id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not thread:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -315,8 +322,9 @@ async def update_thread_standalone(
         thread = await thread_service.update_thread(
             db, thread_id, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -337,8 +345,9 @@ async def delete_thread_standalone(
         deleted = await thread_service.delete_thread(
             db, thread_id, current_user.id, stamp_deleted_at=True
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Thread not found")
 

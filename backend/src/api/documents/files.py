@@ -46,6 +46,19 @@ router = APIRouter(prefix="/files", tags=["files"])
 logger = logging.getLogger(__name__)
 
 
+# Authoritative I8 response-boundary allowlist. FileValidationError.public_detail
+# is a candidate, not trusted text: only these exact static reasons may reach
+# clients. The five service raise sites use four distinct reasons (quota repeats).
+_SAFE_FILE_VALIDATION_DETAILS = frozenset(
+    {
+        "File exceeds the maximum allowed size",
+        "Insufficient storage quota",
+        "Archive uploads are not supported; extract and upload the files",
+        "File type is not allowed",
+    }
+)
+
+
 def _escape_like(value: str) -> str:
     """Escape SQL LIKE special characters."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -249,9 +262,19 @@ async def upload_file(
     except HTTPException:
         # R2-M10: intentional 4xx (validation/quota) must not be re-wrapped.
         raise
-    except FileValidationError as e:
-        # FileService validation messages are intentionally safe and actionable.
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except FileValidationError as exc:
+        # I8: raw exception text stays out of client responses (it goes to the
+        # log); validate public_detail against the authoritative allowlist here,
+        # even if a future raise site supplies an arbitrary string.
+        logger.warning("File validation failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                exc.public_detail
+                if exc.public_detail in _SAFE_FILE_VALIDATION_DETAILS
+                else "File validation failed"
+            ),
+        )
     except FileStorageError:
         logger.error("File upload failed", exc_info=True)
         raise HTTPException(
@@ -576,9 +599,13 @@ async def update_file_metadata(
             "file": document.to_dict(),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.error("Failed to update file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to update file",
+        )
 
 
 @router.delete("/{file_id}")
@@ -616,8 +643,12 @@ async def delete_file(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        logger.error("Failed to delete file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to delete file",
+        )
 
 
 @router.get("/{file_id}/content")
@@ -907,6 +938,10 @@ async def reprocess_file(
             "job_id": str(processing_job.id),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.error("Failed to reprocess file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to reprocess file",
+        )

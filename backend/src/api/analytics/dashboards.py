@@ -129,8 +129,12 @@ async def get_dashboard(
             )
         return dashboard
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error getting dashboard {dashboard_id}: {e}")
         raise HTTPException(
@@ -151,8 +155,12 @@ async def update_dashboard(
         )
         return dashboard
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error updating dashboard {dashboard_id}: {e}")
         raise HTTPException(
@@ -174,8 +182,12 @@ async def delete_dashboard(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Dashboard not found"
             )
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error deleting dashboard {dashboard_id}: {e}")
         raise HTTPException(
@@ -197,8 +209,12 @@ async def duplicate_dashboard(
         )
         return dashboard
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error duplicating dashboard {dashboard_id}: {e}")
         raise HTTPException(
@@ -228,8 +244,12 @@ async def share_dashboard(
             )
         return {"message": "Dashboard shared successfully"}
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error sharing dashboard {dashboard_id}: {e}")
         raise HTTPException(
@@ -258,8 +278,12 @@ async def create_widget(
         )
         return widget
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error creating widget: {e}")
         raise HTTPException(
@@ -282,8 +306,12 @@ async def update_widget(
         )
         return widget
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error updating widget {widget_id}: {e}")
         raise HTTPException(
@@ -309,8 +337,12 @@ async def delete_widget(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Widget not found"
             )
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error deleting widget {widget_id}: {e}")
         raise HTTPException(

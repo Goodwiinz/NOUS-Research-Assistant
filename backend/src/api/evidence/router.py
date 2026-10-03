@@ -110,6 +110,16 @@ def _classifier_version() -> str:
     return str(getattr(stance_classifier, "model_version"))
 
 
+def _batch_classification_limit_detail() -> str:
+    """Expose the authored limit reason, never text from the caught exception."""
+    limit = stance_classifier.max_batch_sources
+    # Use only the configured integer so the public reason follows limit changes
+    # without admitting arbitrary configuration or exception text into responses.
+    if type(limit) is not int or limit < 1:
+        return "Batch classification limit exceeded"
+    return f"Maximum {limit} sources allowed per batch classification request"
+
+
 def _parse_source_id(value: object) -> UUID:
     """Parse classify request IDs while preserving the endpoint's 400 contract."""
     try:
@@ -292,10 +302,9 @@ async def get_evidence_meter(
         if source_ids:
             try:
                 parsed_source_ids = [UUID(s.strip()) for s in source_ids.split(",")]
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid source ID format: {e}"
-                )
+            except ValueError:
+                logger.warning("Invalid source ID format", exc_info=True)
+                raise HTTPException(status_code=400, detail="Invalid source ID format")
 
         if not parsed_source_ids:
             raise HTTPException(status_code=400, detail="source_ids parameter required")
@@ -303,7 +312,10 @@ async def get_evidence_meter(
         try:
             stance_classifier.validate_batch_size(len(parsed_source_ids))
         except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail=_batch_classification_limit_detail()
+            ) from e
 
         loaded = _load_sources_or_http_error(
             db,
@@ -348,10 +360,16 @@ async def get_evidence_meter(
                 claim_hash=claim_hash,
                 sources=classifier_sources,
             )
-        except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except BatchClassificationTimeoutError as e:
-            raise HTTPException(status_code=504, detail=str(e))
+        except BatchClassificationLimitError:
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail=_batch_classification_limit_detail()
+            )
+        except BatchClassificationTimeoutError:
+            logger.warning("Batch classification timed out", exc_info=True)
+            raise HTTPException(
+                status_code=504, detail="Batch classification timed out"
+            )
 
         # Calculate consensus
         evidence_meter = consensus_calculator.calculate_consensus(
@@ -569,7 +587,10 @@ async def classify_sources_for_claim(
         try:
             stance_classifier.validate_batch_size(len(source_ids))
         except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail=_batch_classification_limit_detail()
+            ) from e
 
         loaded = _load_sources_or_http_error(
             db,
@@ -589,10 +610,16 @@ async def classify_sources_for_claim(
                 claim_hash=claim_hash,
                 sources=classifier_sources,
             )
-        except BatchClassificationLimitError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except BatchClassificationTimeoutError as e:
-            raise HTTPException(status_code=504, detail=str(e))
+        except BatchClassificationLimitError:
+            logger.warning("Batch classification limit exceeded", exc_info=True)
+            raise HTTPException(
+                status_code=400, detail=_batch_classification_limit_detail()
+            )
+        except BatchClassificationTimeoutError:
+            logger.warning("Batch classification timed out", exc_info=True)
+            raise HTTPException(
+                status_code=504, detail="Batch classification timed out"
+            )
 
         # Store results in database (upsert to avoid duplicates/races)
         saved_count = _save_stance_classifications(
@@ -642,6 +669,6 @@ async def health_check(_current_user=Depends(get_current_user)):
             },
         }
 
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+    except Exception:
+        logger.error("Health check failed", exc_info=True)
+        return {"status": "unhealthy", "error": "Health check failed"}
