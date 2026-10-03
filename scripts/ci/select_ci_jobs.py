@@ -78,6 +78,9 @@ def path_scope(name: str) -> str:
     # Runtime Markdown (including README-shaped assets) stays code-scoped.
     if name.startswith(("backend/src/", "frontend/src/")):
         return name.split("/", 1)[0]
+    # Agent backend tests assert this guide's supported limits and relative links.
+    if name == "docs/operations/agent-supported-workflows.md":
+        return "backend"
     if (
         name in ROOT_DOCS
         or (name.endswith(".md") and name.startswith(DOC_TREES))
