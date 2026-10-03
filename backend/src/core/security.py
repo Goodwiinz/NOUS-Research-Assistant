@@ -252,6 +252,12 @@ def _extract_supabase_token_data(payload: dict) -> Optional[TokenData]:
 _CLI_TOKEN_SCOPE = "cli"
 _CLI_TOKEN_ISSUER = "nous-backend"
 
+# jose only checks `exp` when the claim is present; without this a validly
+# signed token that omits `exp` never expires (audit I21). Every live bearer
+# path (HTTP deps, WebSocketAuthenticator, multi-tenancy middleware) decodes
+# via verify_token, so requiring it here covers them all.
+_REQUIRE_EXP = {"require_exp": True}
+
 
 def create_cli_token(
     user_id: str,
@@ -332,7 +338,7 @@ def verify_token(token: str) -> Optional[TokenData]:
                 settings.JWT_SECRET_KEY,
                 algorithms=[settings.JWT_ALGORITHM],
                 issuer=_CLI_TOKEN_ISSUER,
-                options={"verify_aud": False},
+                options={"verify_aud": False, **_REQUIRE_EXP},
             )
             if payload.get("scope") == _CLI_TOKEN_SCOPE:
                 result = _extract_cli_token_data(payload)
@@ -357,6 +363,7 @@ def verify_token(token: str) -> Optional[TokenData]:
             decode_kwargs: Dict[str, Any] = {
                 "algorithms": ["HS256"],
                 "audience": "authenticated",
+                "options": _REQUIRE_EXP,
             }
             if supabase_issuer:
                 decode_kwargs["issuer"] = supabase_issuer
@@ -380,6 +387,7 @@ def verify_token(token: str) -> Optional[TokenData]:
                         decode_kwargs = {
                             "algorithms": ["ES256"],
                             "audience": "authenticated",
+                            "options": _REQUIRE_EXP,
                         }
                         if supabase_issuer:
                             decode_kwargs["issuer"] = supabase_issuer

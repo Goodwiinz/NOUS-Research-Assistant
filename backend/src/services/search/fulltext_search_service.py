@@ -34,6 +34,20 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _require_org_scope(organization_id: Any) -> str:
+    """GOO-351: document search/count is organization-scoped and fails closed.
+
+    A missing, empty or non-UUID scope (including ``str(None)``) must never
+    produce SQL without the ``d.organization_id`` predicate.
+    """
+    try:
+        return str(uuid.UUID(str(organization_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError(
+            "Document search requires a valid organization scope"
+        ) from None
+
+
 class FullTextSearchService:
     """Service for PostgreSQL full-text search functionality"""
 
@@ -51,7 +65,7 @@ class FullTextSearchService:
         self,
         search_request: Optional[SearchQuery] = None,
         user_id: str = None,
-        organization_id: str = None,
+        organization_id: Optional[str] = None,
         db: Session = None,
         *,
         query: Optional[str] = None,
@@ -112,6 +126,24 @@ class FullTextSearchService:
                 offset=search_request.offset,
                 has_more=False,
                 suggestions=self._get_spelling_suggestions(search_request.query),
+            )
+
+        # GOO-351: no valid organization scope -> empty result, no DB work.
+        try:
+            _require_org_scope(organization_id)
+        except ValueError:
+            logger.warning("Full-text search rejected: missing organization scope")
+            return SearchResponse(
+                query=search_request.query,
+                search_id=str(uuid.uuid4()),
+                search_type=search_request.search_type,
+                results=[],
+                total_results=0,
+                returned_results=0,
+                search_time_ms=0,
+                limit=search_request.limit,
+                offset=search_request.offset,
+                has_more=False,
             )
 
         # Use provided db session or create a new one
@@ -267,10 +299,9 @@ class FullTextSearchService:
             "noise_pattern_3": "%replay prevention nonce + timestamp%",
         }
 
-        # Add access control filters
-        if organization_id:
-            query_parts.append("    AND d.organization_id = :organization_id")
-            params["organization_id"] = organization_id
+        # Access control: always tenant-scoped (GOO-351, fail closed).
+        query_parts.append("    AND d.organization_id = :organization_id")
+        params["organization_id"] = _require_org_scope(organization_id)
 
         # Add additional filters
         if search_request.filters:
@@ -324,9 +355,8 @@ class FullTextSearchService:
         }
 
         # Add the same filters as the main query
-        if organization_id:
-            query_parts.append("    AND d.organization_id = :organization_id")
-            params["organization_id"] = organization_id
+        query_parts.append("    AND d.organization_id = :organization_id")
+        params["organization_id"] = _require_org_scope(organization_id)
 
         if search_request.filters:
             filter_clauses, filter_params = self._build_filter_clauses(

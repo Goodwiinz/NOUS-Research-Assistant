@@ -106,11 +106,13 @@ async def list_projects(
             has_prev=result["has_prev"],
         )
 
-    except Exception as e:
-        logger.error("list_projects_failed", error=str(e), user_id=str(current_user.id))
+    except Exception:
+        logger.error(
+            "list_projects_failed", exc_info=True, user_id=str(current_user.id)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list projects: {str(e)}",
+            detail="Failed to list projects",
         )
 
 
@@ -148,14 +150,14 @@ async def create_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
         logger.error(
-            "create_project_failed", error=str(e), user_id=str(current_user.id)
+            "create_project_failed", exc_info=True, user_id=str(current_user.id)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create project: {str(e)}",
+            detail="Failed to create project",
         )
 
 
@@ -226,11 +228,11 @@ async def get_project(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("get_project_failed", error=str(e), project_id=str(project_id))
+    except Exception:
+        logger.error("get_project_failed", exc_info=True, project_id=str(project_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get project: {str(e)}",
+            detail="Failed to get project",
         )
 
 
@@ -266,12 +268,12 @@ async def update_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("update_project_failed", error=str(e), project_id=str(project_id))
+        logger.error("update_project_failed", exc_info=True, project_id=str(project_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update project: {str(e)}",
+            detail="Failed to update project",
         )
 
 
@@ -299,12 +301,12 @@ async def delete_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("delete_project_failed", error=str(e), project_id=str(project_id))
+        logger.error("delete_project_failed", exc_info=True, project_id=str(project_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete project: {str(e)}",
+            detail="Failed to delete project",
         )
 
 
@@ -379,11 +381,11 @@ async def list_project_documents(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("list_project_documents_failed", error=str(e))
+    except Exception:
+        logger.error("list_project_documents_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list documents: {str(e)}",
+            detail="Failed to list documents",
         )
 
 
@@ -602,12 +604,12 @@ async def add_document_to_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("add_document_failed", error=str(e))
+        logger.error("add_document_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add document: {str(e)}",
+            detail="Failed to add document",
         )
 
 
@@ -658,12 +660,12 @@ async def remove_document_from_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("remove_document_failed", error=str(e))
+        logger.error("remove_document_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove document: {str(e)}",
+            detail="Failed to remove document",
         )
 
 
@@ -741,11 +743,11 @@ async def list_project_notes(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("list_notes_failed", error=str(e))
+    except Exception:
+        logger.error("list_notes_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list notes: {str(e)}",
+            detail="Failed to list notes",
         )
 
 
@@ -801,12 +803,12 @@ async def create_note(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("create_note_failed", error=str(e))
+        logger.error("create_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create note: {str(e)}",
+            detail="Failed to create note",
         )
 
 
@@ -836,11 +838,11 @@ async def get_note(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("get_note_failed", error=str(e))
+    except Exception:
+        logger.error("get_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get note: {str(e)}",
+            detail="Failed to get note",
         )
 
 
@@ -892,12 +894,12 @@ async def update_note(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("update_note_failed", error=str(e))
+        logger.error("update_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update note: {str(e)}",
+            detail="Failed to update note",
         )
 
 
@@ -927,12 +929,12 @@ async def delete_note(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("delete_note_failed", error=str(e))
+        logger.error("delete_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete note: {str(e)}",
+            detail="Failed to delete note",
         )
 
 
@@ -968,12 +970,12 @@ async def toggle_note_pin(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("toggle_pin_failed", error=str(e))
+        logger.error("toggle_pin_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to toggle pin: {str(e)}",
+            detail="Failed to toggle pin",
         )
 
 
@@ -1085,11 +1087,11 @@ async def get_project_bibliography(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("generate_bibliography_failed", error=str(e))
+    except Exception:
+        logger.error("generate_bibliography_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate bibliography: {str(e)}",
+            detail="Failed to generate bibliography",
         )
 
 
@@ -1269,11 +1271,11 @@ async def list_project_memories(
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("list_memories_failed", error=str(e))
+    except Exception:
+        logger.error("list_memories_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list memories: {str(e)}",
+            detail="Failed to list memories",
         )
 
 
@@ -1310,12 +1312,12 @@ async def create_project_memory(
         return _to_memory_response(memory)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("create_memory_failed", error=str(e))
+        logger.error("create_memory_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create memory: {str(e)}",
+            detail="Failed to create memory",
         )
 
 
@@ -1352,10 +1354,10 @@ async def delete_project_memory(
         logger.info("project_memory_deleted", memory_id=str(memory_id))
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("delete_memory_failed", error=str(e))
+        logger.error("delete_memory_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete memory: {str(e)}",
+            detail="Failed to delete memory",
         )

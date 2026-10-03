@@ -2263,3 +2263,77 @@ publish, `GET /records/{id}` read-back tied to the package hashes; needs
 `ZENODO_SANDBOX_TOKEN` with `deposit:write deposit:actions`), and the live
 journey (needs a deployed stack at `b0e2a4c6d8f9` with the token in
 Infisical). The fake adapter cannot close the ticket.
+
+## GOO-319 scheduled search updates and classified corpus deltas — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_search_update_rules.py`
+(fires, DST, coalescing, strategy hash, delta classes) and
+`backend/tests/unit/architecture/test_search_update_boundary.py`.
+PostgreSQL proof: `backend/tests/integration/test_search_updates_postgres.py`,
+run against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema (chain head `c2f4b6d8e0a1`; connection URL from
+the environment, value omitted). Providers are fake connectors behind the
+real `discovery.search_sources`; live Crossref/PubMed/OpenAlex, a real beat
+across a worker restart and the deployed journey are NOT RUN.
+
+Procedure for each mutant: apply it as an exact-string replacement that
+asserted a single match, run the named selector, restore the file from a
+private copy, confirm `git diff` is empty, rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_search_update_rules.py -k "coalesces or disappeared"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_search_update_boundary.py                       # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_search_updates_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Fire claim idempotency: `ON CONFLICT DO NOTHING` (`search_update_service.py:747`) + `uq_research_search_executions_fire` (`c2f4b6d8e0a1_create_search_schedules.py:134`) | plain INSERT and the unique key dropped from the migration | Step 3 (`test_search_updates_postgres.py:533`): `assert UUID('…') is None`; the lost-lock insert claimed the same fire twice. (The concurrent `claim_due` pair still yields one row: `SKIP LOCKED` is the first guard.) |
+| Missed-tick coalescing (`search_update_rules.py:133`) | `return due[0], to_utc(due[0], tz), 0` | `-k coalesces` (`test_search_update_rules.py:53`): `assert datetime(2026, 1, 5, 6, 0) == datetime(2026, 1, 26, 6, 0)`; step 5 (`:651`): `assert 0 == 2`. |
+| A missing work is `unknown` (`search_update_rules.py:377`) | `item["class"] = "corrected_retracted"` | `-k disappeared` (`test_search_update_rules.py:117`): `'corrected_retracted' == 'unknown'`; step 6 (`:593`): D read as retracted. |
+| A failed notice check is not "no notice" (`search_update_service.py:1118`) | `found = {doi: [] for doi in checked}` | Step 7 (`:657`): `assert not [{… 'class': 'unchanged' …}]`; works read unchanged after the Crossref outage. |
+| Owner access recheck at execution (`search_update_service.py:904`) | `ResearchAction.EDIT` → `ResearchAction.VIEW` (no lifecycle check) | Step 10 (`:743`): `assert 'succeeded' == 'failed'`; the archived project ran. |
+| Protocol recheck at execution (`search_update_service.py:913`) | `if False:` | Step 10 (`:790`): `assert 'succeeded' == 'failed'`; the amended protocol ran the old plan. |
+| `dedup_key` per execution (`search_update_service.py:1031`) | `dedup_key=f"scheduled:{uuid4()}"` | Step 8 (`:578`): `assert 3 == 2`; the retry after a post-import crash searched again and wrote a second receipt. |
+| Classification reads no withdrawal (`search_update_rules.py`, guard `test_search_update_boundary.py:70`) | `if record.get("is_retracted"): fields["withdrawn"] = True` in `record_fields` | `assert not {'is_retracted'}`. |
+| No insert-only row mutation (guard `test_search_update_boundary.py:96`) | an `update(ResearchSearchExecution)` helper in the service | `assert ['services/re…y:update:789'] == []`. |
+
+Every restore left `git diff` empty; the selectors were green again after
+each restore.
+
+## GOO-320 superseding review versions and reconciled update accounting — 2026-10-01
+
+Unit oracles: `backend/tests/unit/services/test_review_update_rules.py`
+(carry-forward, required work, needs-attention, missing history,
+accounting) and `backend/tests/unit/architecture/test_review_update_boundary.py`.
+PostgreSQL proof: `backend/tests/integration/test_review_versions_postgres.py`,
+run against a disposable local PostgreSQL 14 on GOO-301's
+`screening_factory` schema (chain head `d4a6c8e0f2b3`; connection URL from
+the environment, value omitted). Deltas are real GOO-319 executions over a
+fake Crossref connector; live providers, the methods-expert review of the
+accounting boxes and the deployed journey are NOT RUN.
+
+Procedure for each mutant: apply it as an exact-string replacement that
+asserted a single match, run the named selector, restore the file from a
+private copy, confirm `git diff` is empty, rerun the selector green.
+
+```sh
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/services/test_review_update_rules.py -k "criteria or unknown or reconciles"   # from backend/
+backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/architecture/test_review_update_boundary.py                               # from backend/
+RESEARCH_DECISION_DATABASE_URL="${DISPOSABLE_PG_URL:?}" backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_review_versions_postgres.py   # from backend/
+```
+
+| Guard (line) | Mutation | Observed mutant failure |
+|---|---|---|
+| Carry only `unchanged` (`review_update_rules.py:87`, `:91`) | `changed` neither required nor sent to attention, so it is carried | Step 4 (`test_review_versions_postgres.py:944`): the carried map gains R4's title/abstract and full-text resolutions. |
+| Criteria-hash check (`review_update_rules.py:99`) | `if report in identity_changed:` | `-k criteria` (`test_review_update_rules.py:113`): `['title_abstract', 'full_text'] == ['title_abstract']`; step 8 (`:1106`): `assert [ReviewDecisionRef(…), …] == []`, decisions carried across the amended criteria. |
+| `unknown` -> needs attention (`review_update_rules.py:90`) | `flagged = cls == "unknown"` (every unknown carried) | `-k unknown` (`test_review_update_rules.py:134`): needs-attention emptied, R3 carried; step 4 (`:944`): R3's resolutions in the carried map. |
+| Accounting reconciliation (`review_update_rules.py:230`) | `if False:` | `-k reconciles` (`test_review_update_rules.py:292`): `DID NOT RAISE PrismaInconsistency`; a successor flow claiming 5 studies was accepted. |
+| `graph_part` edges only for changed/corrected reports (`review_update_service.py:741`) | `if True` (every delta report) | Step 7 (`:1032`): `('link', …) not in stale` fails; R1's claim link went stale. |
+| `UNIQUE(parent_review_version_id)` (`d4a6c8e0f2b3_create_review_versions.py:103`) | the constraint dropped from the migration | Step 5 (`:911`): `assert (2 == 1)`; both concurrent successors of the root were committed. |
+| Superseded-release check (`review_update_service.py:1381`) | `if False:` | Step 9 (`:1144`): `DID NOT RAISE HTTPException`; P2 linked to the successor without superseding P. |
+| Screening rows only through `screening_service` (guard `test_review_update_boundary.py:69`) | a `ScreeningQueue(id=uuid4())` helper in the service | `-k screening`: `assert ['builds ScreeningQueue:…'] == []`. |
+| No insert-only row mutation (guard `test_review_update_boundary.py:112`) | an `update(V)` helper in the service | `-k insert_only`: `assert ['services/re…y:update:…'] == []`. |
+
+Every restore left `git diff` empty; the proof, the rules tests and the
+boundary guard were green again after the last restore (12 passed).
