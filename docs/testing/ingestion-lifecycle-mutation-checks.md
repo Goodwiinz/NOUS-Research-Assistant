@@ -316,3 +316,28 @@ Run with disposable PostgreSQL: `ORCHESTRATION_TEST_DATABASE_URL=<disposable-url
 | T5-13 | `ingestion-only` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_preserves_documents_it_does_not_own[non-ingestion]` | FAIL → PASS |
 | T5-14 | `document-update` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_fails_job_and_document_atomically` | FAIL → PASS |
 | T5-15 | `atomic-commit` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_fails_job_and_document_atomically` | FAIL → PASS |
+
+## GOO-360 final worker guards — 2026-10-03
+
+Verified on the tree in the [verification amendment](2026-10-01-ingestion-lifecycle-verification.md).
+With A1–A5, A7, A9, A10 and A13 above, these complete the 13 additional logical
+guard removals from the single Astra fix pass. Every mutant failed at its
+intended assertion, every restored selector passed, then the focused suite
+passed 207 tests. No source mutant was committed.
+
+Use the verification report's command/prerequisites: disposable PostgreSQL,
+Redis, Linux fork and the pinned model. Skipped worker cases are NOT RUN.
+Guard paths are relative to `backend/src/` at `b85f5458d4f00d66558ab506043dfa9cea473f31`.
+
+| Check | Removed guard | Named selector | RED then restored GREEN |
+|---|---|---|---|
+| A6 | `tasks/processing_tasks.py:125`, DO intent before dispatch | `backend/tests/integration/test_ingestion_lifecycle_postgres.py::test_cleanup_survives_worker_loss_after_late_provider_acceptance[do_kb]` | Missing committed intent; PASS |
+| A8 | `services/do_kb/ingest.py:428`, discovery of accepted unrecorded sources | Same selector as A6 | Accepted remote source remained after reconciliation; PASS |
+| A11 | `services/documents/file_service.py:1435`, active ingestion rejection | `backend/tests/integration/test_ingestion_lifecycle_postgres.py::test_reprocess_rejects_an_overlapping_worker` | Both routes returned 200 instead of 409; both PASS |
+| A12 | `services/documents/file_service.py:1399`, document lock | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_reprocessing_holds_document_lock_until_new_job_commit` | NOWAIT did not raise `OperationalError`; PASS |
+
+Acceptance cases delete/clean the document, wait for provider acceptance, kill
+the canonical worker before acknowledgement, then run actual reconciliation.
+DO coverage checks mirror-object and discovered-source removal. Overlap cases
+verify real JWT authentication and both actual routers, assert one job remains,
+deny foreign/anonymous callers, then let the original worker finish.
