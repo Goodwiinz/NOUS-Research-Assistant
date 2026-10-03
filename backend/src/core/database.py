@@ -349,9 +349,9 @@ def init_database():
         # Commit all changes
         db.commit()
         print("\n✅ Database initialized successfully!")
-        # Show generated passwords for development
+        # Never print generated passwords: stdout lands in container/CI logs (audit I25).
         if not SEED_ADMIN_PASSWORD:
-            print(f"   ├── Password: {admin_password} (auto-generated)")
+            print("   ├── Password: auto-generated, not shown (unrecoverable)")
             print("   │   ⚠️  Set SEED_ADMIN_PASSWORD env var for consistent password")
         else:
             print("   ├── Password: (set via SEED_ADMIN_PASSWORD env var)")
@@ -360,7 +360,7 @@ def init_database():
         print("   Demo User:")
         print("   ├── Email: demo@multimodal-rag.com")
         if not SEED_DEMO_PASSWORD:
-            print(f"   ├── Password: {demo_password} (auto-generated)")
+            print("   ├── Password: auto-generated, not shown (unrecoverable)")
             print("   │   ⚠️  Set SEED_DEMO_PASSWORD env var for consistent password")
         else:
             print("   ├── Password: (set via SEED_DEMO_PASSWORD env var)")
@@ -369,7 +369,7 @@ def init_database():
         print("   Lab Admin:")
         print("   ├── Email: lab-admin@multimodal-rag.com")
         if not SEED_LAB_ADMIN_PASSWORD:
-            print(f"   ├── Password: {lab_password} (auto-generated)")
+            print("   ├── Password: auto-generated, not shown (unrecoverable)")
             print(
                 "   │   ⚠️  Set SEED_LAB_ADMIN_PASSWORD env var for consistent password"
             )
@@ -384,7 +384,8 @@ def init_database():
 
     except SQLAlchemyError as e:
         db.rollback()
-        print(f"❌ Error initializing database: {e}")
+        # str(e) embeds bound INSERT parameters (hashed_password); log the type only.
+        print(f"❌ Error initializing database: {type(e).__name__}")
         raise
     finally:
         db.close()
