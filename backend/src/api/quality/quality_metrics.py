@@ -108,13 +108,13 @@ async def record_search_metrics(
             for metric in metrics
         ]
 
-    except ValueError as e:
+    except ValueError:
         # track_search_session raises ValueError when the client-supplied
         # session_id belongs to another organization — a client conflict, not a
         # server fault. Surface 409 so legitimate cross-tenant rejections don't
-        # page as 5xx. The message echoes only the caller's own session_id.
-        logger.warning(f"Rejected search-metrics record: {e}")
-        raise HTTPException(status_code=409, detail=str(e))
+        # page as 5xx.
+        logger.warning("Rejected search-metrics record", exc_info=True)
+        raise HTTPException(status_code=409, detail="Search metrics record rejected")
     except Exception as e:
         logger.error(f"Error recording search metrics: {e}")
         raise HTTPException(status_code=500, detail="Failed to record search metrics")

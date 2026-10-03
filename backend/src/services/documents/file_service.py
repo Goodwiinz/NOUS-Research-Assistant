@@ -74,9 +74,17 @@ _ACTIVE_CONTENT_MIME_TYPES = frozenset(
 
 
 class FileValidationError(Exception):
-    """File validation related errors"""
+    """File validation related errors.
 
-    pass
+    ``str(exc)`` is for logs only. ``public_detail`` is a candidate reason:
+    the upload endpoint permits only exact members of its authoritative
+    ``_SAFE_FILE_VALIDATION_DETAILS`` allowlist (audit I8), otherwise returning
+    a generic message. Supplying a string does not make it client-safe.
+    """
+
+    def __init__(self, message: str, public_detail: str | None = None) -> None:
+        super().__init__(message)
+        self.public_detail = public_detail
 
 
 class FileStorageError(Exception):
@@ -314,14 +322,16 @@ class FileService:
         if file_size > organization.max_file_size_bytes:
             raise FileValidationError(
                 f"File size ({file_size} bytes) exceeds maximum allowed size "
-                f"({organization.max_file_size_bytes} bytes)"
+                f"({organization.max_file_size_bytes} bytes)",
+                public_detail="File exceeds the maximum allowed size",
             )
 
         # Check storage quota
         if not organization.can_upload_file(file_size):
             raise FileValidationError(
                 f"Insufficient storage quota. Available: "
-                f"{organization.storage_available_gb:.2f}GB"
+                f"{organization.storage_available_gb:.2f}GB",
+                public_detail="Insufficient storage quota",
             )
 
         # Check file extension
@@ -363,10 +373,16 @@ class FileService:
             # became an empty COMPLETED document. Reject honestly.
             raise FileValidationError(
                 f"Archive format '{file_ext}' is not supported; "
-                "extract and upload the contained files"
+                "extract and upload the contained files",
+                public_detail=(
+                    "Archive uploads are not supported; extract and upload the files"
+                ),
             )
         if file_ext not in allowed_extensions:
-            raise FileValidationError(f"File extension '{file_ext}' is not allowed")
+            raise FileValidationError(
+                f"File extension '{file_ext}' is not allowed",
+                public_detail="File type is not allowed",
+            )
 
         # Read content for type detection
         file_content = file.file.read(min(file_size, 8192))  # Read first 8KB
@@ -629,7 +645,8 @@ class FileService:
             )
             if claim.rowcount == 0:
                 raise FileValidationError(
-                    "Insufficient storage quota (concurrent-upload race lost)"
+                    "Insufficient storage quota (concurrent-upload race lost)",
+                    public_detail="Insufficient storage quota",
                 )
             await self.db.commit()
             quota_committed = True

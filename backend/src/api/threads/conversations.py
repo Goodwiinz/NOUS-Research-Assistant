@@ -55,8 +55,11 @@ async def create_workspace(
     service = get_chat_service(db)
     try:
         workspace = await service.create_workspace(data, current_user.id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+        )
 
     return WorkspaceResponse(
         id=workspace.id,

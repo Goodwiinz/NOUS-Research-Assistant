@@ -36,8 +36,12 @@ async def write_text(
             ),
         )
         return WriteResponse(**result)
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid writer request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid writer request",
+        )
     except Exception as e:
         logger.error("write_failed", error=str(e))
         raise HTTPException(
@@ -66,8 +70,12 @@ async def generate_outline(
             ),
         )
         return OutlineResponse(**result)
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid writer request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid writer request",
+        )
     except Exception as e:
         logger.error("outline_failed", error=str(e))
         raise HTTPException(
