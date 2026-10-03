@@ -151,3 +151,99 @@ Ruling: Exercise the actual document/file/search routers with real authenticatio
 Ruling: Give post-delete graph cleanup its own AsyncSession bound to the caller database — releasing its read transaction otherwise expires response objects and discards caller pending writes — cost if wrong: each cleanup uses an additional short database session.
 Ruling: Use a pipe for the killed-worker release barrier — killing a process inside multiprocessing.Event.wait corrupts its notification semaphore and hangs teardown — cost if wrong: the fixture supports one bounded release per blocked provider write.
 Ruling: Keep the inherited Python 3.11 AST pin unchanged and report the required matrix failure under local Python 3.12 — tool source is byte-identical to merged develop and removing only 3.12 type_params fields reproduces the pinned 3.11 hash — cost if wrong: CI on its pinned 3.11 runtime must still establish the required green gate before merging.
+
+## Final Astra review amendment — 2026-10-03
+
+This amendment supersedes the earlier retained DO KB commit-loss/starvation
+paragraph and nine-case worker coverage/counts. The original results remain
+historical evidence. One fresh read-only Astra review found five Important
+findings, no Critical findings and no Minor findings. All five entered one
+focused fix pass; eight new assertion cases failed before repair and passed
+afterwards. No second review was requested; no minor findings are deferred.
+
+Final source layout:
+
+- GOO-358 cleanup source `d236204a12a2d0a87e098c9da00130d535330f17`, branch
+  tip `591d280eeac47f36bb7d71d6e839898e3f10ba39`. Existing PR #1845 head
+  `c33398f0860bd0f00ab5fd20eab1656e9dd112a6` is an ancestor; shared history
+  was not rewritten. Standalone cleanup/API suite: **100 passed, 4 warnings,
+  52.43 seconds** with real disposable PostgreSQL/Redis; full-source Ruff passed.
+- GOO-359 `b57f6264867e12f661e1821122d1669cb89cbb7d`, stacked on GOO-358.
+  Processing implementation is byte-identical to combined verified source;
+  earlier 65-test and 15-guard receipts still apply.
+- GOO-360 implementation `b85f5458d4f00d66558ab506043dfa9cea473f31`, stacked
+  on GOO-359. Backend tree `e8010b8b6c04cc7e3418b6141427cd8fc9006731` is
+  byte-identical to final local verification. Later changes are documentation.
+
+| Finding | Repair | RED→GREEN reproduction |
+|---|---|---|
+| Early successful graph cleanup hid unsettled writes | Commit per-call intent before dispatch; keep earlier cleanup pending | `test_cleanup_survives_worker_loss_after_late_provider_acceptance[graph]` |
+| Stale repair completion erased failed deletion | Lock/reload the scoped document before recording completion | `test_reconciler_completion_cannot_hide_concurrent_failed_delete` |
+| DO persistence failure lost accepted UUID | Return remote handle despite commit failure; discover by owned object key after process loss | `test_do_kb_commit_failure_retains_accepted_uuid`, `test_cleanup_survives_worker_loss_after_late_provider_acceptance[do_kb]` |
+| Failed/disabled prefixes starved other organizations | Durable global attempt order; disabled-only rows consume no actionable cap | `test_repeated_runs_do_not_starve_later_cleanup[False/True]` |
+| Overlapping jobs both had write authority | Both routes use a service document lock and reject active ingestion with HTTP 409 | `test_reprocess_rejects_an_overlapping_worker[files/documents]` |
+
+Worker coverage now has **13 cases**. Four additions cover graph/DO acceptance
+followed by SIGKILL before acknowledgement, and both reprocess routes during
+active work. Foreign reprocessing returns 404; anonymous calls are denied.
+A real PostgreSQL NOWAIT probe proves the reprocessing lock lasts through new
+job insertion/commit. Graph pre-dispatch observation and two completed-cleanup
+token cases prove outstanding intent is committed and discoverable. All
+**13 additional logical guard removals** failed at intended assertions and
+every restored selector passed; A11 covers two routes. Exact receipts are in
+[the mutation record](ingestion-lifecycle-mutation-checks.md).
+
+Run the ten-file focused command above with three additional files:
+
+```bash
+backend/tests/test_reprocess_document_no_orphan.py
+backend/tests/services/do_kb/test_ingest.py
+backend/tests/api/documents/test_files_endpoint_bugs.py
+```
+
+Final focused suite: **207 passed, 5 warnings, 145.12 seconds**, no skips.
+All named plan checks ran with disposable PostgreSQL/Redis and installed text
+extraction prerequisites; provider transports are simulated. An interrupted
+run exposed a graph/DO cleanup lock interaction; releasing the graph outcome
+lock before independent-session DO cleanup repaired it. The interrupted run
+is not passing evidence. First A10 mutant passed an insufficient two-run test;
+that attempt is excluded. Its strengthened first-run assertion failed under
+the mutant and passed after restoration. Sparse-checkout import/doc-lint and
+initial new-module typing errors were corrected before final checks. A later
+sparse reapplication removed ignored raw logs; outcomes were read before that
+removal and retained in these dated records.
+
+Final required backend matrix: **1319 passed, 72 skipped, 1 inherited AST-pin
+failure, 36 warnings, 77.15 seconds**. The unchanged-source/Python 3.12 versus
+3.11 explanation above remains; the matrix is not locally green. Final branch
+validation passed every gate that ran: full-source Ruff, Ruff/Black/isort on
+15 changed Python files, mypy on all 3 added files, directory docs, OpenAPI drift
+and the 111-revision Alembic structure check. Generated API types, migration
+delta and empty-database replay remained skipped as unchanged.
+
+Merge GOO-358, then GOO-359, then GOO-360. Retarget each stack PR to `develop`
+after its parent merges and require fresh checks on that head. Test Pipeline
+runs for PRs targeting `main`/`develop`; a stacked-base PR does not establish
+its pinned Python 3.11 gate. No PR was merged or production change deployed.
+
+Unknown writer tokens retain idempotent cleanup eligibility because a lost
+writer cannot prove an earlier dispatch finished. Existing reconciliation
+apply/feature flags must permit remote cleanup. Failed DO listing remains
+retryable, never proof of absence. Discovery uses owned KB mappings and
+server-derived keys, not caller metadata addresses. Costs: recurring cleanup,
+a JSON attempt-time sort, one short progress commit per attempt, and waiting
+for active ingestion or terminal recovery before reprocessing.
+Production provider semantics, full middleware, deployed prefork behavior,
+broker visibility-timeout timing and non-text formats remain unverified.
+Document/status/search/reprocess denial checks do not establish chat/export
+isolation. Final review decisions supplement the eleven original rulings:
+
+Final: Ruling: use durable per-call metadata tokens and retain unknown writer outcomes for idempotent cleanup — deletion cannot prove a dispatched provider operation has settled, so a lost process must not erase evidence — cost if wrong: lost-writer tombstones retain bounded periodic cleanup work and repeated timeouts can grow metadata.
+Final: Ruling: order the existing reconciler globally by durable attempt time, with disabled-only work outside its actionable cap — an eligible failed prefix must not starve other organizations — cost if wrong: ordering adds a JSON sort and a short progress commit per attempted document.
+Final: Ruling: reject overlapping reprocessing with HTTP 409 under a service-owned document lock — the existing task-ID guard cannot authorize two independent jobs safely — cost if wrong: callers must wait for active work or its terminal recovery before retrying.
+Final: Ruling: deployed prefork, real provider servers, full application middleware and timed broker visibility remain unverified — disposable canonical workers and simulated transports establish the scoped lifecycle behavior only — cost if wrong: deployed-runtime differences need separate verification.
+Final: Ruling: retain text-only end-to-end scope — the plan requests a small text upload, so PDF/audio/video/figure success is not claimed — cost if wrong: those formats need their own acceptance coverage.
+Final: Ruling: retain the inherited Python 3.11 AST pin — unchanged source and normalized local AST establish provenance, while the existing pinned CI gate must still run — cost if wrong: merge must wait for that gate and a CI-only mismatch may need separate investigation.
+Final: Ruling: preserve historical cleanup for deleted rows with no cascade metadata — the old schema cannot reconstruct a non-cascade choice that was never recorded — cost if wrong: legacy non-cascade tombstones remain ambiguous.
+Final: Ruling: retained-document cancellation keeps already-indexed content according to the existing contract — cancelling ingestion does not delete the retained document — cost if wrong: a product change would need an explicit retention requirement.
+Final: Ruling: keep new schedulers, automatic restart of terminal failures and the separately tracked security/artifact issues outside this repair — existing reconciliation and explicit retry satisfy the scoped lifecycle behavior — cost if wrong: those excluded defects require their existing follow-up work.
