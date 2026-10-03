@@ -243,3 +243,48 @@ ORCHESTRATION_TEST_DATABASE_URL='<disposable-postgres-url>' PYTHONPATH=backend \
   pytest -q -o addopts= \
   'backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_preserves_caller_objects_and_pending_writes'
 ```
+
+## GOO-358 final Astra fix pass — 2026-10-03
+
+The single final Astra review found early successful cleanup hiding an
+unsettled write, stale repair completion overwriting failed deletion, lost
+DO KB identifiers after a failed persistence commit, and cleanup starvation.
+All were reproduced before the repair. The following additional logical
+removals failed at their intended assertions and passed after restoration.
+The mutation runs recompiled functions with live globals in memory; no source
+mutant was written or committed. The new cleanup implementation is
+`d236204a12a2d0a87e098c9da00130d535330f17`.
+
+Run from the repository root with disposable PostgreSQL and installed backend
+test prerequisites:
+
+```bash
+ORCHESTRATION_TEST_DATABASE_URL='<disposable-postgres-url>' PYTHONPATH=backend \
+  pytest -q -o addopts= -o log_cli=false '<selector from the table>'
+```
+
+Paths in the guard column name production modules under `backend/src/`.
+Paths in selectors name tests under `backend/tests/`.
+
+| Check | Removed guard | Named selector | Observed RED, then restored GREEN |
+|---|---|---|---|
+| A1 | `tasks/processing_tasks.py:545`, graph `begin_write` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_graph_intent_is_durable_before_provider_and_survives_early_cleanup` | Missing committed `pending_satellite_writes`; PASS |
+| A2 | `services/documents/file_service.py:1467`, pending graph writes keep cleanup pending | Same selector as A1 | `completed != pending`; PASS |
+| A3 | `tasks/reconcile_tasks.py:107`, pending graph token selection | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_outstanding_writes_survive_an_older_completed_cleanup[graph]` | `scanned == 0`, expected 1; PASS |
+| A4 | `tasks/reconcile_tasks.py:188`, completion row lock | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_reconciler_completion_cannot_hide_concurrent_failed_delete` | Repair overwrote deletion `failed` with `completed`; PASS |
+| A5 | `tasks/processing_tasks.py:166`, accepted UUID return on persistence failure | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_do_kb_commit_failure_retains_accepted_uuid` | Lost remote handle, `None != ds-accepted`; PASS |
+| A7 | `tasks/reconcile_tasks.py:92`, pending DO token selection | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_outstanding_writes_survive_an_older_completed_cleanup[do_kb]` | `scanned == 0`, expected 1; PASS |
+| A9 | `tasks/reconcile_tasks.py:444`, durable attempt timestamp | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_repeated_runs_do_not_starve_later_cleanup[False]` | Later organization's cleanup still failed after two capped runs; PASS |
+| A10 | `tasks/reconcile_tasks.py:396`, disabled-only rows excluded from actionable cap | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_repeated_runs_do_not_starve_later_cleanup[True]` | Disabled prefix hid first actionable cleanup; PASS |
+| A13 | `tasks/processing_tasks.py:294`, commit graph outcome before independent DO cleanup | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_do_kb_success_is_compensated[True]` | Two-second PostgreSQL lock timeout left `ds-late` uncleared; PASS |
+
+The first A10 attempt passed a two-run test because fair rotation masked the
+missing disabled-budget exclusion. That attempt is discarded. The final
+first-run assertion fails without the exclusion and passes with it. Worker
+loss after provider acceptance and active reprocessing are additionally
+covered by GOO-360's real-worker tests and its dated verification amendment.
+
+Unknown writer tokens intentionally remain eligible after successful cleanup:
+an earlier deletion cannot establish that a dispatched operation has finished.
+The existing reconciler rotates attempts fairly. Feature/apply flags still
+control remote mutations; no second scheduler was added.
