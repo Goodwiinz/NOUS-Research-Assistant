@@ -13,7 +13,8 @@ import { ChatConversation } from '@/hooks/chat/chatTypes';
 import { useChatPersistence } from '@/hooks/useChatPersistence';
 import { upsertConversationFromThread } from '@/components/chat/shared/threadConversationState';
 import { workspaceService } from '@/services/workspaceService';
-import { useChatStore } from '@/store/chat-store';
+import { useChatSessionGuard } from './useChatSessionGuard';
+import { useChatStore, onChatSessionReset } from '@/store/chat-store';
 import { useAuthStore } from '@/stores/authStore';
 import { getLoginPathWithRedirect } from '@/utils/authRedirect';
 import {
@@ -141,6 +142,7 @@ export interface UseChatSessionReturn {
  * Must be called inside a component wrapped in <Suspense> (uses useSearchParams).
  */
 export function useChatSession(): UseChatSessionReturn {
+  const isCurrentSession = useChatSessionGuard();
   const { initialize: initializeChatPersistence } = useChatPersistence();
   // ---- State ----
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
@@ -673,6 +675,11 @@ export function useChatSession(): UseChatSessionReturn {
       threadsPageRef.current = nextPage;
       setHasMoreThreads(response.has_more);
     } catch (error) {
+      if (
+        threadsListWorkspaceIdRef.current !== workspaceId ||
+        threadsRequestGenerationRef.current !== requestGeneration
+      )
+        return;
       console.error('[Chat] Failed to load more threads:', error);
       toast.error('Could not load more threads. Please try again.');
     }
@@ -683,7 +690,7 @@ export function useChatSession(): UseChatSessionReturn {
     const initGeneration = initGenerationRef.current + 1;
     initGenerationRef.current = initGeneration;
     const ownsInitialization = (): boolean =>
-      initGenerationRef.current === initGeneration;
+      isCurrentSession() && initGenerationRef.current === initGeneration;
 
     // Watchdog: a hung request (socket open, no response) leaves init awaiting
     // forever and the UI stuck on "Initializing…". Surface a recoverable error
@@ -881,6 +888,7 @@ export function useChatSession(): UseChatSessionReturn {
     };
   }, [
     initializeChatPersistence,
+    isCurrentSession,
     isAuthenticated,
     loadThreadsFromDb,
     setCurrentThread,
@@ -902,6 +910,28 @@ export function useChatSession(): UseChatSessionReturn {
   // mid-turn never returns, so entries could accumulate for the session.
   // FIFO-cap the map — a park older than the last few switches is stale
   // anyway (the canonical rows have long since persisted).
+  useEffect(
+    () =>
+      onChatSessionReset(() => {
+        initGenerationRef.current += 1;
+        threadsRequestGenerationRef.current += 1;
+        threadsListWorkspaceIdRef.current = null;
+        threadsPageRef.current = 1;
+        firstPageThreadsRef.current = [];
+        parkedMessagesRef.current.clear();
+        messagesRef.current = [];
+        conversationsRef.current = [];
+        localMessagesThreadIdRef.current = null;
+        isHydratedRef.current = false;
+        unavailableInitialUrlThreadRef.current = null;
+        setWorkspace(null);
+        setMessages([]);
+        setConversations([]);
+        setHasMoreThreads(false);
+        setInitError(null);
+      }),
+    []
+  );
   const MAX_PARKED_THREADS = 8;
   const parkOverlay = (threadId: string, overlay: ChatPageMessage[]): void => {
     const parked = parkedMessagesRef.current;

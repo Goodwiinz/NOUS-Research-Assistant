@@ -54,6 +54,16 @@ const WS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 // independent listWorkspaces()->[]->createWorkspace() and a fresh user gets
 // two "My Workspace" rows plus duplicate conversations.
 let _defaultWorkspaceInFlight: Promise<ApiWorkspace> | null = null;
+let cacheGeneration = 0;
+
+function captureCacheGeneration(): () => void {
+  const generation = cacheGeneration;
+  return () => {
+    if (generation !== cacheGeneration) {
+      throw new DOMException('Chat session ended', 'AbortError');
+    }
+  };
+}
 
 // Collapses concurrent getOrCreateDefaultConversation callers (per workspace)
 // onto one promise. useChatSession and useChatPersistence both bootstrap the
@@ -67,6 +77,7 @@ const _defaultConversationInFlight = new Map<
 
 /** Clear all workspace service caches (localStorage). Called on auth errors. */
 export function clearWorkspaceServiceCache(): void {
+  cacheGeneration += 1;
   if (typeof window !== 'undefined') {
     localStorage.removeItem(WS_CACHE_KEY);
     localStorage.removeItem(WS_CACHE_AT_KEY);
@@ -416,14 +427,18 @@ export const workspaceService = {
 
   async getOrCreateDefaultWorkspace(): Promise<ApiWorkspace> {
     if (_defaultWorkspaceInFlight) return _defaultWorkspaceInFlight;
-    _defaultWorkspaceInFlight = this._resolveDefaultWorkspace().finally(() => {
-      _defaultWorkspaceInFlight = null;
+    const inFlight = this._resolveDefaultWorkspace().finally(() => {
+      if (_defaultWorkspaceInFlight === inFlight)
+        _defaultWorkspaceInFlight = null;
     });
-    return _defaultWorkspaceInFlight;
+    _defaultWorkspaceInFlight = inFlight;
+    return inFlight;
   },
 
   async _resolveDefaultWorkspace(): Promise<ApiWorkspace> {
+    const assertCurrentSession = captureCacheGeneration();
     const cacheWorkspace = (ws: ApiWorkspace) => {
+      assertCurrentSession();
       if (typeof window !== 'undefined') {
         localStorage.setItem(WS_CACHE_KEY, JSON.stringify(ws));
         localStorage.setItem(WS_CACHE_AT_KEY, String(Date.now()));
@@ -432,6 +447,7 @@ export const workspaceService = {
     };
 
     const clearCachedWorkspace = () => {
+      assertCurrentSession();
       if (typeof window !== 'undefined') {
         localStorage.removeItem(WS_CACHE_KEY);
         localStorage.removeItem(WS_CACHE_AT_KEY);
@@ -460,6 +476,7 @@ export const workspaceService = {
               cacheWorkspace(workspace);
               return workspace;
             } catch (error: unknown) {
+              assertCurrentSession();
               const apiError = error as { error?: { status_code?: number } };
               const status = apiError?.error?.status_code;
               if (status === 403 || status === 404) {
@@ -470,6 +487,7 @@ export const workspaceService = {
             clearCachedWorkspace();
           }
         } catch {
+          assertCurrentSession();
           // Corrupted JSON — fall through to API
           clearCachedWorkspace();
         }
@@ -482,8 +500,10 @@ export const workspaceService = {
     // Try to get existing workspaces with retry for transient errors
     let retries = 2;
     while (retries > 0) {
+      assertCurrentSession();
       try {
         const workspaces = await this.listWorkspaces();
+        assertCurrentSession();
         if (workspaces.length > 0) {
           const bestWorkspace = workspaces.reduce((best, current) => {
             const bestScore =
@@ -500,6 +520,7 @@ export const workspaceService = {
         // Successfully got an empty list — no workspaces exist yet
         break;
       } catch (error: unknown) {
+        assertCurrentSession();
         retries--;
         if (retries > 0) {
           console.warn(
@@ -541,7 +562,9 @@ export const workspaceService = {
     if (existing) return existing;
     const inFlight = this._resolveDefaultConversation(workspaceId).finally(
       () => {
-        _defaultConversationInFlight.delete(workspaceId);
+        if (_defaultConversationInFlight.get(workspaceId) === inFlight) {
+          _defaultConversationInFlight.delete(workspaceId);
+        }
       }
     );
     _defaultConversationInFlight.set(workspaceId, inFlight);
@@ -551,7 +574,9 @@ export const workspaceService = {
   async _resolveDefaultConversation(
     workspaceId: string
   ): Promise<ApiConversation> {
+    const assertCurrentSession = captureCacheGeneration();
     const cacheConversationId = (id: string) => {
+      assertCurrentSession();
       if (typeof window !== 'undefined') {
         localStorage.setItem('default-conversation-id', id);
       }
@@ -559,12 +584,14 @@ export const workspaceService = {
 
     try {
       const response = await this.listConversations(workspaceId, { limit: 1 });
+      assertCurrentSession();
       if (response.conversations.length > 0) {
         const conv = response.conversations[0];
         cacheConversationId(conv.id);
         return conv;
       }
     } catch (error: unknown) {
+      assertCurrentSession();
       const apiError = error as { error?: { status_code?: number } };
       const status = apiError?.error?.status_code;
       if (status === 404) {

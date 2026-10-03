@@ -121,6 +121,7 @@ export default function RegisterPage() {
         router.push('/dashboard');
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(
         err instanceof Error ? err.message : 'Could not create your account'
       );

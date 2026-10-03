@@ -1,5 +1,7 @@
 'use client';
 
+import { useChatSessionGuard } from './useChatSessionGuard';
+
 import { useInvalidateThreadArtifacts } from '@/hooks/chat/useThreadArtifacts';
 import { extractConfirmationPreview } from '@nous/chat-runtime/message';
 
@@ -38,6 +40,8 @@ import type {
 } from '@/services/agentStreamEvents';
 import { workspaceService } from '@/services/workspaceService';
 import {
+  captureChatSession,
+  onChatSessionReset,
   resolveBoundProjectId,
   selectCurrentThreadProjectId,
   useChatStore,
@@ -454,6 +458,7 @@ export interface UseChatStreamingReturn {
 export function useChatStreaming(
   params: UseChatStreamingParams
 ): UseChatStreamingReturn {
+  const ownsRenderedSession = useChatSessionGuard();
   const {
     messages,
     displayedMessages,
@@ -803,12 +808,14 @@ export function useChatStreaming(
 
   const requestDurableStop = useCallback(
     (threadId: string, runId: string): Promise<void> => {
+      const isCurrentSession = captureChatSession();
       const existing = durableStopByRunRef.current[runId];
       if (existing) return existing;
 
       const request: Promise<void> = agentChatService
         .cancelActiveRun(threadId, runId)
         .then(() => {
+          if (!isCurrentSession()) return;
           // A delayed ACK from an older run must never stop a newer run that
           // has taken ownership of this thread in the meantime.
           const current = useAgentActivityStore.getState().runs[threadId];
@@ -817,6 +824,7 @@ export function useChatStreaming(
           }
         })
         .catch((error) => {
+          if (!isCurrentSession()) return;
           console.error('[Chat] Failed to cancel active agent run:', error);
           toast.error('Could not stop this response. Please try again.');
         })
@@ -946,6 +954,65 @@ export function useChatStreaming(
 
   // ---- Effects ----
 
+  // Auth transitions can leave this hook mounted. Cancel synchronously with
+  // the store reset, before a queued token, paint, or approval can write back.
+  useEffect(
+    () =>
+      onChatSessionReset(() => {
+        const recoveryAttempt = authRecoveryAttemptRef.current;
+        if (recoveryAttempt?.authRefreshStarted) {
+          // The account boundary can unmount this hook before its auth effect
+          // runs. Complete the tab-scoped handoff after auth teardown settles,
+          // even if this instance has gone away. A replacement login owns the
+          // new session and must never inherit or navigate for this attempt.
+          queueMicrotask(() => {
+            const auth = useAuthStore.getState();
+            if (!auth.isAuthenticated && !auth.isLoading) {
+              beginAuthRecovery(recoveryAttempt);
+            } else {
+              finishAuthRecoveryAttempt(recoveryAttempt);
+            }
+          });
+        } else if (recoveryAttempt) {
+          finishAuthRecoveryAttempt(recoveryAttempt);
+        }
+        streamOwnerRef.current += 1;
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
+        probeAbortRef.current?.abort();
+        if (streamingRafRef.current !== null)
+          cancelAnimationFrame(streamingRafRef.current);
+        if (seqRafRef.current !== null) cancelAnimationFrame(seqRafRef.current);
+        streamingRafRef.current = null;
+        seqRafRef.current = null;
+        pendingStreamContentRef.current = null;
+        pendingSeqRef.current = null;
+        lastStreamedContentRef.current = '';
+        activeRunThreadRef.current = null;
+        streamIdByThreadRef.current = {};
+        runIdByThreadRef.current = {};
+        durableStopByRunRef.current = {};
+        transportFailureRef.current.clear();
+        confirmationProbedRef.current.clear();
+        pendingPreflightDraftsRef.current.clear();
+        inputValueRef.current = '';
+        setInputState('');
+        setPendingConfirmations({});
+        submitLockRef.current = false;
+        confirmLockRef.current = false;
+        setIsLoading(false);
+        setIsConfirming(false);
+        setMessages([]);
+        setConversations([]);
+      }),
+    [
+      setMessages,
+      setConversations,
+      finishAuthRecoveryAttempt,
+      beginAuthRecovery,
+    ]
+  );
+
   // Capture a stable timestamp when streaming begins
   useEffect(() => {
     if (storeIsStreaming) {
@@ -1019,6 +1086,7 @@ export function useChatStreaming(
         signal: AbortSignal
       ) => Promise<void>;
     }): Promise<void> => {
+      const isCurrentSession = captureChatSession();
       const {
         currentThreadId,
         currentConversationId,
@@ -1048,6 +1116,7 @@ export function useChatStreaming(
       // streaming state is the upgrade path if that becomes noticeable.
       const turnThreadId = currentThreadId;
       const isTurnDisplayed = () =>
+        isCurrentSession() &&
         useChatStore.getState().currentThreadId === turnThreadId;
       const userRuntimeId = [...newMessages]
         .reverse()
@@ -1061,7 +1130,7 @@ export function useChatStreaming(
         completedInBackground: !isTurnDisplayed(),
       });
       const reconcileUser = (terminalReason: string) =>
-        turnThreadId
+        isCurrentSession() && turnThreadId
           ? useChatStore.getState().refreshMessages(
               turnThreadId,
               userRuntimeId
@@ -1079,7 +1148,7 @@ export function useChatStreaming(
         },
         terminalReason: string
       ) =>
-        turnThreadId
+        isCurrentSession() && turnThreadId
           ? useChatStore.getState().refreshMessages(turnThreadId, {
               persistedId: doneIds.assistant_message_id ?? undefined,
               runtimeId: doneIds.client_message_id ?? assistantRuntimeId,
@@ -1190,6 +1259,7 @@ export function useChatStreaming(
         await start(
           {
             onToken: (content) => {
+              if (!isCurrentSession()) return;
               if (firstTokenAt === null) firstTokenAt = Date.now();
               assistantContent += content;
               lastStreamedContentRef.current = assistantContent;
@@ -1208,6 +1278,7 @@ export function useChatStreaming(
               }
             },
             onReasoningDelta: (content) => {
+              if (!isCurrentSession()) return;
               turnReasoning = (turnReasoning + content).slice(
                 0,
                 MAX_REASONING_SUMMARY_CHARS
@@ -1215,11 +1286,13 @@ export function useChatStreaming(
               useChatStore.setState({ streamingReasoning: turnReasoning });
             },
             onHeartbeat: (elapsedMs) => {
+              if (!isCurrentSession()) return;
               // The only progress signal during a long silent planner/LLM
               // phase — used to correct the live MessageTiming clock.
               useChatStore.setState({ streamingElapsedMs: elapsedMs });
             },
             onStatus: (phase, detail) => {
+              if (!isCurrentSession()) return;
               if (harnessConnection.executionProvider === 'codex') {
                 harnessConnection.receive(
                   { type: 'status', detail },
@@ -1234,10 +1307,12 @@ export function useChatStreaming(
               });
             },
             onArtifactVersion: (ref) => {
+              if (!isCurrentSession()) return;
               if (currentThreadId)
                 void invalidateThreadArtifacts(currentThreadId, ref);
             },
             onRunId: (runId) => {
+              if (!isCurrentSession()) return;
               if (!currentThreadId || streamOwnerRef.current !== streamOwner) {
                 return;
               }
@@ -1262,10 +1337,12 @@ export function useChatStreaming(
               }
             },
             onStreamId: (sid) => {
+              if (!isCurrentSession()) return;
               if (!currentThreadId) return;
               streamIdByThreadRef.current[currentThreadId] = sid;
             },
             onApprovalRequired: (requestId) => {
+              if (!isCurrentSession()) return;
               if (harnessConnection.executionProvider === 'codex') {
                 void harnessConnection
                   .loadApproval(requestId, currentThreadId)
@@ -1278,10 +1355,12 @@ export function useChatStreaming(
               }
             },
             onConnectionLost: () => {
+              if (!isCurrentSession()) return;
               transportLost = true;
               harnessConnection.markConnectionLost(currentThreadId);
             },
             onSeq: (seq) => {
+              if (!isCurrentSession()) return;
               if (!currentThreadId) return;
               pendingSeqRef.current = {
                 threadId: currentThreadId,
@@ -1306,6 +1385,7 @@ export function useChatStreaming(
               }
             },
             onToolStart: (tool, args, callId) => {
+              if (!isCurrentSession()) return;
               console.log('[Agent] Tool start:', tool, args);
               if (currentThreadId) {
                 useAgentActivityStore
@@ -1332,6 +1412,7 @@ export function useChatStreaming(
               });
             },
             onToolEnd: (tool, result, isError, callId) => {
+              if (!isCurrentSession()) return;
               console.log('[Agent] Tool end:', tool, result, { isError });
               const remainsPending = isPendingToolResult(result, isError);
               const resultFailed = isFailedToolResult(result, isError);
@@ -1377,6 +1458,7 @@ export function useChatStreaming(
               });
             },
             onRagContext: (contexts) => {
+              if (!isCurrentSession()) return;
               console.log('[Agent] RAG contexts:', contexts.length);
               useChatStore.setState({
                 streamingCitations: contexts,
@@ -1387,6 +1469,7 @@ export function useChatStreaming(
               });
             },
             onPlan: (steps, reasoning) => {
+              if (!isCurrentSession()) return;
               // Structured copy for the inline transcript plan — keeps
               // tool/depends_on so status derivation works after commit.
               turnPlan = toTurnPlan(steps);
@@ -1408,9 +1491,11 @@ export function useChatStreaming(
               }
             },
             onUsage: (inputTokens, outputTokens) => {
+              if (!isCurrentSession()) return;
               turnTokenUsage = { input: inputTokens, output: outputTokens };
             },
             onReflection: (_passed, _issues, _round, revising) => {
+              if (!isCurrentSession()) return;
               if (!revising) return;
               assistantContent = '';
               lastStreamedContentRef.current = '';
@@ -1418,6 +1503,7 @@ export function useChatStreaming(
               useChatStore.setState({ streamingContent: '' });
             },
             onConfirmation: (threadId, confirmation, runId) => {
+              if (!isCurrentSession()) return;
               console.log('[Agent] HITL confirmation needed:', confirmation);
               streamHadConfirmation = true;
               const confirmationRunId =
@@ -1453,6 +1539,7 @@ export function useChatStreaming(
               });
             },
             onAuthRefreshAttempt: () => {
+              if (!isCurrentSession()) return;
               if (
                 authRecoveryAttemptRef.current === authRecoveryAttempt &&
                 authRecoveryAttempt
@@ -1461,6 +1548,7 @@ export function useChatStreaming(
               }
             },
             onAuthRefreshSuccess: () => {
+              if (!isCurrentSession()) return;
               if (
                 authRecoveryAttemptRef.current === authRecoveryAttempt &&
                 authRecoveryAttempt
@@ -1469,6 +1557,7 @@ export function useChatStreaming(
               }
             },
             onDone: (payload) => {
+              if (!isCurrentSession()) return;
               console.log('[Agent] Stream complete');
               if (currentThreadId)
                 void invalidateThreadArtifacts(currentThreadId);
@@ -1486,6 +1575,7 @@ export function useChatStreaming(
               }
             },
             onError: (error, category, localFailure) => {
+              if (!isCurrentSession()) return;
               console.error(
                 '[Agent] Stream error:',
                 error,
@@ -1561,6 +1651,8 @@ export function useChatStreaming(
           streamAbort.signal
         );
 
+        if (!isCurrentSession()) return;
+
         // Cancel any pending RAF flush — streaming is done
         if (streamingRafRef.current !== null) {
           cancelAnimationFrame(streamingRafRef.current);
@@ -1595,6 +1687,7 @@ export function useChatStreaming(
                   ? 'connection-lost'
                   : 'stream-error'
           );
+          if (!isCurrentSession()) return;
           setIsLoading(false);
           return;
         }
@@ -1640,6 +1733,7 @@ export function useChatStreaming(
           } else {
             await reconcileUser('empty-response');
           }
+          if (!isCurrentSession()) return;
           setIsLoading(false);
           if (isStoppedByUser()) stopTargetRef.current = null;
           activeRunThreadRef.current = null;
@@ -1766,6 +1860,7 @@ export function useChatStreaming(
         );
         await reconcileAssistant(doneIds, wasStopped ? 'stopped' : 'done');
       } catch (err) {
+        if (!isCurrentSession()) return;
         // A user stop should never read as a failure. (streamMessage already
         // swallows AbortError, but guard here too in case the abort surfaces.)
         if (!isStoppedByUser()) {
@@ -1809,44 +1904,46 @@ export function useChatStreaming(
           await reconcileUser('exception');
         }
       } finally {
-        finishAuthRecoveryAttempt(authRecoveryAttempt);
-        submitLockRef.current = false;
-        setIsLoading(false);
-        // A token that landed just before an exception can leave a scheduled
-        // rAF behind; it would fire after this teardown and write stale
-        // streamingContent back into the store. Scoped to the owner: the rAF
-        // slot is shared, so cancelling it while a confirm stream owns the
-        // slice would drop that stream's first flush.
-        if (
-          streamOwnerRef.current === streamOwner &&
-          streamingRafRef.current !== null
-        ) {
-          cancelAnimationFrame(streamingRafRef.current);
-          streamingRafRef.current = null;
+        if (isCurrentSession()) {
+          finishAuthRecoveryAttempt(authRecoveryAttempt);
+          submitLockRef.current = false;
+          setIsLoading(false);
+          // A token that landed just before an exception can leave a scheduled
+          // rAF behind; it would fire after this teardown and write stale
+          // streamingContent back into the store. Scoped to the owner: the rAF
+          // slot is shared, so cancelling it while a confirm stream owns the
+          // slice would drop that stream's first flush.
+          if (
+            streamOwnerRef.current === streamOwner &&
+            streamingRafRef.current !== null
+          ) {
+            cancelAnimationFrame(streamingRafRef.current);
+            streamingRafRef.current = null;
+          }
+          if (streamOwnerRef.current === streamOwner) {
+            flushPendingSeq();
+          }
+          if (streamOwnerRef.current === streamOwner) {
+            pendingStreamContentRef.current = null;
+          }
+          // Only tear the slice down if nothing newer claimed it. On a
+          // confirmation pause the awaits above hand the user a live approval
+          // card; approving starts the confirm stream, and an unconditional wipe
+          // here orphaned it — streaming UI gone, carried citations lost,
+          // composer unlocked into a second concurrent SSE writer.
+          if (streamOwnerRef.current === streamOwner) {
+            resetStreamingTurnState();
+          }
+          if (streamOwnerRef.current === streamOwner) {
+            // Same ownership rule: these refs are shared with the confirm
+            // stream; a newer owner's state must not be torn down here.
+            lastStreamedContentRef.current = '';
+          }
+          if (stopTargetRef.current === streamOwner) {
+            stopTargetRef.current = null;
+          }
+          activeRunThreadRef.current = null;
         }
-        if (streamOwnerRef.current === streamOwner) {
-          flushPendingSeq();
-        }
-        if (streamOwnerRef.current === streamOwner) {
-          pendingStreamContentRef.current = null;
-        }
-        // Only tear the slice down if nothing newer claimed it. On a
-        // confirmation pause the awaits above hand the user a live approval
-        // card; approving starts the confirm stream, and an unconditional wipe
-        // here orphaned it — streaming UI gone, carried citations lost,
-        // composer unlocked into a second concurrent SSE writer.
-        if (streamOwnerRef.current === streamOwner) {
-          resetStreamingTurnState();
-        }
-        if (streamOwnerRef.current === streamOwner) {
-          // Same ownership rule: these refs are shared with the confirm
-          // stream; a newer owner's state must not be torn down here.
-          lastStreamedContentRef.current = '';
-        }
-        if (stopTargetRef.current === streamOwner) {
-          stopTargetRef.current = null;
-        }
-        activeRunThreadRef.current = null;
       }
     },
     [
@@ -1875,7 +1972,9 @@ export function useChatStreaming(
     ) => {
       // This identity must be captured before the stream's token refresh can
       // synchronously emit SIGNED_OUT and clear the auth store.
+      if (!ownsRenderedSession()) return;
       const ownerUserId = useAuthStore.getState().user?.id;
+      const isCurrentSession = captureChatSession();
       if (submitLockRef.current) {
         console.warn('[Chat] Send ignored: submit already in flight');
         return;
@@ -1919,10 +2018,12 @@ export function useChatStreaming(
             : (useChatStore.getState().currentThreadId ?? null)
         );
       const ownsPreflight = (): boolean =>
+        isCurrentSession() &&
         useAuthStore.getState().user?.id === ownerUserId &&
         useChatStore.getState().currentThreadId === preflightOwner.threadId &&
         currentPreflightContextKey() === preflightOwner.contextKey;
       const abandonPreflight = (): void => {
+        if (!isCurrentSession()) return;
         setIsLoading(false);
         submitLockRef.current = false;
         stopTargetRef.current = null;
@@ -2216,9 +2317,10 @@ export function useChatStreaming(
               ),
           });
         } finally {
-          submitLockRef.current = false;
+          if (isCurrentSession()) submitLockRef.current = false;
         }
       } catch (err) {
+        if (!isCurrentSession()) return;
         // A throw between lock-set and the inner try/finally used to leave
         // the lock stuck true (Send dead until remount). Reset and rethrow.
         submitLockRef.current = false;
@@ -2232,6 +2334,7 @@ export function useChatStreaming(
       }
     },
     [
+      ownsRenderedSession,
       input,
       isLoading,
       storeIsStreaming,
@@ -2257,6 +2360,7 @@ export function useChatStreaming(
   );
 
   const handleStop = useCallback(() => {
+    if (!ownsRenderedSession()) return;
     // Stop during a confirmation continuation has no main-stream active ref;
     // use the pending gate's workspace thread while the confirm lock owns the
     // producer. The parked (legacy) confirmation path stays no-body below.
@@ -2312,12 +2416,15 @@ export function useChatStreaming(
     // cancel. Close its durable run explicitly; if confirmation execution has
     // already started, aborting that live stream owns terminal cleanup.
     if (pendingConfirmation && !confirmLockRef.current) {
+      const isCurrentSession = captureChatSession();
       void agentChatService
         .cancelPendingConfirmation(pendingConfirmation.threadId)
-        .then(() =>
-          setPendingConfirmation(null, pendingConfirmation.workspaceThreadId)
-        )
+        .then(() => {
+          if (isCurrentSession())
+            setPendingConfirmation(null, pendingConfirmation.workspaceThreadId);
+        })
         .catch((error) => {
+          if (!isCurrentSession()) return;
           // Stop is locally authoritative: the user's intent stands even when
           // the durable cancel loses a race (409 once the graph resumed). The
           // per-turn stop target can't leak into later turns, so there is
@@ -2341,6 +2448,7 @@ export function useChatStreaming(
       storeStopStreaming();
     }
   }, [
+    ownsRenderedSession,
     pendingConfirmation,
     setPendingConfirmation,
     requestDurableStop,
@@ -2395,6 +2503,7 @@ export function useChatStreaming(
         const gapAwareCallbacks: AgentStreamCallbacks = {
           ...streamCallbacks,
           onReplayGap: (firstSeq, expectedSeq) => {
+            if (signal.aborted) return;
             console.warn(
               `[Chat] Resume replay gap: buffer starts at ${firstSeq}, expected ${expectedSeq}`
             );
@@ -2437,6 +2546,7 @@ export function useChatStreaming(
               ? latestRun.runId
               : latestRun.streamId
           );
+          if (signal.aborted) return;
           if (res.status === 'idle') {
             if (harnessConnection.executionProvider === 'codex') {
               // A missing active pointer is not proof that the external run
@@ -2563,6 +2673,8 @@ export function useChatStreaming(
 
   const handleConfirmation = useCallback(
     async (confirmed: boolean) => {
+      const isCurrentSession = captureChatSession();
+      if (!ownsRenderedSession()) return;
       const ownerUserId = useAuthStore.getState().user?.id;
       if (!pendingConfirmation) return;
       // CX1 belt: block a synchronous double-click before it can fire a
@@ -2586,6 +2698,7 @@ export function useChatStreaming(
         // server-side regardless, so a skipped local write is not lost (mirrors
         // handleSubmit's isTurnDisplayed guard).
         const isConfirmDisplayed = () =>
+          isCurrentSession() &&
           confirmationBelongsToThread(
             pendingConfirmation,
             useChatStore.getState().currentThreadId
@@ -2615,7 +2728,7 @@ export function useChatStreaming(
           completedInBackground: !isConfirmDisplayed(),
         });
         const reconcileConfirmationUser = (terminalReason: string) =>
-          confirmationThreadId
+          isCurrentSession() && confirmationThreadId
             ? useChatStore.getState().refreshMessages(
                 confirmationThreadId,
                 pendingConfirmation.userRuntimeId
@@ -2633,7 +2746,7 @@ export function useChatStreaming(
           },
           terminalReason: string
         ) =>
-          confirmationThreadId
+          isCurrentSession() && confirmationThreadId
             ? useChatStore.getState().refreshMessages(confirmationThreadId, {
                 persistedId: done.assistant_message_id ?? undefined,
                 runtimeId:
@@ -2778,6 +2891,7 @@ export function useChatStreaming(
             { thread_id: pendingConfirmation.threadId, confirmed },
             {
               onToken: (content) => {
+                if (!isCurrentSession()) return;
                 if (confirmFirstTokenAt === null) {
                   confirmFirstTokenAt = Date.now();
                 }
@@ -2797,6 +2911,7 @@ export function useChatStreaming(
                 }
               },
               onReasoningDelta: (content) => {
+                if (!isCurrentSession()) return;
                 confirmReasoning = (confirmReasoning + content).slice(
                   0,
                   MAX_REASONING_SUMMARY_CHARS
@@ -2806,9 +2921,11 @@ export function useChatStreaming(
                 });
               },
               onHeartbeat: (elapsedMs) => {
+                if (!isCurrentSession()) return;
                 useChatStore.setState({ streamingElapsedMs: elapsedMs });
               },
               onStatus: (phase, detail) => {
+                if (!isCurrentSession()) return;
                 confirmProgress = appendProgressStep(
                   confirmProgress,
                   phase,
@@ -2821,10 +2938,12 @@ export function useChatStreaming(
                 });
               },
               onArtifactVersion: (ref) => {
+                if (!isCurrentSession()) return;
                 if (confirmationThreadId)
                   void invalidateThreadArtifacts(confirmationThreadId, ref);
               },
               onRunId: (runId) => {
+                if (!isCurrentSession()) return;
                 if (
                   !confirmationThreadId ||
                   streamOwnerRef.current !== confirmStreamOwner
@@ -2844,11 +2963,13 @@ export function useChatStreaming(
               // reached, so a disconnect mid-resume replayed the buffer from a
               // stale position instead of continuing after the last seen frame.
               onStreamId: (sid) => {
+                if (!isCurrentSession()) return;
                 const sidThreadId = pendingConfirmation.workspaceThreadId;
                 if (!sidThreadId) return;
                 streamIdByThreadRef.current[sidThreadId] = sid;
               },
               onSeq: (seq) => {
+                if (!isCurrentSession()) return;
                 const seqThreadId = pendingConfirmation.workspaceThreadId;
                 if (!seqThreadId) return;
                 pendingSeqRef.current = {
@@ -2874,6 +2995,7 @@ export function useChatStreaming(
                 }
               },
               onToolStart: (tool, args, callId) => {
+                if (!isCurrentSession()) return;
                 useAgentActivityStore
                   .getState()
                   .pushToolStart(
@@ -2900,6 +3022,7 @@ export function useChatStreaming(
                 });
               },
               onToolEnd: (tool, result, isError, callId) => {
+                if (!isCurrentSession()) return;
                 const remainsPending = isPendingToolResult(result, isError);
                 const resultFailed = isFailedToolResult(result, isError);
                 if (!remainsPending) {
@@ -2962,6 +3085,7 @@ export function useChatStreaming(
                 });
               },
               onRagContext: (contexts) => {
+                if (!isCurrentSession()) return;
                 confirmCitations = contexts;
                 useChatStore.setState({
                   streamingCitations: confirmCitations,
@@ -2972,6 +3096,7 @@ export function useChatStreaming(
                 });
               },
               onPlan: (steps, reasoning) => {
+                if (!isCurrentSession()) return;
                 confirmPlan = toTurnPlan(steps);
                 confirmPlanReasoning = reasoning;
                 useChatStore.setState({
@@ -2987,6 +3112,7 @@ export function useChatStreaming(
                 }
               },
               onConfirmation: (threadId, confirmation, runId) => {
+                if (!isCurrentSession()) return;
                 nestedConfirmation = {
                   threadId,
                   workspaceThreadId: pendingConfirmation.workspaceThreadId,
@@ -3009,18 +3135,21 @@ export function useChatStreaming(
                 };
               },
               onUsage: (inputTokens, outputTokens) => {
+                if (!isCurrentSession()) return;
                 confirmTokenUsage = {
                   input: inputTokens,
                   output: outputTokens,
                 };
               },
               onReflection: (_passed, _issues, _round, revising) => {
+                if (!isCurrentSession()) return;
                 if (!revising) return;
                 confirmContent = '';
                 pendingStreamContentRef.current = '';
                 useChatStore.setState({ streamingContent: '' });
               },
               onAuthRefreshAttempt: () => {
+                if (!isCurrentSession()) return;
                 if (
                   authRecoveryAttempt &&
                   authRecoveryAttemptRef.current === authRecoveryAttempt
@@ -3029,11 +3158,13 @@ export function useChatStreaming(
                 }
               },
               onAuthRefreshSuccess: () => {
+                if (!isCurrentSession()) return;
                 if (authRecoveryAttemptRef.current === authRecoveryAttempt) {
                   authRecoveryAttempt.authRefreshStarted = false;
                 }
               },
               onDone: (payload) => {
+                if (!isCurrentSession()) return;
                 finishAuthRecoveryAttempt(authRecoveryAttempt);
                 confirmDoneIds = payload ?? {};
                 if (confirmationThreadId)
@@ -3077,6 +3208,7 @@ export function useChatStreaming(
                 }
               },
               onError: (error, category, localFailure) => {
+                if (!isCurrentSession()) return;
                 confirmHadError = true;
                 if (
                   localFailure === 'authentication_required' &&
@@ -3109,6 +3241,7 @@ export function useChatStreaming(
             },
             confirmAbort.signal
           );
+          if (!isCurrentSession()) return;
 
           // User hit Stop mid-resume: the abort swallows the stream so onDone
           // never fires — commit the partial answer tagged `stopped`, like
@@ -3145,6 +3278,7 @@ export function useChatStreaming(
             );
           }
         } catch {
+          if (!isCurrentSession()) return;
           const msg: ChatPageMessage = {
             runtimeId: crypto.randomUUID(),
             source: 'local-only',
@@ -3163,85 +3297,87 @@ export function useChatStreaming(
           confirmThrew = true;
           await reconcileConfirmationUser('confirmation-exception');
         } finally {
-          finishAuthRecoveryAttempt(authRecoveryAttempt);
-          // Close out the agent activity rail — the interrupt left the run
-          // "running" and neither onDone (confirm path) nor handleStop
-          // (activeRunThreadRef is null here) ever finished it (round-3 M1).
-          // A nested interrupt keeps the run open: the turn isn't over.
-          // A failed attempt leaves the graph interrupted, so the run is not
-          // over either — only finish it when the turn genuinely ended.
-          const confirmFailed =
-            confirmHadError ||
-            confirmThrew ||
-            authRecoveryAttempt.navigationStarted;
-          if (
-            !nestedConfirmation &&
-            !confirmFailed &&
-            pendingConfirmation.workspaceThreadId
-          ) {
-            // A user Stop is closed by requestDurableStop only after the
-            // producer reports `cancelled`. The normal completion path can
-            // finish immediately because onDone is the producer's terminal
-            // acknowledgement.
-            if (!isConfirmStopped()) {
-              useAgentActivityStore
-                .getState()
-                .finishRun(pendingConfirmation.workspaceThreadId, 'done');
+          if (isCurrentSession()) {
+            finishAuthRecoveryAttempt(authRecoveryAttempt);
+            // Close out the agent activity rail — the interrupt left the run
+            // "running" and neither onDone (confirm path) nor handleStop
+            // (activeRunThreadRef is null here) ever finished it (round-3 M1).
+            // A nested interrupt keeps the run open: the turn isn't over.
+            // A failed attempt leaves the graph interrupted, so the run is not
+            // over either — only finish it when the turn genuinely ended.
+            const confirmFailed =
+              confirmHadError ||
+              confirmThrew ||
+              authRecoveryAttempt.navigationStarted;
+            if (
+              !nestedConfirmation &&
+              !confirmFailed &&
+              pendingConfirmation.workspaceThreadId
+            ) {
+              // A user Stop is closed by requestDurableStop only after the
+              // producer reports `cancelled`. The normal completion path can
+              // finish immediately because onDone is the producer's terminal
+              // acknowledgement.
+              if (!isConfirmStopped()) {
+                useAgentActivityStore
+                  .getState()
+                  .finishRun(pendingConfirmation.workspaceThreadId, 'done');
+              }
             }
-          }
-          // A nested interrupt re-arms the banner with the new confirmation
-          // (carrying the turn's accumulated provenance).
-          //
-          // On failure KEEP the current gate. Clearing it on a 500 or a dropped
-          // connection stranded the backend: the graph stays interrupted, the
-          // card disappears, and the only remaining move is to retype — which
-          // discards the interrupt server-side ("Abandoned HITL interrupt
-          // silently dropped"). Retaining it lets the user press Approve again,
-          // and handleStop is the escape hatch if they'd rather abandon it.
-          setPendingConfirmation(
-            nestedConfirmation ??
-              (confirmFailed
-                ? {
-                    ...pendingConfirmation,
-                    approvalId: crypto.randomUUID(),
-                    steps: confirmSteps.filter(
-                      (step) => step.status !== 'running'
-                    ),
-                    plan: [...confirmPlan],
-                    planReasoning: confirmPlanReasoning || undefined,
-                    citations: [...confirmCitations],
-                    progress: [...confirmProgress],
-                  }
-                : null),
-            pendingConfirmation.workspaceThreadId
-          );
-          setIsConfirming(false);
-          confirmLockRef.current = false;
-          if (stopTargetRef.current === confirmStreamOwner) {
-            stopTargetRef.current = null;
-          }
-          // The confirm stream shares streamingRafRef/pendingStreamContentRef
-          // with handleSubmit's onToken throttle. A token that lands just
-          // before completion schedules a rAF that would otherwise fire AFTER
-          // this reset and resurrect stale streamingContent into the store.
-          // Owner-guarded like runStreamTurn's teardown: a newer stream that
-          // claimed the shared slot must not lose its first scheduled flush.
-          if (streamOwnerRef.current === confirmStreamOwner) {
-            if (streamingRafRef.current !== null) {
-              cancelAnimationFrame(streamingRafRef.current);
-              streamingRafRef.current = null;
+            // A nested interrupt re-arms the banner with the new confirmation
+            // (carrying the turn's accumulated provenance).
+            //
+            // On failure KEEP the current gate. Clearing it on a 500 or a dropped
+            // connection stranded the backend: the graph stays interrupted, the
+            // card disappears, and the only remaining move is to retype — which
+            // discards the interrupt server-side ("Abandoned HITL interrupt
+            // silently dropped"). Retaining it lets the user press Approve again,
+            // and handleStop is the escape hatch if they'd rather abandon it.
+            setPendingConfirmation(
+              nestedConfirmation ??
+                (confirmFailed
+                  ? {
+                      ...pendingConfirmation,
+                      approvalId: crypto.randomUUID(),
+                      steps: confirmSteps.filter(
+                        (step) => step.status !== 'running'
+                      ),
+                      plan: [...confirmPlan],
+                      planReasoning: confirmPlanReasoning || undefined,
+                      citations: [...confirmCitations],
+                      progress: [...confirmProgress],
+                    }
+                  : null),
+              pendingConfirmation.workspaceThreadId
+            );
+            setIsConfirming(false);
+            confirmLockRef.current = false;
+            if (stopTargetRef.current === confirmStreamOwner) {
+              stopTargetRef.current = null;
             }
-            flushPendingSeq();
-            pendingStreamContentRef.current = null;
-          }
-          // Same ownership rule as runStreamTurn: a nested interrupt (or any
-          // newer stream started while this one was reconciling) owns the
-          // slice now, and must not be wiped by this turn's teardown.
-          if (streamOwnerRef.current === confirmStreamOwner) {
-            resetStreamingTurnState();
-          }
-          if (activeRunThreadRef.current === confirmationThreadId) {
-            activeRunThreadRef.current = null;
+            // The confirm stream shares streamingRafRef/pendingStreamContentRef
+            // with handleSubmit's onToken throttle. A token that lands just
+            // before completion schedules a rAF that would otherwise fire AFTER
+            // this reset and resurrect stale streamingContent into the store.
+            // Owner-guarded like runStreamTurn's teardown: a newer stream that
+            // claimed the shared slot must not lose its first scheduled flush.
+            if (streamOwnerRef.current === confirmStreamOwner) {
+              if (streamingRafRef.current !== null) {
+                cancelAnimationFrame(streamingRafRef.current);
+                streamingRafRef.current = null;
+              }
+              flushPendingSeq();
+              pendingStreamContentRef.current = null;
+            }
+            // Same ownership rule as runStreamTurn: a nested interrupt (or any
+            // newer stream started while this one was reconciling) owns the
+            // slice now, and must not be wiped by this turn's teardown.
+            if (streamOwnerRef.current === confirmStreamOwner) {
+              resetStreamingTurnState();
+            }
+            if (activeRunThreadRef.current === confirmationThreadId) {
+              activeRunThreadRef.current = null;
+            }
           }
         }
       } catch (err) {
@@ -3255,6 +3391,7 @@ export function useChatStreaming(
       }
     },
     [
+      ownsRenderedSession,
       flushPendingSeq,
       beginAuthRecovery,
       finishAuthRecoveryAttempt,
