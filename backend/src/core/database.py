@@ -123,7 +123,9 @@ def should_run_create_all(
 # Check if using SQLite (for testing) - SQLite doesn't support pool options
 _is_sqlite = DATABASE_URL.startswith("sqlite")
 
-# Create engine with appropriate settings
+# Create engine with appropriate settings.
+# hide_parameters keeps bound values (password hashes) out of str(exc) and echo
+# logs (audit I25).
 if _is_sqlite:
     # SQLite configuration for testing
     engine = create_engine(
@@ -131,6 +133,7 @@ if _is_sqlite:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
         echo=os.getenv("ENVIRONMENT") == "development",
+        hide_parameters=True,
     )
 else:
     # PostgreSQL configuration for production/development.
@@ -150,6 +153,7 @@ else:
         max_overflow=_env_int("DB_SYNC_MAX_OVERFLOW", 2),
         pool_timeout=30,
         echo=os.getenv("ENVIRONMENT") == "development",
+        hide_parameters=True,
     )
 
 # Create async engine for async operations
@@ -163,6 +167,7 @@ if _is_sqlite:
             else "sqlite+aiosqlite:///:memory:"
         ),
         echo=os.getenv("ENVIRONMENT") == "development",
+        hide_parameters=True,
     )
 else:
     # PostgreSQL async configuration
@@ -204,6 +209,7 @@ else:
             "statement_cache_size": _stmt_cache,
         },
         echo=os.getenv("ENVIRONMENT") == "development",
+        hide_parameters=True,
     )
 
 # Session factory
@@ -384,7 +390,7 @@ def init_database():
 
     except SQLAlchemyError as e:
         db.rollback()
-        # str(e) embeds bound INSERT parameters (hashed_password); log the type only.
+        # str(e) embeds bound INSERT parameters (password_hash); log the type only.
         print(f"❌ Error initializing database: {type(e).__name__}")
         raise
     finally:
