@@ -144,6 +144,18 @@ function clearSession(): void {
   });
 }
 
+function settleMissingSession(): void {
+  // A missing session during anonymous bootstrap is not an account change.
+  // Keep public forms mounted, but still revoke a known or pending identity
+  // (including a login whose SDK request has not returned its user yet).
+  const { user, isAuthenticated } = useAuthStore.getState();
+  if (isAuthenticated || user || sessionUserId || activeSignIn) {
+    clearSession();
+  } else {
+    useAuthStore.setState({ isLoading: false });
+  }
+}
+
 function observeIdentity(userId: string): void {
   const previousId = useAuthStore.getState().user?.id ?? sessionUserId;
   if (previousId !== userId) {
@@ -188,7 +200,7 @@ function getSupabaseClient(): SupabaseClient {
       }
 
       if (event === 'SIGNED_OUT') {
-        clearSession();
+        settleMissingSession();
       }
     });
 
@@ -479,7 +491,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
 
         if (revision !== authRevision) return;
         if (userError || !user) {
-          clearSession();
+          settleMissingSession();
           return;
         }
         observeIdentity(user.id);
@@ -529,7 +541,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           return;
         }
 
-        clearSession();
+        settleMissingSession();
         set({ error: message });
       }
     });

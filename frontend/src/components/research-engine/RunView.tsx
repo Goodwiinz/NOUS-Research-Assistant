@@ -292,7 +292,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
 
     const controller = new AbortController();
     const accountSignal = getAccountSignal();
-    const abortForAccount = () => controller.abort();
+    const abortForAccount = (): void => controller.abort();
     accountSignal.addEventListener('abort', abortForAccount, { once: true });
     abortRef.current = controller;
 

@@ -211,6 +211,54 @@ async function switchToB(): Promise<void> {
 }
 
 describe('private account lifetime', () => {
+  it.each(['verification', 'signedOutEvent'])(
+    '%s rejects an identity whose profile is still loading',
+    async (transition) => {
+      await useAuthStore.getState().signOut();
+      const pending = deferred<unknown>();
+      auth.getUser.mockReturnValueOnce(pending.promise);
+      auth.listener!('SIGNED_IN', session('A'));
+      const verification = useAuthStore.getState().fetchProfile();
+      await vi.waitFor(() => expect(auth.getUser).toHaveBeenCalledOnce());
+      expect(useAuthStore.getState().user).toBeNull();
+      seedPrivateState();
+
+      if (transition === 'verification') {
+        pending.resolve({
+          data: { user: null },
+          error: new Error('Session expired'),
+        });
+      } else {
+        auth.listener!('SIGNED_OUT', null);
+        pending.resolve({ data: { user: { id: 'A' } }, error: null });
+      }
+
+      await verification;
+      assertEmptyPrivateState();
+      expect(useAuthStore.getState().user).toBeNull();
+      expect(api.get).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('a signed-out event cancels a login before its identity is known', async () => {
+    await useAuthStore.getState().signOut();
+    const pending = deferred<unknown>();
+    auth.signInWithPassword.mockReturnValueOnce(pending.promise);
+    const login = useAuthStore
+      .getState()
+      .signIn('a@example.invalid', 'synthetic-password')
+      .then(
+        () => 'accepted',
+        (error: Error) => error.name
+      );
+
+    auth.listener!('SIGNED_OUT', null);
+    pending.resolve({ data: { session: session('A') }, error: null });
+    expect(await login).toBe('AbortError');
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().isLoading).toBe(false);
+  });
+
   it.each([
     'signOut',
     'rejected',
