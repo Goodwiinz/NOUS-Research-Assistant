@@ -37,45 +37,13 @@ export const MathDisplay: React.FC<MathDisplayProps> = ({
           displayMode: block,
         });
 
-        // Prevent XSS vulnerabilities by sanitizing the KaTeX HTML output.
-        // MUST include mathMl: true and explicit ALLOWED_TAGS, otherwise
-        // DOMPurify strips necessary markup and breaks math rendering.
+        // KaTeX output is injected via dangerouslySetInnerHTML, so sanitize it.
+        // Use profiles only: DOMPurify ignores ALLOWED_TAGS when USE_PROFILES
+        // is set. KaTeX needs all three namespaces: html (span), mathMl
+        // (accessibility tree, matrices) and svg (radicals, stretchy arrows,
+        // braces, \\cancel). Without svg those glyphs silently disappear.
         const safeHtml = DOMPurify.sanitize(html, {
-          USE_PROFILES: { mathMl: true, html: true },
-          ALLOWED_TAGS: [
-            'math',
-            'semantics',
-            'annotation',
-            'span',
-            'svg',
-            'path',
-            'g',
-            'mspace',
-            'mn',
-            'mo',
-            'mi',
-            'mover',
-            'munder',
-            'munderover',
-            'mfrac',
-            'msqrt',
-            'mroot',
-            'mstyle',
-            'merror',
-            'mpadded',
-            'mphantom',
-            'mrow',
-            'menclose',
-            'msub',
-            'msup',
-            'msubsup',
-            'mtext',
-            'br',
-            'table',
-            'tbody',
-            'tr',
-            'td',
-          ],
+          USE_PROFILES: { html: true, svg: true, mathMl: true },
         });
 
         setKatexHtml(safeHtml);
