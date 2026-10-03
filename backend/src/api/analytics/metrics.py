@@ -52,8 +52,12 @@ async def create_metric(
         )
         return metric
 
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid request",
+        )
     except Exception as e:
         logger.error(f"Error creating metric: {e}")
         raise HTTPException(
@@ -166,8 +170,12 @@ async def update_metric(
             )
         return metric
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error updating metric {metric_id}: {e}")
         raise HTTPException(
@@ -190,8 +198,12 @@ async def delete_metric(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Metric not found"
             )
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error deleting metric {metric_id}: {e}")
         raise HTTPException(
@@ -314,8 +326,12 @@ async def get_metric_statistics(
         )
         return stats
 
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid request",
+        )
     except Exception as e:
         logger.error(f"Error getting metric statistics: {e}")
         raise HTTPException(
@@ -352,8 +368,12 @@ async def create_kpi(
         # Preserve authz/validation status codes (e.g. a 4xx raised inside the
         # try) — the broad handler below would otherwise mask them as 500.
         raise
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid request",
+        )
     except Exception as e:
         logger.error(f"Error creating KPI: {e}")
         raise HTTPException(
