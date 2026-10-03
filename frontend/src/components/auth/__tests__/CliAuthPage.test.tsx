@@ -132,4 +132,45 @@ describe('CliAuthPage', () => {
       'WXYZ-9876'
     );
   });
+
+  it('lets the user type the terminal code when the link carries none', async () => {
+    mockSearchParams = new URLSearchParams('session_id=session-1');
+    const postSpy = vi
+      .spyOn(api, 'post')
+      .mockResolvedValue({ status: 'approved' } as never);
+
+    render(<CliAuthPage />);
+
+    const approve = await screen.findByRole('button', { name: /approve/i });
+    expect(approve).toBeDisabled();
+
+    fireEvent.change(
+      screen.getByLabelText(/verification code from your terminal/i),
+      { target: { value: ' abcd-1234 ' } }
+    );
+    expect(approve).toBeEnabled();
+    fireEvent.click(approve);
+
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith('/cli-auth/approve', {
+        session_id: 'session-1',
+        verification_code: 'ABCD-1234',
+      })
+    );
+  });
+
+  it('clears the stored code once the login is approved', async () => {
+    mockSearchParams = new URLSearchParams('session_id=session-1');
+    window.sessionStorage.setItem('nous:cli-auth-code:session-1', 'WXYZ-9876');
+    vi.spyOn(api, 'post').mockResolvedValue({ status: 'approved' } as never);
+
+    render(<CliAuthPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /approve/i }));
+
+    await screen.findByText(/cli connected/i);
+    expect(window.sessionStorage.getItem('nous:cli-auth-code:session-1')).toBe(
+      null
+    );
+  });
 });

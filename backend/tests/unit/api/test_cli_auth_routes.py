@@ -91,8 +91,12 @@ def test_cli_auth_status_rejects_missing_or_wrong_poll_token(
     started = client.post("/api/v1/cli-auth/start").json()
     url = f"/api/v1/cli-auth/status/{started['session_id']}"
 
-    assert client.get(url).status_code == 404
-    assert client.get(url, headers={"X-CLI-Poll-Token": "wrong"}).status_code == 404
+    for rejected in (
+        client.get(url),
+        client.get(url, headers={"X-CLI-Poll-Token": "wrong"}),
+    ):
+        assert rejected.status_code == 404
+        assert rejected.headers["cache-control"] == "no-store"
 
 
 def test_cli_auth_status_legacy_query_token_warns_without_logging_secret(

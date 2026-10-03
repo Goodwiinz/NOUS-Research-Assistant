@@ -71,9 +71,10 @@ def test_cli_auth_approve_marks_session_approved_and_stores_credentials(
 
     status_response = client.get(
         f"/api/v1/cli-auth/status/{session['session_id']}",
-        params={"poll_token": session["poll_token"]},
+        headers={"X-CLI-Poll-Token": session["poll_token"]},
     )
     assert status_response.status_code == 200
+    assert status_response.headers["cache-control"] == "no-store"
     status_body = status_response.json()
     assert status_body["status"] == "approved"
     assert status_body["token"] == body["token"]

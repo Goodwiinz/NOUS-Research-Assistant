@@ -16,6 +16,9 @@ function CliAuthPageContent(): React.JSX.Element {
   // Older backends put the code in the query string; current ones use the fragment.
   const legacyQueryCode = searchParams.get('code') ?? '';
   const [verificationCode, setVerificationCode] = useState('');
+  // No code in the link or storage (e.g. storage blocked across the login
+  // redirect): the user types the code the terminal printed.
+  const [manualEntry, setManualEntry] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState('');
@@ -40,6 +43,7 @@ function CliAuthPageContent(): React.JSX.Element {
     // The fragment and sessionStorage only exist in the browser, after mount.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setVerificationCode((previous) => code || previous);
+    setManualEntry(!code);
     if (urlCode) {
       window.history.replaceState(
         null,
@@ -70,6 +74,11 @@ function CliAuthPageContent(): React.JSX.Element {
         verification_code: verificationCode,
       });
       setIsConnected(true);
+      try {
+        sessionStorage.removeItem(`nous:cli-auth-code:${sessionId}`);
+      } catch {
+        // Storage unavailable: nothing was stored.
+      }
     } catch (approveError) {
       setError(
         approveError instanceof Error
@@ -121,7 +130,22 @@ function CliAuthPageContent(): React.JSX.Element {
               Verification code
             </dt>
             <dd className="mt-1.5 font-mono text-lg tracking-[0.3em] text-primary">
-              {verificationCode || 'Missing'}
+              {manualEntry ? (
+                <input
+                  type="text"
+                  aria-label="Verification code from your terminal"
+                  placeholder="Code from your terminal"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={verificationCode}
+                  onChange={(event) =>
+                    setVerificationCode(event.target.value.trim().toUpperCase())
+                  }
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-base tracking-widest text-foreground"
+                />
+              ) : (
+                verificationCode
+              )}
             </dd>
           </div>
         </dl>

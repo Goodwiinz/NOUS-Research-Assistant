@@ -124,6 +124,7 @@ async def get_cli_auth_status(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="CLI auth session not found",
+            headers={"Cache-Control": "no-store"},
         )
 
     body: dict[str, Any] = {
