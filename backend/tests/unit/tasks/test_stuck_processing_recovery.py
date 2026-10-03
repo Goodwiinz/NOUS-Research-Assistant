@@ -326,7 +326,7 @@ def test_sweep_holds_document_then_job_locks_through_commit(
                         .where(model.id == row_id)
                         .with_for_update(nowait=True)
                     )
-                assert raised.value.orig.pgcode == "55P03"
+                assert getattr(raised.value.orig, "pgcode", None) == "55P03"
                 probes.append(model.__name__)
                 other.rollback()
 
