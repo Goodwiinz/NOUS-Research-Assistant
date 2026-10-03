@@ -62,7 +62,7 @@ def test_init_database_does_not_print_generated_passwords(
 
     def spy(self: User, password: str) -> None:
         generated.append(password)
-        return real_set_password(self, password)
+        real_set_password(self, password)
 
     monkeypatch.setattr(User, "set_password", spy)
 
