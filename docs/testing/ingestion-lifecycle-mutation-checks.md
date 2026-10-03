@@ -290,3 +290,29 @@ The existing reconciler rotates attempts fairly. Feature/apply flags still
 control remote mutations; no second scheduler was added.
 
 Standalone GOO-358 validation at `d236204a1` (documentation-only changes afterwards): the six cleanup/API regression files named in the implementation plan passed **100 tests, 4 warnings, 52.43 seconds**, with real disposable PostgreSQL and Redis. Full-source Ruff passed. The earlier sparse-checkout import error is not counted as test execution.
+
+## GOO-359 recovery verification — 2026-10-03
+
+Real PostgreSQL: the initial reproduction had **12 intended failures and 7 preservation cases passing**. After the repair, the focused recovery, existing sweeper and publication suite passed **65 tests**. Candidate-selection hooks commit competing changes before locked reloads. Independent `FOR UPDATE NOWAIT` sessions establish that document and job locks remain held through the commit. Rollback restores both rows.
+
+The following 15 logical guards in `backend/src/tasks/processing_tasks.py::sweep_stuck_processing_jobs` were removed using runtime-only AST recompilation. Every named regression failed at its intended assertion and passed after restoration. Tenant scope and ingestion-only guards span discovery and mutation predicates; their named mutation removes that logical guard at each occurrence. All source functions were restored.
+
+Run with disposable PostgreSQL: `ORCHESTRATION_TEST_DATABASE_URL=<disposable-url> PYTHONPATH=backend pytest -q -o addopts= <selector>`.
+
+| Check | Removed guard | Named selector | Result |
+|---|---|---|---|
+| T5-1 | `document-lock` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_holds_document_then_job_locks_through_commit` | FAIL → PASS |
+| T5-2 | `job-lock` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_holds_document_then_job_locks_through_commit` | FAIL → PASS |
+| T5-3 | `job.is_deleted` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_job_after_candidate_selection[delete]` | FAIL → PASS |
+| T5-4 | `job.status not in _NON_TERMINAL_PROCESSING_STATUSES` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_job_after_candidate_selection[cancel]` | FAIL → PASS |
+| T5-5 | `staleness` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_job_after_candidate_selection[progress]` | FAIL → PASS |
+| T5-6 | `job.organization_id != candidate.organization_id` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_candidate_association[organization_id]` | FAIL → PASS |
+| T5-7 | `job.document_id != candidate.document_id` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_candidate_association[document_id]` | FAIL → PASS |
+| T5-8 | `job.job_type != candidate.job_type` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_candidate_association[job_type]` | FAIL → PASS |
+| T5-9 | `not document.is_deleted` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_document_after_candidate_selection[delete]` | FAIL → PASS |
+| T5-10 | `document.processing_status` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_document_after_candidate_selection[complete]` | FAIL → PASS |
+| T5-11 | `competing-attempt` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_preserves_new_active_ingestion` | FAIL → PASS |
+| T5-12 | `document-tenant-scope` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_preserves_documents_it_does_not_own[foreign]` | FAIL → PASS |
+| T5-13 | `ingestion-only` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_preserves_documents_it_does_not_own[non-ingestion]` | FAIL → PASS |
+| T5-14 | `document-update` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_fails_job_and_document_atomically` | FAIL → PASS |
+| T5-15 | `atomic-commit` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_fails_job_and_document_atomically` | FAIL → PASS |
