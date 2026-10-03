@@ -81,7 +81,7 @@ lines: a one-line dependency or workflow change still gets full CI.
 | Documentation | Allowlisted root and directory docs, Markdown under `docs/`, and Claude command instructions | Directory-doc lint, script/NOUS contracts, CI selection and Release Gate regressions |
 | Frontend | Frontend files without shared dependency/build changes | Lightweight checks, frontend lint/types, frontend/terminal/harness tests, E2E smoke |
 | Backend | Backend files without shared dependency/build changes | Lightweight checks, backend lint, migration and OpenAPI contracts, security, unit/golden/integration/resilience tests, E2E smoke |
-| Full | Mixed frontend/backend changes, CI/scripts, shared dependencies/build files, infrastructure, unknown paths, or an empty diff | Lightweight checks and every existing blocking job |
+| Full | Mixed frontend/backend changes, generated API contract artifacts, CI/scripts, shared dependencies/build files, infrastructure, unknown paths, or an empty diff | Lightweight checks and every existing blocking job |
 
 Markdown under `backend/src/` or `frontend/src/` is runtime content and stays in
 its code profile. Release proposal branches (`codex/release-dev-<source SHA>`)

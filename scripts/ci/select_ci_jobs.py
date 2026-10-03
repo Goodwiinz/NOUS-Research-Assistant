@@ -61,6 +61,11 @@ def path_scope(name: str) -> str:
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts:
         return "full"
+    # Both generated halves share the OpenAPI regeneration/freshness gate.
+    if name == "backend/openapi.json" or name.startswith(
+        "frontend/src/types/generated/"
+    ):
+        return "full"
     if (
         path.name in SHARED_NAMES
         or path.name.startswith(("requirements", "Dockerfile"))

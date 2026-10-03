@@ -183,6 +183,11 @@ def repository(tmp_path: Path) -> tuple[Path, str]:
     (repo / "README.md").write_text("Initial docs\n")
     (repo / "backend/src").mkdir(parents=True)
     (repo / "backend/src/runtime.py").write_text("def value():\n    return 1\n")
+    (repo / "backend/openapi.json").write_text("{}\n")
+    (repo / "frontend/src/types/generated").mkdir(parents=True)
+    (repo / "frontend/src/types/generated/api.d.ts").write_text(
+        "export interface paths {}\n"
+    )
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "Base")
     base = _git(repo, "rev-parse", "HEAD")
@@ -230,6 +235,8 @@ def _select(
         (["backend/requirements.txt"], "full"),
         (["frontend/package.json"], "full"),
         (["frontend/src/package.json"], "full"),
+        (["frontend/src/types/generated/api.d.ts"], "full"),
+        (["backend/openapi.json"], "full"),
         (["backend/src/requirements.txt"], "full"),
         (["frontend/yarn.lock"], "full"),
         (["backend/src/prompts/README.md"], "backend"),
@@ -319,6 +326,23 @@ def test_cross_surface_rename_selects_both_sides(repository: tuple[Path, str]) -
     result = _select(repo, base)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["profile"] == "full"
+
+
+@pytest.mark.parametrize(
+    "name", ["backend/openapi.json", "frontend/src/types/generated/api.d.ts"]
+)
+def test_deleted_contract_artifacts_retain_regeneration_gate(
+    repository: tuple[Path, str], name: str
+) -> None:
+    repo, base = repository
+    (repo / name).unlink()
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "Remove shared contract")
+    result = _select(repo, base)
+    assert result.returncode == 0, result.stderr
+    outputs = json.loads(result.stdout)
+    assert outputs["profile"] == "full"
+    assert outputs["backend"] == "true"
 
 
 def test_large_diff_and_unusual_names_do_not_hide_runtime_changes(
