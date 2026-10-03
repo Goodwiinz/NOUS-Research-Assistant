@@ -623,8 +623,10 @@ async def delete_document(
     try:
         # Locks, cancels unfinished jobs, soft-deletes and releases quota once.
         deleted = await file_service.soft_delete_documents(
-            organization.id, [document.id], cascade=cascade
+            organization.id, [document.id], cascade=cascade, user=current_user
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Failed to delete document %s", document_id)
         raise HTTPException(

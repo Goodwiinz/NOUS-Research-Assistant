@@ -36,10 +36,10 @@ def test_cancel_pending_upload_routes_through_delete_file():
     document.processing_status.value = "pending"
 
     db = MagicMock()
-    # First query: ProcessingJob → none; second: Document → our pending doc.
-    db.execute = AsyncMock(side_effect=[_result(None), _result(document)])
+    db.execute = AsyncMock(return_value=_result(document))
 
     file_service = MagicMock()
+    file_service.cancel_upload_job = AsyncMock(return_value=None)
     file_service.delete_file = AsyncMock(return_value=True)
 
     resp = asyncio.run(

@@ -89,7 +89,9 @@ async def test_cascades_entity_and_satellite_cleanup():
     svc.soft_delete_documents = AsyncMock(return_value=[doc])
     assert await svc.delete_file(doc, user) is True
 
-    svc.soft_delete_documents.assert_awaited_once_with(doc.organization_id, [doc.id])
+    svc.soft_delete_documents.assert_awaited_once_with(
+        doc.organization_id, [doc.id], user=user
+    )
     # Satellite cleanup fired after the commit, exactly once.
     svc._cleanup_satellites_on_delete.assert_awaited_once()
 
