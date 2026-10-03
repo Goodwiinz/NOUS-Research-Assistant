@@ -288,3 +288,5 @@ Unknown writer tokens intentionally remain eligible after successful cleanup:
 an earlier deletion cannot establish that a dispatched operation has finished.
 The existing reconciler rotates attempts fairly. Feature/apply flags still
 control remote mutations; no second scheduler was added.
+
+Standalone GOO-358 validation at `d236204a1` (documentation-only changes afterwards): the six cleanup/API regression files named in the implementation plan passed **100 tests, 4 warnings, 52.43 seconds**, with real disposable PostgreSQL and Redis. Full-source Ruff passed. The earlier sparse-checkout import error is not counted as test execution.
