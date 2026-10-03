@@ -53,7 +53,9 @@ jobs:
       - name: Verify release branch protection
         if: steps.source.outputs.needed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Reading branchProtectionRule needs administration:read, which the
+          # job token lacks; the release PAT has it.
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
           # Preserve GraphQL variables as literals instead of shell expressions.
           GRAPHQL_QUERY: >-
@@ -90,7 +92,7 @@ jobs:
 
       - name: Verify release branch protection
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
           # Preserve GraphQL variables as literals instead of shell expressions.
           GRAPHQL_QUERY: >-

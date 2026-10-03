@@ -271,14 +271,14 @@ async def create_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
         logger.error(
-            "citation_creation_failed", error=str(e), user_id=str(current_user.id)
+            "citation_creation_failed", exc_info=True, user_id=str(current_user.id)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create citation: {str(e)}",
+            detail="Failed to create citation",
         )
 
 
@@ -384,11 +384,13 @@ async def list_citations(
             limit=limit,
         )
 
-    except Exception as e:
-        logger.error("citation_list_failed", error=str(e), user_id=str(current_user.id))
+    except Exception:
+        logger.error(
+            "citation_list_failed", exc_info=True, user_id=str(current_user.id)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list citations: {str(e)}",
+            detail="Failed to list citations",
         )
 
 
@@ -433,16 +435,16 @@ async def get_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.error(
             "citation_get_failed",
-            error=str(e),
+            exc_info=True,
             citation_id=str(citation_id),
             user_id=str(current_user.id),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get citation: {str(e)}",
+            detail="Failed to get citation",
         )
 
 
@@ -573,12 +575,12 @@ async def extract_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("citation_extraction_failed", error=str(e))
+        logger.error("citation_extraction_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to extract citation: {str(e)}",
+            detail="Failed to extract citation",
         )
 
 
@@ -696,11 +698,11 @@ async def lookup_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("citation_lookup_failed", error=str(e))
+    except Exception:
+        logger.error("citation_lookup_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to lookup citation: {str(e)}",
+            detail="Failed to lookup citation",
         )
 
 
@@ -845,13 +847,17 @@ async def export_bibliography(
 
     except HTTPException:
         raise
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
-        logger.error("bibliography_export_failed", error=str(e))
+    except ValueError:
+        logger.warning("Invalid bibliography export request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid bibliography export request",
+        )
+    except Exception:
+        logger.error("bibliography_export_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to export bibliography: {str(e)}",
+            detail="Failed to export bibliography",
         )
 
 
@@ -932,11 +938,11 @@ async def list_citation_relationships(
             "total": len(relationships),
         }
 
-    except Exception as e:
-        logger.error("list_relationships_failed", error=str(e))
+    except Exception:
+        logger.error("list_relationships_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list relationships: {str(e)}",
+            detail="Failed to list relationships",
         )
 
 
@@ -1040,12 +1046,12 @@ async def create_citation_relationship(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("create_relationship_failed", error=str(e))
+        logger.error("create_relationship_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create relationship: {str(e)}",
+            detail="Failed to create relationship",
         )
 
 
@@ -1120,11 +1126,11 @@ async def get_citation_graph(
         # Preserve authz 400/404s — never let them collapse into a 500 if a
         # future edit moves a guard inside this try.
         raise
-    except Exception as e:
-        logger.error("get_graph_failed", error=str(e))
+    except Exception:
+        logger.error("get_graph_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get citation graph: {str(e)}",
+            detail="Failed to get citation graph",
         )
 
 
@@ -1163,11 +1169,11 @@ async def get_graph_node_details(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.error(
-            "get_node_details_failed", error=str(e), citation_id=str(citation_id)
+            "get_node_details_failed", exc_info=True, citation_id=str(citation_id)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get node details: {str(e)}",
+            detail="Failed to get node details",
         )

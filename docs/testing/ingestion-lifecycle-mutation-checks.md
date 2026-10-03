@@ -118,3 +118,81 @@ now corrected.
 | G18 re-drive re-checks deletion, `reconcile_tasks.py:143` `_redrive_neo4j` | check removed | `test_redrive_racing_a_delete_cleans_up_instead_of_completing` | no graph delete; row marked completed |
 | G19 deleted + neo4j pending selected, `reconcile_tasks.py:89` | `(_FAILED, _PENDING)` → `(_FAILED,)` | `test_deleted_document_left_pending_is_cleaned_up` | `0 == 1` |
 
+
+
+## GOO-356 cancellation serialization follow-up — 2026-10-03
+
+## GOO-356 cancellation and claim follow-up, 2026-10-03
+
+This follow-up extends merged PR #1798, starting at develop commit
+`4555c24066e476ee19f17dda6156b5a1b83a2ef9`. The dated checks above retain
+their original source references. References below describe this follow-up.
+
+All 27 mutations below failed their focused tests, then passed after restoring
+the exact source bytes. The initial repair also had 11 behavioral failures
+before implementation. Only broker, physical storage and satellite transports
+were replaced; PostgreSQL queries, row locks, commits and independent observer
+sessions were real. These checks do not exercise a deployed broker or provider.
+
+Run from the repository root with its installed test dependencies and a
+disposable database. Each PostgreSQL case creates and drops a unique schema
+containing only Organization, User, Document, ProcessingJob and Entity tables:
+
+```bash
+export ORCHESTRATION_TEST_DATABASE_URL='postgresql://root@/codex_goo356_20261003'
+python3 -m pytest -q -o addopts= -o log_cli=false \
+  backend/tests/integration/test_document_deletion_postgres.py
+python3 -m pytest -q -o addopts= -o log_cli=false \
+  backend/tests/unit/tasks/test_replay_idempotency.py
+```
+
+To reproduce one row, temporarily apply its mutation and run its named test
+with `FILE::TEST` instead of the whole file. Restore the exact source and rerun
+the same selector. Quote selectors containing parameter brackets.
+
+In the matrix, **claim** means
+`backend/src/tasks/replay_guard.py:claim_job_for_processing`; **cancel** means
+`backend/src/services/documents/file_service.py:FileService.cancel_upload_job`;
+**delete** means that service's `soft_delete_documents`. Tests are in the
+PostgreSQL file above except the three explicitly marked **unit**, which are
+in `test_replay_idempotency.py`. Line references are the unmutated source.
+
+| Guard | Mutation | Focused test | Failure with mutation; restored result |
+| --- | --- | --- | --- |
+| G13 claim:142 deletion denial | Disable condition | **unit** `test_claim_refuses_deleted_ingestion` | Deleted work claimed; 2 pass |
+| G14 claim:125 Document lock | Remove `with_for_update()` | `test_claim_locks_document_before_starting` | Expected lock timeout absent; 1 pass |
+| G15 claim:116 lock order | Lock job before document | `test_claim_does_not_lock_job_while_waiting_for_document` | Competing job lock gets PostgreSQL 55P03; 1 pass |
+| G16 claim:124 Document refresh | Remove `populate_existing()` | `test_claim_refreshes_deleted_document` | Stale live document claimed; 1 pass |
+| G17 claim:131 job refresh | Remove `populate_existing()` | **unit** `test_claim_reads_freshly_locked_row_not_stale_cache` | Running job claimed twice; 1 pass |
+| G18 claim:150 association/missing-document denial | Disable condition | **unit** `test_claim_refuses_missing_or_foreign_document`; `test_claim_rechecks_document_association` | Inaccessible/remapped document accepted; 4 pass |
+| G19 cancel:1088 Document lock | Remove `with_for_update()` | `test_cancellation_does_not_lock_job_while_waiting_for_document[task]` | Required document-lock attempt never observed within bounded wait; 1 pass |
+| G20 cancel:1079 lock order | Lock job before document | `test_cancellation_does_not_lock_job_while_waiting_for_document[task]` | Competing job lock gets 55P03; 1 pass |
+| G21 cancel:1104 job lock | Remove `with_for_update()` | `test_cancellation_locks_job_before_checking_its_state` | Independent publisher can acquire job lock; 1 pass |
+| G22 cancel:1089 Document refresh | Disable `populate_existing` | `test_task_id_cancellation_refreshes_document` | Deleted document accepted / completed document changed to FAILED; 2 pass |
+| G23 cancel:1105 job refresh | Disable `populate_existing` | `test_task_id_cancellation_preserves_concurrent_completion[task]` | Completed job overwritten by stale cancellation; 1 pass |
+| G24 cancel:1115 terminal-state denial | Disable condition | `test_task_id_cancellation_preserves_concurrent_completion`; `test_task_id_cancellation_fails_retained_document` | Completed job overwritten; 4 pass |
+| G25 cancel:1101 dispatch identity | Remove locked task-ID predicate | `test_task_id_cancellation_rechecks_dispatch_identity` | Reassigned task accepted; 3 pass |
+| G26 cancel:1147 other active attempt | Always fail document | `test_cancelled_old_job_preserves_another_active_ingestion` | Another active attempt's document changed to FAILED; 1 pass |
+| G27 cancel:1152 commit-before-revoke | Revoke before commit | `test_task_id_cancellation_fails_retained_document` | Broker observer sees QUEUED/PENDING; 2 pass |
+| G28 delete:1212 Document refresh | Disable `populate_existing` | `test_delete_rechecks_owner_under_lock` | Changed owner accepted; 1 pass |
+| G29 delete:1211 Document lock | Remove `with_for_update()` | `test_concurrent_deletes_release_quota_once` | Both concurrent deletions succeed; 1 pass |
+| G30 delete:1248 job cancellation | Disable condition | `test_deleted_ingestion_is_not_claimed` | Job remains QUEUED; 1 pass |
+| G31 claim:107 autoflush suppression | Replace `no_autoflush` with a no-op context | `test_claim_does_not_lock_job_while_waiting_for_document` | Dirty snapshot locks job before document; 1 pass |
+| G32 cancel:1065 autoflush suppression | Replace `no_autoflush` with a no-op context | `test_cancellation_does_not_lock_job_while_waiting_for_document[task]` | Dirty snapshot locks job before document; 1 pass |
+| G33 delete:1212 Document-select autoflush | Enable autoflush | `test_cancellation_does_not_lock_job_while_waiting_for_document[document]` | Dirty snapshot locks job before document; 1 pass |
+| G34 delete:1240 job-select autoflush | Enable autoflush | `test_task_id_cancellation_preserves_concurrent_completion[document]` | Dirty stale job changes COMPLETED to CANCELLED; 1 pass |
+| G35 delete:1240 job refresh | Disable `populate_existing` | `test_task_id_cancellation_preserves_concurrent_completion[document]` | Cached job changes COMPLETED to CANCELLED; 1 pass |
+| G36 cancel:1122 document status | Fail every document status | `test_task_id_cancellation_refreshes_document[completed]` | Completed document changed to FAILED; 1 pass |
+| G37 cancel:1092 document deletion | Remove deletion check | `test_task_id_cancellation_refreshes_document[deleted]` | Deleted document accepted; 1 pass |
+| G38 cancel:1108 document association | Remove association recheck | `test_task_id_cancellation_rechecks_dispatch_identity[document]` | Changed document link accepted; 1 pass |
+| G39 cancel:1102 job deletion | Remove locked live-job predicate | `test_task_id_cancellation_rechecks_dispatch_identity[deleted]` | Deleted job accepted; 1 pass |
+
+The lock-order cases hold the Document lock in one connection while the
+claim/cancellation waits in another, then acquire the job with `NOWAIT` in the
+first connection. The commit-order case collects state from an independent
+observer at broker invocation and asserts outside the best-effort callback,
+so an assertion cannot be swallowed as a revocation error.
+
+Additional PostgreSQL regressions verify both cancellation ID forms, broker
+failure, duplicate cancellation, foreign tenants, cascade semantics, a commit
+failure that rolls back once without revoking, and quota release exactly once.

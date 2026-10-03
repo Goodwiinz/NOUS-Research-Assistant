@@ -1,0 +1,29 @@
+{
+  "step": "A1-07-add-member-reviewer2",
+  "as": "owner",
+  "at": "2026-09-30T20:55:06.798574+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v2/workspaces/f7538b4a-d043-4a10-b763-e45ce369d69e/members",
+    "body": {
+      "user_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+      "role": "editor"
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "created_at": "2026-09-30T20:55:06.779120",
+    "updated_at": "2026-09-30T20:55:06.779122",
+    "user_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+    "role": "editor",
+    "id": "b1d32e01-213b-46dc-966b-45e41defcf0d",
+    "workspace_id": "f7538b4a-d043-4a10-b763-e45ce369d69e",
+    "joined_at": "2026-09-30T20:55:06.779077",
+    "invited_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "user_email": "eval-2026-09-30-reviewer2@nous.invalid",
+    "user_name": "Eval reviewer2"
+  }
+}

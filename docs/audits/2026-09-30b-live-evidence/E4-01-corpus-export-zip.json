@@ -1,0 +1,17 @@
+{
+  "step": "E4-01-corpus-export-zip",
+  "as": "reviewer",
+  "at": "2026-09-30T21:07:46.457914+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/corpus/export?format=zip",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/zip",
+    "Content-Disposition": "attachment; filename=\"corpus-2f7056ed-b0fb-488a-8290-8bf1c8502652.zip\""
+  },
+  "response_bytes": 5811,
+  "response_sha256": "69b53293ba1885a6f3012feba9db957674e6024cd55586db8508cf743e79de3a"
+}

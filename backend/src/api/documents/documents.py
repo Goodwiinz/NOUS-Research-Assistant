@@ -513,10 +513,11 @@ async def list_documents(
             ),
         )
 
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to list documents", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list documents: {str(e)}",
+            detail="Failed to list documents",
         )
 
 
@@ -622,8 +623,10 @@ async def delete_document(
     try:
         # Locks, cancels unfinished jobs, soft-deletes and releases quota once.
         deleted = await file_service.soft_delete_documents(
-            organization.id, [document.id], cascade=cascade
+            organization.id, [document.id], cascade=cascade, user=current_user
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Failed to delete document %s", document_id)
         raise HTTPException(
@@ -766,10 +769,11 @@ async def get_document_entities(
     except HTTPException:
         # Deliberate 4xx (e.g. unknown entity_type) — don't rewrap as a 500.
         raise
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to get document entities", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get document entities: {str(e)}",
+            detail="Failed to get document entities",
         )
 
 
@@ -1103,10 +1107,11 @@ async def search_documents(
             },
         )
 
-    except Exception as e:
+    except Exception:
+        logger.error("Document search failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Document search failed: {str(e)}",
+            detail="Document search failed",
         )
 
 
@@ -1306,9 +1311,10 @@ async def reprocess_document(
             "job_id": str(processing_job.id),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
+        logger.error("Failed to queue document for reprocessing", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to queue document for reprocessing: {str(e)}",
+            detail="Failed to queue document for reprocessing",
         )

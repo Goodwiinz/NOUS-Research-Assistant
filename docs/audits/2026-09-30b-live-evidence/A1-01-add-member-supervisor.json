@@ -1,0 +1,29 @@
+{
+  "step": "A1-01-add-member-supervisor",
+  "as": "owner",
+  "at": "2026-09-30T20:54:34.580900+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v2/workspaces/f7538b4a-d043-4a10-b763-e45ce369d69e/members",
+    "body": {
+      "user_id": "d0a0dd30-0cba-4802-821e-b74ce646e2c0",
+      "role": "editor"
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "created_at": "2026-09-30T20:54:34.423994",
+    "updated_at": "2026-09-30T20:54:34.423995",
+    "user_id": "d0a0dd30-0cba-4802-821e-b74ce646e2c0",
+    "role": "editor",
+    "id": "cb3c47c9-e31f-4c00-8e34-d094d9dfc574",
+    "workspace_id": "f7538b4a-d043-4a10-b763-e45ce369d69e",
+    "joined_at": "2026-09-30T20:54:34.423975",
+    "invited_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "user_email": "eval-2026-09-30-supervisor@nous.invalid",
+    "user_name": "Eval supervisor"
+  }
+}

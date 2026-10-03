@@ -9,6 +9,7 @@ import os
 import time
 import uuid
 import uuid as uuid_module
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Optional
 
@@ -74,15 +75,30 @@ _ACTIVE_CONTENT_MIME_TYPES = frozenset(
 
 
 class FileValidationError(Exception):
-    """File validation related errors"""
+    """File validation related errors.
 
-    pass
+    ``str(exc)`` is for logs only. ``public_detail`` is a candidate reason:
+    the upload endpoint permits only exact members of its authoritative
+    ``_SAFE_FILE_VALIDATION_DETAILS`` allowlist (audit I8), otherwise returning
+    a generic message. Supplying a string does not make it client-safe.
+    """
+
+    def __init__(self, message: str, public_detail: str | None = None) -> None:
+        super().__init__(message)
+        self.public_detail = public_detail
 
 
 class FileStorageError(Exception):
     """File storage related errors"""
 
     pass
+
+
+@dataclass(frozen=True)
+class UploadCancellation:
+    job_id: uuid.UUID
+    status: JobStatus
+    cancelled: bool
 
 
 class FileService:
@@ -314,14 +330,16 @@ class FileService:
         if file_size > organization.max_file_size_bytes:
             raise FileValidationError(
                 f"File size ({file_size} bytes) exceeds maximum allowed size "
-                f"({organization.max_file_size_bytes} bytes)"
+                f"({organization.max_file_size_bytes} bytes)",
+                public_detail="File exceeds the maximum allowed size",
             )
 
         # Check storage quota
         if not organization.can_upload_file(file_size):
             raise FileValidationError(
                 f"Insufficient storage quota. Available: "
-                f"{organization.storage_available_gb:.2f}GB"
+                f"{organization.storage_available_gb:.2f}GB",
+                public_detail="Insufficient storage quota",
             )
 
         # Check file extension
@@ -363,10 +381,16 @@ class FileService:
             # became an empty COMPLETED document. Reject honestly.
             raise FileValidationError(
                 f"Archive format '{file_ext}' is not supported; "
-                "extract and upload the contained files"
+                "extract and upload the contained files",
+                public_detail=(
+                    "Archive uploads are not supported; extract and upload the files"
+                ),
             )
         if file_ext not in allowed_extensions:
-            raise FileValidationError(f"File extension '{file_ext}' is not allowed")
+            raise FileValidationError(
+                f"File extension '{file_ext}' is not allowed",
+                public_detail="File type is not allowed",
+            )
 
         # Read content for type detection
         file_content = file.file.read(min(file_size, 8192))  # Read first 8KB
@@ -629,7 +653,8 @@ class FileService:
             )
             if claim.rowcount == 0:
                 raise FileValidationError(
-                    "Insufficient storage quota (concurrent-upload race lost)"
+                    "Insufficient storage quota (concurrent-upload race lost)",
+                    public_detail="Insufficient storage quota",
                 )
             await self.db.commit()
             quota_committed = True
@@ -1023,12 +1048,136 @@ class FileService:
                 exc_info=True,
             )
 
+    async def cancel_upload_job(
+        self, task_id: str, user: User
+    ) -> Optional[UploadCancellation]:
+        """Cancel a current task attempt, retaining its document and quota.
+
+        Refresh and lock Document -> ProcessingJob before checking ownership
+        and status. Completion, deletion or a newer dispatch may have happened
+        since the request began. Commit before best-effort broker revocation.
+        The returned snapshot remains readable even in an expiring session.
+        """
+        organization_id, user_id = user.organization_id, user.id
+        if organization_id is None:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        try:
+            with self.db.no_autoflush:
+                candidate = (
+                    await self.db.execute(
+                        select(ProcessingJob.id, ProcessingJob.document_id).where(
+                            ProcessingJob.celery_task_id == task_id,
+                            ProcessingJob.organization_id == organization_id,
+                            ProcessingJob.is_deleted == False,
+                        )
+                    )
+                ).first()
+                if candidate is None:
+                    await self.db.commit()
+                    return None
+
+                document = None
+                if candidate.document_id is not None:
+                    document = (
+                        await self.db.execute(
+                            select(Document)
+                            .where(
+                                Document.id == candidate.document_id,
+                                Document.organization_id == organization_id,
+                            )
+                            .with_for_update()
+                            .execution_options(populate_existing=True)
+                        )
+                    ).scalar_one_or_none()
+                    if document is None or document.is_deleted:
+                        raise HTTPException(status_code=404, detail="Upload not found")
+
+                job = (
+                    await self.db.execute(
+                        select(ProcessingJob)
+                        .where(
+                            ProcessingJob.id == candidate.id,
+                            ProcessingJob.organization_id == organization_id,
+                            ProcessingJob.celery_task_id == task_id,
+                            ProcessingJob.is_deleted == False,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one_or_none()
+                if job is None or job.document_id != candidate.document_id:
+                    await self.db.commit()
+                    return None
+                if job.created_by_user_id != user_id:
+                    raise HTTPException(
+                        status_code=403, detail="You can only cancel your own uploads"
+                    )
+                if job.is_finished:
+                    outcome = UploadCancellation(job.id, job.status, False)
+                    await self.db.commit()
+                    return outcome
+
+                job.cancel_job()
+                job.error_message = "Upload cancelled by user"
+                if document is not None and document.processing_status in (
+                    ProcessingStatus.PENDING,
+                    ProcessingStatus.PROCESSING,
+                    ProcessingStatus.RETRYING,
+                ):
+                    # An older job must not terminate another valid ingestion.
+                    other_attempt = (
+                        await self.db.execute(
+                            select(ProcessingJob.id).where(
+                                ProcessingJob.document_id == document.id,
+                                ProcessingJob.organization_id == organization_id,
+                                ProcessingJob.id != job.id,
+                                ProcessingJob.is_deleted == False,
+                                ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                                ProcessingJob.status.in_(
+                                    (
+                                        JobStatus.PENDING,
+                                        JobStatus.QUEUED,
+                                        JobStatus.RUNNING,
+                                        JobStatus.RETRYING,
+                                    )
+                                ),
+                            )
+                        )
+                    ).first()
+                    if other_attempt is None:
+                        document.update_processing_status(
+                            ProcessingStatus.FAILED, "Upload cancelled by user"
+                        )
+                outcome = UploadCancellation(job.id, job.status, True)
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        self._revoke_tasks([task_id])
+        return outcome
+
+    @staticmethod
+    def _revoke_tasks(task_ids: List[str]) -> None:
+        for task_id in task_ids:
+            try:
+                from src.tasks.processing_tasks import current_app
+
+                current_app.control.revoke(task_id, terminate=True)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to revoke Celery task %s after committed cancellation",
+                    task_id,
+                    exc_info=True,
+                )
+
     async def soft_delete_documents(
         self,
         organization_id: Any,
         document_ids: List[Any],
         *,
         cascade: bool = True,
+        user: Optional[User] = None,
     ) -> List[Document]:
         """Soft-delete live documents, cancel their unfinished jobs and release
         their quota, in one committed transaction.
@@ -1047,6 +1196,8 @@ class FileService:
         from src.models.entity import Entity
 
         try:
+            if user is not None and user.organization_id != organization_id:
+                raise HTTPException(status_code=404, detail="Document not found")
             documents = list(
                 (
                     await self.db.execute(
@@ -1058,14 +1209,21 @@ class FileService:
                         )
                         .order_by(Document.id)
                         .with_for_update()
-                        .execution_options(populate_existing=True)
+                        .execution_options(populate_existing=True, autoflush=False)
                     )
                 )
                 .scalars()
                 .all()
             )
             if not documents:
+                await self.db.commit()
                 return []
+            if user is not None and not user.has_permission(UserRole.ADMIN):
+                if any(d.uploaded_by_user_id != user.id for d in documents):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Can only delete your own documents or require admin role",
+                    )
             locked_ids = [d.id for d in documents]
 
             jobs = (
@@ -1074,11 +1232,12 @@ class FileService:
                         select(ProcessingJob)
                         .where(
                             ProcessingJob.document_id.in_(locked_ids),
+                            ProcessingJob.organization_id == organization_id,
                             ProcessingJob.is_deleted == False,
                         )
                         .order_by(ProcessingJob.id)
                         .with_for_update()
-                        .execution_options(populate_existing=True)
+                        .execution_options(populate_existing=True, autoflush=False)
                     )
                 )
                 .scalars()
@@ -1099,6 +1258,7 @@ class FileService:
                     update(Entity)
                     .where(
                         Entity.document_id.in_(locked_ids),
+                        Entity.organization_id == organization_id,
                         Entity.is_deleted == False,
                     )
                     .values(is_deleted=True, deleted_at=datetime.utcnow())
@@ -1116,17 +1276,7 @@ class FileService:
             await self.db.rollback()
             raise
 
-        for task_id in task_ids:
-            try:
-                from src.tasks.processing_tasks import current_app
-
-                current_app.control.revoke(task_id, terminate=True)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to revoke Celery task %s of a deleted document",
-                    task_id,
-                    exc_info=True,
-                )
+        self._revoke_tasks(task_ids)
         return documents
 
     async def delete_file(self, document: Document, user: User) -> bool:
@@ -1164,8 +1314,10 @@ class FileService:
         # orphan object, never a live row whose backing file is gone.
         try:
             deleted = await self.soft_delete_documents(
-                document.organization_id, [document.id]
+                document.organization_id, [document.id], user=user
             )
+        except HTTPException:
+            raise
         except Exception as e:
             raise FileStorageError(f"Failed to delete file: {str(e)}")
         if not deleted:
