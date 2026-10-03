@@ -59,3 +59,32 @@ export function setActiveAbortController(
 ): void {
   activeAbortController = controller;
 }
+
+// A reset ends the account's entire chat session, including reads and writes
+// that cannot be cancelled at the transport layer. Capture before any await.
+let chatSession = new AbortController();
+const sessionResetListeners = new Set<() => void>();
+
+export const getChatSessionSignal = (): AbortSignal => chatSession.signal;
+
+export function captureChatSession(): () => boolean {
+  const signal = chatSession.signal;
+  return () => !signal.aborted;
+}
+
+export function onChatSessionReset(listener: () => void): () => void {
+  sessionResetListeners.add(listener);
+  return () => {
+    sessionResetListeners.delete(listener);
+  };
+}
+
+export function resetChatSession(): void {
+  const previousSession = chatSession;
+  chatSession = new AbortController();
+  previousSession.abort();
+  activeAbortController?.abort();
+  activeAbortController = null;
+  abortAllNewestPageRequests();
+  for (const listener of sessionResetListeners) listener();
+}

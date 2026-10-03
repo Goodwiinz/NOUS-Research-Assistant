@@ -1,5 +1,6 @@
 'use client';
 
+import { captureAccountSession, getAccountSignal } from '@/lib/account-session';
 import {
   useCallback,
   useEffect,
@@ -157,6 +158,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
 
   const refreshRun = useCallback(
     async (preservePendingReview = false): Promise<boolean> => {
+      const isCurrentAccount = captureAccountSession();
       const requestId = ++requestRef.current;
       try {
         const [run, steps] = await Promise.all([
@@ -165,6 +167,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         ]);
         if (
           requestRef.current !== requestId ||
+          !isCurrentAccount() ||
           useResearchEngineStore.getState().activeRunId !== runId
         ) {
           return false;
@@ -186,6 +189,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             const review = await getPendingReview(runId);
             if (
               requestRef.current === requestId &&
+              isCurrentAccount() &&
               useResearchEngineStore.getState().activeRunId === runId
             ) {
               setPendingReview(review);
@@ -193,6 +197,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
           } catch {
             if (
               requestRef.current === requestId &&
+              isCurrentAccount() &&
               useResearchEngineStore.getState().activeRunId === runId
             ) {
               setActionError({
@@ -209,6 +214,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
         if (run.status === 'completed') {
           void getRunManifest(runId)
             .then((manifest) => {
+              if (!isCurrentAccount()) return;
               const value = asRecord(manifest)?.final_status;
               if (
                 value === 'verified' ||
@@ -231,6 +237,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
       } catch {
         if (
           requestRef.current !== requestId ||
+          !isCurrentAccount() ||
           useResearchEngineStore.getState().activeRunId !== runId
         ) {
           return false;
@@ -255,8 +262,9 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     let cancelled = false;
     requestRef.current += 1;
     abortRef.current?.abort();
+    const isCurrentAccount = captureAccountSession();
     queueMicrotask(() => {
-      if (cancelled) return;
+      if (cancelled || !isCurrentAccount()) return;
       markResumeAuthorized(false);
       resetRun(runId);
       void refreshRun();
@@ -283,11 +291,15 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     if (!shouldStream) return;
 
     const controller = new AbortController();
+    const accountSignal = getAccountSignal();
+    const abortForAccount = (): void => controller.abort();
+    accountSignal.addEventListener('abort', abortForAccount, { once: true });
     abortRef.current = controller;
 
     const connectSSE = async (): Promise<void> => {
       for (let attempt = 1; attempt <= SSE_MAX_ATTEMPTS; attempt += 1) {
         const token = await getAuthToken();
+        if (controller.signal.aborted) return;
         const headers: Record<string, string> = {
           Accept: 'text/event-stream',
         };
@@ -305,6 +317,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             }
           );
 
+          if (controller.signal.aborted) return;
           if (response.ok && response.body) {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -314,7 +327,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
             try {
               while (!controller.signal.aborted) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done || controller.signal.aborted) break;
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
@@ -405,6 +418,7 @@ export function RunView({ runId }: RunViewProps): ReactElement {
     void connectSSE();
 
     return () => {
+      accountSignal.removeEventListener('abort', abortForAccount);
       controller.abort();
       abortRef.current = null;
     };

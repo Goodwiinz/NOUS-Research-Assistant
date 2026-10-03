@@ -1,4 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useChatSessionGuard } from './useChatSessionGuard';
+import { onChatSessionReset } from '@/store/chat-store';
+import { useCallback, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
 import {
@@ -87,7 +89,9 @@ export function useSlashCommands({
   chatInputRef,
 }: UseSlashCommandsParams): UseSlashCommandsReturn {
   const router = useRouter();
+  const isCurrentSession = useChatSessionGuard();
   const [commandOutputs, setCommandOutputs] = useState<CommandOutput[]>([]);
+  useEffect(() => onChatSessionReset(() => setCommandOutputs([])), []);
   const fetchProjects = useProjectStore((s) => s.fetchProjects);
 
   // Clear ephemeral command output on thread change. Reset during render
@@ -101,17 +105,21 @@ export function useSlashCommands({
     setCommandOutputs([]);
   }
 
-  const appendOutput = useCallback((o: CommandOutput) => {
-    setCommandOutputs((prev) => [...prev, o]);
-  }, []);
+  const appendOutput = useCallback(
+    (o: CommandOutput) => {
+      if (isCurrentSession()) setCommandOutputs((prev) => [...prev, o]);
+    },
+    [isCurrentSession]
+  );
 
   const patchOutput = useCallback(
     (id: string, patch: Partial<CommandOutput>) => {
+      if (!isCurrentSession()) return;
       setCommandOutputs((prev) =>
         prev.map((o) => (o.id === id ? { ...o, ...patch } : o))
       );
     },
-    []
+    [isCurrentSession]
   );
 
   // Start a fresh chat — shared by the sidebar "new" button and the /new command
@@ -129,6 +137,7 @@ export function useSlashCommands({
   // thread of a brand-new chat.
   const handleSetProjectContext = useCallback(
     (projectId: string, projectName: string) => {
+      if (!isCurrentSession()) return;
       const params = new URLSearchParams(window.location.search);
       params.set('projectId', projectId);
       router.replace(`/chat?${params.toString()}`);
@@ -149,7 +158,7 @@ export function useSlashCommands({
         const linked = await useProjectChatStore
           .getState()
           .linkThreadToProject(projectId, { thread_id: activeThreadId });
-        if (linked) return;
+        if (!isCurrentSession() || linked) return;
         // Drop the param we optimistically set: a thread the store has not
         // loaded yet DOES read it, so leaving it behind would hand the agent
         // a project the attach just failed to make real.
@@ -171,7 +180,7 @@ export function useSlashCommands({
         });
       })();
     },
-    [router, activeThreadId, patchOutput]
+    [router, activeThreadId, patchOutput, isCurrentSession]
   );
 
   // Project-scoped memory commands. `/remember <fact>` saves a durable fact the
@@ -180,6 +189,7 @@ export function useSlashCommands({
   // (?projectId=), falling back to the selected project in the store.
   const runMemoryCommand = useCallback(
     (kind: 'remember' | 'memories', content: string) => {
+      if (!isCurrentSession()) return;
       const now = Date.now();
       const outId = `cmd-${now}-${Math.random().toString(36).slice(2, 8)}`;
       const projectId =
@@ -269,13 +279,14 @@ export function useSlashCommands({
         }
       })();
     },
-    [appendOutput, patchOutput]
+    [appendOutput, patchOutput, isCurrentSession]
   );
 
   // Run a slash command. Output prints into the chat transcript, CLI-style;
   // nothing navigates away (except /new, which starts a fresh chat).
   const handleSlashCommand = useCallback(
     (id: SlashCommandId) => {
+      if (!isCurrentSession()) return;
       const now = Date.now();
       const outId = `cmd-${now}-${Math.random().toString(36).slice(2, 8)}`;
       switch (id) {
@@ -448,12 +459,14 @@ export function useSlashCommands({
       patchOutput,
       fetchProjects,
       runMemoryCommand,
+      isCurrentSession,
     ]
   );
 
   // A tap on a clickable command-output row.
   const handleCommandItemAction = useCallback(
     (action: CommandAction) => {
+      if (!isCurrentSession()) return;
       switch (action.type) {
         case 'open-thread':
           setCurrentThread(action.id);
@@ -487,6 +500,7 @@ export function useSlashCommands({
       setInput,
       chatInputRef,
       runMemoryCommand,
+      isCurrentSession,
     ]
   );
 
