@@ -77,6 +77,9 @@ _IDENTITY_TABLES = (
     "screening_queues",
     # GOO-319: execution results reference import receipts; schedules
     # reference strategy and protocol versions.
+    # GOO-320: review versions reference accepted execution results.
+    "research_review_release_links",
+    "research_review_versions",
     "research_search_execution_results",
     "research_search_execution_attempts",
     "research_search_executions",

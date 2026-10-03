@@ -46,6 +46,14 @@ import type {
   ApiSearchScheduleVersionCreate,
 } from '@/types/api/research-search-update-contract';
 import type {
+  ApiReviewReleaseLink,
+  ApiReviewReleaseLinkCreate,
+  ApiReviewVersion,
+  ApiReviewVersionCreate,
+  ApiReviewVersionList,
+  ApiUpdateAccounting,
+} from '@/types/api/research-review-version-contract';
+import type {
   ApiRerun,
   ApiRerunCreate,
   ApiRerunEligibility,
@@ -557,6 +565,64 @@ export const exportSearchDelta = (
 ): Promise<void> =>
   api.download(
     `/research-engine/projects/${projectId}/search-schedules/executions/${executionId}/delta`
+  );
+
+// --- Superseding review versions (GOO-320) ---------------------------------
+
+export type {
+  ApiReviewDeltaOption as ReviewDeltaOption,
+  ApiReviewVersion as ReviewVersion,
+  ApiReviewVersionList as ReviewVersionList,
+  ApiReviewWorkStatus as ReviewWorkStatus,
+  ApiUpdateAccounting as UpdateAccounting,
+} from '@/types/api/research-review-version-contract';
+
+const reviewVersions = (projectId: string): string =>
+  `${BASE}/projects/${projectId}/review-versions`;
+
+export const listReviewVersions = (
+  projectId: string
+): Promise<ApiReviewVersionList> =>
+  api.get<ApiReviewVersionList>(reviewVersions(projectId));
+
+export const createReviewVersion = (
+  projectId: string,
+  data: ApiReviewVersionCreate
+): Promise<ApiReviewVersion> =>
+  api.post<ApiReviewVersion>(reviewVersions(projectId), data);
+
+/** Retry the targeted screening queues with the same keys. */
+export const ensureReviewWork = (
+  projectId: string,
+  versionId: string
+): Promise<ApiReviewVersion> =>
+  api.post<ApiReviewVersion>(`${reviewVersions(projectId)}/${versionId}/work`);
+
+export const linkReviewRelease = (
+  projectId: string,
+  versionId: string,
+  data: ApiReviewReleaseLinkCreate
+): Promise<ApiReviewReleaseLink> =>
+  api.post<ApiReviewReleaseLink>(
+    `${reviewVersions(projectId)}/${versionId}/release`,
+    data
+  );
+
+export const getReviewAccounting = (
+  projectId: string,
+  versionId: string
+): Promise<ApiUpdateAccounting> =>
+  api.get<ApiUpdateAccounting>(
+    `${reviewVersions(projectId)}/${versionId}/accounting`
+  );
+
+/** The sealed review version export, saved as a file. */
+export const exportReviewVersion = (
+  projectId: string,
+  versionId: string
+): Promise<void> =>
+  api.download(
+    `/research-engine/projects/${projectId}/review-versions/${versionId}/export`
   );
 
 // --- Plan-to-write journey + audit bundle (GOO-308) -------------------------

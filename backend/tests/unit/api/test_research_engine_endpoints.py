@@ -21,6 +21,13 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.services.research_engine.project_access import ResearchAction
 
+
+@pytest.fixture(autouse=True)
+def _daily_brief_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GOO-338: the flag defaults off; these tests exercise the enabled feature."""
+    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", True)
+
+
 # ============================================================================
 # Helpers
 # ============================================================================

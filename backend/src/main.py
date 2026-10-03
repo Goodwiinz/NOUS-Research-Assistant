@@ -97,6 +97,7 @@ from src.api.research_engine import (
     research_engine_projects_router,
     research_engine_protocols_router,
     research_engine_reruns_router,
+    research_engine_review_versions_router,
     research_engine_reviews_router,
     research_engine_runs_router,
     research_engine_screening_router,
@@ -126,7 +127,7 @@ from src.exceptions.error_handlers import (
 from src.health.endpoints import router as health_router
 from src.middleware.disconnect_signal import AgentDisconnectSignalMiddleware
 from src.middleware.multi_tenancy import MultiTenancyMiddleware
-from src.middleware.rate_limiting import AnalyticsRateLimitMiddleware
+from src.middleware.rate_limiting import ApiRateLimitMiddleware
 from src.middleware.security_headers import SecurityHeadersMiddleware
 
 # from src.services.documents.file_service import redis_client  # Not exported, not needed here
@@ -505,8 +506,12 @@ if OBSERVABILITY_ENABLED:
 # search) — SSE + export routes are excluded so token streaming isn't buffered.
 app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
 
-# Add rate limiting middleware for analytics endpoints
-app.add_middleware(AnalyticsRateLimitMiddleware, redis_client=redis_client)
+# Add global API rate limiting middleware (audit I2/I3): every /api/ route is
+# limited — heavy prefixes via the bucket table, wide default bucket for the
+# rest, legacy role-tier budgets preserved for analytics paths. Fully async
+# (redis.asyncio via core.rate_limit); a Redis outage degrades to a counted
+# per-process in-memory window, or 503 when RATE_LIMIT_FAIL_CLOSED is set.
+app.add_middleware(ApiRateLimitMiddleware)
 
 # Add multi-tenancy middleware — runs before rate limiting so tenant context is
 # available when rate limit decisions are made (registered after = executes first).
@@ -709,6 +714,9 @@ app.include_router(
 app.include_router(
     research_engine_search_updates_router, prefix="/api/v1"
 )  # Research Engine scheduled search updates and corpus deltas (GOO-319)
+app.include_router(
+    research_engine_review_versions_router, prefix="/api/v1"
+)  # Research Engine superseding review versions and update accounting (GOO-320)
 app.include_router(
     research_engine_acquisition_router, prefix="/api/v1"
 )  # Research Engine full-text acquisition + PRISMA flow (GOO-303)
