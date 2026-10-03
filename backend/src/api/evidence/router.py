@@ -3,22 +3,19 @@ Evidence Agreement Meter API endpoints
 """
 
 import logging
-import threading
 import time
 from typing import Annotated, Dict, List, Optional
 from uuid import UUID
 
-import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BeforeValidator
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from ...core.config import settings
 from ...core.database import get_db_sync
 from ...core.dependencies import get_current_user
-from ...middleware.rate_limiting import get_rate_limiter
+from ...middleware.rate_limiting import ApiRateLimiter
 from ...models.document import Document, ProcessingStatus
 from ...models.evidence import StanceClassificationModel
 from ...services.evidence import (
@@ -42,18 +39,18 @@ logger = logging.getLogger(__name__)
 
 # Rate limiter for evidence endpoints
 class EvidenceRateLimiter:
-    """Rate limiter for evidence API endpoints"""
+    """Rate limiter for evidence API endpoints (async — audit I3)."""
 
     def __init__(self, max_requests: int = 60, window_minutes: int = 1):
         self.max_requests = max_requests
         self.window_minutes = window_minutes
-        self._rate_limiter = None
-        self._lock = threading.Lock()
+        # Shared async facade: Redis-backed when REDIS_URL is set, with a
+        # per-process in-memory fallback that still counts during an outage.
+        self._rate_limiter = ApiRateLimiter()
 
-    def check_rate_limit(self, identifier: str) -> bool:
+    async def check_rate_limit(self, identifier: str) -> bool:
         """Check if request is allowed, raises HTTPException if not."""
-        rate_limiter = self._get_rate_limiter()
-        allowed, info = rate_limiter.is_allowed(
+        allowed, info = await self._rate_limiter.is_allowed(
             key=identifier,
             limit=self.max_requests,
             window=self.window_minutes * 60,
@@ -83,26 +80,6 @@ class EvidenceRateLimiter:
 
         return True
 
-    def _get_rate_limiter(self):
-        """Initialize rate limiter once; prefer Redis for multi-worker safety."""
-        if self._rate_limiter is None:
-            with self._lock:
-                if self._rate_limiter is None:
-                    try:
-                        redis_client = redis.Redis.from_url(
-                            settings.REDIS_URL or "redis://localhost:6379/0",
-                            decode_responses=True,
-                        )
-                        redis_client.ping()
-                        self._rate_limiter = get_rate_limiter(redis_client)
-                        logger.info("Evidence rate limiter initialized with Redis")
-                    except Exception as e:
-                        logger.warning(
-                            f"Redis unavailable for evidence rate limiting, using in-memory: {e}"
-                        )
-                        self._rate_limiter = get_rate_limiter(None)
-        return self._rate_limiter
-
 
 evidence_rate_limiter = EvidenceRateLimiter(max_requests=60, window_minutes=1)
 
@@ -112,7 +89,7 @@ async def rate_limit_dependency(request: Request):
     client_ip = request.client.host if request.client else "unknown"
     route_name = request.url.path.rsplit("/", 1)[-1]
     rate_key = f"evidence:ip:{client_ip}:{route_name}"
-    evidence_rate_limiter.check_rate_limit(rate_key)
+    await evidence_rate_limiter.check_rate_limit(rate_key)
     return True
 
 
