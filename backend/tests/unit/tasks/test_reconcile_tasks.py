@@ -68,8 +68,9 @@ def _seed_doc(
     is_deleted=False,
     content_text="text",
     do_kb_uuid=None,
+    doc_id=None,
 ):
-    doc_id = uuid.uuid4()
+    doc_id = doc_id or uuid.uuid4()
     with factory() as db:
         db.add(
             Document(
@@ -146,6 +147,64 @@ def _ok_outcome(doc_id):
 
 def _bad_outcome(doc_id):
     return GraphRepairOutcome(document_id=str(doc_id), error_message="neo4j down")
+
+
+@pytest.mark.parametrize("disabled_prefix", [False, True])
+def test_repeated_runs_do_not_starve_later_cleanup(session_factory, disabled_prefix):
+    prefix = _seed_doc(
+        session_factory,
+        org_id=uuid.UUID(int=1),
+        doc_id=uuid.UUID(int=1),
+        neo4j=None if disabled_prefix else FAILED,
+        do_kb=FAILED if disabled_prefix else None,
+    )
+    later = _seed_doc(
+        session_factory,
+        org_id=uuid.UUID(int=2),
+        doc_id=uuid.UUID(int=2),
+        neo4j=FAILED,
+        is_deleted=True,
+    )
+    repair = MagicMock(side_effect=lambda doc, **kw: _bad_outcome(doc.id))
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService"
+    ) as kg:
+        for _ in range(1 if disabled_prefix else 2):
+            result, _ = _run(
+                session_factory,
+                _settings(apply=True, cap=1, do_kb_enabled=not disabled_prefix),
+                repair=repair,
+            )
+            assert result["scanned"] <= 1
+    assert _get(session_factory, later).neo4j_index_status == COMPLETED
+    assert _get(session_factory, prefix).processing_status == ProcessingStatus.COMPLETED
+    kg.return_value.delete_document_graph.assert_called_once()
+
+
+@pytest.mark.parametrize("satellite", ["graph", "do_kb"])
+def test_outstanding_writes_survive_an_older_completed_cleanup(
+    session_factory, satellite
+):
+    doc_id = _seed_doc(session_factory, neo4j=COMPLETED, is_deleted=True)
+    with session_factory() as db:
+        db.get(Document, doc_id).document_metadata = {
+            "graph_cleanup_requested": True,
+            "pending_satellite_writes": {satellite: {"lost-writer": {}}},
+        }
+        db.commit()
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService"
+    ):
+        result, mocks = _run(
+            session_factory,
+            _settings(apply=True),
+            kb_cleanup=MagicMock(return_value=True),
+        )
+    assert result["scanned"] == 1
+    if satellite == "graph":
+        assert _get(session_factory, doc_id).neo4j_index_status == "pending"
+    else:
+        mocks.kb_cleanup.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +371,11 @@ def test_apply_retries_deleted_document_do_kb_cleanup(session_factory):
 
 def test_deleted_document_cleanup_uses_fresh_async_session():
     document = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
-    current = SimpleNamespace(is_deleted=True, do_kb_data_source_uuid="ds-pending")
+    current = SimpleNamespace(
+        is_deleted=True,
+        do_kb_data_source_uuid="ds-pending",
+        organization_id=document.organization_id,
+    )
     session = MagicMock()
     session.get = AsyncMock(return_value=current)
     context = MagicMock()

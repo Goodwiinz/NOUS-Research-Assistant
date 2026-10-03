@@ -8,8 +8,10 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
+from uuid import uuid4
 
 from celery import Task, current_app
+from sqlalchemy import select
 
 from src.core.config import settings
 from src.core.database import SessionLocal, get_db
@@ -24,6 +26,7 @@ from src.models.graph import EntityType as GraphEntityType
 from src.models.graph import ExtractionMethod as GraphExtractionMethod
 from src.models.graph import RelationshipType as GraphRelationshipType
 from src.models.processing import JobStatus, ProcessingJob
+from src.services.documents.satellite_state import begin_write, finish_write
 from src.services.knowledge_graph.knowledge_graph_service import knowledge_graph_service
 from src.services.processing.llm_entity_extraction import LLMEntityExtractionService
 from src.services.processing.processing_service import ProcessingPipeline
@@ -87,15 +90,79 @@ def _sync_document_to_kb_blocking(
     async def _run() -> str | None:
         from src.core.database import AsyncSessionLocal
         from src.services.do_kb import sync_document_to_kb
+        from src.services.do_kb.provisioner import ensure_kb_for_org
 
+        data_source_uuid = None
+        token = uuid4().hex
         async with AsyncSessionLocal() as kb_db:
             current = await kb_db.get(Document, document.id)
-            if current is None or current.organization_id != document.organization_id:
+            if (
+                current is None
+                or current.organization_id != document.organization_id
+                or current.is_deleted
+                or not settings.DO_KB_ENABLED
+            ):
                 return None
-            data_source_uuid = await sync_document_to_kb(
-                kb_db, current, trigger_indexing=trigger_indexing
-            )
+            # Persist the KB mapping before dispatch, then a discoverable write
+            # intent under the document lock. Neither provider call holds that
+            # lock. A lost response/commit can be recovered by exact object key.
+            await ensure_kb_for_org(kb_db, current.organization_id)
             await kb_db.commit()
+            current = (
+                await kb_db.execute(
+                    select(Document)
+                    .where(
+                        Document.id == document.id,
+                        Document.organization_id == document.organization_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True, autoflush=False)
+                )
+            ).scalar_one_or_none()
+            if current is None or current.is_deleted:
+                await kb_db.rollback()
+                return None
+            begin_write(current, "do_kb", token)
+            await kb_db.commit()
+            try:
+                data_source_uuid = await sync_document_to_kb(
+                    kb_db, current, trigger_indexing=trigger_indexing
+                )
+                indexed_at, index_status = (
+                    current.do_kb_indexed_at,
+                    current.do_kb_index_status,
+                )
+                # Drop the provider's ORM snapshot before writing just its
+                # outcome to a fresh locked row; preserve concurrent deletion.
+                await kb_db.rollback()
+                current = (
+                    await kb_db.execute(
+                        select(Document)
+                        .where(
+                            Document.id == document.id,
+                            Document.organization_id == document.organization_id,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                ).scalar_one_or_none()
+                if current is not None and data_source_uuid:
+                    current.do_kb_data_source_uuid = data_source_uuid
+                    current.do_kb_indexed_at, current.do_kb_index_status = (
+                        indexed_at,
+                        index_status,
+                    )
+                    finish_write(current, "do_kb", token)
+                await kb_db.commit()
+            except Exception:
+                await kb_db.rollback()
+                logger.warning(
+                    "DO KB sync or outcome persistence failed; durable cleanup intent retained",
+                    exc_info=True,
+                )
+                # The remote identifier remains useful even when persistence
+                # fails. The caller can compensate; reconciliation can discover
+                # it independently if this process stops before compensation.
             return data_source_uuid
 
     try:
@@ -222,6 +289,9 @@ def _compensate_late_remote_writes(
             return
         if "graph" in writes:
             _cleanup_deleted_document_graph(current)
+            # The graph outcome holds a short Document lock. Release it before
+            # DO cleanup opens its independent session for the same document.
+            db.commit()
         if "do_kb" in writes:
             _cleanup_deleted_do_kb_document(current)
         db.commit()
@@ -468,8 +538,43 @@ def process_document_ingestion(self, job_id: str):
             document.neo4j_index_status = SatelliteSyncStatus.PENDING.value
             commit_if_active()
 
+            require_active_ingestion(
+                db, job_id, expected_task_id=self.request.id, lock=True
+            )
+            graph_token = uuid4().hex
+            begin_write(document, "graph", graph_token)
+            db.commit()
             remote_writes.add("graph")
-            _index_entities_to_graph(document, entities)
+            try:
+                _index_entities_to_graph(document, entities)
+            finally:
+                # SIGKILL cannot reach this acknowledgement. Its token then
+                # keeps successful earlier cleanup from hiding the late write.
+                with SessionLocal() as outcome_db:
+                    current = (
+                        outcome_db.query(Document)
+                        .filter(
+                            Document.id == document.id,
+                            Document.organization_id == document.organization_id,
+                        )
+                        .populate_existing()
+                        .with_for_update()
+                        .one_or_none()
+                    )
+                    if current is not None:
+                        finish_write(current, "graph", graph_token)
+                        if (
+                            current.is_deleted
+                            and (current.document_metadata or {}).get(
+                                "graph_cleanup_requested"
+                            )
+                            is not False
+                        ):
+                            current.neo4j_index_status = (
+                                SatelliteSyncStatus.PENDING.value
+                            )
+                        outcome_db.commit()
+                db.refresh(document, attribute_names=["document_metadata"])
             commit_if_active()
 
         # Step 3: Embedding Generation — push the document to DO KB, the

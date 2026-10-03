@@ -1440,25 +1440,34 @@ class FileService:
                         extra={"document_id": document_id},
                         exc_info=True,
                     )
-                await cleanup_db.execute(
-                    update(Document)
-                    .where(
-                        Document.id == document_id,
-                        Document.organization_id == organization_id,
-                        Document.is_deleted == True,
-                        Document.document_metadata["graph_cleanup_requested"]
-                        .as_boolean()
-                        .is_distinct_from(False),
+                from src.services.documents.satellite_state import pending_writes
+
+                current = (
+                    await cleanup_db.execute(
+                        select(Document)
+                        .where(
+                            Document.id == document_id,
+                            Document.organization_id == organization_id,
+                            Document.is_deleted == True,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
                     )
-                    .values(
-                        neo4j_index_status=(
-                            SatelliteSyncStatus.COMPLETED.value
-                            if cleanup_ok
-                            else SatelliteSyncStatus.FAILED.value
+                ).scalar_one_or_none()
+                if (
+                    current is not None
+                    and (current.document_metadata or {}).get("graph_cleanup_requested")
+                    is not False
+                ):
+                    current.neo4j_index_status = (
+                        SatelliteSyncStatus.FAILED.value
+                        if not cleanup_ok
+                        else (
+                            SatelliteSyncStatus.PENDING.value
+                            if pending_writes(current, "graph")
+                            else SatelliteSyncStatus.COMPLETED.value
                         )
                     )
-                    .execution_options(autoflush=False, synchronize_session=False)
-                )
                 await cleanup_db.commit()
                 return cleanup_ok
             except Exception:  # noqa: BLE001

@@ -23,6 +23,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
@@ -33,6 +34,7 @@ from src.models.document import Document
 # from what ``_upload_canonical_text`` writes (drift would leak the .txt object
 # on delete — audit finding D6). Re-exported here for backwards compatibility.
 from src.services.documents.object_keys import canonical_text_key
+from src.services.documents.satellite_state import pending_writes
 
 from .client import DOKnowledgeBaseClient, DOKnowledgeBaseError, get_do_kb_client
 from .pre_flight import ensure_content_text_for_kb
@@ -334,6 +336,9 @@ async def unsync_document_from_kb(
     if not settings.DO_KB_ENABLED:
         return True
 
+    if document.is_deleted and pending_writes(document, "do_kb"):
+        return await _cleanup_unknown_deleted_write(session, document, client=client)
+
     ds_uuid = document.do_kb_data_source_uuid
     if not ds_uuid:
         return True
@@ -395,3 +400,67 @@ async def unsync_document_from_kb(
 
     _record_metric("unsynced")
     return True
+
+
+async def _cleanup_unknown_deleted_write(
+    session: AsyncSession, document: Document, *, client=None
+) -> bool:
+    """Discover every accepted source, including a UUID lost with its worker.
+
+    Derive keys from the scoped document, never from caller-editable metadata.
+    Unknown writer tokens remain: an earlier cleanup cannot prove a dispatched
+    remote operation has finished. Their retries are ordered fairly.
+    """
+    document_id, organization_id = document.id, document.organization_id
+    api = client or get_do_kb_client()
+    try:
+        kb_uuid = await ensure_kb_for_org(session, organization_id, client=api)
+        text_key = canonical_text_key(document)
+        keys = {text_key}
+        if document.storage_backend == "s3" and document.storage_path:
+            keys.add(document.storage_path)
+        identifiers = (
+            {document.do_kb_data_source_uuid}
+            if document.do_kb_data_source_uuid
+            else set()
+        )
+        # A failed listing is a failed cleanup, never proof of absence.
+        for source in await api.list_data_sources(kb_uuid=kb_uuid):
+            if _source_item_path(source) in keys and source.get("uuid"):
+                identifiers.add(str(source["uuid"]))
+        await session.rollback()
+        for identifier in identifiers:
+            try:
+                await api.delete_data_source(kb_uuid=kb_uuid, ds_uuid=identifier)
+            except DOKnowledgeBaseError as exc:
+                if exc.status_code != 404:
+                    raise
+        from src.core.s3_client import S3StorageHelper
+
+        await asyncio.to_thread(S3StorageHelper().delete_file, text_key)
+        current = (
+            await session.execute(
+                select(Document)
+                .where(
+                    Document.id == document_id,
+                    Document.organization_id == organization_id,
+                    Document.is_deleted == True,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        ).scalar_one_or_none()
+        if current is not None and current.do_kb_data_source_uuid in identifiers:
+            current.do_kb_data_source_uuid = None
+            current.do_kb_indexed_at = None
+            current.do_kb_index_status = None
+        await session.commit()
+        return True
+    except Exception:
+        await session.rollback()
+        logger.warning(
+            "DO KB unknown-write cleanup failed; intent retained",
+            extra={"document_id": str(document_id)},
+            exc_info=True,
+        )
+        return False

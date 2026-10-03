@@ -577,12 +577,146 @@ def _write_late_data_source(env: SimpleNamespace, ds_uuid: str) -> None:
         other.commit()
 
 
+def test_do_kb_commit_failure_retains_accepted_uuid(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    with _ingestion() as env:
+
+        class FailingPersistence(AsyncSession):
+            async def commit(self):
+                if any(
+                    isinstance(row, Document)
+                    and row.do_kb_data_source_uuid == "ds-accepted"
+                    for row in self.sync_session.dirty
+                ):
+                    raise OSError("synthetic database loss after remote acceptance")
+                await super().commit()
+
+        async def accepted(session, document, **kwargs):
+            _interfere(env, _delete)
+            document.do_kb_data_source_uuid = "ds-accepted"
+            return "ds-accepted"
+
+        monkeypatch.setattr(
+            "src.core.database.AsyncSessionLocal",
+            lambda: FailingPersistence(
+                bind=env.AsyncSession.kw["bind"],
+                expire_on_commit=False,
+                autoflush=False,
+            ),
+        )
+        monkeypatch.setattr("src.services.do_kb.sync_document_to_kb", accepted)
+        monkeypatch.setattr(
+            "src.services.do_kb.provisioner.ensure_kb_for_org",
+            AsyncMock(return_value="kb-owned"),
+        )
+        monkeypatch.setattr(pt.settings, "DO_KB_ENABLED", True)
+        with env.Session() as db:
+            result = pt._sync_document_to_kb_blocking(db.get(Document, env.doc_id))
+        assert result == "ds-accepted", "a failed commit must not erase a remote handle"
+        with env.Session() as db:
+            document = db.get(Document, env.doc_id)
+            assert document.is_deleted
+            assert document.do_kb_data_source_uuid is None
+            assert document.document_metadata.get("pending_satellite_writes", {}).get(
+                "do_kb"
+            )
+
+
+def test_reconciler_completion_cannot_hide_concurrent_failed_delete(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from src.services.knowledge_graph.repair import GraphRepairOutcome
+    from src.tasks import reconcile_tasks as rt
+
+    with _ingestion() as env:
+        with env.Session() as setup:
+            doc = setup.get(Document, env.doc_id)
+            doc.processing_status = ProcessingStatus.COMPLETED
+            doc.neo4j_index_status = "failed"
+            setup.commit()
+        deleted = threading.Event()
+        errors = []
+        raced = False
+
+        def delete():
+            try:
+                with env.Session() as other:
+                    doc = (
+                        other.query(Document)
+                        .filter_by(id=env.doc_id)
+                        .with_for_update()
+                        .one()
+                    )
+                    doc.soft_delete()
+                    doc.document_metadata = {
+                        **(doc.document_metadata or {}),
+                        "graph_cleanup_requested": True,
+                    }
+                    doc.neo4j_index_status = "failed"
+                    other.commit()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                deleted.set()
+
+        with env.Session() as db:
+            original_flush = db.flush
+
+            def flush(*args, **kwargs):
+                nonlocal raced
+                if not raced and any(
+                    isinstance(row, Document) and row.neo4j_index_status == "completed"
+                    for row in db.dirty
+                ):
+                    raced = True
+                    with env.Session() as probe:
+                        try:
+                            probe.query(Document).filter_by(
+                                id=env.doc_id
+                            ).with_for_update(nowait=True).one()
+                        except OperationalError as exc:
+                            assert getattr(exc.orig, "pgcode", None) == "55P03"
+                            probe.rollback()
+                            threading.Thread(target=delete).start()
+                        else:
+                            probe.rollback()
+                            delete()
+                return original_flush(*args, **kwargs)
+
+            db.flush = flush
+            monkeypatch.setattr(
+                rt,
+                "repair_document_graph",
+                lambda doc, **kw: GraphRepairOutcome(document_id=str(doc.id)),
+            )
+            rt._redrive_neo4j(
+                db, db.get(Document, env.doc_id), SimpleNamespace(get=lambda: None)
+            )
+            db.commit()
+        assert raced and deleted.wait(10)
+        assert not errors
+        with env.Session() as db:
+            document = db.get(Document, env.doc_id)
+            assert document.is_deleted
+            assert (
+                document.neo4j_index_status == "failed"
+            ), "repair must not overwrite delete's retry state"
+
+
 def _fake_unsync(ok: bool) -> Any:
     calls: list[str] = []
 
     async def unsync(session: Any, document: Any) -> bool:
         calls.append(document.do_kb_data_source_uuid)
         if ok:
+            from sqlalchemy import text
+
+            # A graph outcome must release its lock before this separate
+            # session writes the same row. Fail promptly if that regresses.
+            await session.execute(text("SET LOCAL lock_timeout = '2s'"))
             document.do_kb_data_source_uuid = None
             await session.commit()
         return ok
@@ -679,6 +813,13 @@ def test_stale_snapshot_does_not_revert_state_through_do_kb_sync(
     """The bridge used to merge() the caller's stale Document and commit it,
     writing every loaded column back over concurrent changes."""
     with _ingestion() as env:
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr(pt.settings, "DO_KB_ENABLED", True)
+        monkeypatch.setattr(
+            "src.services.do_kb.provisioner.ensure_kb_for_org",
+            AsyncMock(return_value="kb-owned"),
+        )
         worker = env.Session()
         stale = worker.get(Document, env.doc_id)  # PENDING, kept in memory
         with env.Session() as other:  # e.g. the sweeper fails it meanwhile
@@ -730,6 +871,43 @@ def test_late_graph_write_is_compensated_when_the_stage_then_crashes(
         )
         with env.Session() as check:
             assert check.get(Document, env.doc_id).neo4j_index_status == "completed"
+
+
+def test_graph_intent_is_durable_before_provider_and_survives_early_cleanup(stubbed):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from src.services.documents.file_service import FileService
+
+    with _ingestion() as env:
+        kg = MagicMock()
+        stubbed.setattr(
+            "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+            lambda: kg,
+        )
+
+        def index(document, entities):
+            with env.Session() as observer:
+                current = observer.get(Document, env.doc_id)
+                assert current.document_metadata["pending_satellite_writes"]["graph"]
+
+            async def delete():
+                async with env.AsyncSession() as db:
+                    service = FileService(db)
+                    await service.soft_delete_documents(env.org_id, [env.doc_id])
+                    assert await service.cleanup_deleted_document_graph(
+                        str(env.doc_id), str(env.org_id)
+                    )
+
+            asyncio.run(delete())
+            with env.Session() as observer:
+                current = observer.get(Document, env.doc_id)
+                assert current.neo4j_index_status == "pending"
+                assert current.document_metadata["pending_satellite_writes"]["graph"]
+            return len(entities)
+
+        stubbed.setattr(pt, "_index_entities_to_graph", index)
+        assert _run(env, stubbed).get()["skipped"] == "deleted"
 
 
 @pytest.mark.parametrize("cleanup_ok", [True, False])
