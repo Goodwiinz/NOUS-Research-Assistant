@@ -85,8 +85,12 @@ async def update_profile(
             "user": updated_user.to_dict(exclude_sensitive=True),
         }
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in update_profile: {e}")
         raise HTTPException(
@@ -159,8 +163,12 @@ async def update_user_role(
             "user": updated_user.to_dict(exclude_sensitive=True),
         }
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in update_user_role: {e}")
         raise HTTPException(
@@ -197,8 +205,12 @@ async def deactivate_user(
 
         return {"message": "User deactivated successfully"}
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in deactivate_user: {e}")
         raise HTTPException(
@@ -238,8 +250,12 @@ async def cleanup_inactive_users(
             "deleted_count": deleted_count,
         }
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in cleanup_inactive_users: {e}")
         raise HTTPException(
