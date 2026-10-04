@@ -6,7 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# Only scopes some route enforces. A scope is added in the PR that checks it.
+# Scopes some route enforces, plus context:read (kept for PR #1784, which
+# enforces it). A scope is added in the PR that checks it.
 STANDARD_SCOPES = frozenset(
     {
         "harness:execute",
