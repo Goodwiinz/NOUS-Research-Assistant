@@ -1511,9 +1511,10 @@ def sweep_stuck_processing_jobs() -> dict:
                     ).in_(documents),
                     ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
                     ProcessingJob.is_deleted == False,
-                    ProcessingJob.status.in_(_NON_TERMINAL_PROCESSING_STATUSES),
                 ),
             )
+        # Existing terminal siblings can retry using only their job lock.
+        # Lock them too so ownership cannot change between decision and commit.
         locked_jobs = (
             db.query(ProcessingJob)
             .filter(job_scope)
