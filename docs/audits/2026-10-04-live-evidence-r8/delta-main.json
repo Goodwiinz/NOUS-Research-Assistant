@@ -1,0 +1,890 @@
+{
+  "body": {
+    "baseline_digest": "7e7e7da56e0558b2166197557a5a5e36e69e7bfc78dc895ec1412f59c31b8c6a",
+    "baseline_execution_id": null,
+    "citation_chasing": {
+      "required": false,
+      "status": "not_required"
+    },
+    "collection_id": "480d8618-3a93-4062-8d1f-608f3fc015b3",
+    "corpus_snapshot_digest": "507fda31b2f3ace32589e1b6d5c459e2ce582d74235409a09a6354c0df5adc17",
+    "counts": {
+      "changed": 1,
+      "corrected_retracted": 1,
+      "new": 27,
+      "unchanged": 1,
+      "unknown": 1
+    },
+    "coverage": {
+      "deduplication": {
+        "after": 29,
+        "before": 30
+      },
+      "exhaustive": false,
+      "partial": false,
+      "providers": {
+        "crossref": {
+          "attempt_id": "a5d01359-6589-4b15-af28-2ef7e46ffb54",
+          "completed_at": "2026-10-04T07:05:23.017617+00:00",
+          "completion": "cap_reached",
+          "error_type": null,
+          "execution_id": "3b7924da-3f38-57dc-9877-bcb870a38001",
+          "imported_count": 10,
+          "limit": 10,
+          "pages": [
+            {
+              "attempt_id": "a5d01359-6589-4b15-af28-2ef7e46ffb54",
+              "imported_count": 10,
+              "imported_source_ids": [],
+              "page_id": "650c5f91-8f23-5c2e-b4da-113b2bad5a0a",
+              "page_index": 0,
+              "page_status": "completed",
+              "record_keys": [
+                {
+                  "external_id": "10.1039/d5bm00028a/v1/review2",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1039/d5bm00028a/v2/review2",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1039/d5bm00028a/v2/review1",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1039/d5bm00028a/v1/review1",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.5360/membrane.47.2",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1007/978-1-4419-6558-5_13",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1007/978-1-4419-6558-5_1",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1201/b15039-19",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1117/12.2261690.5380600130001",
+                  "provider": "crossref"
+                },
+                {
+                  "external_id": "10.1039/d5bm00028a/v1/decision1",
+                  "provider": "crossref"
+                }
+              ],
+              "request": {
+                "endpoint": "https://api.crossref.org/works",
+                "method": "GET",
+                "params": {
+                  "query": "membrane imaging",
+                  "rows": 10
+                },
+                "requested_at": "2026-10-04T07:05:22.442502+00:00"
+              },
+              "response": {
+                "attempt": 1,
+                "error_type": null,
+                "has_more": true,
+                "next_cursor": null,
+                "parsed_count": 10,
+                "provider_count": 10,
+                "received_at": "2026-10-04T07:05:23.017581+00:00",
+                "request_attempts": [
+                  {
+                    "attempt": 1,
+                    "requested_at": "2026-10-04T07:05:22.442502+00:00",
+                    "status_code": 200
+                  }
+                ],
+                "status_code": 200,
+                "total_available": 1606914
+              }
+            }
+          ],
+          "provider": "crossref",
+          "requested_limit": 10,
+          "returned": 10,
+          "returned_count": 10,
+          "started_at": "2026-10-04T07:05:22.354055+00:00",
+          "status": "ok"
+        },
+        "openalex": {
+          "attempt_id": "f6585356-6c87-4978-91ab-77982079f519",
+          "completed_at": "2026-10-04T07:05:23.094309+00:00",
+          "completion": "cap_reached",
+          "error_type": null,
+          "execution_id": "c7e933ea-f8c1-55b8-98ad-0180eb9a546d",
+          "imported_count": 10,
+          "limit": 10,
+          "pages": [
+            {
+              "attempt_id": "f6585356-6c87-4978-91ab-77982079f519",
+              "imported_count": 10,
+              "imported_source_ids": [],
+              "page_id": "0c789e4b-c806-566a-849e-45e299712a03",
+              "page_index": 0,
+              "page_status": "completed",
+              "record_keys": [
+                {
+                  "external_id": "https://openalex.org/W1979096832",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W3146302718",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W2204712496",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W4408129898",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W2295357942",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W4395456785",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W2026037836",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W2039624257",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W2044885070",
+                  "provider": "openalex"
+                },
+                {
+                  "external_id": "https://openalex.org/W2066070294",
+                  "provider": "openalex"
+                }
+              ],
+              "request": {
+                "endpoint": "https://api.openalex.org/works",
+                "method": "GET",
+                "params": {
+                  "cursor": "*",
+                  "per_page": 10,
+                  "search": "membrane imaging"
+                },
+                "requested_at": "2026-10-04T07:05:22.446128+00:00"
+              },
+              "response": {
+                "attempt": 1,
+                "error_type": null,
+                "has_more": true,
+                "next_cursor": "Ils5Ny43MDg5NSwgMTA5MzMwNTYwMDAwMCwgJ2h0dHBzOi8vb3BlbmFsZXgub3JnL1cyMDY2MDcwMjk0J10i",
+                "parsed_count": 10,
+                "provider_count": 10,
+                "received_at": "2026-10-04T07:05:23.093462+00:00",
+                "request_attempts": [
+                  {
+                    "attempt": 1,
+                    "requested_at": "2026-10-04T07:05:22.446128+00:00",
+                    "status_code": 200
+                  }
+                ],
+                "status_code": 200,
+                "total_available": 2196460
+              }
+            }
+          ],
+          "provider": "openalex",
+          "requested_limit": 10,
+          "returned": 10,
+          "returned_count": 10,
+          "started_at": "2026-10-04T07:05:22.354138+00:00",
+          "status": "ok"
+        },
+        "pubmed": {
+          "attempt_id": "85da6b8b-796c-48a1-872f-8cac435c28f9",
+          "completed_at": "2026-10-04T07:05:23.044825+00:00",
+          "completion": "cap_reached",
+          "error_type": null,
+          "execution_id": "e0f8754e-c91a-568d-95d7-1f10b253c1a7",
+          "imported_count": 10,
+          "limit": 10,
+          "pages": [
+            {
+              "attempt_id": "85da6b8b-796c-48a1-872f-8cac435c28f9",
+              "imported_count": 0,
+              "imported_source_ids": [],
+              "page_id": "5cf2e15c-6a7e-5c2e-bb1b-3f74eb00ed69",
+              "page_index": 0,
+              "page_status": "completed",
+              "record_keys": [],
+              "request": {
+                "endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                "method": "GET",
+                "params": {
+                  "db": "pubmed",
+                  "retmax": 10,
+                  "retmode": "xml",
+                  "term": "membrane imaging"
+                },
+                "requested_at": "2026-10-04T07:05:22.416291+00:00"
+              },
+              "response": {
+                "attempt": 1,
+                "error_type": null,
+                "has_more": true,
+                "next_cursor": null,
+                "parsed_count": 0,
+                "provider_count": 10,
+                "received_at": "2026-10-04T07:05:22.846108+00:00",
+                "request_attempts": [
+                  {
+                    "attempt": 1,
+                    "requested_at": "2026-10-04T07:05:22.416291+00:00",
+                    "status_code": 200
+                  }
+                ],
+                "status_code": 200,
+                "total_available": 117682
+              }
+            },
+            {
+              "attempt_id": "85da6b8b-796c-48a1-872f-8cac435c28f9",
+              "imported_count": 10,
+              "imported_source_ids": [],
+              "page_id": "256bd958-3a21-5c0a-a120-d8ba4b8b9b4c",
+              "page_index": 1,
+              "page_status": "completed",
+              "record_keys": [
+                {
+                  "external_id": "42829266",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42829138",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42828270",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42828224",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42828195",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42828166",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42827981",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42827771",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42826312",
+                  "provider": "pubmed"
+                },
+                {
+                  "external_id": "42826180",
+                  "provider": "pubmed"
+                }
+              ],
+              "request": {
+                "endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+                "method": "GET",
+                "params": {
+                  "db": "pubmed",
+                  "id": "42829266,42829138,42828270,42828224,42828195,42828166,42827981,42827771,42826312,42826180",
+                  "retmode": "xml",
+                  "rettype": "abstract"
+                },
+                "requested_at": "2026-10-04T07:05:22.853520+00:00"
+              },
+              "response": {
+                "attempt": 1,
+                "error_type": null,
+                "has_more": true,
+                "next_cursor": null,
+                "parsed_count": 10,
+                "provider_count": 10,
+                "received_at": "2026-10-04T07:05:23.044597+00:00",
+                "request_attempts": [
+                  {
+                    "attempt": 1,
+                    "requested_at": "2026-10-04T07:05:22.853520+00:00",
+                    "status_code": 200
+                  }
+                ],
+                "status_code": 200,
+                "total_available": 117682
+              }
+            }
+          ],
+          "provider": "pubmed",
+          "requested_limit": 10,
+          "returned": 10,
+          "returned_count": 10,
+          "started_at": "2026-10-04T07:05:22.354122+00:00",
+          "status": "ok"
+        }
+      },
+      "retrieved_at": "2026-10-04T07:05:23.104631+00:00"
+    },
+    "delta_hash": "de77847cf303eea63d757c0a754f5eca2c8facdf4d02edd6228b2729b6ce7c56",
+    "execution_id": "84e25599-c165-4365-bba3-aa8ef1fb2fe0",
+    "import_receipt_id": "8a6d5b14-00b8-47af-8c3c-fcf9d075d449",
+    "items": [
+      {
+        "class": "unchanged",
+        "evidence": {},
+        "publication": {
+          "check": "performed",
+          "doi": "10.5360/membrane.47.2",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "0af0ae56-4f82-445f-b5ff-b72f4820cf7b"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "a234fe4c859826ffd6dad2ab24d0a8fc55057caabbb7ef8ea801f016e8bd6f8b"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1126/sciadv.aei0203",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "10b46423-549e-492d-8009-7e3791fbd755"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "75b28813699e31707e6fc3e0119b1efcad2cb0616f19d198965825dde846ca8a"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1039/d5bm00028a/v1/review2",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "11b3e32c-ecd4-41a7-95da-b844bdc12142"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "cdf239052a8ea3c1ba336299431a3c0659592bb6550eccf7eb562c3b7643ebbd"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1093/plphys/kiaa040",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "16f34e3e-3c20-4935-b4de-397cb2362368"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "bcaa123cfad00536b32be420c9cf98d0356fa55426259db18507067337b01757"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.7759/cureus.115647",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "1f67d837-c3c3-426c-92e3-ac6f4f085ff5"
+      },
+      {
+        "class": "changed",
+        "evidence": {
+          "baseline_version_key": "4f0172ec1f4768332c51132c9a13ba6419f6e2fe99787a810bb086936f66b292",
+          "current_version_key": "3ec7fd8dbffdddbc35ff4ae7a8c81a31591ac6415dfec5e2131bfd79fff0ef0a",
+          "fields": {
+            "year": {
+              "after": "2010",
+              "before": "2011"
+            }
+          }
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1007/978-1-4419-6558-5_13",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "46218cdb-185c-46c0-add8-08ab7fa8c61c"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "990d2433bb19753bafafdfaf870abcf0c6c766e68fe72e3f6a97aa6d4d84d32f"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1364/josab.17.001685",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "5142fbd8-4132-4f5c-a7c1-7b4a4ed00d93"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "896bf03b515f35c02c4c771e0e60781031aba9bb987e9498f431aade89997dba"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1016/b978-1-4831-9996-2.50015-8",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "53a30d1e-2003-4dd5-aba5-46f17d13d34a"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "72f2eef27cc83a6daf173f14ad3e38847e992c5d441c4c59066f2f557f64e655"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1039/d5bm00028a/v1/review1",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "5f5cd0fd-e9d0-4278-aff2-4161e254d5ec"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "fced1e25186cc30c40124b05acaaa9135739c32a598f71c9ee96d02505281185"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1016/j.ekir.2026.107010",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "614b2020-7ede-4b53-af04-498908f4d3a7"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "af4489a345180afa8256bbf60e5c89e5efb3015f9f68d9d932dca291e3101140"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1039/d5bm00028a/v2/review2",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "626cf8eb-1078-403f-b568-75fe6efaab8f"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "14547b7ab33b5a46c7cdd0744cad471f4ca0e6cdf240f5cb44e128519bf1ef02"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1093/noajnl/vdag217",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "7f3ff3ca-0946-48a9-9a39-5107425e040b"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "d51c9c061a5852f89766dd4340651b7b5b6f06289138465a3abf37f75688f0f4"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1117/12.424561",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "844f32b6-e677-47f3-9664-fca408d6b32b"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "a37cd110c37a51d45a11c1b203696f9a8b34ae057d4032f207326e64e022fb36"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1364/ol.25.000320",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "89aa583e-71e0-4aea-b824-38a6bbc78301"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "f60ee440373a81ba999ee26b13cdde49c56ba98d8bcb8e114ae2a303d17dc2f6"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1039/d5bm00028a",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "8c1d0e7a-947a-424b-ac4d-76f275ed4e83"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "fef3cf544bbfc20860e0aba224e67282ecadd9cfaef0aeab0f3bfe47df9238d7"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1016/j.euros.2026.09.003",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "90dc3565-456c-45f6-bc56-b7fe9cc77f13"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "e991288e736e1f82556c0eba1c27facf76810e043834313952866368b3f4788a"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1021/acs.iecr.6b00387",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "9207da4e-4670-4e8a-b8a2-f8a35a4d2fe0"
+      },
+      {
+        "class": "unknown",
+        "evidence": {
+          "providers": {
+            "crossref": {
+              "completion": "cap_reached",
+              "status": "ok"
+            },
+            "openalex": {
+              "completion": "cap_reached",
+              "status": "ok"
+            }
+          }
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.5555/r8-live-absent",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": "provider_capped",
+        "report_id": "9b1e7161-5a8c-4d42-8617-c97ebe24e774"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "5e3a44bb97666cabd50f5131dc0056491312a043c39cc21bddc370985b40b14e"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1021/ac0694932",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "9cb9e8fe-3cea-41fd-93ad-2b2954f96093"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "e36887df83b3327e2dcb08d9285823f0aaf3dc95018f7da5389473a242bf30f9"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1016/j.bbrep.2026.102792",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "a419c353-bcad-4333-9cde-6f4f5743dc67"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "e4e13c7b108d68831f14cb3d0b091e196d0f156082d5b577753143c8186973a9"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1201/b15039-19",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "a822f8b3-0272-4219-990d-11b321637dc1"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "1231574e637245bcc9e936642932a26a063c6206128f899e76da893318045e03"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1007/978-1-4419-6558-5_1",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "ad979200-ae77-457b-9d74-33e3628c267c"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "9d883ea7ec8155537e94bbfb1a27ca074032a44a5347d41210f4fb31c0a88f9f"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1039/d5bm00028a/v2/review1",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "b0c58031-f412-408c-a3ac-d133623bdcbc"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "e3d9f9ea95994f53d933ca0c67901563295d5cea4bc981b2adfb5e030be0bfe4"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.3389/fneur.2024.1366238",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "c20a3d3e-3c73-41f9-afee-b45e5f76c7c5"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "b3a6f142260c7ee2ec5716bb8e92b3b7554ecdb4b04e7bb9ce27e49be6b57b72"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1097/md.0000000000051027",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "c955da7a-f621-445f-aa5f-27b806eaa85c"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "d1966b5829494c574110e0084537207cc8a68c7a8e9bfad12b38ce88f2eccd9a"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1016/j.fsi.2026.111739",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "d0d73ebd-0e78-4c85-87bb-271f0a9ffd3c"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "6d6ec3fbc31a82ed60e0920320c597ddd8e26c6f2dac32c70cb4a6d37f55e6c0"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1016/j.eururo.2026.09.017",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "d5bc875e-86cf-4b2e-8077-fce96a9bb5aa"
+      },
+      {
+        "class": "corrected_retracted",
+        "evidence": {
+          "notices": [
+            {
+              "asserted_by": "retraction-watch",
+              "date": "2004-03-06T00:00:00Z",
+              "notice_doi": "10.1016/s0140-6736(04)15715-2",
+              "type": "correction"
+            },
+            {
+              "asserted_by": "retraction-watch",
+              "date": "2010-02-06T00:00:00Z",
+              "notice_doi": "10.1016/s0140-6736(10)60175-4",
+              "type": "retraction"
+            }
+          ],
+          "types": [
+            "correction",
+            "retraction"
+          ]
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1016/s0140-6736(97)11096-0",
+          "notices": [
+            {
+              "asserted_by": "retraction-watch",
+              "date": "2004-03-06T00:00:00Z",
+              "notice_doi": "10.1016/s0140-6736(04)15715-2",
+              "type": "correction"
+            },
+            {
+              "asserted_by": "retraction-watch",
+              "date": "2010-02-06T00:00:00Z",
+              "notice_doi": "10.1016/s0140-6736(10)60175-4",
+              "type": "retraction"
+            }
+          ],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "d6168e0e-5710-4b49-8d84-6d0164a62dc9"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "a67b7a14ce6543b35f51bbc8c8d6b93f3110248545e30f820e1b638311d25971"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1007/s00256-004-0795-5",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "e2dcaece-bbd0-4856-90df-c13204a8af81"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "24ccb77fac1f5d8640127ecaf180a40043dceabe3a7388cb6784e22d259cdeb9"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.3389/fpls.2026.1954570",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "e99503c6-36c9-4467-9b9f-ce47903efaef"
+      },
+      {
+        "class": "new",
+        "evidence": {
+          "current_version_key": "353b9eca1b96fc11d659e4bcd84cac89fc3074fd412e98590aa798cd5b236cc5"
+        },
+        "publication": {
+          "check": "performed",
+          "doi": "10.1039/d5bm00028a/v1/decision1",
+          "notices": [],
+          "other_updates": [],
+          "source": "crossref"
+        },
+        "reason": null,
+        "report_id": "fcf8d15f-86b5-4ab0-a0b5-a98d3c8c9b2f"
+      }
+    ],
+    "schedule_id": "c4a1a4dd-aa55-484e-a791-11315d058f79",
+    "schedule_version": {
+      "baseline_digest": "7e7e7da56e0558b2166197557a5a5e36e69e7bfc78dc895ec1412f59c31b8c6a",
+      "created_at": "2026-10-04T06:58:14.067240Z",
+      "cron": "5 * * * *",
+      "enabled": true,
+      "id": "c4a1a4dd-aa55-484e-a791-11315d058f79",
+      "owner_id": "6e3bde50-ff93-4e50-8474-fc2036d8e9cc",
+      "protocol_version_id": "73bd7d09-8087-40ac-b26a-2f89b99100cf",
+      "query": "membrane imaging",
+      "schedule_id": "c4a1a4dd-aa55-484e-a791-11315d058f79",
+      "source_run_id": "24b46a2f-808e-4b24-a670-42e9053fd646",
+      "step_id": "search",
+      "strategy_version": "sha256:5a07f3c094bfd745f380b1ef7c69f7e5db4910c337081c2f5663e2d2be025caa",
+      "supersedes_schedule_version_id": null,
+      "timezone": "Europe/London"
+    },
+    "schedule_version_id": "c4a1a4dd-aa55-484e-a791-11315d058f79",
+    "scheduled_local": "2026-10-04T08:05",
+    "statement": "Missing works are unknown, never deleted or retracted; only a Crossref update-to notice classifies a correction or retraction."
+  },
+  "body_sha256": "d8239dd984c648a54655309a135504b813fc9382cce5c9ab97d11952ab3a56dd",
+  "exported_at": "2026-10-04T07:05:29.237187+00:00",
+  "schema": "nous.academic.search-delta.v1"
+}

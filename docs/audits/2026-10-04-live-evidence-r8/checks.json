@@ -1,0 +1,352 @@
+[
+  {
+    "check": "chain.root_carries_four_decisions",
+    "detail": 4,
+    "ok": true
+  },
+  {
+    "check": "outage.one_execution",
+    "detail": 1,
+    "ok": true
+  },
+  {
+    "check": "outage.succeeded",
+    "detail": [
+      "started",
+      "succeeded"
+    ],
+    "ok": true
+  },
+  {
+    "check": "outage.crossref_not_ok",
+    "detail": {
+      "crossref": {
+        "completion": "failed",
+        "error_type": "ConnectError",
+        "limit": 10,
+        "returned": 0,
+        "status": "failed"
+      },
+      "openalex": {
+        "completion": "cap_reached",
+        "error_type": null,
+        "limit": 10,
+        "returned": 10,
+        "status": "ok"
+      },
+      "pubmed": {
+        "completion": "cap_reached",
+        "error_type": null,
+        "limit": 10,
+        "returned": 10,
+        "status": "ok"
+      }
+    },
+    "ok": true
+  },
+  {
+    "check": "outage.no_fabricated_retraction",
+    "detail": {
+      "changed": 0,
+      "corrected_retracted": 0,
+      "new": 20,
+      "unchanged": 0,
+      "unknown": 4
+    },
+    "ok": true
+  },
+  {
+    "check": "outage.retracted_doi_unknown_provider_failed",
+    "detail": {
+      "class": "unknown",
+      "evidence": {
+        "providers": {
+          "crossref": {
+            "completion": "failed",
+            "status": "failed"
+          },
+          "openalex": {
+            "completion": "cap_reached",
+            "status": "ok"
+          }
+        }
+      },
+      "publication": {
+        "check": "failed",
+        "doi": "10.1016/s0140-6736(97)11096-0",
+        "source": "crossref"
+      },
+      "reason": "provider_failed",
+      "report_id": "6e4db698-6577-4037-9f76-d5119709e386"
+    },
+    "ok": true
+  },
+  {
+    "check": "outage.finished_before_main_fire",
+    "detail": null,
+    "ok": true
+  },
+  {
+    "check": "main.one_execution",
+    "detail": 1,
+    "ok": true
+  },
+  {
+    "check": "main.two_beats_ticking",
+    "detail": true,
+    "ok": true
+  },
+  {
+    "check": "main.attempts",
+    "detail": [
+      "started",
+      "succeeded"
+    ],
+    "ok": true
+  },
+  {
+    "check": "main.all_five_classes",
+    "detail": {
+      "changed": 1,
+      "corrected_retracted": 1,
+      "new": 27,
+      "unchanged": 1,
+      "unknown": 1
+    },
+    "ok": true
+  },
+  {
+    "check": "main.retraction_notice_real",
+    "detail": {
+      "class": "corrected_retracted",
+      "evidence": {
+        "notices": [
+          {
+            "asserted_by": "retraction-watch",
+            "date": "2004-03-06T00:00:00Z",
+            "notice_doi": "10.1016/s0140-6736(04)15715-2",
+            "type": "correction"
+          },
+          {
+            "asserted_by": "retraction-watch",
+            "date": "2010-02-06T00:00:00Z",
+            "notice_doi": "10.1016/s0140-6736(10)60175-4",
+            "type": "retraction"
+          }
+        ],
+        "types": [
+          "correction",
+          "retraction"
+        ]
+      },
+      "publication": {
+        "check": "performed",
+        "doi": "10.1016/s0140-6736(97)11096-0",
+        "notices": [
+          {
+            "asserted_by": "retraction-watch",
+            "date": "2004-03-06T00:00:00Z",
+            "notice_doi": "10.1016/s0140-6736(04)15715-2",
+            "type": "correction"
+          },
+          {
+            "asserted_by": "retraction-watch",
+            "date": "2010-02-06T00:00:00Z",
+            "notice_doi": "10.1016/s0140-6736(10)60175-4",
+            "type": "retraction"
+          }
+        ],
+        "other_updates": [],
+        "source": "crossref"
+      },
+      "report_id": "d6168e0e-5710-4b49-8d84-6d0164a62dc9"
+    },
+    "ok": true
+  },
+  {
+    "check": "main.single_import_receipt",
+    "detail": 1,
+    "ok": true
+  },
+  {
+    "check": "main.export_hash_stable",
+    "detail": "d8239dd984c648a54655309a135504b813fc9382cce5c9ab97d11952ab3a56dd",
+    "ok": true
+  },
+  {
+    "check": "main.two_distinct_corpus_snapshots",
+    "detail": {
+      "after": "507fda31b2f3ace32589e1b6d5c459e2ce582d74235409a09a6354c0df5adc17",
+      "baseline": "7e7e7da56e0558b2166197557a5a5e36e69e7bfc78dc895ec1412f59c31b8c6a"
+    },
+    "ok": true
+  },
+  {
+    "check": "chain.successor_idempotent",
+    "detail": {
+      "first_replayed": false,
+      "second_replayed": true
+    },
+    "ok": true
+  },
+  {
+    "check": "chain.unchanged_decision_carried_by_reference",
+    "detail": {
+      "carried": [
+        "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+        "9b1e7161-5a8c-4d42-8617-c97ebe24e774"
+      ],
+      "unchanged": [
+        "0af0ae56-4f82-445f-b5ff-b72f4820cf7b"
+      ]
+    },
+    "ok": true
+  },
+  {
+    "check": "chain.uncertain_unknown_carried_with_flag",
+    "detail": "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+    "ok": true
+  },
+  {
+    "check": "chain.required_work_matches_delta_classes",
+    "detail": {
+      "expected": 29,
+      "required": 29
+    },
+    "ok": true
+  },
+  {
+    "check": "chain.targeted_queue_assigned_to_reviewer",
+    "detail": {
+      "reviewers": 1,
+      "status": "queued"
+    },
+    "ok": true
+  },
+  {
+    "check": "chain.accounting_unresolved_while_work_open",
+    "detail": "Review work is unresolved",
+    "ok": true
+  },
+  {
+    "check": "chain.accounting_reconciles_after_review",
+    "detail": {
+      "boxes": {
+        "amended_in": 0,
+        "amended_inclusion": [],
+        "amended_out": 0,
+        "carried_decisions": 2,
+        "changed_sources": 1,
+        "checks": {
+          "new_records_match_flows": true,
+          "parent_flow_matches_decisions": true,
+          "parent_records_retained": true,
+          "studies_reconcile": true,
+          "successor_flow_matches_decisions": true
+        },
+        "corrected_retracted": 1,
+        "duplicates_removed": 2,
+        "new_records_by_source": {
+          "scheduled_search": 29
+        },
+        "new_records_identified": 29,
+        "new_studies_included": 0,
+        "records_excluded": 29,
+        "records_screened": 29,
+        "reports_excluded_by_reason_change": {},
+        "reports_in_previous_version": 0,
+        "reports_not_retrieved": 0,
+        "reports_sought": 0,
+        "studies_in_previous_version": 0,
+        "total_studies_included": 0,
+        "withheld_reports": []
+      },
+      "error": null
+    },
+    "ok": true
+  },
+  {
+    "check": "chain.exports_reload_identically",
+    "detail": {
+      "root": "e35e53824344d8c5dae3fe12723b9a002e00dbbcbd82ebcbf446a433891ffd37",
+      "successor": "9165e837b4ccd8a9b073a256fed895760db9d3f4100a0b9a0a7b1d8b5493bf2e"
+    },
+    "ok": true
+  },
+  {
+    "check": "chain.reviewer_cannot_create_version",
+    "detail": 403,
+    "ok": true
+  },
+  {
+    "check": "chain.foreign_cannot_create_version",
+    "detail": 404,
+    "ok": true
+  },
+  {
+    "check": "crash.no_second_run_while_attempt_is_live",
+    "detail": [
+      [
+        "started"
+      ]
+    ],
+    "ok": true
+  },
+  {
+    "check": "crash.one_execution",
+    "detail": 1,
+    "ok": true
+  },
+  {
+    "check": "crash.attempts_started_started_succeeded",
+    "detail": [
+      "started",
+      "started",
+      "succeeded"
+    ],
+    "ok": true
+  },
+  {
+    "check": "crash.retry_of_first_attempt",
+    "detail": {
+      "retry_of": "cb43cbe2-34e3-404c-a143-f05d6978f251"
+    },
+    "ok": true
+  },
+  {
+    "check": "crash.attempts_from_two_workers",
+    "detail": [
+      "Mac.lan:48682",
+      "Mac.lan:55389",
+      "Mac.lan:55389"
+    ],
+    "ok": true
+  },
+  {
+    "check": "crash.single_import_receipt",
+    "detail": 1,
+    "ok": true
+  },
+  {
+    "check": "revoke.one_execution",
+    "detail": 1,
+    "ok": true
+  },
+  {
+    "check": "revoke.failed_project_archived",
+    "detail": {
+      "at": "2026-10-04T03:11:19.51292-04:00",
+      "detail": null,
+      "id": "63519cde-a3ab-455a-b9af-08bb2ac47904",
+      "outcome": "failed",
+      "reason": "project_archived",
+      "worker": "Mac.lan:55389"
+    },
+    "ok": true
+  },
+  {
+    "check": "revoke.no_import_receipt",
+    "detail": 0,
+    "ok": true
+  }
+]

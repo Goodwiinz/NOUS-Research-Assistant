@@ -1,0 +1,746 @@
+{
+  "coverage_partial": false,
+  "deduplication": {
+    "after": 29,
+    "before": 30
+  },
+  "documents": [
+    {
+      "doi": "10.1039/d5bm00028a/v1/review2",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2025-03-05T15:41:57Z",
+      "title": "Review for \"Membrane-Intercalating Conjugated Oligoelectrolytes for Lipid Membrane Imaging\"",
+      "venue": null,
+      "year": [
+        [
+          2025,
+          1,
+          23
+        ]
+      ]
+    },
+    {
+      "doi": "10.1039/d5bm00028a/v2/review2",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2025-03-05T15:41:52Z",
+      "title": "Review for \"Membrane-Intercalating Conjugated Oligoelectrolytes for Lipid Membrane Imaging\"",
+      "venue": null,
+      "year": [
+        [
+          2025,
+          2,
+          24
+        ]
+      ]
+    },
+    {
+      "doi": "10.1039/d5bm00028a/v2/review1",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2025-03-05T15:41:54Z",
+      "title": "Review for \"Membrane-Intercalating Conjugated Oligoelectrolytes for Lipid Membrane Imaging\"",
+      "venue": null,
+      "year": [
+        [
+          2025,
+          2,
+          16
+        ]
+      ]
+    },
+    {
+      "doi": "10.1039/d5bm00028a/v1/review1",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2025-03-05T15:41:58Z",
+      "title": "Review for \"Membrane-Intercalating Conjugated Oligoelectrolytes for Lipid Membrane Imaging\"",
+      "venue": null,
+      "year": [
+        [
+          2025,
+          1,
+          19
+        ]
+      ]
+    },
+    {
+      "doi": "10.5360/membrane.47.2",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2022-02-13T22:09:19Z",
+      "title": "Atomic Force Imaging of Cell Membrane",
+      "venue": "MEMBRANE",
+      "year": [
+        [
+          2022
+        ]
+      ]
+    },
+    {
+      "doi": "10.1007/978-1-4419-6558-5_13",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2021-04-30T23:44:21Z",
+      "title": "Second Harmonic Imaging of Membrane Potential",
+      "venue": "Membrane Potential Imaging in the Nervous System",
+      "year": [
+        [
+          2010
+        ]
+      ]
+    },
+    {
+      "doi": "10.1007/978-1-4419-6558-5_1",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2021-04-30T19:44:19Z",
+      "title": "Historical Overview and General Methods of Membrane Potential Imaging",
+      "venue": "Membrane Potential Imaging in the Nervous System",
+      "year": [
+        [
+          2010
+        ]
+      ]
+    },
+    {
+      "doi": "10.1201/b15039-19",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2020-12-23T04:07:03Z",
+      "title": "Imaging Membrane Potential with SHG",
+      "venue": "Second Harmonic Generation Imaging",
+      "year": [
+        [
+          2016,
+          4,
+          19
+        ]
+      ]
+    },
+    {
+      "doi": "10.1039/d5bm00028a/v1/decision1",
+      "identifier_kinds": [
+        "doi"
+      ],
+      "provider": "crossref",
+      "provider_updated": "2025-03-05T15:41:56Z",
+      "title": "Decision letter for \"Membrane-Intercalating Conjugated Oligoelectrolytes for Lipid Membrane Imaging\"",
+      "venue": null,
+      "year": [
+        [
+          2025,
+          1,
+          23
+        ]
+      ]
+    },
+    {
+      "doi": "10.1016/j.eururo.2026.09.017",
+      "identifier_kinds": [
+        "doi",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "PSMA-PET/CT-guided Intensification of Radiation Therapy for Prostate Cancer (PSMAgRT): 5-yr Analysis of a Phas",
+      "venue": "European urology",
+      "year": null
+    },
+    {
+      "doi": "10.1016/j.fsi.2026.111739",
+      "identifier_kinds": [
+        "doi",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Microgravity induces morphological and molecular reprogramming in Atlantic Salmon (Salmo salar) kidney cell li",
+      "venue": "Fish & shellfish immunology",
+      "year": null
+    },
+    {
+      "doi": "10.1016/j.euros.2026.09.003",
+      "identifier_kinds": [
+        "doi",
+        "pmcid",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "PSMA PET/CT Kinetics During Systemic Therapy and Radiotherapy in Hormone-sensitive Prostate Cancer: A Systemat",
+      "venue": "European urology open science",
+      "year": null
+    },
+    {
+      "doi": "10.3389/fpls.2026.1954570",
+      "identifier_kinds": [
+        "doi",
+        "pmcid",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Molecular and biophysical foundations of nano-enabled seed priming and smart nanocarriers for crop stress alle",
+      "venue": "Frontiers in plant science",
+      "year": null
+    },
+    {
+      "doi": "10.1093/noajnl/vdag217",
+      "identifier_kinds": [
+        "doi",
+        "pmcid",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Prostate specific membrane antigen (PSMA) PET/CT for radiation planning and response assessment in intracrania",
+      "venue": "Neuro-oncology advances",
+      "year": null
+    },
+    {
+      "doi": "10.1016/j.ekir.2026.107010",
+      "identifier_kinds": [
+        "doi",
+        "pmcid",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Potential Role of the Urokinase-Type Plasminogen Activator Receptor-Integrin \u03b23 Axis in Podocyte Adhesion Inst",
+      "venue": "Kidney international reports",
+      "year": null
+    },
+    {
+      "doi": "10.7759/cureus.115647",
+      "identifier_kinds": [
+        "doi",
+        "pmcid",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Concomitant Hydatid Disease of the Lower Extremity and Retroperitoneum: A Case Report of Two Rare Locations.",
+      "venue": "Cureus",
+      "year": null
+    },
+    {
+      "doi": "10.1016/j.bbrep.2026.102792",
+      "identifier_kinds": [
+        "doi",
+        "pmcid",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Scoparone protects against acetaminophen-induced acute liver injury: Insights from In vivo experiments and RNA",
+      "venue": "Biochemistry and biophysics reports",
+      "year": null
+    },
+    {
+      "doi": "10.1097/md.0000000000051027",
+      "identifier_kinds": [
+        "doi",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Excellent response to high-dose Riboflavin in Brown-Vialetto-Van Laere syndrome: A case report.",
+      "venue": "Medicine",
+      "year": null
+    },
+    {
+      "doi": "10.1126/sciadv.aei0203",
+      "identifier_kinds": [
+        "doi",
+        "pmcid",
+        "pmid"
+      ],
+      "provider": "pubmed",
+      "provider_updated": null,
+      "title": "Synapse-like specializations at dopamine release sites orchestrate efficient and precise neuromodulatory signa",
+      "venue": "Science advances",
+      "year": null
+    },
+    {
+      "doi": "10.1364/josab.17.001685",
+      "identifier_kinds": [
+        "doi",
+        "openalex"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Membrane imaging by second-harmonic generation microscopy",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1093/plphys/kiaa040",
+      "identifier_kinds": [
+        "doi",
+        "openalex",
+        "pmid"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Membrane imaging in the plant endomembrane system",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1016/b978-1-4831-9996-2.50015-8",
+      "identifier_kinds": [
+        "doi",
+        "openalex"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "The Cell Membrane: Image and Interpretation",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1039/d5bm00028a",
+      "identifier_kinds": [
+        "doi",
+        "openalex",
+        "pmid"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Membrane-intercalating conjugated oligoelectrolytes for lipid membrane imaging",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1021/acs.iecr.6b00387",
+      "identifier_kinds": [
+        "doi",
+        "openalex"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "3D Membrane Imaging and Porosity Visualization",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.3389/fneur.2024.1366238",
+      "identifier_kinds": [
+        "doi",
+        "openalex",
+        "pmid"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Advances in chronic subdural hematoma and membrane imaging",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1021/ac0694932",
+      "identifier_kinds": [
+        "doi",
+        "openalex",
+        "pmid"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Closing the gap in membrane imaging",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1117/12.424561",
+      "identifier_kinds": [
+        "doi",
+        "openalex"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Multiharmonic light microscopy: theory and applications in membrane imaging",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1364/ol.25.000320",
+      "identifier_kinds": [
+        "doi",
+        "openalex",
+        "pmid"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Membrane imaging by simultaneous second-harmonic generation and two-photon microscopy",
+      "venue": null,
+      "year": null
+    },
+    {
+      "doi": "10.1007/s00256-004-0795-5",
+      "identifier_kinds": [
+        "doi",
+        "openalex",
+        "pmid"
+      ],
+      "provider": "openalex",
+      "provider_updated": null,
+      "title": "Forearm interosseous membrane imaging and anatomy",
+      "venue": null,
+      "year": null
+    }
+  ],
+  "limit_per_provider": 10,
+  "notices_probe": {
+    "10.1016/s0140-6736(97)11096-0": [
+      {
+        "asserted_by": "retraction-watch",
+        "date": "2004-03-06T00:00:00Z",
+        "notice_doi": "10.1016/s0140-6736(04)15715-2",
+        "type": "correction"
+      },
+      {
+        "asserted_by": "retraction-watch",
+        "date": "2010-02-06T00:00:00Z",
+        "notice_doi": "10.1016/s0140-6736(10)60175-4",
+        "type": "retraction"
+      }
+    ],
+    "10.5555/r8-live-absent": [],
+    "fake_checked": true
+  },
+  "per_provider": {
+    "crossref": {
+      "limit": 10,
+      "pages": [
+        {
+          "attempt_id": "462112d4-f7c6-4821-bdc8-5b28fadc205b",
+          "imported_count": 10,
+          "imported_source_ids": [],
+          "page_id": "10f3b927-1119-58fd-821e-d91bbc34aa69",
+          "page_index": 0,
+          "page_status": "completed",
+          "record_keys": [
+            {
+              "external_id": "10.1039/d5bm00028a/v1/review2",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1039/d5bm00028a/v2/review2",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1039/d5bm00028a/v2/review1",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1039/d5bm00028a/v1/review1",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.5360/membrane.47.2",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1007/978-1-4419-6558-5_13",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1007/978-1-4419-6558-5_1",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1201/b15039-19",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1039/d5bm00028a/v1/decision1",
+              "provider": "crossref"
+            },
+            {
+              "external_id": "10.1117/12.2261690.5380600130001",
+              "provider": "crossref"
+            }
+          ],
+          "request": {
+            "endpoint": "https://api.crossref.org/works",
+            "method": "GET",
+            "params": {
+              "query": "membrane imaging",
+              "rows": 10
+            },
+            "requested_at": "2026-10-04T06:26:59.873262+00:00"
+          },
+          "response": {
+            "attempt": 1,
+            "error_type": null,
+            "has_more": true,
+            "next_cursor": null,
+            "parsed_count": 10,
+            "provider_count": 10,
+            "received_at": "2026-10-04T06:27:00.484135+00:00",
+            "request_attempts": [
+              {
+                "attempt": 1,
+                "requested_at": "2026-10-04T06:26:59.873262+00:00",
+                "status_code": 200
+              }
+            ],
+            "status_code": 200,
+            "total_available": 1606911
+          }
+        }
+      ],
+      "returned": 10,
+      "status": "ok"
+    },
+    "openalex": {
+      "limit": 10,
+      "pages": [
+        {
+          "attempt_id": "c3162d1b-c0e2-437c-8471-db62d3dc3cb7",
+          "imported_count": 10,
+          "imported_source_ids": [],
+          "page_id": "d8834fd8-384a-5019-ae1d-671864a5f229",
+          "page_index": 0,
+          "page_status": "completed",
+          "record_keys": [
+            {
+              "external_id": "https://openalex.org/W1979096832",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W3146302718",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W2204712496",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W4408129898",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W2295357942",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W4395456785",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W2026037836",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W2039624257",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W2044885070",
+              "provider": "openalex"
+            },
+            {
+              "external_id": "https://openalex.org/W2066070294",
+              "provider": "openalex"
+            }
+          ],
+          "request": {
+            "endpoint": "https://api.openalex.org/works",
+            "method": "GET",
+            "params": {
+              "cursor": "*",
+              "per_page": 10,
+              "search": "membrane imaging"
+            },
+            "requested_at": "2026-10-04T06:26:59.877158+00:00"
+          },
+          "response": {
+            "attempt": 1,
+            "error_type": null,
+            "has_more": true,
+            "next_cursor": "Ils5Ny43MDg5NSwgMTA5MzMwNTYwMDAwMCwgJ2h0dHBzOi8vb3BlbmFsZXgub3JnL1cyMDY2MDcwMjk0J10i",
+            "parsed_count": 10,
+            "provider_count": 10,
+            "received_at": "2026-10-04T06:27:00.574551+00:00",
+            "request_attempts": [
+              {
+                "attempt": 1,
+                "requested_at": "2026-10-04T06:26:59.877158+00:00",
+                "status_code": 200
+              }
+            ],
+            "status_code": 200,
+            "total_available": 2196460
+          }
+        }
+      ],
+      "returned": 10,
+      "status": "ok"
+    },
+    "pubmed": {
+      "limit": 10,
+      "pages": [
+        {
+          "attempt_id": "cc520831-3ad4-40ad-b2cc-8bdfe5e1d1b1",
+          "imported_count": 0,
+          "imported_source_ids": [],
+          "page_id": "a76b1811-ebff-5003-9a0f-af2298be1a26",
+          "page_index": 0,
+          "page_status": "completed",
+          "record_keys": [],
+          "request": {
+            "endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            "method": "GET",
+            "params": {
+              "db": "pubmed",
+              "retmax": 10,
+              "retmode": "xml",
+              "term": "membrane imaging"
+            },
+            "requested_at": "2026-10-04T06:26:59.876975+00:00"
+          },
+          "response": {
+            "attempt": 1,
+            "error_type": null,
+            "has_more": true,
+            "next_cursor": null,
+            "parsed_count": 0,
+            "provider_count": 10,
+            "received_at": "2026-10-04T06:27:00.230972+00:00",
+            "request_attempts": [
+              {
+                "attempt": 1,
+                "requested_at": "2026-10-04T06:26:59.876975+00:00",
+                "status_code": 200
+              }
+            ],
+            "status_code": 200,
+            "total_available": 117682
+          }
+        },
+        {
+          "attempt_id": "cc520831-3ad4-40ad-b2cc-8bdfe5e1d1b1",
+          "imported_count": 10,
+          "imported_source_ids": [],
+          "page_id": "2bc04c58-07e0-5397-9d4b-3dab6486b266",
+          "page_index": 1,
+          "page_status": "completed",
+          "record_keys": [
+            {
+              "external_id": "42829266",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42829138",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42828270",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42828224",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42828195",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42828166",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42827981",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42827771",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42826312",
+              "provider": "pubmed"
+            },
+            {
+              "external_id": "42826180",
+              "provider": "pubmed"
+            }
+          ],
+          "request": {
+            "endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            "method": "GET",
+            "params": {
+              "db": "pubmed",
+              "id": "42829266,42829138,42828270,42828224,42828195,42828166,42827981,42827771,42826312,42826180",
+              "retmode": "xml",
+              "rettype": "abstract"
+            },
+            "requested_at": "2026-10-04T06:27:00.231009+00:00"
+          },
+          "response": {
+            "attempt": 1,
+            "error_type": null,
+            "has_more": true,
+            "next_cursor": null,
+            "parsed_count": 10,
+            "provider_count": 10,
+            "received_at": "2026-10-04T06:27:00.483473+00:00",
+            "request_attempts": [
+              {
+                "attempt": 1,
+                "requested_at": "2026-10-04T06:27:00.231009+00:00",
+                "status_code": 200
+              }
+            ],
+            "status_code": 200,
+            "total_available": 117682
+          }
+        }
+      ],
+      "returned": 10,
+      "status": "ok"
+    }
+  },
+  "provider_receipt_keys": [
+    "attempt_id",
+    "completed_at",
+    "completion",
+    "error_type",
+    "execution_id",
+    "imported_count",
+    "limit",
+    "pages",
+    "provider",
+    "requested_limit",
+    "returned",
+    "returned_count",
+    "started_at",
+    "status"
+  ],
+  "providers_requested": [
+    "crossref",
+    "pubmed",
+    "openalex"
+  ],
+  "query": "membrane imaging",
+  "recorded_at": "2026-10-04T06:27:00.575646+00:00"
+}
