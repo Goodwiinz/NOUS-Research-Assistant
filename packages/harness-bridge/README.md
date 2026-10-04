@@ -1,6 +1,6 @@
 # NOUS local harness bridge
 
-`@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. It also ships an opt-in local MCP server that exposes NOUS project read tools to Codex (see [NOUS read tools](#nous-read-tools-over-mcp)). This package does not synchronize other conversations or publish side-panel artifacts.
+`@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. It also ships an opt-in local MCP server that exposes NOUS project read tools to Codex and, when the matching scopes are approved, publication of a file from a registered workspace root and note requests the user approves in NOUS (see [NOUS read tools](#nous-read-tools-over-mcp)). This package does not synchronize other conversations.
 
 ## Requirements and pairing
 
@@ -16,7 +16,7 @@ pnpm --filter @nous/harness-bridge start workspace add --root /absolute/path/to/
 pnpm --filter @nous/harness-bridge start run
 ```
 
-Replace the example host, project UUID, and local path with the values for the NOUS deployment and the project. The CLI stores credentials in its owner-only local state directory; the connection file contains only an opaque credential handle. Browser requests contain device/workspace identifiers and labels, never the local absolute path, executable, arbitrary arguments, or MCP configuration. The owner-authenticated API supports revoking a known grant with `DELETE /api/v1/integrations/grants/{grant_id}`. This initial CLI does not expose a revoke command or display the exchanged grant UUID, and NOUS has no user-facing grant-revocation screen yet. Stopping the bridge and removing local state only disables this local client; it does not revoke the server-side grant. Do not treat it as revocation. Revoking a grant also does not prove an already-running native process has exited; allow reconciliation to report its terminal state.
+Replace the example host, project UUID, and local path with the values for the NOUS deployment and the project. The CLI stores credentials in its owner-only local state directory; the connection file contains only an opaque credential handle. Browser requests contain device/workspace identifiers and labels, never the local absolute path, executable, arbitrary arguments, or MCP configuration. Run `pnpm --filter @nous/harness-bridge start disconnect` to revoke this device's grant and its consent in NOUS and remove the local credentials. If NOUS cannot be reached, it keeps everything so it can be retried. It does not invalidate the CLI login token, and NOUS has no user-facing grant-revocation screen yet. Stopping the bridge or deleting local state without `disconnect` only disables this local client; it does not revoke the server-side grant. Revoking a grant also does not prove an already-running native process has exited; allow reconciliation to report its terminal state.
 
 ## Data and local permissions
 
@@ -28,7 +28,7 @@ Command execution prompts can be approved once or denied in the authenticated NO
 
 ## NOUS read tools over MCP
 
-Connect with `--tools` to also request the `tools:read` scope, and add `--publish` to request `artifacts:publish` as well; the browser approval page lists every scope. The NOUS server must set `NOUS_MCP_ENABLED=true` (default `false`) or every tool call reports that tools are disabled.
+Connect with `--tools` to also request the `tools:read` scope. Add `--publish` to request `artifacts:publish`, and `--write` to request `tools:write`, which lets Codex request notes that the user approves in NOUS. Both need `--tools`, and the browser approval page lists every scope. The NOUS server must set `NOUS_MCP_ENABLED=true` (default `false`) or every tool call reports that tools are disabled. See [`docs/engineering/harness-bridge.md`](../../docs/engineering/harness-bridge.md) for the note-request and grant-renewal contract.
 
 ```sh
 pnpm --filter @nous/harness-bridge start connect --api https://nous.example/api/v1 --project PROJECT_UUID --label "My computer" --tools --publish
