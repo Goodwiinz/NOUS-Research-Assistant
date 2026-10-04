@@ -1,0 +1,225 @@
+[
+  {
+    "at": "2026-10-04T06:58:13+00:00",
+    "event": "fixtures_picked",
+    "query": "membrane imaging"
+  },
+  {
+    "at": "2026-10-04T06:58:14+00:00",
+    "event": "worlds_ready",
+    "schedules": {
+      "crash": {
+        "minute": 9,
+        "schedule_id": "471797d5-dafa-4903-9b9f-4eeec796bc9f"
+      },
+      "main": {
+        "minute": 5,
+        "schedule_id": "c4a1a4dd-aa55-484e-a791-11315d058f79"
+      },
+      "outage": {
+        "minute": 1,
+        "schedule_id": "3064ac20-b17f-4a38-ba9c-e882c75b3aa8"
+      },
+      "revoke": {
+        "minute": 11,
+        "schedule_id": "cb4c30a0-a2f7-4e18-964f-8f22af379497"
+      }
+    }
+  },
+  {
+    "at": "2026-10-04T06:58:14+00:00",
+    "beat": "beat-1",
+    "event": "started",
+    "mode": "crossref blocked",
+    "worker": "worker-1-outage"
+  },
+  {
+    "at": "2026-10-04T07:01:20+00:00",
+    "attempts": [
+      {
+        "at": "2026-10-04T03:01:19.430301-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:47828"
+      }
+    ],
+    "counts": null,
+    "event": "execution",
+    "execution_id": "04c72a3f-8956-4165-930a-23a2308dcbce",
+    "scenario": "outage"
+  },
+  {
+    "at": "2026-10-04T07:01:30+00:00",
+    "attempts": [
+      {
+        "at": "2026-10-04T03:01:19.430301-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:47828"
+      },
+      {
+        "at": "2026-10-04T03:01:30.595815-04:00",
+        "outcome": "succeeded",
+        "reason": null,
+        "worker": "Mac.lan:47828"
+      }
+    ],
+    "counts": {
+      "changed": 0,
+      "corrected_retracted": 0,
+      "new": 20,
+      "unchanged": 0,
+      "unknown": 4
+    },
+    "event": "execution",
+    "execution_id": "04c72a3f-8956-4165-930a-23a2308dcbce",
+    "scenario": "outage"
+  },
+  {
+    "at": "2026-10-04T07:01:33+00:00",
+    "event": "worker_stopped",
+    "signal": "SIGTERM",
+    "worker": "worker-1-outage"
+  },
+  {
+    "at": "2026-10-04T07:01:33+00:00",
+    "beat": "beat-2",
+    "event": "started",
+    "mode": "normal, two beats",
+    "worker": "worker-2-normal"
+  },
+  {
+    "at": "2026-10-04T07:05:19+00:00",
+    "attempts": [],
+    "counts": null,
+    "event": "execution",
+    "execution_id": "84e25599-c165-4365-bba3-aa8ef1fb2fe0",
+    "scenario": "main"
+  },
+  {
+    "at": "2026-10-04T07:05:20+00:00",
+    "attempts": [
+      {
+        "at": "2026-10-04T03:05:19.777317-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:48682"
+      }
+    ],
+    "counts": null,
+    "event": "execution",
+    "execution_id": "84e25599-c165-4365-bba3-aa8ef1fb2fe0",
+    "scenario": "main"
+  },
+  {
+    "at": "2026-10-04T07:05:28+00:00",
+    "attempts": [
+      {
+        "at": "2026-10-04T03:05:19.777317-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:48682"
+      },
+      {
+        "at": "2026-10-04T03:05:27.29906-04:00",
+        "outcome": "succeeded",
+        "reason": null,
+        "worker": "Mac.lan:48682"
+      }
+    ],
+    "counts": {
+      "changed": 1,
+      "corrected_retracted": 1,
+      "new": 27,
+      "unchanged": 1,
+      "unknown": 1
+    },
+    "event": "execution",
+    "execution_id": "84e25599-c165-4365-bba3-aa8ef1fb2fe0",
+    "scenario": "main"
+  },
+  {
+    "at": "2026-10-04T07:09:19+00:00",
+    "attempts": [
+      {
+        "at": "2026-10-04T03:09:19.43391-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:48682"
+      }
+    ],
+    "counts": null,
+    "event": "execution",
+    "execution_id": "47c6d9e1-61ab-4c9a-9409-1208a9288b9b",
+    "scenario": "crash"
+  },
+  {
+    "at": "2026-10-04T07:09:19+00:00",
+    "event": "worker_hard_killed",
+    "scenario": "crash",
+    "worker": "worker-2-normal"
+  },
+  {
+    "at": "2026-10-04T07:09:19+00:00",
+    "event": "worker_started",
+    "worker": "worker-3-after-crash"
+  },
+  {
+    "at": "2026-10-04T07:12:39+00:00",
+    "attempts": [
+      {
+        "at": "2026-10-04T03:11:19.4547-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:55389"
+      },
+      {
+        "at": "2026-10-04T03:11:19.51292-04:00",
+        "outcome": "failed",
+        "reason": "project_archived",
+        "worker": "Mac.lan:55389"
+      }
+    ],
+    "counts": null,
+    "event": "execution",
+    "execution_id": "874435a2-a33c-475f-b815-6f88373f9067",
+    "scenario": "revoke"
+  },
+  {
+    "at": "2026-10-04T07:39:23+00:00",
+    "attempts": [
+      {
+        "at": "2026-10-04T03:09:19.43391-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:48682"
+      },
+      {
+        "at": "2026-10-04T03:39:19.461727-04:00",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:55389"
+      },
+      {
+        "at": "2026-10-04T03:39:22.851364-04:00",
+        "outcome": "succeeded",
+        "reason": null,
+        "worker": "Mac.lan:55389"
+      }
+    ],
+    "counts": {
+      "changed": 1,
+      "corrected_retracted": 1,
+      "new": 27,
+      "unchanged": 1,
+      "unknown": 1
+    },
+    "event": "execution",
+    "execution_id": "47c6d9e1-61ab-4c9a-9409-1208a9288b9b",
+    "scenario": "crash"
+  },
+  {
+    "at": "2026-10-04T07:39:31+00:00",
+    "event": "all_children_stopped"
+  }
+]

@@ -234,3 +234,16 @@ Update the project memory entry for the academic roadmap with the PR numbers and
 | Merge the GitOps image PR and the flag PR | Production-deploy class action |
 | Methods-expert review of the GOO-320 accounting against PRISMA 2020 | Independent human judgment; no substitute identity |
 | Move GOO-319/320 to Done | Acceptance includes the rag-dev journey and the review |
+
+---
+
+## Amendment 2026-10-04: as executed
+
+The plan above is kept as written. Where the execution differed:
+
+- **Alembic URL (Task 4, Step 1):** `alembic upgrade head` needs a synchronous URL (`postgresql://`). The asyncpg URL raised `MissingGreenlet` because `backend/alembic/env.py` builds a sync engine. The from-empty upgrade then exited 0 (111 upgrades, head `d4a6c8e0f2b3`) with idempotent-guard warnings for tables an earlier migration pre-creates; all six R8 tables had their insert-only triggers and CHECK constraints.
+- **Field encryption (Task 4):** seeding users outside pytest needs `initialize_encryption()`, which only the API lifespan and the integration conftest call. The harness sets a random per-run key. The Celery worker needs none: `resolve_project` reads only `User.organization_id`.
+- **Schedule spacing (Task 5):** scenarios fired 3, 7, 11 and 13 minutes after the start (the plan's table said 2, 4, 5, 7 and 9), so a slow run cannot overlap the next scenario's worker configuration. The crash kill is an independent watcher that waits for the main execution to finish.
+- **Shakedown:** a first full run without hard-kill on database `r8_live_20261004` passed 29 of 29 checks (`shakedown-checks.json`). The evidence run used a fresh database, `r8_live_20261004b`.
+- **GOO-320 chain (Task 6):** the plan said no screening decisions were seeded. The run freezes a parent review first: the seeded reviewer excludes the four baseline works at title/abstract and the root is created before the fire. After the successor exists the reviewer excludes the 29 targeted works so the accounting can reconcile. These are harness decisions. They show carried attribution, uncertain carry-forward and reconciliation; release linking and claim staleness stay covered only by the PostgreSQL proof.
+- **Missed-fire coalescing:** not re-proved live. Schedule version rows are insert-only (trigger), so a schedule cannot be backdated; the PostgreSQL proof covers it. Duplicate-tick evidence is two beats ticking plus the tick backlog replayed after a worker restart.
