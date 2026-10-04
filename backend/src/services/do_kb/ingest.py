@@ -34,7 +34,7 @@ from src.models.document import Document
 # from what ``_upload_canonical_text`` writes (drift would leak the .txt object
 # on delete — audit finding D6). Re-exported here for backwards compatibility.
 from src.services.documents.object_keys import canonical_text_key
-from src.services.documents.satellite_state import pending_writes, retire_settled_writes
+from src.services.documents.satellite_state import retire_settled_writes
 
 from .client import DOKnowledgeBaseClient, DOKnowledgeBaseError, get_do_kb_client
 from .pre_flight import ensure_content_text_for_kb
@@ -64,11 +64,7 @@ async def _existing_data_source_uuid(api, kb_uuid: str, key: str) -> Optional[st
     None. Best-effort: any error / unknown shape returns None so the caller adds
     normally (never blocks ingest on a failed/uncertain dedup lookup)."""
     try:
-        for src in await api.list_data_sources(kb_uuid=kb_uuid):
-            if _source_item_path(src) == key:
-                uuid = src.get("uuid")
-                if uuid:
-                    return str(uuid)
+        return await api.find_data_source(kb_uuid=kb_uuid, item_path=key)
     except Exception as exc:  # noqa: BLE001
         logger.debug("do_kb list_data_sources failed (will add): %s", exc)
     return None
@@ -336,7 +332,10 @@ async def unsync_document_from_kb(
     if not settings.DO_KB_ENABLED:
         return True
 
-    if document.is_deleted and pending_writes(document, "do_kb"):
+    # A deleted document is cleaned by key, not only by its recorded uuid: a
+    # timed-out writer can have left another source under the same key whose
+    # token has since been pruned (GOO-358 review).
+    if document.is_deleted:
         return await _cleanup_unknown_deleted_write(session, document, client=client)
 
     ds_uuid = document.do_kb_data_source_uuid

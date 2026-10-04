@@ -1086,3 +1086,49 @@ def test_deleted_do_kb_cleanup_finds_lost_sources_and_retires_settled_tokens(
             assert _cleanup_deleted_do_kb_document(db.get(Document, env.doc_id))
         assert _do_kb_tokens(env) == {}
         assert selected() == 0
+
+
+def test_deleted_do_kb_cleanup_removes_duplicates_without_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed-out writer created source A, its token was later pruned, and a
+    sync whose dedup missed A recorded source B. Deleting the document must
+    remove every source under its key, not only the recorded uuid."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.core.config import settings
+    from src.services.documents.object_keys import canonical_text_key
+    from src.tasks.reconcile_tasks import _cleanup_deleted_do_kb_document
+
+    with _ingestion() as env:
+        with env.Session() as db:
+            doc = db.get(Document, env.doc_id)
+            own_key = canonical_text_key(doc)
+            doc.do_kb_data_source_uuid = "ds-B"
+            doc.soft_delete()
+            db.commit()
+
+        api = MagicMock()
+        api.list_data_sources = AsyncMock(
+            return_value=[
+                {"uuid": "ds-A", "spaces_data_source": {"item_path": own_key}},
+                {"uuid": "ds-B", "spaces_data_source": {"item_path": own_key}},
+            ]
+        )
+        api.delete_data_source = AsyncMock()
+        monkeypatch.setattr(settings, "DO_KB_ENABLED", True)
+        monkeypatch.setattr("src.core.database.AsyncSessionLocal", env.AsyncSession)
+        monkeypatch.setattr("src.services.do_kb.ingest.get_do_kb_client", lambda: api)
+        monkeypatch.setattr(
+            "src.services.do_kb.ingest.ensure_kb_for_org",
+            AsyncMock(return_value="kb-1"),
+        )
+        monkeypatch.setattr("src.core.s3_client.S3StorageHelper", MagicMock)
+
+        with env.Session() as db:
+            assert _cleanup_deleted_do_kb_document(db.get(Document, env.doc_id))
+
+        deleted = {c.kwargs["ds_uuid"] for c in api.delete_data_source.await_args_list}
+        assert deleted == {"ds-A", "ds-B"}
+        with env.Session() as db:
+            assert db.get(Document, env.doc_id).do_kb_data_source_uuid is None
