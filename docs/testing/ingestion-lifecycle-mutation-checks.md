@@ -307,3 +307,10 @@ These Postgres and unit tests prove the lease and retirement rules.
 The delete-time graph cleanup in `FileService` retires tokens in the same way.
 It has no dedicated mutation test: if it misses one, the reconciler (G22)
 retires it on its next run.
+
+### GOO-358 second review fixes
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G25 deleted documents are cleaned by key (`do_kb/ingest.py` `unsync_document_from_kb`) | key path disabled | `test_deleted_do_kb_cleanup_removes_duplicates_without_tokens` | `{'ds-B'} == {'ds-A','ds-B'}` |
+| G26 dedup stops at the first match (`do_kb/client.py` `find_data_source`) | full listing then match | `test_dedup_lookup_keeps_an_early_match_when_a_later_page_fails` | `None == 'ds-1'` |
