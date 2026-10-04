@@ -65,9 +65,23 @@ from .encrypted_user import (
     EncryptionAuditLog,
 )
 from .entity import Entity, EntityType, ExtractionMethod, entity_relationships
-from .extraction_matrix import ExtractionCell, ExtractionMatrix
+from .extraction_matrix import (
+    ExtractionAcceptedValue,
+    ExtractionCell,
+    ExtractionFormVersion,
+    ExtractionMatrix,
+    ExtractionObservation,
+)
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
+from .draft_release import DraftRelease
+from .research_appraisal import AppraisalAssessment
+from .research_evidence_table import (
+    EvidenceContradiction,
+    EvidenceTableVersion,
+    OutcomeCertaintyAssessment,
+)
+from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
 from .organization import Organization, StorageTier
@@ -122,12 +136,67 @@ from .research_protocol import (
     ResearchQuestion,
     ResearchQuestionVersion,
 )
+from .research_fulltext import ResearchFulltextAttempt, ResearchFulltextRequest
+from .research_import import ResearchImportReceipt, ResearchImportRecord
 from .research_project import ResearchProject
 from .research_project_role import ResearchProjectRole, ResearchProjectRoleAssignment
+from .research_report import (
+    ResearchReport,
+    ResearchReportIdentifier,
+    ResearchReportObservation,
+    ResearchStudy,
+)
+from .research_synthesis import SynthesisResult
+from .research_experiment import (
+    ResearchFigure,
+    ResearchRunArtifact,
+    ResearchRunManifest,
+)
+from .research_rerun import ExperimentRerun, ExperimentRerunAttempt
+from .manuscript_release import ManuscriptRelease
+from .research_deposit import (
+    ArchiveDepositApproval,
+    ArchiveDepositAttempt,
+    ArchiveDepositOutbox,
+)
+from .research_search_update import (
+    ResearchSearchExecution,
+    ResearchSearchExecutionAttempt,
+    ResearchSearchExecutionResult,
+    ResearchSearchSchedule,
+)
+from .research_review_version import ResearchReviewReleaseLink, ResearchReviewVersion
+from .manuscript_statements import (
+    ManuscriptStatementApproval,
+    ManuscriptStatementSet,
+    OrcidAuthentication,
+    VenueCheck,
+)
+from .peer_review import (
+    PeerReviewComment,
+    PeerReviewDecision,
+    PeerReviewResponse,
+    PeerReviewReviewer,
+    PeerReviewRound,
+)
+from .research_claim import (
+    ResearchClaim,
+    ResearchClaimAssessment,
+    ResearchClaimEvidenceLink,
+    ResearchClaimStanceObservation,
+    ResearchClaimVersion,
+)
 from .research_run import ResearchRun, RunStatus
 from .research_source import ResearchSource
 from .research_stage_review import ResearchStageReview
 from .research_step import ExecutionMode, ResearchStep, StepType
+from .screening import (
+    ScreeningAssignment,
+    ScreeningObservation,
+    ScreeningQueue,
+    ScreeningResolution,
+    ScreeningSuggestion,
+)
 
 # Evaluation models (must import after User/Organization for monkey-patched relationships)
 from .evaluation import (
@@ -209,6 +278,12 @@ __all__ = [
     "ProjectSkillChangeRequest",
     "ProjectSkillVersionScan",
     "GeneratedDraft",
+    "DraftRelease",
+    "AppraisalAssessment",
+    "EvidenceContradiction",
+    "EvidenceTableVersion",
+    "OutcomeCertaintyAssessment",
+    "DraftTaskResult",
     "DraftCitation",
     "DraftReview",
     "ProjectThread",
@@ -261,6 +336,40 @@ __all__ = [
     # Extraction Matrix models
     "ExtractionMatrix",
     "ExtractionCell",
+    "ExtractionFormVersion",
+    "ExtractionObservation",
+    "ExtractionAcceptedValue",
+    # Versioned claims (GOO-306)
+    "SynthesisResult",
+    "ResearchRunManifest",
+    "ResearchRunArtifact",
+    "ResearchFigure",
+    "ExperimentRerun",
+    "ExperimentRerunAttempt",
+    "PeerReviewRound",
+    "PeerReviewReviewer",
+    "PeerReviewComment",
+    "PeerReviewResponse",
+    "PeerReviewDecision",
+    "ManuscriptRelease",
+    "ManuscriptStatementSet",
+    "ManuscriptStatementApproval",
+    "OrcidAuthentication",
+    "VenueCheck",
+    "ArchiveDepositApproval",
+    "ArchiveDepositAttempt",
+    "ArchiveDepositOutbox",
+    "ResearchSearchSchedule",
+    "ResearchSearchExecution",
+    "ResearchSearchExecutionAttempt",
+    "ResearchSearchExecutionResult",
+    "ResearchReviewVersion",
+    "ResearchReviewReleaseLink",
+    "ResearchClaim",
+    "ResearchClaimVersion",
+    "ResearchClaimEvidenceLink",
+    "ResearchClaimStanceObservation",
+    "ResearchClaimAssessment",
     # Integrity Score models
     "IntegrityScore",
     # Research Engine models
@@ -281,6 +390,19 @@ __all__ = [
     "ExecutionMode",
     "ResearchSource",
     "ResearchStageReview",
+    "ResearchFulltextRequest",
+    "ResearchFulltextAttempt",
+    "ResearchImportReceipt",
+    "ResearchImportRecord",
+    "ResearchReport",
+    "ResearchReportIdentifier",
+    "ResearchReportObservation",
+    "ResearchStudy",
+    "ScreeningQueue",
+    "ScreeningAssignment",
+    "ScreeningObservation",
+    "ScreeningSuggestion",
+    "ScreeningResolution",
     # Research Pipeline
     "ResearchPipeline",
     # Evaluation models
@@ -308,9 +430,17 @@ from .evidence import StanceClassificationModel, StanceEnum  # noqa: E402
 
 __all__ += ["StanceClassificationModel", "StanceEnum"]
 
+from .artifact import (
+    Artifact,
+    ArtifactLifecycleOutbox,
+    ArtifactReference,
+    ArtifactUpload,
+    ArtifactVersion,
+)
 from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
+from .tool_action import IntegrationToolAction
 
 __all__ += [
     "HarnessSession",
@@ -318,4 +448,10 @@ __all__ += [
     "WorkspaceBinding",
     "IntegrationGrant",
     "IntegrationGrantRequest",
+    "IntegrationToolAction",
+    "Artifact",
+    "ArtifactVersion",
+    "ArtifactUpload",
+    "ArtifactReference",
+    "ArtifactLifecycleOutbox",
 ]

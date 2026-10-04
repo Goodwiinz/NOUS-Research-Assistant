@@ -14,4 +14,4 @@ keywords:
   - nous
   - knowledge-graph
   - multimodal
-# All databases are external (DO Managed) — no subchart dependencies
+# PostgreSQL/Redis are externally managed; Neo4j uses our own templates, not subcharts.

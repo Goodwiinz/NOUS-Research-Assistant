@@ -6,40 +6,57 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import { cn } from '@/lib/utils';
+
+export const ANCHOR_LABELS: Record<string, string> = {
+  verified: 'verified',
+  ambiguous: 'ambiguous',
+  unverified: 'unverified',
+  location_unavailable: 'location unavailable',
+  legacy_unanchored: 'legacy, no source location',
+  disambiguated: 'disambiguated',
+  accepted_unverified: 'accepted unverified',
+  not_applicable: 'no source location',
+  legacy: 'legacy, no source location',
+};
 
 interface CellCitationProps {
   citation_snippet: string | null;
-  confidence: number | null;
+  anchorStatus?: string | null;
+  /** Opens the cell's evidence drawer; without it a legacy snippet popover. */
+  onOpen?: () => void;
 }
 
-function getConfidenceColor(confidence: number): string {
-  if (confidence > 0.8) return 'bg-sol';
-  if (confidence > 0.5) return 'bg-helios';
-  return 'bg-red-500';
-}
+const BUTTON =
+  'inline-flex items-center justify-center h-5 w-5 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors';
 
-function getConfidenceLabel(confidence: number): string {
-  if (confidence > 0.8) return 'High';
-  if (confidence > 0.5) return 'Medium';
-  return 'Low';
-}
-
+/** Evidence entry point for one cell. GOO-305: never renders a confidence. */
 export function CellCitation({
   citation_snippet,
-  confidence,
-}: CellCitationProps) {
+  anchorStatus,
+  onOpen,
+}: CellCitationProps): React.JSX.Element | null {
+  const status = anchorStatus
+    ? (ANCHOR_LABELS[anchorStatus] ?? anchorStatus)
+    : 'unverified';
+  const label = `Evidence: ${status}`;
+  if (onOpen) {
+    return (
+      <button
+        type="button"
+        className={BUTTON}
+        aria-label={label}
+        onClick={onOpen}
+      >
+        <Quote className="h-3 w-3" />
+      </button>
+    );
+  }
   if (!citation_snippet) return null;
-
-  const conf = confidence ?? 0;
 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
-          className="inline-flex items-center justify-center h-5 w-5 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-          aria-label="View citation"
-        >
+        <button type="button" className={BUTTON} aria-label={label}>
           <Quote className="h-3 w-3" />
         </button>
       </PopoverTrigger>
@@ -48,39 +65,10 @@ export function CellCitation({
         side="top"
         align="start"
       >
-        <p className="text-xs text-muted-foreground italic leading-relaxed mb-3">
+        <p className="text-xs text-muted-foreground italic leading-relaxed mb-2">
           {citation_snippet}
         </p>
-        {confidence !== null && (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-muted-foreground">
-                Confidence
-              </span>
-              <span
-                className={cn(
-                  'text-[10px]',
-                  conf > 0.8
-                    ? 'text-sol'
-                    : conf > 0.5
-                      ? 'text-helios'
-                      : 'text-red-400'
-                )}
-              >
-                {getConfidenceLabel(conf)} ({Math.round(conf * 100)}%)
-              </span>
-            </div>
-            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-              <div
-                className={cn(
-                  'h-full rounded-full transition-all',
-                  getConfidenceColor(conf)
-                )}
-                style={{ width: `${Math.round(conf * 100)}%` }}
-              />
-            </div>
-          </div>
-        )}
+        <p className="text-[10px] text-muted-foreground">{status}</p>
       </PopoverContent>
     </Popover>
   );

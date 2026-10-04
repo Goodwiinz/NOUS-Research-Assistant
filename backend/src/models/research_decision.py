@@ -104,4 +104,11 @@ class ResearchDecisionEvent(Base):
         ),
         Index("idx_research_decision_event_collection_seq", "collection_id", "seq"),
         Index("idx_research_decision_event_stream_seq", "stream_id", "seq"),
+        # Collection-scoped idempotency lookups (GOO-301 screening queue create).
+        Index(
+            "idx_research_decision_event_idempotency",
+            "collection_id",
+            "event_type",
+            "idempotency_key",
+        ),
     )

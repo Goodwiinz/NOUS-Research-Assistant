@@ -37,13 +37,13 @@ import logging
 from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.models.chat_message import ChatMessage
 from src.models.citation import Citation
-from src.models.collection import Collection
+from src.models.collection import Collection, CollectionDocument
 from src.models.conversation import Conversation
 from src.models.document import Document
 from src.models.message_attachment import MessageAttachment
@@ -71,6 +71,23 @@ def user_can_access_workspace(workspace: Workspace, user_id: UUID) -> bool:
     if str(workspace.owner_id) == str(user_id):
         return True
     return workspace.is_member(str(user_id))
+
+
+def member_or_owner_workspace_clause(user_id: UUID) -> ColumnElement[bool]:
+    """SQL twin of ``user_can_access_workspace`` for listings: live, owned or joined.
+
+    Public workspaces the caller never joined are deliberately left out — they
+    stay readable by id through the getters below, but a "my threads" listing
+    must not enumerate every public workspace. Soft-deleted memberships do not
+    count, matching ``Workspace.is_member``.
+    """
+    joined = select(WorkspaceMember.workspace_id).where(
+        WorkspaceMember.user_id == user_id,
+        WorkspaceMember.is_deleted == False,  # noqa: E712
+    )
+    return (Workspace.is_deleted == False) & or_(  # noqa: E712
+        Workspace.owner_id == user_id, Workspace.id.in_(joined)
+    )
 
 
 async def get_workspace(
@@ -306,7 +323,9 @@ async def get_collection(
 
     options = [selectinload(Collection.workspace).selectinload(Workspace.members)]
     if load_documents:
-        options.append(selectinload(Collection.documents))
+        options.append(
+            selectinload(Collection.documents).selectinload(CollectionDocument.document)
+        )
 
     stmt = select(Collection).options(*options).where(*conditions)
     result = await db.execute(stmt)

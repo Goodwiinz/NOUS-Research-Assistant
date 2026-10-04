@@ -9,6 +9,10 @@ metadata:
   # forced pod-name truncation and left zero headroom before Jobs would fail to
   # create. Base on the release name only. trunc 52 = the CronJob-name ceiling.
   name: {{ printf "%s-synthetic-traffic" .Release.Name | trunc 52 | trimSuffix "-" }}
+  {{- if .Values.backend.migrations.enabled }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  {{- end }}
   labels:
     {{- include "knowledge-graph-analytics.labels" . | nindent 4 }}
     app.kubernetes.io/component: synthetic-traffic
@@ -69,13 +73,9 @@ spec:
                 {{- toYaml .Values.backend.envFrom | nindent 16 }}
                 {{- end }}
               env:
-                {{- include "knowledge-graph-analytics.mergedEnv" (dict "base" .Values.backend.env "override" .Values.syntheticTraffic.env) | nindent 16 }}
-                # Ensure PYTHONPATH and ENVIRONMENT are always set even if
-                # backend.env is overridden in a future values file.
-                - name: ENVIRONMENT
-                  value: {{ .Values.global.environment | default "dev" | quote }}
-                - name: PYTHONPATH
-                  value: "/app"
+                {{- $defaults := list (dict "name" "ENVIRONMENT" "value" (.Values.global.environment | default "dev")) (dict "name" "PYTHONPATH" "value" "/app") }}
+                {{- $base := include "knowledge-graph-analytics.mergedEnv" (dict "base" $defaults "override" .Values.backend.env) | fromYamlArray }}
+                {{- include "knowledge-graph-analytics.mergedEnv" (dict "base" $base "override" .Values.syntheticTraffic.env) | nindent 16 }}
               # The job loads the full LangGraph agent (model clients, tool
               # registry, embeddings) once per run — the same stack the backend
               # serving pod runs. 512Mi OOM-killed every fire; size the floor to

@@ -149,6 +149,8 @@ async def seed_approved_protocol_binding(
     steps: list[dict[str, Any]],
     parameters: dict[str, Any],
     blueprint_version: int = 1,
+    snapshot: Mapping[str, Any] = _PROTOCOL_SNAPSHOT,
+    hypothesis: str | None = None,
 ) -> ApprovedProtocolBinding:
     """Bind an isolated run fixture to the exact approved blueprint plan."""
     question_id = uuid4()
@@ -165,14 +167,14 @@ async def seed_approved_protocol_binding(
         protocol_content(
             question_version_id,
             blueprint_id,
-            _PROTOCOL_SNAPSHOT,
+            snapshot,
             execution_plan,
         )
     )
     question_hash = canonical_hash(
         {
             "question": "Fixture research question",
-            "hypothesis": None,
+            "hypothesis": hypothesis,
             "scope": None,
             "framework": {},
             "canonicalization_version": "research-protocol-v1",
@@ -194,12 +196,13 @@ async def seed_approved_protocol_binding(
                    created_at
                ) VALUES (
                    :id, :question_id, 1, NULL, 'Fixture research question',
-                   NULL, NULL, CAST(:framework AS jsonb), :content_hash,
+                   :hypothesis, NULL, CAST(:framework AS jsonb), :content_hash,
                    :author_user_id, now()
                )"""),
         {
             "id": question_version_id,
             "question_id": question_id,
+            "hypothesis": hypothesis,
             "framework": json.dumps({}),
             "content_hash": question_hash,
             "author_user_id": author_id,
@@ -243,7 +246,7 @@ async def seed_approved_protocol_binding(
             "question_version_id": question_version_id,
             "blueprint_id": blueprint_id,
             "execution_plan": json.dumps(execution_plan),
-            "snapshot": json.dumps(_PROTOCOL_SNAPSHOT),
+            "snapshot": json.dumps(snapshot),
             "content_hash": content_hash,
             "author_user_id": author_id,
         },

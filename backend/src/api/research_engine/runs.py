@@ -32,6 +32,7 @@ from src.schemas.research_engine import (
     validate_blueprint_runtime,
 )
 from src.services.expensive_work_admission import admit_expensive_work
+from src.services.research_engine import experiment_service
 from src.services.research_engine.connectors import (
     ArxivConnector,
     RagStoreConnector,
@@ -81,6 +82,7 @@ from src.services.research_engine.scope import (
     canonicalize_scope_confirmation,
     resolve_effective_daily_brief_parameters,
 )
+from src.services.research_engine.search_receipts import SearchReceiptJournal
 from src.services.research_engine.source_persistence import research_source_rows
 from src.services.research_engine.step_executor import StepExecutor
 
@@ -523,14 +525,14 @@ async def get_manifest(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get reproducibility manifest for a completed run."""
+    """Get the current manifest, including durable in-flight search receipts."""
     run = await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
-    if run.status != RunStatus.COMPLETED.value:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Run is not completed",
-        )
-    return run.reproducibility_manifest or {}
+    manifest = dict(run.reproducibility_manifest or {})
+    manifest.pop(_PAUSE_REQUESTED_KEY, None)
+    return {
+        **manifest,
+        "run_status": run.status,
+    }
 
 
 @router.get("/runs/{run_id}/export")
@@ -830,7 +832,24 @@ async def stream_run(
         )
 
     try:
-        executor = StepExecutor(providers=providers, connectors=connectors)
+        receipt_journal = SearchReceiptJournal(db, run_id, current_user.id)
+        executor = StepExecutor(
+            providers=providers,
+            connectors=connectors,
+            strategy_context={
+                "run_id": str(run.id),
+                "canonical_project_id": str(canonical_project_id),
+                "protocol_version_id": (
+                    str(run.protocol_version_id) if run.protocol_version_id else None
+                ),
+                "effective_plan_hash": run.effective_plan_hash,
+                "blueprint_id": approved_plan["blueprint_id"],
+                "blueprint_version": approved_plan["blueprint_version"],
+                "organization_id": str(organization_id),
+            },
+            on_search_page=receipt_journal.persist_page,
+            analyze_inputs=experiment_service.input_loader(db, canonical_project_id),
+        )
         engine = WorkflowEngine(step_executor=executor)
         await db.refresh(run)
     except BaseException:
@@ -838,6 +857,16 @@ async def stream_run(
             lifecycle.release_stream_claim(run=run, claim=stream_claim)
         )
         raise
+
+    async def _record_manifest(run: ResearchRun) -> None:
+        await experiment_service.record_manifest(
+            db,
+            run,
+            steps=blueprint_dict["steps"],
+            collection_id=canonical_project_id,
+            organization_id=organization_id,
+            actor_id=actor_user_id,
+        )
 
     async def event_generator():
         """Yield SSE-formatted events from the workflow engine."""
@@ -945,6 +974,19 @@ async def stream_run(
                     output = event.get("output")
                     if output is not None and not isinstance(output, dict):
                         output = {"value": output}
+                    coverage = output.get("coverage") if output else None
+                    if (
+                        step_def.get("type") == "search"
+                        and isinstance(coverage, dict)
+                        and isinstance(coverage.get("search_strategy"), dict)
+                    ):
+                        # Attach imported IDs and attempt history to the durable
+                        # journal; the lifecycle commit below persists both.
+                        await receipt_journal.finalize_search_step(
+                            step_id=str(event.get("step_id") or step_def.get("id")),
+                            strategy=coverage["search_strategy"],
+                            output=output,
+                        )
                     source_rows = (
                         research_source_rows(run_id, output)
                         if step_def.get("type") == "search" and output
@@ -955,6 +997,7 @@ async def stream_run(
                         event={**event, "output": output},
                         step_definition=step_def,
                         source_rows=source_rows,
+                        collection_id=canonical_project_id,
                     )
                     total_tokens = int(run.total_tokens or 0)
                     pause_anchor_index = int(transition.step.step_index)
@@ -1001,6 +1044,11 @@ async def stream_run(
                     run.status = RunStatus.FAILED.value
                     run.total_tokens = total_tokens
                     run.completed_at = datetime.now(timezone.utc)
+                    # GOO-312: a failed experiment is recorded, incomplete.
+                    try:
+                        await _record_manifest(run)
+                    except experiment_service.ManifestSecretDetected:
+                        pass  # the run already failed; nothing is recorded
                     await db.commit()
                 elif event_type == "step_error":
                     consumed_tokens = max(0, int(event.get("consumed_tokens") or 0))
@@ -1055,6 +1103,22 @@ async def stream_run(
                         "parameters_override": parameter_overrides,
                         "parameters": effective_parameters,
                     }
+                    # GOO-312: the v2 manifest commits with the terminal status.
+                    try:
+                        await _record_manifest(run)
+                    except experiment_service.ManifestSecretDetected as exc:
+                        run.status = RunStatus.FAILED.value
+                        run.reproducibility_manifest = {
+                            **run.reproducibility_manifest,
+                            "final_status": "failed",
+                            "failure": str(exc),
+                        }
+                        event = {
+                            "event": "run_failed",
+                            "run_id": str(run.id),
+                            "error": str(exc),
+                            "error_category": str(exc),
+                        }
                     await db.commit()
 
                 event_type = event.get("event", "message")

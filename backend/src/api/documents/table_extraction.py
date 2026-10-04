@@ -142,10 +142,11 @@ async def extract_region(
             x2=body.x2,
             y2=body.y2,
         )
-    except ValueError as exc:
+    except ValueError:
+        logger.warning("Invalid extraction region", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
+            detail="Invalid extraction region",
         )
     except Exception as exc:
         logger.error(

@@ -15,6 +15,7 @@ Adding a route commit there would double-commit. The read-only ``select(...)``
 re-fetch after that call is a response-shaping query, not a transaction.
 """
 
+import logging
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -40,6 +41,8 @@ from src.services.threads import message_service, workspace_access
 
 from .dependencies import _get_thread_or_404
 from .presenters import _message_to_response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/workspaces", tags=["workspaces"])
 
@@ -196,8 +199,9 @@ async def update_message_feedback(
             conversation_id=conversation_id,
             workspace_id=workspace_id,
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
 
@@ -361,8 +365,9 @@ async def update_message_standalone(
         message = await message_service.update_message_feedback(
             db, message_id, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
 
@@ -383,8 +388,9 @@ async def delete_message_standalone(
         deleted = await message_service.delete_message(
             db, message_id, current_user.id, require_author_or_admin=False
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Message not found")
 

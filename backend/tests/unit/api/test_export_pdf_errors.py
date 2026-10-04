@@ -63,7 +63,7 @@ async def test_single_pdf_renderer_unavailable_is_a_safe_503(
         )
 
     assert raised.value.status_code == 503
-    assert raised.value.detail == "PDF export unavailable"
+    assert raised.value.detail == "PDF export is currently unavailable"
 
 
 @pytest.mark.asyncio
@@ -83,7 +83,7 @@ async def test_stream_pdf_renderer_unavailable_is_a_safe_503(
         )
 
     assert raised.value.status_code == 503
-    assert raised.value.detail == "PDF export unavailable"
+    assert raised.value.detail == "PDF export is currently unavailable"
 
 
 @pytest.mark.asyncio
@@ -106,7 +106,7 @@ async def test_batch_pdf_renderer_unavailable_is_a_safe_503(
         )
 
     assert raised.value.status_code == 503
-    assert raised.value.detail == "PDF export unavailable"
+    assert raised.value.detail == "PDF export is currently unavailable"
 
 
 @pytest.mark.asyncio

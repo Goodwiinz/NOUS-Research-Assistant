@@ -261,7 +261,6 @@ async def add_documents_to_collection(
                     select(CollectionDocument).where(
                         CollectionDocument.collection_id == collection_id,
                         CollectionDocument.document_id == doc_id,
-                        CollectionDocument.is_deleted == False,  # noqa: E712
                     )
                 )
             )
@@ -276,11 +275,18 @@ async def add_documents_to_collection(
                     sort_order=max_order + i + 1,
                 )
             )
+        elif existing.is_deleted:
+            # Revive the soft-deleted row; a second insert would violate
+            # uq_collection_documents (R6-M7).
+            existing.restore()
+            existing.sort_order = max_order + i + 1
 
     await db.flush()
-    # See create_collection: re-fetch with `.documents` eager-loaded rather
-    # than db.refresh(), which would expire the relationship and
-    # MissingGreenlet on next access under the async session.
+    # The rows above were added by FK only, and `collection.documents` is
+    # already loaded (identity-mapped), so the re-fetch below would return it
+    # stale. Expire just that attribute (AsyncSession.expire is sync) so the
+    # eager load repopulates it. See create_collection for why not db.refresh().
+    db.expire(collection, ["documents"])
     updated = await workspace_access.get_collection(db, collection_id, user_id)
     assert updated is not None
     return updated

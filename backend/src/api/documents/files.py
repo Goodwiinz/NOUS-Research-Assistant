@@ -46,6 +46,19 @@ router = APIRouter(prefix="/files", tags=["files"])
 logger = logging.getLogger(__name__)
 
 
+# Authoritative I8 response-boundary allowlist. FileValidationError.public_detail
+# is a candidate, not trusted text: only these exact static reasons may reach
+# clients. The five service raise sites use four distinct reasons (quota repeats).
+_SAFE_FILE_VALIDATION_DETAILS = frozenset(
+    {
+        "File exceeds the maximum allowed size",
+        "Insufficient storage quota",
+        "Archive uploads are not supported; extract and upload the files",
+        "File type is not allowed",
+    }
+)
+
+
 def _escape_like(value: str) -> str:
     """Escape SQL LIKE special characters."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -249,9 +262,19 @@ async def upload_file(
     except HTTPException:
         # R2-M10: intentional 4xx (validation/quota) must not be re-wrapped.
         raise
-    except FileValidationError as e:
-        # FileService validation messages are intentionally safe and actionable.
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except FileValidationError as exc:
+        # I8: raw exception text stays out of client responses (it goes to the
+        # log); validate public_detail against the authoritative allowlist here,
+        # even if a future raise site supplies an arbitrary string.
+        logger.warning("File validation failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                exc.public_detail
+                if exc.public_detail in _SAFE_FILE_VALIDATION_DETAILS
+                else "File validation failed"
+            ),
+        )
     except FileStorageError:
         logger.error("File upload failed", exc_info=True)
         raise HTTPException(
@@ -430,21 +453,26 @@ def _object_response(signed_url: str, document: Document) -> StreamingResponse:
     embedding are disabled. The viewer renders an object URL built from the
     blob, so `attachment` costs it nothing.
     """
+    media_type, headers = _hardened_download(document)
+    return StreamingResponse(
+        _iter_signed_url(signed_url), media_type=media_type, headers=headers
+    )
+
+
+def _hardened_download(document: Document) -> tuple[str, dict[str, str]]:
+    """Media type + headers every download branch serves (I10: the local
+    branch used to echo the stored mime_type inline with no hardening)."""
     filename = document.filename or "download"
     mime_type = (document.mime_type or "").split(";")[0].strip().lower()
     if mime_type not in _SERVEABLE_MIME_TYPES:
         mime_type = "application/octet-stream"
-    return StreamingResponse(
-        _iter_signed_url(signed_url),
-        media_type=mime_type,
-        headers={
-            # RFC 5987 form so non-ASCII filenames survive the header; quote()
-            # also keeps CR/LF in a stored filename out of the response headers.
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; sandbox",
-        },
-    )
+    return mime_type, {
+        # RFC 5987 form so non-ASCII filenames survive the header; quote()
+        # also keeps CR/LF in a stored filename out of the response headers.
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    }
 
 
 @router.get("/{file_id}/download")
@@ -514,11 +542,8 @@ async def download_file(
             status_code=status.HTTP_404_NOT_FOUND, detail="File not found on disk"
         )
 
-    return FileResponse(
-        path=document.file_path,
-        filename=document.filename,
-        media_type=document.mime_type,
-    )
+    media_type, headers = _hardened_download(document)
+    return FileResponse(path=document.file_path, media_type=media_type, headers=headers)
 
 
 @router.put("/{file_id}")
@@ -574,9 +599,13 @@ async def update_file_metadata(
             "file": document.to_dict(),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.error("Failed to update file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to update file",
+        )
 
 
 @router.delete("/{file_id}")
@@ -612,8 +641,14 @@ async def delete_file(
                 detail="Failed to delete file",
             )
 
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Failed to delete file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to delete file",
+        )
 
 
 @router.get("/{file_id}/content")
@@ -707,74 +742,24 @@ async def cancel_upload(
                 detail="Invalid upload ID format. Must be a valid UUID.",
             )
 
-        # First, check if upload_id exists in processing jobs
-
-        job_stmt = select(ProcessingJob).where(
-            ProcessingJob.celery_task_id == upload_id, ProcessingJob.is_deleted == False
-        )
-        job_result = await db.execute(job_stmt)
-        processing_job = job_result.scalars().first()
-
-        if processing_job:
-            # Handle processing job cancellation
-            # Check if user owns this job
-            if processing_job.created_by_user_id != current_user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You can only cancel your own uploads",
-                )
-
-            # Check if job can be cancelled. JobStatus is a plain PyEnum, so the
-            # old `status not in ["pending", "running"]` compared enum members
-            # to strings — always True, so every cancel early-returned and the
-            # block below was dead (and would have written the raw string
-            # "cancelled" into the enum column). Compare against enum members.
-            if processing_job.status not in (
-                JobStatus.PENDING,
-                JobStatus.QUEUED,
-                JobStatus.RUNNING,
-                JobStatus.RETRYING,
-            ):
+        cancellation = await file_service.cancel_upload_job(upload_id, current_user)
+        if cancellation is not None:
+            if not cancellation.cancelled:
                 return {
-                    "message": f"Cannot cancel job in {processing_job.status.value} state",
+                    "message": f"Cannot cancel job in {cancellation.status.value} state",
                     "upload_id": upload_id,
-                    "job_status": processing_job.status.value,
+                    "job_status": cancellation.status.value,
                 }
-
-            # cancel_job() sets status=CANCELLED + completed_at + duration.
-            processing_job.cancel_job()
-            processing_job.error_message = "Upload cancelled by user"
-            await db.commit()
-
-            # Also revoke the Celery task if one was dispatched, mirroring
-            # processing.py's cancel path — otherwise the worker keeps
-            # running the job after the DB row says cancelled. Best-effort:
-            # the cancel is already committed, so a broker hiccup here must
-            # not turn the response into a 500 (and roll nothing back).
-            if processing_job.celery_task_id:
-                try:
-                    from src.tasks.processing_tasks import current_app
-
-                    current_app.control.revoke(
-                        processing_job.celery_task_id, terminate=True
-                    )
-                except Exception as revoke_exc:
-                    logger.warning(
-                        "Failed to revoke Celery task %s for cancelled job %s: %s",
-                        processing_job.celery_task_id,
-                        processing_job.id,
-                        revoke_exc,
-                    )
-
             return {
                 "message": "Upload cancelled successfully",
                 "upload_id": upload_id,
-                "job_id": processing_job.id,
+                "job_id": cancellation.job_id,
             }
 
         # If no processing job found, check if it's a document ID
         doc_stmt = select(Document).where(
             Document.id == upload_id,
+            Document.organization_id == current_user.organization_id,
             Document.uploaded_by_user_id == current_user.id,
             Document.is_deleted == False,
         )
@@ -814,7 +799,6 @@ async def cancel_upload(
     except HTTPException:
         raise
     except Exception as e:
-        await db.rollback()
         logger.error(f"Failed to cancel upload: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -903,6 +887,10 @@ async def reprocess_file(
             "job_id": str(processing_job.id),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.error("Failed to reprocess file", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to reprocess file",
+        )

@@ -67,8 +67,9 @@ class AgentOutboxStatus(StrEnum):
     ``PENDING`` is written inside the accept transaction — it means "the system
     has durably promised to dispatch this run", not "dispatch has happened".
     ``DISPATCHED`` is stamped once the dispatch actually occurred (today: the
-    in-process graph iterator opened on the ``/stream`` path). ``FAILED`` marks
-    a record a future relay gave up on; nothing writes it yet.
+    in-process graph iterator opened on the ``/stream`` path). ``FAILED``
+    retires the intent of a run that terminalized without completing
+    (``fail_queued_submission`` and the stale-run sweeper).
 
     Members ARE the stored strings (``StrEnum``), and the set is rendered into
     the table's CHECK constraint, so the column domain cannot drift from this
@@ -321,6 +322,8 @@ class AgentStreamEvent(StrEnum):
     APPROVAL_REQUIRED = "approval_required"
     DONE = "done"
     ERROR = "error"
+    # ID-only announcement that an artifact version was committed for this run.
+    ARTIFACT = "artifact"
 
 
 class AgentErrorCategory(StrEnum):

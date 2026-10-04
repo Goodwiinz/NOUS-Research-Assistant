@@ -1111,9 +1111,12 @@ export default function ProjectDetailPage() {
                               pollFailures = 0;
                               setGenerationStatus(status);
                               if (
-                                !['completed', 'failed', 'cancelled'].includes(
-                                  status.status
-                                )
+                                ![
+                                  'completed',
+                                  'failed',
+                                  'cancelled',
+                                  'interrupted',
+                                ].includes(status.status)
                               ) {
                                 pollTimeoutRef.current = setTimeout(
                                   pollStatus,
@@ -1130,6 +1133,8 @@ export default function ProjectDetailPage() {
                                   current_step:
                                     'Lost contact with the generation job after repeated errors.',
                                   started_at: new Date().toISOString(),
+                                  // Client-synthesized; not a server record.
+                                  state_source: 'cache',
                                 });
                                 return;
                               }
@@ -1342,7 +1347,11 @@ export default function ProjectDetailPage() {
 
         {/* Research engine workflow uses the same canonical Collection ID. */}
         {activeTab === 'workflow' && currentProject && (
-          <ProjectWorkflow key={currentProject.id} project={currentProject} />
+          <ProjectWorkflow
+            key={currentProject.id}
+            project={currentProject}
+            onOpenTab={handleTabChange}
+          />
         )}
 
         {/* Knowledge Tab */}

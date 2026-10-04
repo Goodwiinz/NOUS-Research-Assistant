@@ -225,6 +225,7 @@ async def test_generate_draft_reuses_active_generation():
     ]
     db.execute = AsyncMock(return_value=query_result)
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
 
     with patch(
         "src.services.research.extraction_matrix_service"
@@ -266,6 +267,9 @@ async def test_generate_draft_reuses_active_generation():
     fire.assert_not_called()
     assert result["task_id"] == "abc123"
     assert "already in progress" in result["message"]
+    # GOO-321 #4: the caller waits on this task; its authorization locks
+    # (Workspace SHARE, Collection UPDATE) must not outlive this call.
+    db.rollback.assert_awaited_once_with()
 
 
 @pytest.mark.parametrize(
@@ -289,6 +293,7 @@ async def test_active_generation_conflicts_on_exact_instruction_or_source_change
     ]
     db.execute = AsyncMock(return_value=query_result)
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
 
     with patch(
         "src.services.research.extraction_matrix_service"
@@ -332,6 +337,7 @@ async def test_active_generation_conflicts_on_exact_instruction_or_source_change
     assert "task_id" not in result
     fire.assert_not_called()
     publish.assert_not_awaited()
+    db.rollback.assert_awaited_once_with()
 
 
 def test_generation_request_hash_has_scope_version_and_canonical_style() -> None:
@@ -425,6 +431,7 @@ async def test_generation_rechecks_exact_sources_immediately_before_model_dispat
         yield ReadSession()
 
     monkeypatch.setattr(module, "AsyncSessionLocal", session_factory)
+    monkeypatch.setattr(module, "finish_task", AsyncMock(return_value=True))
 
     async def no_sleep(_seconds: float) -> None:
         return None

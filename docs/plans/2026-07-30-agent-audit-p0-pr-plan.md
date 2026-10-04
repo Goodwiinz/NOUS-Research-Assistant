@@ -21,7 +21,7 @@ OpenTelemetry, Prometheus, LangSmith, pytest, Vitest, Playwright.
 
 ## Detailed source
 
-The audit this plan implements is `docs/system-design-audit-2026-07-30.md`.
+The audit this plan implements is `docs/audits/system/system-design-audit-2026-07-30.md`.
 
 The step-by-step implementation *reference* is
 `docs/plans/2026-07-30-full-agent-p0-implementation.md`. That document is

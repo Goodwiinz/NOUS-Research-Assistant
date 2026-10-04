@@ -1,0 +1,79 @@
+{
+  "step": "E4-05-archived-corpus-export",
+  "as": "approver",
+  "at": "2026-09-30T21:07:49.957365+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/f40af11e-87a0-49a6-a715-714ef2298799/corpus/export?format=json",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "body": {
+      "counts": {
+        "providers": {},
+        "receipts": {},
+        "tables": {
+          "decisions": 0,
+          "identifiers": 0,
+          "import_receipts": 0,
+          "import_records": 0,
+          "observations": 0,
+          "reports": 0,
+          "runs": 0,
+          "sources": 0,
+          "studies": 0
+        }
+      },
+      "coverage": {
+        "citation_chasing": {
+          "directions": [],
+          "missing_directions": [],
+          "performed": [],
+          "required": false
+        },
+        "exhaustive": false,
+        "found": [],
+        "missing": [],
+        "not_searched": [
+          "arxiv",
+          "crossref",
+          "openalex",
+          "pubmed",
+          "rag_store",
+          "semantic_scholar"
+        ],
+        "recall": null,
+        "searched": [],
+        "statement": "Coverage lists what was searched, imported and chased for this project. It is not exhaustive and does not prove that no other relevant records exist."
+      },
+      "failures": [],
+      "identities": {
+        "decisions": [],
+        "identifiers": [],
+        "observations": [],
+        "reports": [],
+        "studies": []
+      },
+      "imports": [],
+      "omissions": [],
+      "project": {
+        "collection_id": "f40af11e-87a0-49a6-a715-714ef2298799",
+        "name": "eval-2026-09-29-archived"
+      },
+      "protocol": {
+        "citation_chasing": null,
+        "content_hash": null,
+        "current_approved_version_id": null
+      },
+      "searches": [],
+      "sources": []
+    },
+    "body_sha256": "5daac59717aabe1f1fcdada436426330d9970bc95f4252dc66e04e8bd6a2770e",
+    "exported_at": "2026-09-30T21:07:49.940794+00:00",
+    "schema": "nous.academic.corpus-export.v1"
+  }
+}

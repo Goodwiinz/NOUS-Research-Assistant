@@ -8,26 +8,23 @@
  * On Vercel the frontend runs in a serverless runtime that cannot reach a
  * developer's `localhost:8000` — the previous hardcoded `http://localhost:8000`
  * probe was always meaningless there. We now resolve the backend origin from
- * `NEXT_PUBLIC_API_URL` (the canonical env var used by the API client) and skip
- * the probe entirely if it is unset or still points at localhost.
+ * the same helper as API rewrites (`BACKEND_URL || NEXT_PUBLIC_API_URL`) and
+ * skip the probe if configuration is unusable or still points at localhost.
  *
  * The frontend liveness result is decoupled from backend reachability: this
  * route returns 200 whenever the frontend is serving, so an unreachable or
  * unhealthy backend never makes the frontend appear down to uptime checks.
  */
 
+import { resolveBackendUrl } from '../../../config/resolveBackendUrl';
+
 const BACKEND_PROBE_TIMEOUT_MS = 3000;
 
 /** Resolve the backend origin to probe, or null when none is usable. */
 function resolveBackendOrigin(): string | null {
-  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (!configured) {
-    return null;
-  }
-
   let url: URL;
   try {
-    url = new URL(configured);
+    url = new URL(resolveBackendUrl());
   } catch {
     return null;
   }

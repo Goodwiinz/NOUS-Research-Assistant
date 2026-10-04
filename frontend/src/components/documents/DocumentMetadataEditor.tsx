@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   XMarkIcon,
   PencilIcon,
@@ -58,19 +58,39 @@ const FIELD_TYPES = [
   { value: 'boolean', label: 'Boolean' },
 ];
 
+function toFormData(document: Document | null): MetadataFormData {
+  return {
+    title: document?.title || '',
+    description: document?.description || '',
+    tags: document?.tags || [],
+    customFields: document?.custom_fields
+      ? Object.entries(document.custom_fields).map(([key, value]) => ({
+          id: `existing:${key}`,
+          key,
+          value: String(value),
+          type:
+            typeof value === 'number'
+              ? 'number'
+              : typeof value === 'boolean'
+                ? 'boolean'
+                : 'text',
+        }))
+      : [],
+  };
+}
+
 export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
   document,
   isOpen,
   onClose,
   onSave,
 }) => {
-  const [formData, setFormData] = useState<MetadataFormData>({
-    title: '',
-    description: '',
-    tags: [],
-    customFields: [],
-  });
+  const [formData, setFormData] = useState<MetadataFormData>(() =>
+    toFormData(document)
+  );
+  const [syncedDocument, setSyncedDocument] = useState(document);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [newTag, setNewTag] = useState('');
   const [newCustomField, setNewCustomField] = useState<CustomField>({
@@ -80,30 +100,18 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
     type: 'text',
   });
 
-  // Initialize form data when document changes
-  useEffect(() => {
-    if (document) {
-      setFormData({
-        title: document.title || '',
-        description: document.description || '',
-        tags: document.tags || [],
-        customFields: document.custom_fields
-          ? Object.entries(document.custom_fields).map(([key, value]) => ({
-              id: Math.random().toString(36).substr(2, 9),
-              key,
-              value: String(value),
-              type:
-                typeof value === 'number'
-                  ? 'number'
-                  : typeof value === 'boolean'
-                    ? 'boolean'
-                    : 'text',
-            }))
-          : [],
-      });
-      setHasChanges(false);
-    }
-  }, [document]);
+  // Re-initialise the form when a different document is passed in. Adjusting
+  // state during render (instead of in an effect) avoids a stale-form paint.
+  if (document !== syncedDocument) {
+    setSyncedDocument(document);
+    setFormData(toFormData(document));
+    setHasChanges(false);
+    setSaveError(null);
+  }
+  // A closed editor must not reopen with the previous attempt's error banner.
+  if (!isOpen && saveError) {
+    setSaveError(null);
+  }
 
   const handleInputChange = useCallback(
     <K extends keyof MetadataFormData>(
@@ -189,11 +197,21 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
   const handleSave = useCallback(async () => {
     if (!document || !hasChanges) return;
 
+    const badDate = formData.customFields.find(
+      (field) =>
+        field.type === 'date' && Number.isNaN(new Date(field.value).getTime())
+    );
+    if (badDate) {
+      setSaveError(`"${badDate.key}" is not a valid date.`);
+      return;
+    }
+
     setIsSaving(true);
+    setSaveError(null);
     try {
       const customFieldsObject = formData.customFields.reduce(
         (acc, field) => {
-          let value: any = field.value;
+          let value: string | number | boolean = field.value;
 
           // Convert value based on type
           if (field.type === 'number') {
@@ -207,7 +225,7 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
           acc[field.key] = value;
           return acc;
         },
-        {} as Record<string, any>
+        {} as Record<string, string | number | boolean>
       );
 
       const updatedMetadata: Partial<Document> = {
@@ -221,7 +239,7 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
       onClose();
     } catch (error) {
       console.error('Failed to save metadata:', error);
-      // TODO: Show error toast
+      setSaveError('Failed to save metadata. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -509,6 +527,12 @@ export const DocumentMetadataEditor: React.FC<DocumentMetadataEditorProps> = ({
               )}
             </div>
           </div>
+
+          {saveError && (
+            <p role="alert" className="text-sm text-destructive">
+              {saveError}
+            </p>
+          )}
 
           {/* Actions */}
           <div className="flex justify-end space-x-3 pt-4 border-t">

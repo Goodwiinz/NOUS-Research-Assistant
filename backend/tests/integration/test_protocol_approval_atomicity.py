@@ -97,6 +97,8 @@ async def protocol_engine(
             await connection.exec_driver_sql(
                 f"ALTER TABLE research_runs DROP COLUMN {column} CASCADE"
             )
+        # GOO-302: screening_resolutions.event_id references the ledger.
+        await connection.exec_driver_sql("DROP TABLE screening_resolutions")
         await connection.exec_driver_sql("DROP TABLE research_decision_events")
         await connection.exec_driver_sql("DROP TABLE research_decision_streams")
         await connection.run_sync(

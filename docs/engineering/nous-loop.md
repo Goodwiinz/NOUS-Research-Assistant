@@ -184,9 +184,22 @@ the coordination branch in place and inert; never rewrite its history.
 ### 1. Reconcile prior work
 
 Inspect only PRs created by this loop. Verify their current head, diff, tests,
-reviews, comments, and merge state. Merge only when the current task authorizes
-it and every current gate passes. Otherwise report or repair the prior tick and
-do not start a second one.
+reviews, comments, and merge state. Resume prior work under its own claim and
+fencing rules; do not adopt another active owner's claim. Use the per-PR merge
+protocol in step 8. Resuming a prior tick consumes this invocation: after
+closing it or handing it off, stop rather than proceeding to step 2.
+
+When the user requests reconciliation of an existing group, record the exact
+authorized loop-owned PRs, their tick/claim ownership, permitted mutations, and
+dependency order before making changes. Process parents before children, one
+PR at a time, with separate evidence and outcomes for each tick. A dependency
+outside that set is a blocker, not authority to adopt it. Read-only inventory
+of other PRs does not authorize their mutation. Drafts, missing permissions,
+and unresolved gates require an exact handoff; deadline pressure changes none
+of these gates. Stop when that bounded group is reconciled or handed off. Do
+not start a new bug tick under reconciliation authority or combine the group
+into a new multi-bug tick. Proceed to step 2 only when no prior tick needs
+reconciliation and the task authorizes a new improvement tick.
 
 ### 2. Pick one candidate
 
@@ -272,13 +285,77 @@ address real issues.
 Whenever the published diff changes, return to the causal test proof and local
 gates, repeat independent review whenever the diff changes, and repeat security
 review when applicable. Re-publish the reviewed commit and re-check hosted
-evidence. Never merge past a required red check unless a current repository
-rule explicitly provides an alternative gate and the current task authorizes
-that action.
+evidence. Apply the following protocol to every PR, including reconciled work:
 
-Merge only the final reviewed head after every current required gate passes.
-After an authorized merge, fetch `develop` and verify the fix is present before
-reporting `merged`. Release the claim with `--reason merged`.
+1. **Resolve the live requirements.** Read classic branch protection and all
+   applicable active rulesets for the actual destination. Inspect their rules,
+   enforcement, required check names/providers, review requirements, and actor
+   exemptions; never infer requirements from a ruleset name. Record the PR's
+   head SHA, base branch and current base SHA, open/draft state, and review
+   evidence. Unavailable required state blocks merging. The independent-review
+   and security-review requirements above still apply even when GitHub
+   does not require an approving review.
+2. **Prepare stacked children explicitly.** Record the child's old parent
+   commit boundary before updating the stack. Prove the parent's actual fix
+   landed on `develop`, not merely that its PR closed. After a parent squash
+   or rebase merge, replay only the child's unique changes onto current
+   `develop` using that boundary; do not blindly replay ancestor commits.
+   Inspect the resulting diff for duplicated or lost changes and resolve
+   conflicts under the existing claim and review gates. Retarget the child to
+   `develop` before the subsequent authorized push. Verify that a qualifying
+   CI run actually starts: the [Test Pipeline](../../.github/workflows/test-pipeline.yml)
+   filters PR destination branches, and retargeting alone is not one of its
+   default triggering activities. If no qualifying run starts, report the
+   missing gate. Never substitute a successful Secret Scan or `CLEAN` state,
+   and never count a merge into a feature-branch parent as `merged`.
+3. **Incorporate the current base.** Before each merge, fetch `develop` and
+   verify that its current tip is an ancestor of the candidate head. When it
+   is absent, update the PR branch by merging the base or rebasing onto it;
+   fetching alone is not an update. An already-current branch needs evidence,
+   not an artificial commit. Prefer a forward update for a shared branch.
+   Rewriting a PR branch, including a stacked child, requires verified
+   ownership, authorization, and
+   `--force-with-lease=<ref>:<expected-old-head>` on its push; a changed remote
+   head requires reassessment, never an unconditional force push. These rules
+   do not permit rewriting `develop` or `nous-coordination`.
+4. **Rebuild the evidence.** An updated head, retargeted PR, or advanced base
+   invalidates the previous merge-readiness decision. Rerun applicable local
+   and hosted gates for the resulting integration; apply the causal-proof and
+   repeat-review rules above whenever the diff changes, including conflict
+   resolution or base-induced changes. Bind review evidence to the resulting
+   head and reviewed base. Match required checks to their live configured
+   provider and current run, not just a name or an earlier green result.
+   Release Gate must conclude exact `success`, consistent with
+   [assert_required_jobs.py](../../scripts/ci/assert_required_jobs.py);
+   missing, pending, skipped, neutral, cancelled, failed, or wrong-provider
+   evidence is not successful Release Gate evidence. Trusted successful checks
+   on a synthetic merge commit are valid when their run and tested commit are
+   verified to correspond to the current PR head and base; do not require all
+   checks to run on the raw head SHA. Keep the independent review requirement
+   even when the aggregate check is green.
+5. **Guard the merge.** Immediately before merging, reread the live rules, PR
+   head, base branch/SHA, open/draft state, reviews, and checks. Require the
+   current task's merge authorization, destination `develop`, current base
+   incorporation, the final reviewed head, and every required gate. If relevant
+   state moved, invalidate readiness and repeat the affected preparation and
+   validation. Use an expected-head
+   merge guard, such as REST `sha` or `gh pr merge --match-head-commit`.
+   These guards do not atomically lock the base. Omitting `--admin` does not
+   prove protection applies to an exempt actor. To guarantee freshness at
+   merge time, use a verified server-enforced path that applies the freshness
+   and required-check rules to this actor at execution; a local claim or final
+   read alone cannot supply that guarantee. If that capability is unavailable,
+   return `ready-for-human` naming it. Do not bypass gates, relax repository
+   settings, or directly push the base to complete the merge. A queued or
+   auto-merge request is not a completed merge and must not escape these gates
+   or the authorized PR set.
+6. **Verify the result and advance serially.** After an authorized merge,
+   inspect the returned merge result, fetch `develop`, and verify both the
+   landed result and actual fix before reporting `merged`; squash/rebase can
+   change commit identities. Release only that PR's claim with
+   `--reason merged`. Invalidate readiness for every remaining group member
+   and repeat this protocol against the new base before its merge. Stop at the bounded
+   reconciliation endpoint in step 1.
 
 For `ready-for-human`, report the exact blocker and stage reached. If a live
 claim exists, heartbeat it once and report its expiry; if preflight stopped

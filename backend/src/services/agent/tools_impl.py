@@ -93,6 +93,7 @@ from src.models.document import Document
 from src.models.user import User
 from src.services.agent.trace_metadata import internal_llm_config
 from src.services.research_engine.project_access import ResearchAction
+from src.services.research_engine.report_rendering import publication_year
 
 if TYPE_CHECKING:
     from src.services.agent.tool_operations import ToolOperationKey
@@ -861,6 +862,26 @@ def _result_json(value: Any) -> str:
 
 def _result_size(value: Any) -> int:
     return len(_result_json(value).encode("utf-8"))
+
+
+def _page_within_result_cap(
+    items: list[Dict[str, Any]], rest: Dict[str, Any]
+) -> list[Dict[str, Any]]:
+    """Return the longest prefix of *items* that keeps the result uncapped.
+
+    Past ``_MAX_TOOL_RESULT_BYTES`` the cap strips the whole list and keeps a
+    few identities while ``returned``/``has_more`` still describe the full
+    page, so the model pages past rows it never saw (R8-B4). Trimming here
+    keeps the listing and its paging fields true. *rest* is every other field
+    of the result; 256 bytes are left for the paging fields set afterwards.
+    """
+    budget = _MAX_TOOL_RESULT_BYTES - _result_size(rest) - 256
+    used = 2
+    for index, item in enumerate(items):
+        used += _result_size(item) + 2
+        if used > budget:
+            return items[:index]
+    return items
 
 
 def _json_safe_result(
@@ -1996,6 +2017,15 @@ async def _execute_external_operation(
         )
 
     if claim.status == "completed":
+        if not claim.same_identity and claim.result is not None:
+            # Another call id already failed with these args this turn (R8-B5).
+            # Mark the replay so the model stops instead of looping on it.
+            return {
+                **claim.result,
+                "replayed_from_operation": claim.operation_id,
+                "automatic_retry_allowed": False,
+                "retry_guidance": "This identical call already failed in this turn; do not repeat it.",
+            }
         return claim.result or _operation_error(
             "The completed operation result is unavailable.",
             "operation_result_unavailable",
@@ -2121,7 +2151,8 @@ async def _execute_external_operation(
     if (
         tool_name == "create_draft"
         and isinstance(bounded_result, dict)
-        and bounded_result.get("status") not in {"completed", "failed", "cancelled"}
+        and bounded_result.get("status")
+        not in {"completed", "failed", "cancelled", "interrupted"}
         and isinstance(bounded_result.get("task_id"), str)
         and bounded_result["task_id"]
     ):
@@ -2193,7 +2224,11 @@ def _uncertain_draft_recovery_result(
 
 
 async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, Any]:
-    from src.services.research.draft_generation_service import DraftGenerationService
+    from src.services.agent.tool_session import tool_session
+    from src.services.research.draft_generation_service import (
+        DraftGenerationService,
+        scoped_task_status,
+    )
 
     task_id = dispatched_result.get("task_id")
     project_id = dispatched_result.get("project_id")
@@ -2211,28 +2246,30 @@ async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, 
             "The saved draft task identifier is missing; use scoped status lookup.",
             "draft_status_unavailable",
         )
+    pending = {
+        **dispatched_result,
+        "status": "pending",
+        "message": "Draft task status is not currently available; it will not be started again.",
+        "error_category": "draft_status_unavailable",
+        "_terminal_status": False,
+    }
     try:
         status = await DraftGenerationService.get_status_shared(task_id)
         if status is None or not DraftGenerationService._status_matches_scope(
             status, parsed_project_id, parsed_user_id
         ):
-            pending = {
-                **dispatched_result,
-                "status": "pending",
-                "message": "Draft task status is not currently available; it will not be started again.",
-                "error_category": "draft_status_unavailable",
-                "_terminal_status": False,
-            }
-            return pending
+            # Worker restart or Redis TTL expiry: the retained row is the record.
+            async with tool_session() as session:
+                status = await scoped_task_status(
+                    session,
+                    task_id,
+                    collection_id=parsed_project_id,
+                    actor_user_id=parsed_user_id,
+                )
+            if status is None:
+                return pending
     except Exception:
         logger.warning("draft status recovery failed closed", exc_info=True)
-        pending = {
-            **dispatched_result,
-            "status": "pending",
-            "message": "Draft task status is not currently available; it will not be started again.",
-            "error_category": "draft_status_unavailable",
-            "_terminal_status": False,
-        }
         return pending
     # Recovery can run on another worker after a process restart. Use the
     # scoped shared snapshot directly; wait_for_terminal_status consults only
@@ -2243,6 +2280,7 @@ async def _recover_draft_status(dispatched_result: Dict[str, Any]) -> Dict[str, 
         "completed",
         "failed",
         "cancelled",
+        "interrupted",
     }
     return result
 
@@ -2269,7 +2307,7 @@ def _draft_status_result(
     project_name = str(dispatched_result.get("project_name", "the project"))
     if state == "completed":
         message = f"Draft generated for project '{project_name}'."
-    elif state in {"failed", "cancelled"}:
+    elif state in {"failed", "cancelled", "interrupted"}:
         detail = str(status.get("current_step") or "Draft generation failed")
         message = detail.removeprefix("Error: ").strip()
         result["error"] = message
@@ -2311,6 +2349,12 @@ async def _dispatch_tool(
     dispatch_recorder: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
     """Route a tool call to its ``_tool_*`` implementation."""
+    # Validation materializes every schema default, so an omitted optional
+    # arrives as None. Impls read optionals with ``args.get``, where None and
+    # absent are the same, except presence checks: do_kb_retrieve read
+    # ``document_ids: None`` as an invalid scope and failed every unscoped
+    # call (R8-B1). The operation hash keeps the full validated args.
+    args = {key: value for key, value in args.items() if value is not None}
     if tool_name == "search_arxiv":
         return await _tool_search_arxiv(args)
     if tool_name == "ingest_arxiv_papers":
@@ -2318,7 +2362,9 @@ async def _dispatch_tool(
     if tool_name == "search_documents":
         return await _tool_search_documents(args, db, current_user)
     if tool_name == "do_kb_retrieve":
-        return await _tool_do_kb_retrieve(args, db, current_user)
+        # The page project is server-owned scope, not an LLM argument; the
+        # schema has no project_id, so it must not ride in ``args`` (R8-B2).
+        return await _tool_do_kb_retrieve(args, db, current_user, project_id=project_id)
     if tool_name == "add_document_to_project":
         return await _tool_add_document_to_project(
             args, db, current_user, commit=not defer_local_commit
@@ -2723,7 +2769,7 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     # Hard cap at 5 papers + 250-char abstracts. Trace showed 10×500-char
     # results = 8087 chars feeding into the synthesis LLM call and triggering
     # 1536 reasoning tokens (~46s). Smaller payload = faster synthesis.
-    max_results = min(args.get("max_results", 5), 5)
+    max_results = max(1, min(args.get("max_results", 5), 5))
     categories = args.get("categories")
 
     # Recency window: default to last 12 months so "find recent X" actually
@@ -3140,7 +3186,7 @@ async def _tool_search_documents(
         return {"error": "Authentication required"}
 
     query = args.get("query", "")
-    max_results = min(args.get("max_results", 10), 50)
+    max_results = max(1, min(args.get("max_results", 10), 50))
 
     if not query:
         return {"error": "Query is required"}
@@ -3203,12 +3249,17 @@ async def _tool_do_kb_retrieve(
     args: Dict[str, Any],
     db: Optional[AsyncSession],
     current_user: Optional[User],
+    *,
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Semantic retrieval over the org's DigitalOcean Knowledge Base.
 
     Returns an empty chunks list when the org has no provisioned KB or
     when DO_KB_ENABLED is false — caller falls back to other tools.
+    ``project_id`` is the server-owned page project; ``args["project_id"]``
+    remains for direct callers.
     """
+    scope_project_id: Optional[str] = project_id or args.get("project_id")
     if not current_user:
         return {"error": "Authentication required", "chunks": [], "total": 0}
 
@@ -3220,7 +3271,7 @@ async def _tool_do_kb_retrieve(
 
     top_k = max(1, min(int(args.get("top_k", _kb_settings.DO_KB_DEFAULT_TOP_K)), 20))
 
-    scoped_intent = "document_ids" in args
+    scoped_intent = args.get("document_ids") is not None
     requested_document_ids: list[UUID] = []
     provider_filters: Optional[dict[str, Any]] = None
 
@@ -3288,9 +3339,10 @@ async def _tool_do_kb_retrieve(
             if set(authorized_documents) != requested_document_id_set:
                 return scoped_limitation("requested_documents_unavailable")
 
-            project_id = args.get("project_id")
-            if project_id:
-                project = await _verify_project_ownership(project_id, db, current_user)
+            if scope_project_id:
+                project = await _verify_project_ownership(
+                    scope_project_id, db, current_user
+                )
                 if not project:
                     return scoped_limitation("requested_documents_unavailable")
                 resolved_project_id = str(project.id)
@@ -3411,18 +3463,19 @@ async def _tool_do_kb_retrieve(
 
     # Resolve storage-key document_ids back to real Document rows and
     # optionally filter by project membership.
-    project_id = args.get("project_id")
     # When the caller scopes to a project, verify they actually own it before
     # using it as a filter — otherwise passing another (in-org) project's id
     # would reveal which org documents belong to it (membership inference).
     # Mirrors the _verify_project_ownership guard the sibling project tools use.
-    if project_id and not scoped_intent:
+    if scope_project_id and not scoped_intent:
         if db is None:
             # Can't verify without a session — drop the filter rather than
             # trust an unverified id (fall back to org-wide scoping).
-            project_id = None
+            scope_project_id = None
         else:
-            project = await _verify_project_ownership(project_id, db, current_user)
+            project = await _verify_project_ownership(
+                scope_project_id, db, current_user
+            )
             if not project:
                 # The project_id is usually injected from frontend page
                 # context, which can be stale or point at another member's
@@ -3435,9 +3488,9 @@ async def _tool_do_kb_retrieve(
                 logger.warning(
                     "do_kb_retrieve: project %s not found/owned; "
                     "falling back to org-wide retrieval",
-                    project_id,
+                    scope_project_id,
                 )
-                project_id = None
+                scope_project_id = None
             else:
                 resolved_project_id = str(project.id)
 
@@ -3543,7 +3596,9 @@ async def _tool_do_kb_retrieve(
 
     payload = {
         "chunks": chunks_payload,
-        "total": len(chunks_payload) if project_id or scoped_intent else result.total,
+        "total": (
+            len(chunks_payload) if scope_project_id or scoped_intent else result.total
+        ),
         "source": "do_kb",
         "query": query,
         "evidence_mode": evidence_mode,
@@ -3812,29 +3867,39 @@ async def _tool_list_project_documents(
 
         from src.shared.enums import ApiDocumentStatus
 
+        documents = [
+            {
+                "id": str(d.id),
+                "title": d.title,
+                "type": d.document_type.value if d.document_type else None,
+                # Mirror search_documents' mapping (not the raw db value)
+                # so the same document doesn't report two different
+                # statuses depending on which tool the model called.
+                "status": (
+                    ApiDocumentStatus.from_db(d.processing_status).value
+                    if d.processing_status
+                    else None
+                ),
+            }
+            for d in docs
+        ]
+        documents = _page_within_result_cap(
+            documents,
+            {
+                "project_name": project.name,
+                "total": int(total),
+                "limit": limit,
+                "offset": offset,
+            },
+        )
         return {
             "project_name": project.name,
-            "documents": [
-                {
-                    "id": str(d.id),
-                    "title": d.title,
-                    "type": d.document_type.value if d.document_type else None,
-                    # Mirror search_documents' mapping (not the raw db value)
-                    # so the same document doesn't report two different
-                    # statuses depending on which tool the model called.
-                    "status": (
-                        ApiDocumentStatus.from_db(d.processing_status).value
-                        if d.processing_status
-                        else None
-                    ),
-                }
-                for d in docs
-            ],
+            "documents": documents,
             "total": int(total),
-            "returned": len(docs),
+            "returned": len(documents),
             "limit": limit,
             "offset": offset,
-            "has_more": offset + len(docs) < int(total),
+            "has_more": offset + len(documents) < int(total),
         }
     except Exception as e:
         logger.error("list_project_documents tool failed", exc_info=e)
@@ -4512,8 +4577,8 @@ async def _tool_explore_entity_neighborhood(
         return {"error": "Authentication required"}
 
     entity_id = args.get("entity_id", "")
-    max_depth = min(args.get("max_depth", 2), 3)
-    limit = min(args.get("limit", 30), 50)
+    max_depth = max(1, min(args.get("max_depth", 2), 3))
+    limit = max(1, min(args.get("limit", 30), 50))
 
     if not entity_id:
         return {"error": "entity_id is required"}
@@ -4591,7 +4656,7 @@ async def _tool_find_entity_paths(
 
     source_id = args.get("source_entity_id", "")
     target_id = args.get("target_entity_id", "")
-    max_depth = min(args.get("max_depth", 3), 5)
+    max_depth = max(1, min(args.get("max_depth", 3), 5))
 
     if not source_id or not target_id:
         return {"error": "source_entity_id and target_entity_id are required"}
@@ -4905,21 +4970,11 @@ def _citations_from_documents(documents: list) -> List[_CitationProxy]:
     proxies: List[_CitationProxy] = []
     for doc in documents:
         meta = doc.document_metadata or {}
-        year = None
-        pub_date = meta.get("publication_date")
-        if pub_date:
-            try:
-                if isinstance(pub_date, str):
-                    year = int(pub_date[:4])
-                elif hasattr(pub_date, "year"):
-                    year = pub_date.year
-            except (ValueError, TypeError):
-                pass
         proxies.append(
             _CitationProxy(
                 document_title=meta.get("title") or doc.title or "",
                 authors=meta.get("authors") or [],
-                year=year,
+                year=publication_year(meta),
                 venue=meta.get("journal_reference"),
                 doi=meta.get("doi"),
                 arxiv_id=meta.get("arxiv_id"),
@@ -4943,6 +4998,15 @@ async def _tool_export_bibliography(
 
     if not document_ids:
         return {"error": "At least one document_id is required"}
+    # Refuse rather than truncate: an unbounded IN() list, and a silent cut
+    # would report success over ids the model never got back.
+    if len(document_ids) > 50:
+        return {
+            "error": (
+                f"Maximum 50 documents per request; {len(document_ids)} were "
+                "requested. Split them into batches of 50 or fewer."
+            )
+        }
     if bib_format not in ("bibtex", "apa", "ieee", "mla"):
         return {
             "error": f"Unsupported format: {bib_format}. Use bibtex, apa, ieee, or mla."
@@ -5108,7 +5172,7 @@ async def _tool_search_external_database(args: Dict[str, Any]) -> Dict[str, Any]
 
     connector_name = args.get("connector")
     domain_name = args.get("domain")
-    max_results = min(args.get("max_results", 5), 20)
+    max_results = max(1, min(args.get("max_results", 5), 20))
     raw_filters = args.get("filters")
     if raw_filters is not None and not isinstance(raw_filters, dict):
         return {

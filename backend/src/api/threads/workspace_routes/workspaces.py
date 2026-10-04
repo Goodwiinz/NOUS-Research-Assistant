@@ -50,8 +50,11 @@ async def create_workspace(
         workspace = await workspace_service.create_workspace(
             db, request, current_user.id, user_org_id, enforce_org_match=True
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Workspace access denied"
+        )
 
     await db.commit()
     logger.info(f"Workspace '{workspace.name}' created by user {current_user.id}")
@@ -102,8 +105,9 @@ async def update_workspace(
         workspace = await workspace_service.update_workspace(
             db, workspace_id, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -122,8 +126,9 @@ async def delete_workspace(
         deleted = await workspace_service.delete_workspace(
             db, workspace_id, current_user.id, stamp_deleted_at=True
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Workspace not found")
 

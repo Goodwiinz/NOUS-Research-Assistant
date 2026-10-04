@@ -1,6 +1,6 @@
 # NOUS local harness bridge
 
-`@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. This package does not add a general NOUS MCP server, synchronize other conversations, or publish side-panel artifacts.
+`@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. It also ships an opt-in local MCP server that exposes NOUS project read tools to Codex (see [NOUS read tools](#nous-read-tools-over-mcp)). This package does not synchronize other conversations or publish side-panel artifacts.
 
 ## Requirements and pairing
 
@@ -25,6 +25,23 @@ The browser sends the chat prompt to NOUS. NOUS sends the accepted command to th
 The adapter requests Codex `workspaceWrite` with the registered root as the writable root, network access disabled, and the current temporary-directory exclusions. It verifies the effective policy returned by Codex before starting a turn. **Registering a folder is not folder-only read isolation.** It does not prove Codex cannot read other local files. Treat the computer and files accessible to its Codex process as within the local trust boundary. MCP configuration, when supplied by trusted local composition, is session-scoped; NOUS browser input cannot choose an MCP executable or pass arbitrary process configuration.
 
 Command execution prompts can be approved once or denied in the authenticated NOUS chat. File-change requests remain deny-only while the backend request schema lacks a disclosed path or concrete change summary; do not approve a file-change request on the basis of an opaque item identifier or reason alone.
+
+## NOUS read tools over MCP
+
+Connect with `--tools` to also request the `tools:read` scope, and add `--publish` to request `artifacts:publish` as well; the browser approval page lists every scope. The NOUS server must set `NOUS_MCP_ENABLED=true` (default `false`) or every tool call reports that tools are disabled.
+
+```sh
+pnpm --filter @nous/harness-bridge start connect --api https://nous.example/api/v1 --project PROJECT_UUID --label "My computer" --tools --publish
+```
+
+- `nous-harness run` then configures each managed Codex session with a `nous` MCP server that launches `nous-harness mcp` for that session only.
+- For a standalone Codex, print the registration command and run it yourself; the bridge never edits global Codex configuration:
+
+```sh
+pnpm --filter @nous/harness-bridge start mcp install
+```
+
+Tools are the backend's read allowlist (`search_documents`, `list_project_documents`, `do_kb_retrieve`, `get_current_draft`), scoped to the granted project. With a registered workspace root and the `artifacts:publish` scope, the server also offers `artifacts_publish(relative_path, title, publication_id)`: it reads one regular file under that root (no symlinks anywhere in the path, no hard links, no traversal, at most 10 MiB; containment is enforced by the kernel on macOS via `O_NOFOLLOW_ANY` and by the descriptor's real path on Linux), uploads it with its SHA-256, and finalizes a NOUS artifact version. Reusing the same `publication_id` retries safely. The root comes from the local binding (`--root` in the launch argv), never from tool arguments; `mcp install --root PATH` picks it when more than one workspace is registered. The root limits what can be published, not what Codex can read. Publication requires `ARTIFACTS_ENABLED=true` on the server. Argv carries only the API origin, the state directory, and the opaque credential handle; tokens stay in the owner-only store. Diagnostics go to stderr. Gateway rejections come back as tool errors and are never retried: 401 asks you to reconnect with `--tools`, 403 names a missing `tools:read` scope or an out-of-project resource, 422 forwards the gateway's argument reason, and 503 reports that NOUS tools are disabled. `nous-harness run` prints a stderr notice when the connection lacks `tools:read` and managed sessions therefore get no NOUS tools.
 
 ## Disconnect, recovery, and kill switch
 

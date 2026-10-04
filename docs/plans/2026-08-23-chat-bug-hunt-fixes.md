@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Fix the 16 verified findings from the 2026-08-23 /chat bug hunt (`docs/chat-bug-hunt-2026-08-23.md`), highest severity first, without regressing existing behavior.
+**Goal:** Fix the 16 verified findings from the 2026-08-23 /chat bug hunt (`docs/audits/chat/chat-bug-hunt-2026-08-23.md`), highest severity first, without regressing existing behavior.
 
 **Architecture:** Backend security/data-integrity fixes land in the chat API + LLM cache service (FastAPI/SQLAlchemy, pytest). Frontend fixes land in the composer/runtime composition layer (React hooks, vitest). Each task is independently shippable; tasks are ordered so security issues (B1–B3) merge first. Ledger IDs are referenced throughout — update `~/.audit-ledgers/RAG_system/chat-bug-hunt.md` status per finding as it merges.
 

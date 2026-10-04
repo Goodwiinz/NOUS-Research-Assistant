@@ -8,9 +8,26 @@ import re
 from dataclasses import dataclass, field
 from string import Template
 from types import MappingProxyType
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, cast
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    cast,
+)
+from uuid import NAMESPACE_URL, uuid5
 
-from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.artifacts.storage import get_artifact_storage
+from src.services.research_engine import manifest_rules
+from src.services.research_engine.connectors.base import (
+    SourceConnector,
+    SourceDocument,
+    redact_search_values,
+)
 from src.services.research_engine.contracts import (
     CONTRACT_VERSION,
     ClaimRecord,
@@ -25,7 +42,11 @@ from src.services.research_engine.contracts import (
     validate_screening,
     validate_user_schema,
 )
-from src.services.research_engine.discovery import search_sources, source_records
+from src.services.research_engine.discovery import (
+    SEARCH_TIMEOUT_SECONDS,
+    search_sources,
+    source_records,
+)
 from src.services.research_engine.prompt_batches import (
     MAX_PROMPT_BYTES,
     build_prompt_batches,
@@ -40,6 +61,11 @@ from src.services.research_engine.verification import (
     QualityMark,
     run_source_grounding_check,
 )
+from src.services.sandbox.e2b_sandbox_manager import IsolatedSpec, get_sandbox_manager
+
+# GOO-312: loads one declared ``analyze`` input org-scoped and returns
+# ``(bytes, recorded_sha256, media_type)``; ``LookupError`` when absent.
+AnalyzeInputLoader = Callable[[Mapping[str, Any]], Awaitable[tuple[bytes, Any, str]]]
 
 MAX_CONNECTOR_FANOUT = 4
 MAX_CONNECTOR_RESULTS = 50
@@ -169,9 +195,15 @@ class StepExecutor:
         self,
         connectors: Dict[str, SourceConnector],
         providers: Dict[str, LLMProvider],
+        strategy_context: Optional[Dict[str, Any]] = None,
+        on_search_page: Optional[Callable[..., Awaitable[None]]] = None,
+        analyze_inputs: Optional[AnalyzeInputLoader] = None,
     ) -> None:
         self.connectors = connectors
         self.providers = providers
+        self.strategy_context = strategy_context or {}
+        self.on_search_page = on_search_page
+        self.analyze_inputs = analyze_inputs
         self._last_call_accounting: tuple[int, int, List[Dict[str, Any]]] = (0, 0, [])
 
     async def execute(
@@ -183,6 +215,8 @@ class StepExecutor:
     ) -> StepResult:
         """Execute a step based on its type, dispatching to the appropriate handler."""
         step_type = step_def.get("type", "")
+        if step_type == manifest_rules.STEP_TYPE:
+            return await self._execute_analyze(step_def, context)
         params = self._get_params(step_def)
         contract_version = params.get(
             "contract_version", context.get("contract_version")
@@ -204,6 +238,125 @@ class StepExecutor:
     def _get_params(self, step_def: Dict) -> Dict:
         """Get step parameters, checking both 'params' and 'parameters' keys."""
         return step_def.get("params") or step_def.get("parameters") or {}
+
+    async def _execute_analyze(self, step_def: Dict, context: Dict) -> StepResult:
+        """GOO-312: run the approved plan's code once in an isolated sandbox.
+
+        Inputs are loaded org-scoped and must hash to the plan's digest (and
+        a document's recorded checksum). Every byte blob (code, inputs, the
+        environment lock, outputs) is written content-addressed to private
+        artifact storage; the step output carries digests only, so no storage
+        key or URL reaches a step response. ``run_manifest`` rows are written
+        by ``experiment_service.record_manifest`` at terminal run status."""
+        params = self._get_params(step_def)
+        try:
+            spec = manifest_rules.parse_analyze_step(params)
+        except ValueError as error:
+            raise StepExecutionError(str(error)) from None
+        loader = self.analyze_inputs
+        organization_id = self.strategy_context.get("organization_id")
+        run_id = self.strategy_context.get("run_id")
+        if loader is None or not organization_id or not run_id:
+            raise StepExecutionError("analyze_unavailable")
+        code_bytes = spec.code.encode("utf-8")
+        blobs: list[tuple[bytes, str]] = [(code_bytes, "text/x-python")]
+        files: Dict[str, bytes] = {manifest_rules.CODE_NAME: code_bytes}
+        inputs: List[Dict[str, Any]] = []
+        for item in spec.inputs:
+            try:
+                data, recorded, media_type = await loader(item)
+            except LookupError:
+                raise StepExecutionError("input_not_found") from None
+            digest = manifest_rules.sha256_hex(data)
+            if digest != item["sha256"] or recorded != item["sha256"]:
+                raise StepExecutionError("input_checksum_mismatch")
+            files[f"in/{item['name']}"] = data
+            blobs.append((data, media_type))
+            inputs.append(
+                {
+                    "name": item["name"],
+                    "kind": item["kind"],
+                    "ref_id": item["id"],
+                    "sha256": digest,
+                    "byte_size": len(data),
+                    "media_type": media_type,
+                }
+            )
+        result = await get_sandbox_manager().run_isolated(
+            IsolatedSpec(
+                template=spec.template,
+                requirements=spec.requirements,
+                files=files,
+                command=spec.command,
+                output_names=tuple(o["name"] for o in spec.outputs),
+            )
+        )
+        if result.status != "completed" or result.lock is None:
+            raise StepExecutionError(f"analyze_{result.status}")
+        outputs: List[Dict[str, Any]] = []
+        metrics: Any = None
+        for declared in spec.outputs:
+            data = result.outputs[declared["name"]]
+            if declared["role"] == "metrics":
+                try:
+                    metrics = manifest_rules.parse_metrics(data)
+                except ValueError as error:
+                    raise StepExecutionError(str(error)) from None
+            blobs.append((data, declared["media_type"]))
+            outputs.append(
+                {
+                    **declared,
+                    "sha256": manifest_rules.sha256_hex(data),
+                    "byte_size": len(data),
+                }
+            )
+        blobs.append((result.lock, "text/plain"))
+        storage = get_artifact_storage()
+        for data, media_type in blobs:
+            key = manifest_rules.artifact_key(
+                str(organization_id), str(run_id), manifest_rules.sha256_hex(data)
+            )
+            await storage.put(key, data, media_type)
+        declared_code = {
+            key: params.get(key) if isinstance(params.get(key), str) else None
+            for key in ("repository", "commit")
+        }
+        output = {
+            "analyze": {
+                "status": "completed",
+                "template": spec.template,
+                "code": {
+                    "sha256": manifest_rules.sha256_hex(code_bytes),
+                    "byte_size": len(code_bytes),
+                    **declared_code,
+                },
+                "environment": {
+                    "provider": "e2b",
+                    "template_id": result.template_id,
+                    "sandbox_id": result.sandbox_id,
+                    "python": result.python,
+                    "os_release_sha256": (
+                        None
+                        if result.os_release is None
+                        else manifest_rules.sha256_hex(result.os_release)
+                    ),
+                    "lock_sha256": manifest_rules.sha256_hex(result.lock),
+                    "lock_byte_size": len(result.lock),
+                    "image_digest": dict(manifest_rules.NO_DIGEST),
+                },
+                "inputs": inputs,
+                "outputs": outputs,
+                "metrics": metrics,
+                "started_at": result.started_at.isoformat(),
+                "completed_at": result.completed_at.isoformat(),
+            }
+        }
+        return StepResult(
+            output=output,
+            inputs_hash=manifest_rules.manifest_hash({"inputs": inputs}),
+            outputs_hash=manifest_rules.manifest_hash(output),
+            seed=spec.seed,
+        )
 
     async def _execute_search(
         self, step_def: Dict, context: Dict, *, contract_version: Optional[int] = None
@@ -264,14 +417,91 @@ class StepExecutor:
                 "semantic_scholar" if name == "web" else name for name in sources
             )
         )
+        if self._is_daily_brief_context(context):
+            # GOO-331: the executed search may narrow, never widen, the scope
+            # the researcher confirmed, whatever the resolved parameters say.
+            scope = context["scope_confirmation"]
+            confirmed_providers = scope.get("providers")
+            confirmed_limit = scope.get("limit_per_provider")
+            if not isinstance(confirmed_providers, list) or not set(
+                canonical_sources
+            ).issubset(confirmed_providers):
+                raise ValueError(
+                    "search providers exceed the confirmed Daily Brief scope"
+                )
+            if type(confirmed_limit) is not int or max_results > confirmed_limit:
+                raise ValueError("search limit exceeds the confirmed Daily Brief scope")
+        strategy = {
+            "schema_version": "nous.academic.search-strategy.v1",
+            "project_id": self.strategy_context.get("canonical_project_id"),
+            "protocol_version_id": self.strategy_context.get("protocol_version_id"),
+            "effective_plan_hash": self.strategy_context.get("effective_plan_hash"),
+            "blueprint_id": self.strategy_context.get("blueprint_id"),
+            "blueprint_version": self.strategy_context.get("blueprint_version"),
+            "step_id": step_def.get("id"),
+            "intended": {
+                "selected_providers": canonical_sources,
+                "parameters": redact_search_values(params),
+            },
+            "route_limits": {
+                "max_providers": MAX_CONNECTOR_FANOUT,
+                "max_results_per_provider": MAX_CONNECTOR_RESULTS,
+                "requested_results_per_provider": max_results,
+                "request_timeout_seconds": SEARCH_TIMEOUT_SECONDS,
+            },
+        }
+        strategy_bytes = json.dumps(
+            strategy, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        strategy_version = f"sha256:{hashlib.sha256(strategy_bytes).hexdigest()}"
+        strategy["strategy_version"] = strategy_version
+
+        step_id = str(step_def.get("id") or "search")
+        run_id = self.strategy_context.get("run_id")
+        on_search_page = self.on_search_page
+
+        async def persist_page(
+            provider_name: str, execution_id: str, page: Dict[str, Any]
+        ) -> None:
+            assert on_search_page is not None
+            await on_search_page(
+                step_id=step_id,
+                strategy=strategy,
+                provider=provider_name,
+                execution_id=execution_id,
+                page=page,
+            )
+
+        execution_namespace = (
+            f"{run_id}:{step_id}:{strategy_version}" if run_id else None
+        )
         all_sources, coverage = await search_sources(
-            self.connectors, canonical_sources, query, max_results
+            self.connectors,
+            canonical_sources,
+            query,
+            max_results,
+            execution_namespace=execution_namespace,
+            on_page_update=persist_page if on_search_page is not None else None,
         )
         coverage["requested_sources"] = sources
         aliases = {name: "semantic_scholar" for name in sources if name == "web"}
         if aliases:
             coverage["aliases"] = aliases
-        records = source_records(all_sources)
+        id_namespace = (
+            str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"research-source:{run_id}:{step_id}:{strategy_version}",
+                )
+            )
+            if run_id
+            else None
+        )
+        records = source_records(all_sources, id_namespace=id_namespace)
+        _link_imported_source_ids(records, coverage)
+        # Nested in coverage: the contract-v1 search envelope owns no other keys.
+        coverage["strategy_version"] = strategy_version
+        coverage["search_strategy"] = strategy
 
         if contract_version == CONTRACT_VERSION:
             return StepResult(
@@ -1805,6 +2035,7 @@ class StepExecutor:
         coverage = prompt_context.get("coverage")
         if isinstance(coverage, dict):
             coverage.pop("retrieved_at", None)
+            _strip_receipt_identity(coverage)
         for record in prompt_context.get("source_records", []):
             record.pop("source_id", None)
             for snapshot in record.get("metadata", {}).get("provenance", []):
@@ -1851,6 +2082,86 @@ class StepExecutor:
             temperature=response.temperature,
             seed=response.seed,
         )
+
+
+def _link_imported_source_ids(
+    records: List[Dict[str, Any]], coverage: Dict[str, Any]
+) -> None:
+    """Point each provider page receipt at the persisted source rows it produced."""
+    source_ids_by_provider_key: Dict[tuple[str, str], List[str]] = {}
+    for record in records:
+        source_id = record["source_id"]
+        for snapshot in record.get("metadata", {}).get("provenance", []):
+            provider = snapshot.get("connector_type")
+            external_id = snapshot.get("external_id")
+            if provider and external_id:
+                source_ids_by_provider_key.setdefault(
+                    (provider, str(external_id)), []
+                ).append(source_id)
+
+    for provider_name, receipt in coverage["providers"].items():
+        provider_source_ids: set[str] = set()
+        provider_unlinked_count = 0
+        for page in receipt.get("pages", []):
+            page_source_ids: set[str] = set()
+            linked_record_count = 0
+            for key in page.get("record_keys", []):
+                matches = source_ids_by_provider_key.get(
+                    (key.get("provider", provider_name), str(key.get("external_id"))),
+                    [],
+                )
+                if matches:
+                    linked_record_count += 1
+                    page_source_ids.update(matches)
+            provider_source_ids.update(page_source_ids)
+            parsed_count = int(page.get("response", {}).get("parsed_count", 0))
+            page["imported_source_ids"] = sorted(page_source_ids)
+            page["imported_count"] = len(page_source_ids)
+            page["unlinked_record_count"] = max(parsed_count - linked_record_count, 0)
+            provider_unlinked_count += page["unlinked_record_count"]
+        receipt["imported_source_ids"] = sorted(provider_source_ids)
+        receipt["imported_count"] = len(provider_source_ids)
+        receipt["unlinked_record_count"] = provider_unlinked_count
+
+
+def _strip_receipt_identity(coverage: Dict[str, Any]) -> None:
+    """Drop per-observation receipt identity so reproducible prompts stay stable."""
+    provider_receipts = coverage.get("providers")
+    if not isinstance(provider_receipts, dict):
+        return
+    for receipt in provider_receipts.values():
+        if not isinstance(receipt, dict):
+            continue
+        for field_name in (
+            "execution_id",
+            "attempt_id",
+            "started_at",
+            "completed_at",
+            "imported_source_ids",
+        ):
+            receipt.pop(field_name, None)
+        pages = receipt.get("pages")
+        if not isinstance(pages, list):
+            continue
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            for field_name in (
+                "page_id",
+                "attempt_id",
+                "attempt_history",
+                "imported_source_ids",
+            ):
+                page.pop(field_name, None)
+            request = page.get("request")
+            if isinstance(request, dict):
+                request.pop("requested_at", None)
+            response = page.get("response")
+            if isinstance(response, dict):
+                response.pop("received_at", None)
+                for attempt in response.get("request_attempts", []):
+                    if isinstance(attempt, dict):
+                        attempt.pop("requested_at", None)
 
 
 def requested_parts_source_ids(parts: set[tuple[str, str]]) -> set[str]:

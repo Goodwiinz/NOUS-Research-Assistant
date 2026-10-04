@@ -491,7 +491,7 @@ async def test_streaming_confirmation_root_uses_owned_durable_run_metadata(
     monkeypatch.setenv("IMAGE_TAG", "backend-image-456")
     graph = _ResumeCapturingGraph()
     graph.snapshot.tasks = ()
-    db = SimpleNamespace(close=AsyncMock())
+    db = SimpleNamespace(close=AsyncMock(), commit=AsyncMock())
     request = SimpleNamespace(
         state=SimpleNamespace(request_id=REQUEST_ID),
         is_disconnected=AsyncMock(return_value=False),
@@ -650,7 +650,7 @@ async def test_stream_confirmation_binds_buffer_to_durable_run_id(
     bind_thread_id = uuid.uuid4()
     graph = _ResumeCapturingGraph()
     graph.snapshot.tasks = ()
-    db = SimpleNamespace(close=AsyncMock())
+    db = SimpleNamespace(close=AsyncMock(), commit=AsyncMock())
     request = SimpleNamespace(
         state=SimpleNamespace(request_id=REQUEST_ID),
         is_disconnected=AsyncMock(return_value=False),

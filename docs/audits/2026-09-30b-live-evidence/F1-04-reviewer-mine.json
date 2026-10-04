@@ -1,0 +1,76 @@
+{
+  "step": "F1-04-reviewer-mine",
+  "as": "reviewer",
+  "at": "2026-09-30T21:08:59.539356+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/c3b56c4c-6b21-40fc-bbe1-19357e91b428/mine",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "queue": {
+      "id": "c3b56c4c-6b21-40fc-bbe1-19357e91b428",
+      "stage": "title_abstract",
+      "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177",
+      "criteria_hash": "d8a2fd5e8c76d24aafbfefcf42322a60625a3c4fe01daf22697d9e0472cc0705",
+      "exclusion_reasons": [],
+      "stale": null
+    },
+    "assignment_id": "8a67c8c8-870d-40d3-98a1-d6fe2b7bc596",
+    "items": [
+      {
+        "report_id": "3ae08aad-08f0-484e-ae02-d4db7cca1a1c",
+        "title_snapshot": "Closed-book language models hallucinate under distribution shift",
+        "identifiers": {
+          "doi": [
+            "10.5555/eval-0930b-gamma"
+          ]
+        },
+        "abstract": null,
+        "observation": null,
+        "reveal_state": "hidden",
+        "others": [],
+        "resolution": null
+      },
+      {
+        "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+        "title_snapshot": "Opinion: retrieval is not enough",
+        "identifiers": {
+          "doi": [
+            "10.5555/eval-0930b-delta"
+          ]
+        },
+        "abstract": null,
+        "observation": null,
+        "reveal_state": "hidden",
+        "others": [],
+        "resolution": null
+      },
+      {
+        "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+        "title_snapshot": "Retrieval augmentation reduces hallucination in open-domain QA",
+        "identifiers": {
+          "doi": [
+            "10.5555/eval-0930b-alpha"
+          ]
+        },
+        "abstract": null,
+        "observation": null,
+        "reveal_state": "hidden",
+        "others": [],
+        "resolution": null
+      }
+    ],
+    "counts": {
+      "total": 3,
+      "screened": 0,
+      "remaining": 3,
+      "revealed": 0,
+      "conflicts": 0
+    }
+  }
+}

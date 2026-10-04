@@ -8,12 +8,12 @@ Security: All endpoints validate project ownership before granting access.
 import io
 import zipfile
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog import get_logger
@@ -22,11 +22,22 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models import Collection, DraftReview, Workspace
 from src.models.user import User
+from src.services.research import claim_rules, draft_release_service
+from src.services.research.bibliography_service import REFERENCE_FILES
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     DraftGenerationStatus,
+    DraftRetainedError,
+    get_task_result,
+    reconcile_task,
 )
 from src.services.research_engine.project_access import ResearchAction, resolve_project
+from src.shared.peer_review_schemas import DraftDiffResponse
+from src.shared.research_schemas import (
+    DraftPromoteRequest,
+    DraftReleaseResponse,
+    ReleaseCheckResponse,
+)
 
 logger = get_logger()
 router = APIRouter(prefix="/api/v1/projects/{project_id}/drafts", tags=["drafts"])
@@ -60,6 +71,26 @@ class DraftReviewListResponse(BaseModel):
     reviews: List[DraftReviewResponse]
 
 
+class DraftTaskStatusResponse(BaseModel):
+    """Draft task status: live cache, or the retained ``draft_task_results`` row."""
+
+    # The live payload also carries document_ids, selection_mode, ...
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+    status: str
+    progress: int = 0
+    current_step: str = ""
+    started_at: str
+    updated_at: Optional[str] = None
+    draft_id: Optional[str] = None
+    duration: Optional[float] = None
+    artifact_version: Optional[int] = None
+    artifact_hash: Optional[str] = None
+    error_code: Optional[str] = None
+    state_source: Literal["cache", "database"]
+
+
 # ============================================================================
 # Security Helper
 # ============================================================================
@@ -73,6 +104,16 @@ async def _validate_project_ownership(
 ) -> Collection:
     """Apply the canonical project authorization and lifecycle boundary."""
     return (await resolve_project(db, project_id, current_user.id, action)).collection
+
+
+async def _release_fields(
+    db: AsyncSession, project_id: UUID, draft: Any
+) -> Dict[str, Any]:
+    status_by_id = await draft_release_service.statuses(db, project_id, [draft.id])
+    return {
+        "release_status": status_by_id[draft.id],
+        "content_hash": claim_rules.content_hash(draft.content),
+    }
 
 
 # ============================================================================
@@ -204,6 +245,9 @@ async def list_drafts(
         limit=limit,
     )
 
+    release = await draft_release_service.statuses(
+        db, project_id, [draft.id for draft in result["drafts"]]
+    )
     drafts = []
     for draft in result["drafts"]:
         draft_data = {
@@ -216,6 +260,9 @@ async def list_drafts(
             "citation_count": draft.citation_count,
             "is_current": draft.is_current,
             "created_at": draft.created_at.isoformat() if draft.created_at else None,
+            # GOO-307: candidate until promoted; is_current never verifies.
+            "release_status": release[draft.id],
+            "content_hash": claim_rules.content_hash(draft.content),
         }
         if include_content:
             draft_data["content"] = draft.content
@@ -262,6 +309,7 @@ async def get_current_draft(
         "generation_params": draft.generation_params,
         "is_current": draft.is_current,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        **(await _release_fields(db, project_id, draft)),
     }
 
 
@@ -294,6 +342,7 @@ async def get_draft(
         "generation_params": draft.generation_params,
         "is_current": draft.is_current,
         "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        **(await _release_fields(db, project_id, draft)),
     }
 
 
@@ -310,11 +359,78 @@ async def delete_draft(
 
     service = DraftGenerationService(db)
 
-    success = await service.delete_draft(project_id, draft_id)
+    try:
+        success = await service.delete_draft(project_id, draft_id)
+    except DraftRetainedError:
+        raise HTTPException(
+            status_code=409, detail="Draft has claims; it is retained as evidence"
+        ) from None
     if not success:
         raise HTTPException(status_code=404, detail="Draft not found")
 
     return {"message": "Draft deleted", "draft_id": str(draft_id)}
+
+
+# ============================================================================
+# Verified release (GOO-307)
+# ============================================================================
+
+
+@router.get(
+    "/{draft_id:uuid}/versions/{version}/release",
+    response_model=ReleaseCheckResponse,
+)
+async def get_draft_release(
+    project_id: UUID,
+    draft_id: UUID,
+    version: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseCheckResponse:
+    """Release status, every blocker and the invalidation report (VIEW)."""
+    context = await resolve_project(db, project_id, current_user.id)
+    return await draft_release_service.check(db, context, draft_id, version)
+
+
+@router.post(
+    "/{draft_id:uuid}/versions/{version}/promote",
+    status_code=201,
+    response_model=DraftReleaseResponse,
+)
+async def promote_draft(
+    project_id: UUID,
+    draft_id: UUID,
+    version: int,
+    body: DraftPromoteRequest,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DraftReleaseResponse:
+    """Promote this exact version to verified (adjudicator or supervisor).
+
+    201 new, 200 replayed; 409 blocked (every blocker listed), content
+    changed or stale; 403 without the role."""
+    context = await resolve_project(
+        db, project_id, current_user.id, ResearchAction.RELEASE
+    )
+    try:
+        release, replayed = await draft_release_service.promote(
+            db, context, current_user.id, draft_id, version, body
+        )
+    except draft_release_service.ReleaseBlocked as blocked:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "release_blocked",
+                "blockers": [
+                    b.model_dump(mode="json")
+                    for b in draft_release_service.blocker_models(blocked.blockers)
+                ],
+            },
+        ) from None
+    if replayed:
+        response.status_code = 200
+    return release
 
 
 # ============================================================================
@@ -380,6 +496,24 @@ async def compare_drafts(
     return result
 
 
+@router.get("/diff", response_model=DraftDiffResponse)
+async def diff_drafts(
+    project_id: UUID,
+    from_draft_id: UUID = Query(..., description="Base saved version"),
+    to_draft_id: UUID = Query(..., description="Revised saved version"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DraftDiffResponse:
+    """GOO-314: sentence-level anchored diff between two saved versions."""
+    await _validate_project_ownership(project_id, current_user, db)
+    result = await DraftGenerationService(db).diff_drafts(
+        project_id, from_draft_id, to_draft_id
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return DraftDiffResponse.model_validate(result)
+
+
 # ============================================================================
 # Draft Export (T084)
 # ============================================================================
@@ -389,13 +523,17 @@ async def compare_drafts(
 async def export_draft(
     project_id: UUID,
     draft_id: UUID,
-    format: str = Query("markdown", description="Export format: markdown, latex"),
+    format: str = Query(
+        "markdown", description="Export format: markdown, latex, csl-json, ris"
+    ),
     include_bibliography: bool = Query(True, description="Include bibliography"),
     bib_format: str = Query("bibtex", description="Bibliography format"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export draft to LaTeX (.tex + .bib) or Markdown."""
+    """Export draft to LaTeX (.tex + .bib) or Markdown, or its references
+    alone as CSL JSON or RIS (GOO-317; ``X-Reference-Omissions`` counts the
+    fields left out because the record lacks them)."""
     # Validate project ownership
     await _validate_project_ownership(project_id, current_user, db)
 
@@ -420,6 +558,16 @@ async def export_draft(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    if result.get("format") in REFERENCE_FILES:
+        return Response(
+            content=str(result["content"]).encode("utf-8"),
+            media_type=result["mime_type"],
+            headers={
+                "Content-Disposition": f'attachment; filename="{result["filename"]}"',
+                "X-Reference-Omissions": str(len(result["omissions"])),
+            },
+        )
+
     if result.get("format") == "latex":
         files = result.get("files") or []
         if not files:
@@ -434,7 +582,13 @@ async def export_draft(
                 content = file_data.get("content", "")
                 if not name:
                     continue
-                zip_file.writestr(name, content)
+                # GOO-394: writestr(name) stamps the build clock, so equal
+                # drafts gave unequal zips. Pin it; 0o600 and DEFLATE are what
+                # writestr(name) already set, so only the timestamp changed.
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o600 << 16
+                zip_file.writestr(info, content)
 
         zip_buffer.seek(0)
         filename = (result.get("files", [{}])[0].get("filename", "draft.tex")).replace(
@@ -454,7 +608,7 @@ async def export_draft(
 # ============================================================================
 
 
-@router.get("/status")
+@router.get("/status", response_model=DraftTaskStatusResponse)
 async def get_generation_status(
     project_id: UUID,
     task_id: Optional[str] = Query(
@@ -467,27 +621,54 @@ async def get_generation_status(
     # Validate project ownership
     await _validate_project_ownership(project_id, current_user, db)
 
+    row = None
     if task_id:
         generation_status = await DraftGenerationService.get_status_shared(task_id)
+        # The retained row is the record. Scope-check it before reconciling:
+        # only the owner's read may commit a stale row's interrupt flip.
+        row = await get_task_result(db, task_id)
+        if (
+            row is not None
+            and row.collection_id == project_id
+            and row.actor_user_id == current_user.id
+        ):
+            row = await reconcile_task(db, task_id)
     else:
         generation_status = DraftGenerationService.get_latest_status(
             project_id=project_id,
             user_id=current_user.id,
         )
 
-    if not generation_status:
-        raise HTTPException(status_code=404, detail="Task not found")
+    if row is not None:
+        if row.collection_id != project_id or row.actor_user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Task not found")
+    else:
+        if not generation_status:
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    if generation_status.get("project_id") != str(project_id):
-        raise HTTPException(status_code=404, detail="Task not found")
+        if generation_status.get("project_id") != str(project_id):
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    if generation_status.get("user_id") != str(current_user.id):
-        raise HTTPException(status_code=404, detail="Task not found")
+        if generation_status.get("user_id") != str(current_user.id):
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    return generation_status
+    if row is not None and (generation_status is None or row.state != "running"):
+        return {
+            "started_at": row.started_at.isoformat(),
+            "updated_at": row.terminal_at.isoformat() if row.terminal_at else None,
+            **(generation_status or {}),
+            "task_id": row.task_id,
+            "status": row.state,
+            "draft_id": str(row.artifact_id) if row.artifact_id else None,
+            "artifact_version": row.artifact_version,
+            "artifact_hash": row.artifact_hash,
+            "error_code": row.error_code,
+            "state_source": "database",
+        }
+    return {**(generation_status or {}), "state_source": "cache"}
 
 
-@router.get("/status/{task_id}")
+@router.get("/status/{task_id}", response_model=DraftTaskStatusResponse)
 async def get_generation_status_by_task(
     project_id: UUID,
     task_id: str,
@@ -525,25 +706,36 @@ async def cancel_generation(
     if task_id:
         generation_status = DraftGenerationService.get_status(task_id)
         if not generation_status:
+            # Another replica may own the task: the retained row is the record.
+            row = await get_task_result(db, task_id)
+            if (
+                row is None
+                or row.collection_id != project_id
+                or row.actor_user_id != current_user.id
+            ):
+                raise HTTPException(status_code=404, detail="Task not found")
+        elif generation_status.get("project_id") != str(project_id):
             raise HTTPException(status_code=404, detail="Task not found")
-        if generation_status.get("project_id") != str(project_id):
+        elif generation_status.get("user_id") != str(current_user.id):
             raise HTTPException(status_code=404, detail="Task not found")
-        if generation_status.get("user_id") != str(current_user.id):
-            raise HTTPException(status_code=404, detail="Task not found")
-        success = DraftGenerationService.cancel_generation(task_id)
+        cancelled = await DraftGenerationService.cancel_task(db, task_id)
     else:
-        cancelled_task_id = DraftGenerationService.cancel_latest_generation(
+        latest_task_id, cancelled = await DraftGenerationService.cancel_latest_task(
+            db,
             project_id=project_id,
             user_id=current_user.id,
         )
-        success = cancelled_task_id is not None
-        task_id = cancelled_task_id or ""
+        if latest_task_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot cancel: no draft generation is in progress",
+            )
+        task_id = latest_task_id
 
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot cancel: task not found or already completed",
-        )
+    # Already finished, per this process's status (None) or the retained
+    # row (False): nothing was cancelled.
+    if not cancelled:
+        raise HTTPException(status_code=409, detail="Task already finished")
 
     await DraftGenerationService.publish_status(task_id)
     return {"message": "Generation cancelled", "task_id": task_id, "cancelled": True}

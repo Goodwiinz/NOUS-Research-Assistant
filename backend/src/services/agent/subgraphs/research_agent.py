@@ -419,10 +419,15 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         branch="research",
         messages=sanitized,
     )
+    from src.services.agent.reflection import reflection_revision_messages
+
     messages = [
         SystemMessage(content=static_prompt),
         SystemMessage(content=dynamic_context),
         *sanitized,
+        # R8-A2: on a reflection "revise" pass, hand the review issues back.
+        # Transient — never returned, so never checkpointed.
+        *reflection_revision_messages(state),
     ]
     # See graph.llm_node for rationale on parallel_tool_calls=False.
     from src.services.agent._nodes_llm import (
