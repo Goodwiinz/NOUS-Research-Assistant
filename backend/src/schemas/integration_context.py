@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Only scopes some route enforces. A scope is added in the PR that checks it.
 STANDARD_SCOPES = frozenset(
     {
         "harness:execute",
@@ -13,9 +14,6 @@ STANDARD_SCOPES = frozenset(
         "tools:write",
         "context:read",
         "artifacts:publish",
-        "artifacts:read",
-        "artifacts:edit",
-        "artifacts:share",
     }
 )
 

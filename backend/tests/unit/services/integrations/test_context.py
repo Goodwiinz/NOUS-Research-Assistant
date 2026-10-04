@@ -16,6 +16,7 @@ from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.services.integrations.context import (
     IntegrationAccessDenied,
+    check_scopes,
     mint_integration_grant,
     resolve_integration_context,
     revoke_integration_grant,
@@ -637,3 +638,12 @@ async def test_http_owner_revocation_supports_cli_dual_credentials_and_browser(
             await resolve_integration_context(
                 db, browser_grant.token, required_scope="tools:read"
             )
+
+
+@pytest.mark.parametrize(
+    "scope", ["artifacts:read", "artifacts:edit", "artifacts:share"]
+)
+def test_unenforced_artifact_scopes_cannot_be_requested(scope: str) -> None:
+    # No route enforces these yet; the slice that enforces one re-adds it.
+    with pytest.raises(IntegrationAccessDenied):
+        check_scopes({"harness:execute", scope})
