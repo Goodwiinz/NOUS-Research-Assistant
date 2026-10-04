@@ -2085,10 +2085,10 @@ class StepExecutor:
 
         try:
             response: LLMResponse = await provider.complete(request)
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError:
             if budget is not None:
                 budget.release(reservation)
-            raise StepExecutionError("research stage cancelled", model_calls=1) from exc
+            raise
         except Exception as exc:
             if budget is not None:
                 budget.release(reservation)
