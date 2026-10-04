@@ -1427,6 +1427,9 @@ class FileService:
                     return True
                 await cleanup_db.rollback()
                 cleanup_ok = True
+                from datetime import datetime, timezone
+
+                started = datetime.now(timezone.utc)
                 try:
                     await asyncio.to_thread(
                         lambda: KnowledgeGraphService().delete_document_graph(
@@ -1440,7 +1443,10 @@ class FileService:
                         extra={"document_id": document_id},
                         exc_info=True,
                     )
-                from src.services.documents.satellite_state import pending_writes
+                from src.services.documents.satellite_state import (
+                    pending_writes,
+                    retire_settled_writes,
+                )
 
                 current = (
                     await cleanup_db.execute(
@@ -1459,6 +1465,8 @@ class FileService:
                     and (current.document_metadata or {}).get("graph_cleanup_requested")
                     is not False
                 ):
+                    if cleanup_ok:
+                        retire_settled_writes(current, "graph", started)
                     current.neo4j_index_status = (
                         SatelliteSyncStatus.FAILED.value
                         if not cleanup_ok

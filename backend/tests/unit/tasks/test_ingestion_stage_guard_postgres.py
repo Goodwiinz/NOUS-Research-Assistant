@@ -952,3 +952,137 @@ def test_non_cascade_late_graph_write_is_retained(stubbed, cleanup_ok):
                 .count()
                 == 0
             )
+
+
+# ---------------------------------------------------------------------------
+# DO KB write tokens: bounded on failure, retired after cleanup (GOO-358 review)
+# ---------------------------------------------------------------------------
+
+
+def _do_kb_tokens(env: SimpleNamespace) -> dict:
+    with env.Session() as db:
+        metadata = db.get(Document, env.doc_id).document_metadata or {}
+    return (metadata.get("pending_satellite_writes") or {}).get("do_kb") or {}
+
+
+def _age_tokens(env: SimpleNamespace, satellite: str) -> None:
+    """Pretend every recorded writer started two hours ago (past the lease)."""
+    with env.Session() as db:
+        doc = db.get(Document, env.doc_id)
+        metadata = dict(doc.document_metadata or {})
+        writes = dict(metadata["pending_satellite_writes"])
+        writes[satellite] = {
+            t: {"started_at": "2026-01-01T00:00:00+00:00"} for t in writes[satellite]
+        }
+        doc.document_metadata = {**metadata, "pending_satellite_writes": writes}
+        db.commit()
+
+
+def test_failed_do_kb_syncs_leave_a_bounded_token_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sync that returns no uuid may still have created a data source, so its
+    token stays; but tokens past the lease are pruned by the next write, so
+    repeated failures do not grow metadata without bound."""
+    from unittest.mock import AsyncMock
+
+    from src.core.config import settings
+
+    with _ingestion() as env:
+        monkeypatch.setattr(settings, "DO_KB_ENABLED", True)
+        monkeypatch.setattr("src.core.database.AsyncSessionLocal", env.AsyncSession)
+        monkeypatch.setattr(
+            "src.services.do_kb.provisioner.ensure_kb_for_org",
+            AsyncMock(return_value="kb-1"),
+        )
+        monkeypatch.setattr(
+            "src.services.do_kb.sync_document_to_kb", AsyncMock(return_value=None)
+        )
+        with env.Session() as db:
+            doc = db.get(Document, env.doc_id)
+
+        assert pt._sync_document_to_kb_blocking(doc) is None
+        first = _do_kb_tokens(env)
+        assert len(first) == 1
+        assert "started_at" in next(iter(first.values()))
+
+        _age_tokens(env, "do_kb")
+        assert pt._sync_document_to_kb_blocking(doc) is None
+        second = _do_kb_tokens(env)
+        assert len(second) == 1 and second.keys().isdisjoint(first.keys())
+
+
+def test_deleted_do_kb_cleanup_finds_lost_sources_and_retires_settled_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deleted document carries a lost writer's token and no uuid. Cleanup
+    discovers the data source by this document's own key (never another
+    document's), deletes it and the canonical text, retires tokens whose
+    writers were dead before it began, and keeps a still-live writer's token
+    until a later cleanup outlives it. Then the row leaves the reconciler."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.core.config import settings
+    from src.services.documents.object_keys import canonical_text_key
+    from src.tasks.reconcile_tasks import (
+        _cleanup_deleted_do_kb_document,
+        _reconcilable_filters,
+    )
+
+    with _ingestion() as env:
+        with env.Session() as db:
+            doc = db.get(Document, env.doc_id)
+            own_key = canonical_text_key(doc)
+            other_key = own_key.replace(str(env.doc_id), str(uuid.uuid4()))
+            doc.soft_delete()
+            doc.document_metadata = {
+                "pending_satellite_writes": {
+                    "do_kb": {
+                        "dead": {"started_at": "2026-01-01T00:00:00+00:00"},
+                        "live": {"started_at": "2999-01-01T00:00:00+00:00"},
+                    }
+                }
+            }
+            db.commit()
+
+        api = MagicMock()
+        api.list_data_sources = AsyncMock(
+            return_value=[
+                {"uuid": "ds-own", "spaces_data_source": {"item_path": own_key}},
+                {"uuid": "ds-other", "spaces_data_source": {"item_path": other_key}},
+            ]
+        )
+        api.delete_data_source = AsyncMock()
+        s3 = MagicMock()
+        monkeypatch.setattr(settings, "DO_KB_ENABLED", True)
+        monkeypatch.setattr("src.core.database.AsyncSessionLocal", env.AsyncSession)
+        monkeypatch.setattr("src.services.do_kb.ingest.get_do_kb_client", lambda: api)
+        monkeypatch.setattr(
+            "src.services.do_kb.ingest.ensure_kb_for_org",
+            AsyncMock(return_value="kb-1"),
+        )
+        monkeypatch.setattr("src.core.s3_client.S3StorageHelper", lambda: s3)
+
+        def selected() -> int:
+            with env.Session() as db:
+                return (
+                    db.query(Document.id)
+                    .filter(*_reconcilable_filters(), Document.id == env.doc_id)
+                    .count()
+                )
+
+        with env.Session() as db:
+            assert _cleanup_deleted_do_kb_document(db.get(Document, env.doc_id))
+
+        api.delete_data_source.assert_awaited_once_with(
+            kb_uuid="kb-1", ds_uuid="ds-own"
+        )
+        s3.delete_file.assert_called_once_with(own_key)
+        assert set(_do_kb_tokens(env)) == {"live"}
+        assert selected() == 1  # the live writer may still land
+
+        _age_tokens(env, "do_kb")
+        with env.Session() as db:
+            assert _cleanup_deleted_do_kb_document(db.get(Document, env.doc_id))
+        assert _do_kb_tokens(env) == {}
+        assert selected() == 0

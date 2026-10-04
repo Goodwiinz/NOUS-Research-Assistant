@@ -47,6 +47,10 @@ def _parse_retry_after(value: Optional[str]) -> Optional[float]:
     return min(seconds, _MAX_RETRY_AFTER_SECONDS)
 
 
+# Upper bound on followed pages when listing a KB's data sources.
+_MAX_LIST_PAGES = 100
+
+
 class DOKnowledgeBaseError(RuntimeError):
     """Raised on non-retryable DO KB API failures."""
 
@@ -240,16 +244,28 @@ class DOKnowledgeBaseClient:
         unverified, so callers should match fields with .get() and fall back to
         adding when nothing matches. Returns [] on an unexpected shape.
         """
-        payload = await self._request(
-            "GET",
-            f"{self._api_base}/v2/gen-ai/knowledge_bases/{kb_uuid}/data_sources",
-        )
-        raw = (
-            payload.get("knowledge_base_data_sources")
-            or payload.get("data_sources")
-            or []
-        )
-        return [s for s in raw if isinstance(s, dict)]
+        url = f"{self._api_base}/v2/gen-ai/knowledge_bases/{kb_uuid}/data_sources"
+        sources: list[dict[str, Any]] = []
+        # Follow DO's ``links.pages.next`` when present. Deleted-document cleanup
+        # treats this list as complete, so a truncated listing must raise rather
+        # than look like "nothing left to delete".
+        for _ in range(_MAX_LIST_PAGES):
+            payload = await self._request("GET", url)
+            raw = (
+                payload.get("knowledge_base_data_sources")
+                or payload.get("data_sources")
+                or []
+            )
+            sources.extend(s for s in raw if isinstance(s, dict))
+            links = payload.get("links")
+            pages = links.get("pages") if isinstance(links, dict) else None
+            next_url = pages.get("next") if isinstance(pages, dict) else None
+            if not isinstance(next_url, str) or not next_url:
+                return sources
+            if not next_url.startswith(f"{self._api_base}/"):
+                raise DOKnowledgeBaseError("Unexpected data-source page URL")
+            url = next_url
+        raise DOKnowledgeBaseError("Data-source listing exceeded the page limit")
 
     async def delete_data_source(self, *, kb_uuid: str, ds_uuid: str) -> None:
         """Delete a data source from the KB.

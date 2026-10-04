@@ -34,7 +34,7 @@ from src.models.document import Document
 # from what ``_upload_canonical_text`` writes (drift would leak the .txt object
 # on delete — audit finding D6). Re-exported here for backwards compatibility.
 from src.services.documents.object_keys import canonical_text_key
-from src.services.documents.satellite_state import pending_writes
+from src.services.documents.satellite_state import pending_writes, retire_settled_writes
 
 from .client import DOKnowledgeBaseClient, DOKnowledgeBaseError, get_do_kb_client
 from .pre_flight import ensure_content_text_for_kb
@@ -408,22 +408,48 @@ async def _cleanup_unknown_deleted_write(
     """Discover every accepted source, including a UUID lost with its worker.
 
     Derive keys from the scoped document, never from caller-editable metadata.
-    Unknown writer tokens remain: an earlier cleanup cannot prove a dispatched
-    remote operation has finished. Their retries are ordered fairly.
+    Tokens whose writers were still within their lease when this cleanup began
+    remain: their remote operation may land later. Older ones are retired once
+    the cleanup succeeds. Runs on its own session so it never rolls back or
+    commits the caller's (often the request's) session.
     """
+    from src.core.database import AsyncSessionLocal
+
     document_id, organization_id = document.id, document.organization_id
+    text_key = canonical_text_key(document)
+    keys = {text_key}
+    if document.storage_backend == "s3" and document.storage_path:
+        keys.add(document.storage_path)
+    known_uuid = document.do_kb_data_source_uuid
     api = client or get_do_kb_client()
+    started = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        return await _cleanup_unknown_deleted_write_in(
+            session,
+            api,
+            document_id=document_id,
+            organization_id=organization_id,
+            keys=keys,
+            text_key=text_key,
+            known_uuid=known_uuid,
+            started=started,
+        )
+
+
+async def _cleanup_unknown_deleted_write_in(
+    session: AsyncSession,
+    api,
+    *,
+    document_id,
+    organization_id,
+    keys: set[str],
+    text_key: str,
+    known_uuid: Optional[str],
+    started: datetime,
+) -> bool:
     try:
         kb_uuid = await ensure_kb_for_org(session, organization_id, client=api)
-        text_key = canonical_text_key(document)
-        keys = {text_key}
-        if document.storage_backend == "s3" and document.storage_path:
-            keys.add(document.storage_path)
-        identifiers = (
-            {document.do_kb_data_source_uuid}
-            if document.do_kb_data_source_uuid
-            else set()
-        )
+        identifiers = {known_uuid} if known_uuid else set()
         # A failed listing is a failed cleanup, never proof of absence.
         for source in await api.list_data_sources(kb_uuid=kb_uuid):
             if _source_item_path(source) in keys and source.get("uuid"):
@@ -450,10 +476,12 @@ async def _cleanup_unknown_deleted_write(
                 .execution_options(populate_existing=True, autoflush=False)
             )
         ).scalar_one_or_none()
-        if current is not None and current.do_kb_data_source_uuid in identifiers:
-            current.do_kb_data_source_uuid = None
-            current.do_kb_indexed_at = None
-            current.do_kb_index_status = None
+        if current is not None:
+            if current.do_kb_data_source_uuid in identifiers:
+                current.do_kb_data_source_uuid = None
+                current.do_kb_indexed_at = None
+                current.do_kb_index_status = None
+            retire_settled_writes(current, "do_kb", started)
         await session.commit()
         return True
     except Exception:
