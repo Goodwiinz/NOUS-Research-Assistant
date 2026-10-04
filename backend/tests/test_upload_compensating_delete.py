@@ -14,6 +14,7 @@ the (possibly expired) ORM instance.
 
 Fake sessions cover commit boundaries; an in-memory SQLite session covers
 rollback expiration and cancellation. Storage calls are faked throughout.
+Lost commit acknowledgements preserve backing storage and the durable state.
 """
 
 import asyncio
@@ -45,7 +46,7 @@ class _FakeUpload:
 
 
 class _FakeDB:
-    """Async session stub; each commit in `fail_commits` (1-based) raises."""
+    """Session stub; listed commits (1-based) are definitively rejected."""
 
     def __init__(self, fail_commits=None):
         self.fail_commits = set(fail_commits or ())
@@ -59,7 +60,9 @@ class _FakeDB:
     async def commit(self):
         self.commit_calls += 1
         if self.commit_calls in self.fail_commits:
-            raise RuntimeError("simulated DB commit failure")
+            # A constraint rejection proves no write landed. Generic connection
+            # failures cannot prove that and are covered with real sessions.
+            raise IntegrityError("COMMIT", {}, RuntimeError("transaction rejected"))
 
     async def refresh(self, _obj):
         pass
@@ -267,19 +270,28 @@ async def test_document_refresh_and_reversal_failure_preserves_backing_object(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "refresh_type,reversal_fails,cancel_phase,want_deleted,want_quota,want_jobs",
+    "refresh_type,reversal_fails,cancel_phase,failed_ack,want_deleted,want_quota,want_jobs",
     [
-        (Document, False, None, True, 0, 0),
-        (ProcessingJob, False, None, True, 0, 0),
-        (ProcessingJob, True, None, False, 1234, 1),
-        (Document, False, "refresh", True, 0, 0),
-        (ProcessingJob, False, "refresh", True, 0, 0),
-        (Document, False, "commit", False, 0, 0),
-        (ProcessingJob, False, "commit", False, 1234, 1),
+        (Document, False, None, None, True, 0, 0),
+        (ProcessingJob, False, None, None, True, 0, 0),
+        (ProcessingJob, True, None, None, False, 1234, 1),
+        (Document, False, "refresh", None, True, 0, 0),
+        (ProcessingJob, False, "refresh", None, True, 0, 0),
+        (Document, False, "commit", None, False, 0, 0),
+        (ProcessingJob, False, "commit", None, False, 1234, 1),
+        (None, False, None, 1, False, 0, 0),
+        (None, False, None, 2, False, 1234, 0),
+        (None, False, None, 3, False, 1234, 1),
     ],
 )
 async def test_refresh_compensation_survives_real_session_expiration(
-    refresh_type, reversal_fails, cancel_phase, want_deleted, want_quota, want_jobs
+    refresh_type,
+    reversal_fails,
+    cancel_phase,
+    failed_ack,
+    want_deleted,
+    want_quota,
+    want_jobs,
 ):
     """Rollback expires org/document fields even with expire_on_commit=False."""
     refresh_started = asyncio.Event()
@@ -293,6 +305,8 @@ async def test_refresh_compensation_survives_real_session_expiration(
             if self.faults_active and reversal_fails and self.commit_calls == 4:
                 raise RuntimeError("compensation commit unavailable")
             await super().commit()
+            if self.faults_active and self.commit_calls == failed_ack:
+                raise ConnectionError("commit persisted; acknowledgement lost")
             if (
                 self.faults_active
                 and cancel_phase == "commit"
@@ -302,7 +316,7 @@ async def test_refresh_compensation_survives_real_session_expiration(
                 raise asyncio.CancelledError()
 
         async def refresh(self, instance, **kwargs):
-            if isinstance(instance, refresh_type):
+            if refresh_type is not None and isinstance(instance, refresh_type):
                 if cancel_phase == "refresh":
                     refresh_started.set()
                     await asyncio.Event().wait()

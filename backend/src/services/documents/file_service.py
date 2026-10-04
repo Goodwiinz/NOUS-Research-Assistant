@@ -642,6 +642,8 @@ class FileService:
                 commit_in_flight = True
                 await self.db.commit()
             except IntegrityError as exc:
+                # A rejected transaction did not commit, unlike a lost reply.
+                commit_in_flight = False
                 # Lost the dedup race: the outer handler rolls back and deletes
                 # the stored object (nothing else is committed yet).
                 if _CHECKSUM_UNIQUE_INDEX in str(exc.orig):
@@ -707,14 +709,20 @@ class FileService:
 
         except (Exception, asyncio.CancelledError) as e:
             await self.db.rollback()
-            if isinstance(e, asyncio.CancelledError) and commit_in_flight:
-                # A cancelled commit can have landed without an acknowledgement.
+            if isinstance(e, IntegrityError):
+                commit_in_flight = False
+            if commit_in_flight:
+                # A failed or cancelled commit can have landed without a reply.
+                # Rolling back the session cannot undo an already durable write.
                 # Preserve backing storage until its durable outcome is known.
                 logger.warning(
-                    "upload cancelled during commit for document %s; preserving storage",
+                    "upload commit outcome unknown for document %s; preserving storage",
                     document_id,
+                    exc_info=True,
                 )
-                raise
+                if isinstance(e, asyncio.CancelledError):
+                    raise
+                raise FileStorageError(f"Failed to upload file: {str(e)}") from e
             # Compensate whatever durably landed before the failure. First reverse
             # the DB (soft-delete the row + revert quota + drop the stray job in one
             # commit); only if that succeeds do we delete the storage object. If the
