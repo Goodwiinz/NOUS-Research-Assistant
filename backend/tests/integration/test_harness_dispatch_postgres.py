@@ -1,4 +1,15 @@
-"""Real-Postgres evidence that harness dispatch skips a row another worker holds.
+r"""Real-Postgres evidence that harness dispatch skips a row another worker holds.
+
+Guard under test: the ``AgentOutbox`` select in
+``services/harness/delivery.py::dispatch_pending``, which locks its rows with
+``.with_for_update(skip_locked=True)`` (line 148 at ``ce0df5d0a``).
+
+Focused command, from the repository root (``PY`` and the throwaway PostgreSQL
+come from Gate 0 of ``docs/testing/harness-live-proof.md``)::
+
+    ORCHESTRATION_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/orch \
+    ENVIRONMENT=testing PYTHONPATH=backend "$PY" -m pytest -c backend/pytest.ini -q \
+    backend/tests/integration/test_harness_dispatch_postgres.py
 
 Mutation verification (2026-10-04, local PostgreSQL 14): replacing
 ``.with_for_update(skip_locked=True)`` on the ``AgentOutbox`` select in
