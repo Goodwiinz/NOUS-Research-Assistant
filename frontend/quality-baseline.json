@@ -23,8 +23,8 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 112,
-    "warnings": 2002,
+    "errors": 109,
+    "warnings": 1995,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,
@@ -712,11 +712,11 @@
       },
       "src/components/documents/DocumentLibrary.tsx": {
         "errors": 0,
-        "warnings": 11
+        "warnings": 9
       },
       "src/components/documents/DocumentMetadataEditor.tsx": {
-        "errors": 1,
-        "warnings": 5
+        "errors": 0,
+        "warnings": 3
       },
       "src/components/documents/DocumentMetadataTab.tsx": {
         "errors": 0,
@@ -1155,8 +1155,8 @@
         "warnings": 11
       },
       "src/components/research/LinkThreadModal.tsx": {
-        "errors": 2,
-        "warnings": 7
+        "errors": 0,
+        "warnings": 4
       },
       "src/components/research/NoteEditor.tsx": {
         "errors": 1,

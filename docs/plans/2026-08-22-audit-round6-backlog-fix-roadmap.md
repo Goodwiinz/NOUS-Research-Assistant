@@ -46,6 +46,6 @@ Paste summary into PR body. PR-specific manual checks listed below.
 ## Standing rules
 
 1. Re-verify every row against HEAD before fixing (R2 rows are 08-17 vintage); mark refuted if gone.
-2. Claim IDs in `docs/agent-audit-roundN.md` + `~/.audit-ledgers` mirror before branching.
+2. Claim IDs in `docs/audits/agent/agent-audit-roundN.md` + `~/.audit-ledgers` mirror before branching.
 3. Ledger row update on PR open + merge.
 4. PR 2 manual gate: fresh-scratch `alembic upgrade head` green + stamp script on dev snapshot.

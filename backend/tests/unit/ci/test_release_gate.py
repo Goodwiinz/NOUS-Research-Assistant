@@ -138,7 +138,10 @@ def test_workflow_has_one_named_fail_closed_release_gate() -> None:
     job = _workflow()["jobs"]["test-summary"]
     assert job["name"] == "Release Gate"
     assert job["if"] == "always()"
-    assert tuple(job["needs"]) == EXPECTED_REQUIRED_JOBS
+    assert (
+        tuple(job["needs"])
+        == ("ci-plan", "lightweight-checks") + EXPECTED_REQUIRED_JOBS
+    )
 
     checkout_indexes = [
         index
@@ -157,6 +160,8 @@ def test_workflow_has_one_named_fail_closed_release_gate() -> None:
     assertion_index, step = assertion_steps[0]
     assert checkout_indexes[0] < assertion_index
     assert "toJSON(needs)" in str(step.get("env", {}).get("REQUIRED_JOB_RESULTS"))
+    assert "needs.ci-plan.outputs.profile" in str(step.get("env", {}).get("CI_PROFILE"))
+    assert '--profile "$CI_PROFILE"' in str(step.get("run", ""))
     assert "GITHUB_STEP_SUMMARY" in str(step.get("run", ""))
     assert not step.get("continue-on-error", False)
 
