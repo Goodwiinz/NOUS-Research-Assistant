@@ -125,6 +125,11 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def idem(name: str) -> str:
+    """A plain-label idempotency key (these requests are replayed on purpose)."""
+    return f"r8-live-{name}"
+
+
 def minute_at(start: datetime, minutes: int) -> int:
     return (start + timedelta(minutes=minutes)).astimezone(ZoneInfo(TZ)).minute
 
@@ -510,7 +515,7 @@ async def create_schedule(factory: Factory, world: World, minute: int) -> None:
                 strategy_version=world.strategy["strategy_version"],
                 cron=f"{minute} * * * *",
                 timezone=TZ,
-                idempotency_key=f"r8-live-{world.label}",
+                idempotency_key=idem(world.label),
             ),
         )
     world.schedule_id = schedule.schedule_id
@@ -924,7 +929,7 @@ async def screen_all(
                     assignment_id=assignment["id"],
                     criteria_hash=queue["criteria_hash"],
                     decision=cast(Any, decision),
-                    idempotency_key=f"obs-{queue_id}-{report}",
+                    idempotency_key=idem(f"obs-{queue_id}-{report}"),
                 ),
             )
             await db.commit()
@@ -949,7 +954,7 @@ async def parent_review(
                 protocol_version_id=UUID(world.strategy["protocol_version_id"]),
                 stage=cast(Any, "title_abstract"),
                 report_ids=list(reports.values()),
-                idempotency_key="r8-live-parent-ta",
+                idempotency_key=idem("parent-ta"),
             ),
         )
         await screening_service.assign(
@@ -958,7 +963,7 @@ async def parent_review(
             queue.id,
             ids["O"],
             ScreeningAssignmentCreate(
-                reviewer_user_id=ids["R"], idempotency_key="r8-live-parent-assign"
+                reviewer_user_id=ids["R"], idempotency_key=idem("parent-assign")
             ),
         )
         await db.commit()
@@ -973,7 +978,7 @@ async def parent_review(
             ids["O"],
             ReviewVersionCreate(
                 rationale="R8 live proof: parent review frozen before the update",
-                idempotency_key="r8-live-root",
+                idempotency_key=idem("root"),
             ),
         )
     rec.check(
@@ -1000,7 +1005,7 @@ async def successor_review(
         reviewer_user_ids=[ids["R"]],
         carry_with_uncertainty=[absent],
         rationale="R8 live proof: accept the real scheduled delta",
-        idempotency_key="r8-live-successor",
+        idempotency_key=idem("successor"),
     )
 
     async def create() -> tuple[Any, bool]:
@@ -1115,7 +1120,7 @@ async def successor_review(
                     context,
                     ids[user],
                     ReviewVersionCreate(
-                        rationale="denied", idempotency_key=f"r8-live-deny-{user}"
+                        rationale="denied", idempotency_key=idem(f"deny-{user}")
                     ),
                 )
             status = 200
