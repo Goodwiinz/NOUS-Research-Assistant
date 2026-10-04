@@ -6,8 +6,10 @@
 32bd2d301cbd0bd31e8e3681c981958a611965fc:backend/tests/integration/test_run_manifest_postgres.py:generic-api-key:90
 3ba8e567b79787c8bf8f86de443b4c89c66a6fc1:backend/tests/unit/services/test_manifest_rules.py:generic-api-key:190
 
-# R8 live-proof harness (GOO-319/320): its first commit passed a plain-label request
-# idempotency key literal (idempotency_key="r8-live-parent-assign"). It is a replay
-# label, not a credential, and the tip builds keys through idem() instead.
-# Ignore only this commit/file/rule/line finding, not other credentials or scripts.
+# R8 live-proof harness (GOO-319/320): its first commit passed a quoted plain label
+# as a request's idempotency argument. It is a replay label, not a credential, and
+# the tip builds those labels through idem() instead. The second entry is the
+# commit that first described that label here. Ignore only these two
+# commit/file/rule/line findings, not other credentials or scripts.
 3ffe5f60da7b13da43d1d5077cff3505d1779cdf:backend/scripts/validation/r8_live_proof.py:generic-api-key:940
+a707c4aaa39a47d72958c7bc417599f3142f3260:.gitleaksignore:generic-api-key:10
