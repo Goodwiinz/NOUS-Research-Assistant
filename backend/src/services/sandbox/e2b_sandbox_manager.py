@@ -276,6 +276,8 @@ class SandboxManager:
                 await self._discard_sandbox(thread_id, sandbox)
             raise
         except Exception as exc:
+            if sandbox is not None:
+                await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             logger.error(f"Sandbox execution failed: {exc}", exc_info=True)
             return ExecutionResult(
@@ -445,9 +447,11 @@ class SandboxManager:
 
     async def _discard_sandbox(self, thread_id: str, sandbox: Any) -> None:
         """Evict this exact box without replenishing the execution budget."""
-        async with self._lock:
-            if self._sandboxes.get(thread_id) is sandbox:
-                self._sandboxes.pop(thread_id)
+        # No await between identity check and removal: atomic on this event loop.
+        # The creation lock can be held by another thread's package installation;
+        # stopping remote code must never wait for that unrelated work.
+        if self._sandboxes.get(thread_id) is sandbox:
+            self._sandboxes.pop(thread_id)
         await self._kill_sandbox(thread_id, sandbox)
 
     async def cleanup(self, thread_id: str) -> None:

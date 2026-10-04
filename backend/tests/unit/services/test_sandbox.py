@@ -376,6 +376,63 @@ class TestSandboxExecutionBounds:
         monkeypatch.setattr(module, "AsyncSandbox", provider)
         return module.SandboxManager(), provider
 
+    async def test_timeout_kills_without_waiting_for_other_thread_initialization(
+        self, monkeypatch
+    ):
+        running = asyncio.Event()
+        installing = asyncio.Event()
+        release_install = asyncio.Event()
+        cached = AsyncMock()
+        new_box = AsyncMock()
+
+        async def run(*args, **kwargs):
+            running.set()
+            await asyncio.Event().wait()
+
+        async def install(*args, **kwargs):
+            installing.set()
+            await release_install.wait()
+            return _make_e2b_execution()
+
+        cached.run_code.side_effect = run
+        new_box.run_code.side_effect = install
+        manager, _ = self._manager(monkeypatch, new_box)
+        manager._sandboxes["running"] = cached
+        execution = asyncio.create_task(manager.execute("running", "hang", timeout=1))
+        await running.wait()
+        creation = asyncio.create_task(manager.get_or_create_sandbox("other-thread"))
+        await installing.wait()
+        try:
+            result = await asyncio.wait_for(asyncio.shield(execution), timeout=1.5)
+            assert result.error == "timeout"
+            cached.kill.assert_awaited_once()
+            assert "running" not in manager._sandboxes
+            assert manager._execution_counts["running"] == 1
+            assert not creation.done()
+        finally:
+            release_install.set()
+            await creation
+            await execution
+            await manager.cleanup_all()
+
+    async def test_transport_failure_retires_box_without_replenishing_budget(
+        self, monkeypatch
+    ):
+        sandbox = AsyncMock()
+        sandbox.run_code.side_effect = [
+            _make_e2b_execution(),
+            RuntimeError("provider connection lost"),
+        ]
+        manager, _ = self._manager(monkeypatch, sandbox)
+        try:
+            result = await manager.execute("transport", "code")
+            assert result.error == "execution_error"
+            sandbox.kill.assert_awaited_once()
+            assert "transport" not in manager._sandboxes
+            assert manager._execution_counts["transport"] == 1
+        finally:
+            await manager.cleanup_all()
+
     @pytest.mark.parametrize("timeout,expected", [(0, 1), (-5, 1), (9999, 300)])
     async def test_execution_timeout_cannot_disable_or_exceed_cap(
         self, monkeypatch, timeout, expected
@@ -521,9 +578,11 @@ class TestSandboxExecutionBounds:
         from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
 
         sandbox = AsyncMock()
+        user_calls = []
 
         async def run(code, **kwargs):
             if code == "print(1)":
+                user_calls.append(code)
                 raise RuntimeError("connection lost")
             return _make_e2b_execution()
 
@@ -535,7 +594,8 @@ class TestSandboxExecutionBounds:
                 for _ in range(MAX_EXECUTIONS_PER_RUN + 1)
             ]
             assert results[-1].error == "execution_limit_exceeded"
-            assert sandbox.run_code.await_count == MAX_EXECUTIONS_PER_RUN + 1
+            assert all(result.error == "execution_error" for result in results[:-1])
+            assert len(user_calls) == MAX_EXECUTIONS_PER_RUN
         finally:
             await manager.cleanup_all()
 
