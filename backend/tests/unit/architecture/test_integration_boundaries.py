@@ -8,7 +8,7 @@ nothing scanned ``api/integrations/*``, ``api/artifacts.py`` or
   (a) no ``commit``/``rollback``/``flush``/``refresh`` call in those router
       modules: the services own the transaction boundary. Only the router
       files are scanned, so a service that commits (for example
-      ``services/integrations/connections.py``) is fine;
+      ``services/integrations/context.py``) is fine;
   (b) the access getters keep requiring the caller's identity: every
       identity parameter stays present with no default, so a caller can never
       fall through to an unscoped lookup.
