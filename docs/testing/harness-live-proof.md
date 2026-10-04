@@ -42,7 +42,7 @@ psql -h 127.0.0.1 -p 55432 -U postgres -c 'create database mig' -c 'create datab
 # 0a. Migrations hb01..hb04, aw01/aw02, it01/it02 apply from empty.
 (cd backend && env -u SUPABASE_DB_URL DATABASE_URL=postgresql://postgres@127.0.0.1:55432/mig \
   ENVIRONMENT=testing "$PY" -m alembic upgrade head 2>&1 \
-  | grep -E 'hb0|aw0|it0'; "$PY" ../scripts/ci/check_alembic.py)
+  | grep -E -- '-> (hb0[1-4]|aw0[12]|it0[12])_'; "$PY" ../scripts/ci/check_alembic.py)
 
 # 0b. Two-session SKIP LOCKED on the harness outbox.
 ORCHESTRATION_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/orch ENVIRONMENT=testing \
