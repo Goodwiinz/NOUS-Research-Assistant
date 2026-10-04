@@ -200,6 +200,66 @@ async def test_correlated_failure_preserves_object_as_orphan(quota_deltas):
     svc._delete_stored_object.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_type", [Document, ProcessingJob])
+async def test_refresh_failure_compensates_successfully_committed_rows(
+    quota_deltas, soft_deleted, refresh_type
+):
+    """A failed reload cannot erase knowledge of a durable commit.
+
+    Mutation checks: move either committed flag in
+    backend/src/services/documents/file_service.py:646 (document) or :687 (job)
+    below its refresh call; the matching case must fail. Run:
+    pytest -q backend/tests/test_upload_compensating_delete.py -k refresh_failure
+    """
+    db = _FakeDB()
+
+    async def _refresh(obj):
+        if isinstance(obj, refresh_type):
+            raise RuntimeError("reload failed after successful commit")
+
+    db.refresh = _refresh
+    svc = _make_service(db)
+    org, user = _org_user()
+
+    with pytest.raises(FileStorageError):
+        await svc.upload_file(_FakeUpload(b"hello world"), "Doc", user, org)
+
+    assert (
+        len(soft_deleted) == 1
+    ), "Committed document must be revoked before object deletion"
+    assert soft_deleted[0].is_deleted is True
+    assert db.commit_calls == (2 if refresh_type is Document else 4)
+    assert quota_deltas == ([] if refresh_type is Document else [1234, -1234])
+    if refresh_type is ProcessingJob:
+        assert any(
+            isinstance(obj, ProcessingJob) for obj in db.deleted
+        ), "Committed processing job must be removed when its reload fails"
+    svc._delete_stored_object.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_document_refresh_and_reversal_failure_preserves_backing_object(
+    quota_deltas,
+):
+    """Keep backing storage if a committed row cannot be safely revoked."""
+    db = _FakeDB(fail_commits={2})  # document succeeds, reversal fails
+
+    async def _refresh(_obj):
+        raise RuntimeError("reload failed after successful commit")
+
+    db.refresh = _refresh
+    svc = _make_service(db)
+    org, user = _org_user()
+
+    with pytest.raises(FileStorageError):
+        await svc.upload_file(_FakeUpload(b"hello world"), "Doc", user, org)
+
+    assert db.commit_calls == 2
+    assert quota_deltas == []
+    svc._delete_stored_object.assert_not_called()
+
+
 def _integrity_error(constraint: str) -> IntegrityError:
     orig = Exception(f'duplicate key value violates unique constraint "{constraint}"')
     return IntegrityError("INSERT INTO documents ...", {}, orig)

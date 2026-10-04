@@ -641,8 +641,10 @@ class FileService:
                 if _CHECKSUM_UNIQUE_INDEX in str(exc.orig):
                     raise _duplicate_conflict() from exc
                 raise
-            await self.db.refresh(document)
+            # The commit is durable even if the subsequent reload fails.
+            # Compensation must revoke the row before deleting its object.
             document_committed = True
+            await self.db.refresh(document)
 
             # Atomically CLAIM quota — conditional UPDATE fails (rowcount 0)
             # when a concurrent upload consumed the remaining headroom after
@@ -682,8 +684,8 @@ class FileService:
 
             self.db.add(processing_job)
             await self.db.commit()
-            await self.db.refresh(processing_job)
             processing_job_committed = True
+            await self.db.refresh(processing_job)
 
             # Queue the job for processing
             from src.tasks.processing_tasks import process_document_ingestion
