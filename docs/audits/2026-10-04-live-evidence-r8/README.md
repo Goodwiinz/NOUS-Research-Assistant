@@ -30,6 +30,8 @@ DATABASE_URL=postgresql+asyncpg://<local user>@127.0.0.1:5432/<scratch db> REDIS
   PYTHONPATH="$PWD" python scripts/validation/r8_live_proof.py --out <evidence dir> --scratch <temp dir> --allow-hard-kill
 ```
 
+The committed harness differs from the file that produced this run only in how request idempotency labels are built: an `idem()` helper replaced inline literals that the secret scan flagged, and the screening-observation label gained the `r8-live-` prefix. Behavior is otherwise the same and the evidence was not regenerated.
+
 Alembic needs the synchronous URL; the harness needs the asyncpg one. The harness signals only the processes it spawned, uses a per-run random field-encryption key that is never stored, and leaves `CROSSREF_MAILTO` unset. Seeded users use `@test.invalid` addresses and no address appears in these files. The Lancet DOI in the baseline is a real fixture for a real retraction record, used only for its public bibliographic metadata and Crossref notices.
 
 ## Left behind
