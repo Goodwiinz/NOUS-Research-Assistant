@@ -378,9 +378,7 @@ async def test_reuses_existing_data_source_for_same_item_path(stub_settings):
     key = f"documents/{doc.organization_id}/{doc.id}.txt"
 
     client = MagicMock()
-    client.list_data_sources = AsyncMock(
-        return_value=[{"uuid": "ds-existing", "spaces_data_source": {"item_path": key}}]
-    )
+    client.find_data_source = AsyncMock(return_value="ds-existing")
     client.add_spaces_data_source = AsyncMock()
     client.start_indexing = AsyncMock(return_value=IndexingJob(uuid="job-1"))
 
@@ -398,6 +396,7 @@ async def test_reuses_existing_data_source_for_same_item_path(stub_settings):
         result = await sync_document_to_kb(session, doc, client=client)
 
     assert result == "ds-existing"
+    client.find_data_source.assert_awaited_once_with(kb_uuid="kb-1", item_path=key)
     client.add_spaces_data_source.assert_not_called()
     assert doc.do_kb_data_source_uuid == "ds-existing"
 
