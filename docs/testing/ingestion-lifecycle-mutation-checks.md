@@ -290,3 +290,20 @@ The existing reconciler rotates attempts fairly. Feature/apply flags still
 control remote mutations; no second scheduler was added.
 
 Standalone GOO-358 validation at `d236204a1` (documentation-only changes afterwards): the six cleanup/API regression files named in the implementation plan passed **100 tests, 4 warnings, 52.43 seconds**, with real disposable PostgreSQL and Redis. Full-source Ruff passed. The earlier sparse-checkout import error is not counted as test execution.
+
+### GOO-358 write-token lease (review of d236204a1)
+
+The independent review and CodeRabbit both flagged unbounded write tokens.
+These Postgres and unit tests prove the lease and retirement rules.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G20 `begin_write` prunes writers past the lease (`satellite_state.py`) | keep every token | `test_failed_do_kb_syncs_leave_a_bounded_token_set` | `2 == 1` tokens |
+| G21 DO KB cleanup retires settled tokens (`do_kb/ingest.py`) | retirement removed | `test_deleted_do_kb_cleanup_finds_lost_sources_and_retires_settled_tokens` | `{'dead','live'} == {'live'}` |
+| G22 graph cleanup retires settled tokens (`reconcile_tasks.py` `_cleanup_deleted_document_graph`) | retirement removed | `test_graph_cleanup_retires_writers_past_their_lease[*]` | `'pending' == 'completed'` |
+| G23 a token without a start counts as dead (`satellite_state.py` `_started_before`) | treat as live | `test_graph_cleanup_retires_writers_past_their_lease[None]` | `'pending' == 'completed'` |
+| G24 `list_data_sources` follows pages on the same host (`do_kb/client.py`) | stop after page 1 | `test_list_data_sources_follows_pages`, `test_list_data_sources_refuses_a_foreign_next_page` | one page only / `DID NOT RAISE` |
+
+The delete-time graph cleanup in `FileService` retires tokens in the same way.
+It has no dedicated mutation test: if it misses one, the reconciler (G22)
+retires it on its next run.
