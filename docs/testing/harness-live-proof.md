@@ -12,7 +12,7 @@ Contracts: [harness bridge](../engineering/harness-bridge.md), [bridge package](
 2. Codex reads project sources through the NOUS MCP read gateway.
 3. Phase 2: Codex publishes a workspace file as an artifact, and the stored SHA-256 matches the local file.
 4. Phase 2: a `request_action` note approved in the browser more than 15 minutes after the request still executes. Grants expire after 15 minutes, so the approval rests on the consent, not the original grant.
-5. After `nous-harness disconnect` the old grant is refused (403). In Phase 2, after remediation slice A, the old CLI bearer is refused too (401).
+5. After `nous-harness disconnect`, credentials that answered 200 just before are refused. Without remediation slice A the old grant answers 403 and the old CLI bearer still answers 200 (the known gap). With slice A both answer 401, because the revoked bearer is checked before the grant.
 6. Setting the flags back to `false` refuses new work with 503 while status reads and reconciliation still answer.
 
 ## Flags and scopes
@@ -136,19 +136,31 @@ jq -r '.. | objects | select(.type? == "live-harness-acceptance") | .description
 
 **P1-2: MCP read.** In the same thread, with **Local Codex**, the paired computer and the fixture workspace selected, send: `Use the nous search_documents tool to search this project for "<a term from one project document>" and reply with only the returned document ids.` Record the run id (from the stream, as in P1-1) and the returned document ids. Do not record any source text.
 
-**P1-3: disconnect, then probe.** Copy the state before disconnecting so the old credentials can be replayed once. The copy holds secrets: never print them, and delete the copy straight after.
+**P1-3: disconnect, then probe.** Copy the state before disconnecting so the old credentials can be replayed. The copy holds secrets: never print them, and delete the copy straight after. Replay them twice with the same two requests, first as a control while they are still live, then after `disconnect`.
 
 ```sh
 PROBE=$(mktemp -d) && cp -Rp "$STATE"/. "$PROBE"/
-pnpm --filter @nous/harness-bridge start disconnect --store "$STATE"
 H=$(jq -r .credentialHandle "$PROBE/connection.json")
 AT=$(jq -r .accessToken "$PROBE/$H.json"); GT=$(jq -r .grantToken "$PROBE/$H.json")
-curl -s -o /dev/null -w 'grant:%{http_code}\n' -H "Authorization: Bearer $AT" -H "X-NOUS-Integration-Grant: $GT" "$API/integrations/tools"
-curl -s -o /dev/null -w 'bearer:%{http_code}\n' -H "Authorization: Bearer $AT" "$API/integrations/devices"
-unset AT GT H; rm -rf "$PROBE"
+probe() {
+  curl -s -o /dev/null -w "$1 grant:%{http_code}\n" -H "Authorization: Bearer $AT" -H "X-NOUS-Integration-Grant: $GT" "$API/integrations/tools"
+  curl -s -o /dev/null -w "$1 bearer:%{http_code}\n" -H "Authorization: Bearer $AT" "$API/integrations/devices"
+}
+probe before
 ```
 
-Expected: `disconnect` prints `Disconnected: NOUS revoked this device's access…` and the probe prints `grant:403`. Before slice A, `bearer:200` is the known gap: record it as **FAIL (known, slice A)**, not PASS. After slice A it must print `bearer:401`.
+The control must print `before grant:200` and `before bearer:200`. If it does not, stop before `disconnect`: the credentials are not usable, for example because the copy is stale (a grant lives 15 minutes and every renewal revokes the previous token). `rm -rf "$PROBE"`, fix the cause and copy again. Without this control a 403 cannot be told apart from a grant that had already expired or been renewed away. Then, in the same shell:
+
+```sh
+pnpm --filter @nous/harness-bridge start disconnect --store "$STATE"
+probe after
+unset AT GT H; unset -f probe; rm -rf "$PROBE"
+```
+
+Expected: `disconnect` prints `Disconnected: NOUS revoked this device's access…`. The codes after it depend on whether the deployed image contains slice A's merge commit (the Gate 1 step 2 check):
+
+- Without slice A: `after grant:403` and `after bearer:200`. `bearer:200` is the known gap: record it as **FAIL (known, slice A)**, not PASS.
+- With slice A: `after grant:401` and `after bearer:401`. The revoked CLI bearer is rejected before the grant is looked up, so `grant:401` says nothing about the grant itself. Evidence for the grant comes from the `after grant:403` of a run without slice A, or from the grant row's `revoked_at` (table `integration_grants`).
 
 ## Phase 2: write proof (only after slice A is merged AND deployed, and after the Phase 2 values PR)
 
@@ -183,7 +195,7 @@ date -u +%FT%TZ               # requested_at
 
 Send: `Call the nous request_action tool with action "create_project_note", invocation_id "<uuid>", title "harness live proof note", content "approved after grant expiry". Reply with the result verbatim.` Expected: `Not created yet. The user must approve this note in NOUS: https://goodwiinz.tech/integrations/actions/<uuid>…`. Leave `nous-harness run` running. Wait at least 16 minutes, then open the approval URL as the project owner, approve, and record `date -u +%FT%TZ` as `approved_at`. Then send: `Call the nous get_action_status tool with invocation_id "<uuid>".` Expected: `Created. …`, and the note is visible in the project notes. Record `approved_at - requested_at`; it must be at least 16 minutes.
 
-**P2-3: disconnect, then probe.** Repeat P1-3. Expected: `grant:403` and `bearer:401`.
+**P2-3: disconnect, then probe.** Repeat P1-3, control included. Slice A is deployed by now, so expect `before grant:200` and `before bearer:200`, then `after grant:401` and `after bearer:401`.
 
 ## Rollback and kill switch
 
@@ -205,8 +217,8 @@ Copy this table into a new bundle `docs/testing/evidence/harness-live-proof-YYYY
 | G1-flags | Flag state per pod (Phase 1, then Phase 2) | grep output for backend, worker and beat; Argo CD revision | NOT RUN |
 | P1-1 | Chat run, reload, single approval | Playwright summary; `thread_id`, `run_id`, `device_id`, `workspace_id` | NOT RUN |
 | P1-2 | MCP read | `run_id`, returned document ids | NOT RUN |
-| P1-3 | Disconnect, then probes | `grant:` and `bearer:` codes; bearer 200 is FAIL (known, slice A) | NOT RUN |
+| P1-3 | Disconnect, then probes | `before` and `after` codes for `grant:` and `bearer:`, and whether the image had slice A; without slice A, `after bearer:200` is FAIL (known, slice A) | NOT RUN |
 | P2-1 | Publish and SHA-256 | `artifact_id`, `version_id` from both calls, local and stored SHA-256 | NOT RUN |
 | P2-2 | Approval after more than 15 minutes | `invocation_id`, `requested_at`, `approved_at`, delta, final state | NOT RUN |
-| P2-3 | Disconnect, then probes after slice A | `grant:403`, `bearer:401` | NOT RUN |
+| P2-3 | Disconnect, then probes after slice A | `before grant:200`, `before bearer:200`, `after grant:401`, `after bearer:401`; grant evidence: the P1-3 `after grant:403` or the grant row's `revoked_at` | NOT RUN |
 | RB | Flags off (if rehearsed) | PR number, Argo CD revision, 503 codes, existing status 200 | NOT RUN |
