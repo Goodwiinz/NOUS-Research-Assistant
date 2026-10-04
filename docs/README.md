@@ -1,37 +1,58 @@
-# NOUS Documentation
+# NOUS documentation
 
-Organized reference for the NOUS Multimodal Intelligence Platform.
+Start with the document that matches your task. This repository contains current
+engineering contracts alongside designs, plans, dated audits and retained
+evidence; those records have different authority and freshness.
 
-## Directory Structure
+## Start here
 
-| Directory                                        | Contents                                                          | Key Docs                                                              |
-| ------------------------------------------------ | ----------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [`architecture/`](architecture/)                 | System design, component diagrams, project structure              | Frontend/backend architecture, knowledge graph design, agent workflow |
-| [`database/`](database/)                         | Schema, migrations, Neo4j, Supabase PostgreSQL, DO Knowledge Base | Connection guides, knowledge graph setup, optimization                |
-| [`api/`](api/)                                   | API contracts, endpoint docs                                      | Comprehensive API docs, real-time API reference                       |
-| [`openapi-specs/`](openapi-specs/)               | OpenAPI YAML specifications                                       | Analytics service, evaluation service                                 |
-| [`deployment/`](deployment/)                     | Docker, K8s, CI/CD, startup                                       | Docker setup, deployment guides, operations runbook                   |
-| [`security/`](security/)                         | Auth, RBAC, audit, encryption                                     | Security audit, auth fixes, RBAC strategy                             |
-| [`testing/`](testing/)                           | Test reports, strategies, guides                                  | Backend/E2E reports, testing guide                                    |
-| [`observability/`](observability/)               | Tracing, metrics, dashboards                                      | Architecture, deployment, runbooks                                    |
-| [`monitoring/`](monitoring/)                     | Prometheus, alerting                                              | Setup guides, troubleshooting, alerting                               |
-| [`performance/`](performance/)                   | Benchmarks, optimization                                          | Optimization guide, phase 1/2 implementation                          |
-| [`guides/`](guides/)                             | Feature guides, integration how-tos                               | Quick start, arXiv integration, embeddings, WebSocket, uploads        |
-| [`frontend/`](frontend/)                         | UI architecture, design audits                                    | UX audit, upload/graph component design                               |
-| [`plans/`](plans/)                               | Implementation plans, task boards                                 | Feature designs, remediation plans, task breakdowns                   |
-| [`reports/`](reports/)                           | Implementation and test reports                                   | Agent testing, evaluation, improvements                               |
-| [`fixes/`](fixes/)                               | Bug fix documentation                                             | Fix patterns, session summaries, implementation status                |
-| [`competitive-analysis/`](competitive-analysis/) | Market research                                                   | Competitive analysis, quick wins roadmap                              |
-| [`ab-testing/`](ab-testing/)                     | A/B testing framework                                             | Architecture, system docs                                             |
-| [`operations/`](operations/)                     | Runbooks, on-call procedures                                      | Operations runbook, worker monitoring                                 |
-| [`paper/`](paper/)                               | Research paper (LaTeX)                                            | Project paper, figures                                                |
+| Task | Entry point |
+| --- | --- |
+| Understand the product and repository | [Project overview](../README.md) and [code maps](CODEMAPS/README.md) |
+| Change backend, frontend or API behavior | [Current engineering contracts](engineering/README.md) |
+| Work on research workflows | [Research protocols](engineering/research-protocols.md), [project migration](engineering/research-project-migration.md) and [paper discovery](engineering/paper-discovery.md) |
+| Understand local Codex, MCP and publication | [Harness bridge contract](engineering/harness-bridge.md) |
+| Run tests or interpret verification | [Testing contract](engineering/testing.md), [verification records](testing/README.md) and [evaluation evidence](../evals/README.md) |
+| Operate or deploy the application | [Operational notes](engineering/gotchas.md), [operations](operations/README.md) and [infrastructure runbooks](runbooks/README.md) |
+| Find audit findings and their evidence | [Audit index](audits/README.md) |
+| Find a design, decision or implementation plan | [Decisions](decisions/README.md), [specifications](specs/README.md), [plans](plans/README.md) and [Superpowers records](superpowers/README.md) |
+| Follow project knowledge and delivery in Linear | [NOUS codebase knowledge base](https://linear.app/goodwiinz/document/nous-codebase-knowledge-base-c4cf26347ad2) |
 
-## Quick Links
+## How to read these records
 
-- **Getting started**: [`guides/QUICK_START.md`](guides/QUICK_START.md)
-- **API reference**: [`api/COMPREHENSIVE_API_DOCUMENTATION.md`](api/COMPREHENSIVE_API_DOCUMENTATION.md)
-- **Agent workflow**: [`architecture/agent-chat-workflow.md`](architecture/agent-chat-workflow.md)
-- **Docker setup**: [`deployment/DOCKER_SETUP.md`](deployment/DOCKER_SETUP.md)
-- **Security audit**: [`security/SECURITY_AUDIT_REPORT.md`](security/SECURITY_AUDIT_REPORT.md)
-- **Testing guide**: [`testing/TESTING_GUIDE.md`](testing/TESTING_GUIDE.md)
-- **Brand assets**: [`../brand/`](../brand/) — Logo, guidelines, landing page
+* **Current contracts:** `engineering/` describes implementation boundaries and
+  the tests or gates that enforce them. Check the closest contract and source
+  before relying on a behavior claim.
+* **Design and decision evidence:** specifications, plans, architecture references
+  and decision records explain intent and rationale at their own baseline.
+* **Dated results:** audits, reports, fix records and evaluation bundles retain
+  their original revision, environment and results. A Done ticket, checked plan
+  or recorded pass is not a new CI or production acceptance result.
+* **Archived records:** `archive/` preserves retired planning material. It is
+  useful history, rather than current setup or execution guidance.
+
+Repository engineering contracts remain canonical. Linear is a linked project
+knowledge and delivery view; it does not replace the code or its checks.
+
+## Browse by subject
+
+| Area | Collections |
+| --- | --- |
+| Engineering and implementation | [Engineering](engineering/README.md), [code maps](CODEMAPS/README.md), [architecture](architecture/README.md), [API](api/README.md), [supplemental OpenAPI](openapi-specs/README.md), [database](database/README.md) |
+| Product and integrations | [Frontend and product design](frontend/README.md), [feature guides](guides/README.md), [comparisons](competitive-analysis/README.md), [A/B testing](ab-testing/README.md) |
+| Operations and quality | [Operations](operations/README.md), [runbooks](runbooks/README.md), [deployment](deployment/README.md), [infrastructure](infrastructure/README.md), [security](security/README.md), [performance](performance/README.md), [testing](testing/README.md) |
+| Decisions and delivery records | [Decisions](decisions/README.md), [specifications](specs/README.md), [plans](plans/README.md), [Superpowers](superpowers/README.md) |
+| Historical and research evidence | [Audits](audits/README.md), [reports](reports/README.md), [fix records](fixes/README.md), [archive](archive/README.md), [research paper](paper/README.md), [evaluations](../evals/README.md) |
+
+## Keeping documentation organized
+
+Add a document to the closest subject folder and update that folder’s index.
+Keep current implementation rules in `engineering/`; preserve dated plans and
+audit evidence with their original status and source revision. Add a dated
+amendment when a conclusion changes instead of rewriting recorded history.
+
+When moving a file, update relative links and repository path references in the
+same change. Preserve supporting evidence files with the record they belong to.
+Run `make docs-lint` and `git diff --check -- docs/`, then verify changed links.
+The [documentation instructions](AGENTS.md) and [directory-doc tooling](../scripts/docs/README.md)
+define the complete workflow.
