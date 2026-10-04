@@ -364,6 +364,221 @@ class TestSandboxManagerExecute:
 # ---------------------------------------------------------------------------
 
 
+class TestSandboxExecutionBounds:
+    """Provider doubles exercise bounds without creating paid E2B sandboxes."""
+
+    def _manager(self, monkeypatch, sandbox):
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        monkeypatch.setenv("E2B_API_KEY", "fixture-key")
+        monkeypatch.setattr(module, "_e2b_available", True)
+        provider = Mock(create=AsyncMock(return_value=sandbox))
+        monkeypatch.setattr(module, "AsyncSandbox", provider)
+        return module.SandboxManager(), provider
+
+    @pytest.mark.parametrize("timeout,expected", [(0, 1), (-5, 1), (9999, 300)])
+    async def test_execution_timeout_cannot_disable_or_exceed_cap(
+        self, monkeypatch, timeout, expected
+    ):
+        sandbox = AsyncMock()
+        sandbox.run_code.return_value = _make_e2b_execution()
+        manager, _ = self._manager(monkeypatch, sandbox)
+        try:
+            result = await manager.execute("bounded", "print(1)", timeout=timeout)
+            assert result.exit_code == 0
+            assert sandbox.run_code.call_args.kwargs["timeout"] == expected
+        finally:
+            await manager.cleanup_all()
+
+    async def test_failed_default_packages_kill_box_and_return_safe_error(
+        self, monkeypatch
+    ):
+        sandbox = AsyncMock()
+        sandbox.run_code.return_value = _make_e2b_execution(
+            error=RuntimeError("private provider install failure")
+        )
+        manager, _ = self._manager(monkeypatch, sandbox)
+        result = await manager.execute("failed-init", "print(1)")
+        assert result.error == "execution_error"
+        assert "private provider" not in result.stderr
+        sandbox.kill.assert_awaited_once()
+        assert "failed-init" not in manager._sandboxes
+        assert sandbox.run_code.await_count == 1  # user code must never run
+
+    async def test_provider_creation_failure_returns_safe_error(self, monkeypatch):
+        manager, provider = self._manager(monkeypatch, AsyncMock())
+        provider.create.side_effect = RuntimeError("private provider auth detail")
+        result = await manager.execute("failed-create", "print(1)")
+        assert result.error == "execution_error"
+        assert "private provider" not in result.stderr
+
+    async def test_timeout_kills_box_without_resetting_execution_budget(
+        self, monkeypatch
+    ):
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        class ProviderTimeout(Exception):
+            pass
+
+        monkeypatch.setattr(
+            module, "E2BTimeoutException", ProviderTimeout, raising=False
+        )
+        sandbox = AsyncMock()
+        sandbox.run_code.side_effect = [
+            _make_e2b_execution(),
+            ProviderTimeout("private timeout detail"),
+        ]
+        manager, _ = self._manager(monkeypatch, sandbox)
+        result = await manager.execute("timed-out", "while True: pass")
+        assert result.exit_code == 124
+        assert result.error == "timeout"
+        sandbox.kill.assert_awaited_once()
+        assert "timed-out" not in manager._sandboxes
+        assert manager._execution_counts["timed-out"] == 1
+        assert "timed-out" in manager._last_used  # retained budget still expires
+        await manager.cleanup_all()
+        assert "timed-out" not in manager._execution_counts
+
+    async def test_sdk_stream_cannot_extend_wall_clock_limit(self, monkeypatch):
+        sandbox = AsyncMock()
+
+        async def run(code, **kwargs):
+            if code == "while True: pass":
+                await asyncio.Event().wait()  # provider never raises its timeout
+            return _make_e2b_execution()
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        result = await asyncio.wait_for(
+            manager.execute("wall-clock", "while True: pass", timeout=1), timeout=2
+        )
+        assert result.error == "timeout"
+        sandbox.kill.assert_awaited_once()
+
+    async def test_replacement_box_does_not_replenish_budget(self, monkeypatch):
+        from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
+
+        sandbox = AsyncMock()
+
+        async def run(code, **kwargs):
+            if code == "while True: pass":
+                raise asyncio.TimeoutError()
+            return _make_e2b_execution()
+
+        sandbox.run_code.side_effect = run
+        manager, provider = self._manager(monkeypatch, sandbox)
+        results = [
+            await manager.execute("replacement", "while True: pass")
+            for _ in range(MAX_EXECUTIONS_PER_RUN + 1)
+        ]
+        assert results[-1].error == "execution_limit_exceeded"
+        assert provider.create.await_count == MAX_EXECUTIONS_PER_RUN
+
+    async def test_cancelled_package_initialization_kills_uncached_box(
+        self, monkeypatch
+    ):
+        started = asyncio.Event()
+        sandbox = AsyncMock()
+
+        async def install(*args, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        sandbox.run_code.side_effect = install
+        manager, _ = self._manager(monkeypatch, sandbox)
+        task = asyncio.create_task(manager.execute("cancelled-init", "print(1)"))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        sandbox.kill.assert_awaited_once()
+        assert "cancelled-init" not in manager._sandboxes
+
+    async def test_outer_cancellation_kills_remote_box_and_propagates(
+        self, monkeypatch
+    ):
+        started = asyncio.Event()
+        sandbox = AsyncMock()
+
+        async def run(code, **kwargs):
+            if code == "while True: pass":
+                started.set()
+                await asyncio.Event().wait()
+            return _make_e2b_execution()
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        task = asyncio.create_task(manager.execute("cancelled", "while True: pass"))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        sandbox.kill.assert_awaited_once()
+        assert "cancelled" not in manager._sandboxes
+        assert manager._execution_counts["cancelled"] == 1
+
+    async def test_failed_executions_still_consume_budget(self, monkeypatch):
+        from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
+
+        sandbox = AsyncMock()
+
+        async def run(code, **kwargs):
+            if code == "print(1)":
+                raise RuntimeError("connection lost")
+            return _make_e2b_execution()
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        try:
+            results = [
+                await manager.execute("failed", "print(1)")
+                for _ in range(MAX_EXECUTIONS_PER_RUN + 1)
+            ]
+            assert results[-1].error == "execution_limit_exceeded"
+            assert sandbox.run_code.await_count == MAX_EXECUTIONS_PER_RUN + 1
+        finally:
+            await manager.cleanup_all()
+
+    async def test_concurrent_executions_reserve_budget_before_provider_call(
+        self, monkeypatch
+    ):
+        # Mutation: moving the reservation below the provider await makes this
+        # test fail (six user executions reach the provider instead of five).
+        # Run with PYTHONPATH=backend pytest --confcutdir=backend/tests/unit/services
+        # backend/tests/unit/services/test_sandbox.py -k concurrent_executions.
+        from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        user_calls = []
+        sandbox = AsyncMock()
+
+        async def run(code, **kwargs):
+            if code == "print(1)":
+                user_calls.append(code)
+                started.set()
+                await release.wait()
+            return _make_e2b_execution()
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        tasks = [
+            asyncio.create_task(manager.execute("racing", "print(1)"))
+            for _ in range(MAX_EXECUTIONS_PER_RUN + 1)
+        ]
+        try:
+            await started.wait()
+            await asyncio.sleep(0)
+            release.set()
+            results = await asyncio.gather(*tasks)
+            assert len(user_calls) == MAX_EXECUTIONS_PER_RUN
+            assert sum(r.error == "execution_limit_exceeded" for r in results) == 1
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await manager.cleanup_all()
+
+
 class TestInstallPackages:
     async def test_valid_packages_produce_pip_command(self, monkeypatch):
         monkeypatch.setenv("E2B_API_KEY", "key-abc")
