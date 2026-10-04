@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -43,6 +44,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.core.encryption import initialize_encryption
 from src.models.research_import import ResearchImportRecord
 from src.models.research_project_role import (
     ResearchProjectRole,
@@ -270,6 +272,25 @@ class Fleet:
         for child in reversed(self.children):
             if self.alive(child):
                 self.stop(child)
+
+    def excerpts(self, limit: int = 40) -> str:
+        """The lines that show tick handling, restarts and shutdowns, per
+        process (full logs stay in the scratch directory)."""
+        keys = (
+            "ready.",
+            "beat: Starting",
+            "Sending due task search-updates-tick",
+            "search_update_tasks.tick",
+            "scheduled search execution failed",
+            "Warm shutdown",
+        )
+        parts: list[str] = []
+        for child in self.children:
+            lines = child.log.read_text(errors="replace").splitlines()
+            picked = [ln for ln in lines if any(k in ln for k in keys)]
+            parts.append(f"=== {child.name} ({len(picked)} matching lines)")
+            parts.extend(picked[:limit])
+        return "\n".join(parts) + "\n"
 
     def summary(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -1139,6 +1160,16 @@ async def self_check(out: Path, scratch: Path) -> int:
     return 0 if all(c["ok"] for c in rec.checks) else 1
 
 
+def init_field_encryption() -> None:
+    """Seeded users carry encrypted PII columns, so this process needs a key.
+    It is random per run and never stored: the workers resolve projects through
+    ``User.organization_id`` only and never read those columns."""
+    os.environ.setdefault(
+        "ENCRYPTION_MASTER_KEY", base64.b64encode(os.urandom(32)).decode()
+    )
+    initialize_encryption()
+
+
 async def run(args: argparse.Namespace) -> int:
     out, scratch = Path(args.out), Path(args.scratch)
     out.mkdir(parents=True, exist_ok=True)
@@ -1150,6 +1181,7 @@ async def run(args: argparse.Namespace) -> int:
     started = utcnow()
     crash_task: asyncio.Task[dict[str, Any] | None] | None = None
     try:
+        init_field_encryption()
         fx = await pick_fixtures()
         rec.event("fixtures_picked", query=QUERY)
         worlds = {label: await seed_world(factory, label, fx) for label in OFFSETS}
@@ -1253,6 +1285,7 @@ async def run(args: argparse.Namespace) -> int:
         fleet.stop_all()
         rec.event("all_children_stopped")
         rec.save("log-summary.json", fleet.summary())
+        (out / "log-excerpts.txt").write_text(fleet.excerpts())
         rec.flush()
         await engine.dispose()
     failed = [c["check"] for c in rec.checks if not c["ok"]]
