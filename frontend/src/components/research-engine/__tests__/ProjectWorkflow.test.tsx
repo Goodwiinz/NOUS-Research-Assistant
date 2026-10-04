@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProjectWorkflow } from '../ProjectWorkflow';
 import { projectService } from '@/services/projectService';
+import { useProjectStore } from '@/store/projectStore';
 import {
   createProject,
   listProjectRoles,
@@ -131,10 +132,6 @@ vi.mock('@/services/researchEngineService', () => ({
   listScreeningConflicts: vi.fn(),
   adjudicateScreening: vi.fn(),
   reopenScreening: vi.fn(),
-}));
-const { fetchProject } = vi.hoisted(() => ({ fetchProject: vi.fn() }));
-vi.mock('@/store/projectStore', () => ({
-  useProjectStore: { getState: () => ({ fetchProject }) },
 }));
 describe('ProjectWorkflow', () => {
   beforeEach(() => {
@@ -343,7 +340,7 @@ describe('ProjectWorkflow', () => {
     ).toBeInTheDocument();
   });
 
-  it('refreshes the canonical project store after enabling so a remount keeps the workflow', async () => {
+  it('records the enabled workflow in the project store so a remount keeps it', async () => {
     vi.mocked(createProject).mockResolvedValue({
       id: 'collection-1',
       project_id: 'collection-1',
@@ -362,6 +359,7 @@ describe('ProjectWorkflow', () => {
       created_at: '2026-01-01T00:00:00Z',
       updated_at: '2026-01-01T00:00:00Z',
     };
+    useProjectStore.setState({ currentProject: project });
     const queryClient = new QueryClient();
     const { unmount } = render(
       <QueryClientProvider client={queryClient}>
@@ -369,21 +367,70 @@ describe('ProjectWorkflow', () => {
       </QueryClientProvider>
     );
 
-    screen.getByRole('button', { name: 'Enable workflow' }).click();
-    await waitFor(() => expect(fetchProject).toHaveBeenCalledWith('collection-1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Enable workflow' }));
+    await waitFor(() =>
+      expect(
+        useProjectStore.getState().currentProject?.research_engine_project_id
+      ).toBe('engine-1')
+    );
 
-    // Remount with the project the refreshed store now supplies.
+    // Remount from the store, as the project page does.
     unmount();
     render(
       <QueryClientProvider client={queryClient}>
-        <ProjectWorkflow
-          project={{ ...project, research_engine_project_id: 'engine-1' }}
-        />
+        <ProjectWorkflow project={useProjectStore.getState().currentProject!} />
       </QueryClientProvider>
     );
     expect(
       screen.getByText('Blueprint for collection-1 (editable)')
     ).toBeInTheDocument();
+  });
+
+  it('leaves the store alone when the user moved to another project before enabling finished', async () => {
+    let resolveCreate!: (
+      value: Awaited<ReturnType<typeof createProject>>
+    ) => void;
+    vi.mocked(createProject).mockReturnValue(
+      new Promise((resolve) => {
+        resolveCreate = resolve;
+      })
+    );
+    const project = {
+      id: 'collection-1',
+      workspace_id: 'workspace-1',
+      name: 'First',
+      can_edit: true,
+      can_manage: true,
+      workspace_archived: false,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    const other = { ...project, id: 'collection-2', name: 'Second' };
+    useProjectStore.setState({ currentProject: project });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProjectWorkflow project={project} />
+      </QueryClientProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable workflow' }));
+    await waitFor(() => expect(createProject).toHaveBeenCalled());
+    useProjectStore.setState({ currentProject: other });
+    resolveCreate({
+      id: 'collection-1',
+      project_id: 'collection-1',
+      collection_id: 'collection-1',
+      research_engine_project_id: 'engine-1',
+      name: 'First',
+      status: 'active',
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Blueprint for collection-1 (editable)')
+      ).toBeInTheDocument()
+    );
+    expect(useProjectStore.getState().currentProject).toEqual(other);
   });
 
   it('renders the corpus panel read-only for an archived project', async () => {

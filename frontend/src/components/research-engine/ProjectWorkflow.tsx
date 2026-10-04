@@ -142,9 +142,23 @@ export function ProjectWorkflow({
         engineProjectId: extension.research_engine_project_id,
       });
       void queryClient.invalidateQueries({ queryKey: ['project', project.id] });
-      // The page renders the project from the project store; refresh it so a
-      // remount keeps research_engine_project_id instead of local state.
-      void useProjectStore.getState().fetchProject(project.id);
+      // The page renders the project from the project store; patch it from
+      // the create response so a remount keeps research_engine_project_id.
+      // No fetchProject: it would join a pre-create in-flight GET, and if the
+      // user already left for another project it would supersede that fetch.
+      // ponytail: a pre-create GET still in flight can overwrite this patch;
+      // a store-level request generation counter fixes that if it shows up.
+      useProjectStore.setState((state) =>
+        state.currentProject?.id === project.id
+          ? {
+              currentProject: {
+                ...state.currentProject,
+                research_engine_project_id:
+                  extension.research_engine_project_id,
+              },
+            }
+          : {}
+      );
     },
   });
 
