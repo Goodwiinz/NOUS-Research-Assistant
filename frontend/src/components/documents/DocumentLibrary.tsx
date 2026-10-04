@@ -4,13 +4,10 @@ import {
   DocumentPlusIcon,
   MagnifyingGlassIcon,
   AdjustmentsHorizontalIcon,
-  ArrowDownTrayIcon,
   TrashIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ArrowDownIcon,
-  TagIcon,
-  FolderArrowDownIcon,
 } from '@heroicons/react/24/outline';
 import { useDocuments } from '@/hooks/useDocuments';
 import { useAuthStore } from '@/stores/authStore';
@@ -223,25 +220,6 @@ export const DocumentLibrary: React.FC<DocumentLibraryProps> = ({
     }
   }, [selectedDocuments, deleteDocuments]);
 
-  const handleExportSelected = useCallback(async () => {
-    // TODO: Implement bulk export functionality
-    console.log('Exporting selected documents:', Array.from(selectedDocuments));
-    // This could generate a ZIP file or CSV export
-  }, [selectedDocuments]);
-
-  const handleTagSelected = useCallback(
-    async (tag: string) => {
-      // TODO: Implement bulk tagging functionality
-      console.log(
-        'Tagging selected documents with:',
-        tag,
-        Array.from(selectedDocuments)
-      );
-      // This would add the specified tag to all selected documents
-    },
-    [selectedDocuments]
-  );
-
   // Close bulk actions menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -422,33 +400,6 @@ export const DocumentLibrary: React.FC<DocumentLibraryProps> = ({
                   aria-labelledby="bulk-actions-button"
                 >
                   <div className="py-1">
-                    <button
-                      role="menuitem"
-                      onClick={() => {
-                        handleExportSelected();
-                        setShowBulkActionsMenu(false);
-                      }}
-                      className="flex items-center w-full px-4 py-2 text-sm text-foreground hover:bg-muted"
-                    >
-                      <FolderArrowDownIcon
-                        className="h-4 w-4 mr-2"
-                        aria-hidden="true"
-                      />
-                      Export
-                    </button>
-                    <button
-                      role="menuitem"
-                      onClick={() => {
-                        // TODO: Open tag selection dialog
-                        handleTagSelected('important');
-                        setShowBulkActionsMenu(false);
-                      }}
-                      className="flex items-center w-full px-4 py-2 text-sm text-foreground hover:bg-muted"
-                    >
-                      <TagIcon className="h-4 w-4 mr-2" aria-hidden="true" />
-                      Add Tags
-                    </button>
-                    <hr className="my-1" aria-hidden="true" />
                     <button
                       role="menuitem"
                       onClick={() => {

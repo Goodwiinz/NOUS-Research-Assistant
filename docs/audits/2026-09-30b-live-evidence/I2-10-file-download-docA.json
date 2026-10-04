@@ -1,0 +1,17 @@
+{
+  "step": "I2-10-file-download-docA",
+  "as": "owner",
+  "at": "2026-09-30T21:11:29.351128+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/files/23ade6c7-10f1-4c95-9e4a-4bccff6ece2c/download",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/octet-stream",
+    "Content-Disposition": "attachment; filename*=UTF-8''2609.04767v1.txt"
+  },
+  "response_bytes": 1750,
+  "response_sha256": "78ae5bb1f37b0919869b93c4e7c7f73803b52a85773e806b36fca34a9e822981"
+}

@@ -151,7 +151,7 @@ async def test_bulk_ingest_reports_kg_entries_actually_written(
         ]
     )
 
-    result = await bulk_ingest_with_kg(
+    result = await bulk_ingest_with_kg.__wrapped__(
         request=BulkIngestionRequest(query="cat:cs.AI", create_kg_entries=True),
         current_user={"organization_id": "org-1", "id": "user-1"},
         arxiv_service=arxiv_service,
@@ -178,7 +178,7 @@ async def test_bulk_ingest_still_ingests_when_kg_unavailable(
         route_module, "persist_arxiv_documents", AsyncMock(return_value=persisted)
     )
 
-    result = await bulk_ingest_with_kg(
+    result = await bulk_ingest_with_kg.__wrapped__(
         request=BulkIngestionRequest(query="cat:cs.AI", create_kg_entries=True),
         current_user={"organization_id": "org-1", "id": "user-1"},
         kg_integration=None,

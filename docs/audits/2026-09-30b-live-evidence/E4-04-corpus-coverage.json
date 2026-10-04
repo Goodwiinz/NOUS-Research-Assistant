@@ -1,0 +1,120 @@
+{
+  "step": "E4-04-corpus-coverage",
+  "as": "owner",
+  "at": "2026-09-30T21:07:48.426511+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/corpus/coverage",
+    "body": {
+      "known": [
+        {
+          "doi": "10.5555/eval-0930b-alpha"
+        },
+        {
+          "doi": "10.5555/eval-0930b-beta"
+        },
+        {
+          "doi": "10.1000/one"
+        },
+        {
+          "doi": "10.9999/not-imported-1"
+        },
+        {
+          "doi": "10.9999/not-imported-2"
+        }
+      ]
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "found": [
+      {
+        "kind": "doi",
+        "value": "10.5555/eval-0930b-alpha",
+        "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154"
+      },
+      {
+        "kind": "doi",
+        "value": "10.5555/eval-0930b-beta",
+        "report_id": "ec92bcc8-1be9-4c60-aed9-084f0da3b65f"
+      },
+      {
+        "kind": "doi",
+        "value": "10.1000/one",
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07"
+      }
+    ],
+    "missing": [
+      {
+        "kind": "doi",
+        "value": "10.9999/not-imported-1"
+      },
+      {
+        "kind": "doi",
+        "value": "10.9999/not-imported-2"
+      }
+    ],
+    "recall": 0.6,
+    "searched": [
+      {
+        "type": "provider",
+        "provider": "arxiv",
+        "run_id": "a90c3860-2ed5-4e98-9a8c-390516f16fd3",
+        "execution_id": "d121a45d-8a35-529f-bfbf-63bd919dde05",
+        "executed_at": null,
+        "status": "running",
+        "completion": null,
+        "date_window": "no date filter (connector capability date_filter=false)"
+      },
+      {
+        "type": "provider",
+        "provider": "arxiv",
+        "run_id": "6bc5ccdb-1521-461d-aa44-fff52800f9db",
+        "execution_id": "06710c5f-185e-5c70-8f62-d01b1290fcd0",
+        "executed_at": null,
+        "status": "running",
+        "completion": null,
+        "date_window": "no date filter (connector capability date_filter=false)"
+      },
+      {
+        "type": "import",
+        "receipt_id": "add02549-aa45-481b-8750-0f840ecacc53",
+        "database": "Embase (Ovid)",
+        "search_date": "2026-09-30",
+        "date_window": "2026-09-30"
+      },
+      {
+        "type": "import",
+        "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+        "database": "eval-2026-09-30b synthetic",
+        "search_date": "2026-09-30",
+        "date_window": "2026-09-30"
+      },
+      {
+        "type": "import",
+        "receipt_id": "80d0b3df-262f-4906-9c9a-ef168259b67a",
+        "database": "Embase (Ovid)",
+        "search_date": "2026-09-30",
+        "date_window": "2026-09-30"
+      }
+    ],
+    "not_searched": [
+      "crossref",
+      "openalex",
+      "pubmed",
+      "rag_store",
+      "semantic_scholar"
+    ],
+    "citation_chasing": {
+      "required": false,
+      "directions": [],
+      "performed": [],
+      "missing_directions": []
+    },
+    "exhaustive": false,
+    "statement": "Coverage lists what was searched, imported and chased for this project. It is not exhaustive and does not prove that no other relevant records exist."
+  }
+}

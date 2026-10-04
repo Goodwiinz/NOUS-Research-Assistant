@@ -1,0 +1,124 @@
+{
+  "step": "E1-08-get-import-detail",
+  "as": "owner",
+  "at": "2026-09-30T21:06:59.861033+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/imports/add02549-aa45-481b-8750-0f840ecacc53",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "add02549-aa45-481b-8750-0f840ecacc53",
+    "kind": "file_import",
+    "version": 1,
+    "previous_receipt_id": null,
+    "declared": {
+      "database": "Embase (Ovid)",
+      "query_text": "retrieval augmented generation hallucination",
+      "search_date": "2026-09-30",
+      "exported_at": null,
+      "redistribution": "restricted",
+      "notes": null
+    },
+    "observed": {
+      "counts": {
+        "parsed": 5,
+        "accepted": 3,
+        "rejected": 2
+      },
+      "format": "ris",
+      "sha256": "e0ea3a6d406abac263c740aaf4012c3450ebe6e746333a02d361f4ee70cca867",
+      "filename": "partial.ris",
+      "byte_size": 256,
+      "imported_at": "2026-09-30T21:06:48.265615+00:00",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "parser_version": "nous.search-import.v1",
+      "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177"
+    },
+    "parsed_count": 5,
+    "accepted_count": 3,
+    "rejected_count": 2,
+    "replayed": false,
+    "created_at": "2026-09-30T21:06:48.168376Z",
+    "records": [
+      {
+        "id": "63c8677e-4060-407d-91f1-0d3328bd7a2f",
+        "record_index": 3,
+        "status": "rejected",
+        "rejection_reason": "missing_title",
+        "parsed": {
+          "year": "2017",
+          "authors": [
+            "No Title, X"
+          ],
+          "identifiers": {},
+          "dropped_identifiers": []
+        },
+        "report_id": null,
+        "raw": null
+      },
+      {
+        "id": "ef861ec2-2912-4783-a276-91c804c43ed6",
+        "record_index": 4,
+        "status": "rejected",
+        "rejection_reason": "unterminated_record",
+        "parsed": {
+          "year": "2016",
+          "title": "Record five never ends",
+          "identifiers": {},
+          "dropped_identifiers": []
+        },
+        "report_id": null,
+        "raw": null
+      },
+      {
+        "id": "9bec5d75-6b4d-493b-b8fe-8bd794c914e8",
+        "record_index": 0,
+        "status": "accepted",
+        "rejection_reason": null,
+        "parsed": {
+          "year": "2018",
+          "title": "Record one",
+          "identifiers": {
+            "doi": "10.1000/one"
+          },
+          "dropped_identifiers": []
+        },
+        "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+        "raw": null
+      },
+      {
+        "id": "1b3686e1-3379-4617-993f-455635d14f47",
+        "record_index": 1,
+        "status": "accepted",
+        "rejection_reason": null,
+        "parsed": {
+          "title": "Record two",
+          "identifiers": {
+            "doi": "10.1000/two"
+          },
+          "dropped_identifiers": []
+        },
+        "report_id": "e7d1f299-47ea-4861-821a-fe8f591a81cb",
+        "raw": null
+      },
+      {
+        "id": "97292c82-8ba0-4971-a81f-b1a787066866",
+        "record_index": 2,
+        "status": "accepted",
+        "rejection_reason": null,
+        "parsed": {
+          "title": "Record three",
+          "identifiers": {},
+          "dropped_identifiers": []
+        },
+        "report_id": "0642117c-91a3-4ca4-ba56-9eeda4a5d48f",
+        "raw": null
+      }
+    ]
+  }
+}

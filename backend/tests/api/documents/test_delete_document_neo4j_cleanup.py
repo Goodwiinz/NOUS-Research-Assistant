@@ -35,6 +35,15 @@ def _result(value):
     return r
 
 
+def _file_service(*documents):
+    """The delete transaction lives in FileService.soft_delete_documents (proven
+    against Postgres in tests/integration/test_document_deletion_postgres.py);
+    these tests cover the router's post-commit cleanup."""
+    file_service = MagicMock()
+    file_service.soft_delete_documents = AsyncMock(return_value=list(documents))
+    return file_service
+
+
 def _make_document(*, ds_uuid=None):
     document = MagicMock()
     document.id = uuid.uuid4()
@@ -60,9 +69,6 @@ def _single_delete_db(document):
     db.execute = AsyncMock(
         side_effect=[
             _result(document),  # select the document
-            _result(None),  # cascade entity update
-            _result(None),  # cascade job update
-            MagicMock(),  # atomic quota update
         ]
     )
     db.commit = AsyncMock()
@@ -86,7 +92,7 @@ def test_delete_document_cleans_up_graph():
                 current_user=_user(),
                 organization=org,
                 db=db,
-                file_service=MagicMock(),
+                file_service=_file_service(document),
             )
         )
 
@@ -107,7 +113,6 @@ def test_delete_document_skips_graph_cleanup_when_not_cascade():
     db.execute = AsyncMock(
         side_effect=[
             _result(document),  # select the document
-            MagicMock(),  # atomic quota update (no cascade entity/job updates)
         ]
     )
     db.commit = AsyncMock()
@@ -120,7 +125,7 @@ def test_delete_document_skips_graph_cleanup_when_not_cascade():
                 current_user=_user(),
                 organization=org,
                 db=db,
-                file_service=MagicMock(),
+                file_service=_file_service(document),
             )
         )
 
@@ -147,7 +152,7 @@ def test_delete_document_graph_failure_does_not_block_delete():
                 current_user=_user(),
                 organization=org,
                 db=db,
-                file_service=MagicMock(),
+                file_service=_file_service(document),
             )
         )
 
@@ -177,9 +182,6 @@ def test_bulk_delete_defers_graph_cleanup_to_background_task():
     db.execute = AsyncMock(
         side_effect=[
             select_result,  # select all docs
-            MagicMock(),  # batch entity update
-            MagicMock(),  # batch job update
-            MagicMock(),  # atomic quota update
         ]
     )
     db.commit = AsyncMock()
@@ -194,7 +196,7 @@ def test_bulk_delete_defers_graph_cleanup_to_background_task():
                 current_user=_user(),
                 organization=org,
                 db=db,
-                file_service=MagicMock(),
+                file_service=_file_service(doc_a, doc_b),
             )
         )
 

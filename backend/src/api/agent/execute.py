@@ -32,23 +32,18 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from langgraph.errors import GraphInterrupt  # noqa: F401  re-export for backward compat
 from pydantic import BaseModel, Field
-from sqlalchemy import cast, desc, func, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user, require_admin
 from src.core.rate_limit import create_rate_limiter
-from src.models.chat_message import ChatMessage, MessageRole
-from src.models.conversation import Conversation
-from src.models.document import Document
-from src.models.thread import Thread, ThreadStatus
+from src.models.chat_message import ChatMessage
 from src.models.user import User
-from src.models.workspace import Workspace
 from src.services.agent import stream_buffer as _stream_buffer
 from src.services.agent._pii_redact import redact_tool_executions
-from src.services.agent.agent_execution_service import (  # noqa: F401
+from src.services.agent.agent_execution_service import (
     MAX_JOBS,
     AgentThreadResolutionError,
     _actor_fields,
@@ -63,6 +58,9 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
     _run_agent_graph,
     _set_job,
 )
+from src.services.agent.agent_execution_service import (  # noqa: F401
+    stored_request_payload as _stored_request_payload,
+)
 from src.services.agent.agent_run_service import (
     claim_awaiting_run_for_confirmation,
     get_active_run_for_thread,
@@ -72,6 +70,7 @@ from src.services.agent.agent_run_service import (
 )
 from src.services.agent.agent_submission_service import (
     abandon_awaiting_submission,
+    commit_cancellation,
     request_run_cancellation,
 )
 from src.services.agent.job_store import set_job as _set_job_async
@@ -124,6 +123,7 @@ from src.services.agent.tools_impl import (  # noqa: F401
     _tool_summarize_document,
     execute_tool,
 )
+from src.services.threads import thread_service, workspace_access
 from src.shared.enums import AgentStreamEvent, JobStatus
 
 from .streaming import (  # noqa: F401
@@ -225,7 +225,7 @@ class HTTPErrorResponse(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-AGENT_THREAD_MARKER = {"source": "agent"}
+AGENT_THREAD_MARKER = thread_service.AGENT_THREAD_MARKER
 
 
 class ConfirmationRequest(BaseModel):
@@ -424,7 +424,7 @@ async def _celery_dispatch(
 
         run_agent_job.delay(
             job_id=job_id,
-            request_payload=request.model_dump(mode="json"),
+            request_payload=_stored_request_payload(request),
             user_id=str(current_user.id),
         )
     except Exception:
@@ -482,7 +482,8 @@ async def execute_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid thread ID") from exc
     except AgentThreadResolutionError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        logger.warning("Agent thread resolution failed", exc_info=True)
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
     if thread is not None:
         request.thread_id = str(thread.id) if thread is not None else None
 
@@ -491,7 +492,7 @@ async def execute_agent(
         "status": JobStatus.RUNNING,
         "tool_executions": [],
         **_actor_fields(current_user),
-        "request": request.model_dump(mode="json"),
+        "request": _stored_request_payload(request),
     }
 
     if _resolve_dispatch_backend() == "celery":
@@ -654,11 +655,21 @@ async def get_job_status(
     thread_id = job.get("thread_id") or (
         request.get("thread_id") if isinstance(request, dict) else None
     )
+    # R8-D7: the job record keeps raw tool args; redact them like every other
+    # browser-visible copy (/stream done, confirm done, thread messages).
+    result = job.get("result")
+    if isinstance(result, dict) and result.get("tool_executions"):
+        result = {
+            **result,
+            "tool_executions": redact_tool_executions(result["tool_executions"]),
+        }
     return JobStatusResponse(
         **{
             **job,
             "status": _normalized_job_status(job.get("status")),
             "thread_id": thread_id,
+            "result": result,
+            "tool_executions": redact_tool_executions(job.get("tool_executions")),
         }
     )
 
@@ -1002,18 +1013,19 @@ async def cancel_stream_confirmation(
             raise HTTPException(status_code=409, detail="Run identity is required")
         request_id = getattr(getattr(request, "state", None), "request_id", None)
         try:
-            requested = await request_run_cancellation(
+            requested = await commit_cancellation(
                 db,
-                run_id=expected_run_id,
-                thread_id=thread_id,
-                organization_id=current_user.organization_id,
-                user_id=current_user.id,
-                reason="user_requested",
-                request_id=request_id,
+                request_run_cancellation(
+                    db,
+                    run_id=expected_run_id,
+                    thread_id=thread_id,
+                    organization_id=current_user.organization_id,
+                    user_id=current_user.id,
+                    reason="user_requested",
+                    request_id=request_id,
+                ),
             )
-            await db.commit()
         except Exception as exc:
-            await db.rollback()
             logger.exception("Failed to request cancellation of agent stream")
             raise HTTPException(
                 status_code=503,
@@ -1044,17 +1056,18 @@ async def cancel_stream_confirmation(
         raise HTTPException(status_code=409, detail="Run is not awaiting confirmation")
 
     try:
-        abandoned = await abandon_awaiting_submission(
+        abandoned = await commit_cancellation(
             db,
-            thread_id=thread_id,
-            organization_id=current_user.organization_id,
-            user_id=current_user.id,
-            reason="user_stopped_confirmation",
-            expected_run_id=active.job_id,
+            abandon_awaiting_submission(
+                db,
+                thread_id=thread_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+                reason="user_stopped_confirmation",
+                expected_run_id=active.job_id,
+            ),
         )
-        await db.commit()
     except Exception as exc:
-        await db.rollback()
         logger.exception("Failed to cancel pending agent confirmation")
         raise HTTPException(
             status_code=503,
@@ -1123,19 +1136,11 @@ async def get_graph_trace(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid thread_id")
 
-    # Verify the thread exists and belongs to the current user before
-    # exposing any execution trace data (IDOR guard).
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_uuid,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
+    # IDOR guard through the access funnel (R8-D3): membership-based and
+    # re-checks every soft-deleted ancestor, like the workspace routes.
+    thread_row = await workspace_access.get_thread(
+        db, thread_uuid, current_user.id, include_messages=False
     )
-    thread_row = (await db.execute(ownership_stmt)).scalar_one_or_none()
     if thread_row is None:
         raise HTTPException(status_code=404, detail="Trace not found")
 
@@ -1192,11 +1197,14 @@ async def _pending_confirmation_frame(
             )
             if (
                 active_run is not None
-                and getattr(active_run, "status", None) == JobStatus.STOPPING.value
+                and getattr(active_run, "status", None)
+                != JobStatus.AWAITING_CONFIRMATION.value
             ):
-                # A Stop claim is already durable, but the producer may not
-                # have written the terminal ACK yet. Do not re-arm the stale
-                # checkpoint's approval card during that short window.
+                # Only a parked run can take an answer (R8-D6). STOPPING (Stop
+                # claimed, terminal ACK pending) and QUEUED/RUNNING (already
+                # confirmed via REST /confirm or a live-only confirm stream)
+                # leave the checkpoint's interrupt in place until the resumed
+                # step commits; re-arming its card there only buys a 409.
                 return None
             if active_run is None:
                 latest_run = await get_latest_run_for_thread(
@@ -1394,17 +1402,19 @@ async def resume_stream(
                 stream_harness_run,
             )
 
+            external_run_id = _uuid.UUID(external_run.job_id)
             external_context = await context_for_accepted_run(
-                db, run_id=_uuid.UUID(external_run.job_id), current_user=current_user
+                db, run_id=external_run_id, current_user=current_user
             )
+            # R8-D2: the request-scoped session lives until the streamed body
+            # ends. Its reads are done; release the connection before streaming.
+            await db.rollback()
             return StreamingResponse(
                 stream_harness_run(
                     request,
-                    _uuid.UUID(external_run.job_id),
+                    external_run_id,
                     external_context,
-                    after_seq=external_resume_cursor(
-                        after, stream, _uuid.UUID(external_run.job_id)
-                    ),
+                    after_seq=external_resume_cursor(after, stream, external_run_id),
                 ),
                 media_type="text/event-stream",
                 headers=_SSE_HEADERS,
@@ -1467,6 +1477,7 @@ async def resume_stream(
             db=db,
         )
         if frame is not None:
+            await db.rollback()  # R8-D2: see the harness branch above.
             return StreamingResponse(
                 _single_frame(frame),
                 media_type="text/event-stream",
@@ -1474,6 +1485,9 @@ async def resume_stream(
             )
         return Response(status_code=204)
 
+    # R8-D2: the replay can follow for ~10 minutes; do not hold the
+    # request-scoped session's read transaction (and connection) through it.
+    await db.rollback()
     return StreamingResponse(
         replay_buffered_stream(
             request,
@@ -1546,28 +1560,8 @@ async def list_agent_threads(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List threads for the current user, ordered by most recently updated."""
-    # Build query: Thread -> Conversation -> Workspace, filter by owner
-    # Single query: a window count returns the (pre-limit) total alongside the
-    # page, so we avoid firing a second full count query on every thread-list
-    # load.
-    stmt = (
-        select(Thread, func.count().over().label("total"))
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Workspace.owner_id == current_user.id,
-            Workspace.is_deleted == False,
-            Conversation.is_deleted == False,
-            Thread.is_deleted == False,
-            Thread.rag_document_scope.contains(AGENT_THREAD_MARKER),
-        )
-        .order_by(desc(Thread.updated_at))
-        .limit(50)
-    )
-    rows = (await db.execute(stmt)).all()
-    threads = [row[0] for row in rows]
-    total = rows[0][1] if rows else 0
+    """List agent threads the caller can reach, most recently updated first."""
+    threads, total = await thread_service.list_agent_threads(db, current_user.id)
 
     thread_summaries = []
     for t in threads:
@@ -1617,22 +1611,12 @@ async def get_thread_messages(
     Pass ``limit`` to fetch the most recent N (and ``before`` to page older),
     with ``has_more`` signalling whether older messages remain.
     """
-    # Verify thread exists and belongs to the current user via ownership chain
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_id,
-            Workspace.owner_id == current_user.id,
-            Workspace.is_deleted == False,
-            Conversation.is_deleted == False,
-            Thread.is_deleted == False,
-        )
+    # Read access through the access funnel (R8-D3): an editor's own agent
+    # thread in a shared workspace resolves; a thread below a soft-deleted
+    # conversation/workspace does not.
+    thread = await workspace_access.get_thread(
+        db, thread_id, current_user.id, include_messages=False
     )
-    ownership_result = await db.execute(ownership_stmt)
-    thread = ownership_result.scalar_one_or_none()
-
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 

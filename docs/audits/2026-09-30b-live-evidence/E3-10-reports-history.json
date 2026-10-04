@@ -1,0 +1,81 @@
+{
+  "step": "E3-10-reports-history",
+  "as": "reviewer",
+  "at": "2026-09-30T21:07:27.906779+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/reports/history",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "seq": 1,
+      "event_type": "identity.report_merged",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "adjudicator",
+      "reason": "same untitled-DOI record re-imported in receipt v2",
+      "payload": {
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "moved_source_ids": [],
+        "merged_report_ids": [
+          "284229e8-49e8-4da4-b8fc-c802fed20f8f"
+        ],
+        "moved_identifiers": [],
+        "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177",
+        "surviving_report_id": "0642117c-91a3-4ca4-ba56-9eeda4a5d48f",
+        "moved_import_record_ids": [
+          "159b34ed-5df7-421f-9dbe-c653c87b0bec"
+        ]
+      },
+      "occurred_at": "2026-09-30T21:07:26.326081Z"
+    },
+    {
+      "seq": 2,
+      "event_type": "identity.study_linked",
+      "actor_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "actor_role": "reviewer",
+      "reason": "two import records share DOI 10.5555/eval-0930b-alpha",
+      "payload": {
+        "status": "proposed",
+        "study_id": "206bafb0-5826-449c-973e-b43d66bec1fc",
+        "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+        "prior_status": null,
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "match_evidence": {
+          "conflicts": [],
+          "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+          "suggested": []
+        },
+        "prior_study_id": null,
+        "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177"
+      },
+      "occurred_at": "2026-09-30T21:07:26.593031Z"
+    },
+    {
+      "seq": 3,
+      "event_type": "identity.study_linked",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "actor_role": "adjudicator",
+      "reason": "DOI match confirmed by adjudicator",
+      "payload": {
+        "status": "confirmed",
+        "study_id": "206bafb0-5826-449c-973e-b43d66bec1fc",
+        "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+        "prior_status": "proposed",
+        "collection_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+        "match_evidence": {
+          "conflicts": [],
+          "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+          "suggested": []
+        },
+        "prior_study_id": "206bafb0-5826-449c-973e-b43d66bec1fc",
+        "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177"
+      },
+      "occurred_at": "2026-09-30T21:07:27.009838Z"
+    }
+  ]
+}

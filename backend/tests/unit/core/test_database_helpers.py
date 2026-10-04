@@ -3,7 +3,7 @@
 Coverage gap (daily audit #923, finding #4): the existing database test files
 (``test_database_connections.py``, ``test_database_cascades.py``) use bare
 SQLite / mock engines or ``app.dependency_overrides[get_db]``, so the real
-``_env_int`` env-parsing fallback and ``get_db``'s request-state session reuse
+``_env_int`` env-parsing fallback and ``get_db``'s session lifecycle
 were never directly exercised. These tests target those two paths.
 """
 
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -68,38 +67,16 @@ def test_env_int_non_numeric_falls_back_and_logs(monkeypatch, caplog, bad):
 
 
 # ---------------------------------------------------------------------------
-# get_db — reuse the middleware-provided session when one is on request.state
+# get_db — owns its own request-scoped session (dev D-01: never the
+# middleware's, which closed under a still-streaming response body)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_get_db_reuses_request_state_session(monkeypatch):
-    """When MultiTenancyMiddleware has already opened a session and stashed it
-    on ``request.state.db``, get_db must yield THAT session and must NOT open a
-    second AsyncSessionLocal (which would double the pool draw per request)."""
-    sentinel_session = object()
-    request = SimpleNamespace(state=SimpleNamespace(db=sentinel_session))
-
-    # If get_db wrongly opened a new session this would blow up.
-    factory = MagicMock(side_effect=AssertionError("must not open a new session"))
-    monkeypatch.setattr(database, "AsyncSessionLocal", factory)
-
-    agen = get_db(request)
-    yielded = await agen.__anext__()
-    assert yielded is sentinel_session
-    factory.assert_not_called()
-
-    # Reused sessions are owned by the middleware — get_db must not close them.
-    with pytest.raises(StopAsyncIteration):
-        await agen.__anext__()
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_get_db_opens_new_session_when_no_state(monkeypatch):
-    """No middleware session on request.state → get_db opens its own via
-    AsyncSessionLocal() and closes it on generator exit."""
+async def test_get_db_opens_and_closes_its_own_session(monkeypatch):
+    """get_db opens its own session via AsyncSessionLocal() and closes it on
+    generator exit."""
     fake_session = AsyncMock()
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=fake_session)
@@ -107,9 +84,7 @@ async def test_get_db_opens_new_session_when_no_state(monkeypatch):
     factory = MagicMock(return_value=cm)
     monkeypatch.setattr(database, "AsyncSessionLocal", factory)
 
-    request = SimpleNamespace(state=SimpleNamespace(db=None))
-
-    agen = get_db(request)
+    agen = get_db()
     yielded = await agen.__anext__()
     assert yielded is fake_session
     factory.assert_called_once()

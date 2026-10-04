@@ -51,6 +51,8 @@ awsRdsSecret:
 # Backend
 # ──────────────────────────────────────────────
 backend:
+  migrations:
+    enabled: true
   enabled: true
   # DO writers are frozen; PostgreSQL and Neo4j were verified on AWS.
   replicaCount: 1
@@ -172,6 +174,9 @@ backend:
       value: "true"
     - name: PROJECT_SKILL_RUNTIME_ENABLED
       value: "true"
+    # GOO-338: default-off in code; dev opts in explicitly.
+    - name: DAILY_RESEARCH_BRIEF_ENABLED
+      value: "true"
     - name: PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS
       value: "30"
     - name: MALLOC_ARENA_MAX
@@ -255,7 +260,7 @@ backend:
   initContainers:
     waitForPostgres: true
     waitForRedis: false
-    runMigrations: true
+    runMigrations: false
     waitForNeo4j: false
 # ──────────────────────────────────────────────
 # All databases are external (AWS-managed on EKS: RDS Postgres, ElastiCache

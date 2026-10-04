@@ -24,23 +24,24 @@ os.environ.setdefault("ENVIRONMENT", "testing")
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-integration-tests")
 
-import pytest
 import asyncio
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from types import SimpleNamespace
-from uuid import uuid4, UUID
-from datetime import datetime, timezone
-from fastapi.testclient import TestClient
-from fastapi import status
 import json
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from uuid import UUID, uuid4
 
-from src.core.dependencies import get_current_user
-from src.core.database import get_db
+import pytest
+from fastapi import status
+from fastapi.testclient import TestClient
+
 from src.api.threads import (
-    check_bulk_resolve_rate_limit,
     check_bulk_archive_rate_limit,
     check_bulk_delete_rate_limit,
+    check_bulk_resolve_rate_limit,
 )
+from src.core.database import get_db
+from src.core.dependencies import get_current_user
 
 
 def _make_thread(thread_id: UUID, created_by_id: UUID | None = None) -> SimpleNamespace:
@@ -64,11 +65,9 @@ class TestBulkResolveEndpoint:
     """Test POST /threads/bulk/resolve endpoint"""
 
     @pytest.fixture
-    def mock_app(self):
-        """Create FastAPI app with mocked dependencies"""
-        from src.main import app
-
-        return app
+    def mock_app(self, test_app):
+        """Create FastAPI app with mocked dependencies (src.main app with the tenancy-gate test seam)"""
+        return test_app
 
     @pytest.fixture
     def test_user(self):
@@ -80,12 +79,9 @@ class TestBulkResolveEndpoint:
         return user
 
     @pytest.fixture
-    def auth_headers(self, test_user):
-        """Create authentication headers"""
-        from tests.conftest import create_access_token
-
-        token = create_access_token(data={"sub": str(test_user.id)})
-        return {"Authorization": f"Bearer {token}"}
+    def auth_headers(self, test_auth_headers):
+        """Bearer token the tenancy-gate test seam (tests/conftest.py) accepts."""
+        return test_auth_headers
 
     @pytest.fixture
     def mock_chat_service(self):
@@ -112,7 +108,9 @@ class TestBulkResolveEndpoint:
         thread_ids = [uuid4() for _ in range(3)]
 
         # Mock successful updates
-        mock_results = [(tid, True, None, _make_thread(tid, test_user.id)) for tid in thread_ids]
+        mock_results = [
+            (tid, True, None, _make_thread(tid, test_user.id)) for tid in thread_ids
+        ]
         mock_chat_service.bulk_update_threads = AsyncMock(return_value=mock_results)
 
         # Override dependencies
@@ -121,7 +119,9 @@ class TestBulkResolveEndpoint:
         # Mock rate limiter to pass
         mock_app.dependency_overrides[check_bulk_resolve_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -161,7 +161,9 @@ class TestBulkResolveEndpoint:
         mock_app.dependency_overrides[get_db] = lambda: mock_db
         mock_app.dependency_overrides[check_bulk_resolve_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -187,7 +189,9 @@ class TestBulkResolveEndpoint:
         """Test that bulk resolve broadcasts WebSocket event"""
         thread_ids = [uuid4() for _ in range(2)]
 
-        mock_results = [(tid, True, None, _make_thread(tid, test_user.id)) for tid in thread_ids]
+        mock_results = [
+            (tid, True, None, _make_thread(tid, test_user.id)) for tid in thread_ids
+        ]
         mock_chat_service.bulk_update_threads = AsyncMock(return_value=mock_results)
 
         # Override dependencies
@@ -195,7 +199,9 @@ class TestBulkResolveEndpoint:
         mock_app.dependency_overrides[get_db] = lambda: mock_db
         mock_app.dependency_overrides[check_bulk_resolve_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -284,11 +290,9 @@ class TestBulkArchiveEndpoint:
     """Test POST /threads/bulk/archive endpoint"""
 
     @pytest.fixture
-    def mock_app(self):
-        """Create FastAPI app"""
-        from src.main import app
-
-        return app
+    def mock_app(self, test_app):
+        """Create FastAPI app (src.main app with the tenancy-gate test seam)"""
+        return test_app
 
     @pytest.fixture
     def test_user(self):
@@ -300,12 +304,9 @@ class TestBulkArchiveEndpoint:
         return user
 
     @pytest.fixture
-    def auth_headers(self, test_user):
-        """Create authentication headers"""
-        from tests.conftest import create_access_token
-
-        token = create_access_token(data={"sub": str(test_user.id)})
-        return {"Authorization": f"Bearer {token}"}
+    def auth_headers(self, test_auth_headers):
+        """Bearer token the tenancy-gate test seam (tests/conftest.py) accepts."""
+        return test_auth_headers
 
     @pytest.fixture
     def mock_chat_service(self):
@@ -323,7 +324,9 @@ class TestBulkArchiveEndpoint:
         """Test successful bulk archive"""
         thread_ids = [uuid4() for _ in range(3)]
 
-        mock_results = [(tid, True, None, _make_thread(tid, test_user.id)) for tid in thread_ids]
+        mock_results = [
+            (tid, True, None, _make_thread(tid, test_user.id)) for tid in thread_ids
+        ]
         mock_chat_service.bulk_update_threads = AsyncMock(return_value=mock_results)
 
         # Override dependencies
@@ -331,7 +334,9 @@ class TestBulkArchiveEndpoint:
         mock_app.dependency_overrides[get_db] = lambda: mock_db
         mock_app.dependency_overrides[check_bulk_archive_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -354,7 +359,9 @@ class TestBulkArchiveEndpoint:
         """Test that bulk archive broadcasts 'archived' action"""
         thread_ids = [uuid4()]
 
-        mock_results = [(thread_ids[0], True, None, _make_thread(thread_ids[0], test_user.id))]
+        mock_results = [
+            (thread_ids[0], True, None, _make_thread(thread_ids[0], test_user.id))
+        ]
         mock_chat_service.bulk_update_threads = AsyncMock(return_value=mock_results)
 
         # Override dependencies
@@ -362,7 +369,9 @@ class TestBulkArchiveEndpoint:
         mock_app.dependency_overrides[get_db] = lambda: mock_db
         mock_app.dependency_overrides[check_bulk_archive_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -383,11 +392,9 @@ class TestBulkDeleteEndpoint:
     """Test DELETE /threads/bulk endpoint"""
 
     @pytest.fixture
-    def mock_app(self):
-        """Create FastAPI app"""
-        from src.main import app
-
-        return app
+    def mock_app(self, test_app):
+        """Create FastAPI app (src.main app with the tenancy-gate test seam)"""
+        return test_app
 
     @pytest.fixture
     def test_user(self):
@@ -399,12 +406,9 @@ class TestBulkDeleteEndpoint:
         return user
 
     @pytest.fixture
-    def auth_headers(self, test_user):
-        """Create authentication headers"""
-        from tests.conftest import create_access_token
-
-        token = create_access_token(data={"sub": str(test_user.id)})
-        return {"Authorization": f"Bearer {token}"}
+    def auth_headers(self, test_auth_headers):
+        """Bearer token the tenancy-gate test seam (tests/conftest.py) accepts."""
+        return test_auth_headers
 
     @pytest.fixture
     def mock_chat_service(self):
@@ -430,7 +434,9 @@ class TestBulkDeleteEndpoint:
         mock_app.dependency_overrides[get_db] = lambda: mock_db
         mock_app.dependency_overrides[check_bulk_delete_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -467,7 +473,9 @@ class TestBulkDeleteEndpoint:
         mock_app.dependency_overrides[get_db] = lambda: mock_db
         mock_app.dependency_overrides[check_bulk_delete_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -500,7 +508,9 @@ class TestBulkDeleteEndpoint:
         mock_app.dependency_overrides[get_db] = lambda: mock_db
         mock_app.dependency_overrides[check_bulk_delete_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_chat_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_chat_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -536,11 +546,9 @@ class TestBulkOperationsResponseSchema:
     """Test that response schema matches BulkThreadResponse"""
 
     @pytest.fixture
-    def mock_app(self):
-        """Create FastAPI app"""
-        from src.main import app
-
-        return app
+    def mock_app(self, test_app):
+        """Create FastAPI app (src.main app with the tenancy-gate test seam)"""
+        return test_app
 
     @pytest.fixture
     def test_user(self):
@@ -552,26 +560,27 @@ class TestBulkOperationsResponseSchema:
         return user
 
     @pytest.fixture
-    def auth_headers(self, test_user):
-        """Create authentication headers"""
-        from tests.conftest import create_access_token
-
-        token = create_access_token(data={"sub": str(test_user.id)})
-        return {"Authorization": f"Bearer {token}"}
+    def auth_headers(self, test_auth_headers):
+        """Bearer token the tenancy-gate test seam (tests/conftest.py) accepts."""
+        return test_auth_headers
 
     def test_response_has_required_fields(self, mock_app, test_user, auth_headers):
         """Test response includes all required fields"""
         thread_ids = [uuid4()]
 
         mock_service = Mock()
-        mock_results = [(thread_ids[0], True, None, _make_thread(thread_ids[0], test_user.id))]
+        mock_results = [
+            (thread_ids[0], True, None, _make_thread(thread_ids[0], test_user.id))
+        ]
         mock_service.bulk_update_threads = AsyncMock(return_value=mock_results)
 
         mock_app.dependency_overrides[get_current_user] = lambda: test_user
         mock_app.dependency_overrides[get_db] = lambda: Mock()
         mock_app.dependency_overrides[check_bulk_resolve_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 
@@ -602,7 +611,9 @@ class TestBulkOperationsResponseSchema:
         mock_app.dependency_overrides[get_db] = lambda: Mock()
         mock_app.dependency_overrides[check_bulk_resolve_rate_limit] = lambda: True
 
-        with patch("src.api.threads.threads.get_chat_service", return_value=mock_service):
+        with patch(
+            "src.api.threads.threads.get_chat_service", return_value=mock_service
+        ):
             with patch("src.api.threads.threads.thread_event_service") as mock_event:
                 mock_event.broadcast_threads_bulk_updated = AsyncMock()
 

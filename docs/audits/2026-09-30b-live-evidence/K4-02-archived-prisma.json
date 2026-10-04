@@ -1,0 +1,55 @@
+{
+  "step": "K4-02-archived-prisma",
+  "as": "approver",
+  "at": "2026-09-30T21:12:08.194342+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/f40af11e-87a0-49a6-a715-714ef2298799/prisma",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "schema": "nous.academic.prisma-flow.v1",
+    "generated_at": "2026-09-30T21:12:08.184047Z",
+    "body_sha256": "144d10da50e8ab0fc9359b9ea3e9ca6052145297e5b1ae72d3c0b87f1434a94f",
+    "body": {
+      "counts": {
+        "records_identified": 0,
+        "records_by_source": {},
+        "records_by_import": {},
+        "import_rejected": 0,
+        "duplicates_removed": 0,
+        "unique_reports": 0,
+        "records_screened": 0,
+        "records_excluded": 0,
+        "records_awaiting_screening": 0,
+        "reports_sought": 0,
+        "reports_not_retrieved": 0,
+        "reports_awaiting_retrieval": 0,
+        "reports_assessed": 0,
+        "reports_excluded_by_reason": {},
+        "included_reports": 0,
+        "included_studies": 0,
+        "unconfirmed_study_links": 0
+      },
+      "excluded_from_flow": {
+        "workspace_documents": 0
+      },
+      "amendments": [],
+      "warnings": [],
+      "checks": {
+        "screened_plus_awaiting_equals_unique": true,
+        "assessed_within_retrieved": true,
+        "included_plus_excluded_equals_assessed": true
+      },
+      "versions": {
+        "corpus_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "protocol_version_ids": [],
+        "stream_heads": {}
+      }
+    }
+  }
+}

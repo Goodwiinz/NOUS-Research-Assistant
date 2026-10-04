@@ -152,7 +152,7 @@ async def test_append_idempotency_replay_rollback_and_retention(
         protected = (
             await connection.execute(
                 text("""SELECT relname, relrowsecurity FROM pg_class
-                    WHERE relname IN (
+                    WHERE relnamespace = current_schema()::regnamespace AND relname IN (
                         'research_decision_streams','research_decision_events'
                     )""")
             )

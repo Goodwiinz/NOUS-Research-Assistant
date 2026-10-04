@@ -1,0 +1,33 @@
+{
+  "step": "H4-01-reviewer-include-r2",
+  "as": "reviewer",
+  "at": "2026-09-30T21:09:50.764933+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/55fe3b95-e69b-4bd2-a3de-b59c251b0737/observations",
+    "body": {
+      "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+      "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+      "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+      "decision": "include",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "e685bc57-d866-409d-b535-fa272ed034fc",
+    "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+    "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+    "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+    "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+    "decision": "include",
+    "exclusion_reason": null,
+    "note": null,
+    "supersedes_observation_id": null,
+    "created_at": "2026-09-30T21:09:50.687691Z",
+    "resolution": null
+  }
+}

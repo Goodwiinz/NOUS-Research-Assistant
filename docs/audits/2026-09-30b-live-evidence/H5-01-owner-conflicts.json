@@ -1,0 +1,72 @@
+{
+  "step": "H5-01-owner-conflicts",
+  "as": "owner",
+  "at": "2026-09-30T21:09:52.592395+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/55fe3b95-e69b-4bd2-a3de-b59c251b0737/conflicts",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+      "title_snapshot": "Opinion: retrieval is not enough",
+      "identifiers": {
+        "doi": [
+          "10.5555/eval-0930b-delta"
+        ]
+      },
+      "exclusion_reasons": [
+        "wrong study design",
+        "wrong population",
+        "not empirical"
+      ],
+      "resolution": {
+        "id": "20b6d9f9-83c3-5e14-94f9-830e834b5725",
+        "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+        "basis": "conflict",
+        "outcome": null,
+        "exclusion_reason": null,
+        "input_observation_ids": [
+          "b6e995bc-e559-4ba3-a1c6-d125c1450e58",
+          "e2ccc9d5-0e40-4645-9031-43c9dfa482b7"
+        ],
+        "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+        "supersedes_resolution_id": null,
+        "created_at": "2026-09-30T21:09:50.084414Z"
+      },
+      "observations": [
+        {
+          "id": "b6e995bc-e559-4ba3-a1c6-d125c1450e58",
+          "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+          "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+          "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+          "assignment_id": "7982f1f4-a850-4004-beeb-62eee0fac798",
+          "decision": "include",
+          "exclusion_reason": null,
+          "note": "SENTINEL-P2-NOTE-0930b include because empirical",
+          "supersedes_observation_id": null,
+          "created_at": "2026-09-30T21:09:49.367666Z",
+          "resolution": null
+        },
+        {
+          "id": "e2ccc9d5-0e40-4645-9031-43c9dfa482b7",
+          "queue_id": "55fe3b95-e69b-4bd2-a3de-b59c251b0737",
+          "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+          "reviewer_id": "56f4d19d-fdb8-425a-acbc-19dad813c970",
+          "assignment_id": "6cff85b4-9e9e-4af2-b0a9-b6c5c5172a05",
+          "decision": "exclude",
+          "exclusion_reason": null,
+          "note": null,
+          "supersedes_observation_id": null,
+          "created_at": "2026-09-30T21:09:50.084414Z",
+          "resolution": null
+        }
+      ]
+    }
+  ]
+}

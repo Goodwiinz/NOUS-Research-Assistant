@@ -1,0 +1,22 @@
+{{- if and .Values.backend.enabled .Values.backend.migrations.enabled }}
+{{- if .Values.backend.initContainers.runMigrations }}
+{{- fail "Use either backend.migrations.enabled or backend.initContainers.runMigrations, never two migration writers" }}
+{{- end }}
+{{- $pod := include "knowledge-graph-analytics.migrationPod" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # A normal resource participates in ApplyOutOfSyncOnly. Retain completion
+  # until the next config/image identity; TTL would cause self-heal to rerun it.
+  name: {{ printf "%s-migrate-%s" (.Release.Name | trunc 20 | trimSuffix "-") ($pod | sha256sum | trunc 32) }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    {{- include "knowledge-graph-analytics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    {{- $pod | nindent 4 }}
+{{- end }}
