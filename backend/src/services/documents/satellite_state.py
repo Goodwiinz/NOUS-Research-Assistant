@@ -32,10 +32,12 @@ def pending_writes(document: _MetadataDocument, satellite: str) -> dict[str, Any
 
 def _started_before(entry: Any, cutoff: datetime) -> bool:
     started = entry.get("started_at") if isinstance(entry, dict) else None
+    if not isinstance(started, str):
+        return True  # no recorded start (legacy ``{}`` token): treat as dead
     try:
         return datetime.fromisoformat(started) <= cutoff
-    except (TypeError, ValueError):
-        return True  # no recorded start (legacy ``{}`` token): treat as dead
+    except ValueError:
+        return True
 
 
 def _store(document: _MetadataDocument, satellite: str, tokens: dict) -> None:
