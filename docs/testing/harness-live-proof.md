@@ -12,7 +12,7 @@ Contracts: [harness bridge](../engineering/harness-bridge.md), [bridge package](
 2. Codex reads project sources through the NOUS MCP read gateway.
 3. Phase 2: Codex publishes a workspace file as an artifact, and the stored SHA-256 matches the local file.
 4. Phase 2: a `request_action` note approved in the browser more than 15 minutes after the request still executes. Grants expire after 15 minutes, so the approval rests on the consent, not the original grant.
-5. After `nous-harness disconnect`, credentials that answered 200 just before are refused. Without remediation slice A the old grant answers 403 and the old CLI bearer still answers 200 (the known gap). With slice A both answer 401, because the revoked bearer is checked before the grant.
+5. After `nous-harness disconnect`, credentials that answered 200 just before are refused. Without remediation slice A (the fix that makes `disconnect` revoke the user's CLI logins) the old grant answers 403 and the old CLI bearer still answers 200 (the known gap). With slice A both answer 401, because the revoked bearer is checked before the grant.
 6. Setting the flags back to `false` refuses new work with 503 while status reads and reconciliation still answer.
 
 ## Flags and scopes
@@ -22,9 +22,9 @@ Contracts: [harness bridge](../engineering/harness-bridge.md), [bridge package](
 | `HARNESS_BRIDGE_ENABLED` | New Codex chat runs (`backend/src/api/agent/harness_streaming.py`) and start dispatch (`backend/src/services/harness/delivery.py`) | `true` | `true` |
 | `NOUS_MCP_ENABLED` | `/integrations/tools`, new `/integrations/actions` requests, the approved-action drain (`backend/src/services/agent/tool_actions.py`) | `true` | `true` |
 | `ARTIFACTS_ENABLED` | Artifact upload and version writes (`backend/src/api/artifacts.py`) | `false` | `true` |
-| `ARTIFACT_EDITING_ENABLED`, `ARTIFACT_PREVIEW_ENABLED`, `ARTIFACT_SHARING_ENABLED` | Nothing is safe to expose: `artifacts:read/edit/share` can be minted but are enforced nowhere | `false` | `false` |
+| `ARTIFACT_EDITING_ENABLED`, `ARTIFACT_PREVIEW_ENABLED`, `ARTIFACT_SHARING_ENABLED` | Inert on develop (defined in `backend/src/core/config.py`, read by no backend, frontend or Helm code). Nothing is safe to expose: `artifacts:read/edit/share` can be minted but are enforced nowhere | unset (`false`) | unset (`false`) |
 
-All six default to `false` in `backend/src/core/config.py`. The values go in the `backend.env` list of `values-aws.yaml`. The backend, Celery worker, Celery beat and migration-job pods all render that list, and an explicit `env` entry wins over the `envFrom` secrets.
+All six default to `false` in `backend/src/core/config.py`. `HARNESS_BRIDGE_ENABLED`, `NOUS_MCP_ENABLED` and `ARTIFACTS_ENABLED` go in the `backend.env` list of `values-aws.yaml`; the three inert flags stay out of it. The backend, Celery worker, Celery beat and migration-job pods and the `nous-dev-aws-synthetic-traffic` CronJob (`suspend: true` today, so no pod) all render that list, and an explicit `env` entry wins over the `envFrom` secrets.
 
 `NOUS_MCP_ENABLED` cannot separate reads from writes. The scope requested at `connect` is what separates them. **Phase 1 connects with `--tools` only.** `--publish` (`artifacts:publish`) and `--write` (`tools:write`) belong to Phase 2, which must wait until remediation slice A (CLI-bearer revocation) is merged **and** deployed. Until then `disconnect` revokes the grant but leaves the CLI bearer valid.
 
@@ -40,9 +40,11 @@ pg_ctl -D "$PGDIR/data" -o "-p 55432 -k $PGDIR" -l "$PGDIR/pg.log" start
 psql -h 127.0.0.1 -p 55432 -U postgres -c 'create database mig' -c 'create database orch'
 
 # 0a. Migrations hb01..hb04, aw01/aw02, it01/it02 apply from empty.
-(cd backend && env -u SUPABASE_DB_URL DATABASE_URL=postgresql://postgres@127.0.0.1:55432/mig \
-  ENVIRONMENT=testing "$PY" -m alembic upgrade head 2>&1 \
-  | grep -E -- '-> (hb0[1-4]|aw0[12]|it0[12])_'; "$PY" ../scripts/ci/check_alembic.py)
+(cd backend && export DATABASE_URL=postgresql://postgres@127.0.0.1:55432/mig \
+  ENVIRONMENT=testing && unset SUPABASE_DB_URL
+  "$PY" -m alembic upgrade head 2>&1 | grep -E -- '-> (hb0[1-4]|aw0[12]|it0[12])_'
+  "$PY" ../scripts/ci/check_alembic.py
+  "$PY" -m alembic current)
 
 # 0b. Two-session SKIP LOCKED on the harness outbox.
 ORCHESTRATION_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/orch ENVIRONMENT=testing \
@@ -50,6 +52,7 @@ ORCHESTRATION_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/orch ENVIR
   backend/tests/integration/test_harness_dispatch_postgres.py
 
 # 0c. Unit suites and bridge package.
+pnpm install --frozen-lockfile    # Node 24
 PYTHONPATH=backend "$PY" -m pytest -c backend/pytest.ini -q \
   backend/tests/unit/services/harness backend/tests/unit/services/artifacts
 pnpm --filter @nous/harness-bridge test
@@ -58,15 +61,15 @@ pnpm --filter @nous/harness-bridge type-check
 pg_ctl -D "$PGDIR/data" stop -m fast
 ```
 
-Expected: 0a prints one `Running upgrade` line for each of `hb01_integration_grants`, `hb02_harness_runs`, `hb03_bridge_delivery`, `hb04_harness_approvals`, `aw01_artifact_workspace`, `aw02_artifact_lifecycle`, `it01_integration_actions` and `it02_merge_integration_heads`, and exits 0. 0b prints `1 passed`. In hosted CI it is skipped, because no workflow sets `ORCHESTRATION_TEST_DATABASE_URL`, so the hosted result is NOT RUN. The hosted equivalent of 0a is the Test Pipeline job **Alembic Migration Check**, step **Advisory — upgrade head from empty DB**. That step is `continue-on-error`, so read its log for the eight `Running upgrade` lines; do not rely on the step colour.
+Expected: 0a prints one `Running upgrade` line for each of `hb01_integration_grants`, `hb02_harness_runs`, `hb03_bridge_delivery`, `hb04_harness_approvals`, `aw01_artifact_workspace`, `aw02_artifact_lifecycle`, `it01_integration_actions` and `it02_merge_integration_heads`, then `alembic current` prints the current single head, `d4a6c8e0f2b3 (head)` on 2026-10-04, which is the revision `check_alembic.py` reports. 0b prints `1 passed`. In hosted CI it is skipped, because no workflow sets `ORCHESTRATION_TEST_DATABASE_URL`, so the hosted result is NOT RUN. The hosted equivalent of 0a is the Test Pipeline job **Alembic Migration Check**, step **Advisory — upgrade head from empty DB**. That step is `continue-on-error`, so read its log for the eight `Running upgrade` lines; do not rely on the step colour.
 
-Not covered here: the artifact lifecycle `SKIP LOCKED` (`backend/src/services/artifacts/lifecycle.py`) and the `tool_actions` approved-to-executing compare-and-set have SQLite unit coverage only. Record them as NOT RUN on PostgreSQL.
+Not covered here: the artifact lifecycle `SKIP LOCKED` (`backend/src/services/artifacts/lifecycle.py`), the `HarnessCommand` lease lock (`lease_commands`, `backend/src/services/harness/delivery.py:285`) and the `tool_actions` approved-to-executing compare-and-set have SQLite unit coverage only. Record them as NOT RUN on PostgreSQL.
 
 ## Gate 1: deployment prerequisites (USER-RUN)
 
 Read-only cluster commands need `aws login` and the EKS kubeconfig.
 
-1. **Release pipeline delivers images again.** Release Dev has failed since 2026-10-01 at **Verify release branch protection** (`gh: Resource not accessible by personal access token`; latest run 37181835414 on 2026-10-04). The release token needs `Administration: Read`. Until this is fixed, nothing merged after `8ad2c82` reaches dev.
+1. **Release pipeline delivers images again.** Release Dev has failed since 2026-10-01 at **Verify release branch protection** (`gh: Resource not accessible by personal access token`; for example run 37181835414 on 2026-10-04). The release token needs `Administration: Read`. Until this is fixed, nothing merged after `8ad2c82` reaches dev. After the token is fixed, a release starts from the next push to `develop`, or from re-running the Release Dev run for `develop`'s current head.
 2. **The deployed image contains the bridge.** The image must include `271bd5c1f` (`disconnect`, #1790), `6e1452e66` (grant renewal, #1786) and `bfc33c342` (`request_action`, `it01`, #1780). The image pinned on 2026-10-04 is `8ad2c82` (2026-09-30) and contains none of the three.
 
    ```sh
@@ -210,7 +213,7 @@ Copy this table into a new bundle `docs/testing/evidence/harness-live-proof-YYYY
 
 | # | Check | Evidence to record | Result |
 | --- | --- | --- | --- |
-| 0a | Alembic head on throwaway PostgreSQL | SHA, `postgres --version`, the eight revision lines, `check_alembic.py` output | NOT RUN |
+| 0a | Alembic head on throwaway PostgreSQL | SHA, `postgres --version`, the eight revision lines, the `alembic current` line, `check_alembic.py` output | NOT RUN |
 | 0b | Outbox `SKIP LOCKED`, two sessions | SHA, pytest summary line | NOT RUN |
 | 0c | Unit suites and bridge package | SHA, summary lines | NOT RUN |
 | G1 | Release unblocked, image contains required commits, migrate job Complete | Image tag and digest, `merge-base` output, job name | NOT RUN |
