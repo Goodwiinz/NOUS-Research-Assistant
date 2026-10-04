@@ -12,17 +12,22 @@ correlated second failure leaves a *sweepable orphan object*, never a live row
 pointing at a deleted file. The object is deleted by captured primitives, never
 the (possibly expired) ORM instance.
 
-Pure unit test — no DB, no storage; the session and storage helper are faked.
+Fake sessions cover commit boundaries; an in-memory SQLite session covers
+rollback expiration and cancellation. Storage calls are faked throughout.
 """
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.models import Base
 from src.models.document import Document, DocumentType
 from src.models.organization import Organization
 from src.models.processing import ProcessingJob
@@ -258,6 +263,124 @@ async def test_document_refresh_and_reversal_failure_preserves_backing_object(
     assert db.commit_calls == 2
     assert quota_deltas == []
     svc._delete_stored_object.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "refresh_type,reversal_fails,cancel_phase,want_deleted,want_quota,want_jobs",
+    [
+        (Document, False, None, True, 0, 0),
+        (ProcessingJob, False, None, True, 0, 0),
+        (ProcessingJob, True, None, False, 1234, 1),
+        (Document, False, "refresh", True, 0, 0),
+        (ProcessingJob, False, "refresh", True, 0, 0),
+        (Document, False, "commit", False, 0, 0),
+        (ProcessingJob, False, "commit", False, 1234, 1),
+    ],
+)
+async def test_refresh_compensation_survives_real_session_expiration(
+    refresh_type, reversal_fails, cancel_phase, want_deleted, want_quota, want_jobs
+):
+    """Rollback expires org/document fields even with expire_on_commit=False."""
+    refresh_started = asyncio.Event()
+
+    class ReloadFailureSession(AsyncSession):
+        commit_calls = 0
+        faults_active = False
+
+        async def commit(self):
+            self.commit_calls += 1
+            if self.faults_active and reversal_fails and self.commit_calls == 4:
+                raise RuntimeError("compensation commit unavailable")
+            await super().commit()
+            if (
+                self.faults_active
+                and cancel_phase == "commit"
+                and self.commit_calls == (1 if refresh_type is Document else 3)
+            ):
+                # Model a committed write whose acknowledgement is cancelled.
+                raise asyncio.CancelledError()
+
+        async def refresh(self, instance, **kwargs):
+            if isinstance(instance, refresh_type):
+                if cancel_phase == "refresh":
+                    refresh_started.set()
+                    await asyncio.Event().wait()
+                raise RuntimeError("reload failed after durable commit")
+            await super().refresh(instance, **kwargs)
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def sqlite_functions(connection, _record):
+        connection.create_function("greatest", 2, max)
+
+    organization_id = uuid.uuid4()
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                lambda conn: Base.metadata.create_all(
+                    conn,
+                    tables=[
+                        Organization.__table__,
+                        Document.__table__,
+                        ProcessingJob.__table__,
+                    ],
+                )
+            )
+        factory = async_sessionmaker(
+            engine, class_=ReloadFailureSession, expire_on_commit=False
+        )
+        async with factory() as db:
+            organization = Organization(
+                id=organization_id,
+                name="Test",
+                storage_limit_bytes=10_000,
+                storage_used_bytes=0,
+            )
+            db.add(organization)
+            await db.commit()
+            db.commit_calls = 0
+            db.faults_active = True
+            service = _make_service(db)
+            user = SimpleNamespace(id=uuid.uuid4())
+
+            upload = asyncio.create_task(
+                service.upload_file(
+                    _FakeUpload(b"payload"),
+                    "Doc",
+                    user,
+                    organization,
+                )
+            )
+            if cancel_phase == "refresh":
+                await refresh_started.wait()
+                upload.cancel()
+            with pytest.raises(
+                asyncio.CancelledError if cancel_phase else FileStorageError
+            ):
+                await upload
+
+        async with async_sessionmaker(engine)() as check:
+            document = await check.scalar(
+                select(Document).where(Document.organization_id == organization_id)
+            )
+            assert document is not None
+            assert document.is_deleted is want_deleted
+            quota = await check.scalar(
+                select(Organization.storage_used_bytes).where(
+                    Organization.id == organization_id
+                )
+            )
+            assert quota == want_quota
+            jobs = (await check.scalars(select(ProcessingJob))).all()
+            assert len(jobs) == want_jobs
+        if want_deleted:
+            service._delete_stored_object.assert_called_once()
+        else:
+            service._delete_stored_object.assert_not_called()
+    finally:
+        await engine.dispose()
 
 
 def _integrity_error(constraint: str) -> IntegrityError:

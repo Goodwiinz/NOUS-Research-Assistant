@@ -2,6 +2,7 @@
 File handling and storage service
 """
 
+import asyncio
 import hashlib
 import logging
 import mimetypes
@@ -492,7 +493,9 @@ class FileService:
         # span multiple commits — without this, a failure orphans the object,
         # strands a PENDING row, or drifts org storage quota (see the except).
         document = None
+        document_id = None
         document_committed = False
+        commit_in_flight = False
         quota_committed = False
         processing_job = None
         processing_job_committed = False
@@ -500,6 +503,7 @@ class FileService:
         try:
             # Validate file
             validation_result = self.validate_file(file, user, organization)
+            organization_id = organization.id
             original_ext = Path(file.filename).suffix
             mime_type = validation_result["mime_type"] or "application/octet-stream"
 
@@ -627,6 +631,7 @@ class FileService:
             )
 
             document.checksum_sha256 = file_hash
+            document_id = document.id
 
             # Add file hash as metadata
             document.add_metadata("file_hash", file_hash)
@@ -634,6 +639,7 @@ class FileService:
 
             self.db.add(document)
             try:
+                commit_in_flight = True
                 await self.db.commit()
             except IntegrityError as exc:
                 # Lost the dedup race: the outer handler rolls back and deletes
@@ -644,6 +650,7 @@ class FileService:
             # The commit is durable even if the subsequent reload fails.
             # Compensation must revoke the row before deleting its object.
             document_committed = True
+            commit_in_flight = False
             await self.db.refresh(document)
 
             # Atomically CLAIM quota — conditional UPDATE fails (rowcount 0)
@@ -659,8 +666,10 @@ class FileService:
                     "Insufficient storage quota (concurrent-upload race lost)",
                     public_detail="Insufficient storage quota",
                 )
+            commit_in_flight = True
             await self.db.commit()
             quota_committed = True
+            commit_in_flight = False
 
             # Create processing job for document ingestion
             processing_job = ProcessingJob(
@@ -683,8 +692,10 @@ class FileService:
             )
 
             self.db.add(processing_job)
+            commit_in_flight = True
             await self.db.commit()
             processing_job_committed = True
+            commit_in_flight = False
             await self.db.refresh(processing_job)
 
             # Queue the job for processing
@@ -694,8 +705,16 @@ class FileService:
 
             return document
 
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
             await self.db.rollback()
+            if isinstance(e, asyncio.CancelledError) and commit_in_flight:
+                # A cancelled commit can have landed without an acknowledgement.
+                # Preserve backing storage until its durable outcome is known.
+                logger.warning(
+                    "upload cancelled during commit for document %s; preserving storage",
+                    document_id,
+                )
+                raise
             # Compensate whatever durably landed before the failure. First reverse
             # the DB (soft-delete the row + revert quota + drop the stray job in one
             # commit); only if that succeeds do we delete the storage object. If the
@@ -706,16 +725,15 @@ class FileService:
             reversal_ok = not document_committed
             if document_committed and document is not None:
                 try:
-                    # A committed ProcessingJob only exists when the enqueue
-                    # (.delay) failed — drop it so it can't run against the
-                    # soft-deleted document.
+                    # A committed job may survive reload, enqueue, or cancellation
+                    # failure; drop it before deleting the document's object.
                     if processing_job_committed and processing_job is not None:
                         await self.db.delete(processing_job)
                     document.soft_delete()
                     if quota_committed:
                         await self.db.execute(
                             Organization.storage_usage_update(
-                                organization.id, -validation_result["file_size"]
+                                organization_id, -validation_result["file_size"]
                             )
                         )
                     await self.db.commit()
@@ -725,7 +743,7 @@ class FileService:
                     logger.warning(
                         "upload rollback: failed to reverse committed row/quota for "
                         "document %s; leaving storage object as a sweepable orphan",
-                        getattr(document, "id", None),
+                        document_id,
                         exc_info=True,
                     )
             # Delete by captured primitives (never the possibly-expired instance).
@@ -740,7 +758,9 @@ class FileService:
                         storage_path or obj_file_path,
                         exc_info=True,
                     )
-            if isinstance(e, (FileValidationError, HTTPException)):
+            if isinstance(
+                e, (FileValidationError, HTTPException, asyncio.CancelledError)
+            ):
                 raise
             raise FileStorageError(f"Failed to upload file: {str(e)}")
 
