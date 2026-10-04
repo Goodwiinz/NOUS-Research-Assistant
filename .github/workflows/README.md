@@ -84,8 +84,11 @@ lines: a one-line dependency or workflow change still gets full CI.
 | Full | Mixed frontend/backend changes, generated API contract artifacts, CI/scripts, shared dependencies/build files, infrastructure, unknown paths, or an empty diff | Lightweight checks and every existing blocking job |
 
 Markdown under `backend/src/` or `frontend/src/` is runtime content and stays in
-its code profile. Release proposal branches (`codex/release-dev-<source SHA>`)
-always use full CI so the existing stale-source guard runs.
+its code profile. The [supported agent workflows guide](../../docs/operations/agent-supported-workflows.md)
+also uses the backend profile because backend tests validate its limits and
+relative links. Combining that guide with frontend changes selects full CI.
+Release proposal branches (`codex/release-dev-<source SHA>`) always use full CI
+so the existing stale-source guard runs.
 
 Every push to `develop`/`main` and every manual dispatch also uses full CI.
 This preserves the successful `develop` push as the release workflow's source

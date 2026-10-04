@@ -11,8 +11,9 @@ human noticed.
 
 Every 30 minutes (beat entry in ``celery_app.py``) it scans COMPLETED,
 non-deleted documents whose either satellite status is ``'failed'``, plus
-deleted documents whose DO KB data-source deletion still needs retry. It
-iterates org-by-org with a bounded keyset cursor and a hard per-run rate cap.
+deleted documents whose DO KB data-source deletion or Neo4j subgraph cleanup
+still needs retry. It
+uses durable attempt ordering across organizations and a hard per-run rate cap.
 
 Two-stage safety (values-controllable, no image rebuild):
 
@@ -33,13 +34,22 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from celery import current_app
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import and_, or_
+from sqlalchemy.orm import object_session
 
 from src.core.database import SessionLocal
 from src.models.document import Document, ProcessingStatus
+from src.services.documents.satellite_state import (
+    PENDING_WRITES,
+    begin_write,
+    finish_write,
+    pending_writes,
+    retire_settled_writes,
+)
 from src.services.knowledge_graph.repair import repair_document_graph
 from src.shared.enums import SatelliteSyncStatus
 from src.tasks._async_utils import run_async
@@ -50,9 +60,10 @@ logger = logging.getLogger(__name__)
 
 _FAILED = SatelliteSyncStatus.FAILED.value
 _COMPLETED = SatelliteSyncStatus.COMPLETED.value
+_PENDING = SatelliteSyncStatus.PENDING.value
 
 
-def _reconcilable_filters():
+def _reconcilable_filters(*, do_kb_enabled: bool = True):
     """Filter list selecting reconcilable documents.
 
     Single source of truth shared by the count, the org listing, and the
@@ -62,7 +73,8 @@ def _reconcilable_filters():
     Only COMPLETED active documents are re-driven: a PROCESSING document's
     pipeline is still running, and a FAILED document needs reprocessing.
     Deleted documents are selected separately only while a DO KB deletion
-    handle remains.
+    handle remains or their Neo4j cleanup is marked failed (or left pending by a
+    worker that died before compensating).
     """
     return [
         or_(
@@ -71,13 +83,35 @@ def _reconcilable_filters():
                 Document.processing_status == ProcessingStatus.COMPLETED,
                 or_(
                     Document.neo4j_index_status == _FAILED,
-                    Document.do_kb_sync_status == _FAILED,
+                    Document.do_kb_sync_status == _FAILED if do_kb_enabled else False,
                 ),
             ),
             and_(
                 Document.is_deleted == True,  # noqa: E712
-                Document.do_kb_data_source_uuid.is_not(None),
-                Document.do_kb_data_source_uuid != "",
+                do_kb_enabled,
+                or_(
+                    Document.document_metadata[PENDING_WRITES]["do_kb"]
+                    .as_string()
+                    .is_not(None),
+                    and_(
+                        Document.do_kb_data_source_uuid.is_not(None),
+                        Document.do_kb_data_source_uuid != "",
+                    ),
+                ),
+            ),
+            and_(
+                Document.is_deleted == True,  # noqa: E712
+                # pending: a worker died between its graph fan-out and the
+                # compensation that would have removed it.
+                or_(
+                    Document.neo4j_index_status.in_((_FAILED, _PENDING)),
+                    Document.document_metadata[PENDING_WRITES]["graph"]
+                    .as_string()
+                    .is_not(None),
+                ),
+                Document.document_metadata["graph_cleanup_requested"]
+                .as_boolean()
+                .is_distinct_from(False),
             ),
         ),
     ]
@@ -124,9 +158,53 @@ class _LazyExtractionService:
         return self._service
 
 
-def _redrive_neo4j(document, extraction) -> bool:
+def _redrive_neo4j(db, document, extraction) -> bool:
     """Re-drive one document's Neo4j index; returns True when repaired."""
+    document_id, organization_id = document.id, document.organization_id
+    document = (
+        db.query(Document)
+        .filter(Document.id == document_id, Document.organization_id == organization_id)
+        .execution_options(populate_existing=True, autoflush=False)
+        .with_for_update()
+        .one_or_none()
+    )
+    if (
+        document is None
+        or document.is_deleted
+        or document.processing_status != ProcessingStatus.COMPLETED
+    ):
+        db.rollback()
+        return False
+    token = uuid4().hex
+    begin_write(document, "graph", token)
+    db.commit()
     outcome = repair_document_graph(document, extraction_service=extraction.get())
+    # A delete that landed during the repair ran its graph cleanup before these
+    # upserts existed; remove them instead of recording the deleted row as
+    # indexed, which would hide the orphan for good (GOO-358).
+    document = (
+        db.query(Document)
+        .filter(Document.id == document_id, Document.organization_id == organization_id)
+        .execution_options(populate_existing=True, autoflush=False)
+        .with_for_update()
+        .one_or_none()
+    )
+    if document is None:
+        db.rollback()
+        return False
+    finish_write(document, "graph", token)
+    if document.is_deleted:
+        if (document.document_metadata or {}).get(
+            "graph_cleanup_requested"
+        ) is not False:
+            document.neo4j_index_status = _PENDING
+        db.commit()
+        _cleanup_deleted_document_graph(document)
+        db.commit()
+        return False
+    if document.processing_status != ProcessingStatus.COMPLETED:
+        db.commit()
+        return False
     if outcome.ok:
         document.neo4j_index_status = _COMPLETED
         document.neo4j_indexed_at = datetime.now(timezone.utc)
@@ -139,6 +217,7 @@ def _redrive_neo4j(document, extraction) -> bool:
             outcome.entities_found,
             outcome.relationships_created,
         )
+        db.commit()
         return True
     document.neo4j_index_status = _FAILED
     logger.warning(
@@ -150,6 +229,7 @@ def _redrive_neo4j(document, extraction) -> bool:
         outcome.skipped_reason,
         outcome.error_message,
     )
+    db.commit()
     return False
 
 
@@ -193,7 +273,10 @@ def _cleanup_deleted_do_kb_document(document) -> bool:
             if (
                 current is None
                 or not current.is_deleted
-                or not current.do_kb_data_source_uuid
+                or current.organization_id != document.organization_id
+                or not (
+                    current.do_kb_data_source_uuid or pending_writes(current, "do_kb")
+                )
             ):
                 return True
             return await unsync_document_from_kb(session, current)
@@ -208,6 +291,66 @@ def _cleanup_deleted_do_kb_document(document) -> bool:
             exc,
         )
         return False
+
+
+def _cleanup_deleted_document_graph(document) -> bool:
+    """Remove a soft-deleted document's Neo4j subgraph and record the outcome.
+
+    Sets ``neo4j_index_status`` to completed on success and failed otherwise;
+    a failed row stays selected by ``_reconcilable_filters`` so the next run
+    retries. Only deletes (relationships, then orphaned nodes, org-scoped);
+    never re-indexes. The caller owns the commit.
+    """
+    from src.services.knowledge_graph.knowledge_graph_service import (
+        KnowledgeGraphService,
+    )
+
+    if (document.document_metadata or {}).get("graph_cleanup_requested") is False:
+        return True
+
+    document_id, organization_id = document.id, document.organization_id
+    db = object_session(document)
+    if db is not None:
+        db.rollback()
+    cleanup_ok = True
+    started = datetime.now(timezone.utc)
+    try:
+        KnowledgeGraphService().delete_document_graph(
+            str(document_id), str(organization_id)
+        )
+    except Exception as exc:  # noqa: BLE001 - cleanup must remain retryable
+        cleanup_ok = False
+        logger.warning(
+            "reconciler: Neo4j cleanup failed for deleted document %s (org %s): %s",
+            document_id,
+            organization_id,
+            exc,
+        )
+    if db is not None:
+        document = (
+            db.query(Document)
+            .filter(
+                Document.id == document_id,
+                Document.organization_id == organization_id,
+                Document.is_deleted == True,
+            )
+            .execution_options(populate_existing=True, autoflush=False)
+            .with_for_update()
+            .one_or_none()
+        )
+    if (
+        document is not None
+        and (document.document_metadata or {}).get("graph_cleanup_requested")
+        is not False
+    ):
+        if cleanup_ok:
+            retire_settled_writes(document, "graph", started)
+        document.neo4j_index_status = (
+            _FAILED
+            if not cleanup_ok
+            else _PENDING if pending_writes(document, "graph") else _COMPLETED
+        )
+    return cleanup_ok
 
 
 @current_app.task(name="src.tasks.reconcile_tasks.reconcile_satellite_indexes")
@@ -235,6 +378,8 @@ def reconcile_satellite_indexes() -> dict:
         "do_kb_still_failed": 0,
         "do_kb_cleanup_succeeded": 0,
         "do_kb_cleanup_failed": 0,
+        "kg_cleanup_succeeded": 0,
+        "kg_cleanup_failed": 0,
         "do_kb_skipped_disabled": 0,
     }
     report: list[dict] = []
@@ -249,105 +394,142 @@ def reconcile_satellite_indexes() -> dict:
             logger.info("reconcile_satellite_indexes: nothing to reconcile")
             return summary
 
-        # Org-scoped iteration: process one organization at a time, keyset
-        # cursor on Document.id inside each org, global per-run rate cap.
-        org_rows = (
-            db.query(Document.organization_id)
-            .filter(*filters)
-            .distinct()
-            .order_by(Document.organization_id)
-            .all()
+        # Snapshot a bounded global batch in durable least-recently-attempted
+        # order. Failed/unknown writes rotate behind untouched work across runs.
+        # DO-disabled-only rows remain reported but consume no actionable budget.
+        actionable = _reconcilable_filters(
+            do_kb_enabled=do_kb_enabled if apply_mode else True
         )
-
-        budget = cap
+        if apply_mode and not do_kb_enabled:
+            summary["do_kb_skipped_disabled"] = (
+                summary["eligible"] - db.query(Document.id).filter(*actionable).count()
+            )
+        ids = [
+            row[0]
+            for row in db.query(Document.id)
+            .filter(*actionable)
+            .order_by(
+                Document.document_metadata["satellite_reconcile_attempted_at"]
+                .as_string()
+                .asc()
+                .nullsfirst(),
+                Document.id,
+            )
+            .limit(cap)
+            .all()
+        ]
         try:
-            for (org_id,) in org_rows:
-                if budget <= 0:
-                    break
-                cursor = None
-                while budget > 0:
-                    query = (
-                        db.query(Document)
-                        .filter(*_reconcilable_filters())
-                        .filter(Document.organization_id == org_id)
+            for offset in range(0, len(ids), page_size):
+                batch = (
+                    db.query(Document)
+                    .filter(
+                        *actionable, Document.id.in_(ids[offset : offset + page_size])
                     )
-                    if cursor is not None:
-                        # Keyset cursor — must be filtered before LIMIT.
-                        query = query.filter(Document.id > cursor)
-                    batch = (
-                        query.order_by(Document.id).limit(min(page_size, budget)).all()
+                    .all()
+                )
+                for doc in batch:
+                    if apply_mode:
+                        doc = (
+                            db.query(Document)
+                            .filter(
+                                *actionable,
+                                Document.id == doc.id,
+                                Document.organization_id == doc.organization_id,
+                            )
+                            .execution_options(populate_existing=True, autoflush=False)
+                            .with_for_update()
+                            .one_or_none()
+                        )
+                        if doc is None:
+                            db.rollback()
+                            continue
+                        doc.document_metadata = {
+                            **(doc.document_metadata or {}),
+                            "satellite_reconcile_attempted_at": datetime.now(
+                                timezone.utc
+                            ).isoformat(),
+                        }
+                        # Progress survives provider failure and process loss;
+                        # release the document lock before any remote work.
+                        db.commit()
+                    summary["scanned"] += 1
+                    cleanup_pending = bool(
+                        doc.is_deleted
+                        and (doc.do_kb_data_source_uuid or pending_writes(doc, "do_kb"))
                     )
-                    if not batch:
-                        break
+                    graph_cleanup_pending = bool(
+                        doc.is_deleted
+                        and (
+                            doc.neo4j_index_status in (_FAILED, _PENDING)
+                            or pending_writes(doc, "graph")
+                        )
+                        and (doc.document_metadata or {}).get("graph_cleanup_requested")
+                        is not False
+                    )
+                    needs_kg = not doc.is_deleted and doc.neo4j_index_status == _FAILED
+                    needs_kb = not doc.is_deleted and doc.do_kb_sync_status == _FAILED
 
-                    for doc in batch:
-                        cursor = doc.id
-                        budget -= 1
-                        summary["scanned"] += 1
-                        cleanup_pending = bool(
-                            doc.is_deleted and doc.do_kb_data_source_uuid
+                    if not apply_mode:
+                        logger.info(
+                            "reconciler (report-only): would reconcile "
+                            "document %s (org %s): neo4j=%s do_kb=%s",
+                            doc.id,
+                            doc.organization_id,
+                            doc.neo4j_index_status,
+                            doc.do_kb_sync_status,
                         )
-                        needs_kg = (
-                            not doc.is_deleted and doc.neo4j_index_status == _FAILED
+                        report.append(
+                            {
+                                "document_id": str(doc.id),
+                                "organization_id": str(doc.organization_id),
+                                "neo4j_index_status": doc.neo4j_index_status,
+                                "do_kb_sync_status": doc.do_kb_sync_status,
+                                "do_kb_cleanup_pending": cleanup_pending,
+                                "kg_cleanup_pending": graph_cleanup_pending,
+                            }
                         )
-                        needs_kb = (
-                            not doc.is_deleted and doc.do_kb_sync_status == _FAILED
-                        )
+                        continue
 
-                        if not apply_mode:
+                    if cleanup_pending:
+                        if not do_kb_enabled:
+                            summary["do_kb_skipped_disabled"] += 1
+                        elif _cleanup_deleted_do_kb_document(doc):
+                            summary["do_kb_cleanup_succeeded"] += 1
+                        else:
+                            summary["do_kb_cleanup_failed"] += 1
+
+                    if graph_cleanup_pending:
+                        if _cleanup_deleted_document_graph(doc):
+                            summary["kg_cleanup_succeeded"] += 1
+                        else:
+                            summary["kg_cleanup_failed"] += 1
+
+                    if needs_kg:
+                        if _redrive_neo4j(db, doc, extraction):
+                            summary["kg_repaired"] += 1
+                        else:
+                            summary["kg_still_failed"] += 1
+
+                    if needs_kb:
+                        if not do_kb_enabled:
+                            summary["do_kb_skipped_disabled"] += 1
                             logger.info(
-                                "reconciler (report-only): would reconcile "
-                                "document %s (org %s): neo4j=%s do_kb=%s",
+                                "reconciler: DO KB disabled — leaving "
+                                "document %s (org %s) do_kb_sync_status="
+                                "failed",
                                 doc.id,
                                 doc.organization_id,
-                                doc.neo4j_index_status,
-                                doc.do_kb_sync_status,
                             )
-                            report.append(
-                                {
-                                    "document_id": str(doc.id),
-                                    "organization_id": str(doc.organization_id),
-                                    "neo4j_index_status": doc.neo4j_index_status,
-                                    "do_kb_sync_status": doc.do_kb_sync_status,
-                                    "do_kb_cleanup_pending": cleanup_pending,
-                                }
-                            )
-                            continue
+                        elif _redrive_do_kb(doc):
+                            summary["do_kb_resynced"] += 1
+                            orgs_to_kick.add(str(doc.organization_id))
+                        else:
+                            summary["do_kb_still_failed"] += 1
 
-                        if cleanup_pending:
-                            if not do_kb_enabled:
-                                summary["do_kb_skipped_disabled"] += 1
-                            elif _cleanup_deleted_do_kb_document(doc):
-                                summary["do_kb_cleanup_succeeded"] += 1
-                            else:
-                                summary["do_kb_cleanup_failed"] += 1
-
-                        if needs_kg:
-                            if _redrive_neo4j(doc, extraction):
-                                summary["kg_repaired"] += 1
-                            else:
-                                summary["kg_still_failed"] += 1
-
-                        if needs_kb:
-                            if not do_kb_enabled:
-                                summary["do_kb_skipped_disabled"] += 1
-                                logger.info(
-                                    "reconciler: DO KB disabled — leaving "
-                                    "document %s (org %s) do_kb_sync_status="
-                                    "failed",
-                                    doc.id,
-                                    doc.organization_id,
-                                )
-                            elif _redrive_do_kb(doc):
-                                summary["do_kb_resynced"] += 1
-                                orgs_to_kick.add(str(doc.organization_id))
-                            else:
-                                summary["do_kb_still_failed"] += 1
-
-                        # Commit per document so a crash preserves progress
-                        # and a re-driven doc immediately drops out of the
-                        # failed set.
-                        db.commit()
+                    # Commit per document so a crash preserves progress
+                    # and a re-driven doc immediately drops out of the
+                    # failed set.
+                    db.commit()
         except SoftTimeLimitExceeded:
             db.rollback()
             summary["soft_time_limit"] = True

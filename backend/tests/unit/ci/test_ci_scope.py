@@ -223,6 +223,19 @@ def _select(
     [
         (["docs/engineering/testing.md", ".claude/commands/nous-loop.md"], "docs"),
         (["README.md", "backend/README.md", ".github/workflows/README.md"], "docs"),
+        pytest.param(
+            ["docs/operations/agent-supported-workflows.md"],
+            "backend",
+            id="backend_validated_operations_guide",
+        ),
+        pytest.param(
+            [
+                "docs/operations/agent-supported-workflows.md",
+                "frontend/src/chat.tsx",
+            ],
+            "full",
+            id="backend_validated_operations_guide_with_frontend",
+        ),
         (["frontend/src/chat.tsx"], "frontend"),
         (["backend/src/api/search.py"], "backend"),
         (["backend/src/prompts/system.md"], "backend"),
