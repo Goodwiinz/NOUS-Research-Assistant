@@ -22,7 +22,7 @@ function fakeNous(calls: { url: string; body: any }[]): typeof fetch {
       data = {
         id: "33333333-3333-4333-8333-333333333333",
         approval_url: "https://nous.test/a",
-        thread_label: "Literature\x1b review\x07",
+        thread_label: "Literature\x1b review\x07\u009b\u202e",
       };
     else if (url.endsWith("/exchange")) data = { token: "grant" };
     else data = { status: "approved" };
