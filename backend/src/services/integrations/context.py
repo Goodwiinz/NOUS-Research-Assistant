@@ -355,6 +355,7 @@ async def create_request(
         organization_id=user.organization_id,
         project_id=data.project_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
     )
     request = IntegrationGrantRequest(
         id=uuid4(),
@@ -362,6 +363,7 @@ async def create_request(
         organization_id=user.organization_id,
         project_id=data.project_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
         scopes=sorted(data.scopes),
         status="pending",
         expires_at=now() + timedelta(minutes=10),
@@ -392,6 +394,7 @@ async def owned_request(
         organization_id=user.organization_id,
         project_id=request.project_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
     )
     return cast(IntegrationGrantRequest, request)
 
@@ -405,6 +408,12 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
     status = request.status
     if status in {"pending", "approved"} and not live(request.expires_at):
         status = "expired"
+    thread_label = None
+    if request.thread_id is not None:
+        title = await db.scalar(
+            select(Thread.title).where(Thread.id == request.thread_id)
+        )
+        thread_label = title or "Untitled chat"
     return GrantRequestDTO(
         id=request.id,
         status=cast(GrantRequestStatus, status),
@@ -415,6 +424,8 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         scopes=set(request.scopes),
         project_label=project.name,
         device_label=device.label,
+        thread_id=request.thread_id,
+        thread_label=thread_label,
     )
 
 
@@ -466,6 +477,7 @@ async def exchange_request(
         organization_id=user.organization_id,
         project_id=request.project_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
         scopes=request.scopes,
         request_id=request.id,
     )
