@@ -25,6 +25,8 @@ export type LocalState = {
   projectId: string;
   // The NOUS chat standalone publications land in; absent = project only.
   threadId?: string;
+  // Absent on connections made before `status` existed.
+  label?: string;
   credentialHandle: string;
   // Absent on connections made before tools:read existed.
   scopes?: string[];
@@ -65,6 +67,39 @@ async function request(
   }
   if (!record(data)) throw new Error("invalid NOUS response");
   return data;
+}
+/** A stored connection with the fields the reuse check and `status` read. */
+function storedConnection(value: unknown): LocalState | null {
+  if (
+    !record(value) ||
+    typeof value.apiUrl !== "string" ||
+    !uuid(value.deviceId) ||
+    !uuid(value.projectId) ||
+    typeof value.credentialHandle !== "string" ||
+    !Array.isArray(value.workspaces)
+  )
+    return null;
+  return value as LocalState;
+}
+/**
+ * Liveness probe for binding reuse: a forced renewal that must issue a new
+ * grant token. A refusal, a transient failure (the keeper keeps the old
+ * token) or a connection without a stored grant ID all mean "not proven".
+ */
+async function grantIsLive(
+  store: CredentialStore,
+  handle: string,
+  base: string,
+  fetchFn: typeof fetch,
+): Promise<boolean> {
+  try {
+    const before = await store.load(handle);
+    if (!uuid(before.grantId)) return false;
+    const after = await new GrantKeeper(store, handle, base, fetchFn).current(0);
+    return after.grantToken !== before.grantToken;
+  } catch {
+    return false;
+  }
 }
 async function poll(
   read: () => Promise<Record<string, any>>,
@@ -120,6 +155,32 @@ export async function connect(
   ];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
+  const store = new CredentialStore(options.stateDir);
+  const previous = storedConnection(await store.readLocal("connection").catch(() => null));
+  let sameApi = false;
+  try {
+    sameApi = previous !== null && apiBase(previous.apiUrl) === base;
+  } catch {
+    // An unparsable stored URL is simply a different binding.
+  }
+  const sameBinding =
+    previous !== null &&
+    sameApi &&
+    previous.projectId === options.projectId &&
+    (previous.threadId ?? undefined) === (options.threadId ?? undefined);
+  // Same API, project and chat, every requested scope already granted, and the
+  // grant still renews: keep it instead of a new browser login and consent.
+  if (
+    previous !== null &&
+    sameBinding &&
+    scopes.every((scope) => previous.scopes?.includes(scope)) &&
+    (await grantIsLive(store, previous.credentialHandle, base, fetchFn))
+  ) {
+    announce(
+      `Reusing binding: project ${options.projectId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.`,
+    );
+    return { deviceId: previous.deviceId, credentialHandle: previous.credentialHandle };
+  }
   const login = await request(fetchFn, base, "/cli-auth/start", undefined, {});
   if (
     typeof login.session_id !== "string" ||
@@ -181,7 +242,6 @@ export async function connect(
     auth.token,
     {},
   );
-  const store = new CredentialStore(options.stateDir);
   const credentialHandle = await store.save({
     accessToken: auth.token,
     grantToken: grant.token,
@@ -192,9 +252,8 @@ export async function connect(
   // A reconnect (e.g. to add --publish) must not drop registered folders:
   // re-register each root with the new device so managed runs and
   // standalone installs keep working. Roots that vanished are skipped.
-  const previous = await store.readLocal("connection").catch(() => null);
   const carried: LocalState["workspaces"] = [];
-  if (record(previous) && Array.isArray(previous.workspaces)) {
+  if (previous !== null) {
     for (const old of previous.workspaces as LocalState["workspaces"]) {
       if (typeof old?.root !== "string" || typeof old?.label !== "string") continue;
       const root = await realpath(old.root).catch(() => null);
@@ -218,10 +277,19 @@ export async function connect(
     deviceId: device.id,
     projectId: options.projectId,
     ...(options.threadId ? { threadId: options.threadId } : {}),
+    label: options.label,
     credentialHandle,
     scopes,
     workspaces: carried,
   } satisfies LocalState);
+  // The superseded binding's local credential is useless to this device now.
+  // Its server-side grant and consent stay valid until `disconnect` or expiry.
+  if (previous !== null && !sameBinding && previous.credentialHandle !== credentialHandle)
+    await store.removeLocal(previous.credentialHandle).catch((error: unknown) =>
+      announce(
+        `Could not remove the previous binding's local credential: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
   if (carried.length)
     announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
   const chatLabel =
@@ -536,6 +604,7 @@ export function recoverInterrupt(
 const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write] [--handoff]] | workspace add --root PATH [--label NAME] | run
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
+  connect reuses the stored binding (no browser login or consent) when the API, project and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
   nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools.
