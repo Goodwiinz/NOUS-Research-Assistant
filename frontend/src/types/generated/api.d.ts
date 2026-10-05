@@ -4113,6 +4113,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/handoffs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save Handoff */
+        post: operations["save_handoff_api_v1_integrations_handoffs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/handoffs/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Latest Handoff */
+        get: operations["read_latest_handoff_api_v1_integrations_handoffs_latest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/tools": {
         parameters: {
             query?: never;
@@ -10187,6 +10221,26 @@ export interface paths {
          *     Returns messages in the format expected by LLM APIs, limited by count or tokens.
          */
         get: operations["get_thread_context_api_v2_threads__thread_id__context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/threads/{thread_id}/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Thread Handoff
+         * @description Latest harness handoff left in this chat (standalone route).
+         */
+        get: operations["get_thread_handoff_api_v2_threads__thread_id__handoff_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16679,6 +16733,80 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HandoffCreate */
+        HandoffCreate: {
+            /** Decisions */
+            decisions?: string[];
+            /** Expected Parent Version */
+            expected_parent_version: number | null;
+            /** Goal */
+            goal: string;
+            /**
+             * Handoff Id
+             * Format: uuid
+             */
+            handoff_id: string;
+            /** Harness Name */
+            harness_name: string;
+            /** Harness Session Id */
+            harness_session_id?: string | null;
+            /** Remaining */
+            remaining?: string[];
+            /** Results */
+            results?: components["schemas"]["HandoffResult"][];
+        };
+        /** HandoffDTO */
+        HandoffDTO: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decisions */
+            decisions: string[];
+            /** Goal */
+            goal: string;
+            /**
+             * Handoff Id
+             * Format: uuid
+             */
+            handoff_id: string;
+            /** Harness Name */
+            harness_name: string;
+            /** Harness Session Id */
+            harness_session_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Remaining */
+            remaining: string[];
+            /** Results */
+            results: components["schemas"]["HandoffResult"][];
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            /** Version */
+            version: number;
+        };
+        /** HandoffResult */
+        HandoffResult: {
+            /**
+             * Artifact Version Id
+             * Format: uuid
+             */
+            artifact_version_id: string;
+            /** Summary */
+            summary: string;
         };
         /** IdentityEventResponse */
         IdentityEventResponse: {
@@ -31073,6 +31201,68 @@ export interface operations {
             };
         };
     };
+    save_handoff_api_v1_integrations_handoffs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HandoffCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"];
+                };
+            };
+            /** @description Latest handoff */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_latest_handoff_api_v1_integrations_handoffs_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"];
+                };
+            };
+        };
+    };
     list_tools_api_v1_integrations_tools_get: {
         parameters: {
             query?: never;
@@ -42474,6 +42664,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_thread_handoff_api_v2_threads__thread_id__handoff_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"];
                 };
             };
             /** @description Validation Error */

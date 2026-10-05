@@ -13750,6 +13750,200 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HandoffCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "decisions": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Decisions",
+            "type": "array"
+          },
+          "expected_parent_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Version"
+          },
+          "goal": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "handoff_id": {
+            "format": "uuid",
+            "title": "Handoff Id",
+            "type": "string"
+          },
+          "harness_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Harness Name",
+            "type": "string"
+          },
+          "harness_session_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Session Id"
+          },
+          "remaining": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Remaining",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/HandoffResult"
+            },
+            "maxItems": 50,
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "handoff_id",
+          "expected_parent_version",
+          "goal",
+          "harness_name"
+        ],
+        "title": "HandoffCreate",
+        "type": "object"
+      },
+      "HandoffDTO": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decisions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "handoff_id": {
+            "format": "uuid",
+            "title": "Handoff Id",
+            "type": "string"
+          },
+          "harness_name": {
+            "title": "Harness Name",
+            "type": "string"
+          },
+          "harness_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Session Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "remaining": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Remaining",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/HandoffResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "thread_id": {
+            "format": "uuid",
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "thread_id",
+          "project_id",
+          "version",
+          "handoff_id",
+          "goal",
+          "decisions",
+          "remaining",
+          "results",
+          "harness_name",
+          "harness_session_id",
+          "created_at"
+        ],
+        "title": "HandoffDTO",
+        "type": "object"
+      },
+      "HandoffResult": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_version_id": {
+            "format": "uuid",
+            "title": "Artifact Version Id",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_version_id",
+          "summary"
+        ],
+        "title": "HandoffResult",
+        "type": "object"
+      },
       "IdentityEventResponse": {
         "properties": {
           "actor_role": {
@@ -43158,6 +43352,90 @@
         ]
       }
     },
+    "/api/v1/integrations/handoffs": {
+      "post": {
+        "operationId": "save_handoff_api_v1_integrations_handoffs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Latest handoff"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Handoff",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/handoffs/latest": {
+      "get": {
+        "operationId": "read_latest_handoff_api_v1_integrations_handoffs_latest_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Latest Handoff",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/tools": {
       "get": {
         "operationId": "list_tools_api_v1_integrations_tools_get",
@@ -62967,6 +63245,55 @@
         "summary": "Get Thread Context",
         "tags": [
           "Threads"
+        ]
+      }
+    },
+    "/api/v2/threads/{thread_id}/handoff": {
+      "get": {
+        "description": "Latest harness handoff left in this chat (standalone route).",
+        "operationId": "get_thread_handoff_api_v2_threads__thread_id__handoff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Thread Handoff",
+        "tags": [
+          "workspaces-flat"
         ]
       }
     },
