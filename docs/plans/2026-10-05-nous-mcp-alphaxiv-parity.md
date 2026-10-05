@@ -1,6 +1,6 @@
 # NOUS MCP alphaXiv Parity Implementation Plan (Plan 07)
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (or superpowers:subagent-driven-development) to implement this plan task-by-task. Owner's model policy for this plan (2026-10-05): **Sonnet at maximum effort ("ultra") for implementation subagents**; Fable only for planning/review. Supersedes the Opus default for this work. One slice = one PR, cut from `origin/develop` in its own worktree (`git worktree add .worktrees/<name> -b <branch> origin/develop`). Use the main checkout's `backend/.venv` (`/Users/goodwiinz/development/RAG_system/backend/.venv/bin/python`); worktrees have no venv. Push, merge, flag flips and live proof wait for the owner's word.
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (or superpowers:subagent-driven-development) to implement this plan task-by-task. Owner's model policy for this plan (2026-10-05): **Sonnet at maximum effort ("ultra") for implementation subagents**; Fable only for planning/review. Supersedes the Opus default for this work. One slice = one PR, cut from `origin/develop` in its own worktree (`git worktree add .worktrees/<name> -b <branch> origin/develop`). Python interpreter: `PY=${PY:-$(git rev-parse --show-toplevel)/backend/.venv/bin/python}` from the main checkout, or whatever `PY` the executor exports; worktrees have no venv of their own. Nothing below hard-codes a machine path. Push, merge, flag flips and live proof wait for the owner's word.
 
 **Goal:** Give the harness-bridge MCP server the job coverage of alphaXiv's MCP (find, read and query papers; look up researchers; curate a library) over NOUS data, under NOUS's grant and consent model.
 
@@ -14,7 +14,7 @@
 
 ## Conventions used by every task
 
-- Backend tests: `cd backend && ../../backend/.venv/bin/python -m pytest -q <path> -k <name>` from the worktree (or set `PY=/Users/goodwiinz/development/RAG_system/backend/.venv/bin/python`). Marker `unit` is registered; use `pytestmark = pytest.mark.unit`.
+- Backend tests: `cd backend && $PY -m pytest -q <path> -k <name>` from the worktree, with `PY` resolved as in the header. Marker `unit` is registered; use `pytestmark = pytest.mark.unit`.
 - Lint before each commit: `$PY -m ruff check backend/src backend/tests` and `$PY -m black --check <changed files>`; `$PY -m isort --check <changed files>`.
 - Bridge: `pnpm --filter @nous/harness-bridge type-check && pnpm --filter @nous/harness-bridge test`.
 - Any Pydantic schema change → `$PY scripts/ci/generate_openapi.py` then `pnpm --dir frontend generate:api-types`; commit both outputs in the same PR (the bridge imports `frontend/src/types/generated/api.d.ts`).
@@ -133,7 +133,7 @@ down_revision = "<current head>"
 branch_labels = None
 depends_on = None
 
-TABLES = ("integration_grant_requests", "integration_grants", "integration_tool_actions")
+TABLES = ("integration_grant_requests", "integration_grants", "integration_tool_actions")  # upgrade order; downgrade reverses it
 
 
 def upgrade() -> None:
@@ -160,7 +160,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for table in TABLES:
+    # Children first: actions and grants hold FKs (request_id) into requests.
+    for table in reversed(TABLES):
         op.drop_index(f"ix_{table}_workspace_id", table_name=table)
         name = "some_binding" if table == "integration_tool_actions" else "one_binding"
         op.drop_constraint(f"ck_{table}_{name}", table, type_="check")
@@ -384,7 +385,7 @@ async def _target_project(
 - `_live_project_documents(context)` → `_live_project_documents(project_id, organization_id)`; update callers.
 - `invoke_read`: replace `project_id = str(context.project_id)` with `target = await _target_project(...)`; if `None` for a project-scoped tool return `ToolResult(content=[{"error": "project_id_required"}], is_error=True, source_refs=[])`. `_verify_project_ownership(str(target), db, user)` stays.
 - `list_read_tools()`: when advertising, add an optional `project_id` property with description "Required for workspace grants: which project to act on." Keep `additionalProperties: False`.
-- `tool_actions.py`: `IntegrationToolAction.project_id` may be None for future folder actions, but in this slice every action still has a project; add `workspace_id` to `ActionActor` and persist it on the row; `_same_target` compares both; `_authority_intact` compares `grant.workspace_id` too; `get_action_for_review` uses an outer join on Collection and tolerates `None` label (`project_label: str | None`).
+- `tool_actions.py`: `IntegrationToolAction.project_id` may be None for future folder actions, but in this slice every action still has a project; add `workspace_id` to `ActionActor` and persist it on the row; `_same_target` compares both; `_authority_intact` compares `grant.workspace_id` too; `get_action_for_review` outer-joins `Collection` on `project_id` **and** joins `Workspace` on `IntegrationToolAction.workspace_id` (falling back to `Collection.workspace_id`), so `ActionReview` gains `workspace_id: UUID | None` and `workspace_label: str | None` next to a now-optional `project_label`; the review page renders the workspace row whenever `project_label` is null. Test: a workspace-level row yields a workspace label. (Codex #1881 L380.)
 - Routers: `_actor` passes `workspace_id=context.workspace_id`. `artifacts.py` / `harness.py`: `if context.project_id is None: raise HTTPException(403, "Integration access denied")`.
 
 **Step 4:** Tests → PASS; full `backend/tests/unit/services/integrations`, `backend/tests/unit/services/agent/test_tool_actions.py`, `backend/tests/unit/api/test_integration_*`, `backend/tests/unit/architecture` → PASS. Regenerate OpenAPI + api types (schemas changed). `pnpm --filter @nous/harness-bridge type-check` → PASS (the `ActionStatus` type is unchanged; `GrantRequestDTO` fields widened).
@@ -426,17 +427,28 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
     # name: (description, input_schema, required scope)
     "list_library": (
         "List the folders (NOUS projects) this connection may use, with document counts.",
-        {"type": "object", "properties": {}, "additionalProperties": False, "required": []},
+        {"type": "object", "additionalProperties": False, "required": [],
+         "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 50},
+                        "offset": {"type": "integer", "minimum": 0, "default": 0}}},
         "library:read",
     ),
 }
+# Strict argument models for local tools; the registry path already validates
+# through pydantic, local tools must not be weaker. (Codex #1881 L431.)
+class _ListLibraryArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    limit: int = Field(default=50, ge=1, le=50)
+    offset: int = Field(default=0, ge=0)
+
+
+LOCAL_TOOL_MODELS: dict[str, type[BaseModel]] = {"list_library": _ListLibraryArgs}
 TOOL_SCOPES: dict[str, str] = {name: "tools:read" for name in READ_TOOL_NAMES} | {
     name: scope for name, (_d, _s, scope) in LOCAL_TOOLS.items()
 }
 ```
 
 - `list_read_tools(scopes: Iterable[str] | None = None)` → registry tools plus `LOCAL_TOOLS`, filtered to the grant's scopes when given.
-- `_validate_arguments`: local tools validate against their own schema (plain key check; no pydantic model).
+- `_validate_arguments`: local tools validate with `LOCAL_TOOL_MODELS[name].model_validate(arguments, strict=True)`; `ValidationError` → `ToolArgumentError("invalid argument types")`, unknown keys → `"unknown arguments"` (same 422 contract as registry tools). Every later local tool (Slices 2–4) adds its own strict model here.
 - Branch in `invoke_read`:
 
 ```python
@@ -450,11 +462,15 @@ TOOL_SCOPES: dict[str, str] = {name: "tools:read" for name in READ_TOOL_NAMES} |
                 CollectionDocument.is_deleted.is_(False)))
             .where(Collection.id.in_(allowed), Collection.is_deleted.is_(False))
             .group_by(Collection.id, Collection.name, Collection.description)
-            .order_by(Collection.name)
+            .order_by(Collection.name, Collection.id)
+            .offset(offset)
+            .limit(limit + 1)
         )
+        found = rows.all()
         payload = {"folders": [
-            {"id": str(i), "name": n, "description": d, "document_count": int(c)}
-            for i, n, d, c in rows.all()]}
+            {"id": str(i), "name": n, "description": (d or "")[:500], "document_count": int(c)}
+            for i, n, d, c in found[:limit]],
+            "offset": offset, "next_offset": offset + limit if len(found) > limit else None}
 ```
 
 `list_library` skips the per-project `_verify_project_ownership` block (it has no single target); restructure `invoke_read` so that block runs only for project-scoped tools.
@@ -1153,7 +1169,7 @@ Task sketch: `LOCAL_TOOLS["discover_papers"] {query, sources?: ["corpus","arxiv"
 1. GitOps PR: `NOUS_MCP_ENABLED: "true"` in `infrastructure/helm/knowledge-graph-analytics/values-aws.yaml` `backend.env`.
 2. `nous-harness connect --workspace <id> --tools --write --library`, approve in browser (check labels + workspace row).
 3. From Claude Code: `list_library` → `search_arxiv` → `get_arxiv_paper_content` (two pages) → `ingest_arxiv_papers` (approve) → `get_document_content` → `retrieve_passages` → `save_papers_to_folder` (no approval) → `move_papers_between_folders` → `find_researchers` → `get_researcher` → `delete_folder` (approval).
-4. Each step: paste the `ToolResult` and the `agent_runs`/`integration_tool_actions` rows. Anything not executed stays `NOT RUN`.
+4. Each step: record only ids, states, result sizes, `sha256` of the `ToolResult` body and a one-line redacted assertion ("folder X now has N docs"). Never paste raw `ToolResult` bodies, prompts, document excerpts or whole `agent_runs` / `integration_tool_actions` rows into tracked docs (Codex #1881 L1140). Anything not executed stays `NOT RUN`.
 
 ## Plan index amendment
 
