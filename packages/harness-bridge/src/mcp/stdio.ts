@@ -59,7 +59,7 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
     // Saves are journaled in the same store; the binding is re-read per save.
     local.push(
       getHandoffTool(handoffs),
-      saveHandoffTool(new HandoffQueue(store, handoffs), () => localBinding(store)),
+      saveHandoffTool(new HandoffQueue(store, handoffs), () => localBinding(store, session.credentialHandle)),
     );
   }
   const server = createNousMcpServer(

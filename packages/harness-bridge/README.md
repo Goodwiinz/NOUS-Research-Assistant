@@ -45,7 +45,7 @@ Tools are the backend's read allowlist (`search_documents`, `list_project_docume
 
 ## Binding reuse, status, and chat handoffs
 
-Running `connect` again with the same API, project and `--chat` (both absent counts as equal), and with no scope that the stored connection lacks, reuses the stored binding. It forces one grant renewal as a liveness probe and, if NOUS issues a new grant token, prints `Reusing binding` and skips the browser login and consent entirely. A different chat or project, a missing scope, a connection without a stored grant ID, or a failed or transient renewal runs the full login and consent flow. When the new connection replaces a different chat or project, the superseded local credential file is removed. **Known gap:** its server-side grant and consent are not revoked; that grant lapses within 15 minutes, but the consent stays valid until revoked another way. Run `disconnect` before switching chats if that matters.
+Running `connect` again with the same API, project and `--chat` (both absent counts as equal), and with no scope that the stored connection lacks, reuses the stored binding. It forces one grant renewal as a liveness probe and, if NOUS issues a new grant token, prints `Reusing binding` and skips the browser login and consent entirely. A different chat or project, a missing scope, a connection without a stored grant ID, or a failed or transient renewal runs the full login and consent flow. When the new connection replaces a different chat or project, the superseded local credential file is removed. **Known gap:** its server-side grant and consent are not revoked; that grant lapses within 15 minutes, but the consent stays valid until revoked another way. Run `disconnect` before switching chats if that matters. The reuse probe forces a grant renewal, which revokes the previous grant token: running MCP children pick up the renewed token on their next call, but do not reconnect while a publish sequence (reserve, upload, finalize) is in progress.
 
 `nous-harness status` prints the project, chat, device label, grant expiry and the handoff queue counts from local state only; it makes no network calls and says the device is not connected when there is no state.
 
@@ -56,6 +56,7 @@ pnpm --filter @nous/harness-bridge start handoff show
 pnpm --filter @nous/harness-bridge start handoff save --file handoff.json --parent 3
 pnpm --filter @nous/harness-bridge start handoff flush
 pnpm --filter @nous/harness-bridge start handoff list
+pnpm --filter @nous/harness-bridge start handoff discard HANDOFF_ID
 ```
 
 `handoff.json` holds `goal` and optionally `decisions`, `remaining`, `results`, `harness_name`, `harness_session_id`, `handoff_id` and `expected_parent_version`; `--parent N` overrides the last one, and the default is `null` (the first handoff). Both `handoff save` and the MCP tool `save_nous_handoff` write an owner-only journal entry (`handoff-<handoff_id>.json` in the state directory) before the POST:
@@ -68,7 +69,7 @@ pnpm --filter @nous/harness-bridge start handoff list
 | 409 | `conflicted`, with the latest version stored and printed | no; merge it yourself and save a new handoff |
 | 403, 422 and other 4xx | `rejected`, with the error | no |
 
-`flush` is manual; there is no background retry. It re-sends only `pending` entries journaled for the current chat and project, using the same `handoff_id` so NOUS returns the stored version if the first attempt did land. It reports entries from another chat as skipped and leaves them alone. `save` and `flush` exit non-zero unless every attempt was saved. Conflicts are never merged automatically. `handoff save` and `handoff flush` are meant as hook targets, but **no Codex hooks are wired in v1**.
+`flush` is manual; there is no background retry. It re-sends only `pending` entries journaled for the current chat and project, using the same `handoff_id` so NOUS returns the stored version if the first attempt did land. It reports entries from another chat as skipped and leaves them alone. `save` and `flush` exit non-zero unless every attempt was saved. Conflicts are never merged automatically; `handoff discard HANDOFF_ID` drops a journaled entry in any state and prints what it dropped. `save_nous_handoff` journals only when the MCP session's credential handle is the device's current binding; after a reconnect, a stale MCP session refuses the save and must be restarted. A pending MCP save names the `handoff_id` to retry with. `handoff save` and `handoff flush` are meant as hook targets, but **no Codex hooks are wired in v1**.
 
 ## Disconnect, recovery, and kill switch
 
