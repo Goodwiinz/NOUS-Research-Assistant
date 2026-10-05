@@ -543,17 +543,27 @@ class _NoCache:
         return None
 
 
+_arxiv_cache_client: Any = None
+
+
 def _arxiv_cache() -> Any:
-    try:
-        import redis.asyncio as redis_async
+    """Lazy module-level Redis pool; _NoCache when REDIS_URL is unset."""
+    global _arxiv_cache_client
+    if _arxiv_cache_client is None:
+        try:
+            import redis.asyncio as redis_async
 
-        from src.core.config import settings
+            from src.core.config import settings
 
-        if settings.REDIS_URL:
-            return redis_async.from_url(settings.REDIS_URL, decode_responses=True)
-    except Exception:
-        logger.debug("arxiv fulltext cache unavailable", exc_info=True)
-    return _NoCache()
+            _arxiv_cache_client = (
+                redis_async.from_url(settings.REDIS_URL, decode_responses=True)
+                if settings.REDIS_URL
+                else _NoCache()
+            )
+        except Exception:
+            logger.debug("arxiv fulltext cache unavailable", exc_info=True)
+            _arxiv_cache_client = _NoCache()
+    return _arxiv_cache_client
 
 
 async def _arxiv_paper_content(arguments: dict[str, Any]) -> ToolResult:
