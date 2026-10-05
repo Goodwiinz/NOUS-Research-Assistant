@@ -1,5 +1,6 @@
 """Scoped integration read gateway, using a local SQLite database."""
 
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -8,6 +9,7 @@ import pytest
 from sqlalchemy import insert, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.models.artifact import Artifact, ArtifactVersion
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document, DocumentType
 from src.models.generated_draft import GeneratedDraft
@@ -57,6 +59,8 @@ async def db() -> AsyncIterator[AsyncSession]:
         Document,
         CollectionDocument,
         GeneratedDraft,
+        Artifact,
+        ArtifactVersion,
         # Project authorization reads these even when no engine is enabled.
         ResearchProject,
         ResearchProjectRoleAssignment,
@@ -137,11 +141,21 @@ def test_catalog_advertises_only_the_read_allowlist_without_identity_args() -> N
     [
         _invocation("execute_code", code="print(1)"),
         _invocation("list_project_documents", project_id=str(PROJECT)),
+        _invocation("list_project_artifacts", project_id=str(PROJECT)),
+        _invocation("list_project_artifacts", limit=101),
         _invocation("search_documents", query="x", organization_id=str(ORG)),
         _invocation("search_documents", query="x", unexpected="y"),
         _invocation("search_documents"),
     ],
-    ids=["unknown-tool", "identity-project", "identity-org", "extra-arg", "missing"],
+    ids=[
+        "unknown-tool",
+        "identity-project",
+        "artifacts-identity-project",
+        "artifacts-limit-over-max",
+        "identity-org",
+        "extra-arg",
+        "missing",
+    ],
 )
 async def test_rejected_invocations_never_reach_adapters(
     db: AsyncSession,
@@ -409,3 +423,76 @@ async def test_foreign_user_in_context_is_denied(db: AsyncSession) -> None:
     )
     with pytest.raises(IntegrationAccessDenied):
         await invoke_read(db, context, _invocation("list_project_documents"))
+
+
+async def _artifact(
+    db: AsyncSession, project: UUID, title: str, minute: int, org: UUID = ORG
+) -> tuple[UUID, UUID]:
+    artifact_id, version_id = uuid4(), uuid4()
+    await db.execute(
+        insert(ArtifactVersion).values(
+            id=version_id,
+            artifact_id=artifact_id,
+            upload_id=uuid4(),
+            title=title,
+            mime_type="text/markdown",
+            byte_size=7,
+            sha256="a" * 64,
+            storage_key=f"private/{version_id}",
+            producer="harness",
+            provenance={"producer": "harness"},
+            created_at=datetime(2026, 10, 1, 0, minute, tzinfo=timezone.utc),
+        )
+    )
+    await db.execute(
+        insert(Artifact).values(
+            id=artifact_id,
+            organization_id=org,
+            project_id=project,
+            owner_id=USER,
+            title=title,
+            current_version_id=version_id,
+        )
+    )
+    await db.commit()
+    return artifact_id, version_id
+
+
+async def test_list_project_artifacts_returns_only_the_grant_project(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    older = await _artifact(db, PROJECT, "older.md", 1)
+    newer = await _artifact(db, PROJECT, "newer.md", 2)
+    await _artifact(db, OTHER_PROJECT, "sibling.md", 3)
+    await _artifact(db, PROJECT, "foreign-org.md", 4, org=uuid4())
+
+    result = await invoke_read(db, context, _invocation("list_project_artifacts"))
+
+    assert result.is_error is False
+    rows = result.content[0]["artifacts"]
+    assert [row["title"] for row in rows] == ["newer.md", "older.md"]
+    assert rows[0]["sha256"] == "a" * 64 and rows[0]["thread_id"] is None
+    assert result.source_refs == [
+        {"artifact_id": str(newer[0]), "version_id": str(newer[1])},
+        {"artifact_id": str(older[0]), "version_id": str(older[1])},
+    ]
+    assert "storage_key" not in str(result.content)
+
+
+async def test_list_project_artifacts_honours_limit(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    for minute in range(3):
+        await _artifact(db, PROJECT, f"a{minute}.md", minute)
+    result = await invoke_read(
+        db, context, _invocation("list_project_artifacts", limit=2)
+    )
+    assert len(result.content[0]["artifacts"]) == 2
+
+
+async def test_list_project_artifacts_is_advertised_with_bounded_limit() -> None:
+    tool = {t.name: t for t in list_read_tools()}["list_project_artifacts"]
+    assert tool.input_schema["additionalProperties"] is False
+    assert set(tool.input_schema["properties"]) == {"limit"}
+    assert tool.input_schema["properties"]["limit"]["minimum"] == 1
+    assert tool.input_schema["properties"]["limit"]["maximum"] == 100
