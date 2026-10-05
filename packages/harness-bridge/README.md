@@ -43,6 +43,33 @@ pnpm --filter @nous/harness-bridge start mcp install
 
 Tools are the backend's read allowlist (`search_documents`, `list_project_documents`, `do_kb_retrieve`, `get_current_draft`), scoped to the granted project. With a registered workspace root and the `artifacts:publish` scope, the server also offers `artifacts_publish(relative_path, title, publication_id)`: it reads one regular file under that root (no symlinks anywhere in the path, no hard links, no traversal, at most 10 MiB; containment is enforced by the kernel on macOS via `O_NOFOLLOW_ANY` and by the descriptor's real path on Linux), uploads it with its SHA-256, and finalizes a NOUS artifact version. Reusing the same `publication_id` retries safely. The root comes from the local binding (`--root` in the launch argv), never from tool arguments; `mcp install --root PATH` picks it when more than one workspace is registered. The root limits what can be published, not what Codex can read. Publication requires `ARTIFACTS_ENABLED=true` on the server. Argv carries only the API origin, the state directory, and the opaque credential handle; tokens stay in the owner-only store. Diagnostics go to stderr. Gateway rejections come back as tool errors and are never retried: 401 asks you to reconnect with `--tools`, 403 names a missing `tools:read` scope or an out-of-project resource, 422 forwards the gateway's argument reason, and 503 reports NOUS's own reason (tools disabled, artifact publication disabled, or artifact storage unavailable). `nous-harness run` prints a stderr notice when the connection lacks `tools:read` and managed sessions therefore get no NOUS tools.
 
+## Binding reuse, status, and chat handoffs
+
+Running `connect` again with the same API, project and `--chat` (both absent counts as equal), and with no scope that the stored connection lacks, reuses the stored binding. It forces one grant renewal as a liveness probe and, if NOUS issues a new grant token, prints `Reusing binding` and skips the browser login and consent entirely. A different chat or project, a missing scope, a connection without a stored grant ID, or a failed or transient renewal runs the full login and consent flow. When the new connection replaces a different chat or project, the superseded local credential file is removed. **Known gap:** its server-side grant and consent are not revoked; that grant lapses within 15 minutes, but the consent stays valid until revoked another way. Run `disconnect` before switching chats if that matters.
+
+`nous-harness status` prints the project, chat, device label, grant expiry and the handoff queue counts from local state only; it makes no network calls and says the device is not connected when there is no state.
+
+A connection made with `--chat UUID --tools --handoff` can also use the handoff commands:
+
+```sh
+pnpm --filter @nous/harness-bridge start handoff show
+pnpm --filter @nous/harness-bridge start handoff save --file handoff.json --parent 3
+pnpm --filter @nous/harness-bridge start handoff flush
+pnpm --filter @nous/harness-bridge start handoff list
+```
+
+`handoff.json` holds `goal` and optionally `decisions`, `remaining`, `results`, `harness_name`, `harness_session_id`, `handoff_id` and `expected_parent_version`; `--parent N` overrides the last one, and the default is `null` (the first handoff). Both `handoff save` and the MCP tool `save_nous_handoff` write an owner-only journal entry (`handoff-<handoff_id>.json` in the state directory) before the POST:
+
+| Outcome | Entry | Retried by `flush` |
+| --- | --- | --- |
+| 2xx | deleted | no |
+| network error, timeout, 5xx, 429 | `pending` | yes |
+| 401 or expired grant | `pending`, plus a reconnect hint | yes, after reconnecting |
+| 409 | `conflicted`, with the latest version stored and printed | no; merge it yourself and save a new handoff |
+| 403, 422 and other 4xx | `rejected`, with the error | no |
+
+`flush` is manual; there is no background retry. It re-sends only `pending` entries journaled for the current chat and project, using the same `handoff_id` so NOUS returns the stored version if the first attempt did land. It reports entries from another chat as skipped and leaves them alone. `save` and `flush` exit non-zero unless every attempt was saved. Conflicts are never merged automatically. `handoff save` and `handoff flush` are meant as hook targets, but **no Codex hooks are wired in v1**.
+
 ## Disconnect, recovery, and kill switch
 
 Browser disconnect stops observation, not Codex execution. Reopening the same project chat attaches to the persisted run stream. If local command acceptance or interruption is ambiguous, the bridge journals the uncertainty, does not replay the native action, and keeps the affected workspace quarantined until reconciliation provides terminal evidence. Restart the bridge with the same local state directory and let reconciliation run; do not delete or edit `journal.sqlite` to unlock a workspace.
