@@ -28,10 +28,10 @@ ArgoCD.
 
 ## Source of truth
 
-- **Audit baseline: `docs/system-design-audit-2026-07-30.md`** ("NOUS Agent
+- **Audit baseline: `docs/audits/system/system-design-audit-2026-07-30.md`** ("NOUS Agent
   Production Baseline v1 — full audit and recommendations"). This is the
   document this program implements; every P0/P1/P2 finding traces back to it.
-- Historical background: `docs/system-design-audit-2026-07-10.md`. Retained for
+- Historical background: `docs/audits/system/system-design-audit-2026-07-10.md`. Retained for
   provenance only; where the two disagree, the 2026-07-30 audit wins.
 - P0 implementation detail (reference only, not an execution track):
   `docs/plans/2026-07-30-full-agent-p0-implementation.md`.
