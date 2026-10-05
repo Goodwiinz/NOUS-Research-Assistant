@@ -1,6 +1,7 @@
 """Scoped integration read gateway, using a local SQLite database."""
 
 import json
+from types import SimpleNamespace
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document, DocumentType
 from src.models.generated_draft import GeneratedDraft
+from src.models.graph import EntityType
 from src.models.organization import Organization
 from src.models.research_project import ResearchProject
 from src.models.research_project_role import ResearchProjectRoleAssignment
@@ -828,6 +830,7 @@ class _FakeKG:
         self.people: dict[str, tuple[str, str, list[str]]] = {}
         self.search_calls: list[dict[str, Any]] = []
         self.neighborhood_calls: list[dict[str, Any]] = []
+        self.entity_calls: list[str] = []
 
     def add(
         self,
@@ -872,6 +875,13 @@ class _FakeKG:
             "center_entity_id": entity_id,
         }
 
+    async def entity(self, entity_id: str, _organization_id: str) -> Any:
+        self.entity_calls.append(entity_id)
+        if entity_id not in self.people:
+            return None
+        name, kind, _papers = self.people[entity_id]
+        return SimpleNamespace(id=entity_id, name=name, entity_type=EntityType(kind))
+
 
 @pytest.fixture
 def kg(monkeypatch: pytest.MonkeyPatch) -> _FakeKG:
@@ -884,7 +894,33 @@ def kg(monkeypatch: pytest.MonkeyPatch) -> _FakeKG:
     monkeypatch.setattr(
         read_tools, "_tool_explore_entity_neighborhood", fake.neighborhood
     )
+    monkeypatch.setattr(read_tools, "_kg_entity", fake.entity)
     return fake
+
+
+async def _add_project_paper(
+    db: AsyncSession,
+    title: str,
+    published: str | None = None,
+    arxiv_id: str | None = None,
+) -> UUID:
+    document_id = uuid4()
+    await db.execute(
+        insert(Document).values(
+            dict(
+                _document_row(document_id, title),
+                arxiv_id=arxiv_id,
+                document_metadata={"published": published} if published else None,
+            )
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            dict(collection_id=PROJECT, document_id=document_id)
+        )
+    )
+    await db.commit()
+    return document_id
 
 
 async def test_find_researchers_keeps_only_in_project_authors(
@@ -992,6 +1028,169 @@ async def test_find_researchers_knowledge_graph_outage_is_stable_error(
     assert "hunter2" not in json.dumps(result.content)
 
 
+async def test_get_researcher_reshapes_in_project_papers_and_coauthors(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(document_metadata={"published": "2020-01-01T00:00:00Z"})
+    )
+    attention = await _add_project_paper(
+        db, "attention", published="2017-06-12T17:57:34Z", arxiv_id="1706.03762"
+    )
+    kg.add("ent-vaswani", "Ashish Vaswani", ["attention"])
+    kg.people["ent-turing"][2].append("attention")
+
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", entity_id="ent-turing")
+    )
+    assert result.is_error is False
+    assert result.content == [
+        {
+            "researcher": {"entity_id": "ent-turing", "name": "Alan Turing"},
+            # Newest published first; the other project's paper is absent.
+            "papers": [
+                {"document_id": str(DOC_IN_PROJECT), "title": "retrieval-eval"},
+                {
+                    "document_id": str(attention),
+                    "title": "attention",
+                    "arxiv_id": "1706.03762",
+                },
+            ],
+            # LeCun co-wrote only the other project's paper with Turing.
+            "coauthors": [
+                {"entity_id": "ent-lovelace", "name": "Ada Lovelace"},
+                {"entity_id": "ent-vaswani", "name": "Ashish Vaswani"},
+            ],
+        }
+    ]
+    assert result.source_refs == [
+        {"document_id": str(DOC_IN_PROJECT)},
+        {"document_id": str(attention)},
+    ]
+    assert kg.neighborhood_calls[0] == {
+        "entity_id": "ent-turing",
+        "max_depth": 1,
+        "limit": 50,
+    }
+    assert "LeCun" not in json.dumps(result.content)
+
+
+async def test_get_researcher_denies_an_entity_from_another_project(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", entity_id="ent-lecun")
+    )
+    assert result.is_error is True
+    assert result.content == [{"error": "researcher_not_found"}]
+    assert result.source_refs == []
+    # Not even the name is fetched before an in-project paper is confirmed.
+    assert kg.entity_calls == []
+    assert "LeCun" not in json.dumps(result.content)
+
+
+@pytest.mark.parametrize("entity_id", ["ent-nobody", "paper:retrieval-eval"])
+async def test_get_researcher_unknown_or_non_person_entity_is_not_found(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG, entity_id: str
+) -> None:
+    kg.add("ent-topic", "Transformers", ["retrieval-eval"], entity_type="CONCEPT")
+    for candidate in (entity_id, "ent-topic"):
+        result = await invoke_read(
+            db, context, _invocation("get_researcher", entity_id=candidate)
+        )
+        assert result.is_error is True
+        assert result.content == [{"error": "researcher_not_found"}]
+
+
+async def test_get_researcher_entity_that_vanished_is_not_found(
+    db: AsyncSession,
+    context: IntegrationContext,
+    kg: _FakeKG,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(read_tools, "_kg_entity", AsyncMock(return_value=None))
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", entity_id="ent-lovelace")
+    )
+    assert result.content == [{"error": "researcher_not_found"}]
+
+
+@pytest.mark.parametrize("failing", ["neighborhood", "entity"])
+async def test_get_researcher_knowledge_graph_outage_is_stable_error(
+    db: AsyncSession,
+    context: IntegrationContext,
+    kg: _FakeKG,
+    monkeypatch: pytest.MonkeyPatch,
+    failing: str,
+) -> None:
+    boom = AsyncMock(side_effect=RuntimeError("token=abc"))
+    monkeypatch.setattr(
+        read_tools,
+        (
+            "_tool_explore_entity_neighborhood"
+            if failing == "neighborhood"
+            else "_kg_entity"
+        ),
+        boom,
+    )
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", entity_id="ent-lovelace")
+    )
+    assert result.is_error is True
+    assert result.content == [{"error": "knowledge_graph_unavailable"}]
+    assert "abc" not in json.dumps(result.content)
+
+
+async def test_get_researcher_coauthor_lookups_are_bounded(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    titles = [f"paper-{index:02d}" for index in range(12)]
+    for index, title in enumerate(titles):
+        await _add_project_paper(db, title, published=f"2020-01-{index + 1:02d}")
+        kg.add(f"ent-co-{index:02d}", f"Co {index:02d}", [title])
+    kg.add("ent-prolific", "Prolific", titles)
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", entity_id="ent-prolific")
+    )
+    assert len(result.content[0]["papers"]) == 12
+    # One neighborhood for the researcher, then only the 10 newest papers.
+    assert len(kg.neighborhood_calls) == 1 + read_tools.MAX_COAUTHOR_PAPERS
+    assert {c["entity_id"] for c in result.content[0]["coauthors"]} == {
+        f"ent-co-{index:02d}" for index in range(2, 12)
+    }
+
+
+async def test_get_researcher_result_stays_under_the_size_cap(
+    db: AsyncSession,
+    context: IntegrationContext,
+    kg: _FakeKG,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kg.add("ent-hub", "Hub", ["retrieval-eval"])
+    for index in range(150):
+        kg.add(f"ent-big-{index}", ("\u6587" * 200) + str(index), ["retrieval-eval"])
+
+    # The fake paper node has 150+ authors; the real tool caps a call at 50.
+    async def uncapped(args: dict[str, Any], user: Any = None) -> dict[str, Any]:
+        return await kg.neighborhood({**args, "limit": 500}, user)
+
+    monkeypatch.setattr(read_tools, "_tool_explore_entity_neighborhood", uncapped)
+    # 100 capped co-authors alone are ~63 KiB; shrink the cap so the trim runs.
+    monkeypatch.setattr(read_tools, "MAX_RESULT_BYTES", 20_000)
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", entity_id="ent-hub")
+    )
+    assert result.is_error is False
+    payload = result.content[0]
+    assert 0 < len(payload["coauthors"]) <= read_tools.MAX_COAUTHORS
+    assert payload["truncated"] is True
+    assert payload["papers"], "papers are kept while co-authors absorb the trim"
+    wire = json.dumps(payload, ensure_ascii=False).encode()
+    assert len(wire) <= read_tools.MAX_RESULT_BYTES
+
+
 @pytest.mark.parametrize(
     "invocation",
     [
@@ -1003,6 +1202,11 @@ async def test_find_researchers_knowledge_graph_outage_is_stable_error(
         _invocation("find_researchers", query="x", limit="5"),
         _invocation("find_researchers", query="x", project_id=str(OTHER_PROJECT)),
         _invocation("find_researchers", query="x", organization_id=str(ORG)),
+        _invocation("get_researcher"),
+        _invocation("get_researcher", entity_id=""),
+        _invocation("get_researcher", entity_id="e" * 129),
+        _invocation("get_researcher", entity_id=7),
+        _invocation("get_researcher", entity_id="e", project_id=str(PROJECT)),
     ],
     ids=[
         "find-missing-query",
@@ -1013,9 +1217,14 @@ async def test_find_researchers_knowledge_graph_outage_is_stable_error(
         "find-limit-string",
         "find-project-identity",
         "find-org-identity",
+        "get-missing-id",
+        "get-empty-id",
+        "get-long-id",
+        "get-int-id",
+        "get-project-identity",
     ],
 )
-async def test_find_researchers_argument_shapes_are_rejected(
+async def test_researcher_argument_shapes_are_rejected(
     db: AsyncSession,
     context: IntegrationContext,
     kg: _FakeKG,
@@ -1026,11 +1235,13 @@ async def test_find_researchers_argument_shapes_are_rejected(
     assert kg.search_calls == [] and kg.neighborhood_calls == []
 
 
-def test_find_researchers_is_advertised_with_the_coverage_caveat() -> None:
+def test_researcher_tools_are_advertised_with_the_coverage_caveat() -> None:
     catalog = {tool.name: tool for tool in list_read_tools()}
-    tool = catalog["find_researchers"]
-    assert read_tools.TOOL_SCOPES["find_researchers"] == "tools:read"
-    assert "ingested into this project" in tool.description
-    assert "affiliations" in tool.description
-    assert "project_id" not in tool.input_schema["properties"]
-    assert tool.input_schema["required"] == ["query"]
+    for name in ("find_researchers", "get_researcher"):
+        assert read_tools.TOOL_SCOPES[name] == "tools:read"
+        description = catalog[name].description
+        assert "ingested into this project" in description
+        assert "affiliations" in description
+        assert "project_id" not in catalog[name].input_schema["properties"]
+    assert catalog["find_researchers"].input_schema["required"] == ["query"]
+    assert catalog["get_researcher"].input_schema["required"] == ["entity_id"]
