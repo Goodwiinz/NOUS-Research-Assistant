@@ -15,7 +15,7 @@
     "@assistant-ui/react-ink": "0.0.43",
     "@assistant-ui/react-ink-markdown": "0.0.42",
     "ink": "7.1.1",
-    "react": "19.2.8",
+    "react": "19.3.0",
     "shiki": "^4.4.2",
     "@nous/chat-runtime": "workspace:*",
     "@assistant-ui/core": "0.3.19"
@@ -25,6 +25,6 @@
     "@types/react": "^19.2.18",
     "ink-testing-library": "^4.0.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.4.5"
+    "typescript": "^7.0.2"
   }
 }
