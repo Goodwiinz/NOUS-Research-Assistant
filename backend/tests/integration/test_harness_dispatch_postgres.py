@@ -91,7 +91,9 @@ def _async_dsn(dsn: str) -> str:
 async def test_dispatch_skips_outbox_row_locked_by_another_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    # `or ""` keeps dsn a `str` without leaning on pytest.skip being NoReturn:
+    # the Lint Backend job has no pytest installed, so there skip() is Any.
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL") or ""
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
