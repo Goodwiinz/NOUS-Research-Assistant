@@ -36,6 +36,10 @@ from src.services.integrations.read_tools import (
 pytestmark = pytest.mark.unit
 USER, ORG, PROJECT, WORKSPACE, OTHER_PROJECT = (uuid4() for _ in range(5))
 DOC_IN_PROJECT, DOC_OUTSIDE_PROJECT = uuid4(), uuid4()
+# A second workspace of the same user: reachable by that user, but outside a
+# grant bound to WORKSPACE. One of its projects is named like str(None).
+OTHER_WORKSPACE, FOREIGN_PROJECT, NAMED_NONE_PROJECT = uuid4(), uuid4(), uuid4()
+DOC_FOREIGN, DOC_NAMED_NONE = uuid4(), uuid4()
 
 
 def _document_row(document_id: UUID, title: str) -> dict[str, Any]:
@@ -92,10 +96,28 @@ async def db() -> AsyncIterator[AsyncSession]:
             )
         )
         await session.execute(
+            insert(Workspace).values(
+                id=OTHER_WORKSPACE,
+                name="Other workspace",
+                owner_id=USER,
+                organization_id=ORG,
+            )
+        )
+        await session.execute(
             insert(Collection).values(
                 [
                     dict(id=PROJECT, name="Project", workspace_id=WORKSPACE),
                     dict(id=OTHER_PROJECT, name="Other", workspace_id=WORKSPACE),
+                    dict(
+                        id=FOREIGN_PROJECT,
+                        name="Foreign",
+                        workspace_id=OTHER_WORKSPACE,
+                    ),
+                    dict(
+                        id=NAMED_NONE_PROJECT,
+                        name="None",
+                        workspace_id=OTHER_WORKSPACE,
+                    ),
                 ]
             )
         )
@@ -104,6 +126,8 @@ async def db() -> AsyncIterator[AsyncSession]:
                 [
                     _document_row(DOC_IN_PROJECT, "retrieval-eval"),
                     _document_row(DOC_OUTSIDE_PROJECT, "retrieval-secret"),
+                    _document_row(DOC_FOREIGN, "retrieval-foreign"),
+                    _document_row(DOC_NAMED_NONE, "retrieval-none"),
                 ]
             )
         )
@@ -112,6 +136,8 @@ async def db() -> AsyncIterator[AsyncSession]:
                 [
                     dict(collection_id=PROJECT, document_id=DOC_IN_PROJECT),
                     dict(collection_id=OTHER_PROJECT, document_id=DOC_OUTSIDE_PROJECT),
+                    dict(collection_id=FOREIGN_PROJECT, document_id=DOC_FOREIGN),
+                    dict(collection_id=NAMED_NONE_PROJECT, document_id=DOC_NAMED_NONE),
                 ]
             )
         )
@@ -297,16 +323,18 @@ async def test_size_cap_measures_wire_utf8_not_ascii_escapes(
 
 @pytest.mark.parametrize("model", [Collection, Workspace])
 async def test_search_query_itself_rechecks_ancestors(
-    db: AsyncSession, context: IntegrationContext, model: Any
+    db: AsyncSession, model: Any
 ) -> None:
     # Ancestor soft-deleted between invoke_read's ownership check and the
     # fetch: the fetch alone must return nothing.
     await db.execute(update(model).values(is_deleted=True))
     await db.commit()
-    payload = await read_tools._search_project_documents(db, context, "retrieval", 10)
+    payload = await read_tools._search_project_documents(
+        db, PROJECT, ORG, "retrieval", 10
+    )
     assert payload["documents"] == []
     assert (
-        await read_tools._project_document_ids(db, context, [str(DOC_IN_PROJECT)])
+        await read_tools._project_document_ids(db, PROJECT, ORG, [str(DOC_IN_PROJECT)])
         is None
     )
 
@@ -883,6 +911,7 @@ async def test_arxiv_paper_content_is_transient_and_paginated(
     monkeypatch.setattr(
         read_tools.arxiv_fulltext, "fetch_text", AsyncMock(return_value="t" * 10)
     )
+    before = set((await db.execute(select(Document.id))).scalars().all())
     result = await invoke_read(
         db,
         context,
@@ -893,11 +922,8 @@ async def test_arxiv_paper_content_is_transient_and_paginated(
     assert result.content[0]["next_offset"] == 4
     assert result.source_refs == [{"arxiv_id": "2401.00001"}]
     # Nothing landed in the documents table.
-    rows = await db.execute(select(Document.id))
-    assert {str(r) for r in rows.scalars().all()} == {
-        str(DOC_IN_PROJECT),
-        str(DOC_OUTSIDE_PROJECT),
-    }
+    after = set((await db.execute(select(Document.id))).scalars().all())
+    assert before and after == before
 
 
 async def test_arxiv_paper_content_errors_are_stable(
@@ -1190,7 +1216,7 @@ async def test_find_researchers_internal_clamp_is_defence_in_depth(
     names = [f"Person {index:02d}" for index in range(30)]
     await _add_doc(db, "Crowd", {"authors": names}, created=_day(1))
     result = await read_tools._find_researchers(
-        db, context, {"query": "person", "limit": 99}
+        db, PROJECT, ORG, {"query": "person", "limit": 99}
     )
     assert len(result.content[0]["researchers"]) == read_tools.MAX_RESEARCHERS == 25
 
@@ -1244,7 +1270,7 @@ async def test_find_researchers_excludes_deleted_documents_and_ancestors(
     await db.execute(update(Collection).values(is_deleted=True))
     await db.commit()
     # invoke_read refuses a dead project first; the scan alone must also be empty.
-    assert await read_tools._scan_authored_papers(db, context) == ([], False)
+    assert await read_tools._scan_authored_papers(db, PROJECT, ORG) == ([], False)
 
 
 async def test_find_researchers_reports_when_the_scan_cap_hides_documents(
@@ -1637,3 +1663,517 @@ def test_researcher_tools_are_advertised_with_the_coverage_caveat() -> None:
         assert "project_id" not in catalog[name].input_schema["properties"]
     assert catalog["find_researchers"].input_schema["required"] == ["query"]
     assert catalog["get_researcher"].input_schema["required"] == ["researcher_id"]
+
+
+# --- workspace grants: project selector --------------------------------------
+
+PROJECT_TOOLS: list[tuple[str, dict[str, Any]]] = [
+    ("search_documents", {"query": "retrieval"}),
+    ("list_project_documents", {}),
+    ("do_kb_retrieve", {"query": "q", "document_ids": [str(DOC_IN_PROJECT)]}),
+    ("get_current_draft", {}),
+]
+PROJECT_TOOL_IDS = [name for name, _arguments in PROJECT_TOOLS]
+
+
+def _workspace_context() -> IntegrationContext:
+    return IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=None,
+        workspace_id=WORKSPACE,
+        grant_id=uuid4(),
+    )
+
+
+@pytest.fixture
+def adapters(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+    """Registry adapters as mocks, to prove a refusal never reaches them."""
+    mocks = {
+        name: AsyncMock()
+        for name in (
+            "_tool_list_project_documents",
+            "_tool_do_kb_retrieve",
+            "_tool_get_current_draft",
+        )
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(read_tools, name, mock)
+    return mocks
+
+
+@pytest.mark.parametrize(("tool", "arguments"), PROJECT_TOOLS, ids=PROJECT_TOOL_IDS)
+async def test_workspace_grant_needs_project_selector_for_project_tools(
+    db: AsyncSession,
+    adapters: dict[str, AsyncMock],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    result = await invoke_read(db, _workspace_context(), _invocation(tool, **arguments))
+    assert result.is_error is True
+    assert result.content == [{"error": "project_id_required"}]
+    assert result.source_refs == []
+    for adapter in adapters.values():
+        adapter.assert_not_awaited()
+
+
+async def test_workspace_grant_without_selector_never_resolves_the_word_none(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    # str(None) used to reach the agent helper, which resolves a non-UUID as a
+    # project NAME; a project called "None" in another workspace of the same
+    # user (NAMED_NONE_PROJECT) is reachable that way.
+    result = await invoke_read(
+        db, _workspace_context(), _invocation("list_project_documents")
+    )
+    assert result.content == [{"error": "project_id_required"}]
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+    searched = await invoke_read(
+        db, _workspace_context(), _invocation("search_documents", query="retrieval")
+    )
+    assert searched.content == [{"error": "project_id_required"}]
+
+
+@pytest.mark.parametrize(("tool", "arguments"), PROJECT_TOOLS, ids=PROJECT_TOOL_IDS)
+async def test_workspace_grant_project_selector_outside_workspace_denied(
+    db: AsyncSession,
+    adapters: dict[str, AsyncMock],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    # FOREIGN_PROJECT belongs to this very user, in another workspace: only the
+    # grant's scope, not ownership, can refuse it.
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation(tool, project_id=str(FOREIGN_PROJECT), **arguments),
+        )
+    for adapter in adapters.values():
+        adapter.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("selected", "expected"),
+    [(PROJECT, DOC_IN_PROJECT), (OTHER_PROJECT, DOC_OUTSIDE_PROJECT)],
+    ids=["first-project", "second-project"],
+)
+async def test_workspace_grant_reads_only_the_selected_project(
+    db: AsyncSession, selected: UUID, expected: UUID
+) -> None:
+    context = _workspace_context()
+    listed = await invoke_read(
+        db,
+        context,
+        _invocation("list_project_documents", project_id=str(selected)),
+    )
+    assert listed.is_error is False
+    assert listed.source_refs == [{"document_id": str(expected)}]
+    searched = await invoke_read(
+        db,
+        context,
+        _invocation("search_documents", query="retrieval", project_id=str(selected)),
+    )
+    assert searched.is_error is False
+    assert [doc["id"] for doc in searched.content[0]["documents"]] == [str(expected)]
+
+
+async def test_workspace_grant_reads_the_draft_of_the_selected_project_only(
+    db: AsyncSession,
+) -> None:
+    draft_id = uuid4()
+    await db.execute(
+        insert(GeneratedDraft).values(
+            id=draft_id, project_id=PROJECT, version=1, title="Draft", content="body"
+        )
+    )
+    await db.commit()
+    context = _workspace_context()
+    own = await invoke_read(
+        db, context, _invocation("get_current_draft", project_id=str(PROJECT))
+    )
+    assert own.is_error is False
+    assert own.content[0]["draft"]["id"] == str(draft_id)
+    assert own.source_refs == [{"draft_id": str(draft_id)}]
+    other = await invoke_read(
+        db, context, _invocation("get_current_draft", project_id=str(OTHER_PROJECT))
+    )
+    assert other.content[0]["project_name"] == "Other"
+    assert other.content[0]["draft"] is None
+    assert other.source_refs == []
+
+
+async def test_workspace_retrieval_scopes_document_ids_to_the_selected_project(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retrieval = AsyncMock(return_value={"chunks": [], "total": 0})
+    monkeypatch.setattr(read_tools, "_tool_do_kb_retrieve", retrieval)
+    context = _workspace_context()
+    refused = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "do_kb_retrieve",
+            query="q",
+            document_ids=[str(DOC_OUTSIDE_PROJECT)],
+            project_id=str(PROJECT),
+        ),
+    )
+    # The document is in this workspace, but not in the selected project.
+    assert refused.is_error is True
+    assert refused.content[0]["reason"] == "requested_documents_unavailable"
+    retrieval.assert_not_awaited()
+    allowed = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "do_kb_retrieve",
+            query="q",
+            document_ids=[str(DOC_OUTSIDE_PROJECT)],
+            project_id=str(OTHER_PROJECT),
+        ),
+    )
+    assert allowed.is_error is False
+    assert retrieval.await_args is not None
+    forwarded = retrieval.await_args.args[0]
+    assert forwarded["project_id"] == str(OTHER_PROJECT)
+    assert forwarded["document_ids"] == [str(DOC_OUTSIDE_PROJECT)]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["not-a-uuid", "None", "Project", "", 123, True, ["x"], {"id": 1}],
+    ids=["text", "none-word", "project-name", "empty", "int", "bool", "list", "dict"],
+)
+async def test_workspace_selector_must_be_a_uuid_string_never_a_name(
+    db: AsyncSession, adapters: dict[str, AsyncMock], selector: Any
+) -> None:
+    with pytest.raises(ToolArgumentError, match="project_id must be a UUID"):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation("list_project_documents", project_id=selector),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+async def test_null_selector_is_the_same_as_an_omitted_one(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    result = await invoke_read(
+        db,
+        _workspace_context(),
+        _invocation("list_project_documents", project_id=None),
+    )
+    assert result.content == [{"error": "project_id_required"}]
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["user_id", "organization_id", "thread_id", "run_id", "grant_id", "workspace_id"],
+)
+async def test_workspace_grant_accepts_no_identity_argument_but_the_selector(
+    db: AsyncSession, adapters: dict[str, AsyncMock], key: str
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation(
+                "list_project_documents", project_id=str(PROJECT), **{key: str(uuid4())}
+            ),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+async def test_workspace_grant_is_denied_once_its_workspace_is_deleted(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation("list_project_documents", project_id=str(PROJECT)),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+async def test_selector_naming_a_deleted_project_is_denied(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    await db.execute(
+        update(Collection).where(Collection.id == PROJECT).values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation("list_project_documents", project_id=str(PROJECT)),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+# Tools that act on no single project: there is nothing for a selector to select.
+PROJECTLESS_TOOLS = {
+    "search_arxiv",
+    "search_external_database",
+    "list_external_databases",
+    "get_arxiv_paper_content",
+}
+
+
+def test_catalog_offers_the_project_selector_only_to_workspace_grants() -> None:
+    for tool in list_read_tools():
+        assert "project_id" not in tool.input_schema["properties"]
+    workspace_catalog = list_read_tools(workspace_bound=True)
+    assert {tool.name for tool in workspace_catalog} == set(READ_TOOL_NAMES) | set(
+        read_tools.LOCAL_TOOLS
+    )
+    selectorless = set()
+    for tool in workspace_catalog:
+        schema = tool.input_schema
+        if "project_id" not in schema["properties"]:
+            selectorless.add(tool.name)
+            continue
+        selector = schema["properties"]["project_id"]
+        assert selector["type"] == "string" and selector["format"] == "uuid"
+        assert "workspace grants" in selector["description"]
+        # Optional in the schema: omitting it is a structured error, not a 422.
+        assert "project_id" not in schema["required"]
+        assert schema["additionalProperties"] is False
+    assert selectorless == PROJECTLESS_TOOLS
+
+
+def test_catalog_selector_does_not_leak_into_the_shared_local_schemas() -> None:
+    # list_read_tools hands out copies: advertising the selector to one
+    # workspace grant must not change what a project grant sees afterwards.
+    list_read_tools(workspace_bound=True)
+    for name, (_description, schema, _scope) in read_tools.LOCAL_TOOLS.items():
+        assert "project_id" not in schema["properties"], name
+    for tool in list_read_tools():
+        assert "project_id" not in tool.input_schema["properties"]
+
+
+# --- workspace grants: the tools added by Plan 06 and Plan 07 -----------------
+
+# Each acts on one project, so a workspace grant must name it like the others.
+SELECTOR_TOOLS: list[tuple[str, dict[str, Any]]] = [
+    ("list_project_artifacts", {}),
+    ("get_document_content", {"document_id": str(DOC_IN_PROJECT)}),
+    ("retrieve_passages", {"query": "retrieval"}),
+    ("find_researchers", {"query": "a"}),
+    ("get_researcher", {"researcher_id": "a"}),
+]
+SELECTOR_TOOL_IDS = [name for name, _arguments in SELECTOR_TOOLS]
+
+
+@pytest.fixture
+def project_readers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[AsyncMock, _StubFulltext]:
+    """The artifact query and the search service, to prove a refusal precedes them."""
+    artifacts = AsyncMock(return_value=[])
+    search = _StubFulltext([])
+    monkeypatch.setattr(read_tools, "list_project_artifacts", artifacts)
+    monkeypatch.setattr(read_tools, "fulltext_search_service", search)
+    return artifacts, search
+
+
+@pytest.mark.parametrize(("tool", "arguments"), SELECTOR_TOOLS, ids=SELECTOR_TOOL_IDS)
+async def test_workspace_grant_needs_a_selector_for_every_project_tool(
+    db: AsyncSession,
+    project_readers: tuple[AsyncMock, _StubFulltext],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    artifacts, search = project_readers
+    result = await invoke_read(db, _workspace_context(), _invocation(tool, **arguments))
+    assert result.is_error is True
+    assert result.content == [{"error": "project_id_required"}]
+    assert result.source_refs == []
+    artifacts.assert_not_awaited()
+    assert search.calls == []
+
+
+@pytest.mark.parametrize(("tool", "arguments"), SELECTOR_TOOLS, ids=SELECTOR_TOOL_IDS)
+async def test_workspace_grant_selector_outside_workspace_is_denied_for_every_tool(
+    db: AsyncSession,
+    project_readers: tuple[AsyncMock, _StubFulltext],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    artifacts, search = project_readers
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation(tool, project_id=str(FOREIGN_PROJECT), **arguments),
+        )
+    artifacts.assert_not_awaited()
+    assert search.calls == []
+
+
+@pytest.mark.parametrize(("tool", "arguments"), SELECTOR_TOOLS, ids=SELECTOR_TOOL_IDS)
+async def test_project_grant_still_refuses_the_selector_for_every_tool(
+    db: AsyncSession,
+    context: IntegrationContext,
+    project_readers: tuple[AsyncMock, _StubFulltext],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    artifacts, search = project_readers
+    with pytest.raises(ToolArgumentError, match="unknown arguments"):
+        await invoke_read(
+            db, context, _invocation(tool, project_id=str(PROJECT), **arguments)
+        )
+    artifacts.assert_not_awaited()
+    assert search.calls == []
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        _invocation("search_arxiv", query="q", project_id=str(PROJECT)),
+        _invocation("search_external_database", query="q", project_id=str(PROJECT)),
+        _invocation("list_external_databases", project_id=str(PROJECT)),
+        _invocation("get_arxiv_paper_content", arxiv_id="2401.00001", project_id="x"),
+    ],
+    ids=sorted(PROJECTLESS_TOOLS, key=lambda name: name),
+)
+async def test_projectless_tools_take_no_selector_from_a_workspace_grant(
+    db: AsyncSession, invocation: ToolInvocation
+) -> None:
+    with pytest.raises(ToolArgumentError, match="unknown arguments"):
+        await invoke_read(db, _workspace_context(), invocation)
+
+
+async def test_projectless_tools_run_for_a_workspace_grant_without_a_selector(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arxiv = AsyncMock(return_value={"papers": [{"id": "2401.00001"}]})
+    monkeypatch.setattr(read_tools, "_tool_search_arxiv", arxiv)
+    ownership = AsyncMock()
+    monkeypatch.setattr(read_tools, "_verify_project_ownership", ownership)
+    result = await invoke_read(
+        db, _workspace_context(), _invocation("search_arxiv", query="llm")
+    )
+    assert result.is_error is False
+    assert result.source_refs == [{"arxiv_id": "2401.00001"}]
+    arxiv.assert_awaited_once()
+    ownership.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("selected", "titles"),
+    [(PROJECT, ["first.md"]), (OTHER_PROJECT, ["second.md"])],
+    ids=["first-project", "second-project"],
+)
+async def test_workspace_grant_lists_only_the_selected_projects_artifacts(
+    db: AsyncSession, selected: UUID, titles: list[str]
+) -> None:
+    await _artifact(db, PROJECT, "first.md", 1)
+    await _artifact(db, OTHER_PROJECT, "second.md", 2)
+    await _artifact(db, FOREIGN_PROJECT, "foreign.md", 3)
+    result = await invoke_read(
+        db,
+        _workspace_context(),
+        _invocation("list_project_artifacts", project_id=str(selected)),
+    )
+    assert result.is_error is False
+    assert [row["title"] for row in result.content[0]["artifacts"]] == titles
+
+
+async def test_workspace_document_content_is_scoped_to_the_selected_project(
+    db: AsyncSession,
+) -> None:
+    context = _workspace_context()
+    # DOC_OUTSIDE_PROJECT is in this workspace, but not in the selected project.
+    refused = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "get_document_content",
+            document_id=str(DOC_OUTSIDE_PROJECT),
+            project_id=str(PROJECT),
+        ),
+    )
+    assert refused.is_error is True
+    assert refused.content[0]["reason"] == "requested_documents_unavailable"
+    allowed = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "get_document_content",
+            document_id=str(DOC_OUTSIDE_PROJECT),
+            project_id=str(OTHER_PROJECT),
+        ),
+    )
+    assert allowed.is_error is False
+    assert allowed.content[0]["document_id"] == str(DOC_OUTSIDE_PROJECT)
+    assert allowed.source_refs == [{"document_id": str(DOC_OUTSIDE_PROJECT)}]
+
+
+async def test_workspace_passages_search_only_the_selected_project(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _StubFulltext([_search_result(DOC_OUTSIDE_PROJECT, "a hit")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    context = _workspace_context()
+    refused = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages",
+            query="q",
+            document_ids=[str(DOC_OUTSIDE_PROJECT)],
+            project_id=str(PROJECT),
+        ),
+    )
+    assert refused.is_error is True
+    assert refused.content[0]["reason"] == "requested_documents_unavailable"
+    assert stub.calls == []
+    result = await invoke_read(
+        db,
+        context,
+        _invocation("retrieve_passages", query="q", project_id=str(OTHER_PROJECT)),
+    )
+    assert result.is_error is False
+    assert [chunk["document_id"] for chunk in result.content[0]["chunks"]] == [
+        str(DOC_OUTSIDE_PROJECT)
+    ]
+    (call,) = stub.calls
+    # Only the selected project's documents were handed to the search service.
+    assert call["search_request"].filters.document_ids == [str(DOC_OUTSIDE_PROJECT)]
+    assert call["organization_id"] == str(ORG)
+
+
+async def test_workspace_researchers_come_from_the_selected_project_only(
+    db: AsyncSession,
+) -> None:
+    await _seed_authors(db)
+    context = _workspace_context()
+
+    async def call(tool: str, selected: UUID, **arguments: Any) -> Any:
+        return await invoke_read(
+            db, context, _invocation(tool, project_id=str(selected), **arguments)
+        )
+
+    # Yann LeCun only co-wrote a paper in OTHER_PROJECT.
+    in_first = await call("find_researchers", PROJECT, query="lecun")
+    in_second = await call("find_researchers", OTHER_PROJECT, query="lecun")
+    assert in_first.content[0]["researchers"] == []
+    assert [r["name"] for r in in_second.content[0]["researchers"]] == ["Yann LeCun"]
+    unknown_here = await call("get_researcher", PROJECT, researcher_id="yann lecun")
+    assert unknown_here.is_error is True
+    assert unknown_here.content == [{"error": "researcher_not_found"}]
+    known_there = await call(
+        "get_researcher", OTHER_PROJECT, researcher_id="yann lecun"
+    )
+    assert known_there.is_error is False
+    assert known_there.content[0]["researcher"]["name"] == "Yann LeCun"

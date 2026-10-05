@@ -18,7 +18,7 @@ from src.schemas.integration_tools import ToolResult
 from src.services.integrations.context import IntegrationAccessDenied
 
 pytestmark = pytest.mark.unit
-USER, ORG, PROJECT, GRANT = (uuid4() for _ in range(4))
+USER, ORG, PROJECT, GRANT, WORKSPACE = (uuid4() for _ in range(5))
 HEADERS = {
     "Authorization": "Bearer cli-jwt",
     "X-NOUS-Integration-Grant": "opaque-grant",
@@ -92,6 +92,51 @@ def test_catalog_and_read_succeed_with_matching_credentials(client: TestClient) 
     assert catalog.status_code == 200
     assert {tool["name"] for tool in catalog.json()} >= {"search_documents"}
     assert _read(client).status_code == 200
+
+
+def test_catalog_offers_the_project_selector_only_to_workspace_grants(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def properties() -> dict[str, dict[str, Any]]:
+        response = client.get("/api/v1/integrations/tools", headers=HEADERS)
+        assert response.status_code == 200
+        return {
+            tool["name"]: tool["input_schema"]["properties"] for tool in response.json()
+        }
+
+    assert all("project_id" not in schema for schema in properties().values())
+
+    async def resolve_workspace(_db: Any, token: str, *, required_scope: str) -> Any:
+        if token != "opaque-grant" or required_scope != "tools:read":
+            raise IntegrationAccessDenied()
+        return IntegrationContext(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            grant_id=GRANT,
+        )
+
+    monkeypatch.setattr(
+        "src.api.integrations.auth.resolve_integration_context", resolve_workspace
+    )
+    by_tool = properties()
+    selectors = {
+        name: schema["project_id"]
+        for name, schema in by_tool.items()
+        if "project_id" in schema
+    }
+    assert selectors and all(
+        selector["type"] == "string" and selector["format"] == "uuid"
+        for selector in selectors.values()
+    )
+    # A tool that acts on no single project has nothing for a selector to select.
+    assert set(by_tool) - set(selectors) == {
+        "search_arxiv",
+        "search_external_database",
+        "list_external_databases",
+        "get_arxiv_paper_content",
+    }
 
 
 def test_jwt_actor_must_match_grant_actor(app: FastAPI, client: TestClient) -> None:

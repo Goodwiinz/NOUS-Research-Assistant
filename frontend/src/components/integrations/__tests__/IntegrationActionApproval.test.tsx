@@ -132,6 +132,42 @@ describe('IntegrationActionApproval', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
   });
 
+  it('shows the workspace when the action has no project', async () => {
+    vi.mocked(integrationActionService.review).mockResolvedValue(
+      review('awaiting_approval', {
+        project_id: null,
+        project_label: null,
+        workspace_id: 'w1',
+        workspace_label: 'Lab',
+      })
+    );
+    render(<IntegrationActionApproval invocationId={ID} />);
+    expect(await screen.findByText(/Lab \(w1\)/)).toBeInTheDocument();
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
+    expect(screen.queryByText('Project')).not.toBeInTheDocument();
+    expect(screen.queryByText(/This .* was deleted/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a request for a deleted workspace deniable but not approvable', async () => {
+    vi.mocked(integrationActionService.review).mockResolvedValue(
+      review('awaiting_approval', {
+        project_id: null,
+        project_label: null,
+        workspace_id: 'w1',
+        workspace_label: 'Lab',
+        project_available: false,
+      })
+    );
+    render(<IntegrationActionApproval invocationId={ID} />);
+    expect(
+      await screen.findByText(/This workspace was deleted/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Approve and create note' })
+    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
+  });
+
   it('shows why a failed request was not created', async () => {
     vi.mocked(integrationActionService.review).mockResolvedValue(
       review('failed', { last_error: 'denied by user' })

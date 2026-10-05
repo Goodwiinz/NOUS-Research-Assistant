@@ -229,13 +229,27 @@
             "type": "boolean"
           },
           "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "project_label": {
-            "title": "Project Label",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Label"
           },
           "requested_at": {
             "format": "date-time",
@@ -278,6 +292,29 @@
           "tool_name": {
             "title": "Tool Name",
             "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "workspace_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Label"
           }
         },
         "required": [

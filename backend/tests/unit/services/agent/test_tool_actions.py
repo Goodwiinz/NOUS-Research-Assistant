@@ -253,6 +253,12 @@ async def test_replay_with_a_different_server_binding_conflicts(
         ActionActor(
             user_id=USER, organization_id=ORG, project_id=PROJECT, run_id=uuid4()
         ),
+        ActionActor(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            workspace_id=WORKSPACE,
+        ),
     ):
         with pytest.raises(ActionConflict):
             await request_action(db, actor, invocation)
@@ -813,3 +819,212 @@ async def test_drain_executes_only_approved_rows_and_honours_the_kill_switch(
     assert await drain_integration_actions(db) == 1
     assert await _note_count(db) == 1
     assert await drain_integration_actions(db) == 0
+
+
+# --- workspace bindings ----------------------------------------------------
+
+
+def _workspace_actor(**overrides: Any) -> ActionActor:
+    """The actor of a workspace grant whose action targets PROJECT."""
+    values: dict[str, Any] = {
+        "user_id": USER,
+        "organization_id": ORG,
+        "project_id": PROJECT,
+        "workspace_id": WORKSPACE,
+        "grant_id": GRANT,
+        "consent_id": CONSENT,
+    }
+    values.update(overrides)
+    return ActionActor(**values)
+
+
+async def _workspace_row(db: AsyncSession, **overrides: Any) -> IntegrationToolAction:
+    """A workspace-level action with no target project, as a later slice requests."""
+    values: dict[str, Any] = {
+        "organization_id": ORG,
+        "user_id": USER,
+        "project_id": None,
+        "workspace_id": WORKSPACE,
+        "invocation_id": uuid4(),
+        "tool_name": "create_project_note",
+        "arguments": NOTE_ARGS,
+        "argument_hash": canonical_hash("create_project_note", NOTE_ARGS),
+        "state": "awaiting_approval",
+    }
+    values.update(overrides)
+    row = IntegrationToolAction(**values)
+    db.add(row)
+    await db.commit()
+    return row
+
+
+async def _workspace_authority(db: AsyncSession) -> tuple[UUID, UUID]:
+    """A consumed workspace consent and the live grant exchanged from it."""
+    grant_id, consent_id = uuid4(), uuid4()
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=consent_id,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            device_id=DEVICE,
+            scopes=["tools:read", "tools:write"],
+            status="consumed",
+            expires_at=SOON,
+            approved_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.execute(
+        insert(IntegrationGrant).values(
+            **_grant_values(
+                grant_id,
+                project_id=None,
+                workspace_id=WORKSPACE,
+                request_id=consent_id,
+            )
+        )
+    )
+    await db.commit()
+    return grant_id, consent_id
+
+
+async def test_workspace_binding_is_stored_with_the_action(db: AsyncSession) -> None:
+    invocation = _invocation()
+    status = await request_action(db, _workspace_actor(), invocation)
+    assert status.state == "awaiting_approval"
+    row = await db.scalar(
+        select(IntegrationToolAction).where(
+            IntegrationToolAction.invocation_id == invocation.invocation_id
+        )
+    )
+    assert row is not None
+    assert (row.project_id, row.workspace_id) == (PROJECT, WORKSPACE)
+    # The same binding replays; a project-bound actor under the same consent
+    # is a different target.
+    assert (
+        await request_action(db, _workspace_actor(), invocation)
+    ).state == "awaiting_approval"
+    with pytest.raises(ActionConflict):
+        await request_action(db, _actor(), invocation)
+    assert await _row_count(db) == 1
+
+
+async def test_workspace_actor_cannot_request_a_project_action_yet(
+    db: AsyncSession,
+) -> None:
+    # Every action row names a project, and create_project_note has no way to
+    # select one: a workspace connection is refused, not stored.
+    with pytest.raises(
+        ToolActionArgumentError, match="workspace connections cannot request"
+    ):
+        await request_action(db, _workspace_actor(project_id=None), _invocation())
+    assert await _row_count(db) == 0
+
+
+async def test_grant_bound_to_another_workspace_cannot_run_the_action(
+    db: AsyncSession,
+) -> None:
+    # GRANT is bound to PROJECT, not to WORKSPACE.
+    status = await request_action(db, _workspace_actor(), _invocation())
+    await _approve(db, status.invocation_id)
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (await _last_error(db, status.invocation_id)) == (
+        "grant no longer authorizes this action"
+    )
+    assert await _note_count(db) == 0
+
+
+async def test_review_of_a_workspace_level_action_names_the_workspace(
+    db: AsyncSession,
+) -> None:
+    row = await _workspace_row(db)
+    review = await get_action_for_review(db, await _user(db), row.invocation_id)
+    assert (review.project_id, review.project_label) == (None, None)
+    assert (review.workspace_id, review.workspace_label) == (WORKSPACE, "Workspace")
+    assert review.project_available is True
+    assert review.title == "Findings"
+    # Still reviewable, and still deniable, once the workspace is gone.
+    await db.execute(update(Workspace).values(is_deleted=True))
+    await db.commit()
+    gone = await get_action_for_review(db, await _user(db), row.invocation_id)
+    assert gone.project_available is False
+    assert gone.workspace_label == "Workspace"
+
+
+async def test_review_names_the_workspace_only_for_workspace_bound_actions(
+    db: AsyncSession,
+) -> None:
+    plain = await request_action(db, _actor(), _invocation())
+    review = await get_action_for_review(db, await _user(db), plain.invocation_id)
+    assert (review.project_label, review.workspace_id, review.workspace_label) == (
+        "Project",
+        None,
+        None,
+    )
+    bound = await request_action(db, _workspace_actor(), _invocation())
+    review = await get_action_for_review(db, await _user(db), bound.invocation_id)
+    assert (review.project_id, review.project_label) == (PROJECT, "Project")
+    assert (review.workspace_id, review.workspace_label) == (WORKSPACE, "Workspace")
+    assert review.project_available is True
+
+
+async def test_workspace_level_action_never_runs_without_a_project(
+    db: AsyncSession,
+) -> None:
+    grant_id, consent_id = await _workspace_authority(db)
+    # A project literally called "None": str(None) must never be resolved by
+    # name into a write target.
+    await db.execute(
+        insert(Collection).values(id=uuid4(), name="None", workspace_id=WORKSPACE)
+    )
+    await db.commit()
+    row = await _workspace_row(
+        db, grant_id=grant_id, consent_id=consent_id, state="approved", approved=True
+    )
+    done = await execute_action(db, row.invocation_id)
+    # The authority check passed (the grant, consent and row agree on the
+    # workspace); the effect itself refused a missing project.
+    assert done is not None and done.state == "failed"
+    assert (await _last_error(db, row.invocation_id)) == "effect failed before commit"
+    assert await _note_count(db) == 0
+
+
+@pytest.mark.parametrize(
+    ("table", "values", "reason"),
+    [
+        ("grant", {"workspace_id": uuid4()}, "grant no longer authorizes this action"),
+        ("consent", {"workspace_id": uuid4()}, "consent revoked"),
+        (
+            "consent",
+            {"workspace_id": None, "project_id": uuid4()},
+            "consent revoked",
+        ),
+    ],
+    ids=["grant-workspace", "consent-workspace", "consent-became-project"],
+)
+async def test_workspace_authority_lost_after_approval_fails_before_the_effect(
+    db: AsyncSession, table: str, values: dict[str, Any], reason: str
+) -> None:
+    grant_id, consent_id = await _workspace_authority(db)
+    row = await _workspace_row(
+        db, grant_id=grant_id, consent_id=consent_id, state="approved", approved=True
+    )
+    if table == "consent":
+        await db.execute(
+            update(IntegrationGrantRequest)
+            .where(IntegrationGrantRequest.id == consent_id)
+            .values(**values)
+        )
+    else:
+        await db.execute(
+            update(IntegrationGrant)
+            .where(IntegrationGrant.id == grant_id)
+            .values(**values)
+        )
+    await db.commit()
+    failed = await execute_action(db, row.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (await _last_error(db, row.invocation_id)) == reason
+    assert await _note_count(db) == 0

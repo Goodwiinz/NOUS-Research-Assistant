@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, or_, select, update
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -146,6 +146,13 @@ async def request_action(
     """Record the intent once. Same id + same payload replays; a different payload conflicts."""
     if invocation.tool_name not in ALLOWED_ACTIONS:
         raise ToolActionArgumentError("tool is not available as an action")
+    if actor.project_id is None:
+        # Every action row names a project, and none of these actions can
+        # select one: refuse a workspace connection rather than store a row
+        # whose target cannot be resolved.
+        raise ToolActionArgumentError(
+            "workspace connections cannot request this action"
+        )
     arguments = _validate_note_arguments(invocation.arguments)
     digest = canonical_hash(invocation.tool_name, arguments)
     existing = await db.scalar(_scoped(actor, invocation.invocation_id))
@@ -154,6 +161,7 @@ async def request_action(
             organization_id=actor.organization_id,
             user_id=actor.user_id,
             project_id=actor.project_id,
+            workspace_id=actor.workspace_id,
             thread_id=actor.thread_id,
             run_id=str(actor.run_id) if actor.run_id else None,
             grant_id=actor.grant_id,
@@ -191,6 +199,7 @@ def _same_target(row: IntegrationToolAction, actor: ActionActor) -> bool:
     """A replay must name the stored target; the hash excludes server bindings."""
     return bool(
         row.project_id == actor.project_id
+        and row.workspace_id == actor.workspace_id
         and row.thread_id == actor.thread_id
         and row.run_id == (str(actor.run_id) if actor.run_id else None)
     )
@@ -257,10 +266,19 @@ async def get_action_for_review(
                 IntegrationToolAction,
                 Collection.name,
                 Collection.is_deleted,
+                Workspace.name,
                 Workspace.is_deleted,
             )
-            .join(Collection, Collection.id == IntegrationToolAction.project_id)
-            .join(Workspace, Workspace.id == Collection.workspace_id)
+            # A workspace-level action has no project; a project action
+            # reaches its workspace through the project.
+            .outerjoin(Collection, Collection.id == IntegrationToolAction.project_id)
+            .join(
+                Workspace,
+                Workspace.id
+                == func.coalesce(
+                    IntegrationToolAction.workspace_id, Collection.workspace_id
+                ),
+            )
             .where(
                 IntegrationToolAction.organization_id == user.organization_id,
                 IntegrationToolAction.user_id == user.id,
@@ -272,14 +290,16 @@ async def get_action_for_review(
     ).first()
     if found is None:
         raise ActionNotFound()
-    row, project_label, project_deleted, workspace_deleted = found
+    row, project_label, project_deleted, workspace_label, workspace_deleted = found
     arguments = row.arguments or {}
     return ActionReview(
         invocation_id=row.invocation_id,
         state=cast(Any, row.state),
         tool_name=row.tool_name,
         project_id=row.project_id,
-        project_label=str(project_label),
+        project_label=None if row.project_id is None else str(project_label),
+        workspace_id=row.workspace_id,
+        workspace_label=None if row.workspace_id is None else str(workspace_label),
         # Kept visible so it can still be denied; approval would fail closed.
         project_available=not (project_deleted or workspace_deleted),
         title=str(arguments.get("title", "")),
@@ -307,6 +327,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
         or grant.user_id != row.user_id
         or grant.organization_id != row.organization_id
         or grant.project_id != row.project_id
+        or grant.workspace_id != row.workspace_id
         or REQUIRED_SCOPE not in grant.scopes
     ):
         return "grant no longer authorizes this action"
@@ -325,6 +346,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
             IntegrationGrantRequest.user_id == row.user_id,
             IntegrationGrantRequest.organization_id == row.organization_id,
             IntegrationGrantRequest.project_id == row.project_id,
+            IntegrationGrantRequest.workspace_id == row.workspace_id,
             IntegrationGrantRequest.consent_revoked_at.is_(None),
             IntegrationGrantRequest.is_deleted.is_(False),
         )
@@ -342,6 +364,10 @@ async def _run_effect(
 ) -> dict[str, Any]:
     from src.services.agent.tools_impl import _tool_create_project_note
 
+    if row.project_id is None:
+        # Never str() a missing project: the adapter resolves any non-UUID,
+        # "None" included, as a project NAME.
+        raise ToolActionError("action has no target project")
     # Project comes from the stored binding; the adapter re-checks edit authority.
     return await _tool_create_project_note(
         {**row.arguments, "project_id": str(row.project_id)},

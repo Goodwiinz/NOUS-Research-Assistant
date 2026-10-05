@@ -11008,13 +11008,10 @@ export interface components {
             last_error?: string | null;
             /** Project Available */
             project_available: boolean;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /**
              * Requested At
              * Format: date-time
@@ -11032,6 +11029,10 @@ export interface components {
             title: string;
             /** Tool Name */
             tool_name: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Workspace Label */
+            workspace_label?: string | null;
         };
         /** ActionStatus */
         ActionStatus: {

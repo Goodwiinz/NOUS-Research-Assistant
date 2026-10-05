@@ -277,6 +277,7 @@ async def test_digest_and_size_mismatch_never_store(
         "deleted_project",
         "deleted_workspace",
         "foreign_actor",
+        "workspace_grant",
     ],
 )
 async def test_publication_denials(
@@ -321,6 +322,15 @@ async def test_publication_denials(
         await db.commit()
     elif case == "foreign_actor":
         context = context.model_copy(update={"user_id": OTHER_USER})
+    elif case == "workspace_grant":
+        # The owner's own workspace: publication stays bound to one Collection.
+        context = IntegrationContext(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            grant_id=context.grant_id,
+        )
     with pytest.raises(expected):
         await reserve_upload(db, context, request)
     assert (
