@@ -411,7 +411,9 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
     thread_label = None
     if request.thread_id is not None:
         title = await db.scalar(
-            select(Thread.title).where(Thread.id == request.thread_id)
+            select(Thread.title).where(
+                Thread.id == request.thread_id, Thread.is_deleted.is_(False)
+            )
         )
         thread_label = title or "Untitled chat"
     return GrantRequestDTO(

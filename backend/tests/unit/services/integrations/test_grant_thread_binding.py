@@ -213,14 +213,26 @@ async def test_foreign_or_dead_thread_is_refused(db: AsyncSession, bad: str) -> 
     assert await db.scalar(select(func.count(IntegrationGrantRequest.id))) == 0
 
 
-async def test_thread_moved_after_request_blocks_approval(db: AsyncSession) -> None:
+@pytest.mark.parametrize(
+    "change,approve_first",
+    [
+        ({"source_project_id": None}, False),  # moved before approval
+        ({"is_deleted": True}, True),  # deleted between approve and exchange
+    ],
+)
+async def test_thread_changed_after_request_blocks_issuance(
+    db: AsyncSession, change: dict[str, Any], approve_first: bool
+) -> None:
     request = await _request(db, THREAD)
-    await db.execute(
-        update(Thread).where(Thread.id == THREAD).values(source_project_id=None)
-    )
+    if approve_first:
+        await decide_request(db, OWNER, request.id, approved=True)
+    await db.execute(update(Thread).where(Thread.id == THREAD).values(**change))
     await db.commit()
     with pytest.raises(IntegrationAccessDenied):
-        await decide_request(db, OWNER, request.id, approved=True)
+        if approve_first:
+            await exchange_request(db, OWNER, request.id)
+        else:
+            await decide_request(db, OWNER, request.id, approved=True)
 
 
 async def test_renewal_keeps_thread(db: AsyncSession) -> None:
