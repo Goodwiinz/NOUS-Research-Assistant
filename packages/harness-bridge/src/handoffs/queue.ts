@@ -64,10 +64,20 @@ function classify(error: unknown): Extract<Attempt, { state: "pending" | "reject
   return { state: "rejected", error: err };
 }
 
-/** The chat this device is bound to, from local state; null when unbound. */
-export async function localBinding(store: CredentialStore): Promise<Binding | null> {
+/**
+ * The chat bound to `credentialHandle`, from local state. Null when the device
+ * is unbound or was reconnected under another handle: a stale MCP child must
+ * never journal (and later flush) its save under the new binding's chat.
+ */
+export async function localBinding(store: CredentialStore, credentialHandle: string): Promise<Binding | null> {
   const state = await store.readLocal("connection").catch(() => null);
-  if (!record(state) || !uuid(state.threadId) || !uuid(state.projectId)) return null;
+  if (
+    !record(state) ||
+    state.credentialHandle !== credentialHandle ||
+    !uuid(state.threadId) ||
+    !uuid(state.projectId)
+  )
+    return null;
   return { threadId: state.threadId, projectId: state.projectId };
 }
 
@@ -116,6 +126,15 @@ export class HandoffQueue {
       result.attempted.push({ entry, attempt: await this.attempt(entry) });
     }
     return result;
+  }
+
+  /** Drop one entry in any state; returns what was removed, or null. */
+  async discard(handoffId: string): Promise<QueueEntry | null> {
+    if (!uuid(handoffId)) throw new Error("handoff_id must be a UUID");
+    const entry = entryOf(await this.store.readLocal(PREFIX + handoffId).catch(() => null));
+    if (entry === null) return null;
+    await this.store.removeLocal(PREFIX + handoffId);
+    return entry;
   }
 
   list(): Promise<QueueEntry[]> {

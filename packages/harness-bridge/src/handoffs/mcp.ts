@@ -114,7 +114,7 @@ export function saveHandoffTool(queue: HandoffQueue, binding: () => Promise<Bind
       const bound = await binding();
       if (bound === null)
         return {
-          text: "This device's local state has no bound chat; reconnect with nous-harness connect --chat UUID --tools --handoff.",
+          text: "This MCP session's credential is not the device's current chat binding (the device was reconnected or is not bound to a chat); nothing was saved. Reconnect this MCP session: restart it after nous-harness connect --chat UUID --tools --handoff.",
           isError: true,
         };
       // Journaled locally first; an unconfirmed save survives for `handoff flush`.
@@ -131,13 +131,18 @@ export function saveHandoffTool(queue: HandoffQueue, binding: () => Promise<Bind
           isError: true,
         };
       }
-      if (attempt.error instanceof ToolRequestRejected || attempt.error instanceof ReauthenticationRequired)
-        throw attempt.error;
       const reason = attempt.error.message;
-      if (attempt.state === "rejected") return { text: `Not saved: ${reason}`, isError: true };
+      if (attempt.state === "rejected") {
+        if (attempt.error instanceof ToolRequestRejected || attempt.error instanceof ReauthenticationRequired)
+          throw attempt.error;
+        return { text: `Not saved: ${reason}`, isError: true };
+      }
+      // Pending (network, 5xx, 429, 401, expired grant): say it is journaled, never just throw.
       console.error(`save_nous_handoff outcome unknown: ${reason}`);
       return {
-        text: `save outcome unknown: ${reason}. It is queued locally as pending; retry with the same handoff_id ${payload.handoff_id} (NOUS returns the stored version) or run nous-harness handoff flush.`,
+        text:
+          `Save not confirmed: ${reason}. It is queued locally as pending under handoff_id ${payload.handoff_id}; retry with that same handoff_id (NOUS returns the stored version) or run nous-harness handoff flush.` +
+          (attempt.reconnect ? " Reconnect first: nous-harness connect --chat UUID --tools --handoff." : ""),
         isError: true,
       };
     },

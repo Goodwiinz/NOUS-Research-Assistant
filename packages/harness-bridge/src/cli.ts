@@ -650,7 +650,13 @@ async function handoffContext(
   if (!state.scopes?.includes(scope)) throw new Error(`this connection lacks ${scope}; ${RECONNECT_HANDOFF}`);
   const base = apiBase(state.apiUrl);
   const keeper = new GrantKeeper(store, state.credentialHandle, base, options.fetchFn ?? fetch);
-  const client = new HandoffHttpClient(base, await store.load(state.credentialHandle), keeper.fetch);
+  let credentials;
+  try {
+    credentials = await store.load(state.credentialHandle);
+  } catch {
+    throw new Error(`this connection's local credentials are missing or unreadable; ${RECONNECT_HANDOFF}`);
+  }
+  const client = new HandoffHttpClient(base, credentials, keeper.fetch);
   return {
     binding: { threadId: state.threadId, projectId: state.projectId },
     queue: new HandoffQueue(store, client),
@@ -718,6 +724,20 @@ export async function handoffFlush(options: ClientOptions): Promise<FlushResult>
   if (result.attempted.length === 0) context.announce("No pending handoffs for this chat.");
   return result;
 }
+/** `handoff discard ID`: drop one journaled entry in any state; offline. */
+export async function handoffDiscard(options: ClientOptions & { handoffId: string }): Promise<QueueEntry> {
+  const store = new CredentialStore(options.stateDir);
+  const entry = await new HandoffQueue(store, {
+    save: async () => {
+      throw new Error("discard never sends");
+    },
+  }).discard(options.handoffId);
+  if (entry === null) throw new Error(`no queued handoff ${options.handoffId}; see nous-harness handoff list`);
+  (options.announce ?? console.log)(
+    `Discarded ${entry.handoff_id} (${entry.state}, chat ${entry.thread_id}, goal: ${JSON.stringify(entry.body.goal.slice(0, 120))}).`,
+  );
+  return entry;
+}
 /** `handoff list`: every journaled entry and its state; offline. */
 export async function handoffList(options: ClientOptions): Promise<QueueEntry[]> {
   const entries = await queueEntries(new CredentialStore(options.stateDir));
@@ -752,7 +772,7 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write] [--handoff]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write] [--handoff]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect reuses the stored binding (no browser login or consent) when the API, project and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow.
@@ -761,6 +781,7 @@ const help = `Usage: nous-harness connect --api https://host/api/v1 --project UU
   nous-harness handoff save --file handoff.json [--parent N]    Journal the handoff locally, then save it; --parent sets expected_parent_version (default null, the first handoff).
   nous-harness handoff flush    Retry pending saves journaled for the current chat; a conflict (409) or rejection (403/422) is kept, never retried or merged.
   nous-harness handoff list    List journaled handoff saves and their states.
+  nous-harness handoff discard HANDOFF_ID    Drop one journaled save (pending, conflicted or rejected) and print what was dropped.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
   nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools.
@@ -837,6 +858,8 @@ async function main(): Promise<void> {
     const result = await handoffFlush({ stateDir });
     if (result.attempted.some(({ attempt }) => attempt.state !== "done")) process.exitCode = 1;
   } else if (positionals.join(" ") === "handoff list") await handoffList({ stateDir });
+  else if (positionals.length === 3 && positionals[0] === "handoff" && positionals[1] === "discard")
+    await handoffDiscard({ stateDir, handoffId: positionals[2] });
   else if (positionals.join(" ") === "mcp install")
     console.log(await mcpInstallCommand(stateDir, { root: values.root }));
   else if (positionals.join(" ") === "mcp") {

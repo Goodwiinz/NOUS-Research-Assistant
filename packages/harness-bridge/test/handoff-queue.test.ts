@@ -6,13 +6,13 @@ import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handoffFlush, handoffList, handoffSave, handoffShow, type LocalState } from "../src/cli.ts";
+import { handoffDiscard, handoffFlush, handoffList, handoffSave, handoffShow, type LocalState } from "../src/cli.ts";
 import { CredentialStore } from "../src/credentials.ts";
 import { GrantExpired } from "../src/grants.ts";
 import { HandoffHttpClient, type Handoff } from "../src/handoffs/client.ts";
 import { saveHandoffTool } from "../src/handoffs/mcp.ts";
-import { HandoffQueue, type QueueEntry } from "../src/handoffs/queue.ts";
-import { ReauthenticationRequired, ToolRequestRejected } from "../src/mcp/client.ts";
+import { HandoffQueue, localBinding, type QueueEntry } from "../src/handoffs/queue.ts";
+import { ToolRequestRejected } from "../src/mcp/client.ts";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const THREAD = "99999999-9999-4999-8999-999999999999";
@@ -287,14 +287,21 @@ test("save_nous_handoff journals before the POST and removes the entry after a 2
     const queued = await tool.call({ handoff_id: handoffId, expected_parent_version: null, goal: "g" });
     assert.equal(queued.isError, true);
     assert.match(queued.text, /queued locally/);
-    assert.match(queued.text, new RegExp(handoffId));
+    assert.match(queued.text, new RegExp(`handoff_id ${handoffId}`));
     assert.equal((await queue.list())[0].state, "pending");
 
-    // Terminal and auth errors keep their MCP error classes.
+    // Pending outcomes (5xx, 401) report the queued handoff_id instead of throwing.
+    for (const mode of ["error", "unauthorized"] as const) {
+      nous.state.mode = mode;
+      const id = randomUUID();
+      const pending = await tool.call({ handoff_id: id, expected_parent_version: null, goal: "g" });
+      assert.equal(pending.isError, true, mode);
+      assert.match(pending.text, new RegExp(`queued locally as pending under handoff_id ${id}`), mode);
+      assert.equal(/nous-harness connect/.test(pending.text), mode === "unauthorized", mode);
+    }
+    // A terminal rejection keeps its MCP error class.
     nous.state.mode = "forbidden";
     await assert.rejects(tool.call({ expected_parent_version: null, goal: "g" }), ToolRequestRejected);
-    nous.state.mode = "unauthorized";
-    await assert.rejects(tool.call({ expected_parent_version: null, goal: "g" }), ReauthenticationRequired);
 
     // No chat binding in local state: refuse before journaling anything.
     const unbound = saveHandoffTool(queue, async () => null);
@@ -334,6 +341,62 @@ test("handoff commands refuse a connection without the handoff scopes or a chat"
     await t.store.writeLocal("connection", { ...state, threadId: undefined });
     await assert.rejects(handoffFlush(t.options), /--chat/);
     assert.equal(nous.posts.size, 0);
+  } finally {
+    await nous.close();
+    t.cleanup();
+  }
+});
+
+test("a stale MCP session handle never journals under the device's new binding", async () => {
+  const nous = await backend();
+  const t = await connected(nous.origin);
+  try {
+    const state = (await t.store.readLocal("connection")) as LocalState;
+    assert.deepEqual(await localBinding(t.store, state.credentialHandle), { threadId: THREAD, projectId: PROJECT });
+    // The device reconnected to another chat under a new handle; this child still holds the old one.
+    const staleHandle = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    assert.equal(await localBinding(t.store, staleHandle), null);
+    const client = new HandoffHttpClient(nous.origin, { accessToken: "a", grantToken: "b" });
+    const tool = saveHandoffTool(new HandoffQueue(t.store, client), () => localBinding(t.store, staleHandle));
+    const refused = await tool.call({ expected_parent_version: null, goal: "g" });
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /Reconnect this MCP session/);
+    assert.deepEqual(await t.entries(), []);
+    assert.equal(nous.posts.size, 0);
+  } finally {
+    await nous.close();
+    t.cleanup();
+  }
+});
+
+test("handoff discard drops one entry in any state and reports it", async () => {
+  const nous = await backend();
+  const t = await connected(nous.origin);
+  try {
+    nous.state.mode = "conflict";
+    await handoffSave({ ...t.options, file: t.file, parent: "2" });
+    const [entry] = await t.entries();
+    const dropped = await handoffDiscard({ ...t.options, handoffId: entry.handoff_id });
+    assert.equal(dropped.state, "conflicted");
+    assert.match(t.lines.at(-1)!, new RegExp(`Discarded ${entry.handoff_id} \\(conflicted`));
+    assert.deepEqual(await t.entries(), []);
+    await assert.rejects(handoffDiscard({ ...t.options, handoffId: entry.handoff_id }), /no queued handoff/);
+    await assert.rejects(handoffDiscard({ ...t.options, handoffId: "nope" }), /UUID/);
+  } finally {
+    await nous.close();
+    t.cleanup();
+  }
+});
+
+test("missing local credentials give the reconnect hint, not a store error", async () => {
+  const nous = await backend();
+  const t = await connected(nous.origin);
+  try {
+    const state = (await t.store.readLocal("connection")) as LocalState;
+    await t.store.removeLocal(state.credentialHandle);
+    await assert.rejects(handoffShow(t.options), /local credentials are missing.*nous-harness connect --chat UUID --tools --handoff/);
+    await assert.rejects(handoffSave({ ...t.options, file: t.file }), /nous-harness connect --chat/);
+    assert.deepEqual(await t.entries(), []);
   } finally {
     await nous.close();
     t.cleanup();
