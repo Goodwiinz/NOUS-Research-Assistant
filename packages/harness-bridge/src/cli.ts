@@ -23,6 +23,8 @@ export type LocalState = {
   apiUrl: string;
   deviceId: string;
   projectId: string;
+  // The NOUS chat standalone publications land in; absent = project only.
+  threadId?: string;
   credentialHandle: string;
   // Absent on connections made before tools:read existed.
   scopes?: string[];
@@ -84,6 +86,7 @@ export async function connect(
   options: ClientOptions & {
     apiUrl: string;
     projectId: string;
+    threadId?: string;
     label: string;
     tools?: boolean;
     publish?: boolean;
@@ -91,6 +94,10 @@ export async function connect(
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
+  if (options.threadId !== undefined) {
+    if (!uuid(options.projectId)) throw new Error("--chat requires --project");
+    if (!uuid(options.threadId)) throw new Error("--chat must be a chat UUID");
+  }
   if (!uuid(options.projectId) || !options.label.trim())
     throw new Error("project UUID and device label required");
   // NOUS capabilities are opt-in and each scope is shown on the consent page.
@@ -142,6 +149,7 @@ export async function connect(
       project_id: options.projectId,
       device_id: device.id,
       scopes,
+      ...(options.threadId ? { thread_id: options.threadId } : {}),
     },
   );
   if (!uuid(consent.id) || typeof consent.approval_url !== "string")
@@ -202,12 +210,20 @@ export async function connect(
     apiUrl: base,
     deviceId: device.id,
     projectId: options.projectId,
+    ...(options.threadId ? { threadId: options.threadId } : {}),
     credentialHandle,
     scopes,
     workspaces: carried,
   } satisfies LocalState);
   if (carried.length)
     announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
+  const chatLabel =
+    typeof consent.thread_label === "string" ? `${consent.thread_label} ` : "";
+  announce(
+    options.threadId
+      ? `Connected to project ${options.projectId}, chat ${chatLabel}(${options.threadId}).`
+      : `Connected to project ${options.projectId}.`,
+  );
   return { deviceId: device.id, credentialHandle };
 }
 /**
@@ -507,7 +523,8 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--tools [--publish] [--write]] | workspace add --root PATH [--label NAME] | run
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write]] | workspace add --root PATH [--label NAME] | run
+  connect --chat UUID binds the grant to one NOUS chat in --project; standalone publications land there. Reconnect without --chat to unbind.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
   nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action.
@@ -523,6 +540,7 @@ async function main(): Promise<void> {
     options: {
       api: { type: "string" },
       project: { type: "string" },
+      chat: { type: "string" },
       label: { type: "string" },
       store: { type: "string" },
       root: { type: "string" },
@@ -549,7 +567,9 @@ async function main(): Promise<void> {
     console.log(
       remaining.length ? remaining.join("\n") : "No uncertain interrupts.",
     );
-  } else if (
+  } else if (positionals.join(" ") === "connect" && values.chat && !values.project)
+    throw new Error("--chat requires --project");
+  else if (
     positionals.join(" ") === "connect" &&
     values.api &&
     values.project &&
@@ -559,6 +579,7 @@ async function main(): Promise<void> {
       stateDir,
       apiUrl: values.api,
       projectId: values.project,
+      threadId: values.chat,
       label: values.label,
       tools: values.tools,
       publish: values.publish,
