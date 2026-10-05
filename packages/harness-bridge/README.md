@@ -41,7 +41,21 @@ pnpm --filter @nous/harness-bridge start connect --api https://nous.example/api/
 pnpm --filter @nous/harness-bridge start mcp install
 ```
 
-Tools are the backend's read allowlist (`search_documents`, `list_project_documents`, `do_kb_retrieve`, `get_current_draft`), scoped to the granted project. With a registered workspace root and the `artifacts:publish` scope, the server also offers `artifacts_publish(relative_path, title, publication_id)`: it reads one regular file under that root (no symlinks anywhere in the path, no hard links, no traversal, at most 10 MiB; containment is enforced by the kernel on macOS via `O_NOFOLLOW_ANY` and by the descriptor's real path on Linux), uploads it with its SHA-256, and finalizes a NOUS artifact version. Reusing the same `publication_id` retries safely. The root comes from the local binding (`--root` in the launch argv), never from tool arguments; `mcp install --root PATH` picks it when more than one workspace is registered. The root limits what can be published, not what Codex can read. Publication requires `ARTIFACTS_ENABLED=true` on the server. Argv carries only the API origin, the state directory, and the opaque credential handle; tokens stay in the owner-only store. Diagnostics go to stderr. Gateway rejections come back as tool errors and are never retried: 401 asks you to reconnect with `--tools`, 403 names a missing `tools:read` scope or an out-of-project resource, 422 forwards the gateway's argument reason, and 503 reports NOUS's own reason (tools disabled, artifact publication disabled, or artifact storage unavailable). `nous-harness run` prints a stderr notice when the connection lacks `tools:read` and managed sessions therefore get no NOUS tools.
+Tools are the backend's read allowlist, all under the `tools:read` scope:
+
+| Tool | Scope of data | Notes |
+| --- | --- | --- |
+| `search_documents` | granted project | title/filename search, ≤ 50 results |
+| `list_project_documents` | granted project | paginated listing |
+| `do_kb_retrieve` | granted project | semantic chunks; needs `document_ids` and a provisioned KB |
+| `retrieve_passages` | granted project | PostgreSQL full-text passages; `document_ids` optional, `top_k` ≤ 20; works without a KB |
+| `get_document_content` | granted project | summary or full text, `offset`/`limit` ≤ 48,000 chars, follow `next_offset` |
+| `get_current_draft` | granted project | latest generated draft |
+| `search_arxiv` | arXiv (external) | ≤ 20 results advertised, 120 s budget |
+| `search_external_database`, `list_external_databases` | connector registry (external) | ≤ 20 results |
+| `get_arxiv_paper_content` | arXiv (external) | transient full text by id, paginated; persists nothing — use `ingest_arxiv_papers` to add a paper to NOUS |
+
+Project-scoped tools resolve the project from the grant, never from arguments; a document outside it answers `requested_documents_unavailable`. Every result is capped at 64 KiB. With a registered workspace root and the `artifacts:publish` scope, the server also offers `artifacts_publish(relative_path, title, publication_id)`: it reads one regular file under that root (no symlinks anywhere in the path, no hard links, no traversal, at most 10 MiB; containment is enforced by the kernel on macOS via `O_NOFOLLOW_ANY` and by the descriptor's real path on Linux), uploads it with its SHA-256, and finalizes a NOUS artifact version. Reusing the same `publication_id` retries safely. The root comes from the local binding (`--root` in the launch argv), never from tool arguments; `mcp install --root PATH` picks it when more than one workspace is registered. The root limits what can be published, not what Codex can read. Publication requires `ARTIFACTS_ENABLED=true` on the server. Argv carries only the API origin, the state directory, and the opaque credential handle; tokens stay in the owner-only store. Diagnostics go to stderr. Gateway rejections come back as tool errors and are never retried: 401 asks you to reconnect with `--tools`, 403 names a missing `tools:read` scope or an out-of-project resource, 422 forwards the gateway's argument reason, and 503 reports NOUS's own reason (tools disabled, artifact publication disabled, or artifact storage unavailable). `nous-harness run` prints a stderr notice when the connection lacks `tools:read` and managed sessions therefore get no NOUS tools.
 
 ## Disconnect, recovery, and kill switch
 
