@@ -55,7 +55,7 @@ async function backend(reply: (request: Seen) => { code: number; body: unknown }
       requests.push(seen);
       const { code, body } = reply(seen);
       response.writeHead(code, { "Content-Type": "application/json" });
-      response.end(JSON.stringify(body));
+      response.end(typeof body === "string" ? body : JSON.stringify(body));
     });
   });
   server.listen(0, "127.0.0.1");
@@ -146,7 +146,7 @@ test("save sends the keeper's bound grant header exactly once and only handoff f
 
 test("a 409 is returned as an isError result carrying the latest version, not thrown", async () => {
   const latest = handoff(4);
-  const server = await backend(() => ({ code: 409, body: latest }));
+  const server = await backend(() => ({ code: 409, body: { detail: "Handoff is stale", latest } }));
   try {
     const tool = saveHandoffTool(new HandoffHttpClient(server.origin, credentials));
     const outcome = await tool.call({ expected_parent_version: 2, goal: "Stale" });
@@ -159,18 +159,36 @@ test("a 409 is returned as an isError result carrying the latest version, not th
   }
 });
 
-test("a 409 without a stored version surfaces the backend detail", async () => {
+test("a 409 envelope without a latest version surfaces its detail", async () => {
   const server = await backend(() => ({
     code: 409,
-    body: { detail: "No handoff exists yet; send expected_parent_version null" },
+    body: { detail: "Handoff version conflict", latest: null },
   }));
   try {
     const tool = saveHandoffTool(new HandoffHttpClient(server.origin, credentials));
     const outcome = await tool.call({ expected_parent_version: 1, goal: "First" });
     assert.equal(outcome.isError, true);
-    assert.match(outcome.text, /send expected_parent_version null/);
+    assert.match(outcome.text, /^Not saved: Handoff version conflict/);
   } finally {
     await server.close();
+  }
+});
+
+test("a 409 with an unparsable body is a conflict, not an unknown outcome", async () => {
+  for (const body of ["not json at all", { latest: { version: "x" } }, { something: 1 }]) {
+    const server = await backend(() => ({ code: 409, body }));
+    try {
+      const client = new HandoffHttpClient(server.origin, credentials);
+      const payload = {
+        handoff_id: randomUUID(), expected_parent_version: null, goal: "g", harness_name: "codex",
+      };
+      assert.deepEqual(await client.save(payload), { conflict: null, detail: "NOUS reported a conflict" });
+      const outcome = await saveHandoffTool(client).call({ expected_parent_version: null, goal: "g" });
+      assert.equal(outcome.isError, true);
+      assert.doesNotMatch(outcome.text, /unknown/);
+    } finally {
+      await server.close();
+    }
   }
 });
 
