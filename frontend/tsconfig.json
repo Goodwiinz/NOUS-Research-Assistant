@@ -59,8 +59,6 @@
     "src/components/layout/Sidebar.tsx",
     "src/components/monitoring/PerformanceMetricsDashboard.tsx",
     "src/components/monitoring/SystemOverviewDashboard.tsx",
-    "src/components/search/QueryRewriter.tsx",
-    "src/components/search/ResultAggregator.tsx",
     "src/components/ui/enhanced-new-chat-dialog.tsx",
     "src/components/ui/shadcn-io/**/*",
     "src/services/analytics/**/*",

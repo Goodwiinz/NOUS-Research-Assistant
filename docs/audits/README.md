@@ -11,6 +11,7 @@ Dated source reviews, findings, reproduction probes and saved execution evidence
 | [2026-09-29-live-evidence/](2026-09-29-live-evidence/) | Retained records and supporting files |
 | [2026-09-30-live-evidence/](2026-09-30-live-evidence/) | Retained records and supporting files |
 | [2026-09-30b-live-evidence/](2026-09-30b-live-evidence/) | Retained records and supporting files |
+| [2026-10-04-live-evidence-r8/](2026-10-04-live-evidence-r8/README.md) | R8 live evidence: real worker, beat and live providers for GOO-319 and GOO-320 |
 | [agent/](agent/README.md) | Agent audit rounds |
 | [agent-orchestration-2026-09-25/](agent-orchestration-2026-09-25/) | Retained records and supporting files |
 | [chat/](chat/README.md) | Chat and streaming audits |
@@ -41,6 +42,8 @@ Dated source reviews, findings, reproduction probes and saved execution evidence
 | [2026-09-30b-goo-300-imports.md](2026-09-30b-goo-300-imports.md) | GOO-300 — search-result import, corpus export and coverage: evidence (2026-09-30b) |
 | [2026-09-30b-goo-301-302-screening.md](2026-09-30b-goo-301-302-screening.md) | GOO-301 / GOO-302 — screening queues and blind dual review: evidence (2026-09-30b) |
 | [2026-09-30b-goo-303-acquisition-prisma.md](2026-09-30b-goo-303-acquisition-prisma.md) | GOO-303 — full-text acquisition and derived PRISMA 2020 flow: evidence (2026-09-30b) |
+| [2026-10-04-goo-319-live.md](2026-10-04-goo-319-live.md) | GOO-319: scheduled search updates under a real worker, beat and live providers: evidence (2026-10-04) |
+| [2026-10-04-goo-320-live.md](2026-10-04-goo-320-live.md) | GOO-320: superseding review versions on a real scheduled delta: evidence (2026-10-04) |
 | [AUDIT_AGENT_PROMPT_TEMPLATE.md](AUDIT_AGENT_PROMPT_TEMPLATE.md) | Audit agent prompt template |
 | [AUDIT_LEDGER_TEMPLATE.md](AUDIT_LEDGER_TEMPLATE.md) | Audit ledger template |
 | [SCOPE_PARTITIONING.md](SCOPE_PARTITIONING.md) | Scope partitioning for multi-agent audits |

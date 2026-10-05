@@ -93,3 +93,4 @@ Dated implementation proposals, task breakdowns, remediation roadmaps and delive
 | [2026-09-30-goo-320-superseding-reviews.md](2026-09-30-goo-320-superseding-reviews.md) | GOO-320 Superseding Review Versions + Reconciled Update Accounting Plan (Academic R8) |
 | [2026-10-01-agent-audit-round8-fixes.md](2026-10-01-agent-audit-round8-fixes.md) | Agent audit round 8 — fix plan |
 | [2026-10-01-daily-research-brief.md](2026-10-01-daily-research-brief.md) | Daily Research Brief: audited workflow ship plan |
+| [2026-10-04-harness-plan-amendment.md](2026-10-04-harness-plan-amendment.md) | Harness bridge and artifact plans: 2026-10-04 amendment |
