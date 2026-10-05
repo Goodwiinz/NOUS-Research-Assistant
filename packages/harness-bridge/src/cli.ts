@@ -226,7 +226,7 @@ export async function connect(
     announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
   const chatLabel =
         typeof consent.thread_label === "string"
-      ? `${consent.thread_label.replace(/[\x00-\x1f\x7f]/g, "")} `
+      ? `${consent.thread_label.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "")} `
       : "";
   announce(
     options.threadId

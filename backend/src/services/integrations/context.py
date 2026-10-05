@@ -53,14 +53,19 @@ def check_scopes(scopes: Iterable[str]) -> None:
         raise IntegrationAccessDenied()
 
 
-async def authorized_project(
-    db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
-) -> Row[Any]:
+def _owner_or_member(user_id: UUID) -> Any:
+    """The joined Workspace is owned by, or has a live membership for, the user."""
     member = exists().where(
         WorkspaceMember.workspace_id == Workspace.id,
         WorkspaceMember.user_id == user_id,
         WorkspaceMember.is_deleted.is_(False),
     )
+    return or_(Workspace.owner_id == user_id, member)
+
+
+async def authorized_project(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
+) -> Row[Any]:
     row = (
         await db.execute(
             select(Collection.id, Collection.name, Workspace.id.label("workspace_id"))
@@ -69,7 +74,7 @@ async def authorized_project(
                 Collection.id == project_id,
                 Collection.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                or_(Workspace.owner_id == user_id, member),
+                _owner_or_member(user_id),
                 exists().where(
                     Organization.id == Workspace.organization_id,
                     Organization.is_deleted.is_(False),
@@ -136,7 +141,7 @@ async def validate_binding(
                 Thread.is_deleted.is_(False),
                 Conversation.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                Workspace.owner_id == user_id,
+                _owner_or_member(user_id),
                 Workspace.organization_id == organization_id,
                 Thread.source_project_id == project_id,
             )
@@ -223,8 +228,12 @@ async def mint_integration_grant(
             )
             .execution_options(populate_existing=True)
         )
+        # A chat-bound consent authorizes only its chat; a project-wide
+        # consent (thread_id NULL) authorizes any chat in the project.
         matching_consents = [
-            consent for consent in consents if scopes <= set(consent.scopes)
+            consent
+            for consent in consents
+            if scopes <= set(consent.scopes) and consent.thread_id in (None, thread_id)
         ]
         # A device may have more than one consumed consent lineage. Selecting
         # the first database row is nondeterministic and can mint run authority
