@@ -48,8 +48,25 @@ def live(value: datetime) -> bool:
     return value.replace(tzinfo=timezone.utc) > now()
 
 
-def check_scopes(scopes: Iterable[str]) -> None:
-    if not scopes or not set(scopes) <= STANDARD_SCOPES:
+# A grant never carries a library scope without the gateway scope the
+# /integrations/tools router requires, nor a write without its read.
+_SCOPE_REQUIRES = {
+    "library:read": frozenset({"tools:read"}),
+    "library:write": frozenset({"library:read", "tools:write"}),
+}
+# Harness runs and artifact publication stay bound to one Collection.
+_PROJECT_ONLY_SCOPES = frozenset({"harness:execute", "artifacts:publish"})
+
+
+def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> None:
+    held = set(scopes)
+    if not held or not held <= STANDARD_SCOPES:
+        raise IntegrationAccessDenied()
+    if any(
+        not needed <= held for scope, needed in _SCOPE_REQUIRES.items() if scope in held
+    ):
+        raise IntegrationAccessDenied()
+    if workspace_bound and held & _PROJECT_ONLY_SCOPES:
         raise IntegrationAccessDenied()
 
 
@@ -98,6 +115,68 @@ async def authorized_project(
     return row
 
 
+async def authorized_workspace(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, workspace_id: UUID
+) -> Row[Any]:
+    """The workspace if the user owns it or is a live member, under the same
+    rules as ``authorized_project``: a public workspace alone is not access,
+    and the owning organization, the user and the user's organization are live."""
+    member = exists().where(
+        WorkspaceMember.workspace_id == Workspace.id,
+        WorkspaceMember.user_id == user_id,
+        WorkspaceMember.is_deleted.is_(False),
+    )
+    row = (
+        await db.execute(
+            select(Workspace.id, Workspace.name).where(
+                Workspace.id == workspace_id,
+                Workspace.is_deleted.is_(False),
+                or_(Workspace.owner_id == user_id, member),
+                exists().where(
+                    Organization.id == Workspace.organization_id,
+                    Organization.is_deleted.is_(False),
+                    Organization.is_active.is_(True),
+                ),
+                exists().where(
+                    User.id == user_id,
+                    User.organization_id == organization_id,
+                    User.is_active.is_(True),
+                    User.is_deleted.is_(False),
+                ),
+                exists().where(
+                    Organization.id == organization_id,
+                    Organization.is_deleted.is_(False),
+                    Organization.is_active.is_(True),
+                ),
+            )
+        )
+    ).first()
+    if row is None:
+        raise IntegrationAccessDenied()
+    return row
+
+
+async def authorized_scope(db: AsyncSession, context: IntegrationContext) -> set[UUID]:
+    """Collection ids the grant may touch; re-checked on every call."""
+    if context.project_id is not None:
+        row = await authorized_project(
+            db, context.user_id, context.organization_id, context.project_id
+        )
+        return {UUID(str(row.id))}
+    if context.workspace_id is None:
+        raise IntegrationAccessDenied()
+    await authorized_workspace(
+        db, context.user_id, context.organization_id, context.workspace_id
+    )
+    rows = await db.execute(
+        select(Collection.id).where(
+            Collection.workspace_id == context.workspace_id,
+            Collection.is_deleted.is_(False),
+        )
+    )
+    return {UUID(str(value)) for value in rows.scalars().all()}
+
+
 async def owned_device(
     db: AsyncSession, device_id: UUID, user_id: UUID, organization_id: UUID
 ) -> BridgeDevice:
@@ -122,12 +201,21 @@ async def validate_binding(
     *,
     user_id: UUID,
     organization_id: UUID,
-    project_id: UUID,
+    project_id: UUID | None,
+    workspace_id: UUID | None = None,
     thread_id: UUID | None = None,
     run_id: UUID | str | None = None,
     device_id: UUID | None = None,
 ) -> None:
-    await authorized_project(db, user_id, organization_id, project_id)
+    if project_id is not None and workspace_id is None:
+        await authorized_project(db, user_id, organization_id, project_id)
+    elif workspace_id is not None and project_id is None:
+        await authorized_workspace(db, user_id, organization_id, workspace_id)
+        # A workspace has no single project for a chat or a run to belong to.
+        if thread_id is not None or run_id is not None:
+            raise IntegrationAccessDenied()
+    else:
+        raise IntegrationAccessDenied()
     if device_id is not None:
         await owned_device(db, device_id, user_id, organization_id)
     if thread_id is not None:
@@ -172,7 +260,8 @@ def _new_grant(
     *,
     user_id: UUID,
     organization_id: UUID,
-    project_id: UUID,
+    project_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     scopes: Iterable[str],
     thread_id: UUID | None = None,
     run_id: UUID | str | None = None,
@@ -185,6 +274,7 @@ def _new_grant(
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
+        workspace_id=workspace_id,
         scopes=sorted(scopes),
         thread_id=thread_id,
         run_id=str(run_id) if run_id else None,
@@ -202,19 +292,21 @@ async def mint_integration_grant(
     *,
     user_id: UUID,
     organization_id: UUID,
-    project_id: UUID,
+    project_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     scopes: frozenset[str],
     thread_id: UUID | None = None,
     run_id: UUID | None = None,
     device_id: UUID | None = None,
 ) -> IssuedGrant:
     """Trusted internal API. External issuance must use the consent exchange."""
-    check_scopes(scopes)
+    check_scopes(scopes, workspace_bound=workspace_id is not None)
     await validate_binding(
         db,
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
+        workspace_id=workspace_id,
         thread_id=thread_id,
         run_id=run_id,
         device_id=device_id,
@@ -227,6 +319,7 @@ async def mint_integration_grant(
                 IntegrationGrantRequest.user_id == user_id,
                 IntegrationGrantRequest.organization_id == organization_id,
                 IntegrationGrantRequest.project_id == project_id,
+                IntegrationGrantRequest.workspace_id == workspace_id,
                 IntegrationGrantRequest.device_id == device_id,
                 IntegrationGrantRequest.status == "consumed",
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
@@ -252,6 +345,7 @@ async def mint_integration_grant(
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
+        workspace_id=workspace_id,
         scopes=scopes,
         thread_id=thread_id,
         run_id=run_id,
@@ -273,12 +367,13 @@ async def _validate_grant(
         or not live(grant.expires_at)
     ):
         raise IntegrationAccessDenied()
-    check_scopes(grant.scopes)
+    check_scopes(grant.scopes, workspace_bound=grant.workspace_id is not None)
     await validate_binding(
         db,
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
         thread_id=grant.thread_id,
         run_id=grant.run_id,
         device_id=grant.device_id,
@@ -292,6 +387,7 @@ async def _validate_grant(
                 IntegrationGrantRequest.user_id == grant.user_id,
                 IntegrationGrantRequest.organization_id == grant.organization_id,
                 IntegrationGrantRequest.project_id == grant.project_id,
+                IntegrationGrantRequest.workspace_id == grant.workspace_id,
                 IntegrationGrantRequest.device_id == grant.device_id,
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
                 IntegrationGrantRequest.is_deleted.is_(False),
@@ -321,6 +417,7 @@ async def resolve_integration_context(
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
         thread_id=grant.thread_id,
         run_id=UUID(grant.run_id) if grant.run_id else None,
         grant_id=grant.id,
@@ -363,12 +460,13 @@ async def revoke_integration_grant(
 async def create_request(
     db: AsyncSession, user: Any, data: GrantRequestCreate
 ) -> GrantRequestDTO:
-    check_scopes(data.scopes)
+    check_scopes(data.scopes, workspace_bound=data.workspace_id is not None)
     await validate_binding(
         db,
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=data.project_id,
+        workspace_id=data.workspace_id,
         device_id=data.device_id,
         thread_id=data.thread_id,
     )
@@ -377,6 +475,7 @@ async def create_request(
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=data.project_id,
+        workspace_id=data.workspace_id,
         device_id=data.device_id,
         thread_id=data.thread_id,
         scopes=sorted(data.scopes),
@@ -408,6 +507,7 @@ async def owned_request(
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=request.project_id,
+        workspace_id=request.workspace_id,
         device_id=request.device_id,
         thread_id=request.thread_id,
     )
@@ -416,9 +516,17 @@ async def owned_request(
 
 async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantRequestDTO:
     request = await owned_request(db, user, request_id)
-    project = await authorized_project(
-        db, user.id, user.organization_id, request.project_id
-    )
+    project_label = workspace_label = None
+    if request.project_id is not None:
+        project = await authorized_project(
+            db, user.id, user.organization_id, request.project_id
+        )
+        project_label = project.name
+    elif request.workspace_id is not None:
+        workspace = await authorized_workspace(
+            db, user.id, user.organization_id, request.workspace_id
+        )
+        workspace_label = workspace.name
     device = await owned_device(db, request.device_id, user.id, user.organization_id)
     status = request.status
     if status in {"pending", "approved"} and not live(request.expires_at):
@@ -437,9 +545,11 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         expires_at=request.expires_at,
         approval_url=f"/integrations/approve?request_id={request.id}",
         project_id=request.project_id,
+        workspace_id=request.workspace_id,
         device_id=request.device_id,
         scopes=set(request.scopes),
-        project_label=project.name,
+        project_label=project_label,
+        workspace_label=workspace_label,
         device_label=device.label,
         thread_id=request.thread_id,
         thread_label=thread_label,
@@ -493,6 +603,7 @@ async def exchange_request(
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=request.project_id,
+        workspace_id=request.workspace_id,
         device_id=request.device_id,
         thread_id=request.thread_id,
         scopes=request.scopes,
@@ -540,6 +651,7 @@ async def renew_grant(db: AsyncSession, user: Any, grant_id: UUID) -> IssuedGran
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
         device_id=grant.device_id,
         scopes=grant.scopes,
         thread_id=grant.thread_id,

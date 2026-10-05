@@ -1,12 +1,14 @@
 """Restricted grant authorization, using a local SQLite database."""
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from secrets import token_urlsafe
 from typing import Any, AsyncIterator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import delete, insert, text, update
+from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.requests import Request
@@ -25,6 +27,9 @@ from src.services.integrations.context import (
 
 pytestmark = pytest.mark.unit
 USER, ORG, PROJECT, WORKSPACE = (uuid4() for _ in range(4))
+# PROJECT is the first live Collection of WORKSPACE; P2 is the second and P3 is
+# soft-deleted (the `library` fixture). OTHER_WORKSPACE is never seeded.
+P2, P3, OTHER_WORKSPACE = (uuid4() for _ in range(3))
 SOON = datetime.now(timezone.utc) + timedelta(hours=1)
 
 
@@ -760,3 +765,512 @@ async def test_database_enforces_the_binding_rule(
         return
     with pytest.raises(IntegrityError, match=f"ck_{table_name}_{constraint}"):
         await db.execute(row)
+
+
+# --- Workspace-scoped grants (Plan 07, slice 1) -----------------------------
+
+
+@pytest.fixture
+async def library(db: AsyncSession) -> None:
+    """WORKSPACE holds the live PROJECT and P2, plus the soft-deleted P3."""
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(id=P2, name="Second", workspace_id=WORKSPACE, is_deleted=False),
+                dict(id=P3, name="Retired", workspace_id=WORKSPACE, is_deleted=True),
+            ]
+        )
+    )
+    await db.commit()
+
+
+async def _mint(
+    db: AsyncSession,
+    *,
+    project_id: UUID | None = None,
+    workspace_id: UUID | None = None,
+    scopes: set[str],
+) -> str:
+    """Store a grant row with a known token and return the bearer token."""
+    from src.models.integration_grant import IntegrationGrant
+
+    token = "nous_ig_" + token_urlsafe(32)
+    db.add(
+        IntegrationGrant(
+            id=uuid4(),
+            user_id=USER,
+            organization_id=ORG,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            scopes=sorted(scopes),
+            token_hash=sha256(token.encode()).hexdigest(),
+            expires_at=SOON,
+            consented_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+    return token
+
+
+async def _second_workspace(db: AsyncSession) -> UUID:
+    """Another workspace the same user owns, so only the binding differs."""
+    second = uuid4()
+    await db.execute(
+        insert(Workspace).values(
+            id=second, name="Second workspace", owner_id=USER, organization_id=ORG
+        )
+    )
+    await db.commit()
+    return second
+
+
+LIBRARY_READ = {"tools:read", "library:read"}
+
+
+async def test_workspace_grant_resolves_context_with_workspace(
+    db: AsyncSession,
+) -> None:
+    token = await _mint(db, workspace_id=WORKSPACE, scopes=LIBRARY_READ)
+    ctx = await resolve_integration_context(db, token, required_scope="library:read")
+    assert ctx.project_id is None and ctx.workspace_id == WORKSPACE
+
+
+async def test_authorized_scope_lists_live_collections_of_workspace(
+    db: AsyncSession, library: None
+) -> None:
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import authorized_scope
+
+    ctx = IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=None,
+        workspace_id=WORKSPACE,
+        grant_id=uuid4(),
+    )
+    assert await authorized_scope(db, ctx) == {PROJECT, P2}  # soft-deleted P3 out
+
+
+async def test_authorized_scope_of_a_project_grant_is_just_that_project(
+    db: AsyncSession, library: None
+) -> None:
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import authorized_scope
+
+    ctx = IntegrationContext(
+        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+    )
+    assert await authorized_scope(db, ctx) == {PROJECT}
+
+
+@pytest.mark.parametrize("case", ["unknown", "public_non_member", "deleted"])
+async def test_authorized_scope_refuses_foreign_workspace(
+    db: AsyncSession, library: None, case: str
+) -> None:
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import authorized_scope
+
+    workspace = OTHER_WORKSPACE
+    if case == "public_non_member":
+        await db.execute(
+            insert(Workspace).values(
+                id=OTHER_WORKSPACE,
+                name="Theirs",
+                owner_id=uuid4(),
+                organization_id=ORG,
+                is_public=True,
+            )
+        )
+    elif case == "deleted":
+        workspace = WORKSPACE
+        await db.execute(update(Workspace).values(is_deleted=True))
+    await db.commit()
+    ctx = IntegrationContext(
+        user_id=USER, organization_id=ORG, workspace_id=workspace, grant_id=uuid4()
+    )
+    with pytest.raises(IntegrationAccessDenied):
+        await authorized_scope(db, ctx)
+
+
+@pytest.mark.parametrize("model", [Workspace, User, Organization])
+async def test_deleted_ancestor_denies_a_workspace_grant_each_call(
+    db: AsyncSession, model: Any
+) -> None:
+    token = await _mint(db, workspace_id=WORKSPACE, scopes=LIBRARY_READ)
+    await resolve_integration_context(db, token, required_scope="library:read")
+    await db.execute(update(model).values(is_deleted=True))
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(db, token, required_scope="library:read")
+
+
+@pytest.mark.parametrize("owning_org_state", ["inactive", "deleted", "missing"])
+async def test_workspace_grant_follows_membership_not_organization(
+    db: AsyncSession, owning_org_state: str
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # Same rule as a project grant: an explicitly invited member of a workspace
+    # owned by another live organization may hold a grant, a public workspace
+    # alone is not access, and the owning organization must stay live.
+    owning_org = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning_org, name="Owning organization", storage_limit_bytes=1000000
+        )
+    )
+    await db.execute(
+        update(Workspace).values(
+            owner_id=uuid4(), organization_id=owning_org, is_public=True
+        )
+    )
+    await db.commit()
+    kwargs: dict[str, Any] = dict(
+        user_id=USER,
+        organization_id=ORG,
+        workspace_id=WORKSPACE,
+        scopes=frozenset(LIBRARY_READ),
+    )
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(db, **kwargs)
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    issued = await mint_integration_grant(db, **kwargs)
+    ctx = await resolve_integration_context(
+        db, issued.token, required_scope="library:read"
+    )
+    assert (ctx.organization_id, ctx.workspace_id) == (ORG, WORKSPACE)
+
+    if owning_org_state == "missing":
+        await db.execute(delete(Organization).where(Organization.id == owning_org))
+    else:
+        changes = (
+            {"is_active": False}
+            if owning_org_state == "inactive"
+            else {"is_deleted": True}
+        )
+        await db.execute(
+            update(Organization).where(Organization.id == owning_org).values(**changes)
+        )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(
+            db, issued.token, required_scope="library:read"
+        )
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(db, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "bindings", [{}, {"project_id": PROJECT, "workspace_id": WORKSPACE}]
+)
+def test_context_and_request_bind_exactly_one_of_project_or_workspace(
+    bindings: dict[str, Any],
+) -> None:
+    from pydantic import ValidationError
+
+    from src.schemas.integration_context import GrantRequestCreate, IntegrationContext
+
+    with pytest.raises(ValidationError):
+        IntegrationContext(
+            user_id=USER, organization_id=ORG, grant_id=uuid4(), **bindings
+        )
+    with pytest.raises(ValidationError):
+        GrantRequestCreate(device_id=uuid4(), scopes={"tools:read"}, **bindings)
+
+
+@pytest.mark.parametrize(
+    "bindings,extra",
+    [
+        ({"project_id": None, "workspace_id": None}, {}),
+        ({"project_id": PROJECT, "workspace_id": WORKSPACE}, {}),
+        ({"project_id": None, "workspace_id": WORKSPACE}, {"thread_id": uuid4()}),
+        ({"project_id": None, "workspace_id": WORKSPACE}, {"run_id": uuid4()}),
+    ],
+)
+async def test_validate_binding_needs_one_binding_and_no_chat_on_a_workspace(
+    db: AsyncSession, bindings: dict[str, Any], extra: dict[str, Any]
+) -> None:
+    from src.services.integrations.context import validate_binding
+
+    with pytest.raises(IntegrationAccessDenied):
+        await validate_binding(
+            db, user_id=USER, organization_id=ORG, **bindings, **extra
+        )
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
+        {"library:read"},
+        {"harness:execute", "library:read"},
+        {"tools:read", "library:write"},
+        {"tools:read", "tools:write", "library:write"},  # no library:read
+        {"tools:read", "library:read", "library:write"},  # no tools:write
+    ],
+)
+def test_library_scopes_need_the_gateway_scopes_they_imply(scopes: set[str]) -> None:
+    with pytest.raises(IntegrationAccessDenied):
+        check_scopes(scopes)
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
+        {"tools:read", "library:read"},
+        {"tools:read", "tools:write", "library:read", "library:write"},
+        {"harness:execute", "tools:read", "tools:write", "library:read"},
+    ],
+)
+def test_complete_library_scope_sets_are_accepted(scopes: set[str]) -> None:
+    check_scopes(scopes)
+
+
+@pytest.mark.parametrize("scope", ["harness:execute", "artifacts:publish"])
+async def test_workspace_grants_are_mcp_only(
+    db: AsyncSession, owner: Any, scope: str
+) -> None:
+    from src.models.integration_grant import IntegrationGrantRequest
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import create_request, register_device
+
+    scopes = LIBRARY_READ | {scope}
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            workspace_id=WORKSPACE,
+            scopes=frozenset(scopes),
+        )
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    with pytest.raises(IntegrationAccessDenied):
+        await create_request(
+            db,
+            owner,
+            GrantRequestCreate(
+                workspace_id=WORKSPACE, device_id=device.id, scopes=scopes
+            ),
+        )
+    # Refused before anything is stored, not merely hidden on read-back.
+    assert await db.scalar(select(func.count(IntegrationGrantRequest.id))) == 0
+    # A row that slipped in some other way is refused when it is resolved.
+    token = await _mint(db, workspace_id=WORKSPACE, scopes=scopes)
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(db, token, required_scope=scope)
+
+
+async def test_workspace_consent_binds_the_grant_and_survives_renewal(
+    db: AsyncSession, owner: Any
+) -> None:
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import (
+        create_request,
+        decide_request,
+        exchange_request,
+        register_device,
+        renew_grant,
+    )
+
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    shown = await create_request(
+        db,
+        owner,
+        GrantRequestCreate(
+            workspace_id=WORKSPACE, device_id=device.id, scopes=LIBRARY_READ
+        ),
+    )
+    assert (shown.project_id, shown.project_label) == (None, None)
+    assert (shown.workspace_id, shown.workspace_label) == (
+        WORKSPACE,
+        "Project workspace",
+    )
+    await decide_request(db, owner, shown.id, True)
+    issued = await exchange_request(db, owner, shown.id)
+    ctx = await resolve_integration_context(
+        db, issued.token, required_scope="library:read"
+    )
+    assert (ctx.project_id, ctx.workspace_id) == (None, WORKSPACE)
+
+    renewed = await renew_grant(db, owner, issued.grant_id)
+    ctx = await resolve_integration_context(
+        db, renewed.token, required_scope="library:read"
+    )
+    assert (ctx.project_id, ctx.workspace_id) == (None, WORKSPACE)
+    # The consent's scope ceiling still holds across the renewal.
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(
+            db, renewed.token, required_scope="tools:write"
+        )
+
+
+async def test_request_for_a_foreign_workspace_is_refused_before_storing(
+    db: AsyncSession, owner: Any
+) -> None:
+    from src.models.integration_grant import IntegrationGrantRequest
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import create_request, register_device
+
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    with pytest.raises(IntegrationAccessDenied):
+        await create_request(
+            db,
+            owner,
+            GrantRequestCreate(
+                workspace_id=OTHER_WORKSPACE, device_id=device.id, scopes=LIBRARY_READ
+            ),
+        )
+    assert await db.scalar(select(func.count(IntegrationGrantRequest.id))) == 0
+
+
+async def test_workspace_request_cannot_carry_a_chat(
+    db: AsyncSession, owner: Any
+) -> None:
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import create_request, register_device
+
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    with pytest.raises(IntegrationAccessDenied):
+        await create_request(
+            db,
+            owner,
+            GrantRequestCreate(
+                workspace_id=WORKSPACE,
+                device_id=device.id,
+                scopes=LIBRARY_READ,
+                thread_id=uuid4(),
+            ),
+        )
+
+
+async def _consent(
+    db: AsyncSession, owner: Any, device_id: UUID, workspace_id: UUID
+) -> None:
+    from src.schemas.integration_context import GrantRequestCreate
+    from src.services.integrations.context import (
+        create_request,
+        decide_request,
+        exchange_request,
+    )
+
+    request = await create_request(
+        db,
+        owner,
+        GrantRequestCreate(
+            workspace_id=workspace_id, device_id=device_id, scopes=LIBRARY_READ
+        ),
+    )
+    await decide_request(db, owner, request.id, True)
+    await exchange_request(db, owner, request.id)
+
+
+async def test_device_mint_needs_a_consent_for_the_same_workspace(
+    db: AsyncSession, owner: Any
+) -> None:
+    from src.schemas.integration_context import DeviceCreate
+    from src.services.integrations.context import register_device
+
+    other = await _second_workspace(db)
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    await _consent(db, owner, device.id, WORKSPACE)
+    kwargs: dict[str, Any] = dict(
+        user_id=USER,
+        organization_id=ORG,
+        device_id=device.id,
+        scopes=frozenset(LIBRARY_READ),
+    )
+    # A consent for one workspace is not authority over another workspace, nor
+    # over a single project, even one inside the consented workspace.
+    for denied in ({"workspace_id": other}, {"project_id": PROJECT}):
+        with pytest.raises(IntegrationAccessDenied):
+            await mint_integration_grant(db, **kwargs, **denied)
+    issued = await mint_integration_grant(db, **kwargs, workspace_id=WORKSPACE)
+    ctx = await resolve_integration_context(
+        db, issued.token, required_scope="library:read"
+    )
+    assert (ctx.project_id, ctx.workspace_id) == (None, WORKSPACE)
+
+
+async def test_workspace_grant_consent_is_rechecked_against_its_workspace(
+    db: AsyncSession, owner: Any
+) -> None:
+    from src.models.integration_grant import IntegrationGrant
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import (
+        create_request,
+        decide_request,
+        exchange_request,
+        register_device,
+    )
+
+    other = await _second_workspace(db)
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    request = await create_request(
+        db,
+        owner,
+        GrantRequestCreate(
+            workspace_id=WORKSPACE, device_id=device.id, scopes=LIBRARY_READ
+        ),
+    )
+    await decide_request(db, owner, request.id, True)
+    issued = await exchange_request(db, owner, request.id)
+    await resolve_integration_context(db, issued.token, required_scope="library:read")
+    # Re-pointing the grant at another workspace the user owns must not borrow
+    # the consent that was given for the first one.
+    await db.execute(
+        update(IntegrationGrant)
+        .where(IntegrationGrant.id == issued.grant_id)
+        .values(workspace_id=other)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(
+            db, issued.token, required_scope="library:read"
+        )
+
+
+async def test_http_grant_request_takes_a_workspace_or_a_project_not_both(
+    db: AsyncSession, owner: Any
+) -> None:
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from src.api.integrations import router
+    from src.core.database import get_db
+    from src.core.dependencies import get_current_user
+    from src.core.security import TokenData, get_current_user_token
+    from src.schemas.integration_context import DeviceCreate
+    from src.services.integrations.context import register_device
+
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: owner
+    token = TokenData(is_cli=True, user_id=str(USER), organization_id=str(ORG))
+    app.dependency_overrides[get_current_user_token] = lambda: token
+    url = "/api/v1/integrations/grant-requests"
+    body: dict[str, Any] = {"device_id": str(device.id), "scopes": sorted(LIBRARY_READ)}
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        shown = await client.post(url, json={**body, "workspace_id": str(WORKSPACE)})
+        assert shown.status_code == 200
+        assert shown.json()["workspace_id"] == str(WORKSPACE)
+        assert shown.json()["workspace_label"] == "Project workspace"
+        assert shown.json()["project_id"] is None
+        assert shown.json()["project_label"] is None
+        for bindings in (
+            {},
+            {"workspace_id": str(WORKSPACE), "project_id": str(PROJECT)},
+        ):
+            assert (
+                await client.post(url, json={**body, **bindings})
+            ).status_code == 422
+        refused = await client.post(url, json={**body, "workspace_id": str(uuid4())})
+        assert refused.status_code == 403
+        assert refused.json() == {"detail": "Integration access denied"}

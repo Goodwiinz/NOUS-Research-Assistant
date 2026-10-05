@@ -1,10 +1,10 @@
-"""Shared, project-scoped integration identity and pairing HTTP contracts."""
+"""Shared, project- or workspace-scoped integration identity and pairing contracts."""
 
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Scopes some route enforces, plus context:read (kept for PR #1784, which
 # enforces it) and library:write (consented from Plan 07 slice 1, enforced by
@@ -30,13 +30,22 @@ class IntegrationContext(BaseModel):
     model_config = ConfigDict(frozen=True)
     user_id: UUID
     organization_id: UUID
-    project_id: UUID
+    # Exactly one binding. project_id: one Collection (today's model).
+    # workspace_id: every live Collection the user can see in that workspace.
+    project_id: UUID | None = None
+    workspace_id: UUID | None = None
     thread_id: UUID | None = None
     run_id: UUID | None = None
     grant_id: UUID
     # The consumed consent request the grant was exchanged from; None for
     # trusted internal issuance. Renewed grants share it.
     consent_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _one_binding(self) -> "IntegrationContext":
+        if (self.project_id is None) == (self.workspace_id is None):
+            raise ValueError("exactly one of project_id or workspace_id")
+        return self
 
 
 class IssuedGrant(BaseModel):
@@ -46,10 +55,17 @@ class IssuedGrant(BaseModel):
 
 class GrantRequestCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    project_id: UUID
+    project_id: UUID | None = None
+    workspace_id: UUID | None = None
     device_id: UUID
     scopes: set[str]
     thread_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _one_binding(self) -> "GrantRequestCreate":
+        if (self.project_id is None) == (self.workspace_id is None):
+            raise ValueError("exactly one of project_id or workspace_id")
+        return self
 
 
 GrantRequestStatus = Literal["pending", "approved", "denied", "expired", "consumed"]
@@ -60,10 +76,12 @@ class GrantRequestDTO(BaseModel):
     status: GrantRequestStatus
     expires_at: datetime
     approval_url: str
-    project_id: UUID
+    project_id: UUID | None
+    workspace_id: UUID | None = None
     device_id: UUID
     scopes: set[str]
-    project_label: str
+    project_label: str | None
+    workspace_label: str | None = None
     device_label: str
     thread_id: UUID | None = None
     thread_label: str | None = None

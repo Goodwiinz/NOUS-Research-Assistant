@@ -16359,15 +16359,14 @@ export interface components {
              * Format: uuid
              */
             device_id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id?: string | null;
             /** Scopes */
             scopes: string[];
             /** Thread Id */
             thread_id?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
@@ -16390,13 +16389,10 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /** Scopes */
             scopes: string[];
             /**
@@ -16408,6 +16404,10 @@ export interface components {
             thread_id?: string | null;
             /** Thread Label */
             thread_label?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Workspace Label */
+            workspace_label?: string | null;
         };
         /**
          * GraphAnalytics
