@@ -16,12 +16,12 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event, select
 from sqlalchemy.exc import OperationalError
-from tests.unit.tasks.test_ingestion_stage_guard_postgres import _ingestion
 
 from src.models.document import Document, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.tasks import processing_tasks as pt
+from tests.unit.tasks.test_ingestion_stage_guard_postgres import _ingestion
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
 
