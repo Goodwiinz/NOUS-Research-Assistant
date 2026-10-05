@@ -95,7 +95,7 @@ export async function connect(
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
   if (options.threadId !== undefined) {
-    if (!uuid(options.projectId)) throw new Error("--chat requires --project");
+    if (!options.projectId) throw new Error("--chat requires --project");
     if (!uuid(options.threadId)) throw new Error("--chat must be a chat UUID");
   }
   if (!uuid(options.projectId) || !options.label.trim())
@@ -218,7 +218,9 @@ export async function connect(
   if (carried.length)
     announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
   const chatLabel =
-    typeof consent.thread_label === "string" ? `${consent.thread_label} ` : "";
+        typeof consent.thread_label === "string"
+      ? `${consent.thread_label.replace(/[\x00-\x1f\x7f]/g, "")} `
+      : "";
   announce(
     options.threadId
       ? `Connected to project ${options.projectId}, chat ${chatLabel}(${options.threadId}).`
@@ -524,7 +526,7 @@ export function recoverInterrupt(
   }
 }
 const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write]] | workspace add --root PATH [--label NAME] | run
-  connect --chat UUID binds the grant to one NOUS chat in --project; standalone publications land there. Reconnect without --chat to unbind.
+  connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
   nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action.

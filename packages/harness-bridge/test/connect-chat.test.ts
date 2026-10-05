@@ -22,7 +22,7 @@ function fakeNous(calls: { url: string; body: any }[]): typeof fetch {
       data = {
         id: "33333333-3333-4333-8333-333333333333",
         approval_url: "https://nous.test/a",
-        thread_label: "Literature review",
+        thread_label: "Literature\x1b review\x07",
       };
     else if (url.endsWith("/exchange")) data = { token: "grant" };
     else data = { status: "approved" };
@@ -48,6 +48,7 @@ test("connect --chat binds the consent request and local state to one chat", asy
     assert.equal(bound.body.thread_id, CHAT);
     const state = () => JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
     assert.equal(state().threadId, CHAT);
+    // Server-supplied labels cannot inject terminal control sequences.
     assert.ok(messages.at(-1)!.includes(`chat Literature review (${CHAT})`));
 
     // Reconnecting without --chat leaves the request unchanged and unbinds.
@@ -70,6 +71,10 @@ test("connect --chat rejects a missing project and a non-UUID chat before any re
     stateDir: join(tmpdir(), "nous-connect-chat-unused"),
   };
   await assert.rejects(connect({ ...base, projectId: "", threadId: CHAT }), /--chat requires --project/);
+  await assert.rejects(
+    connect({ ...base, projectId: "not-a-uuid", threadId: CHAT }),
+    /project UUID and device label required/,
+  );
   await assert.rejects(
     connect({ ...base, projectId: PROJECT, threadId: "not-a-uuid" }),
     /--chat must be a chat UUID/,
