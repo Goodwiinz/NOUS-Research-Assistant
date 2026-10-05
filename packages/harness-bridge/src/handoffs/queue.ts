@@ -2,7 +2,7 @@ import type { CredentialStore } from "../credentials.ts";
 import { GrantExpired } from "../grants.ts";
 import { record } from "../rpc.ts";
 import { ReauthenticationRequired } from "../mcp/client.ts";
-import { statusOf, type Handoff, type HandoffCreate, type SaveOutcome } from "./client.ts";
+import { statusOf, uuid, type Handoff, type HandoffCreate, type SaveOutcome } from "./client.ts";
 
 /**
  * Local journal of handoff saves, one owner-only file per handoff_id.
@@ -29,7 +29,7 @@ export type QueueEntry = {
 export type Binding = { threadId: string; projectId: string };
 export type Attempt =
   | { state: "done"; saved: Handoff }
-  | { state: "conflicted"; latest: Handoff | null; detail?: string }
+  | { state: "conflicted"; latest: Handoff | null; detail: string }
   | { state: "rejected"; error: Error }
   | { state: "pending"; error: Error; reconnect: boolean };
 export type FlushResult = {
@@ -38,9 +38,6 @@ export type FlushResult = {
 };
 
 const PREFIX = "handoff-";
-const uuid = (value: unknown): value is string =>
-  typeof value === "string" &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
 function entryOf(value: unknown): QueueEntry | null {
   if (
@@ -139,13 +136,13 @@ export class HandoffQueue {
       await this.store.removeLocal(key);
       return { state: "done", saved: outcome.saved };
     }
-    const { last_error: _stale, ...rest } = entry;
+    // The 409 envelope's `latest` is kept for a manual merge; never merged here.
     await this.store.writeLocal(key, {
-      ...rest,
+      ...entry,
       state: "conflicted",
       latest: outcome.conflict,
-      ...(outcome.detail ? { last_error: outcome.detail } : {}),
+      last_error: outcome.detail,
     });
-    return { state: "conflicted", latest: outcome.conflict, ...(outcome.detail ? { detail: outcome.detail } : {}) };
+    return { state: "conflicted", latest: outcome.conflict, detail: outcome.detail };
   }
 }

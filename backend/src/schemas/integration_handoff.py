@@ -10,9 +10,14 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-HandoffLine = Annotated[str, Field(min_length=1, max_length=500)]
+HandoffLine = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
+]
+HandoffGoal = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
+]
 
 
 class HandoffInvalid(Exception):
@@ -22,7 +27,7 @@ class HandoffInvalid(Exception):
 class HandoffResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     artifact_version_id: UUID
-    summary: str = Field(min_length=1, max_length=500)
+    summary: HandoffLine
 
 
 class HandoffCreate(BaseModel):
@@ -30,12 +35,20 @@ class HandoffCreate(BaseModel):
     handoff_id: UUID
     # None only for the first handoff in a chat.
     expected_parent_version: int | None = Field(ge=1)
-    goal: str = Field(min_length=1, max_length=2000)
+    goal: HandoffGoal
     decisions: list[HandoffLine] = Field(default_factory=list, max_length=50)
     remaining: list[HandoffLine] = Field(default_factory=list, max_length=50)
     results: list[HandoffResult] = Field(default_factory=list, max_length=50)
     harness_name: str = Field(min_length=1, max_length=64)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("results")
+    @classmethod
+    def _distinct_versions(cls, results: list[HandoffResult]) -> list[HandoffResult]:
+        ids = [result.artifact_version_id for result in results]
+        if len(ids) != len(set(ids)):
+            raise ValueError("results must name each artifact version once")
+        return results
 
 
 class HandoffDTO(BaseModel):
@@ -52,6 +65,14 @@ class HandoffDTO(BaseModel):
     harness_name: str
     harness_session_id: str | None
     created_at: datetime
+
+
+class HandoffConflictBody(BaseModel):
+    """The single 409 envelope; ``latest`` is None when no version exists or
+    the conflicting writer could not be re-read."""
+
+    detail: str
+    latest: HandoffDTO | None
 
 
 class HandoffConflict(Exception):

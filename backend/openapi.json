@@ -13750,6 +13750,31 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HandoffConflictBody": {
+        "description": "The single 409 envelope; ``latest`` is None when no version exists or\nthe conflicting writer could not be re-read.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HandoffDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "detail",
+          "latest"
+        ],
+        "title": "HandoffConflictBody",
+        "type": "object"
+      },
       "HandoffCreate": {
         "additionalProperties": false,
         "properties": {
@@ -43380,11 +43405,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HandoffDTO"
+                  "$ref": "#/components/schemas/HandoffConflictBody"
                 }
               }
             },
-            "description": "Latest handoff"
+            "description": "Merge with latest"
           },
           "422": {
             "content": {

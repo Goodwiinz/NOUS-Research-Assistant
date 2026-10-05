@@ -12,7 +12,11 @@ from src.api.integrations.auth import require_integration_context
 from src.core.config import settings
 from src.core.database import get_db
 from src.schemas.integration_context import IntegrationContext
-from src.schemas.integration_handoff import HandoffCreate, HandoffDTO
+from src.schemas.integration_handoff import (
+    HandoffConflictBody,
+    HandoffCreate,
+    HandoffDTO,
+)
 from src.services.integrations import handoffs
 from src.services.integrations.context import IntegrationAccessDenied
 
@@ -39,7 +43,7 @@ async def read_latest_handoff(
 @router.post(
     "",
     response_model=HandoffDTO,
-    responses={409: {"model": HandoffDTO, "description": "Latest handoff"}},
+    responses={409: {"model": HandoffConflictBody, "description": "Merge with latest"}},
 )
 async def save_handoff(
     payload: HandoffCreate,
@@ -55,10 +59,13 @@ async def save_handoff(
     except handoffs.HandoffInvalid as error:
         raise HTTPException(422, str(error)) from error
     except handoffs.HandoffConflict as error:
-        if error.latest is None:
-            raise HTTPException(
-                409, "No handoff exists yet; send expected_parent_version null"
-            ) from error
-        return JSONResponse(
-            status_code=409, content=error.latest.model_dump(mode="json")
+        # One envelope for every 409; the rejected payload is never stored.
+        body = HandoffConflictBody(
+            detail=(
+                "Handoff is stale; merge with the latest version and retry"
+                if error.latest is not None
+                else "Handoff version conflict"
+            ),
+            latest=error.latest,
         )
+        return JSONResponse(status_code=409, content=body.model_dump(mode="json"))

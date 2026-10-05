@@ -48,10 +48,16 @@ def upgrade() -> None:
         _fk("consent_id", "integration_grant_requests.id", nullable=True),
         _fk("created_by_user_id", "users.id"),
         sa.UniqueConstraint(
-            "thread_id", "version", name="uq_integration_handoffs_thread_version"
+            "thread_id",
+            "project_id",
+            "version",
+            name="uq_integration_handoffs_thread_project_version",
         ),
         sa.UniqueConstraint(
-            "thread_id", "handoff_id", name="uq_integration_handoffs_thread_handoff"
+            "thread_id",
+            "project_id",
+            "handoff_id",
+            name="uq_integration_handoffs_thread_project_handoff",
         ),
     )
     op.create_index("ix_integration_handoffs_id", "integration_handoffs", ["id"])

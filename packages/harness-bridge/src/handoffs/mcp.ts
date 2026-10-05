@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { ReauthenticationRequired, ToolRequestRejected } from "../mcp/client.ts";
 import type { LocalTool } from "../mcp/server.ts";
-import type { Handoff, HandoffCreate, HandoffHttpClient } from "./client.ts";
+import { uuid, type Handoff, type HandoffCreate, type HandoffHttpClient } from "./client.ts";
 import type { Binding, HandoffQueue } from "./queue.ts";
-
-const uuid = (value: unknown): value is string =>
-  typeof value === "string" &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const lines = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
@@ -128,7 +124,7 @@ export function saveHandoffTool(queue: HandoffQueue, binding: () => Promise<Bind
       if (attempt.state === "conflicted") {
         // Not stored: the caller merges with the latest version and retries.
         if (attempt.latest === null)
-          return { text: `Not saved: ${attempt.detail ?? "NOUS reported a conflict"}.`, isError: true };
+          return { text: `Not saved: ${attempt.detail}. Read the latest with get_nous_handoff, merge, and retry.`, isError: true };
         return {
           text: `Not saved: the chat's latest handoff is version ${attempt.latest.version}. Merge your changes into it and retry with expected_parent_version ${attempt.latest.version} and a new handoff_id. Latest: ${JSON.stringify(attempt.latest)}`,
           structured: structured(attempt.latest),

@@ -57,7 +57,7 @@ async function backend(observe: (handoffId: string) => void = () => {}) {
       if (state.mode === "offline") return request.socket.destroy();
       const [code, body]: [number, unknown] = {
         ok: [201, dto(1, id)],
-        conflict: [409, dto(7)],
+        conflict: [409, { detail: "expected_parent_version is stale", latest: dto(7) }],
         forbidden: [403, { detail: "no" }],
         invalid: [422, { detail: "bad goal" }],
         unauthorized: [401, { detail: "expired" }],
@@ -171,6 +171,7 @@ test("a 409 marks the entry conflicted, stores and prints the latest, and flush 
     const [entry] = await t.entries();
     assert.equal(entry.state, "conflicted");
     assert.equal(entry.latest?.version, 7);
+    assert.equal(entry.last_error, "expected_parent_version is stale");
     assert.match(t.lines.join("\n"), /latest handoff is version 7/);
     assert.match(t.lines.join("\n"), /"version": 7/);
     nous.state.mode = "ok";

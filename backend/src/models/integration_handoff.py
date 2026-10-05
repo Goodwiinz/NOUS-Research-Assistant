@@ -13,11 +13,17 @@ class IntegrationHandoff(BaseModel):
     __tablename__ = "integration_handoffs"
     __table_args__ = (
         UniqueConstraint(
-            "thread_id", "version", name="uq_integration_handoffs_thread_version"
+            "thread_id",
+            "project_id",
+            "version",
+            name="uq_integration_handoffs_thread_project_version",
         ),
         # Per thread, never global: a global key would let tenants probe ids.
         UniqueConstraint(
-            "thread_id", "handoff_id", name="uq_integration_handoffs_thread_handoff"
+            "thread_id",
+            "project_id",
+            "handoff_id",
+            name="uq_integration_handoffs_thread_project_handoff",
         ),
     )
     organization_id: Mapped[UUID] = mapped_column(

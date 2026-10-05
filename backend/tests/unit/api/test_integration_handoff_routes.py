@@ -13,7 +13,11 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.security import TokenData, get_current_user_token
 from src.schemas.integration_context import IntegrationContext
-from src.schemas.integration_handoff import HandoffCreate, HandoffDTO
+from src.schemas.integration_handoff import (
+    HandoffConflictBody,
+    HandoffCreate,
+    HandoffDTO,
+)
 from src.services.integrations.context import IntegrationAccessDenied
 from src.services.integrations.handoffs import HandoffConflict, HandoffInvalid
 
@@ -204,10 +208,11 @@ def test_conflict_returns_latest_dto(client: TestClient, state: dict[str, Any]) 
     state["save"] = HandoffConflict(LATEST)
     response = client.post(URL, json=_body(), headers=_headers("rw"))
     assert response.status_code == 409
-    assert HandoffDTO.model_validate(response.json()) == LATEST
+    body = HandoffConflictBody.model_validate(response.json())
+    assert body.latest == LATEST and "latest" in body.detail
 
 
-def test_conflict_without_latest_explains(
+def test_conflict_without_latest_uses_same_envelope(
     client: TestClient, state: dict[str, Any]
 ) -> None:
     state["save"] = HandoffConflict(None)
@@ -215,7 +220,7 @@ def test_conflict_without_latest_explains(
         URL, json=_body(expected_parent_version=1), headers=_headers("rw")
     )
     assert response.status_code == 409
-    assert "expected_parent_version null" in response.json()["detail"]
+    assert response.json() == {"detail": "Handoff version conflict", "latest": None}
 
 
 def test_foreign_version_is_422(client: TestClient, state: dict[str, Any]) -> None:

@@ -5,16 +5,21 @@ import { apiBase, throwForStatus } from "../mcp/client.ts";
 
 export type Handoff = components["schemas"]["HandoffDTO"];
 export type HandoffCreate = components["schemas"]["HandoffCreate"];
+export type HandoffConflictBody = components["schemas"]["HandoffConflictBody"];
 /** A save outcome: stored, or a 409 carrying the latest version to merge. */
 export type SaveOutcome =
   | { saved: Handoff }
-  | { conflict: Handoff | null; detail?: string };
+  | { conflict: Handoff | null; detail: string };
 
 const MESSAGES = {
   forbidden:
     "NOUS denied the handoff: the grant may lack handoff:read/handoff:write or is not bound to a chat (reconnect with nous-harness connect --chat UUID --tools --handoff)",
   disabled: "NOUS integration tools are disabled",
 };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const uuid = (value: unknown): value is string =>
+  typeof value === "string" && UUID_RE.test(value);
+const CONFLICT_DETAIL = "NOUS reported a conflict";
 const STATUS = Symbol("httpStatus");
 /** The HTTP status behind a failed handoff request; undefined for network failures. */
 export function statusOf(error: unknown): number | undefined {
@@ -32,9 +37,6 @@ async function check(response: Response): Promise<void> {
     throw error;
   }
 }
-const uuid = (value: unknown): value is string =>
-  typeof value === "string" &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
 function parseHandoff(data: unknown): Handoff {
   const value = data as Handoff;
@@ -48,6 +50,21 @@ function parseHandoff(data: unknown): Handoff {
   )
     throw new Error("invalid NOUS handoff");
   return value;
+}
+
+/** Every 409 is `{detail, latest}`; anything else is reported, never guessed. */
+function parseConflict(data: unknown): SaveOutcome {
+  const body = data as Partial<HandoffConflictBody> | undefined;
+  const detail =
+    typeof body?.detail === "string" && body.detail.length <= 500 ? body.detail : CONFLICT_DETAIL;
+  if (typeof body !== "object" || body === null || body.latest === undefined)
+    return { conflict: null, detail: CONFLICT_DETAIL };
+  if (body.latest === null) return { conflict: null, detail };
+  try {
+    return { conflict: parseHandoff(body.latest), detail };
+  } catch {
+    return { conflict: null, detail: CONFLICT_DETAIL };
+  }
 }
 
 /** Scoped HTTPS client for the chat handoff bound to this grant. */
@@ -70,12 +87,7 @@ export class HandoffHttpClient {
   async save(payload: HandoffCreate): Promise<SaveOutcome> {
     const response = await this.send("POST", "/integrations/handoffs", payload);
     // throwForStatus drops structured bodies; the 409 body is the latest version.
-    if (response.status === 409) {
-      const data = await this.json(response).catch(() => undefined);
-      const detail = (data as { detail?: unknown } | undefined)?.detail;
-      if (typeof detail === "string") return { conflict: null, detail: detail.slice(0, 500) };
-      return { conflict: parseHandoff(data) };
-    }
+    if (response.status === 409) return parseConflict(await this.json(response).catch(() => undefined));
     await check(response);
     return { saved: parseHandoff(await this.json(response)) };
   }

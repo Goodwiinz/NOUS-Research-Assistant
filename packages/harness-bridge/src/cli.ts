@@ -304,7 +304,7 @@ export async function connect(
     announce(`Re-registered ${carried.length} workspace root(s) on the new device.`);
   const chatLabel =
         typeof consent.thread_label === "string"
-      ? `${consent.thread_label.replace(/[\x00-\x1f\x7f]/g, "")} `
+      ? `${consent.thread_label.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "")} `
       : "";
   announce(
     options.threadId
@@ -664,7 +664,7 @@ function reportAttempt(handoffId: string, attempt: Attempt, announce: (m: string
   else if (attempt.state === "conflicted")
     announce(
       attempt.latest === null
-        ? `Not saved (${handoffId}): ${attempt.detail ?? "NOUS reported a conflict"}. Kept as conflicted.`
+        ? `Not saved (${handoffId}): ${attempt.detail}. Kept as conflicted; read the latest with nous-harness handoff show and merge it yourself.`
         : `Not saved (${handoffId}): the chat's latest handoff is version ${attempt.latest.version}. Kept as conflicted; merge your changes into it yourself and save again with --parent ${attempt.latest.version} and a new handoff_id. Latest:\n${JSON.stringify(attempt.latest, null, 2)}`,
     );
   else if (attempt.state === "rejected")

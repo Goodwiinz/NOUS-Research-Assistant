@@ -24,7 +24,7 @@ from src.models.integration_grant import IntegrationGrant, IntegrationGrantReque
 from src.models.organization import Organization
 from src.models.thread import Thread
 from src.models.user import User
-from src.models.workspace import Workspace, WorkspaceMember
+from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.artifact import (
     ArtifactProvenance,
     PublishVersionRequest,
@@ -42,6 +42,7 @@ from src.services.integrations.context import (
     create_request,
     decide_request,
     exchange_request,
+    mint_integration_grant,
     register_device,
     renew_grant,
     request_dto,
@@ -176,11 +177,13 @@ async def db() -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
-async def _request(db: AsyncSession, thread_id: UUID) -> GrantRequestDTO:
-    device = await register_device(db, OWNER, DeviceCreate(label="Laptop"))
+async def _request(
+    db: AsyncSession, thread_id: UUID | None, user: Any = OWNER
+) -> GrantRequestDTO:
+    device = await register_device(db, user, DeviceCreate(label="Laptop"))
     return await create_request(
         db,
-        OWNER,
+        user,
         GrantRequestCreate(
             project_id=PROJECT, device_id=device.id, scopes=SCOPES, thread_id=thread_id
         ),
@@ -294,3 +297,45 @@ async def test_standalone_publication_lands_in_the_bound_chat(
     )
     assert [r.reference.version_id for r in rows] == [version.version_id]
     assert rows[0].reference.run_id is None
+
+
+async def _mint(db: AsyncSession, device_id: UUID, thread_id: UUID) -> Any:
+    return await mint_integration_grant(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        scopes=frozenset({"tools:read"}),
+        thread_id=thread_id,
+        device_id=device_id,
+    )
+
+
+async def test_chat_bound_consent_mints_only_for_its_chat(db: AsyncSession) -> None:
+    bound = await _request(db, THREAD)
+    await decide_request(db, OWNER, bound.id, approved=True)
+    await exchange_request(db, OWNER, bound.id)
+    with pytest.raises(IntegrationAccessDenied):
+        await _mint(db, bound.device_id, UNTITLED_THREAD)
+    assert await _mint(db, bound.device_id, THREAD)
+
+
+async def test_project_wide_consent_mints_for_any_chat(db: AsyncSession) -> None:
+    wide = await _request(db, None)
+    await decide_request(db, OWNER, wide.id, approved=True)
+    await exchange_request(db, OWNER, wide.id)
+    assert await _mint(db, wide.device_id, UNTITLED_THREAD)
+
+
+async def test_workspace_member_can_bind_a_project_chat(db: AsyncSession) -> None:
+    member = SimpleNamespace(id=OTHER_USER, organization_id=ORG)
+    with pytest.raises(IntegrationAccessDenied):
+        await _request(db, THREAD, member)
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=OTHER_USER, role=WorkspaceRole.EDITOR
+        )
+    )
+    await db.commit()
+    request = await _request(db, THREAD, member)
+    assert request.thread_id == THREAD

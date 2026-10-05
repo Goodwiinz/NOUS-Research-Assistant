@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, insert, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models.artifact import Artifact, ArtifactVersion
@@ -411,7 +412,11 @@ async def test_browser_read_is_org_scoped(db: AsyncSession) -> None:
         {"remaining": ["r" * 501]},
         {"remaining": ["r"] * 51},
         {"decisions": ["d" * 501]},
-        {"results": [{"artifact_version_id": uuid4(), "summary": "s"}] * 51},
+        {
+            "results": [
+                {"artifact_version_id": uuid4(), "summary": "s"} for _ in range(51)
+            ]
+        },
         {"results": [{"artifact_version_id": uuid4(), "summary": "s" * 501}]},
         {"harness_name": "h" * 65},
         {"harness_session_id": "s" * 129},
@@ -424,3 +429,70 @@ def test_payload_bounds(bad: dict[str, Any]) -> None:
     data.update(bad)
     with pytest.raises(ValidationError):
         HandoffCreate(**data)
+
+
+async def test_reattached_thread_starts_a_fresh_chain(db: AsyncSession) -> None:
+    await save(db, _ctx(), _payload())
+    await save(db, _ctx(), _payload(parent=1))
+    await save(db, _ctx(), _payload(parent=2))
+    await db.execute(
+        update(Thread)
+        .where(Thread.id == THREAD)
+        .values(source_project_id=OTHER_PROJECT)
+    )
+    await db.commit()
+    moved = _ctx(project=OTHER_PROJECT)
+    assert await read_latest(db, moved) is None
+    first = await save(
+        db,
+        moved,
+        _payload(
+            results=[{"artifact_version_id": OTHER_PROJECT_VERSION, "summary": "B"}]
+        ),
+    )
+    assert first.version == 1 and first.project_id == OTHER_PROJECT
+    # The browser shows only the chain of the thread's current project.
+    assert (
+        await read_latest_for_thread(db, organization_id=ORG, thread_id=THREAD)
+    ) == first
+    assert await _count(db) == 4
+
+
+async def test_non_chain_integrity_error_is_not_a_conflict(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing_commit() -> None:
+        raise IntegrityError(
+            "INSERT",
+            {},
+            Exception(
+                'insert violates foreign key constraint "fk_integration_handoffs_grant_id"'
+            ),
+        )
+
+    monkeypatch.setattr(db, "commit", failing_commit)
+    with pytest.raises(IntegrityError):
+        await save(db, _ctx(), _payload())
+
+
+def test_text_is_stripped_and_blank_lines_rejected() -> None:
+    payload = _payload(goal="  Goal  ", decisions=[" d "])
+    assert payload.goal == "Goal" and payload.decisions == ["d"]
+    blanks: list[dict[str, Any]] = [{"goal": "   "}, {"remaining": ["  "]}]
+    for bad in blanks:
+        data = _payload().model_dump()
+        data.update(bad)
+        with pytest.raises(ValidationError):
+            HandoffCreate(**data)
+    with pytest.raises(ValidationError):
+        _payload(results=[{"artifact_version_id": VERSION, "summary": " "}])
+
+
+def test_duplicate_result_versions_rejected() -> None:
+    with pytest.raises(ValidationError, match="each artifact version once"):
+        _payload(
+            results=[
+                {"artifact_version_id": VERSION, "summary": "a"},
+                {"artifact_version_id": VERSION, "summary": "b"},
+            ]
+        )

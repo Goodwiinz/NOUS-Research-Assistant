@@ -28,7 +28,9 @@ function Section({
       </h4>
       <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-(--nous-fg-2)">
         {items.map((item, index) => (
-          <li key={index}>{item}</li>
+          <li key={index} className="break-words">
+            {item}
+          </li>
         ))}
       </ul>
     </div>
@@ -60,7 +62,9 @@ export function HandoffCard({
       <h3 className="font-nous-ui text-xs font-semibold text-(--nous-fg-1)">
         Handoff
       </h3>
-      <p className="mt-1 text-sm text-(--nous-fg-1)">{handoff.goal}</p>
+      <p className="mt-1 text-sm break-words text-(--nous-fg-1)">
+        {handoff.goal}
+      </p>
       <Section label="Decisions" items={handoff.decisions} />
       {handoff.results.length > 0 && (
         <div className="mt-2">
@@ -71,7 +75,7 @@ export function HandoffCard({
             {handoff.results.map((result) => {
               const artifact = byVersion.get(result.artifact_version_id);
               return (
-                <li key={result.artifact_version_id}>
+                <li key={result.artifact_version_id} className="break-words">
                   {artifact && onOpenVersion ? (
                     <button
                       type="button"

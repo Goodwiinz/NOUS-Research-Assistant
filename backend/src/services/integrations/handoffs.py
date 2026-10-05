@@ -1,8 +1,9 @@
 """Versioned chat handoff record: harness-written structured data, never an
 LLM summary. Optimistic concurrency per thread; the service owns the commit.
 
-Every query is scoped by organization and thread, and integration reads also
-by the grant's project. A conflict returns the latest version; the rejected
+Every query is scoped by organization, thread and project: a chain belongs to
+one (thread, project) pair, so a chat re-attached to another project starts a
+fresh chain and never shows the previous project's handoffs. A conflict returns the latest version; the rejected
 content is never stored.
 """
 
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.artifact import Artifact, ArtifactVersion
 from src.models.integration_handoff import IntegrationHandoff
+from src.models.thread import Thread
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_handoff import (
     HandoffConflict,
@@ -48,17 +50,17 @@ async def _latest_row(
     *,
     organization_id: UUID,
     thread_id: UUID,
-    project_id: UUID | None = None,
+    project_id: UUID,
 ) -> IntegrationHandoff | None:
-    query = select(IntegrationHandoff).where(
-        IntegrationHandoff.organization_id == organization_id,
-        IntegrationHandoff.thread_id == thread_id,
-        IntegrationHandoff.is_deleted.is_(False),
-    )
-    if project_id is not None:
-        query = query.where(IntegrationHandoff.project_id == project_id)
     row = await db.scalar(
-        query.order_by(IntegrationHandoff.version.desc())
+        select(IntegrationHandoff)
+        .where(
+            IntegrationHandoff.organization_id == organization_id,
+            IntegrationHandoff.thread_id == thread_id,
+            IntegrationHandoff.project_id == project_id,
+            IntegrationHandoff.is_deleted.is_(False),
+        )
+        .order_by(IntegrationHandoff.version.desc())
         .limit(1)
         .execution_options(populate_existing=True)
     )
@@ -132,6 +134,18 @@ async def _check_results(
         )
 
 
+_RACE_CONSTRAINTS = "uq_integration_handoffs_"
+# SQLite (unit tests) reports columns, not the constraint name.
+_SQLITE_UNIQUE = "UNIQUE constraint failed: integration_handoffs."
+
+
+def _is_chain_race(error: IntegrityError) -> bool:
+    """Only our per-chain uniqueness means "lost a race"; any other integrity
+    failure (e.g. a foreign key) is a real error and must surface."""
+    message = str(error.orig)
+    return _RACE_CONSTRAINTS in message or _SQLITE_UNIQUE in message
+
+
 async def _conflict(
     db: AsyncSession, context: IntegrationContext, thread_id: UUID
 ) -> HandoffConflict:
@@ -160,8 +174,20 @@ async def read_latest(
 async def read_latest_for_thread(
     db: AsyncSession, *, organization_id: UUID, thread_id: UUID
 ) -> HandoffDTO | None:
-    """Browser path; the caller has already authorized the thread."""
-    row = await _latest_row(db, organization_id=organization_id, thread_id=thread_id)
+    """Browser path; the caller has already authorized the thread. Only the
+    chain of the thread's current project is shown."""
+    row = await db.scalar(
+        select(IntegrationHandoff)
+        .join(Thread, Thread.id == IntegrationHandoff.thread_id)
+        .where(
+            IntegrationHandoff.organization_id == organization_id,
+            IntegrationHandoff.thread_id == thread_id,
+            IntegrationHandoff.project_id == Thread.source_project_id,
+            IntegrationHandoff.is_deleted.is_(False),
+        )
+        .order_by(IntegrationHandoff.version.desc())
+        .limit(1)
+    )
     return _dto(row) if row is not None else None
 
 
@@ -205,9 +231,11 @@ async def save(
     db.add(row)
     try:
         await db.commit()
-    except IntegrityError:
-        # A concurrent writer took this version (or this handoff_id) first.
+    except IntegrityError as error:
         await db.rollback()
+        if not _is_chain_race(error):
+            raise
+        # A concurrent writer took this version (or this handoff_id) first.
         replay = await _replayed(db, context, thread_id, payload.handoff_id)
         if replay is not None and _same_body(replay, payload):
             return _dto(replay)
