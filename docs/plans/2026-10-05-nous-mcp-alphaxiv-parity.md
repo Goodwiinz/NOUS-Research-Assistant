@@ -114,7 +114,7 @@ In `integration_grant.py`, for **both** `IntegrationGrantRequest` and `Integrati
     )
 ```
 
-(`from sqlalchemy import CheckConstraint`; use the real table name in each constraint name.) Same two column changes on `IntegrationToolAction` in `tool_action.py`, constraint name `ck_integration_tool_actions_one_binding`.
+(`from sqlalchemy import CheckConstraint`; use the real table name in each constraint name.) On `IntegrationToolAction` in `tool_action.py` the two columns mean different things — `project_id` is the **target** Collection of the action, `workspace_id` is the grant **binding** — and a workspace-grant action targeting a Collection sets **both**. So the actions table gets an OR constraint, not XOR: `CheckConstraint("project_id IS NOT NULL OR workspace_id IS NOT NULL", name="ck_integration_tool_actions_some_binding")`. (Codex review on #1881, plan L1013.)
 
 Migration `hb03_workspace_grants.py` (set `down_revision` to the output of `cd backend && $PY -m alembic heads`; must be a single head):
 
@@ -148,16 +148,22 @@ def upgrade() -> None:
             ),
         )
         op.alter_column(table, "project_id", nullable=True)
-        op.create_check_constraint(
-            f"ck_{table}_one_binding", table, "(project_id IS NULL) <> (workspace_id IS NULL)"
-        )
+        if table == "integration_tool_actions":
+            op.create_check_constraint(
+                f"ck_{table}_some_binding", table, "project_id IS NOT NULL OR workspace_id IS NOT NULL"
+            )
+        else:
+            op.create_check_constraint(
+                f"ck_{table}_one_binding", table, "(project_id IS NULL) <> (workspace_id IS NULL)"
+            )
         op.create_index(f"ix_{table}_workspace_id", table, ["workspace_id"])
 
 
 def downgrade() -> None:
     for table in TABLES:
         op.drop_index(f"ix_{table}_workspace_id", table_name=table)
-        op.drop_constraint(f"ck_{table}_one_binding", table, type_="check")
+        name = "some_binding" if table == "integration_tool_actions" else "one_binding"
+        op.drop_constraint(f"ck_{table}_{name}", table, type_="check")
         op.execute(f"DELETE FROM {table} WHERE project_id IS NULL")
         op.alter_column(table, "project_id", nullable=False)
         op.drop_column(table, "workspace_id")
@@ -310,6 +316,8 @@ Thread through the binding:
 - `exchange_request`: pass `request.workspace_id` to `_new_grant`.
 - `_validate_grant`: pass both to `validate_binding`; the consent lookup compares `project_id` **and** `workspace_id`.
 - `resolve_integration_context`: `project_id=grant.project_id, workspace_id=grant.workspace_id`.
+- `check_scopes`: scope implications so a grant can never carry a library scope without the gateway scope the `/tools` router requires: `library:read` ⇒ `tools:read`; `library:write` ⇒ `library:read` and `tools:write`. Raise `IntegrationAccessDenied` otherwise. Test both. (Codex #1881 L454: the `/integrations/tools` dependency stays `tools:read`.)
+- Workspace grants are MCP-only: `create_request`/`mint_integration_grant` reject `harness:execute` and `artifacts:publish` when `workspace_id` is set (`IntegrationAccessDenied`). Test it. (Codex #1881 L493.)
 
 **Step 4:** Tests → PASS. Run the whole `backend/tests/unit/services/integrations` + `backend/tests/unit/api/test_integration_*` → PASS.
 
@@ -500,7 +508,7 @@ test("--library requires --tools and --write", () => {
   ];
 ```
 
-Consent body: `{ ...(options.projectId ? { project_id } : { workspace_id }), device_id, scopes }`. Persist `workspaceId` in `LocalState`. `mcpSession`: `...(state.scopes?.includes("library:write") ? { library: true } : {})`; `McpSession.library?: boolean`. Argv in `mcp/config.ts`: `...(session.library ? ["--library"] : [])` (used in Slice 3). README: document `--workspace`, `--library`.
+`--workspace` is MCP-only: throw `"--workspace cannot be combined with --publish"`, and build the scope list **without** `harness:execute` when `workspaceId` is set (harness runs and artifact publication stay project-bound; the backend refuses them anyway, Task 1.3). `mcpSession`/`sessionOptionsFor`: when `state.workspaceId` is set, never offer `outputRoot` and make the managed-session path throw `"workspace connections are MCP-only; reconnect with --project to run harness sessions"`. Tests for both. Consent body: `{ ...(options.projectId ? { project_id } : { workspace_id }), device_id, scopes }`. Persist `workspaceId` in `LocalState`. `mcpSession`: `...(state.scopes?.includes("library:write") ? { library: true } : {})`; `McpSession.library?: boolean`. Argv in `mcp/config.ts`: `...(session.library ? ["--library"] : [])` (used in Slice 3). README: document `--workspace`, `--library`.
 
 **Step 4:** type-check + tests → PASS. **Step 5:** Commit `feat(harness-bridge): connect --workspace and --library`.
 
@@ -794,6 +802,14 @@ Failing test: fake the service function via `monkeypatch`, assert it is called w
 # Slice 3 — Library writes with auto-run
 
 Branch: `feat/plan07-s3-library-actions`. Depends on S1.
+
+> **Review amendments (Codex on PR #1881, 2026-10-05) — apply these when executing S3; they supersede the task text below where they conflict:**
+> 1. Scope per action, not per route. `request_action` checks `REQUIRED_SCOPE_FOR[tool_name]` ∈ `actor.scopes` (`tools:write` for `create_project_note`, `delete_folder`, `ingest_arxiv_papers`; `library:write` for the auto-run set) and `_authority_intact` re-checks the **same per-action scope** on the live grant. Tests: a `library:write`-only grant cannot request or execute `delete_folder` / `ingest_arxiv_papers`; a `tools:write`-only grant gets `awaiting_approval` for library actions. (L945)
+> 2. Selector vs identity. Split `IDENTITY_KEYS` (actor identity: `user_id`, `organization_id`, `thread_id`, `run_id`, `grant_id`) from `SELECTOR_KEYS` (`project_id`, `from_project_id`, `to_project_id`): `_only` rejects identity keys, validators parse selectors, `_resolve_target` validates them against `authorized_scope`. Project grants still reject any selector that is not the bound project. (L877)
+> 3. Targets without a project selector. `update_document_metadata` resolves its target Collection through **live `CollectionDocument` membership** of `document_id` within `authorized_scope` (ambiguous across several in-scope Collections → use the first by name, record all in the receipt). `ingest_arxiv_papers` under a workspace grant **requires** a `project_id` selector (add to its validator; project grants ignore/forbid it). (L1001, L912)
+> 4. Non-committing effects only. `_tool_ingest_arxiv` opens its own sessions and writes object storage, so it cannot run inside `_run_effect`'s single transaction: keep `ingest_arxiv_papers` on the approval path **and** execute it through the existing Celery drain with its own idempotency key, recording the receipt after the fact (same pattern as today's approved notes if they already run via the worker; otherwise mark the row `executing` and let the worker `_finish`). Document the weaker atomicity in the receipt. (L1035)
+> 5. `PUT /files/{id}` has no service; the router commits inline. Extract `services/documents/file_metadata_service.update_file_metadata(db, file_id, user, *, title, tags, commit=True)` in S3, point the router at it (behaviour unchanged, architecture tests green), then call it with `commit=False` from `_run_effect`. (L1033)
+> 6. `IntegrationToolAction` rows for workspace actions set both `project_id` (target) and `workspace_id` (binding); `create_folder` sets only `workspace_id`. Matches the OR constraint from Task 1.2. (L1013)
 
 ### Task 3.1: Action registry with per-action validators and effect modes
 
