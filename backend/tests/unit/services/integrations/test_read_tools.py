@@ -1070,8 +1070,14 @@ async def test_find_researchers_orders_by_papers_then_name_and_honours_limit(
         "alan TURING",
         "Ada Lovelace",
     ]
-    default = await _find(db, context, query="a")
-    assert len(default.content[0]["researchers"]) == 3
+    # Cut by limit: the caller is told the list is incomplete.
+    assert two.content[0]["truncated"] is True
+    for complete in (
+        await _find(db, context, query="a"),  # default limit 10
+        await _find(db, context, query="a", limit=3),  # exactly the matches
+    ):
+        assert len(complete.content[0]["researchers"]) == 3
+        assert "truncated" not in complete.content[0]
 
 
 async def test_find_researchers_internal_clamp_is_defence_in_depth(
@@ -1402,7 +1408,53 @@ async def test_get_researcher_result_stays_under_the_size_cap(
     assert 0 < len(payload["coauthors"]) < 100
     assert payload["truncated"] is True
     assert payload["papers"], "papers are kept while co-authors absorb the trim"
-    assert len(json.dumps(payload, ensure_ascii=False).encode()) <= 20_000
+    envelope = {
+        "content": result.content,
+        "is_error": result.is_error,
+        "source_refs": result.source_refs,
+    }
+    assert len(json.dumps(envelope, ensure_ascii=False).encode()) <= 20_000
+
+
+async def test_get_researcher_size_cap_counts_source_refs(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = [uuid4() for _ in range(100)]
+    await db.execute(
+        insert(Document).values(
+            [
+                dict(
+                    _document_row(document_id, f"p{index}"),
+                    document_metadata={"authors": ["Prolific Author"]},
+                    created_at=datetime(2025, 1, 1) + timedelta(minutes=index),
+                )
+                for index, document_id in enumerate(ids)
+            ]
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            [dict(collection_id=PROJECT, document_id=i) for i in ids]
+        )
+    )
+    await db.commit()
+    full = await _get(db, context, "prolific author")
+    assert len(full.source_refs) == 100 and "truncated" not in full.content[0]
+    content_bytes = len(json.dumps(full.content[0], ensure_ascii=False).encode())
+    # The content alone fits this cap; content plus the 100 refs does not.
+    cap = content_bytes + 200
+    monkeypatch.setattr(read_tools, "MAX_RESULT_BYTES", cap)
+    result = await _get(db, context, "prolific author")
+    assert result.is_error is False
+    assert result.content[0]["truncated"] is True
+    assert 0 < len(result.content[0]["papers"]) < 100
+    assert len(result.source_refs) == len(result.content[0]["papers"])
+    envelope = {
+        "content": result.content,
+        "is_error": result.is_error,
+        "source_refs": result.source_refs,
+    }
+    assert len(json.dumps(envelope, ensure_ascii=False).encode()) <= cap
 
 
 async def test_get_researcher_reports_when_the_scan_cap_hides_documents(
@@ -1412,8 +1464,21 @@ async def test_get_researcher_reports_when_the_scan_cap_hides_documents(
     await _add_doc(db, "old", {"authors": ["Old Author"]}, created=_day(1))
     await _add_doc(db, "new", {"authors": ["New Author"]}, created=_day(2))
     assert (await _get(db, context, "new author")).content[0]["truncated"] is True
-    # Older than the scan window: indistinguishable from an unknown author.
-    assert (await _get(db, context, "old author")).is_error is True
+    # Older than the scan window: an error that says the scan was incomplete,
+    # so it is not mistaken for an unknown id.
+    hidden = await _get(db, context, "old author")
+    assert hidden.is_error is True
+    assert hidden.content == [{"error": "researcher_not_found", "truncated": True}]
+    assert hidden.source_refs == []
+
+
+async def test_get_researcher_unknown_id_after_a_complete_scan_is_plain(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _add_doc(db, "only", {"authors": ["Known Author"]}, created=_day(1))
+    unknown = await _get(db, context, "nobody")
+    assert unknown.is_error is True
+    assert unknown.content == [{"error": "researcher_not_found"}]
 
 
 @pytest.mark.parametrize(

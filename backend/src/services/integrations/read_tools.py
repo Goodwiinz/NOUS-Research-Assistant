@@ -172,10 +172,11 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
     "find_researchers": (
         "Find researchers by name among the author lists of papers ingested "
         "into this project (arXiv metadata). Case-insensitive substring match; "
-        "most papers first, at most 25. Documents without author metadata are "
-        "invisible, and there are no affiliations or career history. Only the "
-        "2,000 newest documents are scanned (truncated=true when more exist). "
-        "Pass a researcher_id to get_researcher.",
+        "most papers first, at most 25 (limit). Documents without author "
+        "metadata are invisible, and there are no affiliations or career "
+        "history. Only the 2,000 newest documents are scanned. truncated=true "
+        "means the list is incomplete: it was cut by limit, or older documents "
+        "were not scanned. Pass a researcher_id to get_researcher.",
         {
             "type": "object",
             "properties": {
@@ -198,8 +199,10 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         "newest published first, with arxiv_id and published when known) and "
         "co-authors with shared-paper counts (up to 100). Coverage is author "
         "lists of papers ingested into this project (arXiv metadata); no "
-        "affiliations or career history. researcher_not_found means no "
-        "document of this project lists that author.",
+        "affiliations or career history. Only the 2,000 newest documents are "
+        "scanned. researcher_not_found means no scanned document of this "
+        "project lists that author; with truncated=true older documents were "
+        "not scanned, so the author may exist there.",
         {
             "type": "object",
             "properties": {
@@ -759,17 +762,30 @@ async def _find_researchers(
             for key, (name, count) in ranked[:limit]
         ]
     }
-    if truncated:
+    if truncated or len(ranked) > limit:  # cut by the scan window or by limit
         payload["truncated"] = True
     # A researcher is not a source document: there is nothing to cite.
     return _finish(payload)
 
 
+def _paper_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"document_id": paper["document_id"]} for paper in payload["papers"]]
+
+
 def _fit_to_result_cap(payload: dict[str, Any]) -> None:
-    """Halve co-authors, then papers, until the payload fits MAX_RESULT_BYTES."""
+    """Halve co-authors, then papers, until the whole response fits the cap.
+
+    Measured as the ToolResult envelope (content plus source_refs), so the
+    refs derived from the papers count against MAX_RESULT_BYTES too.
+    """
 
     def wire() -> int:
-        return len(json.dumps(payload, default=str, ensure_ascii=False).encode())
+        envelope = {
+            "content": [payload],
+            "is_error": False,
+            "source_refs": _paper_refs(payload),
+        }
+        return len(json.dumps(envelope, default=str, ensure_ascii=False).encode())
 
     for key in ("coauthors", "papers"):
         while wire() > MAX_RESULT_BYTES and payload[key]:
@@ -787,10 +803,12 @@ async def _get_researcher(
     papers = [paper for paper in scanned if any(k == key for k, _ in paper.authors)]
     if not papers:
         # Unknown id and an author who only wrote for another project are the
-        # same answer: nothing here says which.
-        return ToolResult(
-            content=[{"error": "researcher_not_found"}], is_error=True, source_refs=[]
-        )
+        # same answer: nothing here says which. When the scan window hid older
+        # documents the caller must be able to tell "incomplete" from "unknown".
+        missing: dict[str, Any] = {"error": "researcher_not_found"}
+        if truncated:
+            missing["truncated"] = True
+        return ToolResult(content=[missing], is_error=True, source_refs=[])
     name = next(n for k, n in papers[0].authors if k == key)  # newest spelling
     coauthors: dict[str, list[Any]] = {}  # researcher_id -> [name, shared papers]
     for paper in papers:
@@ -831,7 +849,7 @@ async def _get_researcher(
     return ToolResult(
         content=result.content,
         is_error=False,
-        source_refs=[{"document_id": p["document_id"]} for p in payload["papers"]],
+        source_refs=_paper_refs(payload),
     )
 
 
