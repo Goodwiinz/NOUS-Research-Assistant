@@ -812,3 +812,225 @@ async def test_arxiv_paper_content_errors_are_stable(
         await invoke_read(
             db, context, _invocation("get_arxiv_paper_content", arxiv_id="../etc")
         )
+
+
+# --- Plan 07 slice 4: researcher tools ---------------------------------------
+#
+# The real KG agent tools are organization-wide and ignore project_id, so the
+# fake below is deliberately project-blind: every researcher and paper in the
+# organization is visible to it. Project scoping must come from the gateway.
+
+SECRET_TITLE = "retrieval-secret"  # DOC_OUTSIDE_PROJECT's title (other project)
+
+
+class _FakeKG:
+    def __init__(self) -> None:
+        self.people: dict[str, tuple[str, str, list[str]]] = {}
+        self.search_calls: list[dict[str, Any]] = []
+        self.neighborhood_calls: list[dict[str, Any]] = []
+
+    def add(
+        self,
+        entity_id: str,
+        name: str,
+        papers: list[str],
+        entity_type: str = "PERSON",
+    ) -> None:
+        self.people[entity_id] = (name, entity_type, papers)
+
+    async def search(self, args: dict[str, Any], _user: Any = None) -> dict[str, Any]:
+        self.search_calls.append(dict(args))
+        needle = args["query"].lower()
+        hits = [
+            {"id": eid, "name": name, "type": kind, "confidence": 0.9}
+            for eid, (name, kind, _papers) in self.people.items()
+            if needle in name.lower() and kind in args["entity_types"]
+        ]
+        return {"entities": hits[: args["limit"]], "total": len(hits)}
+
+    async def neighborhood(
+        self, args: dict[str, Any], _user: Any = None
+    ) -> dict[str, Any]:
+        self.neighborhood_calls.append(dict(args))
+        entity_id = args["entity_id"]
+        connected: list[dict[str, Any]] = []
+        if entity_id in self.people:
+            for title in self.people[entity_id][2]:
+                connected.append(
+                    {"id": f"paper:{title}", "name": title, "type": "DOCUMENT"}
+                )
+            connected.append({"id": "org:mit", "name": "MIT", "type": "ORGANIZATION"})
+        elif entity_id.startswith("paper:"):
+            title = entity_id.removeprefix("paper:")
+            for eid, (name, kind, papers) in self.people.items():
+                if title in papers:
+                    connected.append({"id": eid, "name": name, "type": kind})
+            connected.append({"id": "cat:cs", "name": "cs.LG", "type": "CONCEPT"})
+        return {
+            "connected_entities": connected[: args["limit"]],
+            "relationships": [],
+            "center_entity_id": entity_id,
+        }
+
+
+@pytest.fixture
+def kg(monkeypatch: pytest.MonkeyPatch) -> _FakeKG:
+    fake = _FakeKG()
+    # Insertion order is search order. LeCun only wrote for the OTHER project.
+    fake.add("ent-lecun", "Yann LeCun", [SECRET_TITLE])
+    fake.add("ent-turing", "Alan Turing", ["retrieval-eval", SECRET_TITLE])
+    fake.add("ent-lovelace", "Ada Lovelace", ["retrieval-eval"])
+    monkeypatch.setattr(read_tools, "_tool_search_knowledge_graph", fake.search)
+    monkeypatch.setattr(
+        read_tools, "_tool_explore_entity_neighborhood", fake.neighborhood
+    )
+    return fake
+
+
+async def test_find_researchers_keeps_only_in_project_authors(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    result = await invoke_read(db, context, _invocation("find_researchers", query="a"))
+    assert result.is_error is False
+    # LeCun's only paper is in the other project: he is dropped, and Turing's
+    # count excludes his other-project paper.
+    assert result.content == [
+        {
+            "researchers": [
+                {"entity_id": "ent-turing", "name": "Alan Turing", "paper_count": 1},
+                {
+                    "entity_id": "ent-lovelace",
+                    "name": "Ada Lovelace",
+                    "paper_count": 1,
+                },
+            ]
+        }
+    ]
+    # Entity ids are knowledge-graph nodes, not documents: nothing citable.
+    assert result.source_refs == []
+    [search] = kg.search_calls
+    assert search["entity_types"] == ["PERSON"]
+    assert search["query"] == "a"
+    assert search["limit"] == read_tools.MAX_RESEARCHER_CANDIDATES
+    assert "LeCun" not in json.dumps(result.content)
+
+
+async def test_find_researchers_matches_titles_ignoring_case_and_spacing(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    kg.add("ent-babbage", "Charles Babbage", ["  RETRIEVAL-eval "])
+    result = await invoke_read(
+        db, context, _invocation("find_researchers", query="babbage")
+    )
+    assert [r["name"] for r in result.content[0]["researchers"]] == ["Charles Babbage"]
+
+
+async def test_find_researchers_stops_checking_once_limit_is_met(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    result = await invoke_read(
+        db, context, _invocation("find_researchers", query="a", limit=1)
+    )
+    assert [r["name"] for r in result.content[0]["researchers"]] == ["Alan Turing"]
+    # LeCun (discarded) then Turing (kept): Lovelace is never looked up.
+    assert [call["entity_id"] for call in kg.neighborhood_calls] == [
+        "ent-lecun",
+        "ent-turing",
+    ]
+    assert all(call["max_depth"] == 1 for call in kg.neighborhood_calls)
+
+
+async def test_find_researchers_internal_clamp_is_defence_in_depth(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    for index in range(30):
+        kg.add(f"ent-extra-{index}", f"Extra {index}", ["retrieval-eval"])
+    user = await db.get(User, USER)
+    result = await read_tools._find_researchers(
+        db, context, user, {"query": "extra", "limit": 99}
+    )
+    assert len(result.content[0]["researchers"]) == read_tools.MAX_RESEARCHERS == 25
+
+
+async def test_find_researchers_skips_knowledge_graph_for_an_empty_project(
+    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+) -> None:
+    await db.execute(update(CollectionDocument).values(is_deleted=True))
+    await db.commit()
+    result = await invoke_read(db, context, _invocation("find_researchers", query="a"))
+    assert result.is_error is False
+    assert result.content == [{"researchers": []}]
+    assert kg.search_calls == []
+
+
+@pytest.mark.parametrize("failing", ["search", "neighborhood"])
+@pytest.mark.parametrize("mode", ["raises", "error-payload"])
+async def test_find_researchers_knowledge_graph_outage_is_stable_error(
+    db: AsyncSession,
+    context: IntegrationContext,
+    kg: _FakeKG,
+    monkeypatch: pytest.MonkeyPatch,
+    failing: str,
+    mode: str,
+) -> None:
+    secret = "bolt://neo4j:hunter2@10.0.0.9:7687"
+    effect: Any = (
+        {"side_effect": RuntimeError(secret)}
+        if mode == "raises"
+        else {"return_value": {"error": secret}}
+    )
+    name = (
+        "_tool_search_knowledge_graph"
+        if failing == "search"
+        else "_tool_explore_entity_neighborhood"
+    )
+    monkeypatch.setattr(read_tools, name, AsyncMock(**effect))
+    result = await invoke_read(db, context, _invocation("find_researchers", query="a"))
+    assert result.is_error is True
+    assert result.content == [{"error": "knowledge_graph_unavailable"}]
+    assert result.source_refs == []
+    assert "hunter2" not in json.dumps(result.content)
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        _invocation("find_researchers"),
+        _invocation("find_researchers", query=""),
+        _invocation("find_researchers", query="x" * 501),
+        _invocation("find_researchers", query="x", limit=26),
+        _invocation("find_researchers", query="x", limit=0),
+        _invocation("find_researchers", query="x", limit="5"),
+        _invocation("find_researchers", query="x", project_id=str(OTHER_PROJECT)),
+        _invocation("find_researchers", query="x", organization_id=str(ORG)),
+    ],
+    ids=[
+        "find-missing-query",
+        "find-empty-query",
+        "find-long-query",
+        "find-limit-over-cap",
+        "find-limit-zero",
+        "find-limit-string",
+        "find-project-identity",
+        "find-org-identity",
+    ],
+)
+async def test_find_researchers_argument_shapes_are_rejected(
+    db: AsyncSession,
+    context: IntegrationContext,
+    kg: _FakeKG,
+    invocation: ToolInvocation,
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(db, context, invocation)
+    assert kg.search_calls == [] and kg.neighborhood_calls == []
+
+
+def test_find_researchers_is_advertised_with_the_coverage_caveat() -> None:
+    catalog = {tool.name: tool for tool in list_read_tools()}
+    tool = catalog["find_researchers"]
+    assert read_tools.TOOL_SCOPES["find_researchers"] == "tools:read"
+    assert "ingested into this project" in tool.description
+    assert "affiliations" in tool.description
+    assert "project_id" not in tool.input_schema["properties"]
+    assert tool.input_schema["required"] == ["query"]

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
 
@@ -28,11 +29,13 @@ from src.schemas.integration_tools import ToolDescriptorDTO, ToolInvocation, Too
 from src.services.agent.tool_helpers import _escape_like, _verify_project_ownership
 from src.services.agent.tools_impl import (
     _tool_do_kb_retrieve,
+    _tool_explore_entity_neighborhood,
     _tool_get_current_draft,
     _tool_list_external_databases,
     _tool_list_project_documents,
     _tool_search_arxiv,
     _tool_search_external_database,
+    _tool_search_knowledge_graph,
 )
 from src.services.integrations import arxiv_fulltext
 from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
@@ -67,6 +70,13 @@ MAX_RESULT_BYTES = 64 * 1024
 MAX_PAGE_BYTES = 48 * 1024
 # Keeps a content-bearing draft under MAX_RESULT_BYTES after JSON escaping.
 MAX_DRAFT_CONTENT_CHARS = 32_000
+# Researcher tools. The KG agent tools are organization-wide, so candidates
+# are over-fetched (their own 50-entity ceiling) and filtered against the
+# grant's project documents.
+MAX_RESEARCHERS = 25
+MAX_RESEARCHER_CANDIDATES = 50
+MAX_NEIGHBOURS = 50
+_RESEARCHER_TEXT_CHARS = 200
 # The advertised schema must match what the gateway enforces; the agent-facing
 # registry descriptions promise wider limits (e.g. list limit 500).
 _SCHEMA_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
@@ -157,6 +167,28 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
                 "limit": _PAGE_LIMIT,
             },
             "required": ["arxiv_id"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
+    "find_researchers": (
+        "Find researchers by name among the authors of papers ingested into "
+        "this project (knowledge-graph PERSON entities; no affiliations or "
+        "career history). Only authors with a paper in the granted project are "
+        "returned; paper_count counts those papers (at most 50). Pass an "
+        "entity_id to get_researcher.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_RESEARCHERS,
+                    "default": 10,
+                },
+            },
+            "required": ["query"],
             "additionalProperties": False,
         },
         "tools:read",
@@ -554,6 +586,167 @@ async def _arxiv_paper_content(arguments: dict[str, Any]) -> ToolResult:
     )
 
 
+@dataclass(frozen=True)
+class _ProjectPaper:
+    document_id: str
+    title: str
+    arxiv_id: str | None
+    recency: str  # ISO timestamp: arXiv published date, else ingest time
+
+
+class _KnowledgeGraphUnavailable(Exception):
+    """A knowledge-graph call failed; callers map it to a stable tool error."""
+
+
+def _kg_unavailable() -> ToolResult:
+    return ToolResult(
+        content=[{"error": "knowledge_graph_unavailable"}],
+        is_error=True,
+        source_refs=[],
+    )
+
+
+def _norm_title(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _short(value: Any) -> str:
+    from src.services.agent._pii_redact import redact_pii
+
+    return redact_pii(value)[:_RESEARCHER_TEXT_CHARS]
+
+
+async def _project_papers(
+    db: AsyncSession, context: IntegrationContext
+) -> dict[str, list[_ProjectPaper]]:
+    """The grant's live documents keyed by normalised title.
+
+    The knowledge graph is organization-wide and its agent tools ignore
+    ``project_id``; this index is the only thing that ties a KG paper node to
+    the grant's project, so every researcher result is filtered through it.
+    """
+    # ponytail: one narrow-column scan of the project's documents per call;
+    # fine at project scale. Push the title match into SQL if a project
+    # reaches tens of thousands of documents.
+    rows = await db.execute(
+        _live_project_documents(context).with_only_columns(
+            Document.id,
+            Document.title,
+            Document.arxiv_id,
+            Document.created_at,
+            Document.document_metadata,
+        )
+    )
+    index: dict[str, dict[str, _ProjectPaper]] = {}
+    for document_id, title, arxiv_id, created_at, metadata in rows.all():
+        key = _norm_title(title)
+        if not key:
+            continue
+        meta = metadata if isinstance(metadata, dict) else {}
+        published = meta.get("published")
+        arxiv = arxiv_id or meta.get("arxiv_id")
+        index.setdefault(key, {})[str(document_id)] = _ProjectPaper(
+            document_id=str(document_id),
+            title=_short(title),
+            arxiv_id=str(arxiv).strip() if arxiv else None,
+            recency=(
+                str(published)
+                if published
+                else created_at.isoformat() if created_at else ""
+            ),
+        )
+    return {key: list(papers.values()) for key, papers in index.items()}
+
+
+async def _kg_payload(
+    tool: Any, arguments: dict[str, Any], user: User
+) -> dict[str, Any]:
+    """Run a KG agent tool; any failure becomes ``_KnowledgeGraphUnavailable``."""
+    try:
+        payload = await tool(arguments, user)
+    except Exception as error:
+        logger.warning("knowledge graph tool failed", exc_info=True)
+        raise _KnowledgeGraphUnavailable from error
+    if not isinstance(payload, dict) or "error" in payload:
+        logger.warning("knowledge graph tool returned an error payload")
+        raise _KnowledgeGraphUnavailable
+    return payload
+
+
+def _project_neighbours(
+    neighbourhood: dict[str, Any], index: dict[str, list[_ProjectPaper]]
+) -> list[tuple[str, _ProjectPaper]]:
+    """(KG paper node id, project document) for neighbours that are project papers.
+
+    A KG DOCUMENT neighbour carries only a title, so it counts as a project
+    paper only when its title matches a live document of the grant.
+    """
+    return [
+        (str(entity.get("id")), paper)
+        for entity in neighbourhood.get("connected_entities") or []
+        if entity.get("type") == "DOCUMENT"
+        for paper in index.get(_norm_title(entity.get("name")), [])
+    ]
+
+
+async def _find_researchers(
+    db: AsyncSession,
+    context: IntegrationContext,
+    user: User,
+    arguments: dict[str, Any],
+) -> ToolResult:
+    query = str(arguments["query"])
+    limit = _clamp(arguments.get("limit", 10), 1, MAX_RESEARCHERS, 10)
+    index = await _project_papers(db, context)
+    if not index:
+        return _finish({"researchers": []})  # no papers: nothing to match
+    # ponytail: cost is bounded. At most MAX_RESEARCHER_CANDIDATES (50) one-hop
+    # neighborhood calls, stopping as soon as `limit` (<= 25) researchers
+    # qualify; each call is itself capped at MAX_NEIGHBOURS (50) entities.
+    # Replace with a project-aware KG query if this ever needs to be cheaper.
+    researchers: list[dict[str, Any]] = []
+    try:
+        found = await _kg_payload(
+            _tool_search_knowledge_graph,
+            {
+                "query": query,
+                "entity_types": ["PERSON"],
+                "limit": MAX_RESEARCHER_CANDIDATES,
+            },
+            user,
+        )
+        seen: set[str] = set()
+        for candidate in found.get("entities") or []:
+            entity_id = str(candidate.get("id") or "")
+            if candidate.get("type") != "PERSON" or not entity_id or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            neighbourhood = await _kg_payload(
+                _tool_explore_entity_neighborhood,
+                {"entity_id": entity_id, "max_depth": 1, "limit": MAX_NEIGHBOURS},
+                user,
+            )
+            papers = {
+                paper.document_id
+                for _node, paper in _project_neighbours(neighbourhood, index)
+            }
+            if not papers:
+                continue  # known to the org's graph, but not in this project
+            researchers.append(
+                {
+                    "entity_id": entity_id,
+                    "name": _short(candidate.get("name")),
+                    "paper_count": len(papers),
+                }
+            )
+            if len(researchers) >= limit:
+                break
+    except _KnowledgeGraphUnavailable:
+        return _kg_unavailable()
+    # Entity ids are graph nodes, not documents: there is nothing to cite.
+    return _finish({"researchers": researchers})
+
+
 async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Dispatch a tool that takes no identity; exception text never leaves."""
     args = dict(arguments)
@@ -694,6 +887,8 @@ async def invoke_read(
             {key: chunk.get(key) for key in ("document_id", "title", "text", "score")}
             for chunk in payload.get("chunks") or []
         ]
+    elif name == "find_researchers":
+        return await _find_researchers(db, context, user, arguments)
     else:
         payload = await _tool_get_current_draft(
             {
