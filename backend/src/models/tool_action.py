@@ -44,10 +44,12 @@ class IntegrationToolAction(BaseModel):
             "invocation_id",
             name="uq_integration_tool_actions_invocation",
         ),
-        # Exactly one binding, as on the grant that authorised the action.
+        # project_id is the action's target Collection and workspace_id the
+        # binding of the grant that authorised it. A workspace-grant action
+        # aimed at one Collection sets both, so only "at least one" holds.
         CheckConstraint(
-            "(project_id IS NULL) <> (workspace_id IS NULL)",
-            name="ck_integration_tool_actions_one_binding",
+            "project_id IS NOT NULL OR workspace_id IS NOT NULL",
+            name="ck_integration_tool_actions_some_binding",
         ),
     )
     organization_id: Mapped[UUID] = mapped_column(

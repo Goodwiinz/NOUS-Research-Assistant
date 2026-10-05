@@ -726,28 +726,37 @@ _BINDING_ROWS: dict[str, dict[str, Any]] = {
 }
 
 
+_BINDINGS: dict[str, dict[str, Any]] = {
+    "project": {"project_id": PROJECT},
+    "workspace": {"workspace_id": WORKSPACE},
+    "both": {"project_id": PROJECT, "workspace_id": WORKSPACE},
+    "neither": {},
+}
+# The shapes each table must refuse, and the constraint that refuses them.
+# Requests and grants bind exactly one of a Collection or a workspace. On an
+# action project_id is the target Collection and workspace_id the grant's
+# binding, so a workspace-grant action aimed at a Collection sets both.
+_REFUSED: dict[str, dict[str, str]] = {
+    "integration_grant_requests": {"both": "one_binding", "neither": "one_binding"},
+    "integration_grants": {"both": "one_binding", "neither": "one_binding"},
+    "integration_tool_actions": {"neither": "some_binding"},
+}
+
+
 @pytest.mark.parametrize("table_name", sorted(_BINDING_ROWS))
-@pytest.mark.parametrize(
-    "binding,valid",
-    [
-        ({"project_id": PROJECT}, True),
-        ({"workspace_id": WORKSPACE}, True),
-        ({}, False),
-        ({"project_id": PROJECT, "workspace_id": WORKSPACE}, False),
-    ],
-    ids=["project", "workspace", "neither", "both"],
-)
-async def test_database_enforces_exactly_one_binding(
-    db: AsyncSession, table_name: str, binding: dict[str, Any], valid: bool
+@pytest.mark.parametrize("binding", sorted(_BINDINGS))
+async def test_database_enforces_the_binding_rule(
+    db: AsyncSession, table_name: str, binding: str
 ) -> None:
     from src.models.base import Base
 
     row = insert(Base.metadata.tables[table_name]).values(
-        **_BINDING_ROWS[table_name], **binding
+        **_BINDING_ROWS[table_name], **_BINDINGS[binding]
     )
-    if valid:
+    constraint = _REFUSED[table_name].get(binding)
+    if constraint is None:
         await db.execute(row)
         await db.commit()
         return
-    with pytest.raises(IntegrityError, match=f"ck_{table_name}_one_binding"):
+    with pytest.raises(IntegrityError, match=f"ck_{table_name}_{constraint}"):
         await db.execute(row)
