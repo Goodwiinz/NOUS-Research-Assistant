@@ -11,13 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from src.models.artifact import Artifact, ArtifactVersion
 from src.models.collection import Collection, CollectionDocument
+from src.models.conversation import Conversation
 from src.models.document import Document, DocumentType
 from src.models.generated_draft import GeneratedDraft
 from src.models.organization import Organization
 from src.models.research_project import ResearchProject
 from src.models.research_project_role import ResearchProjectRoleAssignment
+from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
+from src.schemas.artifact import ArtifactNotFound
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation
 from src.services.integrations import read_tools
@@ -61,6 +64,8 @@ async def db() -> AsyncIterator[AsyncSession]:
         GeneratedDraft,
         Artifact,
         ArtifactVersion,
+        Conversation,
+        Thread,
         # Project authorization reads these even when no engine is enabled.
         ResearchProject,
         ResearchProjectRoleAssignment,
@@ -496,3 +501,16 @@ async def test_list_project_artifacts_is_advertised_with_bounded_limit() -> None
     assert set(tool.input_schema["properties"]) == {"limit"}
     assert tool.input_schema["properties"]["limit"]["minimum"] == 1
     assert tool.input_schema["properties"]["limit"]["maximum"] == 100
+
+
+async def test_list_project_artifacts_denial_is_a_structured_error(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Project vanishes between grant authorization and the artifact query.
+    monkeypatch.setattr(
+        read_tools, "list_project_artifacts", AsyncMock(side_effect=ArtifactNotFound())
+    )
+    result = await invoke_read(db, context, _invocation("list_project_artifacts"))
+    assert result.is_error is True
+    assert result.content == [{"error": "Project not found or access denied"}]
+    assert result.source_refs == []

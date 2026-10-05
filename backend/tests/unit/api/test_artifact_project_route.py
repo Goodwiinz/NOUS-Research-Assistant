@@ -16,7 +16,9 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.artifact import Artifact, ArtifactVersion
 from src.models.collection import Collection
+from src.models.conversation import Conversation
 from src.models.organization import Organization
+from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 
@@ -35,6 +37,8 @@ async def session(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         Workspace,
         WorkspaceMember,
         Collection,
+        Conversation,
+        Thread,
         Artifact,
         ArtifactVersion,
     ]

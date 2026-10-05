@@ -569,10 +569,27 @@ async def list_project_artifacts(
         raise ArtifactNotFound() from error
     rows = (
         await db.execute(
-            select(Artifact, ArtifactVersion)
+            select(Artifact, ArtifactVersion, Conversation.id)
             .join(ArtifactVersion, ArtifactVersion.id == Artifact.current_version_id)
             .join(Collection, Collection.id == Artifact.project_id)
             .join(Workspace, Workspace.id == Collection.workspace_id)
+            # Soft-delete does not cascade: only surface the producing chat
+            # while it is live and inside this project's workspace.
+            .outerjoin(
+                Thread,
+                and_(
+                    Thread.id == ArtifactVersion.thread_id,
+                    Thread.is_deleted.is_(False),
+                ),
+            )
+            .outerjoin(
+                Conversation,
+                and_(
+                    Conversation.id == Thread.conversation_id,
+                    Conversation.is_deleted.is_(False),
+                    Conversation.workspace_id == Collection.workspace_id,
+                ),
+            )
             .where(
                 Artifact.project_id == project_id,
                 Artifact.organization_id == organization_id,
@@ -592,10 +609,10 @@ async def list_project_artifacts(
             title=version.title,
             kind=version.mime_type,
             current_version=_version_dto(version),
-            thread_id=version.thread_id,
+            thread_id=version.thread_id if conversation_id is not None else None,
             updated_at=_aware(cast(datetime, version.created_at)),
         )
-        for artifact, version in rows
+        for artifact, version, conversation_id in rows
     ]
 
 

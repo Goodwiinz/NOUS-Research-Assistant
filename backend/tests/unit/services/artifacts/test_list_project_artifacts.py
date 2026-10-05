@@ -235,6 +235,65 @@ async def test_hides_dead_and_foreign_rows(db: AsyncSession) -> None:
     assert [r.artifact_id for r in await _list(db)] == [live]
 
 
+async def test_current_version_of_another_artifact_is_not_listed(
+    db: AsyncSession,
+) -> None:
+    _other, (foreign_version,) = await _artifact(
+        db, title="foreign", versions=[1], project=OTHER_PROJECT, org=OTHER_ORG
+    )
+    await db.execute(
+        insert(Artifact).values(
+            id=uuid4(),
+            organization_id=ORG,
+            project_id=PROJECT,
+            owner_id=USER,
+            title="hijacked pointer",
+            current_version_id=foreign_version,
+        )
+    )
+    await db.commit()
+    assert await _list(db) == []
+
+
+@pytest.mark.parametrize("case", ["deleted_thread", "deleted_conversation", "foreign"])
+async def test_dead_or_foreign_thread_is_not_exposed(
+    db: AsyncSession, case: str
+) -> None:
+    thread = THREAD
+    if case == "deleted_thread":
+        await db.execute(
+            update(Thread).where(Thread.id == THREAD).values(is_deleted=True)
+        )
+    elif case == "deleted_conversation":
+        await db.execute(
+            update(Conversation)
+            .where(Conversation.id == CONVERSATION)
+            .values(is_deleted=True)
+        )
+    else:
+        foreign_conversation, thread = uuid4(), uuid4()
+        await db.execute(
+            insert(Conversation).values(
+                id=foreign_conversation,
+                workspace_id=OTHER_WORKSPACE,
+                title="Foreign",
+                created_by_id=FOREIGN_USER,
+            )
+        )
+        await db.execute(
+            insert(Thread).values(
+                id=thread,
+                conversation_id=foreign_conversation,
+                created_by_id=FOREIGN_USER,
+            )
+        )
+    await db.commit()
+    artifact_id, _ = await _artifact(db, title="a", versions=[1], thread=thread)
+    (row,) = await _list(db)
+    assert row.artifact_id == artifact_id
+    assert row.thread_id is None
+
+
 async def test_limit_caps_rows(db: AsyncSession) -> None:
     for minute in range(3):
         await _artifact(db, title=f"a{minute}", versions=[minute])
