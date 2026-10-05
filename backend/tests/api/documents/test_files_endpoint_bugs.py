@@ -22,7 +22,7 @@ from fastapi import HTTPException
 
 from src.api.documents import files as files_mod
 from src.models.processing import JobStatus
-from src.services.documents.file_service import UploadCancellation
+from src.services.documents.file_service import FileService, UploadCancellation
 from src.shared.pagination import PaginationParams
 
 pytestmark = pytest.mark.unit
@@ -82,6 +82,42 @@ def test_reprocess_creates_job_and_enqueues():
     assert enq_args[0] is db and enq_args[1] is task
     db.commit.assert_awaited_once()
     assert "job_id" in resp
+
+
+@pytest.mark.parametrize("surface", ["file", "document"])
+@pytest.mark.parametrize("missing", [True, False])
+def test_reprocess_preserves_public_error_details(surface, missing):
+    document = MagicMock()
+    document.id = uuid.uuid4()
+    document.uploaded_by_user_id = "another-owner"
+    selected = MagicMock()
+    selected.scalar_one_or_none.return_value = None if missing else document
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=selected)
+    org = MagicMock(id=uuid.uuid4())
+    user = _user()
+
+    async def invoke():
+        if surface == "file":
+            return await files_mod.reprocess_file(
+                document.id, current_user=user, organization=org, db=db
+            )
+        service = FileService.__new__(FileService)
+        service.db = db
+        return await service.lock_document_for_reprocessing(document.id, org.id, user)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(invoke())
+    assert exc.value.status_code == (404 if missing else 403)
+    expected = (
+        f"{surface.capitalize()} not found"
+        if missing
+        else f"Can only reprocess your own {surface}s or require admin role"
+    )
+    assert exc.value.detail == expected
+    db.add.assert_not_called()
+    db.flush.assert_not_called()
+    db.commit.assert_not_called()
 
 
 def test_cancel_uses_enum_not_string_and_cancels():

@@ -1412,7 +1412,15 @@ class FileService:
         # service is synchronous, so offload to a worker thread.
         await self.cleanup_deleted_document_graph(document_id, organization_id)
 
-    async def lock_document_for_reprocessing(self, document_id, organization_id, user):
+    async def lock_document_for_reprocessing(
+        self,
+        document_id,
+        organization_id,
+        user,
+        *,
+        not_found_detail: str = "Document not found",
+        forbidden_detail: str = "Can only reprocess your own documents or require admin role",
+    ):
         """Serialize reprocessing with claims, stage commits and deletion.
 
         The caller retains this document lock through its job-creation commit.
@@ -1431,13 +1439,13 @@ class FileService:
             )
         ).scalar_one_or_none()
         if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
+            raise HTTPException(status_code=404, detail=not_found_detail)
         if document.uploaded_by_user_id != user.id and not user.has_permission(
             UserRole.ADMIN
         ):
             raise HTTPException(
                 status_code=403,
-                detail="Can only reprocess your own documents or require admin role",
+                detail=forbidden_detail,
             )
         from src.models.processing import JobStatus, JobType, ProcessingJob
 

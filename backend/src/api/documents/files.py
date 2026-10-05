@@ -817,7 +817,11 @@ async def reprocess_file(
     from src.services.documents.file_service import FileService
 
     document = await FileService(db).lock_document_for_reprocessing(
-        file_id, organization.id, current_user
+        file_id,
+        organization.id,
+        current_user,
+        not_found_detail="File not found",
+        forbidden_detail="Can only reprocess your own files or require admin role",
     )
 
     try:
