@@ -48,6 +48,7 @@ from src.services.documents.satellite_state import (
     begin_write,
     finish_write,
     pending_writes,
+    retire_settled_writes,
 )
 from src.services.knowledge_graph.repair import repair_document_graph
 from src.shared.enums import SatelliteSyncStatus
@@ -312,6 +313,7 @@ def _cleanup_deleted_document_graph(document) -> bool:
     if db is not None:
         db.rollback()
     cleanup_ok = True
+    started = datetime.now(timezone.utc)
     try:
         KnowledgeGraphService().delete_document_graph(
             str(document_id), str(organization_id)
@@ -341,6 +343,8 @@ def _cleanup_deleted_document_graph(document) -> bool:
         and (document.document_metadata or {}).get("graph_cleanup_requested")
         is not False
     ):
+        if cleanup_ok:
+            retire_settled_writes(document, "graph", started)
         document.neo4j_index_status = (
             _FAILED
             if not cleanup_ok

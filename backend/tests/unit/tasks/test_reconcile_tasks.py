@@ -20,6 +20,7 @@ Contract under test:
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -185,11 +186,16 @@ def test_repeated_runs_do_not_starve_later_cleanup(session_factory, disabled_pre
 def test_outstanding_writes_survive_an_older_completed_cleanup(
     session_factory, satellite
 ):
+    """A writer still inside its lease may land after this cleanup, so its
+    token survives it."""
     doc_id = _seed_doc(session_factory, neo4j=COMPLETED, is_deleted=True)
+    started = datetime.now(timezone.utc).isoformat()
     with session_factory() as db:
         db.get(Document, doc_id).document_metadata = {
             "graph_cleanup_requested": True,
-            "pending_satellite_writes": {satellite: {"lost-writer": {}}},
+            "pending_satellite_writes": {
+                satellite: {"live-writer": {"started_at": started}}
+            },
         }
         db.commit()
     with patch(
@@ -205,6 +211,32 @@ def test_outstanding_writes_survive_an_older_completed_cleanup(
         assert _get(session_factory, doc_id).neo4j_index_status == "pending"
     else:
         mocks.kb_cleanup.assert_called_once()
+
+
+@pytest.mark.parametrize("started", ["2026-01-01T00:00:00+00:00", None])
+def test_graph_cleanup_retires_writers_past_their_lease(session_factory, started):
+    """A writer that started before the lease (or recorded no start) was dead
+    when the cleanup began, so a successful cleanup removed whatever it sent:
+    its token is retired and the document leaves the reconciler."""
+    doc_id = _seed_doc(session_factory, neo4j=COMPLETED, is_deleted=True)
+    token = {"started_at": started} if started else {}
+    with session_factory() as db:
+        db.get(Document, doc_id).document_metadata = {
+            "graph_cleanup_requested": True,
+            "pending_satellite_writes": {"graph": {"dead-writer": token}},
+        }
+        db.commit()
+    with patch(
+        "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService"
+    ):
+        result, _ = _run(session_factory, _settings(apply=True))
+    assert result["kg_cleanup_succeeded"] == 1
+    doc = _get(session_factory, doc_id)
+    assert doc.neo4j_index_status == COMPLETED
+    assert "pending_satellite_writes" not in (doc.document_metadata or {})
+    # Nothing left to reconcile.
+    result2, _ = _run(session_factory, _settings(apply=True))
+    assert result2["eligible"] == 0
 
 
 # ---------------------------------------------------------------------------
