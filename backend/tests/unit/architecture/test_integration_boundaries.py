@@ -5,10 +5,12 @@ thread and agent routers to the router -> service -> transaction contract, but
 nothing scanned ``api/integrations/*``, ``api/artifacts.py`` or
 ``api/harness.py`` (harness remediation review, rec #4). Two rules:
 
-  (a) no ``commit``/``rollback``/``flush``/``refresh`` call in those router
-      modules: the services own the transaction boundary. Only the router
-      files are scanned, so a service that commits (for example
-      ``services/integrations/context.py``) is fine;
+  (a) no ``commit``/``rollback``/``flush``/``refresh``/``begin``/
+      ``begin_nested`` call in those router modules: the services own the
+      transaction boundary, and ``async with db.begin():`` or a savepoint
+      would make the router own one. Only the router files are scanned, so a
+      service that commits (for example ``services/integrations/context.py``)
+      is fine;
   (b) the access getters keep requiring the caller's identity: every
       identity parameter stays present with no default, so a caller can never
       fall through to an unscoped lookup.
@@ -38,7 +40,9 @@ pytestmark = pytest.mark.unit
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 API_DIR = BACKEND_DIR / "src" / "api"
-TXN_METHODS = frozenset({"commit", "rollback", "flush", "refresh"})
+TXN_METHODS = frozenset(
+    {"commit", "rollback", "flush", "refresh", "begin", "begin_nested"}
+)
 
 ROUTER_FILES = sorted(
     [
@@ -106,6 +110,24 @@ def test_router_glob_covers_the_known_modules() -> None:
 )
 def test_router_owns_no_transaction(path: Path) -> None:
     assert _txn_calls(path.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize(
+    ("method", "statement"),
+    [
+        ("commit", "await db.commit()"),
+        ("begin", "async with db.begin(): pass"),
+        ("begin_nested", "async with db.begin_nested(): pass"),
+    ],
+    ids=["commit", "async-with-begin", "async-with-begin-nested"],
+)
+def test_txn_scan_flags_injected_source(method: str, statement: str) -> None:
+    # Mutation proof for test_router_owns_no_transaction: with no violation in
+    # the real routers it can only pass, so show the scan fires on injected
+    # source. begin()/begin_nested() sit in an AsyncWith item, not a bare
+    # statement, so they get their own cases.
+    source = f"async def route(db):\n    {statement}\n"
+    assert _txn_calls(source) == [f"{method}() at line 2"]
 
 
 @pytest.mark.parametrize(
