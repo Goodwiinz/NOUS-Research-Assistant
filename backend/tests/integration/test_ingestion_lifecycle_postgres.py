@@ -30,7 +30,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jose import jwt
 from sqlalchemy.orm import Session
-from tests.unit.tasks.test_ingestion_stage_guard_postgres import _ingestion
 
 from src.api.documents import documents, files
 from src.api.search import search
@@ -49,6 +48,7 @@ from src.services.processing.processing_service import ProcessingPipeline
 from src.tasks import processing_tasks as pt
 from src.tasks import reconcile_tasks as rt
 from src.tasks.celery_app import celery_app
+from tests.unit.tasks.test_ingestion_stage_guard_postgres import _ingestion
 
 pytestmark = [
     pytest.mark.integration,
