@@ -28,7 +28,7 @@ jobs:
     # can read a repository secret; a protected environment would close that.
     if: github.ref == 'refs/heads/develop'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Pinned release tarball with a verified sha256 (from the release's
       # checksums.txt), not an npm install resolved at run time.
