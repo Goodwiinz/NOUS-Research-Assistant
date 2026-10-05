@@ -657,8 +657,12 @@ class _AuthoredPaper:
 
 
 def _researcher_key(name: Any) -> str:
-    """researcher_id: casefolded, whitespace-collapsed, at most 200 characters."""
-    return " ".join(str(name).split()).casefold()[:_NAME_CHARS]
+    """researcher_id: casefolded, whitespace-collapsed, at most 200 characters.
+
+    Cutting at the cap can leave a trailing space; stripping it keeps the key
+    idempotent, so an id handed out by find_researchers resolves again here.
+    """
+    return " ".join(str(name).split()).casefold()[:_NAME_CHARS].strip()
 
 
 def _author_names(raw: Any) -> tuple[tuple[str, str], ...]:
@@ -672,7 +676,7 @@ def _author_names(raw: Any) -> tuple[tuple[str, str], ...]:
         name = item.get("name") if isinstance(item, dict) else item
         key = _researcher_key(name) if isinstance(name, str) else ""
         if key:
-            authors.setdefault(key, " ".join(name.split())[:_NAME_CHARS])
+            authors.setdefault(key, " ".join(name.split())[:_NAME_CHARS].strip())
     return tuple(authors.items())
 
 
@@ -694,8 +698,6 @@ async def _scan_authored_papers(
     researcher tools and it is project-scoped by construction:
     ``_live_project_documents`` joins the grant's project and every ancestor.
     """
-    from src.services.agent._pii_redact import redact_pii
-
     # ponytail: O(documents x authors) in Python over at most
     # MAX_SCANNED_DOCUMENTS (2000) newest documents, in one narrow-column
     # query. Fine up to a few thousand documents; older ones are invisible and
@@ -727,7 +729,7 @@ async def _scan_authored_papers(
         papers.append(
             _AuthoredPaper(
                 document_id=str(document_id),
-                title=redact_pii(title)[:500],
+                title=str(title or ""),
                 arxiv_id=str(arxiv).strip()[:64] if arxiv else None,
                 published=_published(meta),
                 created_at=created_at.isoformat() if created_at else "",
@@ -800,12 +802,14 @@ async def _get_researcher(
         key=lambda paper: (paper.published or "", paper.created_at, paper.document_id),
         reverse=True,
     )
+    from src.services.agent._pii_redact import redact_pii
+
     payload: dict[str, Any] = {
         "researcher": {"researcher_id": key, "name": name},
         "papers": [
             {
                 "document_id": paper.document_id,
-                "title": paper.title,
+                "title": redact_pii(paper.title)[:500],
                 **({"arxiv_id": paper.arxiv_id} if paper.arxiv_id else {}),
                 **({"published": paper.published} if paper.published else {}),
             }
@@ -822,6 +826,8 @@ async def _get_researcher(
     result = _finish(payload)
     if result.is_error:
         return result
+    # _finish's generic _source_refs also sees a "papers" key (arXiv-search
+    # shaped, keyed by "id"); it yields nothing here and is overridden on purpose.
     return ToolResult(
         content=result.content,
         is_error=False,

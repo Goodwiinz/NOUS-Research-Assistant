@@ -1155,6 +1155,24 @@ async def test_find_researchers_reports_when_the_scan_cap_hides_documents(
     assert (await _find(db, context, query="new")).content[0]["truncated"] is True
 
 
+async def test_researcher_id_round_trips_when_the_name_is_cut_at_the_cap(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    # The 200-character cut lands right after the space.
+    long_name = "A" * 199 + " B"
+    doc = await _add_doc(db, "Long Name", {"authors": [long_name]}, created=_day(1))
+    [found] = (await _find(db, context, query="a")).content[0]["researchers"]
+    assert found["researcher_id"] == "a" * 199
+    assert found["name"] == "A" * 199
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", researcher_id=found["researcher_id"])
+    )
+    assert result.is_error is False
+    assert result.content[0]["papers"] == [
+        {"document_id": str(doc), "title": "Long Name"}
+    ]
+
+
 async def test_find_researchers_blank_query_is_an_argument_error(
     db: AsyncSession, context: IntegrationContext
 ) -> None:
@@ -1289,6 +1307,20 @@ async def test_get_researcher_denies_other_projects_and_unknown_authors(
     assert result.is_error is True
     assert result.content == [{"error": "researcher_not_found"}]
     assert result.source_refs == []
+
+
+async def test_get_researcher_redacts_titles_it_returns(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _add_doc(
+        db,
+        "Contact bob@example.com",
+        {"authors": ["Ada Lovelace"]},
+        created=_day(1),
+    )
+    result = await _get(db, context, "ada lovelace")
+    assert result.content[0]["papers"][0]["title"] == "Contact <email>"
+    assert "bob@example.com" not in json.dumps(result.content)
 
 
 async def test_get_researcher_blank_id_is_an_argument_error(
