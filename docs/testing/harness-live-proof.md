@@ -1,6 +1,6 @@
 # Harness live-proof runbook
 
-**Status:** Procedure, written 2026-10-04 against `origin/develop` `e0d0fcf79`. No step below has run end to end against a live environment. Every live row stays **NOT RUN** until a dated evidence bundle under [evidence/](evidence/README.md) records it. A skipped test is NOT RUN, never PASS.
+**Status:** Procedure, written 2026-10-04 against `origin/develop` `e0d0fcf79` and amended 2026-10-05 against `be0edb2f3` for the merged #1863 and #1866. No step below has run end to end against a live environment. Every live row stays **NOT RUN** until a dated evidence bundle under [evidence/](evidence/README.md) records it. A skipped test is NOT RUN, never PASS.
 
 **Target:** the AWS dev lane only: backend `https://dev-api.goodwiinz.tech`, Argo CD application `nous-dev-aws`, namespace `multimodal-rag-system`, values file [`values-aws.yaml`](../../infrastructure/helm/knowledge-graph-analytics/values-aws.yaml), frontend `https://goodwiinz.tech` (Vercel). The frozen DigitalOcean `values-dev.yaml` (`rag-dev`) and the staging/production files are not targets.
 
@@ -12,7 +12,7 @@ Contracts: [harness bridge](../engineering/harness-bridge.md), [bridge package](
 2. Codex reads project sources through the NOUS MCP read gateway.
 3. Phase 2: Codex publishes a workspace file as an artifact, and the stored SHA-256 matches the local file.
 4. Phase 2: a `request_action` note approved in the browser more than 15 minutes after the request still executes. Grants expire after 15 minutes, so the approval rests on the consent, not the original grant.
-5. After `nous-harness disconnect`, credentials that answered 200 just before are refused. Without remediation slice A (the fix that makes `disconnect` revoke the user's CLI logins) the old grant answers 403 and the old CLI bearer still answers 200 (the known gap). With slice A both answer 401, because the revoked bearer is checked before the grant.
+5. After `nous-harness disconnect`, credentials that answered 200 just before are refused. Remediation slice A (#1863, merged as `613fe13bf`: `disconnect` also ends the user's CLI logins) is not in the image pinned on dev (`8ad2c82`) yet. Without it in the deployed image the old grant answers 403 and the old CLI bearer still answers 200 (the known gap). With it both answer 401, because the revoked bearer is checked before the grant.
 6. Setting the flags back to `false` refuses new work with 503 while status reads and reconciliation still answer.
 
 ## Flags and scopes
@@ -22,11 +22,11 @@ Contracts: [harness bridge](../engineering/harness-bridge.md), [bridge package](
 | `HARNESS_BRIDGE_ENABLED` | New Codex chat runs (`backend/src/api/agent/harness_streaming.py`) and start dispatch (`backend/src/services/harness/delivery.py`) | `true` | `true` |
 | `NOUS_MCP_ENABLED` | `/integrations/tools`, new `/integrations/actions` requests, the approved-action drain (`backend/src/services/agent/tool_actions.py`) | `true` | `true` |
 | `ARTIFACTS_ENABLED` | Artifact upload and version writes (`backend/src/api/artifacts.py`) | `false` | `true` |
-| `ARTIFACT_EDITING_ENABLED`, `ARTIFACT_PREVIEW_ENABLED`, `ARTIFACT_SHARING_ENABLED` | Inert on develop (defined in `backend/src/core/config.py`, read by no backend, frontend or Helm code). Nothing is safe to expose: `artifacts:read/edit/share` can be minted but are enforced nowhere | unset (`false`) | unset (`false`) |
+| `ARTIFACT_EDITING_ENABLED`, `ARTIFACT_PREVIEW_ENABLED`, `ARTIFACT_SHARING_ENABLED` | Inert on develop (defined in `backend/src/core/config.py`, read by no backend, frontend or Helm code). Nothing is safe to expose: no route enforces `artifacts:read/edit/share`, and since #1866 a grant request for them is refused | unset (`false`) | unset (`false`) |
 
 All six default to `false` in `backend/src/core/config.py`. `HARNESS_BRIDGE_ENABLED`, `NOUS_MCP_ENABLED` and `ARTIFACTS_ENABLED` go in the `backend.env` list of `values-aws.yaml`; the three inert flags stay out of it. The backend, Celery worker, Celery beat and migration-job pods and the `nous-dev-aws-synthetic-traffic` CronJob (`suspend: true` today, so no pod) all render that list, and an explicit `env` entry wins over the `envFrom` secrets.
 
-`NOUS_MCP_ENABLED` cannot separate reads from writes. The scope requested at `connect` is what separates them. **Phase 1 connects with `--tools` only.** `--publish` (`artifacts:publish`) and `--write` (`tools:write`) belong to Phase 2, which must wait until remediation slice A (CLI-bearer revocation) is merged **and** deployed. Until then `disconnect` revokes the grant but leaves the CLI bearer valid.
+`NOUS_MCP_ENABLED` cannot separate reads from writes. The scope requested at `connect` is what separates them. **Phase 1 connects with `--tools` only.** `--publish` (`artifacts:publish`) and `--write` (`tools:write`) belong to Phase 2, which must wait until remediation slice A (#1863, `613fe13bf`: `disconnect` also revokes the CLI bearer) is **deployed**; it is merged. Until then `disconnect` revokes the grant but leaves the CLI bearer valid.
 
 ## Gate 0: repository evidence (no cluster)
 
@@ -39,9 +39,12 @@ initdb -D "$PGDIR/data" -U postgres --auth=trust
 pg_ctl -D "$PGDIR/data" -o "-p 55432 -k $PGDIR" -l "$PGDIR/pg.log" start
 psql -h 127.0.0.1 -p 55432 -U postgres -c 'create database mig' -c 'create database orch'
 
-# 0a. Migrations hb01..hb04, aw01/aw02, it01/it02 apply from empty.
-(cd backend && export DATABASE_URL=postgresql://postgres@127.0.0.1:55432/mig \
-  ENVIRONMENT=testing && unset SUPABASE_DB_URL
+# 0a. Migrations hb01..hb04, aw01/aw02, it01/it02 apply from empty. A failing
+# step ends 0a with its status, so nothing after a failed upgrade can mask it.
+(set -euo pipefail
+  cd backend
+  export DATABASE_URL=postgresql://postgres@127.0.0.1:55432/mig ENVIRONMENT=testing
+  unset SUPABASE_DB_URL
   "$PY" -m alembic upgrade head 2>&1 | grep -E -- '-> (hb0[1-4]|aw0[12]|it0[12])_'
   "$PY" ../scripts/ci/check_alembic.py
   "$PY" -m alembic current)
@@ -61,7 +64,7 @@ pnpm --filter @nous/harness-bridge type-check
 pg_ctl -D "$PGDIR/data" stop -m fast
 ```
 
-Expected: 0a prints one `Running upgrade` line for each of `hb01_integration_grants`, `hb02_harness_runs`, `hb03_bridge_delivery`, `hb04_harness_approvals`, `aw01_artifact_workspace`, `aw02_artifact_lifecycle`, `it01_integration_actions` and `it02_merge_integration_heads`, then `alembic current` prints the current single head, `d4a6c8e0f2b3 (head)` on 2026-10-04, which is the revision `check_alembic.py` reports. 0b prints `1 passed`. In hosted CI it is skipped, because no workflow sets `ORCHESTRATION_TEST_DATABASE_URL`, so the hosted result is NOT RUN. The hosted equivalent of 0a is the Test Pipeline job **Alembic Migration Check**, step **Advisory — upgrade head from empty DB**. That step is `continue-on-error`, so read its log for the eight `Running upgrade` lines; do not rely on the step colour.
+Expected: 0a prints one `Running upgrade` line for each of `hb01_integration_grants`, `hb02_harness_runs`, `hb03_bridge_delivery`, `hb04_harness_approvals`, `aw01_artifact_workspace`, `aw02_artifact_lifecycle`, `it01_integration_actions` and `it02_merge_integration_heads`, then `alembic current` prints the current single head, `d4a6c8e0f2b3 (head)` on 2026-10-04, which is the revision `check_alembic.py` reports. The 0a subshell stops at its first failing command, so a traceback with no `alembic current` line, or a non-zero `echo $?` straight after it, is FAIL, never PASS. Run it only against a freshly created `mig`: on an already migrated database the upgrade prints no matching line and 0a fails. 0b prints `1 passed`. In hosted CI it is skipped, because no workflow sets `ORCHESTRATION_TEST_DATABASE_URL`, so the hosted result is NOT RUN. The hosted equivalent of 0a is the Test Pipeline job **Alembic Migration Check**, step **Advisory — upgrade head from empty DB**. That step is `continue-on-error`, so read its log for the eight `Running upgrade` lines; do not rely on the step colour.
 
 Not covered here: the artifact lifecycle `SKIP LOCKED` (`backend/src/services/artifacts/lifecycle.py`), the `HarnessCommand` lease lock (`lease_commands`, `backend/src/services/harness/delivery.py:285`) and the `tool_actions` approved-to-executing compare-and-set have SQLite unit coverage only. Record them as NOT RUN on PostgreSQL.
 
@@ -70,11 +73,16 @@ Not covered here: the artifact lifecycle `SKIP LOCKED` (`backend/src/services/ar
 Read-only cluster commands need `aws login` and the EKS kubeconfig.
 
 1. **Release pipeline delivers images again.** Release Dev has failed since 2026-10-01 at **Verify release branch protection** (`gh: Resource not accessible by personal access token`; for example run 37181835414 on 2026-10-04). The release token needs `Administration: Read`. Until this is fixed, nothing merged after `8ad2c82` reaches dev. After the token is fixed, a release starts from the next push to `develop`, or from re-running the Release Dev run for `develop`'s current head.
-2. **The deployed image contains the bridge.** The image must include `271bd5c1f` (`disconnect`, #1790), `6e1452e66` (grant renewal, #1786) and `bfc33c342` (`request_action`, `it01`, #1780). The image pinned on 2026-10-04 is `8ad2c82` (2026-09-30) and contains none of the three.
+2. **The deployed image contains the bridge.** The image must include `271bd5c1f` (`disconnect`, #1790), `6e1452e66` (grant renewal, #1786) and `bfc33c342` (`request_action`, `it01`, #1780). Phase 2 also needs `613fe13bf` (slice A, #1863: `disconnect` ends the user's CLI logins). The image pinned on 2026-10-04 is `8ad2c82` (2026-09-30) and contains none of the four.
+
+   Read the promoted tag from the freshly fetched `origin/develop`, never from the working tree: Release Dev records a promoted image in a later commit, and `git fetch` does not change a checked-out file.
 
    ```sh
-   TAG=$(awk '/^backend:/{b=1} b&&/tag:/{gsub(/"/,"",$2);print $2;exit}' infrastructure/helm/knowledge-graph-analytics/values-aws.yaml)
-   git fetch origin develop && git merge-base --is-ancestor 271bd5c1f "$TAG" && echo "image $TAG OK"
+   git fetch origin develop
+   TAG=$(git show origin/develop:infrastructure/helm/knowledge-graph-analytics/values-aws.yaml \
+     | awk '/^backend:/{b=1} b&&/tag:/{gsub(/"/,"",$2);print $2;exit}')
+   git merge-base --is-ancestor 271bd5c1f "$TAG" && echo "bridge in image $TAG" || echo "bridge NOT in image $TAG"
+   git merge-base --is-ancestor 613fe13bf "$TAG" && echo "slice A in image $TAG" || echo "slice A NOT in image $TAG"
    kubectl -n multimodal-rag-system get deploy nous-dev-aws-knowledge-graph-analytics-backend \
      -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
    ```
@@ -118,7 +126,7 @@ pnpm --filter @nous/harness-bridge start connect --store "$STATE" --api "$API" \
   --project "$PROJECT_ID" --label harness-proof --tools
 pnpm --filter @nous/harness-bridge start workspace add --store "$STATE" --root "$FIXTURE" --label harness-proof-fixture
 jq -c '{deviceId, scopes, workspace: .workspaces[0].id}' "$STATE/connection.json"
-pnpm --filter @nous/harness-bridge start run --store "$STATE"     # leave running in its own terminal
+pnpm --filter @nous/harness-bridge start run --store "$STATE"     # leave running in its own terminal until P1-3 stops it
 ```
 
 Expected scopes: `["harness:execute","tools:read"]`, with no `tools:write` and no `artifacts:publish`.
@@ -152,7 +160,7 @@ probe() {
 probe before
 ```
 
-The control must print `before grant:200` and `before bearer:200`. If it does not, stop before `disconnect`: the credentials are not usable, for example because the copy is stale (a grant lives 15 minutes and every renewal revokes the previous token). `rm -rf "$PROBE"`, fix the cause and copy again. Without this control a 403 cannot be told apart from a grant that had already expired or been renewed away. Then, in the same shell:
+The control must print `before grant:200` and `before bearer:200`. If it does not, stop before `disconnect`: the credentials are not usable, for example because the copy is stale (a grant lives 15 minutes and every renewal revokes the previous token). `rm -rf "$PROBE"`, fix the cause and copy again. Without this control a 403 cannot be told apart from a grant that had already expired or been renewed away. Once it passes, stop the bridge: press Ctrl-C in the terminal that runs `nous-harness run`. `disconnect` deletes the credentials but does not stop a running bridge, which would keep retrying with the old handle every five seconds and never exit, and the Phase 2 `run` would then be a second bridge on the same `$STATE/journal.sqlite`. Then, in the same shell:
 
 ```sh
 pnpm --filter @nous/harness-bridge start disconnect --store "$STATE"
@@ -160,14 +168,14 @@ probe after
 unset AT GT H; unset -f probe; rm -rf "$PROBE"
 ```
 
-Expected: `disconnect` prints `Disconnected: NOUS revoked this device's access…`. The codes after it depend on whether the deployed image contains slice A's merge commit (the Gate 1 step 2 check):
+Expected: `disconnect` prints `Disconnected: NOUS revoked this device's access…`. The codes after it depend on whether the deployed image contains slice A, `613fe13bf` (#1863, merged; the second check in Gate 1 step 2):
 
 - Without slice A: `after grant:403` and `after bearer:200`. `bearer:200` is the known gap: record it as **FAIL (known, slice A)**, not PASS.
-- With slice A: `after grant:401` and `after bearer:401`. The revoked CLI bearer is rejected before the grant is looked up, so `grant:401` says nothing about the grant itself. Evidence for the grant comes from the `after grant:403` of a run without slice A, or from the grant row's `revoked_at` (table `integration_grants`).
+- With slice A: `after grant:401` and `after bearer:401`. The revoked CLI bearer is rejected before the grant is looked up, so `grant:401` says nothing about the grant itself. Evidence for the grant comes from the `after grant:403` of a run without slice A, or from the grant row's `revoked_at` (table `integration_grants`). `after bearer:200` is a FAIL here, for example when Redis was unreachable: the CLI cutoff is written after the revocation commits and is best-effort, so `disconnect` still reports success. The cutoff covers every CLI login of that user, not only this device's, so run the proof as the test user: other machines logged in as that user must `connect` again.
 
-## Phase 2: write proof (only after slice A is merged AND deployed, and after the Phase 2 values PR)
+## Phase 2: write proof (only after slice A is deployed, and after the Phase 2 values PR)
 
-Do not start Phase 2 until Gate 1 step 2 has been re-run with slice A's merge commit in place of `271bd5c1f`.
+Do not start Phase 2 until Gate 1 step 2, re-run, prints `slice A in image`.
 
 ```sh
 pnpm --filter @nous/harness-bridge start connect --store "$STATE" --api "$API" \
@@ -187,7 +195,7 @@ shasum -a 256 "$FIXTURE/proof.md"
 uuidgen | tr 'A-Z' 'a-z'      # publication_id
 ```
 
-In the chat thread with Local Codex, send: `Call the nous artifacts_publish tool with relative_path "proof.md", title "harness live proof", publication_id "<uuid>". Then call it again with the same arguments. Reply with both results verbatim.` Expected: both results carry the same `version_id`, and their `sha256` equals the local `shasum` value. The artifact appears in the thread's artifact panel.
+In the chat thread with Local Codex, send: `Call the nous artifacts_publish tool with relative_path "proof.md", title "harness live proof", publication_id "<uuid>". Then call it again with the same arguments. Reply with both results verbatim.` Expected: both results carry the same `version_id`, and their `sha256` equals the local `shasum` value. Do not expect the artifact in the thread's artifact panel: the managed MCP child publishes with the connection's grant (`mcpSession` in `packages/harness-bridge/src/cli.ts`), which carries no thread or run, so `publish_version` (`backend/src/services/artifacts/service.py`) stores the version and its reference with `thread_id` and `run_id` null, and the panel's source `GET $API/artifacts/threads/{thread_id}` lists only references whose `thread_id` matches. Record the absence from the panel as a known gap, not as a failed publish.
 
 **P2-2: approval after the grant lifetime.**
 
@@ -198,13 +206,13 @@ date -u +%FT%TZ               # requested_at
 
 Send: `Call the nous request_action tool with action "create_project_note", invocation_id "<uuid>", title "harness live proof note", content "approved after grant expiry". Reply with the result verbatim.` Expected: `Not created yet. The user must approve this note in NOUS: https://goodwiinz.tech/integrations/actions/<uuid>…`. Leave `nous-harness run` running. Wait at least 16 minutes, then open the approval URL as the project owner, approve, and record `date -u +%FT%TZ` as `approved_at`. Then send: `Call the nous get_action_status tool with invocation_id "<uuid>".` Expected: `Created. …`, and the note is visible in the project notes. Record `approved_at - requested_at`; it must be at least 16 minutes.
 
-**P2-3: disconnect, then probe.** Repeat P1-3, control included. Slice A is deployed by now, so expect `before grant:200` and `before bearer:200`, then `after grant:401` and `after bearer:401`.
+**P2-3: disconnect, then probe.** Repeat P1-3, control and bridge stop included. Slice A is deployed by now, so expect `before grant:200` and `before bearer:200`, then `after grant:401` and `after bearer:401`.
 
 ## Rollback and kill switch
 
 - **Stop new work (USER APPROVAL REQUIRED):** open a PR that sets `HARNESS_BRIDGE_ENABLED`, `NOUS_MCP_ENABLED` and `ARTIFACTS_ENABLED` to `"false"` in `values-aws.yaml`, and merge it. Argo CD `nous-dev-aws` auto-syncs `develop`. Release Dev deliberately skips a rebuild when only `values-aws.yaml` changed. Never `kubectl edit/patch/set env`: self-heal reverts it and it bypasses review.
 - **Expected after the flags are off:** a new Codex run is refused (`Local harness execution is disabled by server policy`). `GET $API/integrations/tools` with a live grant returns 503, and so does a new `request_action`. `get_action_status` for an existing invocation still answers. Accepted Codex runs still reconcile to a terminal state. Approved actions wait and do not execute.
-- **Device side:** stop `nous-harness run` (Ctrl-C) and run `nous-harness disconnect --store "$STATE"`. A grant UUID can also be revoked through the owner API `DELETE $API/integrations/grants/{grant_id}`. Do not edit or delete `journal.sqlite`; for uncertain interrupts use `recover-interrupt` as described in the package README.
+- **Device side:** stop `nous-harness run` (Ctrl-C) and run `nous-harness disconnect --store "$STATE"`. A grant UUID can also be revoked through the owner API `DELETE $API/integrations/grants/{grant_id}`; with a browser login that revokes the grant and its consent only and leaves CLI logins alone (a CLI-authenticated DELETE, which is what `disconnect` sends, also ends them), and the browser device list and revoke routes of #1788 are not on `develop`. Do not edit or delete `journal.sqlite`; for uncertain interrupts use `recover-interrupt` as described in the package README.
 - **Schema:** the harness, artifact and integration migrations are additive, and the flags are the rollback. Do not run `alembic downgrade` on RDS.
 
 ## Evidence table
@@ -220,7 +228,7 @@ Copy this table into a new bundle `docs/testing/evidence/harness-live-proof-YYYY
 | G1-flags | Flag state per pod (Phase 1, then Phase 2) | grep output for backend, worker and beat; Argo CD revision | NOT RUN |
 | P1-1 | Chat run, reload, single approval | Playwright summary; `thread_id`, `run_id`, `device_id`, `workspace_id` | NOT RUN |
 | P1-2 | MCP read | `run_id`, returned document ids | NOT RUN |
-| P1-3 | Disconnect, then probes | `before` and `after` codes for `grant:` and `bearer:`, and whether the image had slice A; without slice A, `after bearer:200` is FAIL (known, slice A) | NOT RUN |
+| P1-3 | Disconnect, then probes | `before` and `after` codes for `grant:` and `bearer:`, and whether the image had slice A (`613fe13bf`); `after bearer:200` is FAIL either way (known gap without slice A) | NOT RUN |
 | P2-1 | Publish and SHA-256 | `artifact_id`, `version_id` from both calls, local and stored SHA-256 | NOT RUN |
 | P2-2 | Approval after more than 15 minutes | `invocation_id`, `requested_at`, `approved_at`, delta, final state | NOT RUN |
 | P2-3 | Disconnect, then probes after slice A | `before grant:200`, `before bearer:200`, `after grant:401`, `after bearer:401`; grant evidence: the P1-3 `after grant:403` or the grant row's `revoked_at` | NOT RUN |
