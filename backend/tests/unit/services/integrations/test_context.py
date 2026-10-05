@@ -567,10 +567,20 @@ async def test_cross_org_project_requires_live_owning_organization(
 
 
 async def test_http_owner_revocation_supports_cli_dual_credentials_and_browser(
-    db: AsyncSession, owner: Any, pending: Any
+    db: AsyncSession, owner: Any, pending: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from types import SimpleNamespace
 
+    from src.services.integrations import context as service
+
+    # `nous-harness disconnect` must also end the CLI login it used (CLI JWTs
+    # carry no device id), and only after the grant revocation commits.
+    cutoffs: list[tuple[str, bool]] = []
+
+    async def record(user_id: str) -> None:
+        cutoffs.append((user_id, db.in_transaction()))
+
+    monkeypatch.setattr(service, "revoke_user_cli_tokens", record)
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
 
@@ -615,7 +625,9 @@ async def test_http_owner_revocation_supports_cli_dual_credentials_and_browser(
                 headers={**headers, "X-NOUS-Integration-Grant": browser_grant.token},
             )
         ).status_code == 403
+        assert cutoffs == []  # refused deletes revoke nothing
         assert (await client.delete(url, headers=headers)).status_code == 204
+        assert cutoffs == [(str(USER), False)]
         with pytest.raises(IntegrationAccessDenied):
             await resolve_integration_context(
                 db, issued.token, required_scope="tools:read"
@@ -634,6 +646,7 @@ async def test_http_owner_revocation_supports_cli_dual_credentials_and_browser(
         actor = owner
         token.user_id = str(USER)
         assert (await client.delete(browser_url)).status_code == 204
+        assert len(cutoffs) == 1  # a browser grant delete leaves CLI logins alone
         with pytest.raises(IntegrationAccessDenied):
             await resolve_integration_context(
                 db, browser_grant.token, required_scope="tools:read"

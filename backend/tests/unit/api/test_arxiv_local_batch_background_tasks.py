@@ -37,7 +37,7 @@ async def test_batch_forwards_real_background_tasks_not_none():
 
     with (
         patch.object(arxiv_local, "ARXIV_DATA_PATH") as data_path,
-        patch.object(arxiv_local, "extract_features_from_local_pdfs", inner),
+        patch.object(arxiv_local, "_extract_features_from_local_pdfs", inner),
     ):
         data_path.glob.return_value = [_fake_pdf()]
 
