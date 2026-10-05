@@ -1,11 +1,12 @@
 """Scoped integration read gateway, using a local SQLite database."""
 
+import json
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, text, update
+from sqlalchemy import insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models.collection import Collection, CollectionDocument
@@ -126,7 +127,9 @@ def _invocation(tool_name: str, **arguments: Any) -> ToolInvocation:
 def test_catalog_advertises_only_the_read_allowlist_without_identity_args() -> None:
     catalog = list_read_tools()
     names = {tool.name for tool in catalog}
-    assert names == set(READ_TOOL_NAMES)
+    assert names == set(READ_TOOL_NAMES) | set(read_tools.LOCAL_TOOLS)
+    assert set(read_tools.TOOL_SCOPES) == names
+    assert set(read_tools.TOOL_SCOPES.values()) == {"tools:read"}
     assert "execute_code" not in names and "forget_memory" not in names
     for tool in catalog:
         assert "project_id" not in tool.input_schema.get("properties", {})
@@ -409,3 +412,403 @@ async def test_foreign_user_in_context_is_denied(db: AsyncSession) -> None:
     )
     with pytest.raises(IntegrationAccessDenied):
         await invoke_read(db, context, _invocation("list_project_documents"))
+
+
+# ---------------------------------------------------------------------------
+# Plan 07 slice 1: args-only primitives, document content, passages
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_lists_plan07_tools_without_identity_args() -> None:
+    by_name = {tool.name: tool.input_schema for tool in list_read_tools()}
+    assert {
+        "search_arxiv",
+        "search_external_database",
+        "list_external_databases",
+        "get_document_content",
+        "retrieve_passages",
+    } <= set(by_name)
+    for schema in by_name.values():
+        assert not read_tools.IDENTITY_ARGUMENTS & set(schema["properties"])
+        assert schema["additionalProperties"] is False
+    assert by_name["search_arxiv"]["properties"]["max_results"]["maximum"] == 20
+    assert (
+        by_name["search_external_database"]["properties"]["max_results"]["maximum"]
+        == 20
+    )
+    assert by_name["retrieve_passages"]["properties"]["top_k"]["maximum"] == 20
+    assert by_name["retrieve_passages"]["properties"]["document_ids"]["maxItems"] == 20
+    assert by_name["get_document_content"]["properties"]["limit"]["maximum"] == 48_000
+    assert by_name["get_document_content"]["required"] == ["document_id"]
+
+
+async def test_search_arxiv_is_dispatched_with_clamped_results(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arxiv = AsyncMock(return_value={"papers": [{"id": "2401.00001"}]})
+    monkeypatch.setattr(read_tools, "_tool_search_arxiv", arxiv)
+    # Args-only: must not touch project ownership at all.
+    ownership = AsyncMock()
+    monkeypatch.setattr(read_tools, "_verify_project_ownership", ownership)
+    result = await invoke_read(
+        db, context, _invocation("search_arxiv", query="llm", max_results=99)
+    )
+    assert result.is_error is False
+    assert result.source_refs == [{"arxiv_id": "2401.00001"}]
+    assert arxiv.await_args is not None
+    assert arxiv.await_args.args[0]["max_results"] == 20
+    assert "project_id" not in arxiv.await_args.args[0]
+    ownership.assert_not_awaited()
+
+
+async def test_search_arxiv_timeout_is_stable_error(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    async def never(_args: dict[str, Any]) -> dict[str, Any]:
+        await asyncio.sleep(5)
+        return {}
+
+    monkeypatch.setattr(read_tools, "_tool_search_arxiv", never)
+    monkeypatch.setattr(read_tools, "_search_arxiv_budget_seconds", lambda: 0.01)
+    result = await invoke_read(db, context, _invocation("search_arxiv", query="q"))
+    assert result.is_error is True
+    assert result.content == [{"error": "upstream_timeout"}]
+
+
+async def test_search_arxiv_budget_is_the_agent_slow_timeout() -> None:
+    from src.services.agent._nodes_tools import _SLOW_TOOL_TIMEOUT_SECONDS
+
+    assert read_tools._search_arxiv_budget_seconds() == _SLOW_TOOL_TIMEOUT_SECONDS
+
+
+async def test_connector_tools_pass_args_only(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    search = AsyncMock(
+        return_value={
+            "total_results": 1,
+            "results": [{"id": "P04637", "source": "uniprot"}],
+            "connectors_searched": ["uniprot"],
+        }
+    )
+    listing = AsyncMock(return_value={"total": 0, "connectors": []})
+    monkeypatch.setattr(read_tools, "_tool_search_external_database", search)
+    monkeypatch.setattr(read_tools, "_tool_list_external_databases", listing)
+    searched = await invoke_read(
+        db,
+        context,
+        _invocation("search_external_database", query="p53", max_results=40),
+    )
+    listed = await invoke_read(db, context, _invocation("list_external_databases"))
+    assert searched.is_error is False and listed.is_error is False
+    assert searched.source_refs == [{"external_id": "P04637", "connector": "uniprot"}]
+    assert search.await_args is not None
+    assert search.await_args.args[0] == {"query": "p53", "max_results": 20}
+    assert listing.await_args is not None
+    assert listing.await_args.args[0] == {}
+
+
+async def test_external_tool_crash_never_leaks_exception_text(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(side_effect=RuntimeError("api key sk-secret")),
+    )
+    result = await invoke_read(
+        db, context, _invocation("search_external_database", query="q")
+    )
+    assert result.is_error is True
+    assert "sk-secret" not in json.dumps(result.content)
+
+
+async def _set_content(db: AsyncSession, document_id: UUID, text_: str) -> None:
+    await db.execute(
+        update(Document)
+        .where(Document.id == document_id)
+        .values(content_text=text_, content_summary="sum")
+    )
+    await db.commit()
+
+
+@pytest.mark.parametrize(
+    "document_id", [DOC_OUTSIDE_PROJECT, uuid4()], ids=["foreign-project", "unknown"]
+)
+async def test_document_content_refuses_documents_outside_the_grant(
+    db: AsyncSession, context: IntegrationContext, document_id: UUID
+) -> None:
+    await _set_content(db, DOC_OUTSIDE_PROJECT, "secret body")
+    result = await invoke_read(
+        db,
+        context,
+        _invocation("get_document_content", document_id=str(document_id), mode="full"),
+    )
+    assert result.is_error is True
+    assert result.content[0]["reason"] == "requested_documents_unavailable"
+    assert "secret" not in json.dumps(result.content)
+    assert result.source_refs == []
+
+
+async def test_document_content_paginates_full_text(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _set_content(db, DOC_IN_PROJECT, "0123456789")
+    first = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "get_document_content",
+            document_id=str(DOC_IN_PROJECT),
+            mode="full",
+            limit=4,
+        ),
+    )
+    assert first.is_error is False
+    page = first.content[0]
+    assert page["text"] == "0123"
+    assert page["next_offset"] == 4
+    assert page["total_chars"] == 10
+    assert page["mode"] == "full"
+    assert page["title"] == "retrieval-eval"
+    assert page["source_refs"] == [{"document_id": str(DOC_IN_PROJECT)}]
+    assert first.source_refs == [{"document_id": str(DOC_IN_PROJECT)}]
+    last = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "get_document_content",
+            document_id=str(DOC_IN_PROJECT),
+            mode="full",
+            offset=8,
+            limit=4,
+        ),
+    )
+    assert last.content[0]["text"] == "89"
+    assert last.content[0]["next_offset"] is None
+    summary = await invoke_read(
+        db,
+        context,
+        _invocation("get_document_content", document_id=str(DOC_IN_PROJECT)),
+    )
+    assert summary.content[0]["mode"] == "summary"
+    assert summary.content[0]["text"] == "sum"
+    assert summary.content[0]["next_offset"] is None
+
+
+async def test_document_content_stays_under_the_result_cap(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    # 3-byte UTF-8 chars: 48k chars would be 144 KiB on the wire.
+    await _set_content(db, DOC_IN_PROJECT, "文" * 100_000)
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "get_document_content", document_id=str(DOC_IN_PROJECT), mode="full"
+        ),
+    )
+    assert result.is_error is False
+    page = result.content[0]
+    wire = json.dumps(page, ensure_ascii=False).encode()
+    assert len(wire) <= read_tools.MAX_RESULT_BYTES
+    assert page["next_offset"] == len(page["text"]) > 0
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        _invocation("get_document_content", document_id="nope"),
+        _invocation("get_document_content", document_id=str(DOC_IN_PROJECT), mode="x"),
+        _invocation(
+            "get_document_content", document_id=str(DOC_IN_PROJECT), limit=48_001
+        ),
+        _invocation("retrieve_passages", query="q", document_ids=[]),
+        _invocation("retrieve_passages", query="q", top_k=21),
+    ],
+    ids=["bad-uuid", "bad-mode", "limit-too-big", "empty-ids", "top-k-too-big"],
+)
+async def test_plan07_argument_shapes_are_rejected(
+    db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(db, context, invocation)
+
+
+class _StubFulltext:
+    def __init__(self, results: list[Any]) -> None:
+        self.results = results
+        self.calls: list[dict[str, Any]] = []
+
+    def search(self, **kwargs: Any) -> Any:
+        from src.models.search_schemas import SearchResponse
+
+        self.calls.append(kwargs)
+        request = kwargs["search_request"]
+        return SearchResponse(
+            query=request.query,
+            search_id=str(uuid4()),
+            search_type=request.search_type,
+            results=self.results,
+            total_results=len(self.results),
+            returned_results=len(self.results),
+            search_time_ms=1,
+            limit=request.limit,
+            offset=0,
+            has_more=False,
+        )
+
+
+def _search_result(document_id: UUID, snippet: str) -> Any:
+    from datetime import datetime
+
+    from src.models.search_schemas import SearchResult, TextSnippet
+
+    return SearchResult(
+        document_id=str(document_id),
+        title="retrieval-eval",
+        document_type=DocumentType.TEXT,
+        content_preview="preview",
+        snippets=[
+            TextSnippet(
+                text=snippet, start_position=0, end_position=1, relevance_score=0.8
+            )
+        ],
+        relevance_score=1.5,
+        file_size_bytes=1,
+        created_at=datetime(2026, 1, 1),
+        updated_at=datetime(2026, 1, 1),
+        processing_status="COMPLETED",
+        tags=[],
+        is_public=False,
+        uploaded_by_user_id=str(USER),
+        organization_id=str(ORG),
+        metadata={"storage_key": "internal"},
+    )
+
+
+async def test_retrieve_passages_without_ids_scopes_to_the_collection(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _StubFulltext([_search_result(DOC_IN_PROJECT, "a <mark>hit</mark> here")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    result = await invoke_read(
+        db, context, _invocation("retrieve_passages", query="hit", top_k=3)
+    )
+    assert result.is_error is False
+    assert result.content[0]["chunks"] == [
+        {
+            "document_id": str(DOC_IN_PROJECT),
+            "title": "retrieval-eval",
+            "text": "a hit here",
+            "score": 1.5,
+        }
+    ]
+    assert result.source_refs == [{"document_id": str(DOC_IN_PROJECT)}]
+    [call] = stub.calls
+    assert call["organization_id"] == str(ORG)
+    # Only the grant's collection, never the sibling project's document.
+    assert call["search_request"].filters.document_ids == [str(DOC_IN_PROJECT)]
+    assert call["search_request"].limit == 3
+
+
+async def test_retrieve_passages_refuses_foreign_ids_before_searching(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _StubFulltext([])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages",
+            query="q",
+            document_ids=[str(DOC_IN_PROJECT), str(DOC_OUTSIDE_PROJECT)],
+        ),
+    )
+    assert result.is_error is True
+    assert result.content[0]["reason"] == "requested_documents_unavailable"
+    assert stub.calls == []
+
+
+async def test_retrieve_passages_empty_collection_skips_search(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _StubFulltext([_search_result(DOC_OUTSIDE_PROJECT, "leak")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    await db.execute(update(CollectionDocument).values(is_deleted=True))
+    await db.commit()
+    context = IntegrationContext(
+        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+    )
+    result = await invoke_read(db, context, _invocation("retrieve_passages", query="q"))
+    assert result.is_error is False
+    assert result.content[0]["chunks"] == []
+    assert stub.calls == []
+
+
+async def test_retrieve_passages_backend_failure_is_safe_error(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Boom:
+        def search(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("dsn=postgres://user:pw@host/db")
+
+    monkeypatch.setattr(read_tools, "fulltext_search_service", Boom())
+    result = await invoke_read(db, context, _invocation("retrieve_passages", query="q"))
+    assert result.is_error is True
+    assert "pw@host" not in json.dumps(result.content)
+
+
+async def test_arxiv_paper_content_is_transient_and_paginated(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Cache:
+        store: dict[str, str] = {}
+
+        async def get(self, key: str) -> str | None:
+            return self.store.get(key)
+
+        async def set(self, key: str, value: str, ex: int | None = None) -> None:
+            self.store[key] = value
+
+    monkeypatch.setattr(read_tools, "_arxiv_cache", Cache)
+    monkeypatch.setattr(
+        read_tools.arxiv_fulltext, "fetch_text", AsyncMock(return_value="t" * 10)
+    )
+    result = await invoke_read(
+        db,
+        context,
+        _invocation("get_arxiv_paper_content", arxiv_id="2401.00001", limit=4),
+    )
+    assert result.is_error is False
+    assert result.content[0]["text"] == "tttt"
+    assert result.content[0]["next_offset"] == 4
+    assert result.source_refs == [{"arxiv_id": "2401.00001"}]
+    # Nothing landed in the documents table.
+    rows = await db.execute(select(Document.id))
+    assert {str(r) for r in rows.scalars().all()} == {
+        str(DOC_IN_PROJECT),
+        str(DOC_OUTSIDE_PROJECT),
+    }
+
+
+async def test_arxiv_paper_content_errors_are_stable(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(read_tools, "_arxiv_cache", lambda: read_tools._NoCache())
+    monkeypatch.setattr(
+        read_tools.arxiv_fulltext,
+        "fetch_text",
+        AsyncMock(side_effect=RuntimeError("token=abc")),
+    )
+    result = await invoke_read(
+        db, context, _invocation("get_arxiv_paper_content", arxiv_id="2401.00001")
+    )
+    assert result.content == [{"error": "arxiv_unavailable"}]
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(
+            db, context, _invocation("get_arxiv_paper_content", arxiv_id="../etc")
+        )

@@ -8,13 +8,16 @@ evidence that a registry tool is safe to expose outside the agent graph.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document
@@ -26,22 +29,42 @@ from src.services.agent.tool_helpers import _escape_like, _verify_project_owners
 from src.services.agent.tools_impl import (
     _tool_do_kb_retrieve,
     _tool_get_current_draft,
+    _tool_list_external_databases,
     _tool_list_project_documents,
+    _tool_search_arxiv,
+    _tool_search_external_database,
 )
+from src.services.integrations import arxiv_fulltext
+from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
 from src.services.integrations.context import IntegrationAccessDenied
+from src.services.search.fulltext_search_service import fulltext_search_service
 
+logger = logging.getLogger(__name__)
+
+# Tools with an agent-registry twin; the catalog schema derives from it.
 READ_TOOL_NAMES: tuple[str, ...] = (
     "search_documents",
     "list_project_documents",
     "do_kb_retrieve",
     "get_current_draft",
+    "search_arxiv",
+    "search_external_database",
+    "list_external_databases",
+)
+# Args-only tools: no project scoping, dispatched before the ownership check.
+_ARGS_ONLY_TOOLS = frozenset(
+    {"search_arxiv", "search_external_database", "list_external_databases"}
 )
 IDENTITY_ARGUMENTS = frozenset(
     {"project_id", "user_id", "organization_id", "thread_id", "run_id", "grant_id"}
 )
 MAX_RESULTS = 50
 MAX_DOCUMENT_IDS = 20
+MAX_EXTERNAL_RESULTS = 20
 MAX_RESULT_BYTES = 64 * 1024
+# Bytes a content page may occupy once JSON-encoded; leaves headroom under
+# MAX_RESULT_BYTES for the envelope.
+MAX_PAGE_BYTES = 48 * 1024
 # Keeps a content-bearing draft under MAX_RESULT_BYTES after JSON escaping.
 MAX_DRAFT_CONTENT_CHARS = 32_000
 # The advertised schema must match what the gateway enforces; the agent-facing
@@ -61,8 +84,92 @@ _SCHEMA_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
             "description": "Project document UUIDs to retrieve from (required).",
         },
     },
+    "search_arxiv": {"max_results": {"maximum": MAX_EXTERNAL_RESULTS}},
+    "search_external_database": {"max_results": {"maximum": MAX_EXTERNAL_RESULTS}},
 }
 _EXTRA_REQUIRED = {"do_kb_retrieve": ["document_ids"]}
+
+_UUID_ITEMS = {"type": "string", "format": "uuid"}
+_OFFSET = {"type": "integer", "minimum": 0, "default": 0}
+_PAGE_LIMIT = {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": MAX_PAGE_CHARS,
+    "default": MAX_PAGE_CHARS,
+    "description": "Characters per page.",
+}
+# Tools without a registry twin: name -> (description, input_schema, scope).
+LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
+    "get_document_content": (
+        "Read a project document's summary or full text. Paginated by "
+        "characters; follow next_offset until it is null.",
+        {
+            "type": "object",
+            "properties": {
+                "document_id": _UUID_ITEMS,
+                "mode": {
+                    "type": "string",
+                    "enum": ["summary", "full"],
+                    "default": "summary",
+                },
+                "offset": _OFFSET,
+                "limit": _PAGE_LIMIT,
+            },
+            "required": ["document_id"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
+    "retrieve_passages": (
+        "Full-text passage retrieval over the granted project's documents "
+        "(PostgreSQL ranking; works without a semantic knowledge base). "
+        "Omit document_ids to search the whole project.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1, "maxLength": 1000},
+                "document_ids": {
+                    "type": "array",
+                    "items": _UUID_ITEMS,
+                    "minItems": 1,
+                    "maxItems": MAX_DOCUMENT_IDS,
+                },
+                "top_k": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_DOCUMENT_IDS,
+                    "default": 8,
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
+    "get_arxiv_paper_content": (
+        "Read the full text of an arXiv paper by id without ingesting it. "
+        "Paginated by characters; follow next_offset until it is null.",
+        {
+            "type": "object",
+            "properties": {
+                "arxiv_id": {"type": "string", "maxLength": 32},
+                "offset": _OFFSET,
+                "limit": _PAGE_LIMIT,
+            },
+            "required": ["arxiv_id"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
+}
+TOOL_SCOPES: dict[str, str] = {name: "tools:read" for name in READ_TOOL_NAMES} | {
+    name: scope for name, (_d, _s, scope) in LOCAL_TOOLS.items()
+}
+_JSON_TYPES: dict[str, type | tuple[type, ...]] = {
+    "string": str,
+    "integer": int,
+    "array": list,
+}
 
 
 class ToolArgumentError(ValueError):
@@ -103,16 +210,52 @@ def list_read_tools() -> list[ToolDescriptorDTO]:
         ToolDescriptorDTO(name=name, description=desc_, input_schema=schema)
         for name in READ_TOOL_NAMES
         for desc_, schema, _model in (_registry_schema(name),)
+    ] + [
+        ToolDescriptorDTO(name=name, description=desc_, input_schema=schema)
+        for name, (desc_, schema, _scope) in LOCAL_TOOLS.items()
     ]
+
+
+def _check_local_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> None:
+    """Plain key/type/bounds check against a LOCAL_TOOLS schema (no coercion)."""
+
+    def check(spec: dict[str, Any], value: Any) -> bool:
+        expected = _JSON_TYPES[spec["type"]]
+        if isinstance(value, bool) or not isinstance(value, expected):
+            return False
+        if "enum" in spec and value not in spec["enum"]:
+            return False
+        if isinstance(value, int):
+            return spec.get("minimum", value) <= value <= spec.get("maximum", value)
+        if isinstance(value, str):
+            return (
+                spec.get("minLength", 0) <= len(value) <= spec.get("maxLength", 2**31)
+            )
+        return spec.get("minItems", 0) <= len(value) <= spec.get(
+            "maxItems", 2**31
+        ) and all(check(spec["items"], item) for item in value)
+
+    for key, value in arguments.items():
+        if not check(schema["properties"][key], value):
+            raise ToolArgumentError("invalid argument types")
 
 
 def _validate_arguments(invocation: ToolInvocation) -> dict[str, Any]:
     from pydantic import ValidationError
 
-    if invocation.tool_name not in READ_TOOL_NAMES:
+    name = invocation.tool_name
+    if name not in READ_TOOL_NAMES and name not in LOCAL_TOOLS:
         raise ToolArgumentError("tool is not available to integrations")
     arguments = invocation.arguments
-    _, schema, model = _registry_schema(invocation.tool_name)
+    if name in LOCAL_TOOLS:
+        _, schema, _scope = LOCAL_TOOLS[name]
+        if set(arguments) - set(schema["properties"]):
+            raise ToolArgumentError("unknown arguments")
+        if set(schema["required"]) - set(arguments):
+            raise ToolArgumentError("missing required arguments")
+        _check_local_arguments(schema, arguments)
+        return arguments
+    _, schema, model = _registry_schema(name)
     # Identity keys were stripped from the advertised schema, so a caller
     # supplying project_id/user_id/... is rejected here as an unknown argument.
     allowed = set(schema["properties"])
@@ -208,10 +351,249 @@ async def _project_document_ids(
     return [str(value) for value in raw_ids]
 
 
+async def _collection_document_ids(
+    db: AsyncSession, context: IntegrationContext
+) -> list[str]:
+    """Every live document in the grant's Collection."""
+    # ponytail: unbounded id list -> one bind param per document; add a cap
+    # or a join-based filter in the search service if collections grow large.
+    rows = await db.execute(
+        _live_project_documents(context).with_only_columns(Document.id)
+    )
+    return [str(value) for value in rows.scalars().all()]
+
+
+def _unavailable() -> ToolResult:
+    """Foreign and unknown ids look identical: no membership probing."""
+    return ToolResult(
+        content=[
+            {
+                "error": "requested_documents_unavailable",
+                "reason": "requested_documents_unavailable",
+                "chunks": [],
+                "total": 0,
+            }
+        ],
+        is_error=True,
+        source_refs=[],
+    )
+
+
+def _page(text: str, offset: int, limit: int) -> tuple[str, int | None]:
+    """Character page whose JSON encoding stays under MAX_PAGE_BYTES."""
+    chunk = text[offset : offset + limit]
+    while chunk:
+        wire = len(json.dumps(chunk, ensure_ascii=False).encode())
+        if wire <= MAX_PAGE_BYTES:
+            break
+        chunk = chunk[: max(1, int(len(chunk) * MAX_PAGE_BYTES / wire))]
+    end = offset + len(chunk)
+    return chunk, end if end < len(text) else None
+
+
+async def _document_content(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> ToolResult:
+    try:
+        document_id = UUID(str(arguments["document_id"]))
+    except ValueError as error:
+        raise ToolArgumentError("document_id must be a UUID") from error
+    rows = await db.execute(
+        _live_project_documents(context).where(Document.id == document_id)
+    )
+    document = rows.scalars().first()
+    if document is None:
+        return _unavailable()
+    mode = str(arguments.get("mode", "summary"))
+    text = (
+        document.content_text or ""
+        if mode == "full"
+        else document.content_summary or document.get_content_preview(500) or ""
+    )
+    offset = _clamp(arguments.get("offset", 0), 0, 2**31 - 1, 0)
+    chunk, next_offset = _page(
+        text,
+        offset,
+        _clamp(
+            arguments.get("limit", MAX_PAGE_CHARS), 1, MAX_PAGE_CHARS, MAX_PAGE_CHARS
+        ),
+    )
+    ref = {"document_id": str(document.id)}
+    return ToolResult(
+        content=[
+            {
+                "document_id": str(document.id),
+                "title": document.title,
+                "mode": mode,
+                "offset": offset,
+                "next_offset": next_offset,
+                "total_chars": len(text),
+                "text": chunk,
+                "source_refs": [ref],
+            }
+        ],
+        is_error=False,
+        source_refs=[ref],
+    )
+
+
+_MARK_TAGS = ("<mark>", "</mark>")
+
+
+async def _retrieve_passages(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    from src.models.search_schemas import SearchFilter, SearchQuery, SearchType
+    from src.services.agent._pii_redact import redact_pii
+
+    query = str(arguments["query"])
+    top_k = _clamp(arguments.get("top_k", 8), 1, MAX_DOCUMENT_IDS, 8)
+    if "document_ids" in arguments:
+        document_ids = await _project_document_ids(
+            db, context, arguments["document_ids"]
+        )
+        if document_ids is None:
+            return _unavailable().content[0]
+    else:
+        document_ids = await _collection_document_ids(db, context)
+    empty = {"chunks": [], "total": 0, "query": query}
+    if not document_ids:
+        return empty
+    request = SearchQuery(
+        query=query,
+        search_type=SearchType.FULLTEXT,
+        limit=top_k,
+        filters=SearchFilter(document_ids=document_ids),
+    )
+    # The live /documents/search path: synchronous PostgreSQL ts_rank_cd, so
+    # it runs off the event loop; the service opens its own sync session.
+    try:
+        response = await run_in_threadpool(
+            fulltext_search_service.search,
+            search_request=request,
+            user_id=str(context.user_id),
+            organization_id=str(context.organization_id),
+        )
+    except Exception:
+        logger.warning("retrieve_passages failed", exc_info=True)
+        return {"error": "retrieval_unavailable"}
+    allowed = set(document_ids)
+    chunks = []
+    for hit in response.results:
+        if hit.document_id not in allowed:
+            continue  # belt and braces: the filter already scoped the SQL
+        text = " ".join(s.text for s in hit.snippets) or hit.content_preview
+        for tag in _MARK_TAGS:
+            text = text.replace(tag, "")
+        chunks.append(
+            {
+                "document_id": hit.document_id,
+                "title": redact_pii(hit.title) if hit.title else hit.title,
+                "text": text,
+                "score": hit.relevance_score,
+            }
+        )
+    return {"chunks": chunks, "total": len(chunks), "query": query}
+
+
+def _search_arxiv_budget_seconds() -> float:
+    # search_arxiv is SLOW / NO_OUTER_RETRY in the agent graph; same backstop.
+    from src.services.agent._nodes_tools import _SLOW_TOOL_TIMEOUT_SECONDS
+
+    return float(_SLOW_TOOL_TIMEOUT_SECONDS)
+
+
+class _NoCache:
+    async def get(self, _key: str) -> None:
+        return None
+
+    async def set(self, _key: str, _value: str, ex: int | None = None) -> None:
+        return None
+
+
+def _arxiv_cache() -> Any:
+    try:
+        import redis.asyncio as redis_async
+
+        from src.core.config import settings
+
+        if settings.REDIS_URL:
+            return redis_async.from_url(settings.REDIS_URL, decode_responses=True)
+    except Exception:
+        logger.debug("arxiv fulltext cache unavailable", exc_info=True)
+    return _NoCache()
+
+
+async def _arxiv_paper_content(arguments: dict[str, Any]) -> ToolResult:
+    arxiv_id = str(arguments["arxiv_id"])
+    try:
+        page = await arxiv_fulltext.get_page(
+            arxiv_id,
+            offset=_clamp(arguments.get("offset", 0), 0, 2**31 - 1, 0),
+            limit=_clamp(
+                arguments.get("limit", MAX_PAGE_CHARS),
+                1,
+                MAX_PAGE_CHARS,
+                MAX_PAGE_CHARS,
+            ),
+            redis=_arxiv_cache(),
+        )
+    except ValueError as error:
+        raise ToolArgumentError("invalid arxiv id") from error
+    except LookupError:
+        return ToolResult(
+            content=[{"error": "arxiv_unavailable"}], is_error=True, source_refs=[]
+        )
+    except Exception:
+        logger.warning("get_arxiv_paper_content failed", exc_info=True)
+        return ToolResult(
+            content=[{"error": "arxiv_unavailable"}], is_error=True, source_refs=[]
+        )
+    return ToolResult(
+        content=[page], is_error=False, source_refs=[{"arxiv_id": arxiv_id}]
+    )
+
+
+async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch a tool that takes no identity; exception text never leaves."""
+    args = dict(arguments)
+    try:
+        if name == "search_arxiv":
+            args["max_results"] = _clamp(
+                args.get("max_results", 5), 1, MAX_EXTERNAL_RESULTS, 5
+            )
+            return await asyncio.wait_for(
+                _tool_search_arxiv(args), timeout=_search_arxiv_budget_seconds()
+            )
+        if name == "search_external_database":
+            args["max_results"] = _clamp(
+                args.get("max_results", 10), 1, MAX_EXTERNAL_RESULTS, 10
+            )
+            return await _tool_search_external_database(args)
+        return await _tool_list_external_databases(args)
+    except asyncio.TimeoutError:
+        return {"error": "upstream_timeout"}
+    except Exception:
+        logger.warning("%s failed", name, exc_info=True)
+        return {"error": "upstream_unavailable"}
+
+
 def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if "error" in payload:
         return []
     refs: list[dict[str, Any]] = []
+    for paper in payload.get("papers") or []:
+        if paper.get("id"):
+            refs.append({"arxiv_id": str(paper["id"])})
+    for hit in payload.get("results") or []:
+        if hit.get("id"):
+            # Per-result "source" is the connector that produced it.
+            refs.append(
+                {
+                    "external_id": str(hit["id"]),
+                    "connector": hit.get("source") or payload.get("connector"),
+                }
+            )
     for doc in payload.get("documents") or []:
         if doc.get("id"):
             refs.append({"document_id": str(doc["id"])})
@@ -233,6 +615,11 @@ async def invoke_read(
     user = await db.get(User, context.user_id)
     if user is None or user.organization_id != context.organization_id:
         raise IntegrationAccessDenied()
+    name = invocation.tool_name
+    if name in _ARGS_ONLY_TOOLS:
+        return _finish(await _args_only(name, arguments))
+    if name == "get_arxiv_paper_content":
+        return await _arxiv_paper_content(arguments)
     project_id = str(context.project_id)
     # Recheck project ownership and live ancestors on every call.
     if await _verify_project_ownership(project_id, db, user) is None:
@@ -242,7 +629,10 @@ async def invoke_read(
             source_refs=[],
         )
 
-    name = invocation.tool_name
+    if name == "get_document_content":
+        return await _document_content(db, context, arguments)
+    if name == "retrieve_passages":
+        return _finish(await _retrieve_passages(db, context, arguments))
     if name == "search_documents":
         payload = await _search_project_documents(
             db,
@@ -317,7 +707,10 @@ async def invoke_read(
         if isinstance(draft, dict) and isinstance(draft.get("content"), str):
             draft["content_truncated"] = len(draft["content"]) > MAX_DRAFT_CONTENT_CHARS
             draft["content"] = draft["content"][:MAX_DRAFT_CONTENT_CHARS]
+    return _finish(payload)
 
+
+def _finish(payload: dict[str, Any]) -> ToolResult:
     # Measure as FastAPI emits it (UTF-8, no ASCII escaping).
     wire = json.dumps(payload, default=str, ensure_ascii=False).encode()
     if len(wire) > MAX_RESULT_BYTES:
