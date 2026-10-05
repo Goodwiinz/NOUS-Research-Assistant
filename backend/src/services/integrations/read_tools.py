@@ -75,6 +75,9 @@ MAX_DRAFT_CONTENT_CHARS = 32_000
 # are over-fetched (their own 50-entity ceiling) and filtered against the
 # grant's project documents.
 MAX_RESEARCHERS = 25
+# Researcher tools read the author lists of the grant's newest documents.
+MAX_SCANNED_DOCUMENTS = 2000
+_NAME_CHARS = 200
 MAX_RESEARCHER_CANDIDATES = 50
 MAX_NEIGHBOURS = 50
 # get_researcher: papers are bounded by one neighborhood call (<= 50 entities);
@@ -178,15 +181,16 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         "tools:read",
     ),
     "find_researchers": (
-        "Find researchers by name among the authors of papers ingested into "
-        "this project (knowledge-graph PERSON entities; no affiliations or "
-        "career history). Only authors with a paper in the granted project are "
-        "returned; paper_count counts those papers (at most 50). Pass an "
-        "entity_id to get_researcher.",
+        "Find researchers by name among the author lists of papers ingested "
+        "into this project (arXiv metadata). Case-insensitive substring match; "
+        "most papers first, at most 25. Documents without author metadata are "
+        "invisible, and there are no affiliations or career history. Only the "
+        "2,000 newest documents are scanned (truncated=true when more exist). "
+        "Pass a researcher_id to get_researcher.",
         {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "minLength": 1, "maxLength": 500},
+                "query": {"type": "string", "minLength": 1, "maxLength": 200},
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
@@ -744,62 +748,121 @@ def _project_neighbours(
     ]
 
 
-async def _find_researchers(
-    db: AsyncSession,
-    context: IntegrationContext,
-    user: User,
-    arguments: dict[str, Any],
-) -> ToolResult:
-    query = str(arguments["query"])
-    limit = _clamp(arguments.get("limit", 10), 1, MAX_RESEARCHERS, 10)
-    index = await _project_papers(db, context)
-    if not index:
-        return _finish({"researchers": []})  # no papers: nothing to match
-    # ponytail: cost is bounded. At most MAX_RESEARCHER_CANDIDATES (50) one-hop
-    # neighborhood calls, stopping as soon as `limit` (<= 25) researchers
-    # qualify; each call is itself capped at MAX_NEIGHBOURS (50) entities.
-    # Replace with a project-aware KG query if this ever needs to be cheaper.
-    researchers: list[dict[str, Any]] = []
-    try:
-        found = await _kg_payload(
-            _tool_search_knowledge_graph,
-            {
-                "query": query,
-                "entity_types": ["PERSON"],
-                "limit": MAX_RESEARCHER_CANDIDATES,
-            },
-            user,
+@dataclass(frozen=True)
+class _AuthoredPaper:
+    document_id: str
+    title: str
+    arxiv_id: str | None
+    published: str | None
+    created_at: str
+    authors: tuple[tuple[str, str], ...]  # (researcher_id, display name)
+
+
+def _researcher_key(name: Any) -> str:
+    """researcher_id: casefolded, whitespace-collapsed, at most 200 characters."""
+    return " ".join(str(name).split()).casefold()[:_NAME_CHARS]
+
+
+def _author_names(raw: Any) -> tuple[tuple[str, str], ...]:
+    """(researcher_id, display name) per distinct author of one document.
+
+    Tolerates what ingest has persisted: a list of strings (arXiv), legacy
+    ``{"name": ...}`` objects, a lone string, or no authors at all.
+    """
+    authors: dict[str, str] = {}
+    for item in raw if isinstance(raw, list) else [raw]:
+        name = item.get("name") if isinstance(item, dict) else item
+        key = _researcher_key(name) if isinstance(name, str) else ""
+        if key:
+            authors.setdefault(key, " ".join(name.split())[:_NAME_CHARS])
+    return tuple(authors.items())
+
+
+def _published(metadata: dict[str, Any]) -> str | None:
+    # arXiv ingest stores publication_date; the change tracker stores published.
+    for field in ("publication_date", "published"):
+        value = metadata.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:40]
+    return None
+
+
+async def _scan_authored_papers(
+    db: AsyncSession, context: IntegrationContext
+) -> tuple[list[_AuthoredPaper], bool]:
+    """The grant's newest live documents that carry an author list.
+
+    Returns ``(papers, truncated)``. This is the only data source of the
+    researcher tools and it is project-scoped by construction:
+    ``_live_project_documents`` joins the grant's project and every ancestor.
+    """
+    from src.services.agent._pii_redact import redact_pii
+
+    # ponytail: O(documents x authors) in Python over at most
+    # MAX_SCANNED_DOCUMENTS (2000) newest documents, in one narrow-column
+    # query. Fine up to a few thousand documents; older ones are invisible and
+    # reported as truncated. Move the aggregation into SQL or a per-project
+    # author index if projects outgrow that.
+    rows = (
+        await db.execute(
+            _live_project_documents(context)
+            .with_only_columns(
+                Document.id,
+                Document.title,
+                Document.arxiv_id,
+                Document.created_at,
+                Document.document_metadata,
+            )
+            .order_by(desc(Document.created_at), Document.id)
+            .limit(MAX_SCANNED_DOCUMENTS + 1)
         )
-        seen: set[str] = set()
-        for candidate in found.get("entities") or []:
-            entity_id = str(candidate.get("id") or "")
-            if candidate.get("type") != "PERSON" or not entity_id or entity_id in seen:
-                continue
-            seen.add(entity_id)
-            neighbourhood = await _kg_payload(
-                _tool_explore_entity_neighborhood,
-                {"entity_id": entity_id, "max_depth": 1, "limit": MAX_NEIGHBOURS},
-                user,
+    ).all()
+    papers: list[_AuthoredPaper] = []
+    for document_id, title, arxiv_id, created_at, metadata in rows[
+        :MAX_SCANNED_DOCUMENTS
+    ]:
+        meta = metadata if isinstance(metadata, dict) else {}
+        authors = _author_names(meta.get("authors"))
+        if not authors:
+            continue  # no author metadata: invisible to the researcher tools
+        arxiv = arxiv_id or meta.get("arxiv_id")
+        papers.append(
+            _AuthoredPaper(
+                document_id=str(document_id),
+                title=redact_pii(title)[:500],
+                arxiv_id=str(arxiv).strip()[:64] if arxiv else None,
+                published=_published(meta),
+                created_at=created_at.isoformat() if created_at else "",
+                authors=authors,
             )
-            papers = {
-                paper.document_id
-                for _node, paper in _project_neighbours(neighbourhood, index)
-            }
-            if not papers:
-                continue  # known to the org's graph, but not in this project
-            researchers.append(
-                {
-                    "entity_id": entity_id,
-                    "name": _short(candidate.get("name")),
-                    "paper_count": len(papers),
-                }
-            )
-            if len(researchers) >= limit:
-                break
-    except _KnowledgeGraphUnavailable:
-        return _kg_unavailable()
-    # Entity ids are graph nodes, not documents: there is nothing to cite.
-    return _finish({"researchers": researchers})
+        )
+    return papers, len(rows) > MAX_SCANNED_DOCUMENTS
+
+
+async def _find_researchers(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> ToolResult:
+    needle = _researcher_key(arguments["query"])
+    if not needle:
+        raise ToolArgumentError("query must not be blank")
+    limit = _clamp(arguments.get("limit", 10), 1, MAX_RESEARCHERS, 10)
+    papers, truncated = await _scan_authored_papers(db, context)
+    found: dict[str, list[Any]] = {}  # researcher_id -> [first-seen name, papers]
+    for paper in papers:  # newest first, so the display name is the newest one
+        for key, name in paper.authors:
+            if needle in key:
+                found.setdefault(key, [name, 0])[1] += 1
+    ranked = sorted(found.items(), key=lambda item: (-item[1][1], item[0]))
+    payload: dict[str, Any] = {
+        "researchers": [
+            {"researcher_id": key, "name": name, "paper_count": count}
+            for key, (name, count) in ranked[:limit]
+        ]
+    }
+    if truncated:
+        payload["truncated"] = True
+    # A researcher is not a source document: there is nothing to cite.
+    return _finish(payload)
 
 
 async def _kg_entity(entity_id: str, organization_id: str) -> Any:
@@ -1046,7 +1109,7 @@ async def invoke_read(
             for chunk in payload.get("chunks") or []
         ]
     elif name == "find_researchers":
-        return await _find_researchers(db, context, user, arguments)
+        return await _find_researchers(db, context, arguments)
     elif name == "get_researcher":
         return await _get_researcher(db, context, user, arguments)
     else:

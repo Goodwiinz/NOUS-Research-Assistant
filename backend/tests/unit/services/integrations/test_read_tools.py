@@ -1,6 +1,7 @@
 """Scoped integration read gateway, using a local SQLite database."""
 
 import json
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
@@ -991,109 +992,215 @@ async def _add_project_paper(
     return document_id
 
 
-async def test_find_researchers_keeps_only_in_project_authors(
-    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+async def _add_doc(
+    db: AsyncSession,
+    title: str,
+    metadata: Any,
+    *,
+    created: datetime,
+    project: UUID = PROJECT,
+    arxiv_id: str | None = None,
+) -> UUID:
+    document_id = uuid4()
+    await db.execute(
+        insert(Document).values(
+            dict(
+                _document_row(document_id, title),
+                arxiv_id=arxiv_id,
+                document_metadata=metadata,
+                created_at=created,
+            )
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            dict(collection_id=project, document_id=document_id)
+        )
+    )
+    await db.commit()
+    return document_id
+
+
+def _day(day: int) -> datetime:
+    return datetime(2026, 1, day)
+
+
+async def _seed_authors(db: AsyncSession) -> None:
+    """Two project papers sharing Turing, plus a sibling project's paper."""
+    await _add_doc(
+        db,
+        "Computing Machinery",
+        {"authors": ["Alan Turing", "Ada Lovelace"]},
+        created=_day(1),
+    )
+    await _add_doc(
+        db,
+        "Computable Numbers",
+        {"authors": ["alan   TURING", "Charles Babbage"]},
+        created=_day(2),
+    )
+    await _add_doc(
+        db,
+        "Secret Work",
+        {"authors": ["Alan Turing", "Yann LeCun"]},
+        created=_day(4),
+        project=OTHER_PROJECT,
+    )
+
+
+async def _find(db: AsyncSession, context: IntegrationContext, **arguments: Any) -> Any:
+    result = await invoke_read(
+        db, context, _invocation("find_researchers", **arguments)
+    )
+    assert result.source_refs == []
+    return result
+
+
+async def test_find_researchers_never_sees_another_projects_authors(
+    db: AsyncSession, context: IntegrationContext
 ) -> None:
-    result = await invoke_read(db, context, _invocation("find_researchers", query="a"))
+    await _seed_authors(db)
+    result = await _find(db, context, query="a")
     assert result.is_error is False
-    # LeCun's only paper is in the other project: he is dropped, and Turing's
-    # count excludes his other-project paper.
+    # Turing's count is the two in-project papers, not the sibling's third.
     assert result.content == [
         {
             "researchers": [
-                {"entity_id": "ent-turing", "name": "Alan Turing", "paper_count": 1},
                 {
-                    "entity_id": "ent-lovelace",
+                    "researcher_id": "alan turing",
+                    "name": "alan TURING",
+                    "paper_count": 2,
+                },
+                {
+                    "researcher_id": "ada lovelace",
                     "name": "Ada Lovelace",
+                    "paper_count": 1,
+                },
+                {
+                    "researcher_id": "charles babbage",
+                    "name": "Charles Babbage",
                     "paper_count": 1,
                 },
             ]
         }
     ]
-    # Entity ids are knowledge-graph nodes, not documents: nothing citable.
-    assert result.source_refs == []
-    [search] = kg.search_calls
-    assert search["entity_types"] == ["PERSON"]
-    assert search["query"] == "a"
-    assert search["limit"] == read_tools.MAX_RESEARCHER_CANDIDATES
+    lecun = await _find(db, context, query="lecun")
+    assert lecun.content == [{"researchers": []}]
     assert "LeCun" not in json.dumps(result.content)
 
 
-async def test_find_researchers_matches_titles_ignoring_case_and_spacing(
-    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+@pytest.mark.parametrize("query", ["TURING", "  alan   Tur ", "uring"])
+async def test_find_researchers_is_a_normalised_substring_match(
+    db: AsyncSession, context: IntegrationContext, query: str
 ) -> None:
-    kg.add("ent-babbage", "Charles Babbage", ["  RETRIEVAL-eval "])
-    result = await invoke_read(
-        db, context, _invocation("find_researchers", query="babbage")
-    )
-    assert [r["name"] for r in result.content[0]["researchers"]] == ["Charles Babbage"]
+    await _seed_authors(db)
+    result = await _find(db, context, query=query)
+    [researcher] = result.content[0]["researchers"]
+    # Spelling variants merge; the newest document's spelling is kept.
+    assert researcher["researcher_id"] == "alan turing"
+    assert researcher["name"] == "alan TURING"
+    assert researcher["paper_count"] == 2
 
 
-async def test_find_researchers_stops_checking_once_limit_is_met(
-    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+async def test_find_researchers_orders_by_papers_then_name_and_honours_limit(
+    db: AsyncSession, context: IntegrationContext
 ) -> None:
-    result = await invoke_read(
-        db, context, _invocation("find_researchers", query="a", limit=1)
-    )
-    assert [r["name"] for r in result.content[0]["researchers"]] == ["Alan Turing"]
-    # LeCun (discarded) then Turing (kept): Lovelace is never looked up.
-    assert [call["entity_id"] for call in kg.neighborhood_calls] == [
-        "ent-lecun",
-        "ent-turing",
+    await _seed_authors(db)
+    two = await _find(db, context, query="a", limit=2)
+    assert [r["name"] for r in two.content[0]["researchers"]] == [
+        "alan TURING",
+        "Ada Lovelace",
     ]
-    assert all(call["max_depth"] == 1 for call in kg.neighborhood_calls)
+    default = await _find(db, context, query="a")
+    assert len(default.content[0]["researchers"]) == 3
 
 
 async def test_find_researchers_internal_clamp_is_defence_in_depth(
-    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+    db: AsyncSession, context: IntegrationContext
 ) -> None:
-    for index in range(30):
-        kg.add(f"ent-extra-{index}", f"Extra {index}", ["retrieval-eval"])
-    user = await db.get(User, USER)
+    names = [f"Person {index:02d}" for index in range(30)]
+    await _add_doc(db, "Crowd", {"authors": names}, created=_day(1))
     result = await read_tools._find_researchers(
-        db, context, user, {"query": "extra", "limit": 99}
+        db, context, {"query": "person", "limit": 99}
     )
     assert len(result.content[0]["researchers"]) == read_tools.MAX_RESEARCHERS == 25
 
 
-async def test_find_researchers_skips_knowledge_graph_for_an_empty_project(
-    db: AsyncSession, context: IntegrationContext, kg: _FakeKG
+async def test_find_researchers_tolerates_documents_without_clean_authors(
+    db: AsyncSession, context: IntegrationContext
 ) -> None:
-    await db.execute(update(CollectionDocument).values(is_deleted=True))
+    await _add_doc(db, "none", None, created=_day(1))
+    await _add_doc(db, "no-key", {"source": "arxiv"}, created=_day(2))
+    await _add_doc(db, "list-meta", ["authors"], created=_day(3))
+    await _add_doc(db, "null", {"authors": None}, created=_day(4))
+    await _add_doc(db, "lone", {"authors": "Solo Author"}, created=_day(5))
+    await _add_doc(
+        db,
+        "messy",
+        {
+            "authors": [
+                "Grace Hopper",
+                "grace  hopper",
+                "",
+                "  ",
+                None,
+                7,
+                {"nom": "x"},
+                {"name": "Edsger Dijkstra"},
+            ]
+        },
+        created=_day(6),
+    )
+    result = await _find(db, context, query="r")
+    assert {
+        r["researcher_id"]: r["paper_count"] for r in result.content[0]["researchers"]
+    } == {
+        "grace hopper": 1,
+        "edsger dijkstra": 1,
+        "solo author": 1,
+    }
+
+
+async def test_find_researchers_excludes_deleted_documents_and_ancestors(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    doc = await _add_doc(db, "Paper", {"authors": ["Ada Lovelace"]}, created=_day(1))
+    assert (await _find(db, context, query="ada")).content[0]["researchers"]
+    await db.execute(update(Document).where(Document.id == doc).values(is_deleted=True))
     await db.commit()
-    result = await invoke_read(db, context, _invocation("find_researchers", query="a"))
-    assert result.is_error is False
-    assert result.content == [{"researchers": []}]
-    assert kg.search_calls == []
+    assert (await _find(db, context, query="ada")).content == [{"researchers": []}]
+    await db.execute(
+        update(Document).where(Document.id == doc).values(is_deleted=False)
+    )
+    await db.execute(update(Collection).values(is_deleted=True))
+    await db.commit()
+    # invoke_read refuses a dead project first; the scan alone must also be empty.
+    assert await read_tools._scan_authored_papers(db, context) == ([], False)
 
 
-@pytest.mark.parametrize("failing", ["search", "neighborhood"])
-@pytest.mark.parametrize("mode", ["raises", "error-payload"])
-async def test_find_researchers_knowledge_graph_outage_is_stable_error(
-    db: AsyncSession,
-    context: IntegrationContext,
-    kg: _FakeKG,
-    monkeypatch: pytest.MonkeyPatch,
-    failing: str,
-    mode: str,
+async def test_find_researchers_reports_when_the_scan_cap_hides_documents(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    secret = "bolt://neo4j:hunter2@10.0.0.9:7687"
-    effect: Any = (
-        {"side_effect": RuntimeError(secret)}
-        if mode == "raises"
-        else {"return_value": {"error": secret}}
-    )
-    name = (
-        "_tool_search_knowledge_graph"
-        if failing == "search"
-        else "_tool_explore_entity_neighborhood"
-    )
-    monkeypatch.setattr(read_tools, name, AsyncMock(**effect))
-    result = await invoke_read(db, context, _invocation("find_researchers", query="a"))
-    assert result.is_error is True
-    assert result.content == [{"error": "knowledge_graph_unavailable"}]
-    assert result.source_refs == []
-    assert "hunter2" not in json.dumps(result.content)
+    # The fixture's authorless document is the newest, so it uses one slot.
+    monkeypatch.setattr(read_tools, "MAX_SCANNED_DOCUMENTS", 3)
+    await _add_doc(db, "old", {"authors": ["Old Author"]}, created=_day(1))
+    await _add_doc(db, "mid", {"authors": ["Mid Author"]}, created=_day(2))
+    await _add_doc(db, "new", {"authors": ["New Author"]}, created=_day(3))
+    result = await _find(db, context, query="author")
+    assert {r["name"] for r in result.content[0]["researchers"]} == {
+        "Mid Author",
+        "New Author",
+    }
+    assert result.content[0]["truncated"] is True
+    # Truncation describes the scan, so it is reported even for a narrow hit.
+    assert (await _find(db, context, query="new")).content[0]["truncated"] is True
+
+
+async def test_find_researchers_blank_query_is_an_argument_error(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(db, context, _invocation("find_researchers", query="   "))
 
 
 async def test_get_researcher_reshapes_in_project_papers_and_coauthors(
@@ -1264,7 +1371,7 @@ async def test_get_researcher_result_stays_under_the_size_cap(
     [
         _invocation("find_researchers"),
         _invocation("find_researchers", query=""),
-        _invocation("find_researchers", query="x" * 501),
+        _invocation("find_researchers", query="x" * 201),
         _invocation("find_researchers", query="x", limit=26),
         _invocation("find_researchers", query="x", limit=0),
         _invocation("find_researchers", query="x", limit="5"),
