@@ -2,6 +2,7 @@
 File handling and storage service
 """
 
+import asyncio
 import hashlib
 import logging
 import mimetypes
@@ -37,6 +38,7 @@ from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.models.user import User, UserRole
+from src.shared.enums import SatelliteSyncStatus
 
 logger = logging.getLogger(__name__)
 
@@ -491,7 +493,9 @@ class FileService:
         # span multiple commits — without this, a failure orphans the object,
         # strands a PENDING row, or drifts org storage quota (see the except).
         document = None
+        document_id = None
         document_committed = False
+        commit_in_flight = False
         quota_committed = False
         processing_job = None
         processing_job_committed = False
@@ -499,6 +503,7 @@ class FileService:
         try:
             # Validate file
             validation_result = self.validate_file(file, user, organization)
+            organization_id = organization.id
             original_ext = Path(file.filename).suffix
             mime_type = validation_result["mime_type"] or "application/octet-stream"
 
@@ -626,6 +631,7 @@ class FileService:
             )
 
             document.checksum_sha256 = file_hash
+            document_id = document.id
 
             # Add file hash as metadata
             document.add_metadata("file_hash", file_hash)
@@ -633,15 +639,21 @@ class FileService:
 
             self.db.add(document)
             try:
+                commit_in_flight = True
                 await self.db.commit()
             except IntegrityError as exc:
+                # A rejected transaction did not commit, unlike a lost reply.
+                commit_in_flight = False
                 # Lost the dedup race: the outer handler rolls back and deletes
                 # the stored object (nothing else is committed yet).
                 if _CHECKSUM_UNIQUE_INDEX in str(exc.orig):
                     raise _duplicate_conflict() from exc
                 raise
-            await self.db.refresh(document)
+            # The commit is durable even if the subsequent reload fails.
+            # Compensation must revoke the row before deleting its object.
             document_committed = True
+            commit_in_flight = False
+            await self.db.refresh(document)
 
             # Atomically CLAIM quota — conditional UPDATE fails (rowcount 0)
             # when a concurrent upload consumed the remaining headroom after
@@ -656,8 +668,10 @@ class FileService:
                     "Insufficient storage quota (concurrent-upload race lost)",
                     public_detail="Insufficient storage quota",
                 )
+            commit_in_flight = True
             await self.db.commit()
             quota_committed = True
+            commit_in_flight = False
 
             # Create processing job for document ingestion
             processing_job = ProcessingJob(
@@ -680,9 +694,11 @@ class FileService:
             )
 
             self.db.add(processing_job)
+            commit_in_flight = True
             await self.db.commit()
-            await self.db.refresh(processing_job)
             processing_job_committed = True
+            commit_in_flight = False
+            await self.db.refresh(processing_job)
 
             # Queue the job for processing
             from src.tasks.processing_tasks import process_document_ingestion
@@ -691,8 +707,22 @@ class FileService:
 
             return document
 
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
             await self.db.rollback()
+            if isinstance(e, IntegrityError):
+                commit_in_flight = False
+            if commit_in_flight:
+                # A failed or cancelled commit can have landed without a reply.
+                # Rolling back the session cannot undo an already durable write.
+                # Preserve backing storage until its durable outcome is known.
+                logger.warning(
+                    "upload commit outcome unknown for document %s; preserving storage",
+                    document_id,
+                    exc_info=True,
+                )
+                if isinstance(e, asyncio.CancelledError):
+                    raise
+                raise FileStorageError(f"Failed to upload file: {str(e)}") from e
             # Compensate whatever durably landed before the failure. First reverse
             # the DB (soft-delete the row + revert quota + drop the stray job in one
             # commit); only if that succeeds do we delete the storage object. If the
@@ -703,16 +733,15 @@ class FileService:
             reversal_ok = not document_committed
             if document_committed and document is not None:
                 try:
-                    # A committed ProcessingJob only exists when the enqueue
-                    # (.delay) failed — drop it so it can't run against the
-                    # soft-deleted document.
+                    # A committed job may survive reload, enqueue, or cancellation
+                    # failure; drop it before deleting the document's object.
                     if processing_job_committed and processing_job is not None:
                         await self.db.delete(processing_job)
                     document.soft_delete()
                     if quota_committed:
                         await self.db.execute(
                             Organization.storage_usage_update(
-                                organization.id, -validation_result["file_size"]
+                                organization_id, -validation_result["file_size"]
                             )
                         )
                     await self.db.commit()
@@ -722,7 +751,7 @@ class FileService:
                     logger.warning(
                         "upload rollback: failed to reverse committed row/quota for "
                         "document %s; leaving storage object as a sweepable orphan",
-                        getattr(document, "id", None),
+                        document_id,
                         exc_info=True,
                     )
             # Delete by captured primitives (never the possibly-expired instance).
@@ -737,7 +766,9 @@ class FileService:
                         storage_path or obj_file_path,
                         exc_info=True,
                     )
-            if isinstance(e, (FileValidationError, HTTPException)):
+            if isinstance(
+                e, (FileValidationError, HTTPException, asyncio.CancelledError)
+            ):
                 raise
             raise FileStorageError(f"Failed to upload file: {str(e)}")
 
@@ -1264,6 +1295,15 @@ class FileService:
                     .values(is_deleted=True, deleted_at=datetime.utcnow())
                 )
             for document in documents:
+                # Record the user's cascade choice before any remote cleanup.
+                # A process loss or provider outage must leave retry intent,
+                # while a non-cascading delete must retain the graph.
+                document.document_metadata = {
+                    **(document.document_metadata or {}),
+                    "graph_cleanup_requested": cascade,
+                }
+                if cascade:
+                    document.neo4j_index_status = SatelliteSyncStatus.PENDING.value
                 document.soft_delete()
             await self.db.execute(
                 Organization.storage_usage_update(
@@ -1370,24 +1410,112 @@ class FileService:
         # Neo4j: reap this document's relationships then its now-orphaned entity
         # nodes (shared across docs — no blind DETACH DELETE), org-scoped. The KG
         # service is synchronous, so offload to a worker thread.
-        try:
-            import asyncio
+        await self.cleanup_deleted_document_graph(document_id, organization_id)
 
-            from src.services.knowledge_graph.knowledge_graph_service import (
-                KnowledgeGraphService,
-            )
+    async def cleanup_deleted_document_graph(
+        self, document_id: str, organization_id: str
+    ) -> bool:
+        """Remove a deleted document's graph and persist its retryable outcome.
 
-            await asyncio.to_thread(
-                lambda: KnowledgeGraphService().delete_document_graph(
-                    document_id, organization_id
+        No database lock is held during the provider call. Only the satellite
+        status of the current, scoped, deleted row is updated afterwards.
+        """
+        import asyncio
+
+        from src.services.knowledge_graph.knowledge_graph_service import (
+            KnowledgeGraphService,
+        )
+
+        # Cleanup owns a separate transaction: rollback releases its read before
+        # the provider call without expiring the request's response objects or
+        # committing unrelated pending work in its session.
+        async with AsyncSession(
+            bind=self.db.bind, expire_on_commit=False
+        ) as cleanup_db:
+            try:
+                document = (
+                    (
+                        await cleanup_db.execute(
+                            select(Document)
+                            .where(
+                                Document.id == document_id,
+                                Document.organization_id == organization_id,
+                                Document.is_deleted == True,
+                            )
+                            .execution_options(populate_existing=True, autoflush=False)
+                        )
+                    )
+                    .scalars()
+                    .first()
                 )
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "knowledge-graph cleanup on file delete failed",
-                extra={"document_id": document_id},
-                exc_info=True,
-            )
+                if (
+                    document is None
+                    or (document.document_metadata or {}).get("graph_cleanup_requested")
+                    is False
+                ):
+                    await cleanup_db.rollback()
+                    return True
+                await cleanup_db.rollback()
+                cleanup_ok = True
+                from datetime import datetime, timezone
+
+                started = datetime.now(timezone.utc)
+                try:
+                    await asyncio.to_thread(
+                        lambda: KnowledgeGraphService().delete_document_graph(
+                            document_id, organization_id
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    cleanup_ok = False
+                    logger.warning(
+                        "knowledge-graph cleanup on delete failed",
+                        extra={"document_id": document_id},
+                        exc_info=True,
+                    )
+                from src.services.documents.satellite_state import (
+                    pending_writes,
+                    retire_settled_writes,
+                )
+
+                current = (
+                    await cleanup_db.execute(
+                        select(Document)
+                        .where(
+                            Document.id == document_id,
+                            Document.organization_id == organization_id,
+                            Document.is_deleted == True,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                ).scalar_one_or_none()
+                if (
+                    current is not None
+                    and (current.document_metadata or {}).get("graph_cleanup_requested")
+                    is not False
+                ):
+                    if cleanup_ok:
+                        retire_settled_writes(current, "graph", started)
+                    current.neo4j_index_status = (
+                        SatelliteSyncStatus.FAILED.value
+                        if not cleanup_ok
+                        else (
+                            SatelliteSyncStatus.PENDING.value
+                            if pending_writes(current, "graph")
+                            else SatelliteSyncStatus.COMPLETED.value
+                        )
+                    )
+                await cleanup_db.commit()
+                return cleanup_ok
+            except Exception:  # noqa: BLE001
+                await cleanup_db.rollback()
+                logger.warning(
+                    "Could not record deleted-document graph cleanup outcome",
+                    extra={"document_id": document_id},
+                    exc_info=True,
+                )
+                return False
 
     async def get_file_stats(self, organization_id: str) -> Dict[str, Any]:
         """Get file statistics for organization"""

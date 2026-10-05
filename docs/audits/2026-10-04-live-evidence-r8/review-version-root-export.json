@@ -1,0 +1,276 @@
+{
+  "body": {
+    "accounting": {
+      "boxes": null,
+      "error": null,
+      "flow": {
+        "amendments": [],
+        "checks": {
+          "assessed_within_retrieved": true,
+          "included_plus_excluded_equals_assessed": true,
+          "screened_plus_awaiting_equals_unique": true
+        },
+        "counts": {
+          "duplicates_removed": 0,
+          "import_rejected": 0,
+          "included_reports": 0,
+          "included_studies": 0,
+          "records_awaiting_screening": 0,
+          "records_by_import": {
+            "r8-live-fixture": 4
+          },
+          "records_by_source": {},
+          "records_excluded": 4,
+          "records_identified": 4,
+          "records_screened": 4,
+          "reports_assessed": 0,
+          "reports_awaiting_retrieval": 0,
+          "reports_excluded_by_reason": {},
+          "reports_not_retrieved": 0,
+          "reports_sought": 0,
+          "unconfirmed_study_links": 0,
+          "unique_reports": 4
+        },
+        "excluded_from_flow": {
+          "workspace_documents": 0
+        },
+        "versions": {
+          "corpus_hash": "772cc4b681602b255d01f8bf377d5e32475f0b3626a39369c45ac33b8d4688f7",
+          "protocol_version_ids": [
+            "73bd7d09-8087-40ac-b26a-2f89b99100cf"
+          ],
+          "stream_heads": {
+            "research_identity:480d8618-3a93-4062-8d1f-608f3fc015b3": 0,
+            "research_screening:620eb0d2-4d84-4786-ae8b-a5cc6b88804d": 6,
+            "research_search_update:480d8618-3a93-4062-8d1f-608f3fc015b3": 1
+          }
+        },
+        "warnings": []
+      },
+      "flow_matches_frozen_hash": true,
+      "parent_flow": null,
+      "parent_review_version_id": null,
+      "review_version_id": "c4575e57-8a47-4ced-8d8b-1d63d976006d"
+    },
+    "carried": [
+      {
+        "basis": "single",
+        "event_id": "074c34f9-08cf-47c9-9ee9-31980047d1e1",
+        "outcome": "exclude",
+        "report_id": "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+        "resolution": {
+          "basis": "single",
+          "criteria_hash": "c954eca424c5bfbaef98a21a48f8c0e2d23b1ee55a9c5ff31296a2e3c4b70976",
+          "event_actor_id": "ee490f30-298e-47c9-bd62-f38ca69cc3d2",
+          "event_actor_role": "reviewer",
+          "event_id": "074c34f9-08cf-47c9-9ee9-31980047d1e1",
+          "event_reason": null,
+          "exclusion_reason": null,
+          "outcome": "exclude",
+          "queue_id": "620eb0d2-4d84-4786-ae8b-a5cc6b88804d",
+          "report_id": "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+          "resolution_id": "64fc43bb-2f9b-5395-b7db-e5b6a14b1e77",
+          "reviewer_ids": [
+            "ee490f30-298e-47c9-bd62-f38ca69cc3d2"
+          ],
+          "stage": "title_abstract",
+          "supersedes_resolution_id": null
+        },
+        "resolution_id": "64fc43bb-2f9b-5395-b7db-e5b6a14b1e77",
+        "stage": "title_abstract"
+      },
+      {
+        "basis": "single",
+        "event_id": "6e11bb81-f4a8-4a7b-898c-9e059ec8ce84",
+        "outcome": "exclude",
+        "report_id": "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+        "resolution": {
+          "basis": "single",
+          "criteria_hash": "c954eca424c5bfbaef98a21a48f8c0e2d23b1ee55a9c5ff31296a2e3c4b70976",
+          "event_actor_id": "ee490f30-298e-47c9-bd62-f38ca69cc3d2",
+          "event_actor_role": "reviewer",
+          "event_id": "6e11bb81-f4a8-4a7b-898c-9e059ec8ce84",
+          "event_reason": null,
+          "exclusion_reason": null,
+          "outcome": "exclude",
+          "queue_id": "620eb0d2-4d84-4786-ae8b-a5cc6b88804d",
+          "report_id": "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+          "resolution_id": "80827681-2d4c-5a26-9162-9d0ffd913f7b",
+          "reviewer_ids": [
+            "ee490f30-298e-47c9-bd62-f38ca69cc3d2"
+          ],
+          "stage": "title_abstract",
+          "supersedes_resolution_id": null
+        },
+        "resolution_id": "80827681-2d4c-5a26-9162-9d0ffd913f7b",
+        "stage": "title_abstract"
+      },
+      {
+        "basis": "single",
+        "event_id": "775c0c5f-d74a-41c4-9880-84f988acce9e",
+        "outcome": "exclude",
+        "report_id": "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+        "resolution": {
+          "basis": "single",
+          "criteria_hash": "c954eca424c5bfbaef98a21a48f8c0e2d23b1ee55a9c5ff31296a2e3c4b70976",
+          "event_actor_id": "ee490f30-298e-47c9-bd62-f38ca69cc3d2",
+          "event_actor_role": "reviewer",
+          "event_id": "775c0c5f-d74a-41c4-9880-84f988acce9e",
+          "event_reason": null,
+          "exclusion_reason": null,
+          "outcome": "exclude",
+          "queue_id": "620eb0d2-4d84-4786-ae8b-a5cc6b88804d",
+          "report_id": "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+          "resolution_id": "a8d5aa8e-35e3-5cf3-9f83-961d27e643ff",
+          "reviewer_ids": [
+            "ee490f30-298e-47c9-bd62-f38ca69cc3d2"
+          ],
+          "stage": "title_abstract",
+          "supersedes_resolution_id": null
+        },
+        "resolution_id": "a8d5aa8e-35e3-5cf3-9f83-961d27e643ff",
+        "stage": "title_abstract"
+      },
+      {
+        "basis": "single",
+        "event_id": "49b73cec-3001-42dd-976b-05a58a143780",
+        "outcome": "exclude",
+        "report_id": "d6168e0e-5710-4b49-8d84-6d0164a62dc9",
+        "resolution": {
+          "basis": "single",
+          "criteria_hash": "c954eca424c5bfbaef98a21a48f8c0e2d23b1ee55a9c5ff31296a2e3c4b70976",
+          "event_actor_id": "ee490f30-298e-47c9-bd62-f38ca69cc3d2",
+          "event_actor_role": "reviewer",
+          "event_id": "49b73cec-3001-42dd-976b-05a58a143780",
+          "event_reason": null,
+          "exclusion_reason": null,
+          "outcome": "exclude",
+          "queue_id": "620eb0d2-4d84-4786-ae8b-a5cc6b88804d",
+          "report_id": "d6168e0e-5710-4b49-8d84-6d0164a62dc9",
+          "resolution_id": "dddedb03-3a34-5d09-ac4f-1bee700c2db9",
+          "reviewer_ids": [
+            "ee490f30-298e-47c9-bd62-f38ca69cc3d2"
+          ],
+          "stage": "title_abstract",
+          "supersedes_resolution_id": null
+        },
+        "resolution_id": "dddedb03-3a34-5d09-ac4f-1bee700c2db9",
+        "stage": "title_abstract"
+      }
+    ],
+    "corpus": [
+      {
+        "identifiers": [
+          {
+            "kind": "doi",
+            "value": "10.5360/membrane.47.2"
+          }
+        ],
+        "report_id": "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+        "study_id": null,
+        "title": "Atomic Force Imaging of Cell Membrane"
+      },
+      {
+        "identifiers": [
+          {
+            "kind": "doi",
+            "value": "10.1007/978-1-4419-6558-5_13"
+          }
+        ],
+        "report_id": "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+        "study_id": null,
+        "title": "Second Harmonic Imaging of Membrane Potential"
+      },
+      {
+        "identifiers": [
+          {
+            "kind": "doi",
+            "value": "10.5555/r8-live-absent"
+          }
+        ],
+        "report_id": "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+        "study_id": null,
+        "title": "Absent fixture work (made-up DOI under the 10.5555 test prefix)"
+      },
+      {
+        "identifiers": [
+          {
+            "kind": "doi",
+            "value": "10.1016/s0140-6736(97)11096-0"
+          }
+        ],
+        "report_id": "d6168e0e-5710-4b49-8d84-6d0164a62dc9",
+        "study_id": null,
+        "title": "Ileal-lymphoid-nodular hyperplasia, non-specific colitis, and pervasive developmental disorder in children"
+      }
+    ],
+    "missing_history": [],
+    "needs_attention": [],
+    "predecessors": [],
+    "project_id": "480d8618-3a93-4062-8d1f-608f3fc015b3",
+    "release": null,
+    "statement": "Carried decisions are references to the original resolutions; re-reviewed reports keep their parent decision as predecessor. Release bytes are GOO-315's package by release id and hash.",
+    "version": {
+      "accepted_execution_id": null,
+      "content_hash": "341778b71398c191861bd3b3cab078dea94d848b6e6a0065136b67b8819225c0",
+      "created_at": "2026-10-04T06:58:14.213196+00:00",
+      "created_by_id": "6e3bde50-ff93-4e50-8474-fc2036d8e9cc",
+      "delta_hash": null,
+      "id": "c4575e57-8a47-4ced-8d8b-1d63d976006d",
+      "input_versions": {
+        "decision_tips": [
+          "64fc43bb-2f9b-5395-b7db-e5b6a14b1e77",
+          "80827681-2d4c-5a26-9162-9d0ffd913f7b",
+          "a8d5aa8e-35e3-5cf3-9f83-961d27e643ff",
+          "dddedb03-3a34-5d09-ac4f-1bee700c2db9"
+        ],
+        "protocol_version_ids": [
+          "73bd7d09-8087-40ac-b26a-2f89b99100cf"
+        ],
+        "record_keys": [
+          "import:1b7cd13c-54c9-4ab0-9f23-3815cb8dc924",
+          "import:2886fc16-eacf-424c-bf86-5840a54e7bb6",
+          "import:42643fe8-ba9f-4d46-8a45-9f10dfdf5083",
+          "import:de313f6f-d64b-4e84-851c-449ff78af335"
+        ],
+        "reviewer_user_ids": [],
+        "stream_heads": {
+          "research_identity:480d8618-3a93-4062-8d1f-608f3fc015b3": 0,
+          "research_screening:620eb0d2-4d84-4786-ae8b-a5cc6b88804d": 6,
+          "research_search_update:480d8618-3a93-4062-8d1f-608f3fc015b3": 1
+        }
+      },
+      "parent_review_version_id": null,
+      "prisma_body_hash": "1df3c69fa2ccf0b90cf303c51c1547569070abf2f9fb40c8fff3adfac93094eb",
+      "protocol_version_id": "73bd7d09-8087-40ac-b26a-2f89b99100cf",
+      "rationale": "R8 live proof: parent review frozen before the update",
+      "strategy_version": null,
+      "version_number": 1
+    },
+    "work": [
+      {
+        "assigned_reviewer_ids": [],
+        "queue_id": null,
+        "required_report_ids": [],
+        "resolutions": [],
+        "resolved_count": 0,
+        "stage": "title_abstract",
+        "status": "none",
+        "unresolved_count": 0
+      },
+      {
+        "assigned_reviewer_ids": [],
+        "queue_id": null,
+        "required_report_ids": [],
+        "resolutions": [],
+        "resolved_count": 0,
+        "stage": "full_text",
+        "status": "none",
+        "unresolved_count": 0
+      }
+    ]
+  },
+  "body_sha256": "e35e53824344d8c5dae3fe12723b9a002e00dbbcbd82ebcbf446a433891ffd37",
+  "exported_at": "2026-10-04T07:05:30.694766+00:00",
+  "schema": "nous.academic.review-version.v1"
+}

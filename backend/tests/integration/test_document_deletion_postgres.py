@@ -797,3 +797,158 @@ async def test_delete_rechecks_owner_under_lock() -> None:
                 await FileService(db).delete_file(document, user)
             assert exc.value.status_code == 403
         assert _quota(env) == _QUOTA_BEFORE
+
+
+@pytest.mark.parametrize("outcome", ["success", "provider-error", "non-cascade"])
+async def test_graph_cleanup_preserves_caller_objects_and_pending_writes(
+    outcome: str,
+) -> None:
+    """A post-delete cleanup must not expire or commit its caller's objects."""
+    async with _schema() as env:
+        with env.sync() as seed:
+            document = seed.get(Document, env.ids.doc)
+            document.is_deleted = True
+            document.document_metadata = {
+                "graph_cleanup_requested": outcome != "non-cascade"
+            }
+            seed.commit()
+            original_name = seed.get(User, env.ids.user).first_name
+        kg = MagicMock()
+        if outcome == "provider-error":
+            kg.delete_document_graph.side_effect = OSError("synthetic outage")
+        async with env.async_() as db:
+            document = await db.get(Document, env.ids.doc)
+            user = await db.get(User, env.ids.user)
+            user.first_name = "Uncommitted caller change"
+            with patch(
+                "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+                return_value=kg,
+            ):
+                assert await FileService(db).cleanup_deleted_document_graph(
+                    str(env.ids.doc), str(env.ids.org)
+                ) is (outcome != "provider-error")
+            assert document.id == env.ids.doc
+            assert user.id == env.ids.user
+            assert user.first_name == "Uncommitted caller change"
+            with env.sync() as observer:
+                assert observer.get(User, env.ids.user).first_name == original_name
+
+
+@pytest.mark.parametrize("cleanup_ok", [False, True])
+def test_normal_delete_graph_cleanup_is_durable(cleanup_ok):
+    """Delete commits retry intent; an outage remains selected until recovery."""
+    from src.tasks.reconcile_tasks import _reconcilable_filters
+
+    async def scenario():
+        async with _schema() as env:
+            with env.sync() as db:
+                doc = db.get(Document, env.ids.doc)
+                doc.neo4j_index_status = "completed"
+                db.commit()
+            kg = MagicMock()
+            if not cleanup_ok:
+                kg.delete_document_graph.side_effect = RuntimeError("neo4j down")
+            async with env.async_() as session:
+                service = FileService(session)
+                with patch.object(service, "_revoke_tasks"):
+                    await service.soft_delete_documents(env.ids.org, [env.ids.doc])
+                with env.sync() as check:
+                    assert (
+                        check.query(Document.id)
+                        .filter(*_reconcilable_filters(), Document.id == env.ids.doc)
+                        .count()
+                        == 1
+                    ), "retry intent must be committed before remote cleanup"
+                with patch(
+                    "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+                    return_value=kg,
+                ):
+                    await service.cleanup_deleted_document_graph(
+                        str(env.ids.doc), str(env.ids.org)
+                    )
+            with env.sync() as check:
+                doc = check.get(Document, env.ids.doc)
+                assert doc.is_deleted
+                assert doc.neo4j_index_status == (
+                    "completed" if cleanup_ok else "failed"
+                )
+                assert check.query(Document.id).filter(
+                    *_reconcilable_filters(), Document.id == env.ids.doc
+                ).count() == (0 if cleanup_ok else 1)
+            kg.delete_document_graph.assert_called_once_with(
+                str(env.ids.doc), str(env.ids.org)
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("denial", ["foreign", "live", "non-cascade"])
+def test_graph_cleanup_rechecks_scope_and_delete_intent(denial):
+    async def scenario():
+        async with _schema() as env:
+            org_id = str(env.ids.org)
+            with env.sync() as db:
+                doc = db.get(Document, env.ids.doc)
+                doc.is_deleted = denial != "live"
+                doc.neo4j_index_status = "pending"
+                doc.document_metadata = {
+                    "graph_cleanup_requested": denial != "non-cascade"
+                }
+                db.commit()
+            if denial == "foreign":
+                org_id = str(uuid.uuid4())
+            with patch(
+                "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService"
+            ) as kg:
+                async with env.async_() as session:
+                    assert await FileService(session).cleanup_deleted_document_graph(
+                        str(env.ids.doc), org_id
+                    )
+                kg.return_value.delete_document_graph.assert_not_called()
+            with env.sync() as db:
+                assert db.get(Document, env.ids.doc).neo4j_index_status == "pending"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["foreign", "live", "non-cascade"])
+def test_graph_cleanup_outcome_does_not_overwrite_changed_row(change):
+    async def scenario():
+        async with _schema() as env:
+            with env.sync() as db:
+                db.get(Document, env.ids.doc).is_deleted = True
+                db.get(Document, env.ids.doc).neo4j_index_status = "pending"
+                db.commit()
+
+            def delete_graph(*args):
+                with env.sync() as other:
+                    doc = other.get(Document, env.ids.doc)
+                    if change == "foreign":
+                        org_id = uuid.uuid4()
+                        other.add(
+                            Organization(
+                                id=org_id, name="Other", storage_limit_bytes=10_000
+                            )
+                        )
+                        other.flush()
+                        doc.organization_id = org_id
+                    elif change == "live":
+                        doc.is_deleted = False
+                    else:
+                        doc.document_metadata = {"graph_cleanup_requested": False}
+                    other.commit()
+
+            kg = MagicMock()
+            kg.delete_document_graph.side_effect = delete_graph
+            with patch(
+                "src.services.knowledge_graph.knowledge_graph_service.KnowledgeGraphService",
+                return_value=kg,
+            ):
+                async with env.async_() as session:
+                    await FileService(session).cleanup_deleted_document_graph(
+                        str(env.ids.doc), str(env.ids.org)
+                    )
+            with env.sync() as db:
+                assert db.get(Document, env.ids.doc).neo4j_index_status == "pending"
+
+    asyncio.run(scenario())

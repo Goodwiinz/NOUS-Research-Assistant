@@ -116,6 +116,15 @@ async def extract_paper_features(
 
     The extraction can be performed synchronously or asynchronously in the background.
     """
+    return await _extract_paper_features(request, background_tasks, current_user)
+
+
+async def _extract_paper_features(
+    request: ExtractionRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User,
+):
+    """Extract papers after the calling HTTP endpoint has admitted the work."""
     try:
         logger.info(f"Starting feature extraction for {len(request.paper_ids)} papers")
 
@@ -451,7 +460,7 @@ async def bulk_extract_features(
 
         # Process extraction
         bulk_background_tasks = BackgroundTasks()
-        result = await extract_paper_features(
+        result = await _extract_paper_features(
             request=extraction_request,
             background_tasks=bulk_background_tasks,
             current_user=current_user,
