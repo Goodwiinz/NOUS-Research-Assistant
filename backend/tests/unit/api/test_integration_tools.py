@@ -142,3 +142,11 @@ def test_disabled_flag_returns_503(
     monkeypatch.setattr(settings, "NOUS_MCP_ENABLED", False)
     assert client.get("/api/v1/integrations/tools", headers=HEADERS).status_code == 503
     assert _read(client).status_code == 503
+
+
+def test_catalog_lists_transient_arxiv_reader() -> None:
+    from src.services.integrations.read_tools import list_read_tools
+
+    by_name = {tool.name: tool for tool in list_read_tools()}
+    assert "get_arxiv_paper_content" in by_name
+    assert by_name["get_arxiv_paper_content"].input_schema["required"] == ["arxiv_id"]
