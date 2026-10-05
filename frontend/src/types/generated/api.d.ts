@@ -16734,6 +16734,16 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * HandoffConflictBody
+         * @description The single 409 envelope; ``latest`` is None when no version exists or
+         *     the conflicting writer could not be re-read.
+         */
+        HandoffConflictBody: {
+            /** Detail */
+            detail: string;
+            latest: components["schemas"]["HandoffDTO"] | null;
+        };
         /** HandoffCreate */
         HandoffCreate: {
             /** Decisions */
@@ -31223,13 +31233,13 @@ export interface operations {
                     "application/json": components["schemas"]["HandoffDTO"];
                 };
             };
-            /** @description Latest handoff */
+            /** @description Merge with latest */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HandoffDTO"];
+                    "application/json": components["schemas"]["HandoffConflictBody"];
                 };
             };
             /** @description Validation Error */
