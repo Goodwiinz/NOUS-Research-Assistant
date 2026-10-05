@@ -62,13 +62,14 @@ export function useThreadArtifacts(
     staleTime: 5_000,
     // Poll while output can still arrive without a stream frame: the run is
     // live (frames invalidate too, but a suppressed announcement is cheap to
-    // cover), it ended recently, or a file's message has not landed yet.
+    // cover), it ended recently, or a run file's message has not landed yet.
     refetchInterval: (query) => {
       const endedAt = streamEndedAt.current;
       const recentlyEnded =
         endedAt !== null && Date.now() - endedAt < LATE_OUTPUT_WINDOW_MS;
+      // Only run output awaits a message; standalone rows (no run) never get one.
       const pending = query.state.data?.some(
-        (a) => a.reference.messageId === null
+        (a) => a.reference.messageId === null && a.reference.runId !== null
       );
       return streamingHere || recentlyEnded || pending
         ? LATE_OUTPUT_POLL_MS
