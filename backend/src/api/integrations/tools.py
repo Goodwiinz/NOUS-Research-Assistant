@@ -28,7 +28,9 @@ async def list_tools(
     context: IntegrationContext = Depends(require_integration_context("tools:read")),
 ) -> list[ToolDescriptorDTO]:
     _require_enabled()
-    return list_read_tools(workspace_bound=context.workspace_id is not None)
+    return list_read_tools(
+        context.scopes, workspace_bound=context.workspace_id is not None
+    )
 
 
 @router.post("/read", response_model=ToolResult)

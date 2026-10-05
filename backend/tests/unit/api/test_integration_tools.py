@@ -37,7 +37,11 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         if token != "opaque-grant" or required_scope != "tools:read":
             raise IntegrationAccessDenied()
         return IntegrationContext(
-            user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=GRANT
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            grant_id=GRANT,
+            scopes=frozenset({"tools:read"}),
         )
 
     monkeypatch.setattr(
@@ -115,6 +119,7 @@ def test_catalog_offers_the_project_selector_only_to_workspace_grants(
             project_id=None,
             workspace_id=WORKSPACE,
             grant_id=GRANT,
+            scopes=frozenset({"tools:read"}),
         )
 
     monkeypatch.setattr(
@@ -137,6 +142,54 @@ def test_catalog_offers_the_project_selector_only_to_workspace_grants(
         "list_external_databases",
         "get_arxiv_paper_content",
     }
+
+
+def _grant_holding(monkeypatch: pytest.MonkeyPatch, scopes: set[str]) -> None:
+    """Resolve the grant header to a project grant holding exactly ``scopes``."""
+
+    async def resolve(_db: Any, token: str, *, required_scope: str) -> Any:
+        if token != "opaque-grant" or required_scope not in scopes:
+            raise IntegrationAccessDenied()
+        return IntegrationContext(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            grant_id=GRANT,
+            scopes=frozenset(scopes),
+        )
+
+    monkeypatch.setattr(
+        "src.api.integrations.auth.resolve_integration_context", resolve
+    )
+
+
+def test_catalog_lists_library_tools_only_for_grants_with_library_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def names() -> set[str]:
+        response = client.get("/api/v1/integrations/tools", headers=HEADERS)
+        assert response.status_code == 200
+        return {tool["name"] for tool in response.json()}
+
+    _grant_holding(monkeypatch, {"tools:read"})
+    assert "search_documents" in names() and "list_library" not in names()
+    _grant_holding(monkeypatch, {"tools:read", "library:read"})
+    assert {"search_documents", "list_library"} <= names()
+
+
+def test_reading_a_tool_outside_the_grants_scopes_is_403(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api.integrations import tools
+    from src.services.integrations import read_tools
+
+    # The real gateway, not the fixture's stub: it must refuse on the grant's
+    # scopes before it touches the database (which is None here).
+    monkeypatch.setattr(tools, "invoke_read", read_tools.invoke_read)
+    _grant_holding(monkeypatch, {"tools:read"})
+    response = _read(client, tool_name="list_library")
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Integration access denied"}
 
 
 def test_jwt_actor_must_match_grant_actor(app: FastAPI, client: TestClient) -> None:

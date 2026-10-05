@@ -6,7 +6,9 @@ exception is the ``project_id`` selector of a workspace grant, which picks one
 of the workspace's live projects and is checked against ``authorized_scope``
 on every call. The allowlist is deliberately narrow: the absence of a
 ``DESTRUCTIVE`` tag is not evidence that a registry tool is safe to expose
-outside the agent graph.
+outside the agent graph. Each tool names the scope a grant must hold to call
+it (``TOOL_SCOPES``): ``tools:read`` for the registry tools, and the scope in
+``LOCAL_TOOLS`` for the tools that have no agent-registry twin.
 """
 
 from __future__ import annotations
@@ -16,11 +18,12 @@ import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Iterable, Sequence, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
+from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 from starlette.concurrency import run_in_threadpool
@@ -65,12 +68,16 @@ _ARGS_ONLY_TOOLS = frozenset(
     {"search_arxiv", "search_external_database", "list_external_databases"}
 )
 # Tools that act on no single project. A workspace grant gives them no project
-# selector: there is nothing for it to select.
-_PROJECTLESS_TOOLS = _ARGS_ONLY_TOOLS | {"get_arxiv_paper_content"}
+# selector: there is nothing for it to select. list_library lists the grant's
+# whole scope.
+_PROJECTLESS_TOOLS = _ARGS_ONLY_TOOLS | {"get_arxiv_paper_content", "list_library"}
 IDENTITY_ARGUMENTS = frozenset(
     {"project_id", "user_id", "organization_id", "thread_id", "run_id", "grant_id"}
 )
 MAX_RESULTS = 50
+# Matches the 2**31 - 1 clamp on the registry tools' offset: a larger value
+# would only reach the database as an out-of-range bind.
+MAX_OFFSET = 2**31 - 1
 MAX_DOCUMENT_IDS = 20
 MAX_ARTIFACTS = 100
 MAX_EXTERNAL_RESULTS = 20
@@ -86,6 +93,7 @@ MAX_SCANNED_DOCUMENTS = 2000
 MAX_RESEARCHER_PAPERS = 100
 MAX_COAUTHORS = 100
 _NAME_CHARS = 200
+MAX_FOLDER_DESCRIPTION_CHARS = 500
 # The advertised schema must match what the gateway enforces; the agent-facing
 # registry descriptions promise wider limits (e.g. list limit 500).
 _SCHEMA_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
@@ -231,6 +239,31 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         },
         "tools:read",
     ),
+    "list_library": (
+        "List the folders (NOUS projects) this connection may use, with document "
+        "counts. Pass next_offset as offset to read the next page; it is null on "
+        "the last one.",
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [],
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_RESULTS,
+                    "default": MAX_RESULTS,
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_OFFSET,
+                    "default": 0,
+                },
+            },
+        },
+        "library:read",
+    ),
 }
 TOOL_SCOPES: dict[str, str] = {name: "tools:read" for name in READ_TOOL_NAMES} | {
     name: scope for name, (_d, _s, scope) in LOCAL_TOOLS.items()
@@ -309,19 +342,30 @@ def _local_schema(
     return description, schema
 
 
-def list_read_tools(*, workspace_bound: bool = False) -> list[ToolDescriptorDTO]:
-    """The catalog; a workspace grant also sees the optional project selector."""
-    return [
-        ToolDescriptorDTO(name=name, description=desc_, input_schema=schema)
-        for name in READ_TOOL_NAMES
-        for desc_, schema, _model in (
-            _registry_schema(name, workspace_bound=workspace_bound),
+def list_read_tools(
+    scopes: Iterable[str] | None = None, *, workspace_bound: bool = False
+) -> list[ToolDescriptorDTO]:
+    """The registry tools plus the local ones.
+
+    Given a grant's ``scopes``, only the tools those scopes may call are
+    listed; without them, every tool. A workspace grant also sees the optional
+    project selector on the tools that act on one project.
+    """
+    held = None if scopes is None else frozenset(scopes)
+    catalog: list[ToolDescriptorDTO] = []
+    for name in (*READ_TOOL_NAMES, *LOCAL_TOOLS):
+        if held is not None and TOOL_SCOPES[name] not in held:
+            continue
+        if name in LOCAL_TOOLS:
+            description, schema = _local_schema(name, workspace_bound=workspace_bound)
+        else:
+            description, schema, _model = _registry_schema(
+                name, workspace_bound=workspace_bound
+            )
+        catalog.append(
+            ToolDescriptorDTO(name=name, description=description, input_schema=schema)
         )
-    ] + [
-        ToolDescriptorDTO(name=name, description=desc_, input_schema=schema)
-        for name in LOCAL_TOOLS
-        for desc_, schema in (_local_schema(name, workspace_bound=workspace_bound),)
-    ]
+    return catalog
 
 
 def _check_local_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> None:
@@ -354,7 +398,7 @@ def _validate_arguments(
     from pydantic import ValidationError
 
     name = invocation.tool_name
-    if name not in READ_TOOL_NAMES and name not in LOCAL_TOOLS:
+    if name not in TOOL_SCOPES:
         raise ToolArgumentError("tool is not available to integrations")
     arguments = invocation.arguments
     workspace_bound = context.workspace_id is not None
@@ -372,7 +416,8 @@ def _validate_arguments(
     # Identity keys were stripped from the advertised schema, so a caller
     # supplying user_id/organization_id/... is rejected here as an unknown
     # argument, and so is project_id on a project grant. Only a workspace
-    # grant advertises (and so accepts) the project_id selector.
+    # grant advertises (and so accepts) the project_id selector, and only on
+    # the tools that act on one project.
     allowed = set(schema["properties"])
     if set(arguments) - allowed:
         raise ToolArgumentError("unknown arguments")
@@ -1065,17 +1110,96 @@ async def _target_project(
     return chosen
 
 
+async def _library_folders(
+    db: AsyncSession,
+    allowed: set[UUID],
+    organization_id: UUID,
+    offset: int,
+    limit: int,
+) -> Sequence[Row[Any]]:
+    """One page of live Collections among ``allowed``, with live document counts.
+
+    The count applies the filters ``list_project_documents`` applies to its
+    ``total``, so the two never disagree. The Workspace join re-checks that
+    ancestor in this statement, because ``allowed`` came from another one.
+    """
+    live_documents = (
+        select(func.count(CollectionDocument.id))
+        .join(Document, Document.id == CollectionDocument.document_id)
+        .where(
+            CollectionDocument.collection_id == Collection.id,
+            CollectionDocument.is_deleted.is_(False),
+            Document.organization_id == organization_id,
+            Document.is_deleted.is_(False),
+        )
+        .correlate(Collection)
+        .scalar_subquery()
+    )
+    rows = await db.execute(
+        select(Collection.id, Collection.name, Collection.description, live_documents)
+        .join(Workspace, Workspace.id == Collection.workspace_id)
+        .where(
+            Collection.id.in_(allowed),
+            Collection.is_deleted.is_(False),
+            Workspace.is_deleted.is_(False),
+        )
+        .order_by(Collection.name, Collection.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    return rows.all()
+
+
+async def _list_library(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """The folders (projects) the grant may use, with live document counts.
+
+    A project grant sees its own project, a workspace grant the live projects
+    of its workspace; the scope is resolved afresh on every call.
+    """
+    # The shape was checked by _validate_arguments; this only applies defaults.
+    limit = _clamp(arguments.get("limit", MAX_RESULTS), 1, MAX_RESULTS, MAX_RESULTS)
+    offset = _clamp(arguments.get("offset", 0), 0, MAX_OFFSET, 0)
+    allowed = await authorized_scope(db, context)
+    found = await _library_folders(
+        db, allowed, context.organization_id, offset, limit + 1
+    )
+    return {
+        "folders": [
+            {
+                "id": str(folder_id),
+                "name": name,
+                "description": (description or "")[:MAX_FOLDER_DESCRIPTION_CHARS],
+                "document_count": int(document_count),
+            }
+            for folder_id, name, description, document_count in found[:limit]
+        ],
+        "offset": offset,
+        "next_offset": offset + limit if len(found) > limit else None,
+    }
+
+
 async def invoke_read(
     db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
 ) -> ToolResult:
+    required_scope = TOOL_SCOPES.get(invocation.tool_name)
+    if required_scope is not None and required_scope not in context.scopes:
+        # The router only demands tools:read; a grant can hold that and still
+        # lack the scope of this tool (list_library needs library:read). An
+        # unknown tool falls through to _validate_arguments, which rejects it.
+        raise IntegrationAccessDenied()
     arguments = _validate_arguments(context, invocation)
     user = await db.get(User, context.user_id)
     if user is None or user.organization_id != context.organization_id:
         raise IntegrationAccessDenied()
     name = invocation.tool_name
     if name in _PROJECTLESS_TOOLS:
-        # No project is involved, so neither the selector nor the ownership
-        # check below applies.
+        # No single project is involved, so neither the selector nor the
+        # per-project ownership check below applies. list_library resolves
+        # authorized_scope itself, which covers every folder it returns.
+        if name == "list_library":
+            return _finish(await _list_library(db, context, arguments))
         if name == "get_arxiv_paper_content":
             return await _arxiv_paper_content(arguments)
         return _finish(await _args_only(name, arguments))

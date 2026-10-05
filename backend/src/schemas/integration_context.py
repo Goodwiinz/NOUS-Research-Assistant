@@ -40,6 +40,10 @@ class IntegrationContext(BaseModel):
     # The consumed consent request the grant was exchanged from; None for
     # trusted internal issuance. Renewed grants share it.
     consent_id: UUID | None = None
+    # The scopes of the grant this context was resolved from, so a service can
+    # authorize each tool against them. Empty for a context built without
+    # resolving a grant, which therefore passes no scope check.
+    scopes: frozenset[str] = frozenset()
 
     @model_validator(mode="after")
     def _one_binding(self) -> "IntegrationContext":

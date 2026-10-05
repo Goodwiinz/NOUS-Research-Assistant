@@ -422,6 +422,7 @@ async def resolve_integration_context(
         run_id=UUID(grant.run_id) if grant.run_id else None,
         grant_id=grant.id,
         consent_id=grant.request_id,
+        scopes=frozenset(grant.scopes),
     )
 
 

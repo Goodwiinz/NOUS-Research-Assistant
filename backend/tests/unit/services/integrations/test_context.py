@@ -835,6 +835,32 @@ async def test_workspace_grant_resolves_context_with_workspace(
     assert ctx.project_id is None and ctx.workspace_id == WORKSPACE
 
 
+async def test_resolved_context_carries_the_scopes_of_its_grant(
+    db: AsyncSession, issued: Any
+) -> None:
+    # The read gateway authorizes each tool against these, so they must be
+    # exactly what the stored grant holds: no more, whichever scope was asked.
+    workspace_token = await _mint(db, workspace_id=WORKSPACE, scopes=LIBRARY_READ)
+    workspace_ctx = await resolve_integration_context(
+        db, workspace_token, required_scope="tools:read"
+    )
+    assert workspace_ctx.scopes == frozenset(LIBRARY_READ)
+    project_ctx = await resolve_integration_context(
+        db, issued.token, required_scope="tools:read"
+    )
+    assert project_ctx.scopes == frozenset({"tools:read"})
+
+
+def test_a_context_built_without_a_grant_holds_no_scopes() -> None:
+    from src.schemas.integration_context import IntegrationContext
+
+    # Fail closed: a context nobody resolved from a grant authorizes no tool.
+    ctx = IntegrationContext(
+        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+    )
+    assert ctx.scopes == frozenset()
+
+
 async def test_authorized_scope_lists_live_collections_of_workspace(
     db: AsyncSession, library: None
 ) -> None:
