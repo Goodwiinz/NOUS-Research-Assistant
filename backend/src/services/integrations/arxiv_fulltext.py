@@ -13,6 +13,8 @@ import logging
 import re
 import tempfile
 import time
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,49 @@ def _key(arxiv_id: str) -> str:
     return f"arxiv:fulltext:{arxiv_id}"
 
 
+_PER_PROCESS_GAP_S = 3.0  # arXiv's minimum spacing, as in _make_async_request
+_sleep = asyncio.sleep
+_executor: ProcessPoolExecutor | None = None
+
+
+def _executor_factory() -> Any:
+    return ProcessPoolExecutor(max_workers=1)
+
+
+def _extract(pdf_path: str) -> str:
+    """Sync, top-level (picklable) pypdf parse; same page framing as
+    ``ArXivIngestionService.extract_pdf_content``. Runs in the worker process."""
+    from pypdf import PdfReader
+
+    full_text = ""
+    for page_num, page in enumerate(PdfReader(pdf_path).pages):
+        try:
+            page_text = page.extract_text() or ""
+        except Exception:
+            continue
+        if page_text.strip():
+            full_text += f"[Page {page_num + 1}]\n{page_text}\n\n"
+    return full_text
+
+
+async def _extract_in_subprocess(pdf_path: str) -> str:
+    """Parse in a single-worker process pool; a cancelled/timed-out parse
+    kills the pool so a stuck pypdf cannot outlive the request."""
+    global _executor
+    if _executor is None:
+        _executor = _executor_factory()
+    executor = _executor
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            executor, _extract, pdf_path
+        )
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        executor.shutdown(wait=False, cancel_futures=True)
+        if _executor is executor:
+            _executor = None
+        raise
+
+
 async def fetch_text(arxiv_id: str) -> str:
     """Download + extract through the existing service (rate gate, 429 handling).
 
@@ -43,18 +88,23 @@ async def fetch_text(arxiv_id: str) -> str:
             # request path uses it); the helper is module-private but it is
             # the one shared arXiv gate, so reserve a slot the same way.
             slot_wait = await mod._acquire_arxiv_rate_slot()
-            if slot_wait:
-                await asyncio.sleep(slot_wait)
+            if slot_wait is None:
+                # No shared gate: mirror _make_async_request's per-process
+                # spacing on the service's own class-level clock.
+                elapsed = (
+                    time.monotonic() - mod.ArXivIngestionService._last_request_time
+                )
+                if elapsed < _PER_PROCESS_GAP_S:
+                    await _sleep(_PER_PROCESS_GAP_S - elapsed)
+                mod.ArXivIngestionService._last_request_time = time.monotonic()
+            elif slot_wait > 0:
+                await _sleep(slot_wait)
             pdf = await svc.download_paper_pdf(arxiv_id)
             if not pdf:
                 raise LookupError("arxiv_unavailable")
-            # extract_pdf_content is an async def with a purely synchronous
-            # pypdf body; run it on its own loop in a worker thread so the
-            # parse never blocks the API event loop.
-            extracted = await asyncio.to_thread(
-                lambda: asyncio.run(svc.extract_pdf_content(pdf))
-            )
-    return str(extracted.get("full_text") or "")
+            pdf_path = Path(tmp) / "paper.pdf"
+            pdf_path.write_bytes(pdf)
+            return await _extract_in_subprocess(str(pdf_path))
 
 
 async def _cached(redis: Any, key: str) -> tuple[str | None, float]:
@@ -90,7 +140,10 @@ async def get_page(
     limit: int,
     redis: Any,
     fetch: Fetch | None = None,
+    budget: float | None = None,
 ) -> dict[str, Any]:
+    """One character page; ``budget`` bounds the (re)fetch only, so a stale
+    cache entry is still served when a refresh times out."""
     if not _ARXIV_ID.match(arxiv_id):
         raise ValueError("invalid arxiv id")
     limit = max(1, min(int(limit), MAX_PAGE_CHARS))
@@ -99,7 +152,7 @@ async def get_page(
     text, fetched_at = await _cached(redis, key)
     if text is None or time.time() - fetched_at > TTL_S:
         try:
-            text = await (fetch or fetch_text)(arxiv_id)
+            text = await asyncio.wait_for((fetch or fetch_text)(arxiv_id), budget)
         except Exception:
             if text is None:
                 raise

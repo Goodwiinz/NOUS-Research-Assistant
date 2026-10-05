@@ -880,3 +880,64 @@ async def test_arxiv_paper_content_timeout_and_empty_text(
     )
     assert result.is_error is True
     assert result.content == [{"error": "arxiv_no_text"}]
+
+
+async def test_retrieve_passages_drops_hits_revoked_during_search(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _StubFulltext([_search_result(DOC_IN_PROJECT, "hit")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+
+    async def revoke_then_search(func: Any, /, **kwargs: Any) -> Any:
+        # The pre-filter already captured DOC_IN_PROJECT; revoke it now.
+        await db.execute(update(CollectionDocument).values(is_deleted=True))
+        await db.commit()
+        return func(**kwargs)
+
+    monkeypatch.setattr(read_tools, "run_in_threadpool", revoke_then_search)
+    result = await invoke_read(
+        db, context, _invocation("retrieve_passages", query="hit")
+    )
+    assert result.is_error is False
+    assert stub.calls[0]["search_request"].filters.document_ids == [str(DOC_IN_PROJECT)]
+    assert result.content[0]["chunks"] == []
+    assert result.source_refs == []
+
+
+async def test_document_summary_falls_back_to_sql_preview(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(content_text="b" * 700, content_summary=None)
+    )
+    await db.commit()
+    result = await invoke_read(
+        db,
+        context,
+        _invocation("get_document_content", document_id=str(DOC_IN_PROJECT)),
+    )
+    assert result.is_error is False
+    assert result.content[0]["text"] == "b" * 500
+    assert result.content[0]["total_chars"] == 500
+
+
+async def test_returned_error_payloads_are_sanitized(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(return_value={"error": "set ACME_API_KEY", "results": []}),
+    )
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_arxiv",
+        AsyncMock(return_value={"error": "Traceback: boom", "papers": []}),
+    )
+    for name in ("search_external_database", "search_arxiv"):
+        result = await invoke_read(db, context, _invocation(name, query="q"))
+        assert result.is_error is True
+        assert result.content == [{"error": "upstream_unavailable"}]
+        assert result.source_refs == []
