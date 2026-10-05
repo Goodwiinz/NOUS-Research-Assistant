@@ -1,5 +1,6 @@
 import type { components } from "../../../../frontend/src/types/generated/api.d.ts";
 import { integrationHeaders, type IntegrationCredentials } from "../credentials.ts";
+import { GrantExpired } from "../grants.ts";
 import { apiBase, throwForStatus } from "../mcp/client.ts";
 
 export type Handoff = components["schemas"]["HandoffDTO"];
@@ -14,6 +15,23 @@ const MESSAGES = {
     "NOUS denied the handoff: the grant may lack handoff:read/handoff:write or is not bound to a chat (reconnect with nous-harness connect --chat UUID --tools --handoff)",
   disabled: "NOUS integration tools are disabled",
 };
+const STATUS = Symbol("httpStatus");
+/** The HTTP status behind a failed handoff request; undefined for network failures. */
+export function statusOf(error: unknown): number | undefined {
+  return typeof error === "object" && error !== null
+    ? (error as { [STATUS]?: number })[STATUS]
+    : undefined;
+}
+/** throwForStatus, tagging the thrown error with the status for the offline queue. */
+async function check(response: Response): Promise<void> {
+  try {
+    await throwForStatus(response, MESSAGES);
+  } catch (error) {
+    if (typeof error === "object" && error !== null)
+      (error as { [STATUS]?: number })[STATUS] = response.status;
+    throw error;
+  }
+}
 const uuid = (value: unknown): value is string =>
   typeof value === "string" &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -46,7 +64,7 @@ export class HandoffHttpClient {
   async getLatest(): Promise<Handoff | null> {
     const response = await this.send("GET", "/integrations/handoffs/latest");
     if (response.status === 404) return null;
-    await throwForStatus(response, MESSAGES);
+    await check(response);
     return parseHandoff(await this.json(response));
   }
   async save(payload: HandoffCreate): Promise<SaveOutcome> {
@@ -58,7 +76,7 @@ export class HandoffHttpClient {
       if (typeof detail === "string") return { conflict: null, detail: detail.slice(0, 500) };
       return { conflict: parseHandoff(data) };
     }
-    await throwForStatus(response, MESSAGES);
+    await check(response);
     return { saved: parseHandoff(await this.json(response)) };
   }
   private async json(response: Response): Promise<unknown> {
@@ -79,6 +97,8 @@ export class HandoffHttpClient {
         signal: AbortSignal.timeout(20_000),
       });
     } catch (error) {
+      // The keeper's fetch refuses an expired grant: that needs a reconnect, not a retry.
+      if (error instanceof GrantExpired) throw error;
       const cause =
         error instanceof Error && error.cause instanceof Error
           ? error.cause.message

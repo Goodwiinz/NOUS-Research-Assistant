@@ -4,12 +4,22 @@ import { connectBridge } from "./connection.ts";
 import { CodexAdapter } from "./adapters/codex.ts";
 import { homedir } from "node:os";
 import { join, basename, resolve } from "node:path";
-import { realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { CredentialStore } from "./credentials.ts";
-import { GrantExpired, GrantKeeper } from "./grants.ts";
+import { GRANT_LIFETIME_MS, GrantExpired, GrantKeeper } from "./grants.ts";
+import { HandoffHttpClient, type Handoff } from "./handoffs/client.ts";
+import { handoffPayload } from "./handoffs/mcp.ts";
+import {
+  HandoffQueue,
+  queueEntries,
+  type Attempt,
+  type Binding,
+  type FlushResult,
+  type QueueEntry,
+} from "./handoffs/queue.ts";
 import { record } from "./rpc.ts";
 import { apiBase, type McpSession } from "./mcp/client.ts";
 import {
@@ -581,6 +591,147 @@ export async function mcpInstallCommand(
   }
   return standaloneInstallCommand(mcpSession(stateDir, state, root));
 }
+/** Offline summary of the local binding, grant expiry and handoff queue. */
+export async function status(options: {
+  stateDir: string;
+  announce?: (message: string) => void;
+}): Promise<void> {
+  const announce = options.announce ?? console.log;
+  const store = new CredentialStore(options.stateDir);
+  const entries = await queueEntries(store);
+  const count = (state: QueueEntry["state"]) => entries.filter((e) => e.state === state).length;
+  const extra = [
+    count("conflicted") ? `${count("conflicted")} conflicted` : "",
+    count("rejected") ? `${count("rejected")} rejected` : "",
+  ].filter(Boolean);
+  const queueLine = `Pending handoffs: ${count("pending")}${extra.length ? ` (${extra.join(", ")})` : ""}`;
+  const state = storedConnection(await store.readLocal("connection").catch(() => null));
+  if (state === null) {
+    announce(["This device is not connected (run nous-harness connect).", ...(entries.length ? [queueLine] : [])].join("\n"));
+    return;
+  }
+  let grant: string;
+  try {
+    const credentials = await store.load(state.credentialHandle);
+    if (typeof credentials.renewedAt !== "number")
+      grant = "connection predates grant renewal; reconnect to keep it alive";
+    else {
+      const expiry = credentials.renewedAt + GRANT_LIFETIME_MS;
+      grant =
+        expiry > Date.now()
+          ? `expires ${new Date(expiry).toISOString()} unless a running bridge or MCP session renews it`
+          : `expired ${new Date(expiry).toISOString()}; reconnect with nous-harness connect`;
+    }
+  } catch {
+    grant = "local credentials missing; reconnect with nous-harness connect";
+  }
+  announce(
+    [
+      `Project: ${state.projectId}`,
+      `Chat: ${state.threadId ?? "none (project only)"}`,
+      `Device: ${state.label ?? "unlabelled"} (${state.deviceId})`,
+      `API: ${state.apiUrl}`,
+      `Scopes: ${state.scopes?.join(" ") ?? "unknown"}`,
+      `Grant: ${grant}`,
+      queueLine,
+    ].join("\n"),
+  );
+}
+const RECONNECT_HANDOFF = "reconnect with nous-harness connect --chat UUID --tools --handoff";
+/** The chat-bound connection, its queue and a keeper-backed handoff client. */
+async function handoffContext(
+  options: ClientOptions,
+  scope: "handoff:read" | "handoff:write",
+): Promise<{ binding: Binding; queue: HandoffQueue; client: HandoffHttpClient; announce: (m: string) => void }> {
+  const store = new CredentialStore(options.stateDir);
+  const state = storedConnection(await store.readLocal("connection").catch(() => null));
+  if (state === null) throw new Error("connect this device first");
+  if (!uuid(state.threadId)) throw new Error(`this device is not bound to a chat; ${RECONNECT_HANDOFF}`);
+  if (!state.scopes?.includes(scope)) throw new Error(`this connection lacks ${scope}; ${RECONNECT_HANDOFF}`);
+  const base = apiBase(state.apiUrl);
+  const keeper = new GrantKeeper(store, state.credentialHandle, base, options.fetchFn ?? fetch);
+  const client = new HandoffHttpClient(base, await store.load(state.credentialHandle), keeper.fetch);
+  return {
+    binding: { threadId: state.threadId, projectId: state.projectId },
+    queue: new HandoffQueue(store, client),
+    client,
+    announce: options.announce ?? console.log,
+  };
+}
+function reportAttempt(handoffId: string, attempt: Attempt, announce: (m: string) => void): void {
+  if (attempt.state === "done")
+    announce(`Saved handoff version ${attempt.saved.version} (${handoffId}).`);
+  else if (attempt.state === "conflicted")
+    announce(
+      attempt.latest === null
+        ? `Not saved (${handoffId}): ${attempt.detail ?? "NOUS reported a conflict"}. Kept as conflicted.`
+        : `Not saved (${handoffId}): the chat's latest handoff is version ${attempt.latest.version}. Kept as conflicted; merge your changes into it yourself and save again with --parent ${attempt.latest.version} and a new handoff_id. Latest:\n${JSON.stringify(attempt.latest, null, 2)}`,
+    );
+  else if (attempt.state === "rejected")
+    announce(`Rejected by NOUS (${handoffId}): ${attempt.error.message}. Kept as rejected; it is not retried.`);
+  else
+    announce(
+      `Not confirmed (${handoffId}): ${attempt.error.message}. Queued as pending; run nous-harness handoff flush to retry.` +
+        (attempt.reconnect ? ` Then ${RECONNECT_HANDOFF} before flushing.` : ""),
+    );
+}
+/** `handoff show`: the chat's latest handoff, read over HTTPS. */
+export async function handoffShow(options: ClientOptions): Promise<Handoff | null> {
+  const context = await handoffContext(options, "handoff:read");
+  const latest = await context.client.getLatest();
+  context.announce(latest ? JSON.stringify(latest, null, 2) : "No handoff yet in this chat.");
+  return latest;
+}
+/** `handoff save`: validate the file, journal it, then POST it. */
+export async function handoffSave(
+  options: ClientOptions & { file: string; parent?: string },
+): Promise<Attempt> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(options.file, "utf8"));
+  } catch {
+    throw new Error("--file must name a readable JSON handoff file");
+  }
+  if (!record(parsed)) throw new Error("--file must contain a JSON object");
+  const args: Record<string, unknown> = { expected_parent_version: null, ...parsed };
+  if (options.parent !== undefined) {
+    if (!/^[1-9][0-9]{0,9}$/.test(options.parent))
+      throw new Error("--parent must be the latest handoff version (a positive integer)");
+    args.expected_parent_version = Number(options.parent);
+  }
+  const payload = handoffPayload(args, "nous-harness");
+  if (typeof payload === "string") throw new Error(payload);
+  const context = await handoffContext(options, "handoff:write");
+  const attempt = await context.queue.submit(context.binding, payload);
+  reportAttempt(payload.handoff_id, attempt, context.announce);
+  return attempt;
+}
+/** `handoff flush`: retry pending entries journaled for the current chat. */
+export async function handoffFlush(options: ClientOptions): Promise<FlushResult> {
+  const context = await handoffContext(options, "handoff:write");
+  const result = await context.queue.flush(context.binding);
+  for (const entry of result.skipped)
+    context.announce(
+      `Skipped ${entry.handoff_id}: journaled for chat ${entry.thread_id} in project ${entry.project_id}, not this device's current binding.`,
+    );
+  for (const { entry, attempt } of result.attempted) reportAttempt(entry.handoff_id, attempt, context.announce);
+  if (result.attempted.length === 0) context.announce("No pending handoffs for this chat.");
+  return result;
+}
+/** `handoff list`: every journaled entry and its state; offline. */
+export async function handoffList(options: ClientOptions): Promise<QueueEntry[]> {
+  const entries = await queueEntries(new CredentialStore(options.stateDir));
+  (options.announce ?? console.log)(
+    entries.length
+      ? entries
+          .map((e) =>
+            [e.handoff_id, e.state, `chat ${e.thread_id}`, e.created_at, e.last_error ?? ""].join("  ").trimEnd(),
+          )
+          .join("\n")
+      : "No queued handoffs.",
+  );
+  return entries;
+}
 export function recoverInterrupt(
   stateDir: string,
   commandId?: string,
@@ -601,10 +752,15 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write] [--handoff]] | workspace add --root PATH [--label NAME] | run
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write] [--handoff]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect reuses the stored binding (no browser login or consent) when the API, project and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow.
+  nous-harness status    Show the binding (project, chat, device, grant expiry) and the handoff queue; works offline.
+  nous-harness handoff show    Print the bound chat's latest handoff.
+  nous-harness handoff save --file handoff.json [--parent N]    Journal the handoff locally, then save it; --parent sets expected_parent_version (default null, the first handoff).
+  nous-harness handoff flush    Retry pending saves journaled for the current chat; a conflict (409) or rejection (403/422) is kept, never retried or merged.
+  nous-harness handoff list    List journaled handoff saves and their states.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
   nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools.
@@ -631,6 +787,8 @@ async function main(): Promise<void> {
       write: { type: "boolean" },
       actions: { type: "boolean" },
       handoff: { type: "boolean" },
+      file: { type: "string" },
+      parent: { type: "string" },
       help: { type: "boolean" },
     },
   });
@@ -669,6 +827,16 @@ async function main(): Promise<void> {
     });
   else if (positionals.join(" ") === "disconnect")
     await disconnect({ stateDir });
+  else if (positionals.join(" ") === "status") await status({ stateDir });
+  else if (positionals.join(" ") === "handoff show") await handoffShow({ stateDir });
+  else if (positionals.join(" ") === "handoff save" && values.file) {
+    // Anything but a confirmed save exits non-zero; the entry stays journaled.
+    const attempt = await handoffSave({ stateDir, file: values.file, parent: values.parent });
+    if (attempt.state !== "done") process.exitCode = 1;
+  } else if (positionals.join(" ") === "handoff flush") {
+    const result = await handoffFlush({ stateDir });
+    if (result.attempted.some(({ attempt }) => attempt.state !== "done")) process.exitCode = 1;
+  } else if (positionals.join(" ") === "handoff list") await handoffList({ stateDir });
   else if (positionals.join(" ") === "mcp install")
     console.log(await mcpInstallCommand(stateDir, { root: values.root }));
   else if (positionals.join(" ") === "mcp") {

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect } from "../src/cli.ts";
+import { connect, status } from "../src/cli.ts";
 import { CredentialStore } from "../src/credentials.ts";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
@@ -156,3 +156,39 @@ test("a connection without a stored grant id is never reused", async () => {
   }
 });
 
+test("status reports the binding offline, and says not connected without state", async () => {
+  const t = setup();
+  try {
+    const lines: string[] = [];
+    await status({ stateDir: t.dir, announce: (m) => lines.push(m) });
+    assert.match(lines.join("\n"), /not connected/i);
+    const first = await connect({ ...t.base, threadId: CHAT, tools: true, handoff: true });
+    const store = new CredentialStore(t.dir);
+    for (const [id, thread, state] of [
+      ["44444444-4444-4444-8444-444444444444", CHAT, "pending"],
+      ["55555555-5555-4555-8555-555555555555", OTHER_CHAT, "pending"],
+      ["66666666-6666-4666-8666-666666666666", CHAT, "rejected"],
+    ])
+      await store.writeLocal(`handoff-${id}`, {
+        handoff_id: id,
+        thread_id: thread,
+        project_id: PROJECT,
+        body: { handoff_id: id, expected_parent_version: null, goal: "g", harness_name: "x" },
+        state,
+        created_at: new Date().toISOString(),
+      });
+    const mark = t.calls.length;
+    lines.length = 0;
+    await status({ stateDir: t.dir, announce: (m) => lines.push(m) });
+    const out = lines.join("\n");
+    assert.equal(t.calls.length, mark, "status makes no network calls");
+    assert.match(out, new RegExp(`Project: ${PROJECT}`));
+    assert.match(out, new RegExp(`Chat: ${CHAT}`));
+    assert.match(out, new RegExp(`Device: Laptop \\(${first.deviceId}\\)`));
+    assert.match(out, /Grant: expires \d{4}-\d{2}-\d{2}T/);
+    assert.match(out, /Pending handoffs: 2/);
+    assert.ok(!out.includes("secret"));
+  } finally {
+    t.cleanup();
+  }
+});

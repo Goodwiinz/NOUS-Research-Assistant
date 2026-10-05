@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { once } from "node:events";
@@ -13,12 +13,25 @@ import { CredentialStore } from "../src/credentials.ts";
 import { GrantKeeper } from "../src/grants.ts";
 import { HandoffHttpClient, type Handoff } from "../src/handoffs/client.ts";
 import { getHandoffTool, saveHandoffTool } from "../src/handoffs/mcp.ts";
+import { HandoffQueue } from "../src/handoffs/queue.ts";
 import { CapabilityClient, ToolRequestRejected } from "../src/mcp/client.ts";
 import { createNousMcpServer } from "../src/mcp/server.ts";
 
 const credentials = { accessToken: "cli-jwt", grantToken: "nous_ig_" + "a".repeat(43) };
 const THREAD = "99999999-9999-4999-8999-999999999999";
 const VERSION = "55555555-5555-4555-8555-555555555555";
+
+const queueDirs: string[] = [];
+after(() => queueDirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+/** save_nous_handoff over a throwaway local queue bound to THREAD. */
+function saveTool(client: HandoffHttpClient) {
+  const dir = mkdtempSync(join(tmpdir(), "nous-handoff-queue-"));
+  queueDirs.push(dir);
+  return saveHandoffTool(new HandoffQueue(new CredentialStore(dir), client), async () => ({
+    threadId: THREAD,
+    projectId: randomUUID(),
+  }));
+}
 
 function handoff(version: number): Handoff {
   return {
@@ -94,7 +107,7 @@ test("the MCP server lists both handoff tools when they are registered", async (
     const handoffs = new HandoffHttpClient(server.origin, credentials);
     const mcp = createNousMcpServer(new CapabilityClient(server.origin, credentials), [
       getHandoffTool(handoffs),
-      saveHandoffTool(handoffs),
+      saveTool(handoffs),
     ]);
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await mcp.connect(serverSide);
@@ -116,7 +129,7 @@ test("save sends the keeper's bound grant header exactly once and only handoff f
     const handle = await store.save(credentials);
     const keeper = new GrantKeeper(store, handle, server.origin);
     // Same wiring as stdio: static headers plus the keeper's fetch.
-    const tool = saveHandoffTool(new HandoffHttpClient(server.origin, credentials, keeper.fetch));
+    const tool = saveTool(new HandoffHttpClient(server.origin, credentials, keeper.fetch));
     const outcome = await tool.call({
       expected_parent_version: null,
       goal: "Finish the review",
@@ -148,7 +161,7 @@ test("a 409 is returned as an isError result carrying the latest version, not th
   const latest = handoff(4);
   const server = await backend(() => ({ code: 409, body: latest }));
   try {
-    const tool = saveHandoffTool(new HandoffHttpClient(server.origin, credentials));
+    const tool = saveTool(new HandoffHttpClient(server.origin, credentials));
     const outcome = await tool.call({ expected_parent_version: 2, goal: "Stale" });
     assert.equal(outcome.isError, true);
     assert.match(outcome.text, /latest handoff is version 4/);
@@ -165,7 +178,7 @@ test("a 409 without a stored version surfaces the backend detail", async () => {
     body: { detail: "No handoff exists yet; send expected_parent_version null" },
   }));
   try {
-    const tool = saveHandoffTool(new HandoffHttpClient(server.origin, credentials));
+    const tool = saveTool(new HandoffHttpClient(server.origin, credentials));
     const outcome = await tool.call({ expected_parent_version: 1, goal: "First" });
     assert.equal(outcome.isError, true);
     assert.match(outcome.text, /send expected_parent_version null/);
@@ -197,7 +210,7 @@ test("get_nous_handoff reads the latest, reports none on 404, and rejects on 403
 test("save_nous_handoff validates arguments locally before any request", async () => {
   const server = await backend(() => ({ code: 200, body: handoff(1) }));
   try {
-    const tool = saveHandoffTool(new HandoffHttpClient(server.origin, credentials));
+    const tool = saveTool(new HandoffHttpClient(server.origin, credentials));
     for (const args of [
       { goal: "g" },
       { expected_parent_version: 0, goal: "g" },

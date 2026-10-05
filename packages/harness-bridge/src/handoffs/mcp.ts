@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ReauthenticationRequired, ToolRequestRejected } from "../mcp/client.ts";
 import type { LocalTool } from "../mcp/server.ts";
 import type { Handoff, HandoffCreate, HandoffHttpClient } from "./client.ts";
+import type { Binding, HandoffQueue } from "./queue.ts";
 
 const uuid = (value: unknown): value is string =>
   typeof value === "string" &&
@@ -34,10 +35,50 @@ export function getHandoffTool(client: HandoffHttpClient): LocalTool {
 }
 
 /**
+ * Validate handoff fields from model arguments or a CLI file; returns an
+ * error message when invalid. Only the keys below are read.
+ */
+export function handoffPayload(args: Record<string, any>, defaultHarness: string): HandoffCreate | string {
+  const handoffId = args.handoff_id ?? randomUUID();
+  const parent = args.expected_parent_version;
+  const { goal, decisions = [], remaining = [], results = [] } = args;
+  if (!uuid(handoffId)) return "handoff_id must be a UUID";
+  if (!(parent === null || (typeof parent === "number" && Number.isInteger(parent) && parent >= 1)))
+    return "expected_parent_version must be null or the latest version number";
+  if (typeof goal !== "string" || !goal.trim()) return "save_nous_handoff requires a goal";
+  if (!lines(decisions) || !lines(remaining)) return "decisions and remaining must be lists of strings";
+  if (
+    !Array.isArray(results) ||
+    !results.every(
+      (r) => typeof r === "object" && r !== null && uuid(r.artifact_version_id) && typeof r.summary === "string",
+    )
+  )
+    return "results must be a list of {artifact_version_id, summary}";
+  const name = args.harness_name ?? defaultHarness;
+  const session = args.harness_session_id;
+  if (typeof name !== "string" || (session !== undefined && typeof session !== "string"))
+    return "harness_name and harness_session_id must be strings";
+  return {
+    handoff_id: handoffId,
+    expected_parent_version: parent,
+    goal,
+    decisions,
+    remaining,
+    results: results.map((r: { artifact_version_id: string; summary: string }) => ({
+      artifact_version_id: r.artifact_version_id,
+      summary: r.summary,
+    })),
+    harness_name: name,
+    ...(session !== undefined ? { harness_session_id: session } : {}),
+  };
+}
+
+/**
  * `save_nous_handoff`: record a new handoff version. Identity and the chat come
  * from the grant; only the keys below are read from the model's arguments.
+ * Every save goes through the local queue (journal first, then POST).
  */
-export function saveHandoffTool(client: HandoffHttpClient): LocalTool {
+export function saveHandoffTool(queue: HandoffQueue, binding: () => Promise<Binding | null>): LocalTool {
   return {
     descriptor: {
       name: "save_nous_handoff",
@@ -72,60 +113,37 @@ export function saveHandoffTool(client: HandoffHttpClient): LocalTool {
       },
     },
     async call(args) {
-      const handoffId = args.handoff_id ?? randomUUID();
-      const parent = args.expected_parent_version;
-      const { goal, decisions = [], remaining = [], results = [] } = args;
-      if (!uuid(handoffId)) return { text: "handoff_id must be a UUID", isError: true };
-      if (!(parent === null || (typeof parent === "number" && Number.isInteger(parent) && parent >= 1)))
-        return { text: "expected_parent_version must be null or the latest version number", isError: true };
-      if (typeof goal !== "string" || !goal.trim()) return { text: "save_nous_handoff requires a goal", isError: true };
-      if (!lines(decisions) || !lines(remaining))
-        return { text: "decisions and remaining must be lists of strings", isError: true };
-      if (
-        !Array.isArray(results) ||
-        !results.every(
-          (r) => typeof r === "object" && r !== null && uuid(r.artifact_version_id) && typeof r.summary === "string",
-        )
-      )
-        return { text: "results must be a list of {artifact_version_id, summary}", isError: true };
-      const name = args.harness_name ?? "codex";
-      const session = args.harness_session_id;
-      if (typeof name !== "string" || (session !== undefined && typeof session !== "string"))
-        return { text: "harness_name and harness_session_id must be strings", isError: true };
-      const payload: HandoffCreate = {
-        handoff_id: handoffId,
-        expected_parent_version: parent,
-        goal,
-        decisions,
-        remaining,
-        results: results.map((r: { artifact_version_id: string; summary: string }) => ({
-          artifact_version_id: r.artifact_version_id,
-          summary: r.summary,
-        })),
-        harness_name: name,
-        ...(session !== undefined ? { harness_session_id: session } : {}),
-      };
-      try {
-        const outcome = await client.save(payload);
-        if ("saved" in outcome)
-          return { text: `Saved handoff version ${outcome.saved.version}. ${JSON.stringify(outcome.saved)}`, structured: structured(outcome.saved) };
-        // Not stored: the caller merges with the latest version and retries.
-        if (outcome.conflict === null)
-          return { text: `Not saved: ${outcome.detail ?? "NOUS reported a conflict"}.`, isError: true };
+      const payload = handoffPayload(args, "codex");
+      if (typeof payload === "string") return { text: payload, isError: true };
+      const bound = await binding();
+      if (bound === null)
         return {
-          text: `Not saved: the chat's latest handoff is version ${outcome.conflict.version}. Merge your changes into it and retry with expected_parent_version ${outcome.conflict.version} and a new handoff_id. Latest: ${JSON.stringify(outcome.conflict)}`,
-          structured: structured(outcome.conflict),
+          text: "This device's local state has no bound chat; reconnect with nous-harness connect --chat UUID --tools --handoff.",
           isError: true,
         };
-      } catch (error) {
-        if (error instanceof ToolRequestRejected || error instanceof ReauthenticationRequired) throw error;
-        const reason = error instanceof Error ? error.message : String(error);
-        console.error(`save_nous_handoff outcome unknown: ${reason}`);
+      // Journaled locally first; an unconfirmed save survives for `handoff flush`.
+      const attempt = await queue.submit(bound, payload);
+      if (attempt.state === "done")
+        return { text: `Saved handoff version ${attempt.saved.version}. ${JSON.stringify(attempt.saved)}`, structured: structured(attempt.saved) };
+      if (attempt.state === "conflicted") {
+        // Not stored: the caller merges with the latest version and retries.
+        if (attempt.latest === null)
+          return { text: `Not saved: ${attempt.detail ?? "NOUS reported a conflict"}.`, isError: true };
         return {
-          text: `save outcome unknown: ${reason}. Retry with the same handoff_id ${handoffId}; NOUS returns the stored version.`,
+          text: `Not saved: the chat's latest handoff is version ${attempt.latest.version}. Merge your changes into it and retry with expected_parent_version ${attempt.latest.version} and a new handoff_id. Latest: ${JSON.stringify(attempt.latest)}`,
+          structured: structured(attempt.latest),
           isError: true,
         };
       }
+      if (attempt.error instanceof ToolRequestRejected || attempt.error instanceof ReauthenticationRequired)
+        throw attempt.error;
+      const reason = attempt.error.message;
+      if (attempt.state === "rejected") return { text: `Not saved: ${reason}`, isError: true };
+      console.error(`save_nous_handoff outcome unknown: ${reason}`);
+      return {
+        text: `save outcome unknown: ${reason}. It is queued locally as pending; retry with the same handoff_id ${payload.handoff_id} (NOUS returns the stored version) or run nous-harness handoff flush.`,
+        isError: true,
+      };
     },
   };
 }
