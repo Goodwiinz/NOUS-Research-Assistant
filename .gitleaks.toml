@@ -50,4 +50,8 @@ paths = [
   '''(^|/)infrastructure/terraform/terraform\.tfvars\.example$''',
   # Eval fixtures carry synthetic secret-shaped strings by design (redaction tests)
   '''(^|/)evals/[^/]+/tests/.*\.json$''',
+  # R8 live evidence (GOO-319/320): the sealed search-delta export has
+  # current_version_key / baseline_version_key fields that hold SHA-256 hashes of
+  # provider source versions, not credentials. Only this run's retained JSON.
+  '''(^|/)docs/audits/2026-10-04-live-evidence-r8/[^/]+\.json$''',
 ]
