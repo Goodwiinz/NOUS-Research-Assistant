@@ -205,7 +205,13 @@ reconciliation and the task authorizes a new improvement tick.
 
 Use the first source available and authorized:
 
-1. A reproducible failure from real or synthetic runtime traces.
+1. A reproducible failure from real or synthetic runtime traces. Synthetic
+   traces come from `backend/scripts/synthetic_traffic.py`, scheduled by the
+   chart's `synthetic-traffic-cronjob.yaml` into the LangSmith project named
+   by `LANGSMITH_PROJECT` in the values file the live dev Argo application
+   renders; select them by root run name `synthetic:<scenario>` or
+   `metadata.synthetic`. The CronJob can be enabled yet suspended, so confirm
+   recent runs exist before treating their absence as a clean signal.
 2. A repository-backed audit or bug backlog whose status is still open.
 3. A focused fresh hunt in one unclaimed subsystem.
 
