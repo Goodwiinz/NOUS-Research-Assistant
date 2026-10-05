@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     String,
@@ -43,6 +44,11 @@ class IntegrationToolAction(BaseModel):
             "invocation_id",
             name="uq_integration_tool_actions_invocation",
         ),
+        # Exactly one binding, as on the grant that authorised the action.
+        CheckConstraint(
+            "(project_id IS NULL) <> (workspace_id IS NULL)",
+            name="ck_integration_tool_actions_one_binding",
+        ),
     )
     organization_id: Mapped[UUID] = mapped_column(
         GUID(), ForeignKey("organizations.id"), nullable=False, index=True
@@ -50,8 +56,11 @@ class IntegrationToolAction(BaseModel):
     user_id: Mapped[UUID] = mapped_column(
         GUID(), ForeignKey("users.id"), nullable=False
     )
-    project_id: Mapped[UUID] = mapped_column(
-        GUID(), ForeignKey("collections.id"), nullable=False
+    project_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("collections.id"), nullable=True
+    )
+    workspace_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
     )
     thread_id: Mapped[UUID | None] = mapped_column(GUID(), ForeignKey("threads.id"))
     run_id: Mapped[str | None] = mapped_column(

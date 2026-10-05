@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import delete, insert, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.requests import Request
 
@@ -24,6 +25,7 @@ from src.services.integrations.context import (
 
 pytestmark = pytest.mark.unit
 USER, ORG, PROJECT, WORKSPACE = (uuid4() for _ in range(4))
+SOON = datetime.now(timezone.utc) + timedelta(hours=1)
 
 
 @pytest.fixture
@@ -31,6 +33,7 @@ async def db() -> AsyncIterator[AsyncSession]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     from src.models.bridge_device import BridgeDevice, WorkspaceBinding
     from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
+    from src.models.tool_action import IntegrationToolAction
 
     tables: list[Any] = [
         Organization,
@@ -42,6 +45,7 @@ async def db() -> AsyncIterator[AsyncSession]:
         WorkspaceBinding,
         IntegrationGrantRequest,
         IntegrationGrant,
+        IntegrationToolAction,
     ]
     async with engine.begin() as conn:
         for model in tables:
@@ -666,3 +670,84 @@ def test_library_scopes_are_standard() -> None:
     from src.schemas.integration_context import STANDARD_SCOPES
 
     assert {"library:read", "library:write"} <= STANDARD_SCOPES
+
+
+async def test_grant_accepts_workspace_binding_without_project(
+    db: AsyncSession,
+) -> None:
+    from src.models.integration_grant import IntegrationGrant
+
+    grant = IntegrationGrant(
+        id=uuid4(),
+        user_id=USER,
+        organization_id=ORG,
+        project_id=None,
+        workspace_id=WORKSPACE,
+        scopes=["library:read"],
+        token_hash="x" * 64,
+        expires_at=SOON,
+        consented_at=datetime.now(timezone.utc),
+    )
+    db.add(grant)
+    await db.commit()
+    db.expunge_all()  # expire_on_commit is off here; force a real read-back
+    stored = await db.get(IntegrationGrant, grant.id)
+    assert stored is not None
+    assert stored.project_id is None and stored.workspace_id == WORKSPACE
+
+
+# The minimum NOT NULL columns of each table that carries a grant binding.
+_BINDING_ROWS: dict[str, dict[str, Any]] = {
+    "integration_grant_requests": {
+        "user_id": USER,
+        "organization_id": ORG,
+        "device_id": uuid4(),
+        "scopes": ["library:read"],
+        "status": "pending",
+        "expires_at": SOON,
+    },
+    "integration_grants": {
+        "user_id": USER,
+        "organization_id": ORG,
+        "scopes": ["library:read"],
+        "token_hash": "y" * 64,
+        "expires_at": SOON,
+        "consented_at": SOON,
+    },
+    "integration_tool_actions": {
+        "organization_id": ORG,
+        "user_id": USER,
+        "invocation_id": uuid4(),
+        "tool_name": "create_note",
+        "arguments": {},
+        "argument_hash": "z" * 64,
+        "state": "awaiting_approval",
+    },
+}
+
+
+@pytest.mark.parametrize("table_name", sorted(_BINDING_ROWS))
+@pytest.mark.parametrize(
+    "binding,valid",
+    [
+        ({"project_id": PROJECT}, True),
+        ({"workspace_id": WORKSPACE}, True),
+        ({}, False),
+        ({"project_id": PROJECT, "workspace_id": WORKSPACE}, False),
+    ],
+    ids=["project", "workspace", "neither", "both"],
+)
+async def test_database_enforces_exactly_one_binding(
+    db: AsyncSession, table_name: str, binding: dict[str, Any], valid: bool
+) -> None:
+    from src.models.base import Base
+
+    row = insert(Base.metadata.tables[table_name]).values(
+        **_BINDING_ROWS[table_name], **binding
+    )
+    if valid:
+        await db.execute(row)
+        await db.commit()
+        return
+    with pytest.raises(IntegrityError, match=f"ck_{table_name}_one_binding"):
+        await db.execute(row)
