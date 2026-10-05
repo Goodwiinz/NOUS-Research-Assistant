@@ -156,6 +156,76 @@ async def test_list_data_sources_uses_current_do_api_route():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_list_data_sources_follows_pages():
+    """Deleted-document cleanup treats the listing as complete, so every page
+    must be read (GOO-358 review)."""
+    cfg = _make_settings()
+    client = DOKnowledgeBaseClient(cfg=cfg)
+    base = f"{client._api_base}/v2/gen-ai/knowledge_bases/kb-123/data_sources"
+    pages = [
+        {
+            "knowledge_base_data_sources": [{"uuid": "ds-1"}],
+            "links": {"pages": {"next": f"{base}?page=2"}},
+        },
+        {"knowledge_base_data_sources": [{"uuid": "ds-2"}], "links": {}},
+    ]
+
+    with patch("httpx.AsyncClient") as mock_async_client:
+        request_mock = AsyncMock(side_effect=[_mock_response(200, p) for p in pages])
+        mock_async_client.return_value.request = request_mock
+
+        data_sources = await client.list_data_sources(kb_uuid="kb-123")
+
+    assert data_sources == [{"uuid": "ds-1"}, {"uuid": "ds-2"}]
+    assert request_mock.await_args_list[1].args[1] == f"{base}?page=2"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_dedup_lookup_keeps_an_early_match_when_a_later_page_fails():
+    """Dedup must not lose a match on page 1 because page 2 failed, or ingest
+    adds a duplicate data source (GOO-358 review)."""
+    from src.services.do_kb.ingest import _existing_data_source_uuid
+
+    cfg = _make_settings()
+    client = DOKnowledgeBaseClient(cfg=cfg)
+    base = f"{client._api_base}/v2/gen-ai/knowledge_bases/kb-123/data_sources"
+    first = {
+        "knowledge_base_data_sources": [
+            {"uuid": "ds-1", "spaces_data_source": {"item_path": "documents/o/d.txt"}}
+        ],
+        "links": {"pages": {"next": f"{base}?page=2"}},
+    }
+
+    with patch("httpx.AsyncClient") as mock_async_client:
+        mock_async_client.return_value.request = AsyncMock(
+            side_effect=[_mock_response(200, first), _mock_response(400, {})]
+        )
+        found = await _existing_data_source_uuid(client, "kb-123", "documents/o/d.txt")
+
+    assert found == "ds-1"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_list_data_sources_refuses_a_foreign_next_page():
+    cfg = _make_settings()
+    client = DOKnowledgeBaseClient(cfg=cfg)
+    payload = {
+        "knowledge_base_data_sources": [{"uuid": "ds-1"}],
+        "links": {"pages": {"next": "https://evil.example/steal"}},
+    }
+
+    with patch("httpx.AsyncClient") as mock_async_client:
+        mock_async_client.return_value.request = AsyncMock(
+            return_value=_mock_response(200, payload)
+        )
+        with pytest.raises(DOKnowledgeBaseError):
+            await client.list_data_sources(kb_uuid="kb-123")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_retrieve_parses_chunks():
     cfg = _make_settings()
     client = DOKnowledgeBaseClient(cfg=cfg)

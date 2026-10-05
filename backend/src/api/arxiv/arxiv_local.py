@@ -136,6 +136,17 @@ async def extract_features_from_local_pdfs(
     This endpoint processes PDF files directly from the data/arxiv directory
     and extracts text, entities, topics, and other features.
     """
+    return await _extract_features_from_local_pdfs(
+        request, background_tasks, current_user
+    )
+
+
+async def _extract_features_from_local_pdfs(
+    request: LocalExtractionRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict,
+):
+    """Extract local PDFs for an already-admitted HTTP request."""
     try:
         logger.info(f"Starting local PDF feature extraction")
 
@@ -636,7 +647,7 @@ async def process_batch_local_papers(
         # schedules per-paper KG tasks via background_tasks.add_task — a None
         # here raised AttributeError that the broad except reported as a failed
         # batch, silently dropping the KG update.
-        result = await extract_features_from_local_pdfs(
+        result = await _extract_features_from_local_pdfs(
             request=extraction_request,
             background_tasks=background_tasks,
             current_user=current_user,
