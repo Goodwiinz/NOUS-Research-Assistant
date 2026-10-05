@@ -51272,6 +51272,11 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Templates",
         "tags": [
           "research-engine"
@@ -51315,6 +51320,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Get Template Detail",
         "tags": [
           "research-engine"
@@ -51456,6 +51466,11 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Connector Capabilities",
         "tags": [
           "research-engine"

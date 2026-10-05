@@ -1,7 +1,8 @@
 """Safe Research Engine connector capability discovery."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from src.core.dependencies import get_current_user
 from src.schemas.research_engine import ConnectorCapabilityResponse
 from src.services.research_engine.connectors.registry import safe_capability_projection
 
@@ -11,7 +12,11 @@ router = APIRouter(
 )
 
 
-@router.get("", response_model=list[ConnectorCapabilityResponse])
+@router.get(
+    "",
+    response_model=list[ConnectorCapabilityResponse],
+    dependencies=[Depends(get_current_user)],
+)
 async def list_connector_capabilities() -> list[ConnectorCapabilityResponse]:
     """Return the safe projection of canonical research connectors."""
     return [
