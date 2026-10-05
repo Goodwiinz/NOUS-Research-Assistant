@@ -18,6 +18,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 from starlette.concurrency import run_in_threadpool
 
 from src.models.collection import Collection, CollectionDocument
@@ -402,7 +403,8 @@ async def _project_document_ids(
     members = {UUID(str(value)) for value in rows.scalars().all()}
     if members != requested:
         return None
-    return [str(value) for value in raw_ids]
+    # Canonical spelling so later equality checks match DB-emitted ids.
+    return [str(UUID(str(value))) for value in raw_ids]
 
 
 async def _collection_document_ids(
@@ -452,13 +454,14 @@ async def _document_content(
         document_id = UUID(str(arguments["document_id"]))
     except ValueError as error:
         raise ToolArgumentError("document_id must be a UUID") from error
-    rows = await db.execute(
-        _live_project_documents(context).where(Document.id == document_id)
-    )
+    mode = str(arguments.get("mode", "summary"))
+    statement = _live_project_documents(context).where(Document.id == document_id)
+    if mode != "full":
+        statement = statement.options(defer(Document.content_text))
+    rows = await db.execute(statement)
     document = rows.scalars().first()
     if document is None:
         return _unavailable()
-    mode = str(arguments.get("mode", "summary"))
     text = (
         document.content_text or ""
         if mode == "full"
@@ -542,6 +545,8 @@ async def _retrieve_passages(
         chunks.append(
             {
                 "document_id": hit.document_id,
+                # Redacted like search_documents (do_kb_retrieve passes the
+                # provider title through unchanged; this path owns its rows).
                 "title": redact_pii(hit.title) if hit.title else hit.title,
                 "text": text,
                 "score": hit.relevance_score,
@@ -574,11 +579,21 @@ def _arxiv_cache() -> Any:
     if _arxiv_cache_client is None:
         try:
             import redis.asyncio as redis_async
+            from redis.asyncio.retry import Retry
+            from redis.backoff import NoBackoff
 
             from src.core.config import settings
 
             _arxiv_cache_client = (
-                redis_async.from_url(settings.REDIS_URL, decode_responses=True)
+                redis_async.from_url(
+                    settings.REDIS_URL,
+                    decode_responses=True,
+                    # Same bounds as core/rate_limit.py: a slow cache must not
+                    # stall the read; get_page treats errors as misses.
+                    socket_connect_timeout=0.25,
+                    socket_timeout=0.25,
+                    retry=Retry(NoBackoff(), 0),
+                )
                 if settings.REDIS_URL
                 else _NoCache()
             )
@@ -590,32 +605,35 @@ def _arxiv_cache() -> Any:
 
 async def _arxiv_paper_content(arguments: dict[str, Any]) -> ToolResult:
     arxiv_id = str(arguments["arxiv_id"])
+    offset = _clamp(arguments.get("offset", 0), 0, 2**31 - 1, 0)
+    limit = _clamp(
+        arguments.get("limit", MAX_PAGE_CHARS), 1, MAX_PAGE_CHARS, MAX_PAGE_CHARS
+    )
     try:
-        page = await arxiv_fulltext.get_page(
-            arxiv_id,
-            offset=_clamp(arguments.get("offset", 0), 0, 2**31 - 1, 0),
-            limit=_clamp(
-                arguments.get("limit", MAX_PAGE_CHARS),
-                1,
-                MAX_PAGE_CHARS,
-                MAX_PAGE_CHARS,
+        page = await asyncio.wait_for(
+            arxiv_fulltext.get_page(
+                arxiv_id, offset=offset, limit=limit, redis=_arxiv_cache()
             ),
-            redis=_arxiv_cache(),
+            timeout=_search_arxiv_budget_seconds(),
         )
     except ValueError as error:
         raise ToolArgumentError("invalid arxiv id") from error
+    except asyncio.TimeoutError:
+        return _finish({"error": "upstream_timeout"})
     except LookupError:
-        return ToolResult(
-            content=[{"error": "arxiv_unavailable"}], is_error=True, source_refs=[]
-        )
+        return _finish({"error": "arxiv_unavailable"})
     except Exception:
         logger.warning("get_arxiv_paper_content failed", exc_info=True)
-        return ToolResult(
-            content=[{"error": "arxiv_unavailable"}], is_error=True, source_refs=[]
-        )
-    return ToolResult(
-        content=[page], is_error=False, source_refs=[{"arxiv_id": arxiv_id}]
+        return _finish({"error": "arxiv_unavailable"})
+    if not page["total_chars"]:
+        return _finish({"error": "arxiv_no_text"})
+    # get_page slices by characters; re-page by bytes so the 64 KiB cap holds.
+    text, next_offset = _page(page["text"], 0, limit)
+    page["text"] = text
+    page["next_offset"] = (
+        offset + len(text) if offset + len(text) < page["total_chars"] else None
     )
+    return _finish({**page, "source_refs": [{"arxiv_id": arxiv_id}]})
 
 
 @dataclass(frozen=True)
@@ -924,6 +942,9 @@ def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if "error" in payload:
         return []
     refs: list[dict[str, Any]] = []
+    for ref in payload.get("source_refs") or []:
+        if isinstance(ref, dict):
+            refs.append(dict(ref))
     for paper in payload.get("papers") or []:
         if paper.get("id"):
             refs.append({"arxiv_id": str(paper["id"])})
@@ -1001,19 +1022,7 @@ async def invoke_read(
             db, context, arguments.get("document_ids")
         )
         if document_ids is None:
-            # Foreign and unknown ids look identical: no membership probing.
-            return ToolResult(
-                content=[
-                    {
-                        "error": "requested_documents_unavailable",
-                        "reason": "requested_documents_unavailable",
-                        "chunks": [],
-                        "total": 0,
-                    }
-                ],
-                is_error=True,
-                source_refs=[],
-            )
+            return _unavailable()
         payload = await _tool_do_kb_retrieve(
             {
                 "query": str(arguments["query"]),

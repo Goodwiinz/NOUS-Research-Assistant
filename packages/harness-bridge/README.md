@@ -53,7 +53,7 @@ Tools are the backend's read allowlist, all under the `tools:read` scope:
 | `get_current_draft` | granted project | latest generated draft |
 | `search_arxiv` | arXiv (external) | ≤ 20 results advertised, 120 s budget |
 | `search_external_database`, `list_external_databases` | connector registry (external) | ≤ 20 results |
-| `get_arxiv_paper_content` | arXiv (external) | transient full text by id, paginated; persists nothing — use `ingest_arxiv_papers` to add a paper to NOUS |
+| `get_arxiv_paper_content` | arXiv (external) | transient full text by id, paginated (Redis cache: 24 h fresh, up to 7 d stale fallback); persists nothing — use `ingest_arxiv_papers` to add a paper to NOUS |
 | `find_researchers` | granted project | authors of papers ingested into this project (knowledge-graph `PERSON`s); `limit` ≤ 25; no affiliations or career history |
 | `get_researcher` | granted project | one researcher's in-project papers (≤ 50, newest first) and co-authors; `researcher_not_found` outside the project |
 

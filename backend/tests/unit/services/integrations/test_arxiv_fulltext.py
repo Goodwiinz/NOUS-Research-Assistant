@@ -172,7 +172,7 @@ async def test_fetch_text_uses_rate_slot_and_leaves_no_pdf_behind(
     assert _FakeService.events == ["slot", "download"]
     [tmp] = _FakeService.dirs
     assert not os.path.exists(tmp)
-    assert not Path("data/arxiv/2401.00001.pdf").exists()
+    assert not (Path.cwd() / "data" / "arxiv" / "2401.00001.pdf").exists()
 
 
 async def test_fetch_text_raises_lookup_error_when_no_pdf(
@@ -191,3 +191,48 @@ async def test_fetch_text_raises_lookup_error_when_no_pdf(
     monkeypatch.setattr(mod, "_acquire_arxiv_rate_slot", slot)
     with pytest.raises(LookupError):
         await arxiv_fulltext.fetch_text("2401.00001")
+
+
+async def test_legacy_plain_string_cache_value_is_a_miss() -> None:
+    redis = FakeRedis()
+    redis.store["arxiv:fulltext:2401.00001"] = "plain old text"
+    fetch = CountingFetch("fresh")
+    page = await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=redis, fetch=fetch
+    )
+    assert fetch.calls == 1 and page["text"] == "fresh"
+    assert json.loads(redis.store["arxiv:fulltext:2401.00001"])["text"] == "fresh"
+
+
+async def test_empty_extraction_is_not_cached() -> None:
+    redis = FakeRedis()
+    await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=redis, fetch=CountingFetch("")
+    )
+    assert redis.store == {}
+
+
+async def test_extraction_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    import threading
+
+    import src.services.arxiv.arxiv_service as mod
+
+    main = threading.get_ident()
+    seen: list[int] = []
+
+    class Svc(_FakeService):
+        async def extract_pdf_content(self, _pdf: bytes) -> dict[str, Any]:
+            seen.append(threading.get_ident())
+            return {"full_text": "body"}
+
+    async def slot() -> float | None:
+        return None
+
+    monkeypatch.setattr(mod, "ArXivIngestionService", Svc)
+    monkeypatch.setattr(mod, "_acquire_arxiv_rate_slot", slot)
+    assert await arxiv_fulltext.fetch_text("2401.00001") == "body"
+    assert seen and seen[0] != main
+    assert asyncio.get_running_loop() is not None
