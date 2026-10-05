@@ -10,6 +10,7 @@ from sqlalchemy import exists, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.cli_token_revocation import revoke_user_cli_tokens
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.collection import Collection
@@ -312,7 +313,12 @@ async def resolve_integration_context(
     )
 
 
-async def revoke_integration_grant(db: AsyncSession, grant_id: UUID) -> None:
+async def revoke_integration_grant(
+    db: AsyncSession, grant_id: UUID, *, end_cli_sessions: bool = False
+) -> None:
+    """Revoke a grant and its consent. ``end_cli_sessions`` (set when the CLI
+    disconnects itself) also moves the owner's CLI revoked-before cutoff,
+    because CLI JWTs carry no device id."""
     grant = await db.scalar(
         select(IntegrationGrant)
         .where(IntegrationGrant.id == grant_id)
@@ -332,7 +338,11 @@ async def revoke_integration_grant(db: AsyncSession, grant_id: UUID) -> None:
                 .where(IntegrationGrantRequest.id == grant.request_id)
                 .values(consent_revoked_at=now())
             )
+    user_id = grant.user_id if grant is not None else None
     await db.commit()
+    if end_cli_sessions and user_id is not None:
+        # After the commit, never inside it: best-effort and never raises.
+        await revoke_user_cli_tokens(str(user_id))
 
 
 async def create_request(
