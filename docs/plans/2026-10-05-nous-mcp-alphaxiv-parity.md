@@ -6,7 +6,7 @@
 
 **Architecture:** Two existing allowlists stay the only entry points: `READ_TOOL_NAMES`/`invoke_read` in `backend/src/services/integrations/read_tools.py` and `ALLOWED_ACTIONS`/`request_action` in `backend/src/services/agent/tool_actions.py`. One migration lets a grant bind a **workspace** instead of a single Collection and adds scopes `library:read` / `library:write`; reversible library actions auto-run under `library:write`, destructive ones keep the approve page. A transient arXiv full-text read (Redis cache, no DB write) covers papers not yet ingested. Design: `docs/plans/2026-10-05-nous-mcp-alphaxiv-parity-design.md`.
 
-**Tech Stack:** FastAPI + Pydantic v2 + SQLAlchemy async + Alembic; pytest (`unit` marker, in-memory aiosqlite fixtures); `packages/harness-bridge` (Node 24, MCP SDK, `node:test`, tsx); Next.js approve page; Redis via existing `src.core.redis` helpers; `ArXivIngestionService`.
+**Tech Stack:** FastAPI + Pydantic v2 + SQLAlchemy async + Alembic; pytest (`unit` marker, in-memory aiosqlite fixtures); `packages/harness-bridge` (Node 24, MCP SDK, `node:test`, tsx); Next.js approve page; Redis via the existing async client in `src.services.core.cache` (no `src.core.redis` module exists); `ArXivIngestionService`.
 
 **Baseline:** `origin/develop` `2ba9b0e97`, 2026-10-05.
 
@@ -634,6 +634,8 @@ Import `_tool_search_arxiv, _tool_search_external_database, _tool_list_external_
 
 ### Task 2.2: `get_arxiv_paper_content` (transient full text)
 
+> **Amendment (Codex review on #1881, 2026-10-05):** implemented as follows on `feat/plan07-s2-read-tools`: (a) the download acquires the shared cross-pod arXiv rate slot before `download_paper_pdf` (that method bypasses `_acquire_arxiv_rate_slot`); (b) the PDF is written to a temporary directory and removed after extraction — nothing persists under `data/arxiv/` for a read; (c) the cache value is `{"text","fetched_at"}` under a 7-day stale TTL, served as fresh for 24 h, refetched when stale and the stale text served if the refetch fails; (d) an unreachable Redis is a cache miss (no-cache), never `arxiv_unavailable`; (e) pages are cut by serialized byte size (JSON-encoded chunk ≤ 48 KiB), not by a fixed 48,000-character slice.
+
 **Files:**
 - Create: `backend/src/services/integrations/arxiv_fulltext.py`
 - Modify: `read_tools.py` (`LOCAL_TOOLS`, branch)
@@ -747,6 +749,8 @@ Branch: `ValueError` → `ToolArgumentError("invalid arxiv id")`; `LookupError` 
 
 ### Task 2.3: `get_document_content` (ingested papers, paginated)
 
+> **Amendment (Codex review on #1881, 2026-10-05):** the document and its content are loaded through the single scoped statement (`_live_project_documents(context).where(Document.id == …)`), never by a second unscoped `db.get`; the page is cut by serialized byte size as in Task 2.2.
+
 **Files:**
 - Modify: `read_tools.py`
 - Test: `test_read_tools.py`
@@ -796,6 +800,8 @@ Factor `_unavailable()` out of the existing `do_kb_retrieve` branch (same payloa
 **Step 4:** Tests → PASS; mutation check: remove the membership check → cross-project test fails. **Step 5:** Commit `feat(integrations): get_document_content read tool`.
 
 ### Task 2.4: `retrieve_passages` (PostgreSQL full-text)
+
+> **Amendment (Codex review on #1881, 2026-10-05):** `FullTextSearchService.search` is synchronous (`Session`); the branch calls it through `run_in_threadpool` with its own sync session and `organization_id` from the grant, exactly as the `/api/search` route does. Unit tests stub the service; PostgreSQL-backed ranking is live evidence recorded as NOT RUN until the owner runs it.
 
 **Files:**
 - Modify: `read_tools.py`
@@ -1137,6 +1143,8 @@ const ACTION_FIELDS: Record<string, readonly string[]> = {
 Branch: `feat/plan07-s4-researchers`. Depends on S1.
 
 ### Task 4.1: `find_researchers`
+
+> **Amendment (Codex review on #1881, 2026-10-05):** the baseline KG tools scope Neo4j by `organization_id` only and ignore `project_id`. Both researcher tools therefore post-filter through the grant's live project documents (`find_researchers` keeps PERSON entities linked to an in-project document; `get_researcher` keeps only in-project papers and derives coauthors from them, returning `researcher_not_found` otherwise) with a real cross-project denial test and a mutation check on the filter.
 
 **Files:** `read_tools.py`, `test_read_tools.py`.
 

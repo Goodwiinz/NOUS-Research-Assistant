@@ -87,7 +87,7 @@ The approve page shows workspace name (or Collection name), a scope → label ma
 - Architecture tests (`backend/tests/unit/architecture`) stay green: routers don't commit, access getters require identity.
 - Bridge `node:test`: action enum round-trip, `--library` flag persists scopes, 422/403 wording preserved.
 - Alembic single head, revision-id length. OpenAPI snapshot and `frontend/src/types/generated/api.d.ts` regenerated in the same PR as any schema change (bridge imports `api.d.ts`).
-- Live proof on `rag-dev` is NOT RUN until the owner flips `NOUS_MCP_ENABLED`.
+- Live proof on the AWS dev lane (`values-aws.yaml`, `nous-dev-aws`; the DigitalOcean `rag-dev` lane is frozen) is NOT RUN until the owner flips `NOUS_MCP_ENABLED`.
 
 ## Slices
 

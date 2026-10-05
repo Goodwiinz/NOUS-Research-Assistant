@@ -241,6 +241,7 @@ class IntegrationHandoff(BaseModel):
     handoff_id: UUID            # client-supplied idempotency key
     goal: str (≤ 2000), decisions: list[str] (JSON, ≤ 50×500), remaining: list[str],
     results: list[{"artifact_version_id": UUID, "summary": str}] (JSON, ≤ 50),
+    remaining: list[str] (JSON, ≤ 50 × 500), results[].summary ≤ 500 chars,
     harness_name: str (≤ 64), harness_session_id: str | None (≤ 128),
     grant_id, consent_id, created_by_user_id, created_at
 ```
@@ -260,7 +261,7 @@ async def save(db, context: IntegrationContext, payload: HandoffCreate) -> Hando
 `save` rules, each with a test:
 1. `context.thread_id is None` → `IntegrationAccessDenied` (`test_unbound_grant_cannot_save`).
 2. Existing row with same `handoff_id` → return it unchanged, no insert (`test_replay_returns_same_version`; replay with different body → 409).
-3. `expected_parent_version != latest.version` → `HandoffConflict` carrying the latest DTO (`test_stale_parent_conflicts`). Insert uses `version = expected_parent + 1`; the unique constraint turns a race into `IntegrityError` → rollback → re-read → `HandoffConflict` (**mutation check:** drop the `UniqueConstraint` in a test-only metadata copy or patch the where-clause; the concurrent-save test must fail).
+3. `expected_parent_version != latest.version` → `HandoffConflict` carrying the latest DTO (`test_stale_parent_conflicts`). Insert uses `version = expected_parent + 1`; the unique constraint turns a race into `IntegrityError` → rollback → re-read the scoped `handoff_id` first: an identical canonical body returns that row (idempotent winner), otherwise `HandoffConflict` (**mutation check:** drop the `UniqueConstraint` in a test-only metadata copy or patch the where-clause; the concurrent-save test must fail).
 4. Every `results[].artifact_version_id` must resolve to a live version whose `Artifact.project_id == context.project_id` and org matches (`test_foreign_version_rejected`).
 5. One transaction per call, commit in the service.
 
