@@ -670,7 +670,11 @@ async def test_identical_canonical_replay_returns_original_and_different_replay_
     owner_id, organization_id, run, step = await _seed_gate(db, output=output)
     service_module = _review_module()
     observer = ResearchObservability()
-    service = service_module.ResearchReviewService(db, observer=observer)
+    service = service_module.ResearchReviewService(
+        db,
+        observer=observer,
+        now=lambda: datetime(2026, 9, 27, 12, 0, 30, tzinfo=timezone.utc),
+    )
     first_payload = _screen_payload()
     first_items = cast(list[dict[str, object]], first_payload["items"])
     first_payload["items"] = list(reversed(first_items))
@@ -778,7 +782,11 @@ async def test_decline_is_durable_and_keeps_run_paused(
 
     response = (
         await _review_module()
-        .ResearchReviewService(db, observer=observer)
+        .ResearchReviewService(
+            db,
+            observer=observer,
+            now=lambda: datetime(2026, 9, 27, 12, 0, 30, tzinfo=timezone.utc),
+        )
         .submit_review(
             run_id=run.id,
             step_index=step.step_index,

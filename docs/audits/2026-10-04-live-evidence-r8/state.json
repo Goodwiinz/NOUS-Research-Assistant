@@ -1,0 +1,25 @@
+{
+  "started_at": "2026-10-04T06:58:13.087998+00:00",
+  "worlds": {
+    "crash": {
+      "collection_id": "cfd0b4a4-c948-45c1-bdf2-8a07af1718aa",
+      "fire_minute": 9,
+      "schedule_id": "471797d5-dafa-4903-9b9f-4eeec796bc9f"
+    },
+    "main": {
+      "collection_id": "480d8618-3a93-4062-8d1f-608f3fc015b3",
+      "fire_minute": 5,
+      "schedule_id": "c4a1a4dd-aa55-484e-a791-11315d058f79"
+    },
+    "outage": {
+      "collection_id": "f5504c77-e690-4b37-927f-bd2d1495f970",
+      "fire_minute": 1,
+      "schedule_id": "3064ac20-b17f-4a38-ba9c-e882c75b3aa8"
+    },
+    "revoke": {
+      "collection_id": "36ca9bee-3943-4732-bbc3-4091d46bbe97",
+      "fire_minute": 11,
+      "schedule_id": "cb4c30a0-a2f7-4e18-964f-8f22af379497"
+    }
+  }
+}
