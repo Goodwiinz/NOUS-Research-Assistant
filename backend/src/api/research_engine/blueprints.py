@@ -45,6 +45,7 @@ router = APIRouter(
 @router.get(
     "/templates",
     response_model=List[Dict[str, Any]],
+    dependencies=[Depends(get_current_user)],
 )
 async def list_templates() -> List[Dict[str, Any]]:
     """List available YAML blueprint templates."""
@@ -55,6 +56,7 @@ async def list_templates() -> List[Dict[str, Any]]:
 @router.get(
     "/templates/{slug}",
     response_model=BlueprintTemplateDetailResponse,
+    dependencies=[Depends(get_current_user)],
 )
 async def get_template_detail(slug: str) -> BlueprintTemplateDetailResponse:
     """Return the complete, validated server-owned template contract."""
