@@ -44,7 +44,9 @@ IDENTITY_ARGUMENTS = frozenset(
 )
 MAX_RESULTS = 50
 MAX_DOCUMENT_IDS = 20
-MAX_ARTIFACTS = 100
+# Every returned artifact row must carry a source ref, and _source_refs keeps
+# at most MAX_RESULTS, so the artifact page can never be larger.
+MAX_ARTIFACTS = MAX_RESULTS
 MAX_RESULT_BYTES = 64 * 1024
 # Keeps a content-bearing draft under MAX_RESULT_BYTES after JSON escaping.
 MAX_DRAFT_CONTENT_CHARS = 32_000
