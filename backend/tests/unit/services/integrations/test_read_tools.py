@@ -415,7 +415,7 @@ async def test_foreign_user_in_context_is_denied(db: AsyncSession) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Plan 07 slice 1: args-only primitives, document content, passages
+# Plan 07 slice 2: args-only primitives, document content, passages
 # ---------------------------------------------------------------------------
 
 
@@ -812,3 +812,71 @@ async def test_arxiv_paper_content_errors_are_stable(
         await invoke_read(
             db, context, _invocation("get_arxiv_paper_content", arxiv_id="../etc")
         )
+
+
+async def test_retrieve_passages_canonicalizes_document_ids(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _StubFulltext([_search_result(DOC_IN_PROJECT, "hit")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages", query="hit", document_ids=[str(DOC_IN_PROJECT).upper()]
+        ),
+    )
+    assert result.is_error is False
+    assert result.content[0]["chunks"][0]["document_id"] == str(DOC_IN_PROJECT)
+    assert stub.calls[0]["search_request"].filters.document_ids == [str(DOC_IN_PROJECT)]
+
+
+async def test_arxiv_paper_content_stays_under_the_result_cap(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(read_tools, "_arxiv_cache", lambda: read_tools._NoCache())
+    monkeypatch.setattr(
+        read_tools.arxiv_fulltext,
+        "fetch_text",
+        AsyncMock(return_value="\u6587" * 100_000),
+    )
+    result = await invoke_read(
+        db, context, _invocation("get_arxiv_paper_content", arxiv_id="2401.00001")
+    )
+    assert result.is_error is False
+    page = result.content[0]
+    assert (
+        len(json.dumps(page, ensure_ascii=False).encode())
+        <= read_tools.MAX_RESULT_BYTES
+    )
+    assert 0 < len(page["text"]) < 48_000
+    assert page["next_offset"] == len(page["text"])
+    assert result.source_refs == [{"arxiv_id": "2401.00001"}]
+
+
+async def test_arxiv_paper_content_timeout_and_empty_text(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    monkeypatch.setattr(read_tools, "_arxiv_cache", lambda: read_tools._NoCache())
+
+    async def slow(_id: str) -> str:
+        await asyncio.sleep(5)
+        return "x"
+
+    monkeypatch.setattr(read_tools.arxiv_fulltext, "fetch_text", slow)
+    monkeypatch.setattr(read_tools, "_search_arxiv_budget_seconds", lambda: 0.01)
+    result = await invoke_read(
+        db, context, _invocation("get_arxiv_paper_content", arxiv_id="2401.00001")
+    )
+    assert result.content == [{"error": "upstream_timeout"}]
+    monkeypatch.setattr(read_tools, "_search_arxiv_budget_seconds", lambda: 5)
+    monkeypatch.setattr(
+        read_tools.arxiv_fulltext, "fetch_text", AsyncMock(return_value="")
+    )
+    result = await invoke_read(
+        db, context, _invocation("get_arxiv_paper_content", arxiv_id="2401.00001")
+    )
+    assert result.is_error is True
+    assert result.content == [{"error": "arxiv_no_text"}]

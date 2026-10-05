@@ -48,7 +48,12 @@ async def fetch_text(arxiv_id: str) -> str:
             pdf = await svc.download_paper_pdf(arxiv_id)
             if not pdf:
                 raise LookupError("arxiv_unavailable")
-            extracted = await svc.extract_pdf_content(pdf)
+            # extract_pdf_content is an async def with a purely synchronous
+            # pypdf body; run it on its own loop in a worker thread so the
+            # parse never blocks the API event loop.
+            extracted = await asyncio.to_thread(
+                lambda: asyncio.run(svc.extract_pdf_content(pdf))
+            )
     return str(extracted.get("full_text") or "")
 
 
@@ -56,11 +61,16 @@ async def _cached(redis: Any, key: str) -> tuple[str | None, float]:
     """(text, fetched_at); an unreachable cache is a miss."""
     try:
         raw = await redis.get(key)
-        if raw:
-            entry = json.loads(raw)
-            return str(entry["text"]), float(entry["fetched_at"])
     except Exception:
         logger.warning("arxiv fulltext cache read failed", exc_info=True)
+        return None, 0.0
+    if raw:
+        try:
+            entry = json.loads(raw)
+            return str(entry["text"]), float(entry["fetched_at"])
+        except (ValueError, KeyError, TypeError):
+            # Legacy plain-string value or garbage: treat as a miss.
+            logger.debug("arxiv fulltext cache entry unreadable: %s", key)
     return None, 0.0
 
 
@@ -97,7 +107,8 @@ async def get_page(
                 "arxiv fulltext refetch failed; serving stale", exc_info=True
             )
         else:
-            await _store(redis, key, text)
+            if text:  # never cache an empty extraction; the next call retries
+                await _store(redis, key, text)
     chunk = text[offset : offset + limit]
     nxt = offset + limit if offset + limit < len(text) else None
     return {
