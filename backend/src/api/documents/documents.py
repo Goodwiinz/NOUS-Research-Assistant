@@ -120,43 +120,16 @@ async def _cleanup_do_kb_data_sources_background(document_ids: List[str]) -> Non
 
 
 async def _cleanup_document_graph(document_id: str, organization_id: str) -> None:
-    """Best-effort removal of a deleted document's entity subgraph from Neo4j.
+    """Run service-owned graph cleanup in a session independent of the request.
 
-    The delete transaction soft-deletes the document's Postgres ``Entity`` rows
-    but historically never touched the mirrored graph in Neo4j, so a deleted
-    document's graph data orphaned there forever (audit D2). Entity nodes are
-    shared across documents (MERGE identity has no doc component), so the KG
-    service deletes reference-count style: this doc's relationships first
-    (``r.source_document_id``), then only entity nodes it created that are left
-    with no relationships at all — scoped to the org (property-based graph
-    tenancy). See ``KnowledgeGraphService.delete_document_graph``.
-
-    The KG service is synchronous (blocking Neo4j driver), so it's offloaded to a
-    worker thread to avoid stalling the event loop.
-
-    Failure-isolated: the KG call can raise when the neo4j circuit breaker is open
-    or the driver can't connect. Graph cleanup must never block or fail the user's
-    delete — the document is already gone from Postgres. There is no
-    ``neo4j_index_status`` column yet to record the resulting graph drift, so on
-    failure we only log a warning with the document id (follow-up: add a
-    per-document ``neo4j_index_status`` to make orphaned-graph drift sweepable,
-    per the audit plan).
+    Deletion already committed the cascade choice and pending retry marker.
+    Cleanup records failed/completed so provider outages remain recoverable.
     """
-    try:
-        from src.services.knowledge_graph.knowledge_graph_service import (
-            KnowledgeGraphService,
-        )
+    from src.core.database import AsyncSessionLocal
 
-        await asyncio.to_thread(
-            lambda: KnowledgeGraphService().delete_document_graph(
-                document_id, organization_id
-            )
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            "knowledge-graph cleanup on delete failed",
-            extra={"document_id": str(document_id)},
-            exc_info=True,
+    async with AsyncSessionLocal() as session:
+        await FileService(session).cleanup_deleted_document_graph(
+            document_id, organization_id
         )
 
 
@@ -169,7 +142,7 @@ async def _cleanup_document_graphs_background(
     so it must not touch the request's session. Every document in a bulk delete
     shares one org. Per-doc failure isolation comes from ``_cleanup_document_graph``
     (a neo4j outage on one doc must not skip the rest). See that helper for the
-    ``neo4j_index_status`` follow-up note.
+    durable retry behavior.
     """
     for document_id in document_ids:
         await _cleanup_document_graph(document_id, organization_id)
@@ -623,8 +596,10 @@ async def delete_document(
     try:
         # Locks, cancels unfinished jobs, soft-deletes and releases quota once.
         deleted = await file_service.soft_delete_documents(
-            organization.id, [document.id], cascade=cascade
+            organization.id, [document.id], cascade=cascade, user=current_user
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Failed to delete document %s", document_id)
         raise HTTPException(

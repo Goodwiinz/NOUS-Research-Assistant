@@ -1,0 +1,21 @@
+{
+  "step": "D3-04-supervisor-xorg-export-md-eval",
+  "as": "supervisor",
+  "at": "2026-09-30T21:06:11.364953+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts/a941ca8e-ef56-4a50-b58e-29324ab03bd3/export?format=markdown&bib_format=apa",
+    "body": null
+  },
+  "status": 404,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Project not found",
+      "status_code": 404,
+      "type": "http_error"
+    }
+  }
+}
