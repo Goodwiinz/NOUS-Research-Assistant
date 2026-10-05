@@ -660,3 +660,9 @@ def test_unenforced_artifact_scopes_cannot_be_requested(scope: str) -> None:
     # No route enforces these yet; the slice that enforces one re-adds it.
     with pytest.raises(IntegrationAccessDenied):
         check_scopes({"harness:execute", scope})
+
+
+def test_library_scopes_are_standard() -> None:
+    from src.schemas.integration_context import STANDARD_SCOPES
+
+    assert {"library:read", "library:write"} <= STANDARD_SCOPES

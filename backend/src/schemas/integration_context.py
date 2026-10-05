@@ -7,7 +7,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 # Scopes some route enforces, plus context:read (kept for PR #1784, which
-# enforces it). A scope is added in the PR that checks it.
+# enforces it) and library:write (consented from Plan 07 slice 1, enforced by
+# the auto-run actions in slice 3). A scope is added in the PR that checks it.
 STANDARD_SCOPES = frozenset(
     {
         "harness:execute",
@@ -17,6 +18,10 @@ STANDARD_SCOPES = frozenset(
         "artifacts:publish",
         "handoff:read",
         "handoff:write",
+        # Plan 07: workspace library. read = list folders; write = reversible
+        # folder/document changes run without per-action approval.
+        "library:read",
+        "library:write",
     }
 )
 
