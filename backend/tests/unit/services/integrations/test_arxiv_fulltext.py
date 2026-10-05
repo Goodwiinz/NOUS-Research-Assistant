@@ -134,6 +134,7 @@ class _FakeService:
 
     events: list[str] = []
     dirs: list[Path] = []
+    _last_request_time: float = 0.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.download_dir = Path(config["arxiv_download_dir"])
@@ -150,12 +151,9 @@ class _FakeService:
         (self.download_dir / f"{paper_id}.pdf").write_bytes(b"%PDF")
         return b"%PDF"
 
-    async def extract_pdf_content(self, _pdf: bytes) -> dict[str, Any]:
-        return {"full_text": "body"}
-
 
 async def test_fetch_text_uses_rate_slot_and_leaves_no_pdf_behind(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, thread_pool: None
 ) -> None:
     import src.services.arxiv.arxiv_service as mod
 
@@ -168,6 +166,7 @@ async def test_fetch_text_uses_rate_slot_and_leaves_no_pdf_behind(
 
     monkeypatch.setattr(mod, "ArXivIngestionService", _FakeService)
     monkeypatch.setattr(mod, "_acquire_arxiv_rate_slot", slot)
+    monkeypatch.setattr(arxiv_fulltext, "_extract", _fake_extract)
     assert await arxiv_fulltext.fetch_text("2401.00001") == "body"
     assert _FakeService.events == ["slot", "download"]
     [tmp] = _FakeService.dirs
@@ -212,27 +211,93 @@ async def test_empty_extraction_is_not_cached() -> None:
     assert redis.store == {}
 
 
-async def test_extraction_runs_off_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
+def _fake_extract(_path: str) -> str:
+    return "body"
+
+
+def _slow_extract(_path: str) -> str:
+    time.sleep(5)
+    return "late"
+
+
+@pytest.fixture
+def thread_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A thread pool stands in for the process pool so monkeypatched functions
+    # are visible to the worker (spawned processes would not see them).
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(
+        arxiv_fulltext, "_executor_factory", lambda: ThreadPoolExecutor(1)
+    )
+    monkeypatch.setattr(arxiv_fulltext, "_executor", None)
+
+
+async def test_timed_out_extraction_replaces_the_executor(
+    monkeypatch: pytest.MonkeyPatch, thread_pool: None
 ) -> None:
     import asyncio
-    import threading
 
     import src.services.arxiv.arxiv_service as mod
 
-    main = threading.get_ident()
-    seen: list[int] = []
+    async def slot() -> float | None:
+        return 0.0
 
-    class Svc(_FakeService):
-        async def extract_pdf_content(self, _pdf: bytes) -> dict[str, Any]:
-            seen.append(threading.get_ident())
-            return {"full_text": "body"}
+    monkeypatch.setattr(mod, "ArXivIngestionService", _FakeService)
+    monkeypatch.setattr(mod, "_acquire_arxiv_rate_slot", slot)
+    monkeypatch.setattr(arxiv_fulltext, "_extract", _slow_extract)
+    with pytest.raises(asyncio.TimeoutError):
+        await arxiv_fulltext.get_page(
+            "2401.00001", offset=0, limit=10, redis=FakeRedis(), budget=0.05
+        )
+    first = arxiv_fulltext._executor
+    assert first is None  # shut down and dropped
+    monkeypatch.setattr(arxiv_fulltext, "_extract", _fake_extract)
+    page = await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=FakeRedis(), budget=5
+    )
+    assert page["text"] == "body"
+    assert arxiv_fulltext._executor is not None  # recreated lazily
+
+
+async def test_no_shared_gate_falls_back_to_per_process_spacing(
+    monkeypatch: pytest.MonkeyPatch, thread_pool: None
+) -> None:
+    import src.services.arxiv.arxiv_service as mod
+
+    sleeps: list[float] = []
+
+    async def record(seconds: float) -> None:
+        sleeps.append(seconds)
 
     async def slot() -> float | None:
         return None
 
-    monkeypatch.setattr(mod, "ArXivIngestionService", Svc)
+    monkeypatch.setattr(mod, "ArXivIngestionService", _FakeService)
     monkeypatch.setattr(mod, "_acquire_arxiv_rate_slot", slot)
+    monkeypatch.setattr(
+        mod.ArXivIngestionService, "_last_request_time", time.monotonic()
+    )
+    monkeypatch.setattr(arxiv_fulltext, "_sleep", record)
+    monkeypatch.setattr(arxiv_fulltext, "_extract", _fake_extract)
     assert await arxiv_fulltext.fetch_text("2401.00001") == "body"
-    assert seen and seen[0] != main
-    assert asyncio.get_running_loop() is not None
+    assert len(sleeps) == 1 and 0 < sleeps[0] <= arxiv_fulltext._PER_PROCESS_GAP_S
+
+
+async def test_stale_entry_is_served_when_refresh_times_out() -> None:
+    import asyncio
+
+    redis = FakeRedis()
+    key = "arxiv:fulltext:2401.00001"
+    await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=redis, fetch=CountingFetch("old")
+    )
+    redis.age(key, arxiv_fulltext.TTL_S + 60)
+
+    async def hang(_id: str) -> str:
+        await asyncio.sleep(5)
+        return "never"
+
+    page = await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=redis, fetch=hang, budget=0.05
+    )
+    assert page["text"] == "old"

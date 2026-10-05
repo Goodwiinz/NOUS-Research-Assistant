@@ -16,7 +16,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 from starlette.concurrency import run_in_threadpool
@@ -449,17 +449,23 @@ async def _document_content(
     except ValueError as error:
         raise ToolArgumentError("document_id must be a UUID") from error
     mode = str(arguments.get("mode", "summary"))
-    statement = _live_project_documents(context).where(Document.id == document_id)
+    # The preview is computed in SQL so summary mode never touches the
+    # deferred content_text (an ORM fallback would lazy-load -> MissingGreenlet).
+    statement = (
+        _live_project_documents(context)
+        .where(Document.id == document_id)
+        .add_columns(func.substr(Document.content_text, 1, 500))
+    )
     if mode != "full":
         statement = statement.options(defer(Document.content_text))
-    rows = await db.execute(statement)
-    document = rows.scalars().first()
-    if document is None:
+    row = (await db.execute(statement)).first()
+    if row is None:
         return _unavailable()
+    document, preview = row
     text = (
         document.content_text or ""
         if mode == "full"
-        else document.content_summary or document.get_content_preview(500) or ""
+        else document.content_summary or preview or ""
     )
     offset = _clamp(arguments.get("offset", 0), 0, 2**31 - 1, 0)
     chunk, next_offset = _page(
@@ -528,11 +534,14 @@ async def _retrieve_passages(
     except Exception:
         logger.warning("retrieve_passages failed", exc_info=True)
         return {"error": "retrieval_unavailable"}
-    allowed = set(document_ids)
+    # Re-check liveness after the search: an ancestor soft-deleted while the
+    # threadpool query ran must not leak a hit. The FTS service filters by
+    # ids + org only, so the Collection/Workspace check is ours.
+    allowed = set(document_ids) & set(await _collection_document_ids(db, context))
     chunks = []
     for hit in response.results:
         if hit.document_id not in allowed:
-            continue  # belt and braces: the filter already scoped the SQL
+            continue
         text = " ".join(s.text for s in hit.snippets) or hit.content_preview
         for tag in _MARK_TAGS:
             text = text.replace(tag, "")
@@ -603,12 +612,19 @@ async def _arxiv_paper_content(arguments: dict[str, Any]) -> ToolResult:
     limit = _clamp(
         arguments.get("limit", MAX_PAGE_CHARS), 1, MAX_PAGE_CHARS, MAX_PAGE_CHARS
     )
+    budget = _search_arxiv_budget_seconds()
     try:
+        # get_page bounds the fetch itself (so a stale entry can still be
+        # served when a refresh times out); this is only the outer guard.
         page = await asyncio.wait_for(
             arxiv_fulltext.get_page(
-                arxiv_id, offset=offset, limit=limit, redis=_arxiv_cache()
+                arxiv_id,
+                offset=offset,
+                limit=limit,
+                redis=_arxiv_cache(),
+                budget=budget,
             ),
-            timeout=_search_arxiv_budget_seconds(),
+            timeout=budget + 5,
         )
     except ValueError as error:
         raise ToolArgumentError("invalid arxiv id") from error
@@ -814,27 +830,36 @@ async def _get_researcher(
 
 
 async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch a tool that takes no identity; exception text never leaves."""
+    """Dispatch a tool that takes no identity; upstream detail never leaves.
+
+    Agent tools report failures as payloads (``error`` text naming env vars,
+    connector exceptions, ...) as well as by raising; both are normalised.
+    """
     args = dict(arguments)
     try:
         if name == "search_arxiv":
             args["max_results"] = _clamp(
                 args.get("max_results", 5), 1, MAX_EXTERNAL_RESULTS, 5
             )
-            return await asyncio.wait_for(
+            payload = await asyncio.wait_for(
                 _tool_search_arxiv(args), timeout=_search_arxiv_budget_seconds()
             )
-        if name == "search_external_database":
+        elif name == "search_external_database":
             args["max_results"] = _clamp(
                 args.get("max_results", 10), 1, MAX_EXTERNAL_RESULTS, 10
             )
-            return await _tool_search_external_database(args)
-        return await _tool_list_external_databases(args)
+            payload = await _tool_search_external_database(args)
+        else:
+            payload = await _tool_list_external_databases(args)
     except asyncio.TimeoutError:
         return {"error": "upstream_timeout"}
     except Exception:
         logger.warning("%s failed", name, exc_info=True)
         return {"error": "upstream_unavailable"}
+    if payload.get("error") or payload.get("is_error"):
+        logger.warning("%s returned an error payload: %s", name, payload.get("error"))
+        return {"error": "upstream_unavailable"}
+    return payload
 
 
 def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
