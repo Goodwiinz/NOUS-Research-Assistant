@@ -71,7 +71,7 @@ pnpm --filter @nous/harness-bridge type-check
 pg_ctl -D "$PGDIR/data" stop -m fast
 ```
 
-Expected: 0a prints ten `Running upgrade` lines, one for each of `hb01_integration_grants`, `hb02_harness_runs`, `hb03_bridge_delivery`, `hb04_harness_approvals`, `aw01_artifact_workspace`, `aw02_artifact_lifecycle`, `it01_integration_actions`, `it02_merge_integration_heads`, `hb05_grant_request_thread` and `hb06_integration_handoffs`, then `alembic current` prints the single head `hb06_integration_handoffs (head)`, which is the revision `check_alembic.py` reports (`single head 'hb06_integration_handoffs', 113 revisions` on `feat/plan06-slice5`, 2026-10-05, local PostgreSQL 14.23). Until Plan 06 Slices 2 and 3 (#1882, #1885) merge, `develop` prints only the first eight lines and its head is `d4a6c8e0f2b3`; judge a checkout by the head `check_alembic.py` reports for it. Without `-E UTF8` an initdb under an empty locale creates a `SQL_ASCII` cluster, and the upgrade then stops with `UnicodeEncodeError: 'ascii' codec` part way through the chain. The 0a subshell stops at its first failing command, so a traceback with no `alembic current` line, or a non-zero `echo $?` straight after it, is FAIL, never PASS. Run it only against a freshly created `mig`: on an already migrated database the upgrade prints no matching line and 0a fails. 0b and 0d each print `1 passed`. In hosted CI both are skipped, because no workflow sets `ORCHESTRATION_TEST_DATABASE_URL`, so the hosted result is NOT RUN. 0d runs in-process with mocked Redis and in-memory artifact storage, so it proves grant revocation (403) but not the CLI-bearer cutoff (401); that stays with P1-3 and P2-3. The hosted equivalent of 0a is the Test Pipeline job **Alembic Migration Check**, step **Advisory — upgrade head from empty DB**. That step is `continue-on-error`, so read its log for the eight `Running upgrade` lines; do not rely on the step colour.
+Expected: 0a prints ten `Running upgrade` lines, one for each of `hb01_integration_grants`, `hb02_harness_runs`, `hb03_bridge_delivery`, `hb04_harness_approvals`, `aw01_artifact_workspace`, `aw02_artifact_lifecycle`, `it01_integration_actions`, `it02_merge_integration_heads`, `hb05_grant_request_thread` and `hb06_integration_handoffs`, then `alembic current` prints the single head `hb06_integration_handoffs (head)`, which is the revision `check_alembic.py` reports (`single head 'hb06_integration_handoffs', 113 revisions` on `feat/plan06-slice5`, 2026-10-05, local PostgreSQL 14.23). Until Plan 06 Slices 2 and 3 (#1882, #1885) merge, `develop` prints only the first eight lines and its head is `d4a6c8e0f2b3`; judge a checkout by the head `check_alembic.py` reports for it. Without `-E UTF8` an initdb under an empty locale creates a `SQL_ASCII` cluster, and the upgrade then stops with `UnicodeEncodeError: 'ascii' codec` part way through the chain. The 0a subshell stops at its first failing command, so a traceback with no `alembic current` line, or a non-zero `echo $?` straight after it, is FAIL, never PASS. Run it only against a freshly created `mig`: on an already migrated database the upgrade prints no matching line and 0a fails. 0b and 0d each print `1 passed`. In hosted CI both are skipped, because no workflow sets `ORCHESTRATION_TEST_DATABASE_URL`, so the hosted result is NOT RUN. 0d runs in-process with mocked Redis and in-memory artifact storage, so it proves grant revocation (403) but not the CLI-bearer cutoff (401); that stays with P1-3 and P2-3. The hosted equivalent of 0a is the Test Pipeline job **Alembic Migration Check**, step **Advisory — upgrade head from empty DB**. That step is `continue-on-error`, so read its log for the same `Running upgrade` lines as 0a: ten (`hb01`..`hb06`, `aw01`/`aw02`, `it01`/`it02`) once Plan 06 Slices 2 and 3 are in the commit under test, eight (no `hb05`/`hb06`) before that. Do not rely on the step colour.
 
 Not covered here: the artifact lifecycle `SKIP LOCKED` (`backend/src/services/artifacts/lifecycle.py`), the `HarnessCommand` lease lock (`lease_commands`, `backend/src/services/harness/delivery.py:285`) and the `tool_actions` approved-to-executing compare-and-set have SQLite unit coverage only. Record them as NOT RUN on PostgreSQL.
 
@@ -221,11 +221,12 @@ Send: `Call the nous request_action tool with action "create_project_note", invo
 
 All steps are USER-RUN against the AWS dev lane (`values-aws.yaml`, Argo CD `nous-dev-aws`), never the frozen DigitalOcean `rag-dev`. Every row stays **NOT RUN** until it runs. Start only when Gate 1 step 2 shows the Plan 06 commits in the image, Gate 1 step 3 shows `hb05_grant_request_thread` and `hb06_integration_handoffs` applied, and Gate 1 step 4 shows `ARTIFACTS_ENABLED` and `NOUS_MCP_ENABLED` set to `"true"`. Phase 3 needs neither `--write` nor `HARNESS_BRIDGE_ENABLED`: the Codex sessions are standalone, launched from a terminal with NOUS registered through `mcp install`, not started from NOUS chat.
 
-Use two state directories for the two devices, and one disposable fixture per session. In the NOUS UI, create a chat in the test project and copy its id from `?thread=`.
+Use two state directories for the two devices, and one disposable fixture per session (`$FIXTURE` for A from Gate 1 step 5, `$FIXTURE_B` for B). In the NOUS UI, create a chat in the test project and copy its id from `?thread=`.
 
 ```sh
 export THREAD_ID=<chat UUID in $PROJECT_ID>
 export STATE_A="$HOME/.nous/harness-proof-a" STATE_B="$HOME/.nous/harness-proof-b"
+export FIXTURE_B="$(mktemp -d)/fixture-b" && mkdir -p "$FIXTURE_B"
 pnpm --filter @nous/harness-bridge start connect --store "$STATE_A" --api "$API" \
   --project "$PROJECT_ID" --chat "$THREAD_ID" --label proof-a --tools --publish --handoff
 pnpm --filter @nous/harness-bridge start workspace add --store "$STATE_A" --root "$FIXTURE" --label proof-a-fixture
@@ -246,17 +247,19 @@ Expected: each `sha256` equals the local `shasum`, and `handoff save` reports ve
 
 **P3-2: fresh browser.** In a private window, log in as the project owner. Open the project's Files tab: all three files are listed with the chat as their source. Download each and compare `shasum -a 256` with P3-1. Open the chat: the handoff card shows version 1 with the goal and the three results.
 
-**P3-3: second session continues.** On the second device (or with `$STATE_B` on the same machine), connect to the same project and chat, then confirm reuse by running `connect` again:
+**P3-3: second session continues.** On the second device (or with `$STATE_B` on the same machine), connect to the same project and chat, confirm reuse by running `connect` again, then register B's own fixture and its MCP server exactly as for A:
 
 ```sh
 pnpm --filter @nous/harness-bridge start connect --store "$STATE_B" --api "$API" \
   --project "$PROJECT_ID" --chat "$THREAD_ID" --label proof-b --tools --publish --handoff
 pnpm --filter @nous/harness-bridge start connect --store "$STATE_B" --api "$API" \
   --project "$PROJECT_ID" --chat "$THREAD_ID" --label proof-b --tools --publish --handoff   # prints "Reusing binding", no browser
+pnpm --filter @nous/harness-bridge start workspace add --store "$STATE_B" --root "$FIXTURE_B" --label proof-b-fixture
+pnpm --filter @nous/harness-bridge start mcp install --store "$STATE_B" --root "$FIXTURE_B"   # run the printed codex command
 pnpm --filter @nous/harness-bridge start handoff show --store "$STATE_B"
 ```
 
-Expected: `handoff show` prints version 1, identical to P3-1. Change `plot.png`, record its new `shasum`, and in a new Codex session registered for `$STATE_B` send: `Call the nous artifacts_publish tool with relative_path "plot.png", title "plot.png", a new publication_id, artifact_id "<plot artifact_id from P3-1>" and expected_parent_version_id "<plot version_id from P3-1>". Reply with the result verbatim.` Expected: the same `artifact_id`, a new `version_id`, and the new `sha256`. Then:
+Expected: `handoff show` prints version 1, identical to P3-1. Put a changed `plot.png` in `$FIXTURE_B` (B publishes only from its own registered root), record its new `shasum`, and in a new Codex session started in `$FIXTURE_B` with the MCP server registered for `$STATE_B` send: `Call the nous artifacts_publish tool with relative_path "plot.png", title "plot.png", a new publication_id, artifact_id "<plot artifact_id from P3-1>" and expected_parent_version_id "<plot version_id from P3-1>". Reply with the result verbatim.` Expected: the same `artifact_id`, a new `version_id`, and the new `sha256`. Then:
 
 ```sh
 pnpm --filter @nous/harness-bridge start handoff save --store "$STATE_B" --file handoff-v2.json --parent 1
@@ -264,7 +267,13 @@ pnpm --filter @nous/harness-bridge start handoff save --store "$STATE_B" --file 
 
 Expected: the plot's version history in the browser shows two versions, and the first version still downloads with its P3-1 checksum. `handoff save` reports version 2, and after a reload the chat card shows version 2. A save with `--parent 1` repeated with a new `handoff_id` answers 409 and prints version 2 as the latest; record it, then `handoff discard <handoff_id>` it.
 
-**P3-4: clean up.** `disconnect` both state directories, as in P1-3.
+**P3-4: clean up.** Two plain `disconnect`s in a row do not work. `disconnect` sends `DELETE $API/integrations/grants/{grant_id}` with the device's CLI login, and a CLI-authenticated DELETE calls `revoke_integration_grant(..., end_cli_sessions=True)` (`backend/src/services/integrations/context.py`, via `backend/src/api/integrations/grants.py::delete_grant`). That revokes the grant and its consent and then moves the owner's CLI revoked-before cutoff, which ends **every** CLI login of the user, including the other state directory's. The second `disconnect` then gets 401, removes its local credentials and reports that NOUS no longer accepts the grant, but its grant and its consent were never revoked on the server: the grant lapses within 15 minutes, the consent stays valid. So revoke B without the CLI first, then disconnect A last:
+
+1. Revoke B's grant with the owner's **browser** login: `DELETE $API/integrations/grants/<B grant_id>` with the browser session's access token as the bearer and no `X-NOUS-Integration-Grant` header. Read the id with `H=$(jq -r .credentialHandle "$STATE_B/connection.json"); jq -r .grantId "$STATE_B/$H.json"`. A browser-authenticated DELETE takes the `require_interactive_user` branch and calls `revoke_integration_grant` with `end_cli_sessions=False`, so it revokes B's grant and consent and leaves CLI logins alone. Expect 204. There is no revoke button in the UI on this branch (the browser device routes of #1788 are not on `develop`), so this step is an API call.
+2. `pnpm --filter @nous/harness-bridge start disconnect --store "$STATE_B"`. Expect `NOUS no longer accepts this device's grant; local credentials removed` (the CLI login still works and the revoked grant answers 403), or, when the grant was due for renewal and the renewal was refused, `This device's access had already ended; local credentials removed`. Either way B's local credentials are removed and nothing on the server changes.
+3. `pnpm --filter @nous/harness-bridge start disconnect --store "$STATE_A"`. Expect `Disconnected: NOUS revoked this device's access…` (204): A's grant and consent are revoked, then the CLI cutoff ends the user's CLI logins.
+
+Record both grants' `revoked_at` (table `integration_grants`) and both consents' `consent_revoked_at` (table `integration_grant_requests`), or the 204 codes, as evidence that neither was left live. If B was disconnected first by mistake, revoke A's grant with the browser DELETE of step 1 and then run `disconnect --store "$STATE_A"` to remove its local credentials (expect one of the two messages of step 2).
 
 **Evidence.** Record in `docs/testing/evidence/harness-live-proof-YYYYMMDD/README.md`, created only when the phase runs: the deployed image tag, the device ids and grant ids of both sessions, the `thread_id`, the artifact and version ids, local and stored SHA-256 for every file and version, the handoff versions and `handoff_id`s, and the 409 code from P3-3. Record only redacted ids and hashes. Never record raw database rows, document text, file contents, tokens, emails or local absolute paths.
 
@@ -296,5 +305,5 @@ Copy this table into a new bundle `docs/testing/evidence/harness-live-proof-YYYY
 | P3-1 | First session: publish three files, handoff v1 | device and grant id, `thread_id`, version ids, local and stored SHA-256, handoff version and `handoff_id` | NOT RUN |
 | P3-2 | Fresh browser: Files tab and chat card | file list with source chat, download checksums, card version | NOT RUN |
 | P3-3 | Second session: reuse, `handoff show` == v1, plot v2, handoff v2, stale save 409 | second device and grant id, `Reusing binding` line, both plot version ids and checksums, handoff v2, 409 | NOT RUN |
-| P3-4 | Disconnect both sessions | `disconnect` output for both | NOT RUN |
+| P3-4 | Revoke B from the browser, then disconnect B and A | browser DELETE code for B, `disconnect` output for B and A, `revoked_at` and `consent_revoked_at` for both | NOT RUN |
 | RB | Flags off (if rehearsed) | PR number, Argo CD revision, 503 codes, existing status 200 | NOT RUN |
