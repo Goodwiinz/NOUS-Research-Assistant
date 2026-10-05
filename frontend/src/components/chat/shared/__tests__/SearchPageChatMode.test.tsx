@@ -9,10 +9,6 @@ vi.mock('@/lib/analytics', () => ({
   }),
 }));
 
-vi.mock('@/components/search/ResultsPanel', () => ({
-  ResultsPanel: () => <div>Results Panel</div>,
-}));
-
 vi.mock('@/components/chat/shared/ChatBubble', () => ({
   ChatBubble: () => <div>Bubble</div>,
 }));

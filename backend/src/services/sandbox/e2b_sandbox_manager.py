@@ -19,11 +19,13 @@ logger = logging.getLogger(__name__)
 # Lazy import to avoid hard dependency when E2B is not configured
 _e2b_available = False
 try:
+    from e2b import TimeoutException as E2BTimeoutException
     from e2b_code_interpreter import AsyncSandbox
 
     _e2b_available = True
 except ImportError:
     AsyncSandbox = None  # type: ignore[assignment,misc]
+    E2BTimeoutException = asyncio.TimeoutError
 
 
 @dataclass
@@ -162,15 +164,25 @@ class SandboxManager:
             logger.info(f"Creating new E2B sandbox for thread {thread_id}")
             sandbox = await AsyncSandbox.create(timeout=SANDBOX_IDLE_TIMEOUT)
 
-            # Pre-install default scientific packages
-            await sandbox.run_code(
-                f"import subprocess; subprocess.check_call("
-                f"['pip', 'install', '-q', {', '.join(repr(p) for p in DEFAULT_PACKAGES)}])"
-            )
+            # A failed or cancelled install must never cache an incomplete box.
+            try:
+                installed = await asyncio.wait_for(
+                    sandbox.run_code(
+                        f"import subprocess; subprocess.check_call("
+                        f"['pip', 'install', '-q', {', '.join(repr(p) for p in DEFAULT_PACKAGES)}])",
+                        timeout=MAX_EXECUTION_TIMEOUT,
+                    ),
+                    timeout=MAX_EXECUTION_TIMEOUT,
+                )
+                if installed.error:
+                    raise RuntimeError("Sandbox package initialization failed.")
+            except (Exception, asyncio.CancelledError):
+                await self._kill_sandbox(thread_id, sandbox)
+                raise
 
             self._sandboxes[thread_id] = sandbox
             self._last_used[thread_id] = time.monotonic()
-            self._execution_counts[thread_id] = 0
+            self._execution_counts.setdefault(thread_id, 0)
 
             # Start cleanup loop if not running
             if self._cleanup_task is None or self._cleanup_task.done():
@@ -198,11 +210,22 @@ class SandboxManager:
                 error="execution_limit_exceeded",
             )
 
-        sandbox = await self.get_or_create_sandbox(thread_id)
+        # Reserve before the first await: failed and concurrent calls cost an
+        # attempt too. Creating a replacement box must not replenish the budget.
+        self._execution_counts[thread_id] = count + 1
+        self._last_used[thread_id] = time.monotonic()
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        timeout = max(1, min(timeout, MAX_EXECUTION_TIMEOUT))
+        sandbox = None
         start = time.monotonic()
 
         try:
-            execution = await sandbox.run_code(code, timeout=timeout)
+            sandbox = await self.get_or_create_sandbox(thread_id)
+            execution = await asyncio.wait_for(
+                sandbox.run_code(code, language=language, timeout=timeout),
+                timeout=timeout,
+            )
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -221,7 +244,6 @@ class SandboxManager:
                     if result_data:
                         results.append(result_data)
 
-            self._execution_counts[thread_id] = count + 1
             self._last_used[thread_id] = time.monotonic()
 
             stdout = _cap_log(execution.logs.stdout if execution.logs else "")
@@ -236,7 +258,9 @@ class SandboxManager:
                 results=results,
             )
 
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, E2BTimeoutException):
+            if sandbox is not None:
+                await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return ExecutionResult(
                 stdout="",
@@ -245,12 +269,20 @@ class SandboxManager:
                 execution_time_ms=elapsed_ms,
                 error="timeout",
             )
+        except asyncio.CancelledError:
+            # The agent tool's outer wall-clock limit cancels this coroutine.
+            # Stopping the SDK stream alone does not stop remote user code.
+            if sandbox is not None:
+                await self._discard_sandbox(thread_id, sandbox)
+            raise
         except Exception as exc:
+            if sandbox is not None:
+                await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             logger.error(f"Sandbox execution failed: {exc}", exc_info=True)
             return ExecutionResult(
                 stdout="",
-                stderr=str(exc),
+                stderr="Code execution failed. Please try again.",
                 exit_code=1,
                 execution_time_ms=elapsed_ms,
                 error="execution_error",
@@ -403,6 +435,25 @@ class SandboxManager:
             except Exception as exc:
                 logger.warning("Isolated sandbox kill failed: %s", type(exc).__name__)
 
+    async def _kill_sandbox(self, thread_id: str, sandbox: Any) -> None:
+        """Bound provider cleanup even after execution cancellation."""
+        try:
+            await asyncio.wait_for(sandbox.kill(), timeout=60)
+            logger.info("Sandbox cleaned up for thread %s", thread_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to kill sandbox for %s: %s", thread_id, type(exc).__name__
+            )
+
+    async def _discard_sandbox(self, thread_id: str, sandbox: Any) -> None:
+        """Evict this exact box without replenishing the execution budget."""
+        # No await between identity check and removal: atomic on this event loop.
+        # The creation lock can be held by another thread's package installation;
+        # stopping remote code must never wait for that unrelated work.
+        if self._sandboxes.get(thread_id) is sandbox:
+            self._sandboxes.pop(thread_id)
+        await self._kill_sandbox(thread_id, sandbox)
+
     async def cleanup(self, thread_id: str) -> None:
         """Kill and remove sandbox for a thread."""
         async with self._lock:
@@ -411,15 +462,11 @@ class SandboxManager:
             self._execution_counts.pop(thread_id, None)
 
         if sandbox:
-            try:
-                await sandbox.kill()
-                logger.info(f"Sandbox cleaned up for thread {thread_id}")
-            except Exception as exc:
-                logger.warning(f"Failed to kill sandbox for {thread_id}: {exc}")
+            await self._kill_sandbox(thread_id, sandbox)
 
     async def cleanup_all(self) -> None:
         """Kill all active sandboxes. Call on app shutdown."""
-        thread_ids = list(self._sandboxes.keys())
+        thread_ids = set(self._sandboxes) | set(self._execution_counts)
         for tid in thread_ids:
             await self.cleanup(tid)
 
@@ -441,8 +488,8 @@ class SandboxManager:
                 logger.info(f"Cleaning up idle sandbox for thread {tid}")
                 await self.cleanup(tid)
 
-            # Stop loop if no sandboxes remain
-            if not self._sandboxes:
+            # Discarded or failed boxes still retain a budget until idle expiry.
+            if not self._last_used:
                 break
 
 

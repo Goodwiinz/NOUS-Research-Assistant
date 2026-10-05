@@ -1,0 +1,30 @@
+{
+  "execution": {
+    "attempts": [
+      {
+        "at": "2026-10-04T03:11:19.4547-04:00",
+        "detail": null,
+        "id": "f27b006d-0261-43e6-8ade-3091b7272b3b",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:55389"
+      },
+      {
+        "at": "2026-10-04T03:11:19.51292-04:00",
+        "detail": null,
+        "id": "63519cde-a3ab-455a-b9af-08bb2ac47904",
+        "outcome": "failed",
+        "reason": "project_archived",
+        "worker": "Mac.lan:55389"
+      }
+    ],
+    "collection_id": "36ca9bee-3943-4732-bbc3-4091d46bbe97",
+    "counts": null,
+    "delta_hash": null,
+    "execution_id": "874435a2-a33c-475f-b815-6f88373f9067",
+    "missed_fires": 0,
+    "schedule_id": "cb4c30a0-a2f7-4e18-964f-8f22af379497",
+    "scheduled_local": "2026-10-04T08:11"
+  },
+  "import_receipts": 0
+}
