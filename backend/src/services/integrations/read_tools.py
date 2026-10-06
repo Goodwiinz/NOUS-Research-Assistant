@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
 
@@ -74,6 +75,12 @@ MAX_RESULT_BYTES = 64 * 1024
 MAX_PAGE_BYTES = 48 * 1024
 # Keeps a content-bearing draft under MAX_RESULT_BYTES after JSON escaping.
 MAX_DRAFT_CONTENT_CHARS = 32_000
+# Researcher tools read the author lists of the grant's newest documents.
+MAX_RESEARCHERS = 25
+MAX_SCANNED_DOCUMENTS = 2000
+MAX_RESEARCHER_PAPERS = 100
+MAX_COAUTHORS = 100
+_NAME_CHARS = 200
 # The advertised schema must match what the gateway enforces; the agent-facing
 # registry descriptions promise wider limits (e.g. list limit 500).
 _SCHEMA_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
@@ -164,6 +171,50 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
                 "limit": _PAGE_LIMIT,
             },
             "required": ["arxiv_id"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
+    "find_researchers": (
+        "Find researchers by name among the author lists of papers ingested "
+        "into this project (arXiv metadata). Case-insensitive substring match; "
+        "most papers first, at most 25 (limit). Documents without author "
+        "metadata are invisible, and there are no affiliations or career "
+        "history. Only the 2,000 newest documents are scanned. truncated=true "
+        "means the list is incomplete: it was cut by limit, or older documents "
+        "were not scanned. Pass a researcher_id to get_researcher.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_RESEARCHERS,
+                    "default": 10,
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
+    "get_researcher": (
+        "Read one researcher by researcher_id (from find_researchers or a "
+        "co-author entry): their papers in the granted project (up to 100, "
+        "newest published first, with arxiv_id and published when known) and "
+        "co-authors with shared-paper counts (up to 100). Coverage is author "
+        "lists of papers ingested into this project (arXiv metadata); no "
+        "affiliations or career history. Only the 2,000 newest documents are "
+        "scanned. researcher_not_found means no scanned document of this "
+        "project lists that author; with truncated=true older documents were "
+        "not scanned, so the author may exist there.",
+        {
+            "type": "object",
+            "properties": {
+                "researcher_id": {"type": "string", "minLength": 1, "maxLength": 200}
+            },
+            "required": ["researcher_id"],
             "additionalProperties": False,
         },
         "tools:read",
@@ -622,6 +673,210 @@ async def _arxiv_paper_content(arguments: dict[str, Any]) -> ToolResult:
     return _finish({**page, "source_refs": [{"arxiv_id": arxiv_id}]})
 
 
+@dataclass(frozen=True)
+class _AuthoredPaper:
+    document_id: str
+    title: str
+    arxiv_id: str | None
+    published: str | None
+    created_at: str
+    authors: tuple[tuple[str, str], ...]  # (researcher_id, display name)
+
+
+def _researcher_key(name: Any) -> str:
+    """researcher_id: casefolded, whitespace-collapsed, at most 200 characters.
+
+    Cutting at the cap can leave a trailing space; stripping it keeps the key
+    idempotent, so an id handed out by find_researchers resolves again here.
+    """
+    return " ".join(str(name).split()).casefold()[:_NAME_CHARS].strip()
+
+
+def _author_names(raw: Any) -> tuple[tuple[str, str], ...]:
+    """(researcher_id, display name) per distinct author of one document.
+
+    Tolerates what ingest has persisted: a list of strings (arXiv), legacy
+    ``{"name": ...}`` objects, a lone string, or no authors at all.
+    """
+    authors: dict[str, str] = {}
+    for item in raw if isinstance(raw, list) else [raw]:
+        name = item.get("name") if isinstance(item, dict) else item
+        key = _researcher_key(name) if isinstance(name, str) else ""
+        if key:
+            authors.setdefault(key, " ".join(name.split())[:_NAME_CHARS].strip())
+    return tuple(authors.items())
+
+
+def _published(metadata: dict[str, Any]) -> str | None:
+    # arXiv ingest stores publication_date; the change tracker stores published.
+    for field in ("publication_date", "published"):
+        value = metadata.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:40]
+    return None
+
+
+async def _scan_authored_papers(
+    db: AsyncSession, context: IntegrationContext
+) -> tuple[list[_AuthoredPaper], bool]:
+    """The grant's newest live documents that carry an author list.
+
+    Returns ``(papers, truncated)``. This is the only data source of the
+    researcher tools and it is project-scoped by construction:
+    ``_live_project_documents`` joins the grant's project and every ancestor.
+    """
+    # ponytail: O(documents x authors) in Python over at most
+    # MAX_SCANNED_DOCUMENTS (2000) newest documents, in one narrow-column
+    # query. Fine up to a few thousand documents; older ones are invisible and
+    # reported as truncated. Move the aggregation into SQL or a per-project
+    # author index if projects outgrow that.
+    rows = (
+        await db.execute(
+            _live_project_documents(context)
+            .with_only_columns(
+                Document.id,
+                Document.title,
+                Document.arxiv_id,
+                Document.created_at,
+                Document.document_metadata,
+            )
+            .order_by(desc(Document.created_at), Document.id)
+            .limit(MAX_SCANNED_DOCUMENTS + 1)
+        )
+    ).all()
+    papers: list[_AuthoredPaper] = []
+    for document_id, title, arxiv_id, created_at, metadata in rows[
+        :MAX_SCANNED_DOCUMENTS
+    ]:
+        meta = metadata if isinstance(metadata, dict) else {}
+        authors = _author_names(meta.get("authors"))
+        if not authors:
+            continue  # no author metadata: invisible to the researcher tools
+        arxiv = arxiv_id or meta.get("arxiv_id")
+        papers.append(
+            _AuthoredPaper(
+                document_id=str(document_id),
+                title=str(title or ""),
+                arxiv_id=str(arxiv).strip()[:64] if arxiv else None,
+                published=_published(meta),
+                created_at=created_at.isoformat() if created_at else "",
+                authors=authors,
+            )
+        )
+    return papers, len(rows) > MAX_SCANNED_DOCUMENTS
+
+
+async def _find_researchers(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> ToolResult:
+    needle = _researcher_key(arguments["query"])
+    if not needle:
+        raise ToolArgumentError("query must not be blank")
+    limit = _clamp(arguments.get("limit", 10), 1, MAX_RESEARCHERS, 10)
+    papers, truncated = await _scan_authored_papers(db, context)
+    found: dict[str, list[Any]] = {}  # researcher_id -> [first-seen name, papers]
+    for paper in papers:  # newest first, so the display name is the newest one
+        for key, name in paper.authors:
+            if needle in key:
+                found.setdefault(key, [name, 0])[1] += 1
+    ranked = sorted(found.items(), key=lambda item: (-item[1][1], item[0]))
+    payload: dict[str, Any] = {
+        "researchers": [
+            {"researcher_id": key, "name": name, "paper_count": count}
+            for key, (name, count) in ranked[:limit]
+        ]
+    }
+    if truncated or len(ranked) > limit:  # cut by the scan window or by limit
+        payload["truncated"] = True
+    # A researcher is not a source document: there is nothing to cite.
+    return _finish(payload)
+
+
+def _paper_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"document_id": paper["document_id"]} for paper in payload["papers"]]
+
+
+def _fit_to_result_cap(payload: dict[str, Any]) -> None:
+    """Halve co-authors, then papers, until the whole response fits the cap.
+
+    Measured as the ToolResult envelope (content plus source_refs), so the
+    refs derived from the papers count against MAX_RESULT_BYTES too.
+    """
+
+    def wire() -> int:
+        envelope = {
+            "content": [payload],
+            "is_error": False,
+            "source_refs": _paper_refs(payload),
+        }
+        return len(json.dumps(envelope, default=str, ensure_ascii=False).encode())
+
+    for key in ("coauthors", "papers"):
+        while wire() > MAX_RESULT_BYTES and payload[key]:
+            payload[key] = payload[key][: len(payload[key]) // 2]
+            payload["truncated"] = True
+
+
+async def _get_researcher(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> ToolResult:
+    key = _researcher_key(arguments["researcher_id"])
+    if not key:
+        raise ToolArgumentError("researcher_id must not be blank")
+    scanned, truncated = await _scan_authored_papers(db, context)
+    papers = [paper for paper in scanned if any(k == key for k, _ in paper.authors)]
+    if not papers:
+        # Unknown id and an author who only wrote for another project are the
+        # same answer: nothing here says which. When the scan window hid older
+        # documents the caller must be able to tell "incomplete" from "unknown".
+        missing: dict[str, Any] = {"error": "researcher_not_found"}
+        if truncated:
+            missing["truncated"] = True
+        return ToolResult(content=[missing], is_error=True, source_refs=[])
+    name = next(n for k, n in papers[0].authors if k == key)  # newest spelling
+    coauthors: dict[str, list[Any]] = {}  # researcher_id -> [name, shared papers]
+    for paper in papers:
+        for other, other_name in paper.authors:
+            if other != key:
+                coauthors.setdefault(other, [other_name, 0])[1] += 1
+    ranked = sorted(coauthors.items(), key=lambda item: (-item[1][1], item[0]))
+    papers.sort(
+        key=lambda paper: (paper.published or "", paper.created_at, paper.document_id),
+        reverse=True,
+    )
+    from src.services.agent._pii_redact import redact_pii
+
+    payload: dict[str, Any] = {
+        "researcher": {"researcher_id": key, "name": name},
+        "papers": [
+            {
+                "document_id": paper.document_id,
+                "title": redact_pii(paper.title)[:500],
+                **({"arxiv_id": paper.arxiv_id} if paper.arxiv_id else {}),
+                **({"published": paper.published} if paper.published else {}),
+            }
+            for paper in papers[:MAX_RESEARCHER_PAPERS]
+        ],
+        "coauthors": [
+            {"researcher_id": other, "name": other_name, "paper_count": count}
+            for other, (other_name, count) in ranked[:MAX_COAUTHORS]
+        ],
+    }
+    if truncated or len(papers) > MAX_RESEARCHER_PAPERS or len(ranked) > MAX_COAUTHORS:
+        payload["truncated"] = True
+    _fit_to_result_cap(payload)
+    result = _finish(payload)
+    if result.is_error:
+        return result
+    # _finish's generic _source_refs also sees a "papers" key (arXiv-search
+    # shaped, keyed by "id"); it yields nothing here and is overridden on purpose.
+    return ToolResult(
+        content=result.content,
+        is_error=False,
+        source_refs=_paper_refs(payload),
+    )
+
+
 async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Dispatch a tool that takes no identity; upstream detail never leaves.
 
@@ -803,6 +1058,10 @@ async def invoke_read(
             {key: chunk.get(key) for key in ("document_id", "title", "text", "score")}
             for chunk in payload.get("chunks") or []
         ]
+    elif name == "find_researchers":
+        return await _find_researchers(db, context, arguments)
+    elif name == "get_researcher":
+        return await _get_researcher(db, context, arguments)
     elif name == "list_project_artifacts":
         payload = await _project_artifacts(
             db,
