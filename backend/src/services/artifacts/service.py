@@ -381,21 +381,26 @@ async def publish_version(
         thread_id=context.thread_id,
     )
     db.add(version)
-    db.add(reference)
-    # Announcement intent commits with the version; the drain delivers it.
-    db.add(
-        ArtifactLifecycleOutbox(
-            id=uuid4(),
-            organization_id=context.organization_id,
-            artifact_id=artifact.id,
-            version_id=version.id,
-            kind=ARTIFACT_VERSION_CREATED,
-            run_id=version.run_id,
-            thread_id=context.thread_id,
-        )
-    )
     upload_pk = upload.id  # rollback expires the row; keep the key as a plain value
     try:
+        # The reference and outbox rows carry FKs to artifact_versions but no
+        # ORM relationship, so the unit of work may INSERT them before the
+        # version. PostgreSQL then rejects the flush, which the IntegrityError
+        # handler below reports as a conflict. Flush the version alone first.
+        await db.flush()
+        db.add(reference)
+        # Announcement intent commits with the version; the drain delivers it.
+        db.add(
+            ArtifactLifecycleOutbox(
+                id=uuid4(),
+                organization_id=context.organization_id,
+                artifact_id=artifact.id,
+                version_id=version.id,
+                kind=ARTIFACT_VERSION_CREATED,
+                run_id=version.run_id,
+                thread_id=context.thread_id,
+            )
+        )
         await db.flush()
         # Claim the reservation conditionally: a sweep that soft-deleted it
         # meanwhile (or a racing finalize) makes this a no-op and we conflict
