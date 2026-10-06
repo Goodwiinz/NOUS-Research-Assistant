@@ -17228,6 +17228,53 @@
         "title": "ProfileUpdate",
         "type": "object"
       },
+      "ProjectArtifactDTO": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "current_version": {
+            "$ref": "#/components/schemas/ArtifactVersionDTO"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "title",
+          "kind",
+          "current_version",
+          "thread_id",
+          "updated_at"
+        ],
+        "title": "ProjectArtifactDTO",
+        "type": "object"
+      },
       "ProjectDetailResponse": {
         "description": "Detailed project response with additional context.",
         "properties": {
@@ -35420,6 +35467,58 @@
         "summary": "Get Api Key Usage",
         "tags": [
           "api-keys"
+        ]
+      }
+    },
+    "/api/v1/artifacts/projects/{project_id}": {
+      "get": {
+        "operationId": "project_artifacts_api_v1_artifacts_projects__project_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectArtifactDTO"
+                  },
+                  "title": "Response Project Artifacts Api V1 Artifacts Projects  Project Id  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Project Artifacts",
+        "tags": [
+          "artifacts"
         ]
       }
     },
