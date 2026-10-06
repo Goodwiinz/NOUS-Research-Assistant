@@ -1152,6 +1152,105 @@ async def test_workspace_grant_follows_membership_not_organization(
         await mint_integration_grant(db, **kwargs)
 
 
+async def _invite_into_another_organizations_workspace(db: AsyncSession) -> UUID:
+    """WORKSPACE now belongs to a second live organization, and USER (of ORG)
+    is an invited member of it. Returns that second organization.
+
+    The owner's organization is not the grant's, so the liveness of the grant's
+    organization is a fact of its own. Were they one organization, the
+    owning-organization clause of authorized_workspace would refuse first and
+    hide the grant organization's clause.
+    """
+    from src.models.workspace import WorkspaceRole
+
+    owning = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning, name="Owning organization", storage_limit_bytes=1000000
+        )
+    )
+    await db.execute(
+        update(Workspace).values(
+            owner_id=uuid4(), organization_id=owning, is_public=False
+        )
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    return owning
+
+
+def _lapse(change: str, owning: UUID) -> Any:
+    """One change at a time that must end a workspace grant's access."""
+    return {
+        "user-inactive": update(User).values(is_active=False),
+        "user-moved-to-another-organization": update(User).values(
+            organization_id=owning
+        ),
+        "grant-organization-inactive": update(Organization)
+        .where(Organization.id == ORG)
+        .values(is_active=False),
+        "grant-organization-deleted": update(Organization)
+        .where(Organization.id == ORG)
+        .values(is_deleted=True),
+    }[change]
+
+
+LAPSES = [
+    "user-inactive",
+    "user-moved-to-another-organization",
+    "grant-organization-inactive",
+    "grant-organization-deleted",
+]
+
+
+@pytest.mark.parametrize("change", LAPSES)
+async def test_workspace_grant_is_denied_once_the_user_or_grant_organization_lapses(
+    db: AsyncSession, change: str
+) -> None:
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import (
+        authorized_scope,
+        authorized_scope_filter,
+    )
+
+    # Membership is what makes the workspace reachable, so each guard of
+    # authorized_workspace on the user and on the grant's organization has to
+    # be pinned on its own: the user is live and of the grant's organization,
+    # and so is that organization, independent of the workspace's owner.
+    owning = await _invite_into_another_organizations_workspace(db)
+    kwargs: dict[str, Any] = dict(
+        user_id=USER,
+        organization_id=ORG,
+        workspace_id=WORKSPACE,
+        scopes=frozenset(LIBRARY_READ),
+    )
+    token = (await mint_integration_grant(db, **kwargs)).token
+    ctx = IntegrationContext(
+        user_id=USER, organization_id=ORG, workspace_id=WORKSPACE, grant_id=uuid4()
+    )
+    # Allowed until it changes, on every path that resolves the workspace.
+    assert (
+        await resolve_integration_context(db, token, required_scope="library:read")
+    ).workspace_id == WORKSPACE
+    assert await authorized_scope(db, ctx) == {PROJECT}
+    await authorized_scope_filter(db, ctx)
+
+    await db.execute(_lapse(change, owning))
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(db, token, required_scope="library:read")
+    with pytest.raises(IntegrationAccessDenied):
+        await authorized_scope(db, ctx)
+    with pytest.raises(IntegrationAccessDenied):
+        await authorized_scope_filter(db, ctx)
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(db, **kwargs)
+
+
 @pytest.mark.parametrize(
     "bindings", [{}, {"project_id": PROJECT, "workspace_id": WORKSPACE}]
 )

@@ -2882,6 +2882,65 @@ async def test_list_library_of_a_project_grant_follows_membership(
         await invoke_read(db, context, _invocation("list_library"))
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        "user-inactive",
+        "user-moved-to-another-organization",
+        "grant-organization-inactive",
+        "grant-organization-deleted",
+    ],
+)
+async def test_list_library_is_denied_once_the_user_or_grant_organization_lapses(
+    db: AsyncSession, change: str
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # An invited member of a workspace another live organization owns. The
+    # owner's organization is not the grant's, so the grant organization's own
+    # liveness is a fact of its own: were they one, the owning-organization
+    # clause would refuse first. (invoke_read refuses a user of another
+    # organization itself, so that case is pinned in test_context.py too, at
+    # the level of authorized_workspace.)
+    owning = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning, name="Owning organization", storage_limit_bytes=1
+        )
+    )
+    await db.execute(
+        update(Workspace)
+        .where(Workspace.id == WORKSPACE)
+        .values(owner_id=uuid4(), organization_id=owning)
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    context = _workspace_context(LIBRARY_READ)
+    listed = await invoke_read(db, context, _invocation("list_library"))
+    assert set(_library_folders(listed)) == {str(PROJECT), str(OTHER_PROJECT)}
+
+    lapse = {
+        "user-inactive": update(User).values(is_active=False),
+        "user-moved-to-another-organization": update(User).values(
+            organization_id=owning
+        ),
+        "grant-organization-inactive": update(Organization)
+        .where(Organization.id == ORG)
+        .values(is_active=False),
+        "grant-organization-deleted": update(Organization)
+        .where(Organization.id == ORG)
+        .values(is_deleted=True),
+    }[change]
+    await db.execute(lapse)
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, context, _invocation("list_library"))
+
+
 @pytest.mark.parametrize("model", [Collection, Workspace])
 async def test_library_query_itself_rechecks_ancestors(
     db: AsyncSession, model: Any
