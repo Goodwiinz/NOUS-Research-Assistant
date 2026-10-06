@@ -27,6 +27,13 @@ file it as a proposal instead.
   these are hard-won environment/API/tenancy facts, not CI-backed rules.
 - **[research-protocols.md](research-protocols.md)** — immutable methods versions,
   independent approval, retained decisions, and approved execution plans.
+- **[research-project-migration.md](research-project-migration.md)** — canonical
+  collection/project identities, access and decision roles, and retained-history
+  backfill operations.
+- **[paper-discovery.md](paper-discovery.md)** — scholarly-provider selection,
+  bounded search behavior and provider configuration.
+- **[harness-bridge.md](harness-bridge.md)** — local Codex pairing, scoped MCP,
+  artifact publication, recovery and live acceptance prerequisites.
 - **[typesafe-routing.md](typesafe-routing.md)** — opt-in routing configuration,
   offline replay, validation gates, and rollback; Azure remains the default.
 - **[nous-loop.md](nous-loop.md)** — canonical, cross-runtime workflow for one
@@ -57,3 +64,5 @@ Static regression tests that fail loudly if a boundary above erodes:
 ## Ownership
 
 See [`.github/CODEOWNERS`](../../.github/CODEOWNERS).
+
+[Back to documentation home](../README.md).
