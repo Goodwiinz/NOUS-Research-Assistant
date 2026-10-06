@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import {
   artifactService,
   type ArtifactVersion,
+  type ProjectArtifact,
   type ThreadArtifact,
 } from '@/services/artifactService';
 import { useChatStore } from '@/store/chat-store';
@@ -30,6 +31,14 @@ export const artifactVersionsKey = (
   'artifact',
   artifactId,
   'versions',
+];
+
+export const projectArtifactsKey = (
+  projectId: string
+): readonly ['project', string, 'artifacts'] => [
+  'project',
+  projectId,
+  'artifacts',
 ];
 
 /** Late uploads land after the run closes; keep a slow visible-tab poll. */
@@ -62,19 +71,32 @@ export function useThreadArtifacts(
     staleTime: 5_000,
     // Poll while output can still arrive without a stream frame: the run is
     // live (frames invalidate too, but a suppressed announcement is cheap to
-    // cover), it ended recently, or a file's message has not landed yet.
+    // cover), it ended recently, or a run file's message has not landed yet.
     refetchInterval: (query) => {
       const endedAt = streamEndedAt.current;
       const recentlyEnded =
         endedAt !== null && Date.now() - endedAt < LATE_OUTPUT_WINDOW_MS;
+      // Only run output awaits a message; standalone rows (no run) never get one.
       const pending = query.state.data?.some(
-        (a) => a.reference.messageId === null
+        (a) => a.reference.messageId === null && a.reference.runId !== null
       );
       return streamingHere || recentlyEnded || pending
         ? LATE_OUTPUT_POLL_MS
         : false;
     },
     refetchIntervalInBackground: false,
+    retry: false,
+  });
+}
+
+export function useProjectArtifacts(
+  projectId: string | null | undefined
+): UseQueryResult<ProjectArtifact[]> {
+  return useQuery({
+    queryKey: projectArtifactsKey(projectId ?? ''),
+    queryFn: () => artifactService.listProjectArtifacts(projectId ?? ''),
+    enabled: Boolean(projectId),
+    staleTime: 5_000,
     retry: false,
   });
 }

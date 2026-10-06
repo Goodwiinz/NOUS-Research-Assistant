@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -25,6 +25,7 @@ from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document
 from src.models.user import User
 from src.models.workspace import Workspace
+from src.schemas.artifact import ArtifactError
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolDescriptorDTO, ToolInvocation, ToolResult
 from src.services.agent.tool_helpers import _escape_like, _verify_project_ownership
@@ -36,6 +37,7 @@ from src.services.agent.tools_impl import (
     _tool_search_arxiv,
     _tool_search_external_database,
 )
+from src.services.artifacts.service import list_project_artifacts
 from src.services.integrations import arxiv_fulltext
 from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
 from src.services.integrations.context import IntegrationAccessDenied
@@ -49,6 +51,7 @@ READ_TOOL_NAMES: tuple[str, ...] = (
     "list_project_documents",
     "do_kb_retrieve",
     "get_current_draft",
+    "list_project_artifacts",
     "search_arxiv",
     "search_external_database",
     "list_external_databases",
@@ -62,6 +65,7 @@ IDENTITY_ARGUMENTS = frozenset(
 )
 MAX_RESULTS = 50
 MAX_DOCUMENT_IDS = 20
+MAX_ARTIFACTS = 100
 MAX_EXTERNAL_RESULTS = 20
 MAX_RESULT_BYTES = 64 * 1024
 # Bytes a content page may occupy once JSON-encoded; leaves headroom under
@@ -224,21 +228,39 @@ _JSON_TYPES: dict[str, type | tuple[type, ...]] = {
 }
 
 
+class _ListProjectArtifactsArgs(BaseModel):
+    limit: int = Field(MAX_ARTIFACTS, ge=1, le=MAX_ARTIFACTS)
+
+
+# Gateway-native tools: not in the agent TOOL_REGISTRY, so they carry their own schema.
+_GATEWAY_TOOLS: dict[str, tuple[str, type[BaseModel]]] = {
+    "list_project_artifacts": (
+        "List the current version of each artifact published to this project "
+        "(newest first), with sha256, size and the chat it came from, if any.",
+        _ListProjectArtifactsArgs,
+    )
+}
+
+
 class ToolArgumentError(ValueError):
     """Invocation shape rejected before any adapter runs (HTTP 422)."""
 
 
 def _registry_schema(name: str) -> tuple[str, dict[str, Any], type[BaseModel]]:
-    from src.services.agent.tools import TOOL_REGISTRY
+    if name in _GATEWAY_TOOLS:
+        description, model = _GATEWAY_TOOLS[name]
+    else:
+        from src.services.agent.tools import TOOL_REGISTRY
 
-    descriptor = TOOL_REGISTRY.descriptor(name)
-    assert descriptor is not None, name
-    raw_schema = descriptor.tool.tool_call_schema
-    # tool_call_schema is typed as a v2/v1 model class or dict; the registry
-    # only holds decorated @tool wrappers, which always yield a v2 class.
-    if not (isinstance(raw_schema, type) and issubclass(raw_schema, BaseModel)):
-        raise TypeError(f"{name} has no pydantic v2 call schema")
-    model = cast(type[BaseModel], raw_schema)
+        descriptor = TOOL_REGISTRY.descriptor(name)
+        assert descriptor is not None, name
+        raw_schema = descriptor.tool.tool_call_schema
+        # tool_call_schema is typed as a v2/v1 model class or dict; the registry
+        # only holds decorated @tool wrappers, which always yield a v2 class.
+        if not (isinstance(raw_schema, type) and issubclass(raw_schema, BaseModel)):
+            raise TypeError(f"{name} has no pydantic v2 call schema")
+        model = cast(type[BaseModel], raw_schema)
+        description = descriptor.tool.description
     schema = dict(model.model_json_schema())
     properties = {
         key: value
@@ -254,7 +276,7 @@ def _registry_schema(name: str) -> tuple[str, dict[str, Any], type[BaseModel]]:
         key for key in schema.get("required", []) if key in properties
     ] + _EXTRA_REQUIRED.get(name, [])
     schema["additionalProperties"] = False
-    return descriptor.tool.description, schema, model
+    return description, schema, model
 
 
 def list_read_tools() -> list[ToolDescriptorDTO]:
@@ -886,6 +908,40 @@ async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+async def _project_artifacts(
+    db: AsyncSession, context: IntegrationContext, limit: int
+) -> dict[str, Any]:
+    """Current versions in the grant's project; identity never comes from args."""
+    from src.services.agent._pii_redact import redact_pii
+
+    try:
+        rows = await list_project_artifacts(
+            db,
+            user_id=context.user_id,
+            organization_id=context.organization_id,
+            project_id=context.project_id,
+            limit=limit,
+        )
+    except ArtifactError:
+        return {"error": "Project not found or access denied"}
+    return {
+        "artifacts": [
+            {
+                "artifact_id": str(row.artifact_id),
+                "version_id": str(row.current_version.version_id),
+                "title": redact_pii(row.title),
+                "kind": row.kind,
+                "byte_size": row.current_version.byte_size,
+                "sha256": row.current_version.sha256,
+                "created_at": row.current_version.created_at.isoformat(),
+                "thread_id": str(row.thread_id) if row.thread_id else None,
+            }
+            for row in rows
+        ],
+        "total": len(rows),
+    }
+
+
 def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if "error" in payload:
         return []
@@ -913,6 +969,13 @@ def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
         # Document row; an unresolved chunk is not an observed identity.
         if chunk.get("document_id"):
             refs.append({"document_id": str(chunk["document_id"])})
+    for artifact in payload.get("artifacts") or []:
+        refs.append(
+            {
+                "artifact_id": str(artifact["artifact_id"]),
+                "version_id": str(artifact["version_id"]),
+            }
+        )
     draft = payload.get("draft")
     if isinstance(draft, dict) and draft.get("id"):
         refs.append({"draft_id": str(draft["id"])})
@@ -997,6 +1060,14 @@ async def invoke_read(
         return await _find_researchers(db, context, arguments)
     elif name == "get_researcher":
         return await _get_researcher(db, context, arguments)
+    elif name == "list_project_artifacts":
+        payload = await _project_artifacts(
+            db,
+            context,
+            _clamp(
+                arguments.get("limit", MAX_ARTIFACTS), 1, MAX_ARTIFACTS, MAX_ARTIFACTS
+            ),
+        )
     else:
         payload = await _tool_get_current_draft(
             {
