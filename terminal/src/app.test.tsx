@@ -6,11 +6,17 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
 import { render, cleanup } from "ink-testing-library";
+import { AssistantRuntimeProvider } from "@assistant-ui/react-ink";
+import {
+  MessageByIndexProvider,
+  useExternalStoreRuntime,
+} from "@assistant-ui/core/react";
 import type { RuntimeMessage } from "@nous/chat-runtime/types";
 import { saveConfig } from "../../frontend/cli/auth/store";
 import { streamReply, terminalText, type Approve } from "./adapter";
 import { App } from "./app";
 import { useTerminalSession } from "./session";
+import { Message } from "./ui";
 
 let configDir: string;
 const originalConfigDir = process.env.NOUS_CONFIG_DIR;
@@ -79,6 +85,55 @@ test("React resolves independently for the web and terminal", () => {
       createRequire(terminal.resolve(name))("react"),
       terminal("react"),
     );
+  }
+});
+
+test("a failed clipboard write never displays Copied", async () => {
+  const failures: string[] = [];
+  const messages = [
+    {
+      id: "clipboard-test",
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Clipboard test message" }],
+    },
+  ];
+  function Probe() {
+    const runtime = useExternalStoreRuntime({
+      messages,
+      convertMessage: (message) => message,
+      isRunning: false,
+      onNew: async () => {},
+    });
+    return (
+      <AssistantRuntimeProvider runtime={runtime}>
+        <MessageByIndexProvider index={0}>
+          <Message
+            index={0}
+            report={(promise) => {
+              void promise.catch((error) => failures.push(String(error)));
+            }}
+          />
+        </MessageByIndexProvider>
+      </AssistantRuntimeProvider>
+    );
+  }
+  const originalPath = process.env.PATH;
+  try {
+    const ui = render(<Probe />);
+    await until(() => !!ui.lastFrame()?.includes("[Copy]"), "Copy mounts");
+    // Prevent every native clipboard provider from launching in this process.
+    process.env.PATH = configDir;
+    ui.stdin.write("\t");
+    await delay(50);
+    ui.stdin.write("\r");
+    await until(() => failures.length === 1, "Clipboard failure is reported");
+    await delay(50);
+    assert.match(failures[0], /No clipboard provider found/);
+    assert.doesNotMatch(ui.lastFrame()!, /\[Copied\]/);
+    assert.match(ui.lastFrame()!, /\[Copy\]/);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
   }
 });
 
