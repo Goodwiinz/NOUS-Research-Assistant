@@ -606,6 +606,12 @@ export function useChatStreaming(
   const streamingThreadId = useChatStore((state) => state.streamingThreadId);
   const activeThreadId = useChatStore((state) => state.currentThreadId);
   const harnessConnection = useHarnessConnection(activeThreadId);
+  // The cold-load probe outlives the render that started it; it must act on
+  // the current (post-auth) connection, not the one captured at probe start.
+  const harnessConnectionRef = useRef(harnessConnection);
+  useEffect(() => {
+    harnessConnectionRef.current = harnessConnection;
+  }, [harnessConnection]);
   const authIsAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const authenticatedUserId = useAuthStore((state) => state.user?.id ?? null);
   const draftWorkspaceId =
@@ -2506,6 +2512,13 @@ export function useChatStreaming(
     // this thread has a LIVE run server-side — keeping the probe attached
     // would consume that run's frames into the void, so bail immediately.
     const abandonProbe = (): void => probeAbort.abort();
+    // A Codex run's replay opens with accepted/status/tool frames before the
+    // approval_required frame; those are history of the parked run, not proof
+    // of a live NOUS run, so only a native run keeps the probe open.
+    const abandonUnlessCodex = (): void => {
+      if (harnessConnectionRef.current.executionProvider === 'codex') return;
+      abandonProbe();
+    };
     void Promise.resolve(
       agentChatService.resumeStream(
         threadId,
@@ -2538,10 +2551,18 @@ export function useChatStreaming(
             });
             probeAbort.abort();
           },
-          onToken: abandonProbe,
-          onToolStart: abandonProbe,
-          onStatus: abandonProbe,
-          onPlan: abandonProbe,
+          // The server only emits approval_required for Codex runs, so this
+          // is deliberately not gated on the locally selected provider.
+          onApprovalRequired: (requestId) => {
+            if (probeAbort.signal.aborted) return;
+            void harnessConnectionRef.current
+              .loadApproval(requestId, threadId)
+              .catch(() => {});
+          },
+          onToken: abandonUnlessCodex,
+          onToolStart: abandonUnlessCodex,
+          onStatus: abandonUnlessCodex,
+          onPlan: abandonUnlessCodex,
         },
         probeAbort.signal
       )
