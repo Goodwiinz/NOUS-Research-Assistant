@@ -16312,6 +16312,8 @@ export interface components {
             project_id: string;
             /** Scopes */
             scopes: string[];
+            /** Thread Id */
+            thread_id?: string | null;
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
@@ -16348,6 +16350,10 @@ export interface components {
              * @enum {string}
              */
             status: "pending" | "approved" | "denied" | "expired" | "consumed";
+            /** Thread Id */
+            thread_id?: string | null;
+            /** Thread Label */
+            thread_label?: string | null;
         };
         /**
          * GraphAnalytics

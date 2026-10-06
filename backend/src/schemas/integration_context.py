@@ -42,6 +42,7 @@ class GrantRequestCreate(BaseModel):
     project_id: UUID
     device_id: UUID
     scopes: set[str]
+    thread_id: UUID | None = None
 
 
 GrantRequestStatus = Literal["pending", "approved", "denied", "expired", "consumed"]
@@ -57,6 +58,8 @@ class GrantRequestDTO(BaseModel):
     scopes: set[str]
     project_label: str
     device_label: str
+    thread_id: UUID | None = None
+    thread_label: str | None = None
 
 
 class GrantDecision(BaseModel):
