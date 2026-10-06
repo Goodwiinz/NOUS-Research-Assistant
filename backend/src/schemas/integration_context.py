@@ -15,6 +15,8 @@ STANDARD_SCOPES = frozenset(
         "tools:write",
         "context:read",
         "artifacts:publish",
+        "handoff:read",
+        "handoff:write",
     }
 )
 
