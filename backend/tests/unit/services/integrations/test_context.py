@@ -889,6 +889,63 @@ async def test_authorized_scope_of_a_project_grant_is_just_that_project(
     assert await authorized_scope(db, ctx) == {PROJECT}
 
 
+# What ends a project grant's access. authorized_scope re-checks it on every
+# call, so each change must turn the next call into a denial.
+LOST_ACCESS: dict[str, Any] = {
+    "collection-deleted": update(Collection)
+    .where(Collection.id == PROJECT)
+    .values(is_deleted=True),
+    "workspace-deleted": update(Workspace).values(is_deleted=True),
+    "owner-changed-without-membership": update(Workspace).values(owner_id=uuid4()),
+    "user-inactive": update(User).values(is_active=False),
+    "user-deleted": update(User).values(is_deleted=True),
+    "organization-inactive": update(Organization).values(is_active=False),
+}
+
+
+@pytest.mark.parametrize("change", sorted(LOST_ACCESS))
+async def test_authorized_scope_of_a_project_grant_is_denied_once_access_is_lost(
+    db: AsyncSession, library: None, change: str
+) -> None:
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import authorized_scope
+
+    ctx = IntegrationContext(
+        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+    )
+    assert await authorized_scope(db, ctx) == {PROJECT}  # allowed until it changes
+    await db.execute(LOST_ACCESS[change])
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await authorized_scope(db, ctx)
+
+
+async def test_authorized_scope_of_a_project_grant_follows_membership(
+    db: AsyncSession, library: None
+) -> None:
+    from src.models.workspace import WorkspaceRole
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import authorized_scope
+
+    ctx = IntegrationContext(
+        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+    )
+    # The owner leaves; a live membership alone keeps the project reachable...
+    await db.execute(update(Workspace).values(owner_id=uuid4()))
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    assert await authorized_scope(db, ctx) == {PROJECT}
+    # ...and revoking it ends the access.
+    await db.execute(update(WorkspaceMember).values(is_deleted=True))
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await authorized_scope(db, ctx)
+
+
 @pytest.mark.parametrize("case", ["unknown", "public_non_member", "deleted"])
 async def test_authorized_scope_refuses_foreign_workspace(
     db: AsyncSession, library: None, case: str

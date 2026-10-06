@@ -2582,6 +2582,55 @@ async def test_list_library_for_a_foreign_user_is_denied(db: AsyncSession) -> No
         await invoke_read(db, context, _invocation("list_library"))
 
 
+# What ends a project grant's access. list_library resolves the scope again on
+# every call, so each change must turn the next call into a denial.
+LOST_ACCESS: dict[str, Any] = {
+    "collection-deleted": update(Collection)
+    .where(Collection.id == PROJECT)
+    .values(is_deleted=True),
+    "workspace-deleted": update(Workspace).values(is_deleted=True),
+    "owner-changed-without-membership": update(Workspace).values(owner_id=uuid4()),
+    "user-inactive": update(User).values(is_active=False),
+    "organization-inactive": update(Organization).values(is_active=False),
+}
+
+
+@pytest.mark.parametrize("change", sorted(LOST_ACCESS))
+async def test_list_library_of_a_project_grant_is_denied_once_access_is_lost(
+    db: AsyncSession, change: str
+) -> None:
+    context = _project_context(LIBRARY_READ)
+    allowed = await invoke_read(db, context, _invocation("list_library"))
+    assert [f["id"] for f in allowed.content[0]["folders"]] == [str(PROJECT)]
+    await db.execute(LOST_ACCESS[change])
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, context, _invocation("list_library"))
+
+
+async def test_list_library_of_a_project_grant_follows_membership(
+    db: AsyncSession,
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    context = _project_context(LIBRARY_READ)
+    # The owner leaves; a live membership alone keeps the folder listed...
+    await db.execute(update(Workspace).values(owner_id=uuid4()))
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    kept = await invoke_read(db, context, _invocation("list_library"))
+    assert [f["id"] for f in kept.content[0]["folders"]] == [str(PROJECT)]
+    # ...and revoking it must not leave the name and description readable.
+    await db.execute(update(WorkspaceMember).values(is_deleted=True))
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, context, _invocation("list_library"))
+
+
 @pytest.mark.parametrize("model", [Collection, Workspace])
 async def test_library_query_itself_rechecks_ancestors(
     db: AsyncSession, model: Any
