@@ -31,9 +31,14 @@ from src.models.integration_grant import IntegrationGrant, IntegrationGrantReque
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
 from src.models.workspace import Workspace
+from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation, ToolResult
 from src.schemas.tool_actions import ActionActor, ActionReview, ActionStatus
-from src.services.integrations.context import live
+from src.services.integrations.context import (
+    IntegrationAccessDenied,
+    authorized_scope_filter,
+    live,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,9 +202,19 @@ async def request_action(
 
 def _same_target(row: IntegrationToolAction, actor: ActionActor) -> bool:
     """A replay must name the stored target; the hash excludes server bindings."""
+    if row.workspace_id is not None:
+        # The row names its grant's workspace, and its project_id, when set, is
+        # the Collection the action aims at. A workspace grant's actor carries
+        # no project, so only the workspace is compared (the hash covers the
+        # arguments that choose the target); an actor that does name a project
+        # must name that one.
+        same_binding = row.workspace_id == actor.workspace_id and (
+            actor.project_id is None or actor.project_id == row.project_id
+        )
+    else:
+        same_binding = row.project_id == actor.project_id and actor.workspace_id is None
     return bool(
-        row.project_id == actor.project_id
-        and row.workspace_id == actor.workspace_id
+        same_binding
         and row.thread_id == actor.thread_id
         and row.run_id == (str(actor.run_id) if actor.run_id else None)
     )
@@ -312,6 +327,68 @@ async def get_action_for_review(
     )
 
 
+def _binding_matches(
+    project_id: UUID | None, workspace_id: UUID | None, row: IntegrationToolAction
+) -> bool:
+    """Whether a grant's (or its consent's) binding is the one the row needs.
+
+    A row with a workspace_id was authorised by a workspace grant of that
+    workspace, which carries no project: the row's own project_id, if any, is
+    the Collection it aims at, and ``_target_reason`` checks that against the
+    workspace. A row without one needs a grant on exactly its project and on no
+    workspace. Comparing the row's project_id to the grant's would refuse every
+    action a workspace grant aims at a Collection (grant NULL, row set).
+    """
+    if row.workspace_id is not None:
+        return project_id is None and workspace_id == row.workspace_id
+    return project_id == row.project_id and workspace_id is None
+
+
+def _consent_binding(row: IntegrationToolAction) -> tuple[Any, Any]:
+    """``_binding_matches`` as the conditions on a consent request's columns."""
+    if row.workspace_id is not None:
+        return (
+            IntegrationGrantRequest.project_id.is_(None),
+            IntegrationGrantRequest.workspace_id == row.workspace_id,
+        )
+    return (
+        IntegrationGrantRequest.project_id == row.project_id,
+        IntegrationGrantRequest.workspace_id.is_(None),
+    )
+
+
+async def _target_reason(
+    db: AsyncSession, row: IntegrationToolAction, grant: IntegrationGrant
+) -> str | None:
+    """A stable reason when a workspace grant no longer reaches the Collection
+    its action aims at, else None. A row that names no workspace, or no
+    Collection, has nothing more to check here."""
+    if row.workspace_id is None or row.project_id is None:
+        return None
+    # Comparing only the binding lets the grant authorise whatever project_id
+    # the row holds, so the target must still be one of the workspace's live
+    # Collections that the requesting user can reach: another workspace of
+    # theirs, or a deleted Collection, is not.
+    context = IntegrationContext(
+        user_id=row.user_id,
+        organization_id=row.organization_id,
+        workspace_id=row.workspace_id,
+        grant_id=grant.id,
+    )
+    try:
+        scope = await authorized_scope_filter(db, context)
+    except IntegrationAccessDenied:
+        return "grant no longer authorizes this action"
+    reachable = await db.scalar(
+        select(Collection.id).where(
+            Collection.id == row.project_id,
+            scope,
+            Collection.is_deleted.is_(False),
+        )
+    )
+    return None if reachable is not None else "grant no longer authorizes this action"
+
+
 async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str | None:
     """Return a stable reason when the request may no longer run."""
     if row.grant_id is None:
@@ -326,8 +403,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
         or grant.is_deleted
         or grant.user_id != row.user_id
         or grant.organization_id != row.organization_id
-        or grant.project_id != row.project_id
-        or grant.workspace_id != row.workspace_id
+        or not _binding_matches(grant.project_id, grant.workspace_id, row)
         or REQUIRED_SCOPE not in grant.scopes
     ):
         return "grant no longer authorizes this action"
@@ -335,7 +411,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
         # No consent chain: the token itself must still be live.
         if grant.revoked_at is not None or not live(grant.expires_at):
             return "grant revoked or expired"
-        return None
+        return await _target_reason(db, row, grant)
     if row.consent_id is not None and row.consent_id != grant.request_id:
         return "grant no longer authorizes this action"
     consent = await db.scalar(
@@ -345,8 +421,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
             IntegrationGrantRequest.status == "consumed",
             IntegrationGrantRequest.user_id == row.user_id,
             IntegrationGrantRequest.organization_id == row.organization_id,
-            IntegrationGrantRequest.project_id == row.project_id,
-            IntegrationGrantRequest.workspace_id == row.workspace_id,
+            *_consent_binding(row),
             IntegrationGrantRequest.consent_revoked_at.is_(None),
             IntegrationGrantRequest.is_deleted.is_(False),
         )
@@ -356,7 +431,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
         return "consent revoked"
     if grant.device_id is not None and consent.device_id != grant.device_id:
         return "consent revoked"
-    return None
+    return await _target_reason(db, row, grant)
 
 
 async def _run_effect(

@@ -839,7 +839,12 @@ def _workspace_actor(**overrides: Any) -> ActionActor:
 
 
 async def _workspace_row(db: AsyncSession, **overrides: Any) -> IntegrationToolAction:
-    """A workspace-level action with no target project, as a later slice requests."""
+    """A workspace-level action with no target project, as a later slice requests.
+
+    Pass ``project_id`` for the other shape the migration documents: a workspace
+    grant's action aimed at one Collection sets both columns, project_id the
+    target and workspace_id the grant's binding.
+    """
     values: dict[str, Any] = {
         "organization_id": ORG,
         "user_id": USER,
@@ -925,7 +930,8 @@ async def test_workspace_actor_cannot_request_a_project_action_yet(
 async def test_grant_bound_to_another_workspace_cannot_run_the_action(
     db: AsyncSession,
 ) -> None:
-    # GRANT is bound to PROJECT, not to WORKSPACE.
+    # GRANT is a project grant: it binds PROJECT and no workspace, and the row
+    # asks for a workspace grant.
     status = await request_action(db, _workspace_actor(), _invocation())
     await _approve(db, status.invocation_id)
     failed = await execute_action(db, status.invocation_id)
@@ -1004,12 +1010,24 @@ async def test_workspace_level_action_never_runs_without_a_project(
     ],
     ids=["grant-workspace", "consent-workspace", "consent-became-project"],
 )
+@pytest.mark.parametrize(
+    "target", [None, PROJECT], ids=["workspace-level", "aimed-at-a-collection"]
+)
 async def test_workspace_authority_lost_after_approval_fails_before_the_effect(
-    db: AsyncSession, table: str, values: dict[str, Any], reason: str
+    db: AsyncSession,
+    table: str,
+    values: dict[str, Any],
+    reason: str,
+    target: UUID | None,
 ) -> None:
     grant_id, consent_id = await _workspace_authority(db)
     row = await _workspace_row(
-        db, grant_id=grant_id, consent_id=consent_id, state="approved", approved=True
+        db,
+        project_id=target,
+        grant_id=grant_id,
+        consent_id=consent_id,
+        state="approved",
+        approved=True,
     )
     if table == "consent":
         await db.execute(
@@ -1028,3 +1046,215 @@ async def test_workspace_authority_lost_after_approval_fails_before_the_effect(
     assert failed is not None and failed.state == "failed"
     assert (await _last_error(db, row.invocation_id)) == reason
     assert await _note_count(db) == 0
+
+
+async def _approved_workspace_action(
+    db: AsyncSession, **overrides: Any
+) -> IntegrationToolAction:
+    """An approved action a workspace grant of WORKSPACE aimed at PROJECT.
+
+    The grant and its consent bind WORKSPACE and no project; the row names both,
+    its project_id the target Collection and its workspace_id the binding.
+    """
+    grant_id, consent_id = await _workspace_authority(db)
+    values: dict[str, Any] = {
+        "project_id": PROJECT,
+        "grant_id": grant_id,
+        "consent_id": consent_id,
+        "state": "approved",
+        "approved": True,
+    }
+    values.update(overrides)
+    return await _workspace_row(db, **values)
+
+
+async def test_workspace_grant_runs_an_action_aimed_at_one_of_its_collections(
+    db: AsyncSession,
+) -> None:
+    # The row shape the migration documents for a workspace grant's action on a
+    # Collection (project_id the target, workspace_id the binding, both set)
+    # must be authorisable, or the first library action would fail closed.
+    row = await _approved_workspace_action(db)
+    done = await execute_action(db, row.invocation_id)
+    assert done is not None and done.state == "succeeded"
+    assert await _note_count(db) == 1
+    note = await db.scalar(select(ProjectNote))
+    assert note is not None and note.project_id == PROJECT and note.user_id == USER
+
+
+async def test_workspace_grant_cannot_run_a_project_bound_action(
+    db: AsyncSession,
+) -> None:
+    # Only a row that names a workspace is compared by its workspace: a row
+    # bound to PROJECT alone still needs a grant on exactly PROJECT.
+    row = await _approved_workspace_action(db, workspace_id=None)
+    failed = await execute_action(db, row.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (await _last_error(db, row.invocation_id)) == (
+        "grant no longer authorizes this action"
+    )
+    assert await _note_count(db) == 0
+
+
+async def test_project_grant_cannot_run_an_action_that_names_a_workspace(
+    db: AsyncSession,
+) -> None:
+    # GRANT and CONSENT bind PROJECT and no workspace. Neither may authorise a
+    # row that names a workspace, whichever project it aims at.
+    row = await _workspace_row(
+        db,
+        project_id=PROJECT,
+        grant_id=GRANT,
+        consent_id=CONSENT,
+        state="approved",
+        approved=True,
+    )
+    failed = await execute_action(db, row.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (await _last_error(db, row.invocation_id)) == (
+        "grant no longer authorizes this action"
+    )
+    assert await _note_count(db) == 0
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["another-workspace", "deleted-collection", "unknown-collection", "access-lost"],
+)
+async def test_workspace_grant_cannot_aim_an_action_outside_its_workspace(
+    db: AsyncSession, case: str
+) -> None:
+    # The binding alone no longer says which Collection the grant may write to,
+    # so the target is re-checked against the workspace's live Collections that
+    # the user can still reach. Each case below passes the grant and consent
+    # checks, and the user could still write to the Collection themselves.
+    other_workspace, elsewhere, retired = uuid4(), uuid4(), uuid4()
+    await db.execute(
+        insert(Workspace).values(
+            id=other_workspace, name="Other", owner_id=USER, organization_id=ORG
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(id=elsewhere, name="Elsewhere", workspace_id=other_workspace),
+                dict(
+                    id=retired, name="Retired", workspace_id=WORKSPACE, is_deleted=True
+                ),
+            ]
+        )
+    )
+    await db.commit()
+    target = {
+        "another-workspace": elsewhere,
+        "deleted-collection": retired,
+        "unknown-collection": uuid4(),
+        "access-lost": PROJECT,
+    }[case]
+    row = await _approved_workspace_action(db, project_id=target)
+    if case == "access-lost":
+        # Neither the owner nor a member of WORKSPACE any more.
+        await db.execute(
+            update(Workspace).where(Workspace.id == WORKSPACE).values(owner_id=uuid4())
+        )
+        await db.commit()
+    failed = await execute_action(db, row.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (await _last_error(db, row.invocation_id)) == (
+        "grant no longer authorizes this action"
+    )
+    assert await _note_count(db) == 0
+
+
+@pytest.mark.parametrize("aimed_at", ["its-workspace", "another-workspace"])
+async def test_internal_workspace_grant_is_held_to_the_same_target_check(
+    db: AsyncSession, aimed_at: str
+) -> None:
+    # A grant issued without a consent request is checked as itself, and the
+    # row's target is checked on that path too.
+    other_workspace, elsewhere, grant_id = uuid4(), uuid4(), uuid4()
+    await db.execute(
+        insert(Workspace).values(
+            id=other_workspace, name="Other", owner_id=USER, organization_id=ORG
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            id=elsewhere, name="Elsewhere", workspace_id=other_workspace
+        )
+    )
+    await db.execute(
+        insert(IntegrationGrant).values(
+            **_grant_values(
+                grant_id,
+                project_id=None,
+                workspace_id=WORKSPACE,
+                device_id=None,
+                request_id=None,
+            )
+        )
+    )
+    await db.commit()
+    row = await _workspace_row(
+        db,
+        project_id=PROJECT if aimed_at == "its-workspace" else elsewhere,
+        grant_id=grant_id,
+        state="approved",
+        approved=True,
+    )
+    done = await execute_action(db, row.invocation_id)
+    assert done is not None
+    if aimed_at == "its-workspace":
+        assert done.state == "succeeded" and await _note_count(db) == 1
+    else:
+        assert done.state == "failed" and await _note_count(db) == 0
+        assert (await _last_error(db, row.invocation_id)) == (
+            "grant no longer authorizes this action"
+        )
+
+
+def test_a_workspace_grants_action_replays_for_its_workspace_actor() -> None:
+    # The actor of a workspace grant carries its workspace and no project, while
+    # the row it stored names the Collection the action aims at. Only a
+    # row that names no workspace is compared by project.
+    row = IntegrationToolAction(
+        organization_id=ORG,
+        user_id=USER,
+        project_id=PROJECT,
+        workspace_id=WORKSPACE,
+        invocation_id=uuid4(),
+        tool_name="create_project_note",
+        arguments=NOTE_ARGS,
+        argument_hash=canonical_hash("create_project_note", NOTE_ARGS),
+        state="awaiting_approval",
+    )
+    workspace_actor = _workspace_actor(project_id=None)
+    assert tool_actions._same_target(row, workspace_actor)
+    assert tool_actions._same_target(row, _workspace_actor())  # names PROJECT itself
+    for stranger in (
+        _workspace_actor(project_id=uuid4()),  # names another Collection
+        _workspace_actor(project_id=None, workspace_id=uuid4()),
+        _workspace_actor(project_id=None, workspace_id=None),
+        _workspace_actor(project_id=None, thread_id=uuid4()),
+        _workspace_actor(project_id=None, run_id=uuid4()),
+        _actor(),  # a project grant's actor
+    ):
+        assert not tool_actions._same_target(row, stranger)
+
+    bound_to_project = IntegrationToolAction(
+        organization_id=ORG,
+        user_id=USER,
+        project_id=PROJECT,
+        workspace_id=None,
+        invocation_id=uuid4(),
+        tool_name="create_project_note",
+        arguments=NOTE_ARGS,
+        argument_hash=canonical_hash("create_project_note", NOTE_ARGS),
+        state="awaiting_approval",
+    )
+    assert tool_actions._same_target(bound_to_project, _actor())
+    # A workspace actor with no project, or with a workspace, is not that row's.
+    assert not tool_actions._same_target(
+        bound_to_project, _workspace_actor(project_id=None)
+    )
+    assert not tool_actions._same_target(bound_to_project, _workspace_actor())
