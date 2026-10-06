@@ -128,14 +128,24 @@ function ApprovalPrompt({
   tools: Array<{ name: string; args: Record<string, unknown> }>;
 }>) {
   const [answer, setAnswer] = useState("");
-  // Keystrokes that arrive in one tick (a pasted "yes⏎") must see each
-  // other, so the draft lives in a ref and state only drives rendering.
+  // Keystrokes delivered in one tick (fast typing, or a paste that arrives
+  // as "yes" followed by Enter, or as one "yes\r" chunk) must see each
+  // other, so the draft and the submitted flag live in refs; state only
+  // drives rendering.
   const draft = useRef("");
-  const [submitted, setSubmitted] = useState(false);
+  const submitted = useRef(false);
+  const [, rerender] = useState(0);
   const pending = approval?.approved === undefined;
   const update = (value: string) => {
     draft.current = value;
     setAnswer(value);
+  };
+  const submit = () => {
+    const choice = draft.current.trim().toLowerCase();
+    if (choice !== "yes" && choice !== "no") return;
+    submitted.current = true;
+    rerender((n) => n + 1);
+    respondToApproval({ approved: choice === "yes" });
   };
   // The prompt is modal: the composer is unmounted while an approval is
   // pending, so read keystrokes directly instead of through the focus
@@ -144,28 +154,25 @@ function ApprovalPrompt({
   // decision typed in that window was silently dropped (GOO-397).
   useInput(
     (input, key) => {
-      if (submitted || key.ctrl || key.meta || key.escape || key.tab) return;
+      if (submitted.current || key.ctrl || key.meta || key.escape || key.tab)
+        return;
       if (key.return) {
-        const choice = draft.current.trim().toLowerCase();
-        if (choice !== "yes" && choice !== "no") return;
-        setSubmitted(true);
-        respondToApproval({ approved: choice === "yes" });
+        submit();
         return;
       }
       if (key.backspace || key.delete) {
         update(draft.current.slice(0, -1));
         return;
       }
-      if (
-        input &&
-        !key.upArrow &&
-        !key.downArrow &&
-        !key.leftArrow &&
-        !key.rightArrow
-      )
-        update(draft.current + input);
+      if (key.upArrow || key.downArrow || key.leftArrow || key.rightArrow)
+        return;
+      // A pasted chunk may carry its own line ending; strip control
+      // characters from what is shown and treat the newline as Enter.
+      const text = terminalText(input.replace(/[\r\n]/g, ""));
+      if (text) update(draft.current + text);
+      if (/[\r\n]/.test(input)) submit();
     },
-    { isActive: pending && !submitted },
+    { isActive: pending && !submitted.current },
   );
   if (!pending) return null;
   return (
