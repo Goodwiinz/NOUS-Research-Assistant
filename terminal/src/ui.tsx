@@ -217,7 +217,7 @@ export function Message({
             copyToClipboard={(text) => {
               const p = copyText(text);
               report(p);
-              return p.catch(() => {});
+              return p;
             }}
           >
             {({ isCopied }) => <Text>[{isCopied ? "Copied" : "Copy"}]</Text>}
