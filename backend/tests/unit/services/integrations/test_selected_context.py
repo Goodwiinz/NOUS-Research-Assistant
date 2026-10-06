@@ -304,10 +304,18 @@ async def test_a_workspace_bound_context_never_reads_a_selection(
     assert "Cite in APA" not in json.dumps(result.model_dump(mode="json"))
 
 
-async def test_a_workspace_consent_cannot_hold_a_selection(db: AsyncSession) -> None:
+async def test_a_workspace_consent_cannot_hold_a_selection(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # check_scopes refuses context:read for a workspace consent. A row that got
     # in another way still has no project to pick memories from, so the owner
-    # can neither list options for it nor save a selection under it.
+    # can neither list options for it nor save a selection under it, and no
+    # project is ever resolved for it (a NULL project would match nothing, but
+    # that is luck of the SQL, not a rule).
+    async def no_project(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a workspace consent has no project to resolve")
+
+    monkeypatch.setattr(selected_context, "authorized_project", no_project)
     consent = uuid4()
     await db.execute(
         insert(IntegrationGrantRequest).values(
