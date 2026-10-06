@@ -132,8 +132,8 @@ Numbering continues the list kept during the session. "Fixed" means fixed in the
 
 | # | Defect | Status |
 | --- | --- | --- |
-| 1 | `POST /integrations/grant-requests` 403 on the dev lane for a project whose workspace has `organization_id` NULL (`authorized_project` requires an active org row; the web project route falls back to the owner's org) | open; not reproducible locally (new workspaces carry an org) |
-| 2 | Frontend `getPublicApiOrigin()` falls back to `http://localhost:8000` on localhost, which the page CSP (`connect-src 'self' https: wss:`) blocks → "Failed to fetch" on login | open; worked around with `NEXT_PUBLIC_API_URL=http://localhost:3000` |
+| 1 | `POST /integrations/grant-requests` 403 on the dev lane for a project whose workspace has `organization_id` NULL (`authorized_project` requires an active org row; the web project route falls back to the owner's org) | fix in this PR (mirrors `resolve_project`; not reproducible locally, new workspaces carry an org) |
+| 2 | Frontend `getPublicApiOrigin()` falls back to `http://localhost:8000` on localhost, which the page CSP (`connect-src 'self' https: wss:`) blocks → "Failed to fetch" on login | fix in this PR (development-only `connect-src` allowance for `localhost:8000`); the run itself used `NEXT_PUBLIC_API_URL=http://localhost:3000` |
 | 3 | Bridge `run` forces `wss:` even for loopback | fixed (patch 1) |
 | 4 | Backend `/harness/connect` forces `wss:` even for loopback | fixed (patch 2) |
 | 5 | Adapter `verify()` rejects real Codex `writableRoots: []`; fixture server echoes `[root]` | fixed (patch 3 + fixture test) |
