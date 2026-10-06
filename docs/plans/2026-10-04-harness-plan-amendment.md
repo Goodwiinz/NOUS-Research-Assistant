@@ -136,14 +136,19 @@ at `c04521730`, 2026-10-06.
 Slice 1 carries the plan's only migration, so the serial-migration rule above
 applies to it. #1784 (`ic01_integration_context`) merged after the Slice 1
 branch was cut, and it also revises `hb06_integration_handoffs`, as
-`hb03_workspace_grants` does. Before the Slice 1 PR opens, merge fresh
+`hb03_workspace_grants` did. Before the Slice 1 PR opens, merge fresh
 `origin/develop` and point `hb03_workspace_grants` at the head
 `check_alembic.py` prints there (`ic01_integration_context` on 2026-10-06).
 Update every place that names its parent: the migration, its test
 (`backend/tests/unit/test_workspace_grants_migration.py`), Gate 0a in
 [`harness-live-proof.md`](../testing/harness-live-proof.md) and the migration
 test paragraph in [`harness-bridge.md`](../engineering/harness-bridge.md).
-Two heads fail the blocking `migration-check`.
+Two heads fail the blocking `migration-check`. **Done 2026-10-06** on
+`feat/plan07-s1-workspace-grant-v2` after merging `origin/develop` at
+`664cee348`: `hb03_workspace_grants` now revises `ic01_integration_context`, all
+four places name it, and `check_alembic.py` prints the single head
+`hb03_workspace_grants`. Re-check the parent against the head of `develop` once
+more if another migration merges before the PR does.
 
 Slice 1 also needs the **`api-breaking-approved`** label on its PR. A workspace
 request or action has no project, so four response properties widen from

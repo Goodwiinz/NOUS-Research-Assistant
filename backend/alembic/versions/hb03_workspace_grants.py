@@ -8,7 +8,7 @@ workspace-grant action aimed at a Collection sets both: its CHECK only requires
 at least one.
 
 Revision ID: hb03_workspace_grants
-Revises: hb06_integration_handoffs
+Revises: ic01_integration_context
 """
 
 import sqlalchemy as sa
@@ -16,7 +16,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "hb03_workspace_grants"
-down_revision = "hb06_integration_handoffs"
+down_revision = "ic01_integration_context"
 branch_labels = None
 depends_on = None
 
