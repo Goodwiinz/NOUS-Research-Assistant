@@ -2949,6 +2949,61 @@ def test_local_tool_arguments_are_checked_without_coercion() -> None:
                     read_tools._check_local_arguments(schema, {prop: bad})
 
 
+def _edge_values(spec: dict[str, Any]) -> tuple[list[Any], list[Any]]:
+    """Values on and just past each bound a property's schema declares."""
+    accepted: list[Any] = []
+    rejected: list[Any] = []
+    if spec["type"] == "integer":
+        for bound, step in (("minimum", -1), ("maximum", 1)):
+            if bound in spec:
+                accepted.append(spec[bound])
+                rejected.append(spec[bound] + step)
+    elif spec["type"] == "string":
+        if "enum" in spec:
+            accepted += spec["enum"]
+            rejected.append("not-a-member")
+        for bound, step in (("minLength", -1), ("maxLength", 1)):
+            if bound in spec:
+                accepted.append("x" * spec[bound])
+                rejected.append("x" * (spec[bound] + step))
+    else:  # arrays of strings, in every local schema
+        for bound, step in (("minItems", -1), ("maxItems", 1)):
+            if bound in spec:
+                accepted.append(["x"] * spec[bound])
+                rejected.append(["x"] * (spec[bound] + step))
+    return accepted, rejected
+
+
+def test_local_tool_arguments_are_held_to_every_bound_of_their_schema() -> None:
+    # The advertised schema is the one enforced, so nothing a local tool
+    # declares (a range, a length, an item count, an enum) is advisory. This
+    # is how the tools develop added after list_library (get_document_content,
+    # retrieve_passages, get_arxiv_paper_content, find_researchers,
+    # get_researcher) are validated as strictly as the registry tools'
+    # pydantic models, and a tool added later is held to it with no new test.
+    checked = 0
+    for name, (_description, schema, _scope) in read_tools.LOCAL_TOOLS.items():
+        for prop, spec in schema["properties"].items():
+            accepted, rejected = _edge_values(spec)
+            for value in accepted:
+                read_tools._check_local_arguments(schema, {prop: value})
+            for value in rejected:
+                with pytest.raises(ToolArgumentError, match="invalid argument types"):
+                    read_tools._check_local_arguments(schema, {prop: value})
+            checked += len(accepted) + len(rejected)
+    assert checked >= 20, "the local schemas should declare bounds to check"
+
+
+@pytest.mark.parametrize("name", sorted(read_tools.LOCAL_TOOLS))
+def test_local_tools_refuse_unknown_and_missing_arguments(name: str) -> None:
+    context = _project_context(TOOLS_READ | LIBRARY_READ)
+    with pytest.raises(ToolArgumentError, match="unknown arguments"):
+        read_tools._validate_arguments(context, _invocation(name, unexpected=1))
+    if read_tools.LOCAL_TOOLS[name][1]["required"]:
+        with pytest.raises(ToolArgumentError, match="missing required arguments"):
+            read_tools._validate_arguments(context, _invocation(name))
+
+
 def test_registry_tools_need_tools_read_and_library_tools_need_library_read() -> None:
     assert {read_tools.TOOL_SCOPES[name] for name in READ_TOOL_NAMES} == {"tools:read"}
     assert read_tools.TOOL_SCOPES["list_library"] == "library:read"
