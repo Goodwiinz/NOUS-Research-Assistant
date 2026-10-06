@@ -2570,16 +2570,77 @@ async def test_list_library_is_denied_once_its_workspace_is_deleted(
         )
 
 
-async def test_list_library_for_a_foreign_user_is_denied(db: AsyncSession) -> None:
-    context = IntegrationContext(
-        user_id=uuid4(),
+async def _add_user(db: AsyncSession) -> UUID:
+    """A live, active user of ORG who owns nothing and belongs to nothing."""
+    user_id = uuid4()
+    await db.execute(
+        text(
+            "INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role, is_active, login_count, created_at, updated_at, is_deleted) VALUES (:id, :org, :email, 'unused', 'Other', 'User', 'USER', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ),
+        {"id": str(user_id), "org": str(ORG), "email": f"{user_id}@example.test"},
+    )
+    await db.commit()
+    return user_id
+
+
+def _library_context_of(user_id: UUID) -> IntegrationContext:
+    return IntegrationContext(
+        user_id=user_id,
         organization_id=ORG,
         workspace_id=WORKSPACE,
         grant_id=uuid4(),
         scopes=LIBRARY_READ,
     )
+
+
+async def test_list_library_for_an_unknown_user_is_denied(db: AsyncSession) -> None:
+    # No such user row: refused before the library is looked at. The owner and
+    # member rule is pinned by the next tests, with users that do exist.
     with pytest.raises(IntegrationAccessDenied):
-        await invoke_read(db, context, _invocation("list_library"))
+        await invoke_read(db, _library_context_of(uuid4()), _invocation("list_library"))
+
+
+@pytest.mark.parametrize("membership", ["none", "revoked"])
+async def test_list_library_for_a_user_outside_the_workspace_is_denied(
+    db: AsyncSession, membership: str
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # A real, active user of the same organization who neither owns the
+    # workspace nor holds a live membership: only authorized_workspace's
+    # owner-or-member rule stands between them and the folder names.
+    stranger = await _add_user(db)
+    if membership == "revoked":
+        await db.execute(
+            insert(WorkspaceMember).values(
+                workspace_id=WORKSPACE,
+                user_id=stranger,
+                role=WorkspaceRole.VIEWER,
+                is_deleted=True,
+            )
+        )
+        await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db, _library_context_of(stranger), _invocation("list_library")
+        )
+
+
+async def test_list_library_for_a_live_member_is_allowed(db: AsyncSession) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # The control for the two denials above: membership is the discriminator.
+    member = await _add_user(db)
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=member, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    result = await invoke_read(
+        db, _library_context_of(member), _invocation("list_library")
+    )
+    assert set(_library_folders(result)) == {str(PROJECT), str(OTHER_PROJECT)}
 
 
 # What ends a project grant's access. list_library resolves the scope again on
