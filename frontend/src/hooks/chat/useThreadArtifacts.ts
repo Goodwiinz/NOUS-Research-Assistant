@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import {
   artifactService,
   type ArtifactVersion,
+  type ProjectArtifact,
   type ThreadArtifact,
 } from '@/services/artifactService';
 import { threadHandoffKey } from '@/hooks/chat/useThreadHandoff';
@@ -31,6 +32,14 @@ export const artifactVersionsKey = (
   'artifact',
   artifactId,
   'versions',
+];
+
+export const projectArtifactsKey = (
+  projectId: string
+): readonly ['project', string, 'artifacts'] => [
+  'project',
+  projectId,
+  'artifacts',
 ];
 
 /** Late uploads land after the run closes; keep a slow visible-tab poll. */
@@ -77,6 +86,18 @@ export function useThreadArtifacts(
         : false;
     },
     refetchIntervalInBackground: false,
+    retry: false,
+  });
+}
+
+export function useProjectArtifacts(
+  projectId: string | null | undefined
+): UseQueryResult<ProjectArtifact[]> {
+  return useQuery({
+    queryKey: projectArtifactsKey(projectId ?? ''),
+    queryFn: () => artifactService.listProjectArtifacts(projectId ?? ''),
+    enabled: Boolean(projectId),
+    staleTime: 5_000,
     retry: false,
   });
 }

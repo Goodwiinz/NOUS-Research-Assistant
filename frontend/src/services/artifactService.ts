@@ -2,6 +2,7 @@ import { api } from '@/services/api-client';
 import type {
   ApiArtifactReference,
   ApiArtifactVersion,
+  ApiProjectArtifact,
   ApiThreadArtifact,
 } from '@/types/api/artifact-contract';
 
@@ -31,6 +32,15 @@ export interface ArtifactReference {
 export interface ThreadArtifact {
   version: ArtifactVersion;
   reference: ArtifactReference;
+}
+
+export interface ProjectArtifact {
+  artifactId: string;
+  kind: string;
+  title: string;
+  threadId: string | null;
+  updatedAt: string;
+  version: ArtifactVersion;
 }
 
 export function toArtifactVersion(dto: ApiArtifactVersion): ArtifactVersion {
@@ -65,6 +75,17 @@ export function toThreadArtifact(dto: ApiThreadArtifact): ThreadArtifact {
   };
 }
 
+export function toProjectArtifact(dto: ApiProjectArtifact): ProjectArtifact {
+  return {
+    artifactId: dto.artifact_id,
+    kind: dto.kind,
+    title: dto.title,
+    threadId: dto.thread_id ?? null,
+    updatedAt: dto.updated_at,
+    version: toArtifactVersion(dto.current_version),
+  };
+}
+
 /** Relative API path for a version's bytes; always fetched with auth. */
 export function artifactVersionContentPath(versionId: string): string {
   return `/artifacts/versions/${encodeURIComponent(versionId)}/content`;
@@ -76,6 +97,12 @@ export const artifactService = {
       `/artifacts/threads/${encodeURIComponent(threadId)}`
     );
     return rows.map(toThreadArtifact);
+  },
+  async listProjectArtifacts(projectId: string): Promise<ProjectArtifact[]> {
+    const rows = await api.get<ApiProjectArtifact[]>(
+      `/artifacts/projects/${encodeURIComponent(projectId)}`
+    );
+    return rows.map(toProjectArtifact);
   },
   async listVersions(artifactId: string): Promise<ArtifactVersion[]> {
     const rows = await api.get<ApiArtifactVersion[]>(
