@@ -9,9 +9,8 @@ row). ``claim_job_for_processing`` gives the document-processing tasks a single,
 atomic decision so a replay never re-does finished work, never double-processes
 a live run, and safely takes over an abandoned one.
 
-No new infrastructure: the decision reads only the existing
-``ProcessingJob.status`` + ``started_at`` columns, and the claim is serialized
-with ``SELECT ... FOR UPDATE`` on the job row.
+The decision uses existing document deletion and job lifecycle fields. Claims
+lock Document -> ProcessingJob, matching cancellation and stage writes.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from src.models.document import Document
-from src.models.processing import JobStatus, ProcessingJob
+from src.models.processing import JobStatus, JobType, ProcessingJob
 
 # A RUNNING job older than this is treated as abandoned (its worker died) and is
 # reclaimed; a younger RUNNING job is assumed live and skipped so two workers
@@ -82,11 +81,12 @@ def claim_job_for_processing(
 ) -> ClaimResult:
     """Atomically decide whether the caller may process ``job``.
 
-    Re-reads the job under a row lock (``SELECT ... FOR UPDATE``) so concurrent
-    redeliveries cannot both claim it, then:
+    Refreshes and locks Document -> ProcessingJob so cancellation and concurrent
+    redeliveries cannot both own it, then:
 
     * the job or its document is soft-deleted -> skip; the user deleted it.
     * terminal (COMPLETED/FAILED/CANCELLED) -> skip; the work is already done.
+    * missing/foreign document or changed association -> skip; ownership is invalid.
     * RUNNING younger than ``stale_after_seconds`` -> skip; assumed live on
       another worker.
     * RUNNING older than the threshold (or with no ``started_at``) -> reclaim;
@@ -98,25 +98,40 @@ def claim_job_for_processing(
     immediately. On a skip the lock is released (rollback) without mutating the
     job. The passed ``job`` instance is the one mutated — callers keep using it.
     """
-    # Re-read under a row lock. In the same Session this returns the identity-map
-    # instance (i.e. the passed ``job``) while still emitting FOR UPDATE, which
-    # serializes the claim against other workers. FOR UPDATE is a harmless no-op
-    # on SQLite (unit tests).
-    #
-    # ``populate_existing()`` is mandatory: without it SQLAlchemy hands back the
-    # already-cached (and un-expired) identity-map instance and *discards* the
-    # freshly-locked row's column values, so ``locked.status`` would reflect the
-    # pre-lock in-memory state. Two concurrent redeliveries could then both see a
-    # stale QUEUED after the other committed RUNNING and both claim the job —
-    # the exact double-processing this guard exists to prevent. Forcing a refresh
-    # of the locked row makes the status check see the just-locked DB state.
-    locked = (
-        db.query(ProcessingJob)
-        .filter(ProcessingJob.id == job.id)
-        .populate_existing()
-        .with_for_update()
-        .first()
-    )
+    # ``populate_existing()`` keeps both checks tied to the just-locked database
+    # rows rather than cached live/QUEUED snapshots. PostgreSQL tests prove the
+    # lock behavior; SQLite only exercises the decision branches.
+    # Use the same Document -> ProcessingJob order as cancellation/deletion.
+    # Suppress autoflush: the caller may hold a stale ORM snapshot, whose
+    # pending changes must not take a job lock before the document lock.
+    with db.no_autoflush:
+        candidate = (
+            db.query(ProcessingJob.document_id, ProcessingJob.organization_id)
+            .filter(ProcessingJob.id == job.id)
+            .first()
+        )
+        if candidate is None:
+            db.rollback()
+            return ClaimResult(False, "missing")
+        document = None
+        if candidate.document_id is not None:
+            document = (
+                db.query(Document)
+                .filter(
+                    Document.id == candidate.document_id,
+                    Document.organization_id == candidate.organization_id,
+                )
+                .populate_existing()
+                .with_for_update()
+                .first()
+            )
+        locked = (
+            db.query(ProcessingJob)
+            .filter(ProcessingJob.id == job.id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
     if locked is None:
         db.rollback()
         return ClaimResult(False, "missing")
@@ -124,19 +139,27 @@ def claim_job_for_processing(
     # Deletion commits before broker revocation, which is best effort, so the
     # message can still arrive. A document deleted with cascade=False leaves its
     # job row live, hence the document check.
-    if locked.is_deleted or (
-        locked.document_id is not None
-        and db.query(Document.id)
-        .filter(Document.id == locked.document_id, Document.is_deleted == True)
-        .first()
-        is not None
-    ):
+    if locked.is_deleted or (document is not None and document.is_deleted):
         db.rollback()
         return ClaimResult(False, "deleted")
 
     if locked.status in _TERMINAL_STATUSES:
         db.rollback()
         return ClaimResult(False, "terminal")
+
+    if (
+        locked.document_id != candidate.document_id
+        or locked.organization_id != candidate.organization_id
+        or (
+            document is None
+            and (
+                locked.document_id is not None
+                or locked.job_type == JobType.DOCUMENT_INGESTION
+            )
+        )
+    ):
+        db.rollback()
+        return ClaimResult(False, "missing")
 
     if locked.status == JobStatus.RUNNING:
         age = _running_age_seconds(locked)

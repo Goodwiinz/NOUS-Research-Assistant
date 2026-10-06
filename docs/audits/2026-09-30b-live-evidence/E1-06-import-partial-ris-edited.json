@@ -1,0 +1,52 @@
+{
+  "step": "E1-06-import-partial-ris-edited",
+  "as": "owner",
+  "at": "2026-09-30T21:06:59.257098+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/imports",
+    "body": {
+      "file": "<file partial.ris 335B sha256=fa03849ca74c0631460627e17b4d0c1fcaa792fa81b24bd7fa3ff7e194a57bf2>",
+      "format": "ris",
+      "declaration": "{\"database\": \"Embase (Ovid)\", \"query_text\": \"retrieval augmented generation hallucination\", \"search_date\": \"2026-09-30\", \"redistribution\": \"restricted\"}"
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "80d0b3df-262f-4906-9c9a-ef168259b67a",
+    "kind": "file_import",
+    "version": 2,
+    "previous_receipt_id": "add02549-aa45-481b-8750-0f840ecacc53",
+    "declared": {
+      "database": "Embase (Ovid)",
+      "query_text": "retrieval augmented generation hallucination",
+      "search_date": "2026-09-30",
+      "exported_at": null,
+      "redistribution": "restricted",
+      "notes": null
+    },
+    "observed": {
+      "imported_at": "2026-09-30T21:06:59.222640+00:00",
+      "actor_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "filename": "partial.ris",
+      "byte_size": 335,
+      "sha256": "fa03849ca74c0631460627e17b4d0c1fcaa792fa81b24bd7fa3ff7e194a57bf2",
+      "format": "ris",
+      "parser_version": "nous.search-import.v1",
+      "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177",
+      "counts": {
+        "parsed": 6,
+        "accepted": 4,
+        "rejected": 2
+      }
+    },
+    "parsed_count": 6,
+    "accepted_count": 4,
+    "rejected_count": 2,
+    "replayed": false,
+    "created_at": "2026-09-30T21:06:59.145405Z"
+  }
+}

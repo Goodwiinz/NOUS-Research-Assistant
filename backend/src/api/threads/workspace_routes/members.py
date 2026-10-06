@@ -7,6 +7,7 @@ service functions flush, each mutating handler ends with one
 ``await db.commit()``). Transport + transaction-boundary only.
 """
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -23,6 +24,8 @@ from src.schemas.chat import (
 from src.services.threads import workspace_service
 
 from .presenters import _member_to_response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/workspaces", tags=["workspaces"])
 
@@ -47,10 +50,12 @@ async def add_workspace_member(
         member = await workspace_service.add_member(
             db, workspace_id, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
+    except ValueError:
+        logger.warning("Invalid workspace member request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid workspace member request")
     if not member:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -73,10 +78,12 @@ async def update_member_role(
         member = await workspace_service.update_member_role(
             db, workspace_id, user_id, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
+    except ValueError:
+        logger.warning("Invalid workspace member request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid workspace member request")
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
@@ -98,10 +105,12 @@ async def remove_workspace_member(
         removed = await workspace_service.remove_member(
             db, workspace_id, user_id, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
+    except ValueError:
+        logger.warning("Invalid workspace member request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid workspace member request")
     if not removed:
         raise HTTPException(status_code=404, detail="Member not found")
 

@@ -1,0 +1,101 @@
+{
+  "step": "B3-04-owner-run-2-manifest",
+  "as": "owner",
+  "at": "2026-09-30T21:03:10.237716+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/6bc5ccdb-1521-461d-aa44-fff52800f9db/manifest",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "_search_receipts_v1": {
+      "executions": {
+        "06710c5f-185e-5c70-8f62-d01b1290fcd0": {
+          "pages": {
+            "cd643061-db0d-5142-91d3-6cd4ca3b5c66": {
+              "page_id": "cd643061-db0d-5142-91d3-6cd4ca3b5c66",
+              "attempts": [
+                {
+                  "page": {
+                    "page_id": "cd643061-db0d-5142-91d3-6cd4ca3b5c66",
+                    "request": {
+                      "method": "GET",
+                      "params": {
+                        "start": 0,
+                        "sortBy": "relevance",
+                        "sortOrder": "descending",
+                        "max_results": 5,
+                        "search_query": "all:retrieval AND all:augmented AND all:generation AND all:hallucination"
+                      },
+                      "endpoint": "https://export.arxiv.org/api/query",
+                      "requested_at": "2026-09-30T21:01:35.410997+00:00"
+                    },
+                    "response": {
+                      "has_more": null,
+                      "error_type": "InterruptedError",
+                      "received_at": "2026-09-30T21:01:35.459599+00:00",
+                      "status_code": null,
+                      "parsed_count": 0,
+                      "request_attempts": []
+                    },
+                    "attempt_id": "adf36558-aad4-4f2b-a28e-528aed74c2aa",
+                    "page_index": 0,
+                    "page_status": "interrupted",
+                    "record_keys": [],
+                    "imported_count": 0,
+                    "imported_source_ids": []
+                  },
+                  "attempt_id": "adf36558-aad4-4f2b-a28e-528aed74c2aa"
+                }
+              ],
+              "page_index": 0
+            }
+          },
+          "status": "running",
+          "step_id": "search",
+          "provider": "arxiv",
+          "execution_id": "06710c5f-185e-5c70-8f62-d01b1290fcd0",
+          "strategy_version": "sha256:d50b6958f754357bffa12cc01014ed82956f135df72c6c9b90a940c6f70b12e4",
+          "provider_attempts": {}
+        }
+      },
+      "strategies": {
+        "sha256:d50b6958f754357bffa12cc01014ed82956f135df72c6c9b90a940c6f70b12e4": {
+          "step_id": null,
+          "intended": {
+            "parameters": {
+              "sources": [
+                "arxiv"
+              ],
+              "max_results": 5,
+              "contract_version": 1
+            },
+            "selected_providers": [
+              "arxiv"
+            ]
+          },
+          "project_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+          "blueprint_id": "fab71505-9dd2-4b00-b186-9f843c2b9ccf",
+          "route_limits": {
+            "max_providers": 4,
+            "request_timeout_seconds": 90.0,
+            "max_results_per_provider": 50,
+            "requested_results_per_provider": 5
+          },
+          "schema_version": "nous.academic.search-strategy.v1",
+          "strategy_version": "sha256:d50b6958f754357bffa12cc01014ed82956f135df72c6c9b90a940c6f70b12e4",
+          "blueprint_version": 1,
+          "effective_plan_hash": "31011c46c41161f14293c7c113ece54e571428eaf77fdb65efca2bb56244ddc0",
+          "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177"
+        }
+      },
+      "schema_version": 1
+    },
+    "parameters_override": {},
+    "run_status": "running"
+  }
+}

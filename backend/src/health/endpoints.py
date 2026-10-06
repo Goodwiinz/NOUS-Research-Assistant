@@ -1,6 +1,7 @@
 """Dependency-aware Kubernetes readiness endpoint."""
 
 import asyncio
+import logging
 import time
 from typing import Any, Dict, Optional
 
@@ -8,6 +9,8 @@ from fastapi import APIRouter, HTTPException
 
 from ..core.config import get_settings
 from .checker import HealthChecker, HealthStatus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -73,8 +76,9 @@ async def _evaluate_readiness() -> Dict[str, Any]:
                     "detail": f"Critical component {component} is not healthy",
                 }
         return {"ready": True, "detail": None}
-    except Exception as exc:  # defensive: readiness must fail closed, never 500
-        return {"ready": False, "detail": f"Readiness check failed: {exc}"}
+    except Exception:  # defensive: readiness must fail closed, never 500
+        logger.error("Readiness check failed", exc_info=True)
+        return {"ready": False, "detail": "Readiness check failed"}
 
 
 async def get_cached_readiness() -> Dict[str, Any]:

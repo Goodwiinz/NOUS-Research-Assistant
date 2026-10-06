@@ -1,0 +1,472 @@
+{
+  "accounting_after_review": {
+    "boxes": {
+      "amended_in": 0,
+      "amended_inclusion": [],
+      "amended_out": 0,
+      "carried_decisions": 2,
+      "changed_sources": 1,
+      "checks": {
+        "new_records_match_flows": true,
+        "parent_flow_matches_decisions": true,
+        "parent_records_retained": true,
+        "studies_reconcile": true,
+        "successor_flow_matches_decisions": true
+      },
+      "corrected_retracted": 1,
+      "duplicates_removed": 2,
+      "new_records_by_source": {
+        "scheduled_search": 29
+      },
+      "new_records_identified": 29,
+      "new_studies_included": 0,
+      "records_excluded": 29,
+      "records_screened": 29,
+      "reports_excluded_by_reason_change": {},
+      "reports_in_previous_version": 0,
+      "reports_not_retrieved": 0,
+      "reports_sought": 0,
+      "studies_in_previous_version": 0,
+      "total_studies_included": 0,
+      "withheld_reports": []
+    },
+    "error": null,
+    "flow": {
+      "amendments": [],
+      "checks": {
+        "assessed_within_retrieved": true,
+        "included_plus_excluded_equals_assessed": true,
+        "screened_plus_awaiting_equals_unique": true
+      },
+      "counts": {
+        "duplicates_removed": 2,
+        "import_rejected": 0,
+        "included_reports": 0,
+        "included_studies": 0,
+        "records_awaiting_screening": 0,
+        "records_by_import": {
+          "r8-live-fixture": 4,
+          "scheduled_search": 29
+        },
+        "records_by_source": {},
+        "records_excluded": 31,
+        "records_identified": 33,
+        "records_screened": 31,
+        "reports_assessed": 0,
+        "reports_awaiting_retrieval": 0,
+        "reports_excluded_by_reason": {},
+        "reports_not_retrieved": 0,
+        "reports_sought": 0,
+        "unconfirmed_study_links": 0,
+        "unique_reports": 31
+      },
+      "excluded_from_flow": {
+        "workspace_documents": 0
+      },
+      "versions": {
+        "corpus_hash": "f09d0f9738dfe60e47bec4330c4f57ec1310bc2d3aa5e7ec7c7ec9ccd97721b2",
+        "protocol_version_ids": [
+          "73bd7d09-8087-40ac-b26a-2f89b99100cf"
+        ],
+        "stream_heads": {
+          "research_identity:480d8618-3a93-4062-8d1f-608f3fc015b3": 0,
+          "research_screening:620eb0d2-4d84-4786-ae8b-a5cc6b88804d": 6,
+          "research_search_update:480d8618-3a93-4062-8d1f-608f3fc015b3": 2
+        }
+      },
+      "warnings": []
+    },
+    "flow_matches_frozen_hash": true,
+    "parent_flow": {
+      "amendments": [],
+      "checks": {
+        "assessed_within_retrieved": true,
+        "included_plus_excluded_equals_assessed": true,
+        "screened_plus_awaiting_equals_unique": true
+      },
+      "counts": {
+        "duplicates_removed": 0,
+        "import_rejected": 0,
+        "included_reports": 0,
+        "included_studies": 0,
+        "records_awaiting_screening": 0,
+        "records_by_import": {
+          "r8-live-fixture": 4
+        },
+        "records_by_source": {},
+        "records_excluded": 4,
+        "records_identified": 4,
+        "records_screened": 4,
+        "reports_assessed": 0,
+        "reports_awaiting_retrieval": 0,
+        "reports_excluded_by_reason": {},
+        "reports_not_retrieved": 0,
+        "reports_sought": 0,
+        "unconfirmed_study_links": 0,
+        "unique_reports": 4
+      },
+      "excluded_from_flow": {
+        "workspace_documents": 0
+      },
+      "versions": {
+        "corpus_hash": "772cc4b681602b255d01f8bf377d5e32475f0b3626a39369c45ac33b8d4688f7",
+        "protocol_version_ids": [
+          "73bd7d09-8087-40ac-b26a-2f89b99100cf"
+        ],
+        "stream_heads": {
+          "research_identity:480d8618-3a93-4062-8d1f-608f3fc015b3": 0,
+          "research_screening:620eb0d2-4d84-4786-ae8b-a5cc6b88804d": 6,
+          "research_search_update:480d8618-3a93-4062-8d1f-608f3fc015b3": 1
+        }
+      },
+      "warnings": []
+    },
+    "parent_review_version_id": "c4575e57-8a47-4ced-8d8b-1d63d976006d",
+    "review_version_id": "3d37b932-a18c-42c2-813e-10e9ab7e0882"
+  },
+  "accounting_before_review": {
+    "boxes": null,
+    "error": "Review work is unresolved",
+    "flow": {
+      "amendments": [],
+      "checks": {
+        "assessed_within_retrieved": true,
+        "included_plus_excluded_equals_assessed": true,
+        "screened_plus_awaiting_equals_unique": true
+      },
+      "counts": {
+        "duplicates_removed": 2,
+        "import_rejected": 0,
+        "included_reports": 0,
+        "included_studies": 0,
+        "records_awaiting_screening": 29,
+        "records_by_import": {
+          "r8-live-fixture": 4,
+          "scheduled_search": 29
+        },
+        "records_by_source": {},
+        "records_excluded": 2,
+        "records_identified": 33,
+        "records_screened": 2,
+        "reports_assessed": 0,
+        "reports_awaiting_retrieval": 0,
+        "reports_excluded_by_reason": {},
+        "reports_not_retrieved": 0,
+        "reports_sought": 0,
+        "unconfirmed_study_links": 0,
+        "unique_reports": 31
+      },
+      "excluded_from_flow": {
+        "workspace_documents": 0
+      },
+      "versions": {
+        "corpus_hash": "f09d0f9738dfe60e47bec4330c4f57ec1310bc2d3aa5e7ec7c7ec9ccd97721b2",
+        "protocol_version_ids": [
+          "73bd7d09-8087-40ac-b26a-2f89b99100cf"
+        ],
+        "stream_heads": {
+          "research_identity:480d8618-3a93-4062-8d1f-608f3fc015b3": 0,
+          "research_screening:620eb0d2-4d84-4786-ae8b-a5cc6b88804d": 6,
+          "research_search_update:480d8618-3a93-4062-8d1f-608f3fc015b3": 2
+        }
+      },
+      "warnings": []
+    },
+    "flow_matches_frozen_hash": true,
+    "parent_flow": {
+      "amendments": [],
+      "checks": {
+        "assessed_within_retrieved": true,
+        "included_plus_excluded_equals_assessed": true,
+        "screened_plus_awaiting_equals_unique": true
+      },
+      "counts": {
+        "duplicates_removed": 0,
+        "import_rejected": 0,
+        "included_reports": 0,
+        "included_studies": 0,
+        "records_awaiting_screening": 0,
+        "records_by_import": {
+          "r8-live-fixture": 4
+        },
+        "records_by_source": {},
+        "records_excluded": 4,
+        "records_identified": 4,
+        "records_screened": 4,
+        "reports_assessed": 0,
+        "reports_awaiting_retrieval": 0,
+        "reports_excluded_by_reason": {},
+        "reports_not_retrieved": 0,
+        "reports_sought": 0,
+        "unconfirmed_study_links": 0,
+        "unique_reports": 4
+      },
+      "excluded_from_flow": {
+        "workspace_documents": 0
+      },
+      "versions": {
+        "corpus_hash": "772cc4b681602b255d01f8bf377d5e32475f0b3626a39369c45ac33b8d4688f7",
+        "protocol_version_ids": [
+          "73bd7d09-8087-40ac-b26a-2f89b99100cf"
+        ],
+        "stream_heads": {
+          "research_identity:480d8618-3a93-4062-8d1f-608f3fc015b3": 0,
+          "research_screening:620eb0d2-4d84-4786-ae8b-a5cc6b88804d": 6,
+          "research_search_update:480d8618-3a93-4062-8d1f-608f3fc015b3": 1
+        }
+      },
+      "warnings": []
+    },
+    "parent_review_version_id": "c4575e57-8a47-4ced-8d8b-1d63d976006d",
+    "review_version_id": "3d37b932-a18c-42c2-813e-10e9ab7e0882"
+  },
+  "export_root_sha256": "e35e53824344d8c5dae3fe12723b9a002e00dbbcbd82ebcbf446a433891ffd37",
+  "export_successor_sha256": "9165e837b4ccd8a9b073a256fed895760db9d3f4100a0b9a0a7b1d8b5493bf2e",
+  "root": {
+    "accepted_execution_id": null,
+    "carried": [
+      {
+        "basis": "single",
+        "event_id": "074c34f9-08cf-47c9-9ee9-31980047d1e1",
+        "outcome": "exclude",
+        "report_id": "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+        "resolution_id": "64fc43bb-2f9b-5395-b7db-e5b6a14b1e77",
+        "stage": "title_abstract",
+        "uncertain": false
+      },
+      {
+        "basis": "single",
+        "event_id": "6e11bb81-f4a8-4a7b-898c-9e059ec8ce84",
+        "outcome": "exclude",
+        "report_id": "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+        "resolution_id": "80827681-2d4c-5a26-9162-9d0ffd913f7b",
+        "stage": "title_abstract",
+        "uncertain": false
+      },
+      {
+        "basis": "single",
+        "event_id": "775c0c5f-d74a-41c4-9880-84f988acce9e",
+        "outcome": "exclude",
+        "report_id": "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+        "resolution_id": "a8d5aa8e-35e3-5cf3-9f83-961d27e643ff",
+        "stage": "title_abstract",
+        "uncertain": false
+      },
+      {
+        "basis": "single",
+        "event_id": "49b73cec-3001-42dd-976b-05a58a143780",
+        "outcome": "exclude",
+        "report_id": "d6168e0e-5710-4b49-8d84-6d0164a62dc9",
+        "resolution_id": "dddedb03-3a34-5d09-ac4f-1bee700c2db9",
+        "stage": "title_abstract",
+        "uncertain": false
+      }
+    ],
+    "collection_id": "480d8618-3a93-4062-8d1f-608f3fc015b3",
+    "content_hash": "341778b71398c191861bd3b3cab078dea94d848b6e6a0065136b67b8819225c0",
+    "created_at": "2026-10-04T06:58:14.213196Z",
+    "created_by_id": "6e3bde50-ff93-4e50-8474-fc2036d8e9cc",
+    "delta_hash": null,
+    "id": "c4575e57-8a47-4ced-8d8b-1d63d976006d",
+    "is_tip": true,
+    "missing_history": [],
+    "needs_attention": [],
+    "parent_review_version_id": null,
+    "prisma_body_hash": "1df3c69fa2ccf0b90cf303c51c1547569070abf2f9fb40c8fff3adfac93094eb",
+    "protocol_version_id": "73bd7d09-8087-40ac-b26a-2f89b99100cf",
+    "rationale": "R8 live proof: parent review frozen before the update",
+    "release": null,
+    "report_ids": [
+      "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+      "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+      "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+      "d6168e0e-5710-4b49-8d84-6d0164a62dc9"
+    ],
+    "required_work": {
+      "full_text": [],
+      "title_abstract": []
+    },
+    "stale_counts": {},
+    "strategy_version": null,
+    "version_number": 1,
+    "work": [
+      {
+        "assigned_reviewer_ids": [],
+        "queue_id": null,
+        "required_report_ids": [],
+        "resolved_count": 0,
+        "stage": "title_abstract",
+        "status": "none",
+        "unresolved_count": 0
+      },
+      {
+        "assigned_reviewer_ids": [],
+        "queue_id": null,
+        "required_report_ids": [],
+        "resolved_count": 0,
+        "stage": "full_text",
+        "status": "none",
+        "unresolved_count": 0
+      }
+    ]
+  },
+  "successor_at_creation": {
+    "accepted_execution_id": "84e25599-c165-4365-bba3-aa8ef1fb2fe0",
+    "carried": [
+      {
+        "basis": "single",
+        "event_id": "074c34f9-08cf-47c9-9ee9-31980047d1e1",
+        "outcome": "exclude",
+        "report_id": "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+        "resolution_id": "64fc43bb-2f9b-5395-b7db-e5b6a14b1e77",
+        "stage": "title_abstract",
+        "uncertain": false
+      },
+      {
+        "basis": "single",
+        "event_id": "775c0c5f-d74a-41c4-9880-84f988acce9e",
+        "outcome": "exclude",
+        "report_id": "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+        "resolution_id": "a8d5aa8e-35e3-5cf3-9f83-961d27e643ff",
+        "stage": "title_abstract",
+        "uncertain": true
+      }
+    ],
+    "collection_id": "480d8618-3a93-4062-8d1f-608f3fc015b3",
+    "content_hash": "2ffc4d87681aa0ece511380d92b8c9fcd55f1008f38f3b3fa4ce9cc5709afe50",
+    "created_at": "2026-10-04T07:05:29.519816Z",
+    "created_by_id": "6e3bde50-ff93-4e50-8474-fc2036d8e9cc",
+    "delta_hash": "de77847cf303eea63d757c0a754f5eca2c8facdf4d02edd6228b2729b6ce7c56",
+    "id": "3d37b932-a18c-42c2-813e-10e9ab7e0882",
+    "is_tip": true,
+    "missing_history": [],
+    "needs_attention": [],
+    "parent_review_version_id": "c4575e57-8a47-4ced-8d8b-1d63d976006d",
+    "prisma_body_hash": "0f187e7d936a1ac5fb5b4ebc9f144058dda6f68305d4d8c504ed0e634142a0b2",
+    "protocol_version_id": "73bd7d09-8087-40ac-b26a-2f89b99100cf",
+    "rationale": "R8 live proof: accept the real scheduled delta",
+    "release": null,
+    "report_ids": [
+      "0af0ae56-4f82-445f-b5ff-b72f4820cf7b",
+      "10b46423-549e-492d-8009-7e3791fbd755",
+      "11b3e32c-ecd4-41a7-95da-b844bdc12142",
+      "16f34e3e-3c20-4935-b4de-397cb2362368",
+      "1f67d837-c3c3-426c-92e3-ac6f4f085ff5",
+      "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+      "5142fbd8-4132-4f5c-a7c1-7b4a4ed00d93",
+      "53a30d1e-2003-4dd5-aba5-46f17d13d34a",
+      "5f5cd0fd-e9d0-4278-aff2-4161e254d5ec",
+      "614b2020-7ede-4b53-af04-498908f4d3a7",
+      "626cf8eb-1078-403f-b568-75fe6efaab8f",
+      "7f3ff3ca-0946-48a9-9a39-5107425e040b",
+      "844f32b6-e677-47f3-9664-fca408d6b32b",
+      "89aa583e-71e0-4aea-b824-38a6bbc78301",
+      "8c1d0e7a-947a-424b-ac4d-76f275ed4e83",
+      "90dc3565-456c-45f6-bc56-b7fe9cc77f13",
+      "9207da4e-4670-4e8a-b8a2-f8a35a4d2fe0",
+      "9b1e7161-5a8c-4d42-8617-c97ebe24e774",
+      "9cb9e8fe-3cea-41fd-93ad-2b2954f96093",
+      "a419c353-bcad-4333-9cde-6f4f5743dc67",
+      "a822f8b3-0272-4219-990d-11b321637dc1",
+      "ad979200-ae77-457b-9d74-33e3628c267c",
+      "b0c58031-f412-408c-a3ac-d133623bdcbc",
+      "c20a3d3e-3c73-41f9-afee-b45e5f76c7c5",
+      "c955da7a-f621-445f-aa5f-27b806eaa85c",
+      "d0d73ebd-0e78-4c85-87bb-271f0a9ffd3c",
+      "d5bc875e-86cf-4b2e-8077-fce96a9bb5aa",
+      "d6168e0e-5710-4b49-8d84-6d0164a62dc9",
+      "e2dcaece-bbd0-4856-90df-c13204a8af81",
+      "e99503c6-36c9-4467-9b9f-ce47903efaef",
+      "fcf8d15f-86b5-4ab0-a0b5-a98d3c8c9b2f"
+    ],
+    "required_work": {
+      "full_text": [],
+      "title_abstract": [
+        "10b46423-549e-492d-8009-7e3791fbd755",
+        "11b3e32c-ecd4-41a7-95da-b844bdc12142",
+        "16f34e3e-3c20-4935-b4de-397cb2362368",
+        "1f67d837-c3c3-426c-92e3-ac6f4f085ff5",
+        "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+        "5142fbd8-4132-4f5c-a7c1-7b4a4ed00d93",
+        "53a30d1e-2003-4dd5-aba5-46f17d13d34a",
+        "5f5cd0fd-e9d0-4278-aff2-4161e254d5ec",
+        "614b2020-7ede-4b53-af04-498908f4d3a7",
+        "626cf8eb-1078-403f-b568-75fe6efaab8f",
+        "7f3ff3ca-0946-48a9-9a39-5107425e040b",
+        "844f32b6-e677-47f3-9664-fca408d6b32b",
+        "89aa583e-71e0-4aea-b824-38a6bbc78301",
+        "8c1d0e7a-947a-424b-ac4d-76f275ed4e83",
+        "90dc3565-456c-45f6-bc56-b7fe9cc77f13",
+        "9207da4e-4670-4e8a-b8a2-f8a35a4d2fe0",
+        "9cb9e8fe-3cea-41fd-93ad-2b2954f96093",
+        "a419c353-bcad-4333-9cde-6f4f5743dc67",
+        "a822f8b3-0272-4219-990d-11b321637dc1",
+        "ad979200-ae77-457b-9d74-33e3628c267c",
+        "b0c58031-f412-408c-a3ac-d133623bdcbc",
+        "c20a3d3e-3c73-41f9-afee-b45e5f76c7c5",
+        "c955da7a-f621-445f-aa5f-27b806eaa85c",
+        "d0d73ebd-0e78-4c85-87bb-271f0a9ffd3c",
+        "d5bc875e-86cf-4b2e-8077-fce96a9bb5aa",
+        "d6168e0e-5710-4b49-8d84-6d0164a62dc9",
+        "e2dcaece-bbd0-4856-90df-c13204a8af81",
+        "e99503c6-36c9-4467-9b9f-ce47903efaef",
+        "fcf8d15f-86b5-4ab0-a0b5-a98d3c8c9b2f"
+      ]
+    },
+    "stale_counts": {},
+    "strategy_version": "sha256:5a07f3c094bfd745f380b1ef7c69f7e5db4910c337081c2f5663e2d2be025caa",
+    "version_number": 2,
+    "work": [
+      {
+        "assigned_reviewer_ids": [
+          "ee490f30-298e-47c9-bd62-f38ca69cc3d2"
+        ],
+        "queue_id": "490713ad-13dc-48a3-bade-63cd6be32913",
+        "required_report_ids": [
+          "10b46423-549e-492d-8009-7e3791fbd755",
+          "11b3e32c-ecd4-41a7-95da-b844bdc12142",
+          "16f34e3e-3c20-4935-b4de-397cb2362368",
+          "1f67d837-c3c3-426c-92e3-ac6f4f085ff5",
+          "46218cdb-185c-46c0-add8-08ab7fa8c61c",
+          "5142fbd8-4132-4f5c-a7c1-7b4a4ed00d93",
+          "53a30d1e-2003-4dd5-aba5-46f17d13d34a",
+          "5f5cd0fd-e9d0-4278-aff2-4161e254d5ec",
+          "614b2020-7ede-4b53-af04-498908f4d3a7",
+          "626cf8eb-1078-403f-b568-75fe6efaab8f",
+          "7f3ff3ca-0946-48a9-9a39-5107425e040b",
+          "844f32b6-e677-47f3-9664-fca408d6b32b",
+          "89aa583e-71e0-4aea-b824-38a6bbc78301",
+          "8c1d0e7a-947a-424b-ac4d-76f275ed4e83",
+          "90dc3565-456c-45f6-bc56-b7fe9cc77f13",
+          "9207da4e-4670-4e8a-b8a2-f8a35a4d2fe0",
+          "9cb9e8fe-3cea-41fd-93ad-2b2954f96093",
+          "a419c353-bcad-4333-9cde-6f4f5743dc67",
+          "a822f8b3-0272-4219-990d-11b321637dc1",
+          "ad979200-ae77-457b-9d74-33e3628c267c",
+          "b0c58031-f412-408c-a3ac-d133623bdcbc",
+          "c20a3d3e-3c73-41f9-afee-b45e5f76c7c5",
+          "c955da7a-f621-445f-aa5f-27b806eaa85c",
+          "d0d73ebd-0e78-4c85-87bb-271f0a9ffd3c",
+          "d5bc875e-86cf-4b2e-8077-fce96a9bb5aa",
+          "d6168e0e-5710-4b49-8d84-6d0164a62dc9",
+          "e2dcaece-bbd0-4856-90df-c13204a8af81",
+          "e99503c6-36c9-4467-9b9f-ce47903efaef",
+          "fcf8d15f-86b5-4ab0-a0b5-a98d3c8c9b2f"
+        ],
+        "resolved_count": 0,
+        "stage": "title_abstract",
+        "status": "queued",
+        "unresolved_count": 29
+      },
+      {
+        "assigned_reviewer_ids": [],
+        "queue_id": null,
+        "required_report_ids": [],
+        "resolved_count": 0,
+        "stage": "full_text",
+        "status": "waiting_on_title_abstract",
+        "unresolved_count": 0
+      }
+    ]
+  }
+}

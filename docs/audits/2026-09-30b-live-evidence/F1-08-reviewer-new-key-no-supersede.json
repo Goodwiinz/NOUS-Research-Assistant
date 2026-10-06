@@ -1,0 +1,27 @@
+{
+  "step": "F1-08-reviewer-new-key-no-supersede",
+  "as": "reviewer",
+  "at": "2026-09-30T21:09:01.025933+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/c3b56c4c-6b21-40fc-bbe1-19357e91b428/observations",
+    "body": {
+      "report_id": "3ae08aad-08f0-484e-ae02-d4db7cca1a1c",
+      "assignment_id": "8a67c8c8-870d-40d3-98a1-d6fe2b7bc596",
+      "criteria_hash": "d8a2fd5e8c76d24aafbfefcf42322a60625a3c4fe01daf22697d9e0472cc0705",
+      "decision": "exclude",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Report resolved; reopen to change",
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}

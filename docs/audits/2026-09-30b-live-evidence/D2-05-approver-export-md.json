@@ -1,0 +1,17 @@
+{
+  "step": "D2-05-approver-export-md",
+  "as": "approver",
+  "at": "2026-09-30T21:04:54.271825+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/projects/a7460d29-feee-456b-abf2-441a8008921a/drafts/1f01336d-2c57-44cd-a4a5-2924533ab12d/export?format=markdown&bib_format=apa",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/markdown; charset=utf-8",
+    "Content-Disposition": "attachment; filename=\"Literature_Review_-_Transformer_architecture_and_self-attention_as_introduced_in.md\""
+  },
+  "response_bytes": 14770,
+  "response_sha256": "9e6b5de447d8ba540b4306e0c6d46794f0f25610019370e50030dcc168faca25"
+}

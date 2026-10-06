@@ -1,6 +1,7 @@
 """Behavioral contracts joining PR #1722 auth with response-owned DB sessions."""
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -26,7 +27,13 @@ def signed_token(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(settings, "SUPABASE_JWT_ISSUER", "")
     return str(
         jwt.encode(
-            {"sub": "user-1", "aud": "authenticated", "app_metadata": {}},
+            {
+                "sub": "user-1",
+                "aud": "authenticated",
+                "app_metadata": {},
+                # verify_token requires exp (audit I21).
+                "exp": int(time.time()) + 3600,
+            },
             secret,
             algorithm="HS256",
         )
@@ -286,6 +293,7 @@ def _token_with_org(organization_id: str | None) -> str:
                 "sub": "user-1",
                 "aud": "authenticated",
                 "app_metadata": {"organization_id": organization_id},
+                "exp": int(time.time()) + 3600,
             },
             settings.SUPABASE_JWT_SECRET,
             algorithm="HS256",

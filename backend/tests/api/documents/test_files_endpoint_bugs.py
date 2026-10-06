@@ -22,6 +22,7 @@ from fastapi import HTTPException
 
 from src.api.documents import files as files_mod
 from src.models.processing import JobStatus
+from src.services.documents.file_service import UploadCancellation
 from src.shared.pagination import PaginationParams
 
 pytestmark = pytest.mark.unit
@@ -81,39 +82,37 @@ def test_reprocess_creates_job_and_enqueues():
 
 def test_cancel_uses_enum_not_string_and_cancels():
     upload_id = str(uuid.uuid4())
-    job = MagicMock()
-    job.created_by_user_id = "user-1"
-    job.status = JobStatus.PENDING  # a real enum member, not "pending"
-    job.id = uuid.uuid4()
-
+    job_id = uuid.uuid4()
+    service = MagicMock()
+    service.cancel_upload_job = AsyncMock(
+        return_value=UploadCancellation(job_id, JobStatus.CANCELLED, True)
+    )
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_result(job))
-    db.commit = AsyncMock()
 
     resp = asyncio.run(
         files_mod.cancel_upload(
-            upload_id, current_user=_user(), db=db, file_service=MagicMock()
+            upload_id, current_user=_user(), db=db, file_service=service
         )
     )
-    # The real cancel path executes (was dead code under the string compare).
-    job.cancel_job.assert_called_once()
+    # Transport preserves the service's committed cancellation result.
+    assert resp["job_id"] == job_id
     assert "cancelled successfully" in resp["message"].lower()
 
 
 def test_cancel_rejects_finished_job_with_enum_value():
     upload_id = str(uuid.uuid4())
-    job = MagicMock()
-    job.created_by_user_id = "user-1"
-    job.status = JobStatus.COMPLETED
+    service = MagicMock()
+    service.cancel_upload_job = AsyncMock(
+        return_value=UploadCancellation(uuid.uuid4(), JobStatus.COMPLETED, False)
+    )
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_result(job))
 
     resp = asyncio.run(
         files_mod.cancel_upload(
-            upload_id, current_user=_user(), db=db, file_service=MagicMock()
+            upload_id, current_user=_user(), db=db, file_service=service
         )
     )
-    job.cancel_job.assert_not_called()
+    assert resp["job_status"] == "completed"
     assert "cannot cancel" in resp["message"].lower()
 
 
