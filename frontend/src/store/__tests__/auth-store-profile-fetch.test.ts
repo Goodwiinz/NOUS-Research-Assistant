@@ -343,12 +343,16 @@ describe('useAuthStore profile responses across account transitions', () => {
     seedUserBChat(useChatStore);
 
     profileA.resolve(PROFILE_A);
-    await signInA;
+    // The superseded sign-in is not a success for its caller.
+    await expect(signInA).rejects.toMatchObject({
+      name: 'SignInSupersededError',
+    });
 
     expect(useAuthStore.getState()).toMatchObject({
       user: { id: 'user-B' },
       organization: { id: 'org-B' },
       isAuthenticated: true,
+      isLoading: false,
     });
     expect(useChatStore.getState().currentThreadId).toBe('user-B-thread');
   });
@@ -392,4 +396,112 @@ describe('useAuthStore profile responses across account transitions', () => {
       expect(useChatStore.getState().currentThreadId).toBe('user-B-thread');
     }
   );
+
+  it('rejects a sign-in interrupted by sign-out and clears the loading flag', async () => {
+    const { useAuthStore, apiGet } = await loadStore();
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+    const profileA = deferred<typeof PROFILE_A>();
+    apiGet.mockReturnValueOnce(profileA.promise);
+
+    const signIn = useAuthStore
+      .getState()
+      .signIn('user-a@example.invalid', 'synthetic-password');
+    await vi.waitFor(() => expect(apiGet).toHaveBeenCalledTimes(1));
+    await useAuthStore.getState().signOut();
+    profileA.resolve(PROFILE_A);
+
+    await expect(signIn).rejects.toMatchObject({
+      name: 'SignInSupersededError',
+    });
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      isAuthenticated: false,
+      isLoading: false,
+      error: null,
+    });
+  });
+
+  it('does not write a superseded sign-in’s failure onto the newer session', async () => {
+    const { useAuthStore, apiGet } = await loadStore();
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+    const profileA = deferred<typeof PROFILE_A>();
+    apiGet.mockReturnValueOnce(profileA.promise);
+
+    const signIn = useAuthStore
+      .getState()
+      .signIn('user-a@example.invalid', 'synthetic-password');
+    await vi.waitFor(() => expect(apiGet).toHaveBeenCalledTimes(1));
+    await useAuthStore.getState().signOut();
+    profileA.reject(new Error('Synthetic network failure'));
+
+    await expect(signIn).rejects.toThrow('Synthetic network failure');
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      isLoading: false,
+      error: null,
+    });
+  });
+
+  it('clears the loading flag when a fenced-out profile read was the last loader', async () => {
+    const { useAuthStore, apiGet } = await loadStore();
+    // Cold start: initialize() is loading the profile when the user signs out.
+    useAuthStore.setState({
+      user: null,
+      isAuthenticated: false,
+      isLoading: true,
+    });
+    const profileA = deferred<typeof PROFILE_A>();
+    apiGet.mockReturnValueOnce(profileA.promise);
+
+    const pending = useAuthStore.getState().fetchProfile();
+    await vi.waitFor(() => expect(apiGet).toHaveBeenCalledTimes(1));
+    await useAuthStore.getState().signOut();
+    profileA.resolve(PROFILE_A);
+    await pending;
+
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      isAuthenticated: false,
+      isLoading: false,
+    });
+  });
+
+  it('clears the loading flag on a SIGNED_OUT event', async () => {
+    const { useAuthStore, emit } = await loadStore();
+    // Registers the Supabase listener.
+    await useAuthStore.getState().fetchProfile();
+    useAuthStore.setState({ isLoading: true });
+
+    emit('SIGNED_OUT', null);
+
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      isAuthenticated: false,
+      isLoading: false,
+    });
+  });
+
+  it('publishes the profile when the same user signs out and back in', async () => {
+    const { useAuthStore, apiGet } = await loadStore();
+    apiGet.mockResolvedValue(PROFILE);
+
+    await useAuthStore
+      .getState()
+      .signIn('ada@example.com', 'synthetic-password');
+    await useAuthStore.getState().signOut();
+    expect(useAuthStore.getState().user).toBeNull();
+
+    await useAuthStore
+      .getState()
+      .signIn('ada@example.com', 'synthetic-password');
+    expect(useAuthStore.getState()).toMatchObject({
+      user: { id: 'user-1' },
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    // A later profile refresh in the new generation also publishes.
+    useAuthStore.setState({ organization: null });
+    await useAuthStore.getState().fetchProfile();
+    expect(useAuthStore.getState().organization).toEqual({ id: 'org-1' });
+  });
 });

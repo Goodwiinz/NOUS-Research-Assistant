@@ -100,6 +100,29 @@ let profileFetchInFlight: Promise<void> | null = null;
 // user A can neither clear user B's client state nor flip the store back to A.
 let authGeneration = 0;
 
+/**
+ * Rejection for a sign-in whose result was superseded by a later auth
+ * transition (sign-out, another sign-in). It is not a success: the caller must
+ * not continue its post-login flow, and the store already reflects the newer
+ * transition.
+ */
+export class SignInSupersededError extends Error {
+  constructor() {
+    super(
+      'This sign-in was interrupted by another sign-in or sign-out. Please try again.'
+    );
+    this.name = 'SignInSupersededError';
+  }
+}
+
+// A request fenced out of its generation leaves the loading flag to whichever
+// sign-in still owns it; with none in flight, nothing else would clear it.
+function settleSupersededLoading(): void {
+  if (signInInFlight === 0 && useAuthStore.getState().isLoading) {
+    useAuthStore.setState({ isLoading: false });
+  }
+}
+
 function beginAuthGeneration(): number {
   authGeneration += 1;
   // A profile read issued for the previous account must not be joined.
@@ -142,6 +165,7 @@ function getSupabaseClient(): SupabaseClient {
           user: null,
           organization: null,
           isAuthenticated: false,
+          isLoading: false,
           error: null,
           ...CLEARED_PENDING_CONFIRMATION,
         });
@@ -192,7 +216,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const profileData = await api.get<ProfileResponse>('/auth/me', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (generation !== authGeneration) return;
+        if (generation !== authGeneration) throw new SignInSupersededError();
 
         if (get().user && get().user?.id !== profileData.user.id) {
           clearUserScopedClientState();
@@ -210,6 +234,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     } catch (error) {
       const authError =
         error instanceof Error ? error : new Error('Login failed');
+      if (generation !== authGeneration) {
+        // Superseded: never write this attempt's error onto the newer
+        // session. This call is still counted in signInInFlight.
+        if (signInInFlight === 1) set({ isLoading: false });
+        throw authError;
+      }
       set({
         error: authError.message,
         isLoading: false,
@@ -401,7 +431,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           data: { user },
           error: userError,
         } = await supabase.auth.getUser();
-        if (!isCurrentGeneration()) return;
+        if (!isCurrentGeneration()) return settleSupersededLoading();
 
         if (userError || !user) {
           clearUserScopedClientState();
@@ -417,7 +447,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        if (!isCurrentGeneration()) return;
+        if (!isCurrentGeneration()) return settleSupersededLoading();
         const accessToken = session?.access_token;
 
         if (!accessToken) {
@@ -434,7 +464,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const profileData = await api.get<ProfileResponse>('/auth/me', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (!isCurrentGeneration()) return;
+        if (!isCurrentGeneration()) return settleSupersededLoading();
 
         if (get().user && get().user?.id !== profileData.user.id) {
           clearUserScopedClientState();
@@ -447,7 +477,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           ...CLEARED_PENDING_CONFIRMATION,
         });
       } catch (error) {
-        if (!isCurrentGeneration()) return;
+        if (!isCurrentGeneration()) return settleSupersededLoading();
         const message =
           error instanceof Error ? error.message : 'Failed to fetch profile';
         const statusCode = errorStatusCode(error);

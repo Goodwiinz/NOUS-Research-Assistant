@@ -8,7 +8,10 @@
 import toast from 'react-hot-toast';
 import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '@/store/chat-store';
-import { onChatSessionReset } from '@/store/chat/requestCoordinator';
+import {
+  captureChatSession,
+  onChatSessionReset,
+} from '@/store/chat/requestCoordinator';
 import { useAuthStore } from '@/stores/authStore';
 import { workspaceService } from '@/services/workspaceService';
 import {
@@ -277,6 +280,16 @@ function mapThreadToUIConversation(
 let _initInFlight: Promise<void> | null = null;
 let _initCompleted = false;
 
+// Thrown inside a run whose chat session ended (account transition) so it
+// stops before acting on the next account's store. Never surfaced: the run is
+// no longer `_initInFlight` by then, so the terminal handlers ignore it.
+class ChatInitSupersededError extends Error {
+  constructor() {
+    super('Chat initialization superseded by an account transition');
+    this.name = 'ChatInitSupersededError';
+  }
+}
+
 function resetChatPersistenceInitGuard(): void {
   _initInFlight = null;
   _initCompleted = false;
@@ -427,6 +440,10 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           // began. A sidebar click can select a different thread while the
           // conversation page is pending; that newer choice must survive the
           // downstream reset performed by setCurrentConversation.
+          const isCurrentSession = captureChatSession();
+          const assertCurrentSession = (): void => {
+            if (!isCurrentSession()) throw new ChatInitSupersededError();
+          };
           const threadSelectionAtInitializationStart =
             useChatStore.getState().currentThreadId;
           debugLog('[useChatPersistence] Starting initialization...');
@@ -441,6 +458,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
               initializationError = error;
             }
           }
+          assertCurrentSession();
 
           if (!initialized) {
             throw (
@@ -495,6 +513,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
               await workspaceService.getOrCreateDefaultConversation(
                 state.currentWorkspaceId
               );
+            assertCurrentSession();
             if (!newConv) {
               // Surface this as a real failure instead of silently locking in
               // `_initCompleted = false` with no retry path for other waiters.
@@ -533,6 +552,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
               threadSelectionAtInitializationStart;
 
           await setCurrentConversation(conversationId);
+          assertCurrentSession();
 
           debugLog(
             '[useChatPersistence] Loaded threads for conversation:',
@@ -609,6 +629,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
         const run = _initInFlight;
         _initInFlight
           .then(() => {
+            if (_initInFlight !== run) return;
             _initCompleted = true;
             debugLog('[useChatPersistence] Initialization complete');
           })

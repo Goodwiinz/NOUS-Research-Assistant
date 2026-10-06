@@ -57,6 +57,7 @@ import { useChatPersistence } from '@/hooks/useChatPersistence';
 import { useChatStore } from '@/store/chat-store';
 import { useAuthStore } from '@/stores/authStore';
 import { api } from '@/services/api-client';
+import { makeChatPageMessage } from '@/test/chatMessageFactory';
 import type { User } from '@/types';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -251,5 +252,202 @@ describe('useChatSession account switch without remount', () => {
       callsAfterB
     );
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('stops user A’s run once it outlives the switch past setCurrentConversation', async () => {
+    // A's conversation page and thread page are held; A picks a thread in the
+    // sidebar while its init is pending.
+    const conversationsA = deferred<never>();
+    const threadsA = deferred<never>();
+    const bootstrapB = deferred<never>();
+    workspaceMocks.getOrCreateDefaultWorkspace.mockImplementation(() =>
+      accounts.current === 'user-A'
+        ? Promise.resolve(workspaceFor('user-A'))
+        : bootstrapB.promise
+    );
+    workspaceMocks.listConversations.mockImplementation(
+      (workspaceId: string) =>
+        workspaceId === 'ws-user-A'
+          ? conversationsA.promise
+          : Promise.resolve({
+              conversations: [conversationFor('user-B')],
+              total: 1,
+              page: 1,
+              limit: 20,
+            })
+    );
+    workspaceMocks.listThreads.mockImplementation((conversationId: string) =>
+      conversationId === 'conv-user-A'
+        ? threadsA.promise
+        : Promise.resolve({ threads: [], total: 0, page: 1, limit: 20 })
+    );
+
+    const { result } = renderHook(() => useChatPersistence());
+    await waitFor(() =>
+      expect(workspaceMocks.listConversations).toHaveBeenCalledWith('ws-user-A')
+    );
+    act(() => {
+      useChatStore.setState({ currentThreadId: 'user-A-picked-thread' });
+    });
+    await act(async () => {
+      conversationsA.resolve({
+        conversations: [conversationFor('user-A')],
+        total: 1,
+        page: 1,
+        limit: 20,
+      } as never);
+    });
+    await waitFor(() =>
+      expect(workspaceMocks.listThreads).toHaveBeenCalledWith('conv-user-A')
+    );
+
+    // Switch to B while A awaits setCurrentConversation; B's bootstrap holds.
+    accounts.current = 'user-B';
+    await act(async () => {
+      await useAuthStore
+        .getState()
+        .signIn('user-b@example.invalid', 'synthetic-password');
+    });
+    await act(async () => {
+      threadsA.resolve({ threads: [], total: 0, page: 1, limit: 20 } as never);
+    });
+
+    // A's late run neither marks the shared guard complete (a caller still
+    // joins B's pending run) nor selects A's thread in B's store.
+    let joinedSettled = false;
+    let joined!: Promise<void>;
+    act(() => {
+      joined = result.current.initialize().then(() => {
+        joinedSettled = true;
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(joinedSettled).toBe(false);
+    expect(useChatStore.getState().currentThreadId).toBeNull();
+
+    await act(async () => {
+      bootstrapB.resolve(workspaceFor('user-B'));
+      await joined;
+    });
+    expect(useChatStore.getState().currentConversationId).toBe('conv-user-B');
+    expect(useChatStore.getState().currentThreadId).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('does not register user A’s late default conversation in user B’s store', async () => {
+    // A has no conversation yet, so its run creates the default one.
+    const defaultConversationA = deferred<never>();
+    workspaceMocks.listConversations.mockImplementation(
+      async (workspaceId: string) => ({
+        conversations:
+          workspaceId === 'ws-user-B' ? [conversationFor('user-B')] : [],
+        total: 0,
+        page: 1,
+        limit: 20,
+      })
+    );
+    workspaceMocks.getOrCreateDefaultConversation.mockReturnValue(
+      defaultConversationA.promise
+    );
+    renderHook(() => useChatPersistence());
+    await waitFor(() =>
+      expect(workspaceMocks.getOrCreateDefaultConversation).toHaveBeenCalled()
+    );
+
+    accounts.current = 'user-B';
+    await act(async () => {
+      await useAuthStore
+        .getState()
+        .signIn('user-b@example.invalid', 'synthetic-password');
+    });
+    await waitFor(() =>
+      expect(useChatStore.getState().currentConversationId).toBe('conv-user-B')
+    );
+    await act(async () => {
+      defaultConversationA.resolve(conversationFor('user-A'));
+    });
+
+    const chat = useChatStore.getState();
+    expect(chat.conversationToWorkspace['conv-user-A']).toBeUndefined();
+    expect(Object.keys(chat.conversations)).toEqual(['ws-user-B']);
+    expect(chat.currentConversationId).toBe('conv-user-B');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('does not let user A’s late bootstrap re-run conversation setup on user B’s workspace', async () => {
+    const bootstrapA = deferred<never>();
+    workspaceMocks.getOrCreateDefaultWorkspace.mockImplementation(() =>
+      accounts.current === 'user-A'
+        ? bootstrapA.promise
+        : Promise.resolve(workspaceFor('user-B'))
+    );
+    renderHook(() => useChatPersistence());
+    await waitFor(() =>
+      expect(workspaceMocks.getOrCreateDefaultWorkspace).toHaveBeenCalled()
+    );
+
+    accounts.current = 'user-B';
+    await act(async () => {
+      await useAuthStore
+        .getState()
+        .signIn('user-b@example.invalid', 'synthetic-password');
+    });
+    await waitFor(() =>
+      expect(useChatStore.getState().currentConversationId).toBe('conv-user-B')
+    );
+    const threadReadsForB = workspaceMocks.listThreads.mock.calls.length;
+    await act(async () => {
+      bootstrapA.resolve(workspaceFor('user-A'));
+    });
+
+    // A's run stops instead of reloading B's conversation with A's
+    // initialization-time selection.
+    expect(workspaceMocks.listThreads).toHaveBeenCalledTimes(threadReadsForB);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('drops user A’s parked in-flight overlay on the switch', async () => {
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(result.current.isInitializing).toBe(false);
+      expect(result.current.workspace?.id).toBe('ws-user-A');
+    });
+
+    // A switches away from a thread mid-stream: its overlay is parked.
+    await act(async () => {
+      useChatStore.setState({ currentThreadId: 'shared-thread-id' });
+    });
+    await act(async () => {
+      result.current.setMessages([
+        makeChatPageMessage({
+          role: 'user',
+          content: 'User A private in-flight question',
+          timestamp: 1,
+          source: 'optimistic',
+        }),
+      ]);
+    });
+    await act(async () => {
+      useChatStore.setState({
+        streamingThreadId: 'shared-thread-id',
+        currentThreadId: 'user-A-other-thread',
+      });
+    });
+
+    accounts.current = 'user-B';
+    await act(async () => {
+      await useAuthStore
+        .getState()
+        .signIn('user-b@example.invalid', 'synthetic-password');
+    });
+    await waitFor(() => expect(result.current.workspace?.id).toBe('ws-user-B'));
+
+    // B opens a thread with the same id: A's parked overlay must not return.
+    await act(async () => {
+      useChatStore.setState({ currentThreadId: 'shared-thread-id' });
+    });
+    expect(result.current.messages).toEqual([]);
   });
 });

@@ -534,6 +534,12 @@ describe('useChatStreaming edit-and-resend', () => {
           (streamMessageMock.mock.calls[0][0] as { attachment_ids?: string[] })
             .attachment_ids
         ).toEqual([attachment.document_id]);
+        // Attachment metadata is display-only: it never reaches the wire.
+        const serializedRequest = JSON.stringify(
+          streamMessageMock.mock.calls[0][0]
+        );
+        expect(serializedRequest).not.toContain(attachment.display_name);
+        expect(serializedRequest).not.toContain(attachment.id);
 
         callbacks.onError?.('synthetic replacement failure', 'stream-error');
         await act(async () => {

@@ -108,7 +108,8 @@ Recorded 2026-10-06 for the three PR #1776 review findings, on top of
 `4329952e3` (develop merged in). Same procedure as above: each guard was
 disabled alone, the named tests failed as described, the source was restored
 and the identical command passed. The pre-fix sources (`git show HEAD:<file>`)
-fail every new test.
+fail every new test. Line numbers below are as of the second follow-up
+commit.
 
 ## Re-initializing chat persistence on an account switch
 
@@ -119,24 +120,24 @@ Test file: `frontend/src/hooks/chat/__tests__/useChatSession.accountSwitch.test.
 pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useChatSession.accountSwitch.test.tsx --reporter=verbose
 ```
 
-- `frontend/src/hooks/useChatPersistence.ts:285`, dropping the shared init
+- `frontend/src/hooks/useChatPersistence.ts:298`, dropping the shared init
   guard on chat-session reset. Removing it fails all three cases: B takes the
   completed fast path over an empty store (`currentConversationId` stays
   undefined, workspace never becomes `ws-user-B`).
-- `frontend/src/hooks/useChatPersistence.ts:822,833`, keying the per-consumer
+- `frontend/src/hooks/useChatPersistence.ts:843,854`, keying the per-consumer
   reset and auto-init effects to the user id. Reverting to `[isAuthenticated]`
   fails "persistence-only consumer" and "superseded initialization": the chat
   layout never re-initializes for B.
-- `frontend/src/hooks/chat/useChatSession.ts:899`, the init effect's `userId`
+- `frontend/src/hooks/chat/useChatSession.ts:886`, the init effect's `userId`
   dependency. Removing it fails "drops user A workspace metadata": the mounted
   page never re-bootstraps for B.
-- `frontend/src/hooks/chat/useChatSession.ts:323`, dropping the previous
+- `frontend/src/hooks/chat/useChatSession.ts:932`, dropping the previous
   account's workspace on user change. Removing it fails the same case:
   `workspace` is still `ws-user-A` while B's bootstrap is pending.
-- `frontend/src/hooks/useChatPersistence.ts:618`, silencing a superseded run's
+- `frontend/src/hooks/useChatPersistence.ts:639`, silencing a superseded run's
   failure. Removing it fails "superseded initialization": B sees A's
   "Workspace initialization returned no workspace" toast.
-- `frontend/src/hooks/useChatPersistence.ts:627`, only the current run may
+- `frontend/src/hooks/useChatPersistence.ts:648`, only the current run may
   release the in-flight slot. Removing the identity check fails the same case:
   A's late failure releases B's run and a concurrent caller starts a duplicate
   bootstrap (3 calls instead of 2).
@@ -150,24 +151,25 @@ describe "profile responses across account transitions".
 pnpm --dir frontend exec vitest run src/store/__tests__/auth-store-profile-fetch.test.ts --reporter=verbose
 ```
 
-- `frontend/src/stores/authStore.ts:437`, the compare after `/auth/me` in
+- `frontend/src/stores/authStore.ts:467`, the compare after `/auth/me` in
   `fetchProfile`. Removing it fails both "late /auth/me" cases and "lands
   after sign-out": A's response clears B's chat and flips the store back to
   `user-A` (or re-authenticates A after sign-out).
-- `frontend/src/stores/authStore.ts:450`, the compare in the error path.
+- `frontend/src/stores/authStore.ts:480`, the compare in the error path.
   Removing it fails "late 401": A's rejection tears down B's session.
-- `frontend/src/stores/authStore.ts:404,420`, the compares after `getUser()`
+- `frontend/src/stores/authStore.ts:434,450`, the compares after `getUser()`
   and `getSession()`. Removing either fails the matching "late signed-out
   getUser/getSession answer" case: B is signed out locally.
-- `frontend/src/stores/authStore.ts:111`, bumping the generation in
+- `frontend/src/stores/authStore.ts:134`, bumping the generation in
   `clearUserScopedClientState`. Removing it fails "lands after sign-out".
-- `frontend/src/stores/authStore.ts:169,195`, `signIn` starting a generation
+- `frontend/src/stores/authStore.ts:193,219`, `signIn` starting a generation
   and checking it before publishing. Removing either fails "concurrent
   sign-ins": the earlier sign-in's late profile wipes B's chat and wins.
-- `frontend/src/stores/authStore.ts:106`, discarding the previous account's
+  (Line 219 now throws `SignInSupersededError`; see below.)
+- `frontend/src/stores/authStore.ts:129`, discarding the previous account's
   in-flight profile promise. Removing it fails both "late /auth/me" cases: B's
   profile read joins A's abandoned request instead of issuing its own.
-- `frontend/src/stores/authStore.ts:483`, only the owning request may clear
+- `frontend/src/stores/authStore.ts:513`, only the owning request may clear
   the in-flight slot. Removing the identity check fails both "late /auth/me"
   cases: A settling releases B's slot and a concurrent caller issues a
   duplicate `/auth/me`.
@@ -192,3 +194,71 @@ pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useChatStreaming.ed
   (regenerate), forwarding the metadata. Removing either fails the matching
   integration case and the matching composer-actions case. The backend payload
   still carries only `attachment_ids`.
+
+## Second follow-up: superseded init runs and sign-ins
+
+Independent review items I1, I2, M1, M2, M4 and M5. Same procedure.
+
+```sh
+pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useChatSession.accountSwitch.test.tsx src/store/__tests__/auth-store-profile-fetch.test.ts src/hooks/chat/__tests__/useChatStreaming.editResend.test.ts --reporter=verbose
+```
+
+### Init runs stop once their chat session ended (I1)
+
+- `frontend/src/hooks/useChatPersistence.ts:555`, `assertCurrentSession()`
+  after `setCurrentConversation`. Removing it fails "stops user A's run once it
+  outlives the switch past setCurrentConversation": A's run selects
+  `user-A-picked-thread` in B's store.
+- `frontend/src/hooks/useChatPersistence.ts:461`, the check after the
+  default-workspace bootstrap. Removing it fails "does not let user A's late
+  bootstrap re-run conversation setup on user B's workspace": A's run reloads
+  B's threads (2 `listThreads` calls instead of 1).
+- `frontend/src/hooks/useChatPersistence.ts:516`, the check after
+  `getOrCreateDefaultConversation`. Removing it fails "does not register user
+  A's late default conversation in user B's store": `conv-user-A` is indexed
+  under `ws-user-A` in B's store.
+- `frontend/src/hooks/useChatPersistence.ts:632`, the `.then` fence. The
+  in-body checks already make a superseded run reject, so removing this fence
+  alone passes. Removing it together with the line 555 check fails the same
+  "stops user A's run" case on the earlier assertion: a concurrent
+  `initialize()` takes the completed fast path (`joinedSettled` is `true`)
+  while B's bootstrap is still pending.
+
+### Superseded sign-ins reject and release the loading flag (I2, M1)
+
+- `frontend/src/stores/authStore.ts:219`, throwing `SignInSupersededError`
+  instead of returning. Returning fails "rejects a sign-in interrupted by
+  sign-out" and "concurrent sign-ins": the superseded call resolves as success.
+- `frontend/src/stores/authStore.ts:237`, fencing the `signIn` catch path.
+  Removing it fails "does not write a superseded sign-in's failure onto the
+  newer session" (`error` is set) and "rejects a sign-in interrupted by
+  sign-out".
+- `frontend/src/stores/authStore.ts:240`, releasing `isLoading` when no newer
+  sign-in is in flight. Removing it fails both cases above with
+  `isLoading: true`.
+- `frontend/src/stores/authStore.ts:121`, `settleSupersededLoading` for fenced
+  `fetchProfile` returns. Making it a no-op fails "clears the loading flag when
+  a fenced-out profile read was the last loader".
+- `frontend/src/stores/authStore.ts:168`, `isLoading: false` in the
+  `SIGNED_OUT` listener. Removing it fails "clears the loading flag on a
+  SIGNED_OUT event".
+- Negative control (M5): "publishes the profile when the same user signs out
+  and back in". Capturing the generation before `beginAuthGeneration()` in
+  `signIn` (over-fencing) fails it with `SignInSupersededError`.
+
+### Account switch clears parked overlays (M2)
+
+- `frontend/src/hooks/chat/useChatSession.ts:927`, clearing
+  `parkedMessagesRef` on user change. Removing it fails "drops user A's parked
+  in-flight overlay on the switch": opening a thread with the same id restores
+  A's optimistic message. The neighbouring resets
+  (`localMessagesThreadIdRef`, `firstPageThreadsRef`, `threadsPageRef`,
+  `unavailableInitialUrlThreadRef`, `hasMoreThreads`) are defense in depth and
+  are not individually mutation-verified.
+
+### Attachment metadata never reaches the wire (M4)
+
+- In the "%s keeps the turn's attachments" cases, the serialized
+  `streamMessage` request is asserted not to contain the attachment's
+  `display_name` or row id. Adding `attachments: m.attachments` to the request
+  message mapping in `useChatStreaming.ts` fails both cases.
