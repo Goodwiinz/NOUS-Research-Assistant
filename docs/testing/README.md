@@ -29,5 +29,6 @@ Testing instructions, mutation-verification reports, historical suite results an
 | [chat-adversarial-task4-mutations.md](chat-adversarial-task4-mutations.md) | Task 4 mutation evidence |
 | [chat-mutation-checks.md](chat-mutation-checks.md) | Chat store/hook guard mutation checks |
 | [daily-research-brief-verification.md](daily-research-brief-verification.md) | Daily Research Brief verification record |
+| [harness-live-proof.md](harness-live-proof.md) | Harness bridge live-proof runbook (AWS dev) |
 | [ingestion-lifecycle-mutation-checks.md](ingestion-lifecycle-mutation-checks.md) | Ingestion lifecycle mutation checks |
 | [monitoring-test-guide.md](monitoring-test-guide.md) | Monitoring System Testing Guide |
