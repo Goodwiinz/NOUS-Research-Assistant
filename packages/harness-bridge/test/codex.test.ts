@@ -153,6 +153,34 @@ for (const operation of ["start", "resume"])
       },
     );
   }
+test("accepts a reply that omits cwd from writableRoots (real 0.153.4)", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.replyToStart({
+    sandbox: {
+      type: "workspaceWrite",
+      writableRoots: [],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+  });
+  const session = await adapter.startSession(options);
+  assert.equal(session.id, "s");
+});
+test("pins a locally configured model in thread/start config", async (t) => {
+  const { server, adapter, options } = setup(t);
+  await adapter.startSession({ ...options, model: "gpt-6-astra" });
+  const call: any = server.calls("thread/start")[0];
+  assert.equal(call.params.config.model, "gpt-6-astra");
+});
+test("rejects a malformed local model name", async (t) => {
+  const { server, adapter, options } = setup(t);
+  await assert.rejects(
+    adapter.startSession({ ...options, model: "bad model/name" }),
+    /invalid local Codex model name/,
+  );
+  assert.equal(server.calls("thread/start").length, 0);
+});
 test("exact pinned version only", async (t) => {
   const { server, adapter } = setup(t);
   server.configure({ version: "0.153.5" });
