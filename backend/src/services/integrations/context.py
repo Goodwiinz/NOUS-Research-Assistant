@@ -6,7 +6,7 @@ from secrets import token_urlsafe
 from typing import Any, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,10 +70,22 @@ async def authorized_project(
                 Collection.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
                 or_(Workspace.owner_id == user_id, member),
-                exists().where(
-                    Organization.id == Workspace.organization_id,
-                    Organization.is_deleted.is_(False),
-                    Organization.is_active.is_(True),
+                # Mirrors research_engine.project_access.resolve_project: a
+                # legacy workspace with no organization_id falls back to its
+                # owner's organization, which must be the caller's.
+                or_(
+                    exists().where(
+                        Organization.id == Workspace.organization_id,
+                        Organization.is_deleted.is_(False),
+                        Organization.is_active.is_(True),
+                    ),
+                    and_(
+                        Workspace.organization_id.is_(None),
+                        exists().where(
+                            User.id == Workspace.owner_id,
+                            User.organization_id == organization_id,
+                        ),
+                    ),
                 ),
                 exists().where(
                     User.id == user_id,
@@ -137,7 +149,11 @@ async def validate_binding(
                 Conversation.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
                 Workspace.owner_id == user_id,
-                Workspace.organization_id == organization_id,
+                # Same NULL-organization fallback as authorized_project.
+                or_(
+                    Workspace.organization_id.is_(None),
+                    Workspace.organization_id == organization_id,
+                ),
                 Thread.source_project_id == project_id,
             )
         )
