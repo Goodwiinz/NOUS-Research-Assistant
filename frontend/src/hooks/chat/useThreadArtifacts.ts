@@ -8,8 +8,10 @@ import { useCallback, useEffect, useRef } from 'react';
 import {
   artifactService,
   type ArtifactVersion,
+  type ProjectArtifact,
   type ThreadArtifact,
 } from '@/services/artifactService';
+import { threadHandoffKey } from '@/hooks/chat/useThreadHandoff';
 import { useChatStore } from '@/store/chat-store';
 
 /**
@@ -30,6 +32,14 @@ export const artifactVersionsKey = (
   'artifact',
   artifactId,
   'versions',
+];
+
+export const projectArtifactsKey = (
+  projectId: string
+): readonly ['project', string, 'artifacts'] => [
+  'project',
+  projectId,
+  'artifacts',
 ];
 
 /** Late uploads land after the run closes; keep a slow visible-tab poll. */
@@ -80,6 +90,18 @@ export function useThreadArtifacts(
   });
 }
 
+export function useProjectArtifacts(
+  projectId: string | null | undefined
+): UseQueryResult<ProjectArtifact[]> {
+  return useQuery({
+    queryKey: projectArtifactsKey(projectId ?? ''),
+    queryFn: () => artifactService.listProjectArtifacts(projectId ?? ''),
+    enabled: Boolean(projectId),
+    staleTime: 5_000,
+    retry: false,
+  });
+}
+
 export function useArtifactVersions(
   artifactId: string | null | undefined
 ): UseQueryResult<ArtifactVersion[]> {
@@ -102,6 +124,10 @@ export function useInvalidateThreadArtifacts(): (
     async (threadId: string, ref?: { artifactId: string }) => {
       await queryClient.invalidateQueries({
         queryKey: threadArtifactsKey(threadId),
+      });
+      // A harness publishes its results, then saves the handoff naming them.
+      await queryClient.invalidateQueries({
+        queryKey: threadHandoffKey(threadId),
       });
       if (ref) {
         await queryClient.invalidateQueries({
