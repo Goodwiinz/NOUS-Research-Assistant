@@ -181,12 +181,15 @@ export async function connect(
     throw new Error("--library requires --write");
   if (options.context && !options.tools)
     throw new Error("--context requires --tools");
-  // A workspace grant is MCP-only: harness runs and artifact publication stay
-  // bound to one project (NOUS refuses both scopes for a workspace grant), and
-  // without tools:read it could do nothing at all.
+  // A workspace grant is MCP-only: harness runs, artifact publication and a
+  // project's selected memories stay bound to one project (NOUS refuses all
+  // three scopes for a workspace grant), and without tools:read it could do
+  // nothing at all.
   if (projectId === undefined) {
     if (options.publish)
       throw new Error("--workspace cannot be combined with --publish");
+    if (options.context)
+      throw new Error("--workspace cannot be combined with --context");
     if (!options.tools) throw new Error("--workspace requires --tools");
   }
   const scopes = [
@@ -585,7 +588,12 @@ function mcpSession(
       : {}),
     ...(state.scopes?.includes("handoff:write") ? { handoff: true } : {}),
     ...(state.scopes?.includes("library:write") ? { library: true } : {}),
-    ...(state.scopes?.includes("context:read") ? { context: true } : {}),
+    // read_selected_context reads the memories chosen for the granted project.
+    // A workspace grant has none and NOUS refuses it context:read, so the tool
+    // is not offered there whatever the stored scopes say.
+    ...(state.workspaceId === undefined && state.scopes?.includes("context:read")
+      ? { context: true }
+      : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -852,7 +860,7 @@ export function recoverInterrupt(
 const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
-  connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat or --handoff, and cannot run harness sessions.
+  connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions.
   connect --library (needs --tools and --write) also requests library:read and library:write.
   connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow.
   nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.

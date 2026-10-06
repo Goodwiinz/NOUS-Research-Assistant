@@ -495,6 +495,67 @@ test("connect refuses contradictory binding and scope flags before any request",
   }
 });
 
+test("--context is a project capability: connect --workspace refuses it before any request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-context-flags-"));
+  const calls: { url: string; body: any }[] = [];
+  const base = {
+    stateDir: dir,
+    fetchFn: consentFetch(calls),
+    announce: () => {},
+    apiUrl: "https://nous.test/api/v1",
+    label: "dev",
+  };
+  try {
+    // The memories a user selects belong to one project's consent, and NOUS
+    // refuses context:read for a workspace grant, so asking for it could only
+    // fail after the browser consent.
+    for (const extra of [{}, { write: true, library: true }]) {
+      await assert.rejects(
+        connect({ ...base, workspaceId: WORKSPACE, tools: true, ...extra, context: true }),
+        /--workspace cannot be combined with --context/,
+      );
+    }
+    assert.equal(calls.length, 0);
+    // A project connection still requests it, after the scopes it implies.
+    await connect({ ...base, projectId: PROJECT, tools: true, context: true });
+    const consent = calls.find((c) => c.url.endsWith("/grant-requests"))!;
+    assert.deepEqual(consent.body, {
+      project_id: PROJECT,
+      device_id: DEVICE,
+      scopes: ["harness:execute", "tools:read", "context:read"],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a workspace connection never launches the MCP child with --context", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-context-"));
+  const install = async (scopes: string[], binding: Record<string, string>) => {
+    await new CredentialStore(stateDir).writeLocal("connection", {
+      apiUrl: "https://nous.example/api/v1",
+      deviceId: randomUUID(),
+      credentialHandle: randomUUID(),
+      scopes,
+      workspaces: [],
+      ...binding,
+    });
+    return mcpInstallCommand(stateDir, { announce: () => {} });
+  };
+  try {
+    // context:read is what offers read_selected_context. NOUS refuses it for a
+    // workspace grant, so even a stored connection that claims the scope must
+    // not offer the model a tool that can only fail.
+    const workspace = await install(["tools:read", "context:read"], { workspaceId: WORKSPACE });
+    assert.equal(workspace.includes("'--context'"), false);
+    // A project connection keeps it.
+    const project = await install(["harness:execute", "tools:read", "context:read"], { projectId: PROJECT });
+    assert.equal(project.includes("'--context'"), true);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("--handoff and --library each reach the MCP child argv on their own scope", () => {
   const folder = { id: randomUUID(), root: "/tmp", label: "w", projectId: randomUUID() };
   const state: LocalState = {
@@ -563,6 +624,11 @@ test("the nous-harness CLI parses --workspace and --library into the consent req
     const both = await cli("connect", "--project", PROJECT, "--workspace", WORKSPACE, "--label", "dev", "--tools");
     assert.equal(both.code, 1);
     assert.match(both.stderr, /--project or --workspace \(not both\) required/);
+    assert.equal(requests.length, 0);
+
+    const withContext = await cli("connect", "--workspace", WORKSPACE, "--label", "dev", "--tools", "--context");
+    assert.equal(withContext.code, 1);
+    assert.match(withContext.stderr, /--workspace cannot be combined with --context/);
     assert.equal(requests.length, 0);
 
     const ok = await cli("connect", "--workspace", WORKSPACE, "--label", "dev", "--tools", "--write", "--library");
