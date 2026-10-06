@@ -240,8 +240,14 @@ async def lease_commands(
         ).all()
         result = []
         for candidate in sessions:
-            run, session = await _locked(db, candidate.run_id)
-            await _authorize(db, context, run, session)
+            try:
+                run, session = await _locked(db, candidate.run_id)
+                await _authorize(db, context, run, session)
+            except IntegrationAccessDenied:
+                # One unauthorized session must not starve the device's others.
+                # Stay locked: releasing needs terminal evidence only the
+                # reconcile/projection path has.
+                continue
             session.grant_id = grant.id
             if (
                 run.cancel_requested_at
@@ -466,9 +472,20 @@ async def project_terminal(db: AsyncSession, run_id: str) -> int:
             _persist_assistant_message_safe,
         )
 
+        # A turn that fails or is interrupted before any assistant text leaves
+        # no deltas. ChatMessageResponse requires non-empty content, so an empty
+        # row would 500 every subsequent read of the thread (GET .../messages).
+        text = (
+            "".join(content)
+            or {
+                "failed": "External execution failed.",
+                "interrupted": "External execution was stopped.",
+                "completed": "External execution completed without output.",
+            }[state]
+        )
         assistant_id = await _persist_assistant_message_safe(
             thread_id=thread,
-            content="".join(content),
+            content=text,
             model_name="codex",
             tool_executions_out=None,
             stopped=state == "interrupted",
@@ -577,7 +594,10 @@ async def lease_runs(
         result: dict[str, int] = {}
         for session in sessions:
             run: Any = await db.get(AgentRun, session.run_id, populate_existing=True)
-            await _authorize(db, context, run, session)
+            try:
+                await _authorize(db, context, run, session)
+            except IntegrationAccessDenied:
+                continue  # Skipped, still locked; see lease_commands.
             result[session.run_id] = session.generation
         await db.commit()
         return result
