@@ -6,9 +6,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# Scopes some route enforces, plus context:read (kept for PR #1784, which
-# enforces it) and library:write (consented from Plan 07 slice 1, enforced by
-# the auto-run actions in slice 3). A scope is added in the PR that checks it.
+# Scopes some route enforces, plus library:write (consented from Plan 07 slice
+# 1, enforced by the auto-run actions in slice 3). context:read is enforced by
+# GET /integrations/context (#1784) and, like harness:execute, artifacts:publish
+# and the handoff scopes, is refused for a workspace grant (see
+# services/integrations/context.py). A scope is added in the PR that checks it.
 STANDARD_SCOPES = frozenset(
     {
         "harness:execute",
