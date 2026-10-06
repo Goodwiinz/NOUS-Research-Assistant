@@ -2886,13 +2886,56 @@ async def test_list_library_of_a_project_grant_follows_membership(
 async def test_library_query_itself_rechecks_ancestors(
     db: AsyncSession, model: Any
 ) -> None:
-    # The scope came from a separate statement; the page query alone must
-    # return nothing once a Collection or its Workspace is soft-deleted.
-    allowed = {PROJECT, OTHER_PROJECT}
-    assert len(await read_tools._library_folders(db, allowed, ORG, 0, 10)) == 2
+    # The scope's access check ran in a separate statement; the page query
+    # alone must return nothing once a Collection or its Workspace is
+    # soft-deleted.
+    scope = Collection.workspace_id == WORKSPACE
+    assert len(await read_tools._library_folders(db, scope, ORG, 0, 10)) == 2
     await db.execute(update(model).values(is_deleted=True))
     await db.commit()
-    assert await read_tools._library_folders(db, allowed, ORG, 0, 10) == []
+    assert await read_tools._library_folders(db, scope, ORG, 0, 10) == []
+
+
+async def test_list_library_binds_no_value_per_collection(
+    db: AsyncSession, executed_sql: list[tuple[str, Any]]
+) -> None:
+    # asyncpg refuses a statement that binds more than 32,767 values, and the
+    # collection routes put no cap on a workspace: one editor can reach that
+    # many folders and make list_library answer 500 for every member. SQLite
+    # would take that many ids, so count what is bound instead. The scope must
+    # reach the query as a condition, and what the query binds must not grow
+    # with the number of Collections in the workspace.
+    async def most_bound() -> int:
+        executed_sql.clear()
+        result = await invoke_read(
+            db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+        )
+        assert result.is_error is False
+        assert executed_sql, "the recorder saw no statement"
+        return max(
+            len(list(_bound_values(parameters))) for _sql, parameters in executed_sql
+        )
+
+    before = await most_bound()
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(id=uuid4(), name=f"Folder {n:03}", workspace_id=WORKSPACE)
+                for n in range(60)
+            ]
+        )
+    )
+    await db.commit()
+    assert await most_bound() == before
+    # The scope still selects the whole workspace, and only it: the first page
+    # of 62 folders by name, none of them from the user's other workspace.
+    grown = await invoke_read(
+        db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+    )
+    assert [f["name"] for f in grown.content[0]["folders"]] == [
+        f"Folder {n:03}" for n in range(MAX_RESULTS)
+    ]
+    assert grown.content[0]["next_offset"] == MAX_RESULTS
 
 
 def test_catalog_offers_a_tool_only_to_grants_holding_its_scope() -> None:

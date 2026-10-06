@@ -948,6 +948,33 @@ async def test_authorized_scope_of_a_project_grant_is_just_that_project(
     assert await authorized_scope(db, ctx) == {PROJECT}
 
 
+@pytest.mark.parametrize("binding", ["project", "workspace"])
+async def test_authorized_scope_filter_selects_the_scope_by_its_binding_not_its_ids(
+    db: AsyncSession, library: None, binding: str
+) -> None:
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import authorized_scope_filter
+
+    await _second_workspace(db)  # a live Collection the user owns, elsewhere
+    bound = PROJECT if binding == "project" else WORKSPACE
+    ctx = IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT if binding == "project" else None,
+        workspace_id=WORKSPACE if binding == "workspace" else None,
+        grant_id=uuid4(),
+    )
+    scope = await authorized_scope_filter(db, ctx)
+    # A condition that binds the grant's one id, however many Collections the
+    # scope holds. An IN list of their ids would pass SQLite and fail
+    # PostgreSQL once a workspace holds more than 32,767 of them.
+    assert list(scope.compile().params.values()) == [bound]
+    # It leaves soft-deletion to the statement it joins, so ask for live ones.
+    live = select(Collection.id).where(scope, Collection.is_deleted.is_(False))
+    expected = {PROJECT} if binding == "project" else {PROJECT, P2}
+    assert {UUID(str(found)) for found in await db.scalars(live)} == expected
+
+
 # What ends a project grant's access. authorized_scope re-checks it on every
 # call, so each change must turn the next call into a denial.
 LOST_ACCESS: dict[str, Any] = {
@@ -979,6 +1006,23 @@ async def test_authorized_scope_of_a_project_grant_is_denied_once_access_is_lost
         await authorized_scope(db, ctx)
 
 
+@pytest.mark.parametrize("change", sorted(LOST_ACCESS))
+async def test_authorized_scope_filter_is_denied_once_access_is_lost(
+    db: AsyncSession, library: None, change: str
+) -> None:
+    from src.schemas.integration_context import IntegrationContext
+    from src.services.integrations.context import authorized_scope_filter
+
+    ctx = IntegrationContext(
+        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+    )
+    await authorized_scope_filter(db, ctx)  # allowed until it changes
+    await db.execute(LOST_ACCESS[change])
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await authorized_scope_filter(db, ctx)
+
+
 async def test_authorized_scope_of_a_project_grant_follows_membership(
     db: AsyncSession, library: None
 ) -> None:
@@ -1005,12 +1049,13 @@ async def test_authorized_scope_of_a_project_grant_follows_membership(
         await authorized_scope(db, ctx)
 
 
+@pytest.mark.parametrize("getter", ["authorized_scope", "authorized_scope_filter"])
 @pytest.mark.parametrize("case", ["unknown", "public_non_member", "deleted"])
 async def test_authorized_scope_refuses_foreign_workspace(
-    db: AsyncSession, library: None, case: str
+    db: AsyncSession, library: None, case: str, getter: str
 ) -> None:
     from src.schemas.integration_context import IntegrationContext
-    from src.services.integrations.context import authorized_scope
+    from src.services.integrations import context as integration_context
 
     workspace = OTHER_WORKSPACE
     if case == "public_non_member":
@@ -1031,7 +1076,7 @@ async def test_authorized_scope_refuses_foreign_workspace(
         user_id=USER, organization_id=ORG, workspace_id=workspace, grant_id=uuid4()
     )
     with pytest.raises(IntegrationAccessDenied):
-        await authorized_scope(db, ctx)
+        await getattr(integration_context, getter)(db, ctx)
 
 
 @pytest.mark.parametrize("model", [Workspace, User, Organization])

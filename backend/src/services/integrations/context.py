@@ -6,7 +6,7 @@ from secrets import token_urlsafe
 from typing import Any, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import ColumnElement, exists, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -159,23 +159,37 @@ async def authorized_workspace(
     return row
 
 
-async def authorized_scope(db: AsyncSession, context: IntegrationContext) -> set[UUID]:
-    """Collection ids the grant may touch; re-checked on every call."""
+async def authorized_scope_filter(
+    db: AsyncSession, context: IntegrationContext
+) -> ColumnElement[bool]:
+    """The grant's scope as a condition on ``Collection``, after the same
+    per-call access re-check as ``authorized_scope``.
+
+    Filter by it where the ids ``authorized_scope`` returns would only be bound
+    back into a statement. A workspace can hold more live Collections than one
+    statement may bind (asyncpg refuses more than 32,767 parameters, and the
+    collection routes put no cap on a workspace), so an ``IN`` list of its ids
+    is an outage waiting for that many folders. The condition does not exclude
+    soft-deleted Collections or Workspaces: the caller's statement must.
+    """
     if context.project_id is not None:
-        row = await authorized_project(
+        await authorized_project(
             db, context.user_id, context.organization_id, context.project_id
         )
-        return {UUID(str(row.id))}
+        return Collection.id == context.project_id
     if context.workspace_id is None:
         raise IntegrationAccessDenied()
     await authorized_workspace(
         db, context.user_id, context.organization_id, context.workspace_id
     )
+    return Collection.workspace_id == context.workspace_id
+
+
+async def authorized_scope(db: AsyncSession, context: IntegrationContext) -> set[UUID]:
+    """Collection ids the grant may touch; re-checked on every call."""
+    scope = await authorized_scope_filter(db, context)
     rows = await db.execute(
-        select(Collection.id).where(
-            Collection.workspace_id == context.workspace_id,
-            Collection.is_deleted.is_(False),
-        )
+        select(Collection.id).where(scope, Collection.is_deleted.is_(False))
     )
     return {UUID(str(value)) for value in rows.scalars().all()}
 

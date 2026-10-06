@@ -22,7 +22,7 @@ from typing import Any, Iterable, Sequence, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import ColumnElement, desc, func, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -47,7 +47,11 @@ from src.services.agent.tools_impl import (
 from src.services.artifacts.service import list_project_artifacts
 from src.services.integrations import arxiv_fulltext
 from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
-from src.services.integrations.context import IntegrationAccessDenied, authorized_scope
+from src.services.integrations.context import (
+    IntegrationAccessDenied,
+    authorized_scope,
+    authorized_scope_filter,
+)
 from src.services.search.fulltext_search_service import fulltext_search_service
 
 logger = logging.getLogger(__name__)
@@ -1115,16 +1119,18 @@ async def _target_project(
 
 async def _library_folders(
     db: AsyncSession,
-    allowed: set[UUID],
+    scope: ColumnElement[bool],
     organization_id: UUID,
     offset: int,
     limit: int,
 ) -> Sequence[Row[Any]]:
-    """One page of live Collections among ``allowed``, with live document counts.
+    """One page of live Collections in ``scope``, with live document counts.
 
-    The count applies the filters ``list_project_documents`` applies to its
-    ``total``, so the two never disagree. The Workspace join re-checks that
-    ancestor in this statement, because ``allowed`` came from another one.
+    ``scope`` is a condition (``authorized_scope_filter``), never a list of ids:
+    a workspace can hold more Collections than one statement may bind. The count
+    applies the filters ``list_project_documents`` applies to its ``total``, so
+    the two never disagree. The Workspace join re-checks that ancestor in this
+    statement, because the scope's access check ran in another one.
     """
     live_documents = (
         select(func.count(CollectionDocument.id))
@@ -1142,7 +1148,7 @@ async def _library_folders(
         select(Collection.id, Collection.name, Collection.description, live_documents)
         .join(Workspace, Workspace.id == Collection.workspace_id)
         .where(
-            Collection.id.in_(allowed),
+            scope,
             Collection.is_deleted.is_(False),
             Workspace.is_deleted.is_(False),
         )
@@ -1164,9 +1170,9 @@ async def _list_library(
     # The shape was checked by _validate_arguments; this only applies defaults.
     limit = _clamp(arguments.get("limit", MAX_RESULTS), 1, MAX_RESULTS, MAX_RESULTS)
     offset = _clamp(arguments.get("offset", 0), 0, MAX_OFFSET, 0)
-    allowed = await authorized_scope(db, context)
+    scope = await authorized_scope_filter(db, context)
     found = await _library_folders(
-        db, allowed, context.organization_id, offset, limit + 1
+        db, scope, context.organization_id, offset, limit + 1
     )
     folders = [
         {
@@ -1218,7 +1224,7 @@ async def invoke_read(
     if name in _PROJECTLESS_TOOLS:
         # No single project is involved, so neither the selector nor the
         # per-project ownership check below applies. list_library resolves
-        # authorized_scope itself, which covers every folder it returns.
+        # authorized_scope_filter itself, which covers every folder it returns.
         if name == "list_library":
             return _finish(await _list_library(db, context, arguments))
         if name == "get_arxiv_paper_content":
