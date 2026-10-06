@@ -27,6 +27,7 @@ function mcpArgs(session: McpSession): string[] {
     ...(session.outputRoot ? ["--root", session.outputRoot] : []),
     ...(session.actions ? ["--actions"] : []),
     ...(session.handoff ? ["--handoff"] : []),
+    ...(session.library ? ["--library"] : []),
   ];
 }
 /** Session-scoped Codex MCP configuration; only opaque handles reach argv. */

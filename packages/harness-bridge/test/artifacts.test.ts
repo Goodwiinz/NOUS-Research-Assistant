@@ -356,7 +356,7 @@ test("mcp install binds a root only when unambiguous or explicit", async () => {
   };
   try {
     assert.equal((await install(base)).includes("--root"), false);
-    const one = { id: randomUUID(), root: ws.dir, label: "w", projectId: base.projectId };
+    const one = { id: randomUUID(), root: ws.dir, label: "w", projectId: base.projectId! };
     const command = await install({ ...base, workspaces: [one] });
     assert.ok(command.includes(`'--root' '${ws.dir}'`));
     assert.match(announced.at(-1) ?? "", new RegExp(ws.dir));

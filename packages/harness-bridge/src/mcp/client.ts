@@ -23,6 +23,8 @@ export type McpSession = {
   actions?: boolean;
   // Grant carries handoff:read/handoff:write; enables get/save_nous_handoff.
   handoff?: boolean;
+  // Grant carries library:write; marks the library actions (Plan 07, Slice 3).
+  library?: boolean;
 };
 export const REAUTH_MESSAGE =
   "NOUS session expired or revoked; reconnect this device (nous-harness connect --tools)";

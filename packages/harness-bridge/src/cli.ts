@@ -19,10 +19,17 @@ import {
 import { runStdioMcp } from "./mcp/stdio.ts";
 import type { SessionOptions } from "./contracts.ts";
 
+// Harness sessions need one project; a workspace grant cannot hold harness:execute.
+const WORKSPACE_MCP_ONLY =
+  "workspace connections are MCP-only; reconnect with --project to run harness sessions";
+
 export type LocalState = {
   apiUrl: string;
   deviceId: string;
-  projectId: string;
+  // Exactly one binding. A project connection can run harness sessions; a
+  // workspace connection (every project in one NOUS workspace) is MCP-only.
+  projectId?: string;
+  workspaceId?: string;
   // The NOUS chat standalone publications land in; absent = project only.
   threadId?: string;
   credentialHandle: string;
@@ -85,22 +92,29 @@ async function poll(
 export async function connect(
   options: ClientOptions & {
     apiUrl: string;
-    projectId: string;
+    // Exactly one of projectId / workspaceId.
+    projectId?: string;
+    workspaceId?: string;
     threadId?: string;
     label: string;
     tools?: boolean;
     publish?: boolean;
     write?: boolean;
     handoff?: boolean;
+    library?: boolean;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
+  const projectId = options.projectId;
   if (options.threadId !== undefined) {
     if (!options.projectId) throw new Error("--chat requires --project");
     if (!uuid(options.threadId)) throw new Error("--chat must be a chat UUID");
   }
-  if (!uuid(options.projectId) || !options.label.trim())
-    throw new Error("project UUID and device label required");
+  if ((projectId === undefined) === (options.workspaceId === undefined))
+    throw new Error("--project or --workspace (not both) required");
+  const target = projectId !== undefined ? "project" : "workspace";
+  if (!uuid(projectId ?? options.workspaceId) || !options.label.trim())
+    throw new Error(`${target} UUID and device label required`);
   // NOUS capabilities are opt-in and each scope is shown on the consent page.
   if (options.publish && !options.tools)
     throw new Error("--publish requires --tools");
@@ -108,15 +122,31 @@ export async function connect(
     throw new Error("--write requires --tools");
   if (options.handoff && !options.tools)
     throw new Error("--handoff requires --tools");
+  // A handoff lives in one chat of one project; a workspace grant has neither.
+  if (options.handoff && projectId === undefined)
+    throw new Error("--workspace cannot be combined with --handoff");
   // A handoff lives in one chat; an unbound grant could never use the scopes.
   if (options.handoff && options.threadId === undefined)
     throw new Error("--handoff requires --chat");
+  if (options.library && !options.tools)
+    throw new Error("--library requires --tools");
+  if (options.library && !options.write)
+    throw new Error("--library requires --write");
+  // A workspace grant is MCP-only: harness runs and artifact publication stay
+  // bound to one project (NOUS refuses both scopes for a workspace grant), and
+  // without tools:read it could do nothing at all.
+  if (projectId === undefined) {
+    if (options.publish)
+      throw new Error("--workspace cannot be combined with --publish");
+    if (!options.tools) throw new Error("--workspace requires --tools");
+  }
   const scopes = [
-    "harness:execute",
+    ...(projectId !== undefined ? ["harness:execute"] : []),
     ...(options.tools ? ["tools:read"] : []),
     ...(options.publish ? ["artifacts:publish"] : []),
     ...(options.write ? ["tools:write"] : []),
     ...(options.handoff ? ["handoff:read", "handoff:write"] : []),
+    ...(options.library ? ["library:read", "library:write"] : []),
   ];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
@@ -153,7 +183,9 @@ export async function connect(
     "/integrations/grant-requests",
     auth.token,
     {
-      project_id: options.projectId,
+      ...(projectId !== undefined
+        ? { project_id: projectId }
+        : { workspace_id: options.workspaceId }),
       device_id: device.id,
       scopes,
       ...(options.threadId ? { thread_id: options.threadId } : {}),
@@ -162,7 +194,7 @@ export async function connect(
   if (!uuid(consent.id) || typeof consent.approval_url !== "string")
     throw new Error("invalid grant request");
   announce(
-    `Approve this device and project in your browser: ${consent.approval_url}`,
+    `Approve this device and ${target} in your browser: ${consent.approval_url}`,
   );
   await poll(
     () =>
@@ -194,7 +226,11 @@ export async function connect(
   // standalone installs keep working. Roots that vanished are skipped.
   const previous = await store.readLocal("connection").catch(() => null);
   const carried: LocalState["workspaces"] = [];
-  if (record(previous) && Array.isArray(previous.workspaces)) {
+  if (
+    projectId !== undefined &&
+    record(previous) &&
+    Array.isArray(previous.workspaces)
+  ) {
     for (const old of previous.workspaces as LocalState["workspaces"]) {
       if (typeof old?.root !== "string" || typeof old?.label !== "string") continue;
       const root = await realpath(old.root).catch(() => null);
@@ -208,15 +244,27 @@ export async function connect(
         base,
         `/integrations/devices/${device.id}/workspaces`,
         auth.token,
-        { workspace_id: workspaceId, label: old.label, project_id: options.projectId },
+        { workspace_id: workspaceId, label: old.label, project_id: projectId },
       );
-      carried.push({ id: workspaceId, root, label: old.label, projectId: options.projectId });
+      carried.push({ id: workspaceId, root, label: old.label, projectId });
     }
+  } else if (
+    record(previous) &&
+    Array.isArray(previous.workspaces) &&
+    previous.workspaces.length
+  ) {
+    // Only reached for a workspace connection: registered folders are
+    // project-bound write roots, so there is no project to carry them to.
+    announce(
+      "Registered local folders were not carried over: workspace connections are MCP-only. Register them again after reconnecting with --project.",
+    );
   }
   await store.writeLocal("connection", {
     apiUrl: base,
     deviceId: device.id,
-    projectId: options.projectId,
+    ...(projectId !== undefined
+      ? { projectId }
+      : { workspaceId: options.workspaceId }),
     ...(options.threadId ? { threadId: options.threadId } : {}),
     credentialHandle,
     scopes,
@@ -230,8 +278,8 @@ export async function connect(
       : "";
   announce(
     options.threadId
-      ? `Connected to project ${options.projectId}, chat ${chatLabel}(${options.threadId}).`
-      : `Connected to project ${options.projectId}.`,
+      ? `Connected to project ${projectId}, chat ${chatLabel}(${options.threadId}).`
+      : `Connected to ${target} ${projectId ?? options.workspaceId}.`,
   );
   return { deviceId: device.id, credentialHandle };
 }
@@ -301,6 +349,11 @@ export async function addWorkspace(
 ): Promise<{ workspaceId: string; root: string }> {
   const store = new CredentialStore(options.stateDir);
   const value = await store.readLocal("connection");
+  // A registered folder is a write root bound to one project.
+  if (record(value) && uuid(value.workspaceId))
+    throw new Error(
+      "workspace connections are MCP-only; reconnect with --project to register local folders",
+    );
   if (
     !record(value) ||
     !uuid(value.deviceId) ||
@@ -311,6 +364,7 @@ export async function addWorkspace(
   )
     throw new Error("connect this device first");
   const state = value as LocalState;
+  const projectId = value.projectId;
   const root = await realpath(options.root);
   if (!(await stat(root)).isDirectory())
     throw new Error("workspace must be a directory");
@@ -324,13 +378,13 @@ export async function addWorkspace(
     apiBase(state.apiUrl),
     `/integrations/devices/${state.deviceId}/workspaces`,
     credentials.accessToken,
-    { workspace_id: workspaceId, label, project_id: state.projectId },
+    { workspace_id: workspaceId, label, project_id: projectId },
   );
   state.workspaces.push({
     id: workspaceId,
     root,
     label,
-    projectId: state.projectId,
+    projectId,
   });
   await store.writeLocal("connection", state);
   (options.announce ?? console.log)(
@@ -353,6 +407,9 @@ export async function runBridge(
   )
     throw new Error("connect this device first");
   const state = value as LocalState;
+  // The bridge socket serves harness sessions only. Refuse now rather than
+  // reconnect forever against a backend that will never accept this grant.
+  if (state.workspaceId !== undefined) throw new Error(WORKSPACE_MCP_ONLY);
   const adapters = new Map<string, CodexAdapter>();
   if (!state.scopes?.includes("tools:read"))
     console.error(
@@ -436,12 +493,16 @@ function mcpSession(
     credentialHandle: state.credentialHandle,
     // Codex launches the MCP child from the workspace cwd, never from here.
     stateDir: resolve(stateDir),
-    // Publication is bound to a registered root only; never to the cwd.
-    ...(outputRoot && state.scopes?.includes("artifacts:publish")
+    // Publication is bound to a registered root only; never to the cwd, and
+    // never on a workspace connection, whatever its stored scopes say.
+    ...(outputRoot &&
+    state.workspaceId === undefined &&
+    state.scopes?.includes("artifacts:publish")
       ? { outputRoot }
       : {}),
     ...(state.scopes?.includes("tools:write") ? { actions: true } : {}),
     ...(state.scopes?.includes("handoff:write") ? { handoff: true } : {}),
+    ...(state.scopes?.includes("library:write") ? { library: true } : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -450,6 +511,8 @@ export function sessionOptionsFor(
   state: LocalState,
   workspaceId: string,
 ): SessionOptions {
+  // `workspaceId` here is a registered local folder; a NOUS workspace connection has none.
+  if (state.workspaceId !== undefined) throw new Error(WORKSPACE_MCP_ONLY);
   const workspace = state.workspaces.find((w) => w.id === workspaceId);
   if (!workspace) throw new Error("unregistered local workspace");
   return {
@@ -533,12 +596,14 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write] [--handoff]] | workspace add --root PATH [--label NAME] | run
+const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff]] | workspace add --root PATH [--label NAME] | run
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
+  connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat or --handoff, and cannot run harness sessions.
+  connect --library (needs --tools and --write) also requests library:read and library:write.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
-  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools.
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff] [--library]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools, --library marks a library:write grant.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
@@ -551,6 +616,7 @@ async function main(): Promise<void> {
     options: {
       api: { type: "string" },
       project: { type: "string" },
+      workspace: { type: "string" },
       chat: { type: "string" },
       label: { type: "string" },
       store: { type: "string" },
@@ -560,6 +626,7 @@ async function main(): Promise<void> {
       tools: { type: "boolean" },
       publish: { type: "boolean" },
       write: { type: "boolean" },
+      library: { type: "boolean" },
       actions: { type: "boolean" },
       handoff: { type: "boolean" },
       help: { type: "boolean" },
@@ -584,19 +651,21 @@ async function main(): Promise<void> {
   else if (
     positionals.join(" ") === "connect" &&
     values.api &&
-    values.project &&
+    (values.project || values.workspace) &&
     values.label
   )
     await connect({
       stateDir,
       apiUrl: values.api,
       projectId: values.project,
+      workspaceId: values.workspace,
       threadId: values.chat,
       label: values.label,
       tools: values.tools,
       publish: values.publish,
       write: values.write,
       handoff: values.handoff,
+      library: values.library,
     });
   else if (positionals.join(" ") === "disconnect")
     await disconnect({ stateDir });
@@ -612,6 +681,7 @@ async function main(): Promise<void> {
       ...(values.root ? { outputRoot: resolve(values.root) } : {}),
       ...(values.actions ? { actions: true } : {}),
       ...(values.handoff ? { handoff: true } : {}),
+      ...(values.library ? { library: true } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
