@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { expect, test, type Response } from "@playwright/test";
 
 const optIn = process.env.NOUS_HARNESS_E2E === "1";
@@ -58,7 +60,13 @@ test("live Codex run survives chat reload and approval without duplicate transcr
   const email = required.NOUS_HARNESS_E2E_EMAIL!;
   const password = required.NOUS_HARNESS_E2E_PASSWORD!;
   const marker = `NOUS_HARNESS_E2E_${randomUUID().replaceAll("-", "")}`;
-  const fixtureFile = `.nous-harness-e2e-${marker.slice(-12)}.txt`;
+  // The write must land OUTSIDE the registered workspace root: under the
+  // bridge policy (workspace-write, on-request) an in-root write runs inside
+  // the sandbox without any approval callback, so only an out-of-root write
+  // makes Codex raise the command approval this test exists to exercise.
+  // $TMPDIR and /tmp are excluded from the sandbox too, but the home
+  // directory is the plainest out-of-root target on every platform.
+  const fixtureFile = join(homedir(), `.nous-harness-e2e-${marker.slice(-12)}.txt`);
   const command = `printf '%s' '${marker}' > '${fixtureFile}'`;
   const runIds = new Set<string>();
   const streamReads: Promise<void>[] = [];
@@ -88,7 +96,7 @@ test("live Codex run survives chat reload and approval without duplicate transcr
   );
   await expect(composer).toBeEnabled();
   await composer.fill(
-    `In the registered test workspace, execute this exact command: ${command}. If it succeeds, reply with this exact marker: ${marker}. Do not use another command.`,
+    `Execute this exact shell command: ${command}. It intentionally writes outside the workspace root, so if the sandbox blocks it, request approval to run it unsandboxed rather than changing it. If it succeeds, reply with this exact marker: ${marker}. Do not use another command.`,
   );
   await page.getByRole("button", { name: /^Send/ }).click();
 
