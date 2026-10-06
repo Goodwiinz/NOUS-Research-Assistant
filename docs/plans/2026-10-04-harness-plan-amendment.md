@@ -70,6 +70,48 @@ Branch each migration-bearing slice only after the previous one has merged and
 two migrations that each passed CI against their own base forked the chain
 once both landed. The rule now lives in [gotchas](../engineering/gotchas.md).
 
+## 2026-10-05: Plan 06, same-project harness continuation
+
+A standalone Codex session can now continue another session's work in the
+same NOUS project and chat. The plan is
+[`2026-10-05-same-project-harness-continuation.md`](2026-10-05-same-project-harness-continuation.md).
+It adds to the order above and replaces nothing in it.
+
+| Slice | Scope | PR / branch | Migration |
+| --- | --- | --- | --- |
+| 1 | Project artifact list `GET /api/v1/artifacts/projects/{id}`, `list_project_artifacts` read tool, project Files tab | #1879 (`feat/project-artifact-discovery`) | none |
+| 2 | Chat binding on consent (`thread_id`), carried to grants and publication | #1882 (`feat/plan06-slice2`) | `hb05_grant_request_thread` |
+| 3 | Versioned chat handoffs: `integration_handoffs`, integration and thread routes, MCP tools | #1885 (`feat/plan06-slice3`) | `hb06_integration_handoffs` |
+| 4 | Bridge: binding reuse, `status`, handoff CLI and offline queue | #1886 (`feat/plan06-slice4`) | none |
+| 5 | PostgreSQL acceptance journey, live-proof runbook Phase 3, this section, `publish_version` flush-order fix | PR TBD (`feat/plan06-slice5`) | none |
+
+Decisions as applied:
+
+- **D1, publication is explicit.** Files reach NOUS only through
+  `artifacts_publish` or the CLI. Nothing uploads automatically, and no Codex
+  hooks are wired in v1.
+- **D2, `--chat` on `connect`.** `nous-harness connect --project <id> --chat <thread>`
+  binds the consent, and every grant renewed from it, to one existing chat.
+  The approval page shows the chat title. Creating a chat from the CLI is out
+  of v1.
+- **D3, a handoff is not an LLM summary.** It is structured data the harness
+  writes (goal, decisions, remaining, results that name artifact version ids,
+  harness session). Plan 04 is unaffected.
+- **D4, Slice 2 went ahead without waiting for #1784.** `hb05` was parented on
+  the head of the day. Whichever of #1784 and Slice 2 merges second must
+  re-parent its migration, following the serial-migration rule above.
+- **D5, conflicts answer 409 with the latest version.** A stale or
+  ahead-of-chain `expected_parent_version` gets 409 plus the latest handoff.
+  The caller merges and retries; rejected content is never stored. A replayed
+  `handoff_id` with the same body returns the stored version.
+
+Evidence: the Slice 5 journey
+(`backend/tests/integration/test_same_project_continuation.py`) passed on a
+local PostgreSQL 14 on 2026-10-05. It is skipped in hosted CI, so hosted is
+NOT RUN. Live proof is runbook Phase 3
+([`docs/testing/harness-live-proof.md`](../testing/harness-live-proof.md)),
+NOT RUN.
+
 ## Not verified here
 
 - Whether the running dev pod has the skill flags on.

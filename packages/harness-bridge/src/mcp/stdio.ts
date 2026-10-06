@@ -9,14 +9,16 @@ import { CredentialStore } from "../credentials.ts";
 import { GrantKeeper } from "../grants.ts";
 import { HandoffHttpClient } from "../handoffs/client.ts";
 import { getHandoffTool, saveHandoffTool } from "../handoffs/mcp.ts";
+import { HandoffQueue, localBinding } from "../handoffs/queue.ts";
 import { CapabilityClient, type McpSession } from "./client.ts";
 import { createNousMcpServer, type LocalTool } from "./server.ts";
 
 /** Serves NOUS read tools, plus publication, action and handoff tools when granted, over stdio. */
 export async function runStdioMcp(session: McpSession): Promise<void> {
   // Every client sends the keeper's current grant, renewed before expiry.
+  const store = new CredentialStore(session.stateDir);
   const keeper = new GrantKeeper(
-    new CredentialStore(session.stateDir),
+    store,
     session.credentialHandle,
     session.apiOrigin,
   );
@@ -54,7 +56,11 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
   if (session.handoff) {
     // The chat is the grant's binding; the model never names it.
     const handoffs = new HandoffHttpClient(session.apiOrigin, credentials, keeper.fetch);
-    local.push(getHandoffTool(handoffs), saveHandoffTool(handoffs));
+    // Saves are journaled in the same store; the binding is re-read per save.
+    local.push(
+      getHandoffTool(handoffs),
+      saveHandoffTool(new HandoffQueue(store, handoffs), () => localBinding(store, session.credentialHandle)),
+    );
   }
   const server = createNousMcpServer(
     new CapabilityClient(session.apiOrigin, credentials, keeper.fetch),
