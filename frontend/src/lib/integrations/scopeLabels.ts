@@ -9,6 +9,10 @@ const LABELS: Record<string, string> = {
   'tools:write': 'Request changes that you approve one by one',
   'artifacts:publish': 'Publish files from the registered output folder',
   'context:read': 'Read selected memories',
+  'handoff:read':
+    "Read this chat's saved handoff (goal, decisions, remaining work and results)",
+  'handoff:write':
+    'Save a handoff for this chat (goal, decisions, remaining work and results)',
   'library:read': 'List the folders (projects) in this workspace',
   'library:write':
     'Add, remove, move and rename items in this workspace without asking each time. Deleting folders and ingesting papers still require your approval.',

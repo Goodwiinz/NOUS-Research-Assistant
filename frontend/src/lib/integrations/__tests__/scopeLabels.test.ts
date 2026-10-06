@@ -10,6 +10,8 @@ const STANDARD_SCOPES = [
   'tools:write',
   'context:read',
   'artifacts:publish',
+  'handoff:read',
+  'handoff:write',
   'library:read',
   'library:write',
 ];
