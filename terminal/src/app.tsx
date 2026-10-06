@@ -128,8 +128,46 @@ function ApprovalPrompt({
   tools: Array<{ name: string; args: Record<string, unknown> }>;
 }>) {
   const [answer, setAnswer] = useState("");
+  // Keystrokes that arrive in one tick (a pasted "yes⏎") must see each
+  // other, so the draft lives in a ref and state only drives rendering.
+  const draft = useRef("");
   const [submitted, setSubmitted] = useState(false);
-  if (approval?.approved !== undefined) return null;
+  const pending = approval?.approved === undefined;
+  const update = (value: string) => {
+    draft.current = value;
+    setAnswer(value);
+  };
+  // The prompt is modal: the composer is unmounted while an approval is
+  // pending, so read keystrokes directly instead of through the focus
+  // manager. A focus-based input only becomes active after the composer's
+  // unmount and this prompt's mount settle across several commits, and any
+  // decision typed in that window was silently dropped (GOO-397).
+  useInput(
+    (input, key) => {
+      if (submitted || key.ctrl || key.meta || key.escape || key.tab) return;
+      if (key.return) {
+        const choice = draft.current.trim().toLowerCase();
+        if (choice !== "yes" && choice !== "no") return;
+        setSubmitted(true);
+        respondToApproval({ approved: choice === "yes" });
+        return;
+      }
+      if (key.backspace || key.delete) {
+        update(draft.current.slice(0, -1));
+        return;
+      }
+      if (
+        input &&
+        !key.upArrow &&
+        !key.downArrow &&
+        !key.leftArrow &&
+        !key.rightArrow
+      )
+        update(draft.current + input);
+    },
+    { isActive: pending && !submitted },
+  );
+  if (!pending) return null;
   return (
     <Box
       flexDirection="column"
@@ -149,18 +187,10 @@ function ApprovalPrompt({
       <Text>
         Type yes to approve or no to deny, then Enter. Ctrl+C cancels.
       </Text>
-      <FocusedTextInput
-        value={answer}
-        onChange={setAnswer}
-        submitOnEnter
-        onSubmit={(value) => {
-          if (submitted) return;
-          const choice = value.trim().toLowerCase();
-          if (choice !== "yes" && choice !== "no") return;
-          setSubmitted(true);
-          respondToApproval({ approved: choice === "yes" });
-        }}
-      />
+      <Text>
+        {answer}
+        <Text inverse> </Text>
+      </Text>
     </Box>
   );
 }

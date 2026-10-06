@@ -256,6 +256,53 @@ for (const approved of [true, false]) {
   });
 }
 
+test("an approval decision typed as soon as the prompt renders is not lost", async () => {
+  // Regression for GOO-397: the composer unmounts and the approval prompt
+  // mounts in the same commit, so a focus-based input only becomes active a
+  // few commits later and keystrokes in that window were silently dropped.
+  const calls: string[] = [];
+  mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+    calls.push(String(url));
+    return calls.length === 1
+      ? response([
+          [
+            "confirmation",
+            {
+              thread_id: "thread-1",
+              confirmation: { tool_name: "create_note", tool_args: {} },
+            },
+          ],
+        ])
+      : response([["token", { content: "Note created" }], ["done", {}]]);
+  });
+  const ui = render(<App />);
+  await until(
+    () =>
+      ui.frames.length > 1 && (ui.lastFrame()?.includes("Ask NOUS") ?? false),
+    "Composer mounts",
+  );
+  ui.stdin.write("Find papers");
+  await until(
+    () => ui.lastFrame()?.includes("Find papers") ?? false,
+    "Input is visible",
+  );
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Approval required") ?? false,
+    "Approval is visible",
+  );
+  // No delay: type the decision in the very next tick after the prompt shows.
+  ui.stdin.write("yes");
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Note created") ?? false,
+    "Resumed response renders without waiting for focus",
+  );
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /\/agent\/stream\/confirm$/);
+  ui.unmount();
+});
+
 test("Ctrl+C during approval cancels without posting a decision", async () => {
   const fetch = mock.method(globalThis, "fetch", async () =>
     response([
