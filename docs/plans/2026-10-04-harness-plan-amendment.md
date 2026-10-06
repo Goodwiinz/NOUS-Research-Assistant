@@ -145,6 +145,29 @@ Update every place that names its parent: the migration, its test
 test paragraph in [`harness-bridge.md`](../engineering/harness-bridge.md).
 Two heads fail the blocking `migration-check`.
 
+Slice 1 also needs the **`api-breaking-approved`** label on its PR. A workspace
+request or action has no project, so four response properties widen from
+`string` to `string | null`: `project_id` and `project_label` of
+`GrantRequestDTO` (`POST /integrations/grant-requests`,
+`GET /integrations/grant-requests/{request_id}` and
+`POST /integrations/grant-requests/{request_id}/decision`) and of `ActionReview`
+(`GET /integrations/actions/{invocation_id}/review`). oasdiff 1.23.0, the
+version CI pins (tarball checked against the release's `checksums.txt`), run on
+the branch's `backend/openapi.json` against the one at its merge base with
+`origin/develop` (`f52735690`) reports eight ERR-level
+`response-property-list-of-types-widened` changes, one per property and
+operation, and nothing else. Without the label the `openapi-contract` job fails
+on them. This is the use [`api-contracts.md`](../engineering/api-contracts.md#escape-hatch)
+allows, a deliberate contract change with its consumers updated in the same PR:
+the approve page (`frontend/app/(dashboard)/integrations/approve/page.tsx`) and
+`IntegrationActionApproval.tsx` show the workspace when there is no project,
+`frontend/src/types/generated/api.d.ts` is regenerated, and `nous-harness` reads
+only `id` and `approval_url` of these responses. Say so in the PR body.
+`scripts/ci/run_local_ci.sh` checks the generated files for drift but does not
+run oasdiff, so a green local run does not show the break. The label skips the
+whole gate, so run oasdiff by hand again after any later contract change and
+expect these eight and no more.
+
 ## Not verified here
 
 - Whether the running dev pod has the skill flags on.
