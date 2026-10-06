@@ -7,7 +7,7 @@ fresh chain and never shows the previous project's handoffs. A conflict returns 
 content is never stored.
 """
 
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, select
@@ -44,7 +44,8 @@ def _bound_thread(context: IntegrationContext) -> UUID:
 
 
 def _dto(row: IntegrationHandoff) -> HandoffDTO:
-    return HandoffDTO.model_validate(row)
+    # Hosted mypy 1.7 has no pydantic plugin: model_validate is Any there.
+    return cast(HandoffDTO, HandoffDTO.model_validate(row))
 
 
 def _live_chain(
@@ -84,7 +85,7 @@ async def _latest_row(
         .limit(1)
         .execution_options(populate_existing=True)
     )
-    return row
+    return cast("IntegrationHandoff | None", row)
 
 
 async def _replayed(
@@ -101,7 +102,7 @@ async def _replayed(
         )
         .execution_options(populate_existing=True)
     )
-    return row
+    return cast("IntegrationHandoff | None", row)
 
 
 def _results(payload: HandoffCreate) -> list[dict[str, str]]:
