@@ -8,6 +8,7 @@
  */
 import { Workspace, WorkspaceCreate, WorkspaceUpdate } from '@/types/workspace';
 import { workspaceService } from '@/services/workspaceService';
+import { captureChatSession } from '../requestCoordinator';
 import type { ChatSliceCreator, ChatState, ChatActions } from '../types';
 import { MAX_REINIT_RETRIES } from '../initialState';
 
@@ -46,6 +47,7 @@ export function handleStaleDataRecovery(
       'isLoadingConversations' | 'isLoadingThreads' | 'isLoadingMessages';
   } = {}
 ): RecoveryResult {
+  const isCurrentSession = captureChatSession();
   const { clearWorkspaces = true, loadingKey } = options;
 
   let shouldReinit = false;
@@ -95,6 +97,7 @@ export function handleStaleDataRecovery(
   return {
     shouldProceed: true,
     triggerReinit: () => {
+      if (!isCurrentSession()) return;
       // Use Promise-based approach instead of fire-and-forget setTimeout
       (async () => {
         try {
@@ -105,9 +108,11 @@ export function handleStaleDataRecovery(
             err
           );
         } finally {
-          set((state) => {
-            state.isReinitializing = false;
-          });
+          if (isCurrentSession()) {
+            set((state) => {
+              state.isReinitializing = false;
+            });
+          }
         }
       })();
     },
@@ -118,6 +123,7 @@ export const createWorkspaceSlice: ChatSliceCreator<WorkspaceSlice> = (
   set
 ) => ({
   loadWorkspaces: async () => {
+    const isCurrentSession = captureChatSession();
     set((state) => {
       state.isLoadingWorkspaces = true;
       state.error = null;
@@ -125,11 +131,13 @@ export const createWorkspaceSlice: ChatSliceCreator<WorkspaceSlice> = (
 
     try {
       const workspaces = await workspaceService.listWorkspaces();
+      if (!isCurrentSession()) return;
       set((state) => {
         state.workspaces = workspaces;
         state.isLoadingWorkspaces = false;
       });
     } catch (error) {
+      if (!isCurrentSession()) return;
       console.error('[ChatStore] Error loading workspaces:', error);
       set((state) => {
         state.error = 'Failed to load workspaces';
@@ -139,13 +147,16 @@ export const createWorkspaceSlice: ChatSliceCreator<WorkspaceSlice> = (
   },
 
   createWorkspace: async (data) => {
+    const isCurrentSession = captureChatSession();
     try {
       const workspace = await workspaceService.createWorkspace(data);
+      if (!isCurrentSession()) return null;
       set((state) => {
         state.workspaces.unshift(workspace);
       });
       return workspace;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error creating workspace:', error);
       set((state) => {
         state.error = 'Failed to create workspace';
@@ -155,8 +166,10 @@ export const createWorkspaceSlice: ChatSliceCreator<WorkspaceSlice> = (
   },
 
   updateWorkspace: async (id, data) => {
+    const isCurrentSession = captureChatSession();
     try {
       const workspace = await workspaceService.updateWorkspace(id, data);
+      if (!isCurrentSession()) return null;
       set((state) => {
         const index = state.workspaces.findIndex((w) => w.id === id);
         if (index !== -1) {
@@ -165,6 +178,7 @@ export const createWorkspaceSlice: ChatSliceCreator<WorkspaceSlice> = (
       });
       return workspace;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error updating workspace:', error);
       set((state) => {
         state.error = 'Failed to update workspace';
@@ -174,8 +188,10 @@ export const createWorkspaceSlice: ChatSliceCreator<WorkspaceSlice> = (
   },
 
   deleteWorkspace: async (id) => {
+    const isCurrentSession = captureChatSession();
     try {
       await workspaceService.deleteWorkspace(id);
+      if (!isCurrentSession()) return false;
       set((state) => {
         state.workspaces = state.workspaces.filter((w) => w.id !== id);
         if (state.currentWorkspaceId === id) {
@@ -186,6 +202,7 @@ export const createWorkspaceSlice: ChatSliceCreator<WorkspaceSlice> = (
       });
       return true;
     } catch (error) {
+      if (!isCurrentSession()) return false;
       console.error('[ChatStore] Error deleting workspace:', error);
       set((state) => {
         state.error = 'Failed to delete workspace';
