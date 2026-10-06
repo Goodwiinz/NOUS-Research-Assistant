@@ -3,4 +3,4 @@
 # available in newer setuptools releases.
 setuptools<81
 qdrant-client==1.19.0
-numpy<2
+numpy<3
