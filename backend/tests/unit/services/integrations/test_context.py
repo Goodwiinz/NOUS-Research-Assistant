@@ -31,13 +31,19 @@ USER, ORG, PROJECT, WORKSPACE = (uuid4() for _ in range(4))
 # soft-deleted (the `library` fixture). OTHER_WORKSPACE is never seeded.
 P2, P3, OTHER_WORKSPACE = (uuid4() for _ in range(3))
 SOON = datetime.now(timezone.utc) + timedelta(hours=1)
+# An owned chat in WORKSPACE that belongs to no project (Thread.source_project_id
+# is NULL), and a run of it: the `chat` fixture.
+CHAT_THREAD, CHAT_RUN = uuid4(), uuid4()
 
 
 @pytest.fixture
 async def db() -> AsyncIterator[AsyncSession]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    from src.models.agent_run import AgentRun
     from src.models.bridge_device import BridgeDevice, WorkspaceBinding
+    from src.models.conversation import Conversation
     from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
+    from src.models.thread import Thread
     from src.models.tool_action import IntegrationToolAction
 
     tables: list[Any] = [
@@ -46,6 +52,9 @@ async def db() -> AsyncIterator[AsyncSession]:
         Workspace,
         WorkspaceMember,
         Collection,
+        Conversation,
+        Thread,
+        AgentRun,
         BridgeDevice,
         WorkspaceBinding,
         IntegrationGrantRequest,
@@ -94,6 +103,46 @@ async def issued(db: AsyncSession) -> Any:
         project_id=PROJECT,
         scopes=frozenset({"tools:read"}),
     )
+
+
+@pytest.fixture
+async def chat(db: AsyncSession) -> None:
+    """A real chat of USER with no source project, and a run of it.
+
+    A workspace has no single project for a chat to belong to, yet a lookup on
+    `Thread.source_project_id == project_id` with no project is `IS NULL` and
+    matches this very chat. Only the guard in validate_binding refuses it.
+    """
+    from src.models.agent_run import AgentRun
+    from src.models.conversation import Conversation
+    from src.models.thread import Thread
+
+    conversation = uuid4()
+    await db.execute(
+        insert(Conversation).values(
+            id=conversation, workspace_id=WORKSPACE, title="Chat", created_by_id=USER
+        )
+    )
+    await db.execute(
+        insert(Thread).values(
+            id=CHAT_THREAD,
+            conversation_id=conversation,
+            created_by_id=USER,
+            source_project_id=None,
+            title="Unattached chat",
+        )
+    )
+    await db.execute(
+        insert(AgentRun).values(
+            job_id=str(CHAT_RUN),
+            organization_id=ORG,
+            user_id=USER,
+            thread_id=CHAT_THREAD,
+            project_id=None,
+            status="running",
+        )
+    )
+    await db.commit()
 
 
 async def test_revocation_is_checked_per_call(db: AsyncSession, issued: Any) -> None:
@@ -1071,15 +1120,25 @@ def test_context_and_request_bind_exactly_one_of_project_or_workspace(
     [
         ({"project_id": None, "workspace_id": None}, {}),
         ({"project_id": PROJECT, "workspace_id": WORKSPACE}, {}),
-        ({"project_id": None, "workspace_id": WORKSPACE}, {"thread_id": uuid4()}),
-        ({"project_id": None, "workspace_id": WORKSPACE}, {"run_id": uuid4()}),
+        ({"project_id": None, "workspace_id": WORKSPACE}, {"thread_id": CHAT_THREAD}),
+        ({"project_id": None, "workspace_id": WORKSPACE}, {"run_id": CHAT_RUN}),
+        (
+            {"project_id": None, "workspace_id": WORKSPACE},
+            {"thread_id": CHAT_THREAD, "run_id": CHAT_RUN},
+        ),
     ],
+    ids=["neither", "both", "workspace-chat", "workspace-run", "workspace-chat-run"],
 )
 async def test_validate_binding_needs_one_binding_and_no_chat_on_a_workspace(
-    db: AsyncSession, bindings: dict[str, Any], extra: dict[str, Any]
+    db: AsyncSession, chat: None, bindings: dict[str, Any], extra: dict[str, Any]
 ) -> None:
     from src.services.integrations.context import validate_binding
 
+    # The workspace itself is a valid binding; the chat and run are real and
+    # owned, so nothing but the rule that a workspace carries no chat refuses it.
+    await validate_binding(
+        db, user_id=USER, organization_id=ORG, project_id=None, workspace_id=WORKSPACE
+    )
     with pytest.raises(IntegrationAccessDenied):
         await validate_binding(
             db, user_id=USER, organization_id=ORG, **bindings, **extra
@@ -1214,8 +1273,9 @@ async def test_request_for_a_foreign_workspace_is_refused_before_storing(
 
 
 async def test_workspace_request_cannot_carry_a_chat(
-    db: AsyncSession, owner: Any
+    db: AsyncSession, owner: Any, chat: None
 ) -> None:
+    from src.models.integration_grant import IntegrationGrantRequest
     from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
     from src.services.integrations.context import create_request, register_device
 
@@ -1228,9 +1288,33 @@ async def test_workspace_request_cannot_carry_a_chat(
                 workspace_id=WORKSPACE,
                 device_id=device.id,
                 scopes=LIBRARY_READ,
-                thread_id=uuid4(),
+                thread_id=CHAT_THREAD,
             ),
         )
+    # Refused before anything is stored, not merely hidden on read-back.
+    assert await db.scalar(select(func.count(IntegrationGrantRequest.id))) == 0
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"thread_id": CHAT_THREAD}, {"thread_id": CHAT_THREAD, "run_id": CHAT_RUN}],
+    ids=["chat", "chat-and-run"],
+)
+async def test_workspace_grant_cannot_be_minted_for_a_chat(
+    db: AsyncSession, chat: None, extra: dict[str, Any]
+) -> None:
+    from src.models.integration_grant import IntegrationGrant
+
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            workspace_id=WORKSPACE,
+            scopes=frozenset(LIBRARY_READ),
+            **extra,
+        )
+    assert await db.scalar(select(func.count(IntegrationGrant.id))) == 0
 
 
 async def _consent(
