@@ -2,12 +2,12 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator, Iterable
+from typing import Any, AsyncIterator, Iterable, Iterator
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import event, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models.artifact import Artifact, ArtifactVersion
@@ -2227,6 +2227,114 @@ async def test_workspace_researchers_come_from_the_selected_project_only(
     )
     assert known_there.is_error is False
     assert known_there.content[0]["researcher"]["name"] == "Yann LeCun"
+
+
+# --- workspace grants: every tool, one invariant ------------------------------
+
+# One valid call per tool, without a project_id. A tool added to READ_TOOL_NAMES
+# or LOCAL_TOOLS needs a row here, or test_every_tool_has_a_workspace_grant_case
+# fails: the grant has no project of its own, so every branch of invoke_read
+# must take its project from the selector or answer without one.
+EVERY_TOOL_CALL: dict[str, dict[str, Any]] = {
+    "search_documents": {"query": "retrieval"},
+    "list_project_documents": {},
+    "do_kb_retrieve": {"query": "q", "document_ids": [str(DOC_IN_PROJECT)]},
+    "get_current_draft": {},
+    "list_project_artifacts": {},
+    "search_arxiv": {"query": "llm"},
+    "search_external_database": {"query": "p53"},
+    "list_external_databases": {},
+    "get_document_content": {"document_id": str(DOC_IN_PROJECT)},
+    "retrieve_passages": {"query": "retrieval"},
+    "get_arxiv_paper_content": {"arxiv_id": "2401.00001"},
+    "find_researchers": {"query": "a"},
+    "get_researcher": {"researcher_id": "a"},
+    "list_library": {},
+}
+
+
+def test_every_tool_has_a_workspace_grant_case() -> None:
+    tools = set(READ_TOOL_NAMES) | set(read_tools.LOCAL_TOOLS)
+    assert set(EVERY_TOOL_CALL) == tools
+    # Each one names the scope a grant needs for it.
+    assert set(read_tools.TOOL_SCOPES) == tools
+
+
+@pytest.fixture
+def offline_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tools that reach outside the database, answered locally."""
+    for name, payload in (
+        ("_tool_search_arxiv", {"papers": []}),
+        ("_tool_search_external_database", {"results": []}),
+        ("_tool_list_external_databases", {"connectors": []}),
+    ):
+        monkeypatch.setattr(read_tools, name, AsyncMock(return_value=payload))
+    monkeypatch.setattr(read_tools, "_arxiv_cache", lambda: read_tools._NoCache())
+    monkeypatch.setattr(
+        read_tools.arxiv_fulltext, "fetch_text", AsyncMock(return_value="text")
+    )
+    monkeypatch.setattr(read_tools, "fulltext_search_service", _StubFulltext([]))
+
+
+def _bound_values(parameters: Any) -> Iterable[Any]:
+    if isinstance(parameters, dict):
+        parameters = list(parameters.values())
+    for value in parameters or ():
+        if isinstance(value, (list, tuple, dict)):
+            yield from _bound_values(value)
+        else:
+            yield value
+
+
+@pytest.fixture
+def executed_sql(db: AsyncSession) -> Iterator[list[tuple[str, Any]]]:
+    """Every statement the session sends, with the values it binds."""
+    seen: list[tuple[str, Any]] = []
+
+    def record(
+        _conn: Any, _cursor: Any, statement: str, parameters: Any, *_: Any
+    ) -> None:
+        seen.append((statement, parameters))
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", record)
+    yield seen
+    event.remove(engine, "before_cursor_execute", record)
+
+
+@pytest.mark.usefixtures("offline_tools")
+@pytest.mark.parametrize("tool", sorted(EVERY_TOOL_CALL))
+async def test_every_tool_under_a_workspace_grant_without_a_selector(
+    db: AsyncSession, executed_sql: list[tuple[str, Any]], tool: str
+) -> None:
+    # Either the tool needs a project, and says so, or it answers from the
+    # grant's own scope. Never an exception, and never the word "None": the
+    # agent helpers resolve a non-UUID string as a project NAME, and the
+    # user's other workspace holds a project called exactly that.
+    selector_tools = {
+        listed.name
+        for listed in list_read_tools(workspace_bound=True)
+        if "project_id" in listed.input_schema["properties"]
+    }
+    result = await invoke_read(
+        db,
+        _workspace_context(TOOLS_READ | LIBRARY_READ),
+        _invocation(tool, **EVERY_TOOL_CALL[tool]),
+    )
+    if tool in selector_tools:
+        assert result.is_error is True
+        assert result.content == [{"error": "project_id_required"}]
+        assert result.source_refs == []
+    else:
+        assert result.content != [{"error": "project_id_required"}]
+    if tool == "list_library":
+        assert set(_library_folders(result)) == {str(PROJECT), str(OTHER_PROJECT)}
+    assert executed_sql, "the recorder saw no statement"
+    for statement, parameters in executed_sql:
+        assert "'None'" not in statement
+        assert "None" not in _bound_values(parameters), statement
+    leaked = json.dumps(result.content, default=str)
+    assert str(NAMED_NONE_PROJECT) not in leaked and "retrieval-none" not in leaked
 
 
 # --- list_library: a local tool behind library:read ---------------------------
