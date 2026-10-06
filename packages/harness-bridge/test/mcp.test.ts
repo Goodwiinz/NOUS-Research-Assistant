@@ -529,6 +529,46 @@ test("--context is a project capability: connect --workspace refuses it before a
   }
 });
 
+test("the Status paragraph of harness-bridge.md never calls a scope connect requests unexposed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-status-doc-"));
+  const calls: { url: string; body: any }[] = [];
+  try {
+    // Every flag on, so the one consent request carries every scope connect can ask for.
+    await connect({
+      stateDir: dir,
+      fetchFn: consentFetch(calls),
+      announce: () => {},
+      apiUrl: "https://nous.test/api/v1",
+      label: "dev",
+      projectId: PROJECT,
+      threadId: CHAT,
+      tools: true,
+      publish: true,
+      write: true,
+      library: true,
+      handoff: true,
+      context: true,
+    });
+    const requestable: string[] = calls.find((c) => c.url.endsWith("/grant-requests"))!.body.scopes;
+    assert.ok(requestable.includes("context:read"), "no flag reaches context:read any more: revisit the Status paragraph");
+
+    const doc = readFileSync(fileURLToPath(new URL("../../../docs/engineering/harness-bridge.md", import.meta.url)), "utf8");
+    const status = doc.split("\n").find((line) => line.startsWith("**Status:**"));
+    assert.ok(status, "harness-bridge.md has no Status paragraph");
+    const unexposed = status
+      .split(/[.;]\s/)
+      .filter((clause) => /\bnot exposed\b/.test(clause))
+      .flatMap((clause) => [...clause.matchAll(/`([a-z]+:[a-z]+)`/g)].map((match) => match[1]));
+    assert.deepEqual(
+      unexposed.filter((scope) => requestable.includes(scope)),
+      [],
+      "the Status paragraph calls a scope that nous-harness connect requests 'not exposed'",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a workspace connection never launches the MCP child with --context", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-context-"));
   const install = async (scopes: string[], binding: Record<string, string>) => {
