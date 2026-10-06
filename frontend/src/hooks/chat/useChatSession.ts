@@ -179,7 +179,8 @@ export function useChatSession(): UseChatSessionReturn {
   const unavailableInitialUrlThreadRef = useRef<string | null>(null);
 
   // ---- Auth ----
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const userId = user?.id ?? null;
 
   // ---- Store bindings ----
   const activeThreadId = useChatStore((state) => state.currentThreadId);
@@ -310,6 +311,19 @@ export function useChatSession(): UseChatSessionReturn {
       isHydratedRef.current = false;
     }
   }, [isAuthenticated]);
+
+  // An account switch (A -> B without sign-out) keeps isAuthenticated true and
+  // this page mounted. Drop the previous account's workspace and local
+  // sidebar/transcript overlay; the init effect below refetches for B.
+  const sessionUserIdRef = useRef(userId);
+  useEffect(() => {
+    if (sessionUserIdRef.current === userId) return;
+    sessionUserIdRef.current = userId;
+    isHydratedRef.current = false;
+    setWorkspace(null);
+    setConversations([]);
+    setMessages([]);
+  }, [userId]);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -882,6 +896,7 @@ export function useChatSession(): UseChatSessionReturn {
   }, [
     initializeChatPersistence,
     isAuthenticated,
+    userId,
     loadThreadsFromDb,
     setCurrentThread,
   ]);

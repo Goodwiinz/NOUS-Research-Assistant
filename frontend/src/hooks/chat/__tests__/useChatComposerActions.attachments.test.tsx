@@ -11,6 +11,11 @@ vi.mock('@/services/enhancedDocumentService', () => ({
 
 const documentId = '11111111-1111-4111-8111-111111111111';
 const clientMessageId = '22222222-2222-4222-8222-222222222222';
+const attachment = {
+  id: 'attachment-row',
+  document_id: documentId,
+  display_name: 'Synthetic audit paper.pdf',
+};
 
 function setup(): {
   result: { current: ReturnType<typeof useChatComposerActions> };
@@ -30,13 +35,7 @@ function setup(): {
           role: 'user',
           content: 'Summarize the attached paper',
           clientMessageId,
-          attachments: [
-            {
-              id: 'attachment-row',
-              document_id: documentId,
-              display_name: 'Synthetic audit paper.pdf',
-            },
-          ],
+          attachments: [attachment],
         }),
         makeChatPageMessage({
           id: 'answer-row',
@@ -61,7 +60,7 @@ describe('attached chat turns', () => {
   });
 
   it.each(['edit', 'regenerate'] as const)(
-    '%s retains the original document IDs',
+    '%s retains the original document IDs and attachment metadata',
     (action) => {
       vi.useFakeTimers();
       const { result, handleSubmit } = setup();
@@ -74,9 +73,13 @@ describe('attached chat turns', () => {
         else result.current.handleRegenerate(1);
         vi.runAllTimers();
       });
-      expect(handleSubmit).toHaveBeenCalledWith(content, [], clientMessageId, [
-        documentId,
-      ]);
+      expect(handleSubmit).toHaveBeenCalledWith(
+        content,
+        [],
+        clientMessageId,
+        [documentId],
+        [attachment]
+      );
     }
   );
 });

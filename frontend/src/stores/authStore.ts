@@ -94,7 +94,21 @@ let signInInFlight = 0;
 // explicit callers) onto a single /auth/me round-trip.
 let profileFetchInFlight: Promise<void> | null = null;
 
+// Auth generation: bumped by every account transition (sign-in, sign-out,
+// rejected session). A profile request captures it before its first await
+// and publishes nothing once it changed, so a late /auth/me (or its 401) for
+// user A can neither clear user B's client state nor flip the store back to A.
+let authGeneration = 0;
+
+function beginAuthGeneration(): number {
+  authGeneration += 1;
+  // A profile read issued for the previous account must not be joined.
+  profileFetchInFlight = null;
+  return authGeneration;
+}
+
 function clearUserScopedClientState(): void {
+  beginAuthGeneration();
   clearWorkspaceServiceCache();
   useChatStore.getState().reset();
   useAgentChatStore.getState().reset();
@@ -152,6 +166,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   signIn: async (email: string, password: string) => {
     set({ isLoading: true, error: null });
     signInInFlight += 1;
+    const generation = beginAuthGeneration();
 
     try {
       const supabase = getSupabaseClient();
@@ -177,6 +192,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const profileData = await api.get<ProfileResponse>('/auth/me', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
+        if (generation !== authGeneration) return;
 
         if (get().user && get().user?.id !== profileData.user.id) {
           clearUserScopedClientState();
@@ -371,6 +387,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       return;
     }
 
+    const generation = authGeneration;
+    const isCurrentGeneration = (): boolean => generation === authGeneration;
     const request = (async () => {
       try {
         const supabase = getSupabaseClient();
@@ -383,6 +401,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           data: { user },
           error: userError,
         } = await supabase.auth.getUser();
+        if (!isCurrentGeneration()) return;
 
         if (userError || !user) {
           clearUserScopedClientState();
@@ -398,6 +417,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const {
           data: { session },
         } = await supabase.auth.getSession();
+        if (!isCurrentGeneration()) return;
         const accessToken = session?.access_token;
 
         if (!accessToken) {
@@ -414,6 +434,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const profileData = await api.get<ProfileResponse>('/auth/me', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
+        if (!isCurrentGeneration()) return;
 
         if (get().user && get().user?.id !== profileData.user.id) {
           clearUserScopedClientState();
@@ -426,6 +447,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           ...CLEARED_PENDING_CONFIRMATION,
         });
       } catch (error) {
+        if (!isCurrentGeneration()) return;
         const message =
           error instanceof Error ? error.message : 'Failed to fetch profile';
         const statusCode = errorStatusCode(error);
@@ -458,7 +480,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await request;
     } finally {
-      profileFetchInFlight = null;
+      if (profileFetchInFlight === request) {
+        profileFetchInFlight = null;
+      }
     }
   },
 

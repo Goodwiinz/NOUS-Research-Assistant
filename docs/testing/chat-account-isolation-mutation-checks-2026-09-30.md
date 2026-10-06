@@ -101,3 +101,94 @@ Neutralizing the condition lets an old pending bootstrap resolve with
 ```sh
 pnpm --dir frontend exec vitest run src/services/__tests__/workspaceService.cache.test.ts -t 'cannot restore the old account' --reporter=verbose
 ```
+
+# Review follow-up: account switch, profile fencing, attachment retention
+
+Recorded 2026-10-06 for the three PR #1776 review findings, on top of
+`4329952e3` (develop merged in). Same procedure as above: each guard was
+disabled alone, the named tests failed as described, the source was restored
+and the identical command passed. The pre-fix sources (`git show HEAD:<file>`)
+fail every new test.
+
+## Re-initializing chat persistence on an account switch
+
+Test file: `frontend/src/hooks/chat/__tests__/useChatSession.accountSwitch.test.tsx`
+(real auth store, chat store, `useChatPersistence` and `useChatSession`).
+
+```sh
+pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useChatSession.accountSwitch.test.tsx --reporter=verbose
+```
+
+- `frontend/src/hooks/useChatPersistence.ts:285`, dropping the shared init
+  guard on chat-session reset. Removing it fails all three cases: B takes the
+  completed fast path over an empty store (`currentConversationId` stays
+  undefined, workspace never becomes `ws-user-B`).
+- `frontend/src/hooks/useChatPersistence.ts:822,833`, keying the per-consumer
+  reset and auto-init effects to the user id. Reverting to `[isAuthenticated]`
+  fails "persistence-only consumer" and "superseded initialization": the chat
+  layout never re-initializes for B.
+- `frontend/src/hooks/chat/useChatSession.ts:899`, the init effect's `userId`
+  dependency. Removing it fails "drops user A workspace metadata": the mounted
+  page never re-bootstraps for B.
+- `frontend/src/hooks/chat/useChatSession.ts:323`, dropping the previous
+  account's workspace on user change. Removing it fails the same case:
+  `workspace` is still `ws-user-A` while B's bootstrap is pending.
+- `frontend/src/hooks/useChatPersistence.ts:618`, silencing a superseded run's
+  failure. Removing it fails "superseded initialization": B sees A's
+  "Workspace initialization returned no workspace" toast.
+- `frontend/src/hooks/useChatPersistence.ts:627`, only the current run may
+  release the in-flight slot. Removing the identity check fails the same case:
+  A's late failure releases B's run and a concurrent caller starts a duplicate
+  bootstrap (3 calls instead of 2).
+
+## Fencing profile responses to their auth generation
+
+Test file: `frontend/src/store/__tests__/auth-store-profile-fetch.test.ts`,
+describe "profile responses across account transitions".
+
+```sh
+pnpm --dir frontend exec vitest run src/store/__tests__/auth-store-profile-fetch.test.ts --reporter=verbose
+```
+
+- `frontend/src/stores/authStore.ts:437`, the compare after `/auth/me` in
+  `fetchProfile`. Removing it fails both "late /auth/me" cases and "lands
+  after sign-out": A's response clears B's chat and flips the store back to
+  `user-A` (or re-authenticates A after sign-out).
+- `frontend/src/stores/authStore.ts:450`, the compare in the error path.
+  Removing it fails "late 401": A's rejection tears down B's session.
+- `frontend/src/stores/authStore.ts:404,420`, the compares after `getUser()`
+  and `getSession()`. Removing either fails the matching "late signed-out
+  getUser/getSession answer" case: B is signed out locally.
+- `frontend/src/stores/authStore.ts:111`, bumping the generation in
+  `clearUserScopedClientState`. Removing it fails "lands after sign-out".
+- `frontend/src/stores/authStore.ts:169,195`, `signIn` starting a generation
+  and checking it before publishing. Removing either fails "concurrent
+  sign-ins": the earlier sign-in's late profile wipes B's chat and wins.
+- `frontend/src/stores/authStore.ts:106`, discarding the previous account's
+  in-flight profile promise. Removing it fails both "late /auth/me" cases: B's
+  profile read joins A's abandoned request instead of issuing its own.
+- `frontend/src/stores/authStore.ts:483`, only the owning request may clear
+  the in-flight slot. Removing the identity check fails both "late /auth/me"
+  cases: A settling releases B's slot and a concurrent caller issues a
+  duplicate `/auth/me`.
+
+## Keeping attachments on an edited or regenerated turn
+
+Tests: "%s keeps the turn's attachments on the optimistic replacement…" in
+`frontend/src/hooks/chat/__tests__/useChatStreaming.editResend.test.ts` (real
+`useChatComposerActions` wired to real `useChatStreaming`) and "%s retains the
+original document IDs and attachment metadata" in
+`frontend/src/hooks/chat/__tests__/useChatComposerActions.attachments.test.tsx`.
+
+```sh
+pnpm --dir frontend exec vitest run src/hooks/chat/__tests__/useChatStreaming.editResend.test.ts src/hooks/chat/__tests__/useChatComposerActions.attachments.test.tsx --reporter=verbose
+```
+
+- `frontend/src/hooks/chat/useChatStreaming.ts:2053`, copying attachments onto
+  the optimistic user message. Removing it fails both edit and regenerate
+  integration cases: the replacement has `attachments: undefined` during the
+  stream and in the local error state.
+- `frontend/src/hooks/chat/useChatComposerActions.ts:205` (edit) and `:167`
+  (regenerate), forwarding the metadata. Removing either fails the matching
+  integration case and the matching composer-actions case. The backend payload
+  still carries only `attachment_ids`.

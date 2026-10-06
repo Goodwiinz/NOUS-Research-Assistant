@@ -26,7 +26,8 @@ import {
 } from '@/components/chat/shared/cloudMessageView';
 import { makeChatPageMessage } from '@/test/chatMessageFactory';
 import { useChatStore } from '@/store/chat-store';
-import type { ChatMessage } from '@/types/workspace';
+import type { ChatMessage, MessageAttachment } from '@/types/workspace';
+import { useChatComposerActions } from '@/hooks/chat/useChatComposerActions';
 
 function wrapper({ children }: { children: ReactNode }): ReactElement {
   const client = new QueryClient({
@@ -47,6 +48,10 @@ vi.mock('@/services/agentChatService', () => ({
     streamConfirm: vi.fn(),
     resumeStream: vi.fn().mockResolvedValue({ status: 'idle' }),
   },
+}));
+
+vi.mock('@/services/enhancedDocumentService', () => ({
+  enhancedDocumentService: { uploadDocument: vi.fn() },
 }));
 
 vi.mock('@/services/workspaceService', () => ({
@@ -448,4 +453,110 @@ describe('useChatStreaming edit-and-resend', () => {
     const payload = streamMessageMock.mock.calls[0][0] as Payload;
     expect('supersedes_client_message_id' in payload).toBe(false);
   });
+
+  it.each(['edit', 'regenerate'] as const)(
+    '%s keeps the turn’s attachments on the optimistic replacement, during the stream and after a failure',
+    async (action) => {
+      const attachment: MessageAttachment = {
+        id: 'attachment-row',
+        document_id: '33333333-3333-4333-8333-333333333333',
+        display_name: 'Synthetic audit paper.pdf',
+      };
+      let callbacks!: ReplacementStreamCallbacks;
+      let release!: () => void;
+      streamMessageMock.mockImplementation(
+        (_request: unknown, nextCallbacks: ReplacementStreamCallbacks) => {
+          callbacks = nextCallbacks;
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+      );
+      useChatStore.setState({
+        currentThreadId: 'thread-A',
+        isStreaming: false,
+        streamingThreadId: null,
+      });
+      const { useChatStreaming } =
+        await import('@/hooks/chat/useChatStreaming');
+      const { result } = renderHook(
+        () => {
+          const [messages, setMessages] = useState<ChatPageMessage[]>([]);
+          const [storeRows] = useState(() =>
+            withStoreMetadata(replacementStoreRows).map((row) =>
+              row.client_message_id === EDITED_CMID
+                ? { ...row, attachments: [attachment] }
+                : row
+            )
+          );
+          const displayedMessages = selectDisplayedMessages({
+            localMessages: messages,
+            storeMessages: storeRows,
+            messageFreshness: 'stale',
+          });
+          const streaming = useChatStreaming({
+            messages,
+            displayedMessages,
+            setMessages,
+            conversations: [],
+            setConversations: vi.fn(),
+            dbConversation: null,
+            enableRAG: false,
+          });
+          const composer = useChatComposerActions({
+            workspace: null,
+            setInput: streaming.setInput,
+            handleSubmit: streaming.handleSubmit,
+            isLoading: streaming.isLoading,
+            storeIsStreaming: false,
+            displayedMessages,
+          });
+          return { messages, composer };
+        },
+        { wrapper }
+      );
+
+      // Rows: before-user(0) before-assistant(1) old-user(2) old-assistant(3)
+      act(() => {
+        if (action === 'edit')
+          result.current.composer.handleEditUserMessage(2, 'Edited question');
+        else result.current.composer.handleRegenerate(3);
+      });
+      await waitFor(() => expect(callbacks).toBeDefined());
+      try {
+        const replacement = (): ChatPageMessage | undefined =>
+          result.current.messages.find(
+            (message) => message.replacesClientMessageId === EDITED_CMID
+          );
+        expect(replacement()?.attachments).toEqual([attachment]);
+        // The backend still receives only the ids.
+        expect(
+          (streamMessageMock.mock.calls[0][0] as { attachment_ids?: string[] })
+            .attachment_ids
+        ).toEqual([attachment.document_id]);
+
+        callbacks.onError?.('synthetic replacement failure', 'stream-error');
+        await act(async () => {
+          release();
+        });
+        await waitFor(() =>
+          expect(
+            result.current.messages.some(
+              (message) => message.error?.category === 'stream-error'
+            )
+          ).toBe(true)
+        );
+        const failedTurn = result.current.messages.find(
+          (message) => message.role === 'user'
+        );
+        expect(failedTurn?.attachments).toEqual([attachment]);
+      } finally {
+        // Never leave the stream hanging into the next case.
+        callbacks.onError?.('test cleanup', 'stream-error');
+        await act(async () => {
+          release();
+        });
+      }
+    }
+  );
 });

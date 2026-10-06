@@ -258,6 +258,7 @@ describe('ChatPage commands, stop/retry/regenerate, and HITL gating', () => {
         'What is RAG?',
         [],
         undefined,
+        undefined,
         undefined
       )
     );
@@ -272,6 +273,7 @@ describe('ChatPage commands, stop/retry/regenerate, and HITL gating', () => {
       expect(mockHandleSubmit).toHaveBeenCalledWith(
         'What is RAG?',
         [],
+        undefined,
         undefined,
         undefined
       )

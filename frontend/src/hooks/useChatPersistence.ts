@@ -8,6 +8,7 @@
 import toast from 'react-hot-toast';
 import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '@/store/chat-store';
+import { onChatSessionReset } from '@/store/chat/requestCoordinator';
 import { useAuthStore } from '@/stores/authStore';
 import { workspaceService } from '@/services/workspaceService';
 import {
@@ -268,16 +269,24 @@ function mapThreadToUIConversation(
 //   the "create promise" branch.
 // - On failure, `_initInFlight` is cleared so a *future* fresh mount can
 //   retry — but the current awaiters all observe the same rejection first.
+// - The guard belongs to one account's chat session. Every account
+//   transition resets the chat store, which ends that session; the listener
+//   below drops the guard with it so the next account cannot take the
+//   completed fast path over an empty store, and a superseded run can no
+//   longer settle the guard.
 let _initInFlight: Promise<void> | null = null;
 let _initCompleted = false;
 
-function resetChatPersistenceInitGuard() {
+function resetChatPersistenceInitGuard(): void {
   _initInFlight = null;
   _initCompleted = false;
 }
 
+onChatSessionReset(resetChatPersistenceInitGuard);
+
 export function useChatPersistence(): UseChatPersistenceReturn {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const userId = user?.id ?? null;
 
   // Per-instance ref is still useful for noting whether *this* consumer has
   // already awaited the shared init (avoids re-subscribing in StrictMode).
@@ -401,7 +410,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
         return;
       }
 
-      // Fast path: another consumer already finished init.
+      // Fast path: another consumer already finished init for this account.
       if (_initCompleted) {
         initializationRef.current = { started: true, completed: true };
         return;
@@ -597,12 +606,16 @@ export function useChatPersistence(): UseChatPersistenceReturn {
         // same resolution; on failure we clear `_initInFlight` so a fresh mount
         // can retry, but only after the failure has propagated to every
         // current awaiter.
+        const run = _initInFlight;
         _initInFlight
           .then(() => {
             _initCompleted = true;
             debugLog('[useChatPersistence] Initialization complete');
           })
           .catch((error) => {
+            // A run superseded by an account transition reports to nobody:
+            // its failure belongs to the ended session.
+            if (_initInFlight !== run) return;
             console.error('[useChatPersistence] Initialization failed:', error);
             const message =
               error instanceof Error
@@ -611,7 +624,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
             toast.error(message);
           })
           .finally(() => {
-            if (!_initCompleted) {
+            if (_initInFlight === run && !_initCompleted) {
               _initInFlight = null;
             }
           });
@@ -799,12 +812,14 @@ export function useChatPersistence(): UseChatPersistenceReturn {
   // Reset initialization state when user logs out. Both the per-instance ref
   // AND the module-level shared guards must clear so a subsequent login
   // re-runs initialization instead of short-circuiting on a stale completion.
+  // An account switch (A -> B without sign-out) keeps isAuthenticated true, so
+  // the per-instance ref is keyed to the user id as well.
   useEffect(() => {
+    initializationRef.current = { started: false, completed: false };
     if (!isAuthenticated) {
-      initializationRef.current = { started: false, completed: false };
       resetChatPersistenceInitGuard();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, userId]);
 
   // Auto-initialize on mount - use ref guard instead of initialize in deps to prevent loops
   useEffect(() => {
@@ -815,7 +830,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
     ) {
       initialize();
     }
-  }, [isAuthenticated, initialize]);
+  }, [isAuthenticated, userId, initialize]);
 
   return {
     isInitialized,
