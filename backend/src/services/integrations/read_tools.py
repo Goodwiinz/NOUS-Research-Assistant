@@ -243,7 +243,8 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
     ),
     "list_library": (
         "List the folders (NOUS projects) this connection may use, with document "
-        "counts. Pass next_offset as offset to read the next page; it is null on "
+        "counts. A page holds at most limit folders, fewer when their text is "
+        "long. Pass next_offset as offset to read the next page; it is null on "
         "the last one.",
         {
             "type": "object",
@@ -1167,18 +1168,36 @@ async def _list_library(
     found = await _library_folders(
         db, allowed, context.organization_id, offset, limit + 1
     )
+    folders = [
+        {
+            "id": str(folder_id),
+            "name": name,
+            "description": (description or "")[:MAX_FOLDER_DESCRIPTION_CHARS],
+            "document_count": int(document_count),
+        }
+        for folder_id, name, description, document_count in found[:limit]
+    ]
+    # Rows are bounded by characters, the cap by UTF-8 bytes: 50 long CJK or
+    # emoji descriptions pass it. End the page at the longest prefix that fits
+    # and let next_offset resume there, rather than failing the whole page.
+    # ponytail: re-serialises per dropped row (at most 49); bisect if limit grows.
+    while (
+        len(folders) > 1
+        and _wire_size(_library_page(folders, offset, len(found))) > MAX_RESULT_BYTES
+    ):
+        folders.pop()
+    return _library_page(folders, offset, len(found))
+
+
+def _library_page(
+    folders: list[dict[str, Any]], offset: int, fetched: int
+) -> dict[str, Any]:
+    """A page of ``folders``; ``fetched`` rows were read, so more follow when
+    fewer were kept."""
     return {
-        "folders": [
-            {
-                "id": str(folder_id),
-                "name": name,
-                "description": (description or "")[:MAX_FOLDER_DESCRIPTION_CHARS],
-                "document_count": int(document_count),
-            }
-            for folder_id, name, description, document_count in found[:limit]
-        ],
+        "folders": folders,
         "offset": offset,
-        "next_offset": offset + limit if len(found) > limit else None,
+        "next_offset": offset + len(folders) if len(folders) < fetched else None,
     }
 
 
@@ -1304,10 +1323,13 @@ async def invoke_read(
     return _finish(payload)
 
 
+def _wire_size(payload: dict[str, Any]) -> int:
+    """Bytes of a payload as FastAPI emits it (UTF-8, no ASCII escaping)."""
+    return len(json.dumps(payload, default=str, ensure_ascii=False).encode())
+
+
 def _finish(payload: dict[str, Any]) -> ToolResult:
-    # Measure as FastAPI emits it (UTF-8, no ASCII escaping).
-    wire = json.dumps(payload, default=str, ensure_ascii=False).encode()
-    if len(wire) > MAX_RESULT_BYTES:
+    if _wire_size(payload) > MAX_RESULT_BYTES:
         return ToolResult(
             content=[{"error": "result_too_large"}], is_error=True, source_refs=[]
         )

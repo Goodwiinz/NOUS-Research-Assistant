@@ -2513,6 +2513,67 @@ async def test_list_library_breaks_name_ties_by_id_across_pages(
     )
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["\u6587" * 500, "\U0001f600" * 500],
+    ids=["cjk-description", "emoji-name-and-description"],
+)
+async def test_list_library_pages_by_bytes_so_a_full_page_fits_the_result_cap(
+    db: AsyncSession, text: str
+) -> None:
+    # Names and descriptions are free text and Collection.description is
+    # unbounded, while the cap counts UTF-8 bytes: 50 folders with a
+    # 500-character CJK description are ~80 KB. A page that cannot fit must
+    # end earlier and say where to resume, not turn into result_too_large.
+    await db.execute(
+        update(Collection)
+        .where(Collection.workspace_id == WORKSPACE)
+        .values(is_deleted=True)
+    )
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(
+                    id=UUID(int=100 + number),
+                    name=f"{number:02d} {text[:100]}",
+                    description=text,
+                    workspace_id=WORKSPACE,
+                )
+                for number in range(60)
+            ]
+        )
+    )
+    await db.commit()
+    context = _workspace_context(LIBRARY_READ)
+    seen: list[str] = []
+    sizes: list[int] = []
+    pages = 0
+    next_offset: int | None = 0
+    while next_offset is not None:
+        # The first page asks for the default limit: the caller does not have
+        # to know it should have asked for fewer.
+        arguments = {"offset": next_offset} if pages else {}
+        page = await invoke_read(db, context, _invocation("list_library", **arguments))
+        assert page.is_error is False, page.content
+        body = page.content[0]
+        folders = body["folders"]
+        if not pages:
+            assert 1 <= len(folders) < MAX_RESULTS  # shortened, not failed
+        assert (body["offset"], body["next_offset"]) == (
+            next_offset,
+            None if len(seen) + len(folders) == 60 else next_offset + len(folders),
+        )
+        sizes.append(len(json.dumps(body, ensure_ascii=False).encode()))
+        seen += [folder["id"] for folder in folders]
+        next_offset = body["next_offset"]
+        pages += 1
+        assert pages <= 60, "paging made no progress"
+    assert max(sizes) <= read_tools.MAX_RESULT_BYTES
+    assert pages > 1
+    # Every folder once, in name order, whatever the page boundaries were.
+    assert seen == [str(UUID(int=100 + number)) for number in range(60)]
+
+
 async def test_list_library_counts_what_list_project_documents_reports(
     db: AsyncSession,
 ) -> None:
