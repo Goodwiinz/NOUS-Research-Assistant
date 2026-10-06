@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const middlewareMocks = vi.hoisted(() => ({
   updateSession: vi.fn(async (request: NextRequest, requestHeaders?: Headers) =>
@@ -39,5 +39,31 @@ describe('proxy protected-route recovery metadata', () => {
     expect(response.headers.get('content-security-policy')).toContain(
       "script-src 'self' 'nonce-"
     );
+  });
+});
+
+describe('proxy CSP connect-src', () => {
+  const connectSrc = async (): Promise<string> => {
+    const response = await proxy(new NextRequest('http://localhost:3000/chat'));
+    const csp = response.headers.get('content-security-policy') ?? '';
+    return csp.split('; ').find((d) => d.startsWith('connect-src')) ?? '';
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('allows the local backend on :8000 in development', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    const directive = await connectSrc();
+    expect(directive).toContain('http://localhost:8000');
+    expect(directive).toContain('ws://localhost:8000');
+    expect(directive).toContain('http://127.0.0.1:8000');
+    expect(directive).toContain('ws://127.0.0.1:8000');
+  });
+
+  it('keeps production connect-src free of plain-http origins', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(await connectSrc()).toBe("connect-src 'self' https: wss:");
   });
 });
