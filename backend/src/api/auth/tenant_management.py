@@ -3,6 +3,7 @@ Tenant management API endpoints
 Provides organization management, quota monitoring, and multi-tenancy operations
 """
 
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +20,8 @@ from src.exceptions.analytics_exceptions import (
 from src.middleware.multi_tenancy import check_tenant_permission, get_current_tenant_id
 from src.models.organization import StorageTier
 from src.services.security.tenant_service import TenantService, get_tenant_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenants", tags=["Tenant Management"])
 
@@ -193,9 +196,13 @@ async def create_organization(
 
         return OrganizationResponse(**organization.to_dict())
 
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except ConfigurationException:
+        logger.warning("Invalid organization request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid organization request",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create organization",
@@ -226,7 +233,7 @@ async def get_organization(
             ),
             user_role=e.details.get("user_role", "unknown"),
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve organization",
@@ -256,9 +263,13 @@ async def update_organization(
             ),
             user_role=e.details.get("user_role", "unknown"),
         )
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except ConfigurationException:
+        logger.warning("Invalid organization request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid organization request",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update organization",
@@ -289,9 +300,13 @@ async def upgrade_storage_tier(
             ),
             user_role=e.details.get("user_role", "unknown"),
         )
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except ConfigurationException:
+        logger.warning("Invalid organization request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid organization request",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to upgrade storage tier",
@@ -319,9 +334,13 @@ async def get_storage_quota_status(
             ),
             user_role=e.details.get("user_role", "unknown"),
         )
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except Exception as e:
+    except ConfigurationException:
+        logger.warning("Organization configuration not found", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization configuration not found",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve storage quota status",
@@ -349,7 +368,7 @@ async def get_user_count(
             ),
             user_role=e.details.get("user_role", "unknown"),
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user count",
@@ -380,7 +399,7 @@ async def get_organization_analytics(
             ),
             user_role=e.details.get("user_role", "unknown"),
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve organization analytics",
@@ -407,9 +426,13 @@ async def validate_organization_limits(
             ),
             user_role=e.details.get("user_role", "unknown"),
         )
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except Exception as e:
+    except ConfigurationException:
+        logger.warning("Organization configuration not found", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization configuration not found",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to validate organization limits",
@@ -445,7 +468,7 @@ async def get_current_tenant_info(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve tenant information",
@@ -472,7 +495,7 @@ async def test_tenant_isolation(
 
         return isolation_test
 
-    except PermissionDeniedException as e:
+    except PermissionDeniedException:
         # This is expected if isolation is working correctly
         return {
             "organization_id": organization_id,
@@ -481,7 +504,7 @@ async def test_tenant_isolation(
             "isolation_status": "access_denied",
             "reason": "Tenant isolation working correctly",
         }
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Tenant isolation test failed",

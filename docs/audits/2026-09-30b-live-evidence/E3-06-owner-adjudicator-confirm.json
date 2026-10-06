@@ -1,0 +1,60 @@
+{
+  "step": "E3-06-owner-adjudicator-confirm",
+  "as": "owner",
+  "at": "2026-09-30T21:07:27.139109+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/reports/5d6149b8-5d7c-402a-9b80-353bf84d9154/study-link",
+    "body": {
+      "status": "confirmed",
+      "rationale": "DOI match confirmed by adjudicator",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+    "title_snapshot": "Retrieval augmentation reduces hallucination in open-domain QA",
+    "identifiers": {
+      "doi": [
+        "10.5555/eval-0930b-alpha"
+      ]
+    },
+    "study_id": "206bafb0-5826-449c-973e-b43d66bec1fc",
+    "study_link_status": "confirmed",
+    "study_link_rationale": "DOI match confirmed by adjudicator",
+    "merged_into_report_id": null,
+    "observations": [],
+    "imported_records": [
+      {
+        "import_record_id": "240976ca-9def-4214-9b00-e03cb44b5c5e",
+        "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+        "match_method": "new",
+        "evidence": {
+          "observed": {
+            "doi": "10.5555/eval-0930b-alpha"
+          },
+          "conflicts": []
+        }
+      },
+      {
+        "import_record_id": "db8b8a03-1034-4cf3-8ac3-59db06857323",
+        "receipt_id": "5f787db3-f77f-45b4-8f30-576b6c303a0c",
+        "match_method": "doi",
+        "evidence": {
+          "matched": {
+            "kind": "doi",
+            "value": "10.5555/eval-0930b-alpha"
+          },
+          "observed": {
+            "doi": "10.5555/eval-0930b-alpha"
+          },
+          "conflicts": []
+        }
+      }
+    ]
+  }
+}

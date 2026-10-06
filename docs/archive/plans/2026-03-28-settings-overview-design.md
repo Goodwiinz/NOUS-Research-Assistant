@@ -14,7 +14,7 @@ The design is grounded in the current NOUS product context documented in:
 
 - `memory/projects/nous-platform.md`
 - `memory/glossary.md`
-- `docs/NOUS-UX-UI-Critique.md`
+- `docs/frontend/NOUS-UX-UI-Critique.md`
 - `brand/NOUS-Project-Structure.md`
 - `brand/NOUS-API-Reference.md`
 
@@ -30,7 +30,7 @@ These references establish that NOUS is not a generic personal productivity app.
 
 ### Internal references
 
-- `docs/NOUS-UX-UI-Critique.md`
+- `docs/frontend/NOUS-UX-UI-Critique.md`
   - Settings is explicitly called out as too sparse and in need of more information density.
   - The critique says to preserve NOUS's monospaced uppercase header system, rounded card treatment, and strong dark/light parity.
 - `docs/plans/2026-02-18-settings-page-design.md`
@@ -279,4 +279,4 @@ The page should look complete, but it must not pretend to save or manage server 
 ## Notes On Existing Docs
 
 - `docs/plans/2026-02-18-settings-page-design.md` describes the current centered-panel design and should be treated as superseded by this document.
-- `memory/projects/nous-platform.md` still mentions an older accent framing; active visual direction should follow `docs/NOUS-UX-UI-Critique.md` and `frontend/app/globals.css`, which reflect the current NOUS gold-led brand implementation.
+- `memory/projects/nous-platform.md` still mentions an older accent framing; active visual direction should follow `docs/frontend/NOUS-UX-UI-Critique.md` and `frontend/app/globals.css`, which reflect the current NOUS gold-led brand implementation.

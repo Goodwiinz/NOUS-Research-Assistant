@@ -1,0 +1,21 @@
+{
+  "step": "B2-03-owner-stream-run",
+  "as": "owner",
+  "at": "2026-09-30T20:57:31.431859+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/a90c3860-2ed5-4e98-9a8c-390516f16fd3/stream",
+    "body": null
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Run is in 'running' state and cannot be streamed",
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}

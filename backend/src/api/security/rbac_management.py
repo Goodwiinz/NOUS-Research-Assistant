@@ -3,6 +3,7 @@ RBAC management API endpoints
 Provides role and permission management for fine-grained access control
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,8 @@ from src.models.permission import (
 )
 from src.models.user import User
 from src.services.security.rbac_service import RBACService, get_rbac_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rbac", tags=["RBAC Management"])
 
@@ -181,7 +184,7 @@ async def get_permissions(
 
         return [PermissionResponse(**perm.to_dict()) for perm in permissions]
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve permissions",
@@ -198,7 +201,7 @@ async def get_permission_categories(
         categories = rbac_service.get_permission_categories()
         return [PermissionCategoryResponse(**cat) for cat in categories]
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve permission categories",
@@ -233,9 +236,13 @@ async def create_role(
         rbac_service.db.refresh(role)
         return RoleResponse(**role.to_dict())
 
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except ConfigurationException:
+        logger.warning("Invalid RBAC configuration request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid RBAC configuration request",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create role",
@@ -268,7 +275,7 @@ async def get_roles(
 
         return [RoleResponse(**role.to_dict()) for role in roles]
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve roles",
@@ -300,7 +307,7 @@ async def get_role(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve role",
@@ -362,7 +369,7 @@ async def update_role(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         rbac_service.db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -418,7 +425,7 @@ async def delete_role(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         rbac_service.db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -455,9 +462,13 @@ async def assign_role_to_user(
         rbac_service.db.refresh(assignment)
         return RoleAssignmentResponse(**assignment.to_dict())
 
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except ConfigurationException:
+        logger.warning("Invalid RBAC configuration request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid RBAC configuration request",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to assign role to user",
@@ -489,7 +500,7 @@ async def revoke_role_from_user(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revoke role from user",
@@ -516,7 +527,7 @@ async def get_user_permissions(
             roles=[RoleResponse(**role.to_dict()) for role in roles],
         )
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user permissions",
@@ -550,7 +561,7 @@ async def get_current_user_permissions(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve current user permissions",
@@ -586,7 +597,7 @@ async def get_users_with_role(
 
         return user_data
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users for role",
@@ -620,7 +631,7 @@ async def initialize_rbac_system(
             "organization_id": organization_id,
         }
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to initialize RBAC system",
@@ -651,7 +662,7 @@ async def cleanup_expired_assignments(
             "expired_assignments_removed": expired_count,
         }
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cleanup expired assignments",

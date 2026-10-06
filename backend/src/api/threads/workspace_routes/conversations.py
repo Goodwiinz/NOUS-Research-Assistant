@@ -7,6 +7,7 @@ flushes, each mutating handler ends with one ``await db.commit()``). Transport
 + transaction-boundary only.
 """
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -25,6 +26,8 @@ from src.services.threads import conversation_service, workspace_access
 
 from .dependencies import _get_conversation_or_404
 from .presenters import _conversation_to_response
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2/workspaces", tags=["workspaces"])
 
@@ -53,8 +56,9 @@ async def create_conversation(
         conversation = await conversation_service.create_conversation(
             db, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not conversation:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -135,8 +139,9 @@ async def update_conversation(
         conversation = await conversation_service.update_conversation(
             db, conversation_id, request, current_user.id, workspace_id=workspace_id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -164,8 +169,9 @@ async def delete_conversation(
             stamp_deleted_at=True,
             require_admin=False,
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -210,8 +216,9 @@ async def update_conversation_standalone(
         conversation = await conversation_service.update_conversation(
             db, conversation_id, request, current_user.id
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -236,8 +243,9 @@ async def delete_conversation_standalone(
             stamp_deleted_at=True,
             require_admin=False,
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except PermissionError:
+        logger.warning("Workspace access denied", exc_info=True)
+        raise HTTPException(status_code=403, detail="Workspace access denied")
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
 

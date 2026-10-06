@@ -324,9 +324,11 @@ def get_all_entities(
             has_more=(offset + len(entities)) < total,
         )
     except Exception as e:
-        logger.error(f"Error getting entities: {e}")
+        logger.error("Error getting entities", exc_info=True)
         if _is_neo4j_unavailable_error(e):
-            raise HTTPException(status_code=503, detail=str(e))
+            raise HTTPException(
+                status_code=503, detail="Knowledge graph temporarily unavailable"
+            )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
