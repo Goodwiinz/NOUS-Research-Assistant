@@ -7,10 +7,12 @@ import { createArtifactPublisher } from "../artifacts/publisher.ts";
 import { grantedRoot } from "../artifacts/snapshot.ts";
 import { CredentialStore } from "../credentials.ts";
 import { GrantKeeper } from "../grants.ts";
+import { HandoffHttpClient } from "../handoffs/client.ts";
+import { getHandoffTool, saveHandoffTool } from "../handoffs/mcp.ts";
 import { CapabilityClient, type McpSession } from "./client.ts";
 import { createNousMcpServer, type LocalTool } from "./server.ts";
 
-/** Serves NOUS read tools, plus publication and action requests when granted, over stdio. */
+/** Serves NOUS read tools, plus publication, action and handoff tools when granted, over stdio. */
 export async function runStdioMcp(session: McpSession): Promise<void> {
   // Every client sends the keeper's current grant, renewed before expiry.
   const keeper = new GrantKeeper(
@@ -48,6 +50,11 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
     // Requests only: approval stays a browser action the model cannot take.
     const actions = new ActionHttpClient(session.apiOrigin, credentials, keeper.fetch);
     local.push(requestActionTool(actions), actionStatusTool(actions));
+  }
+  if (session.handoff) {
+    // The chat is the grant's binding; the model never names it.
+    const handoffs = new HandoffHttpClient(session.apiOrigin, credentials, keeper.fetch);
+    local.push(getHandoffTool(handoffs), saveHandoffTool(handoffs));
   }
   const server = createNousMcpServer(
     new CapabilityClient(session.apiOrigin, credentials, keeper.fetch),

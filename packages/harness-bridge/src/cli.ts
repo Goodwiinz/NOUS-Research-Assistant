@@ -91,6 +91,7 @@ export async function connect(
     tools?: boolean;
     publish?: boolean;
     write?: boolean;
+    handoff?: boolean;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
@@ -105,11 +106,17 @@ export async function connect(
     throw new Error("--publish requires --tools");
   if (options.write && !options.tools)
     throw new Error("--write requires --tools");
+  if (options.handoff && !options.tools)
+    throw new Error("--handoff requires --tools");
+  // A handoff lives in one chat; an unbound grant could never use the scopes.
+  if (options.handoff && options.threadId === undefined)
+    throw new Error("--handoff requires --chat");
   const scopes = [
     "harness:execute",
     ...(options.tools ? ["tools:read"] : []),
     ...(options.publish ? ["artifacts:publish"] : []),
     ...(options.write ? ["tools:write"] : []),
+    ...(options.handoff ? ["handoff:read", "handoff:write"] : []),
   ];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
@@ -434,6 +441,7 @@ function mcpSession(
       ? { outputRoot }
       : {}),
     ...(state.scopes?.includes("tools:write") ? { actions: true } : {}),
+    ...(state.scopes?.includes("handoff:write") ? { handoff: true } : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -525,11 +533,12 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write]] | workspace add --root PATH [--label NAME] | run
+const help = `Usage: nous-harness connect --api https://host/api/v1 --project UUID --label NAME [--chat UUID] [--tools [--publish] [--write] [--handoff]] | workspace add --root PATH [--label NAME] | run
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
+  connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
-  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action.
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
@@ -552,6 +561,7 @@ async function main(): Promise<void> {
       publish: { type: "boolean" },
       write: { type: "boolean" },
       actions: { type: "boolean" },
+      handoff: { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -586,6 +596,7 @@ async function main(): Promise<void> {
       tools: values.tools,
       publish: values.publish,
       write: values.write,
+      handoff: values.handoff,
     });
   else if (positionals.join(" ") === "disconnect")
     await disconnect({ stateDir });
@@ -600,6 +611,7 @@ async function main(): Promise<void> {
       stateDir: resolve(stateDir),
       ...(values.root ? { outputRoot: resolve(values.root) } : {}),
       ...(values.actions ? { actions: true } : {}),
+      ...(values.handoff ? { handoff: true } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });

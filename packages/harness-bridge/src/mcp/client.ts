@@ -21,6 +21,8 @@ export type McpSession = {
   outputRoot?: string;
   // Grant carries tools:write; enables request_action / get_action_status.
   actions?: boolean;
+  // Grant carries handoff:read/handoff:write; enables get/save_nous_handoff.
+  handoff?: boolean;
 };
 export const REAUTH_MESSAGE =
   "NOUS session expired or revoked; reconnect this device (nous-harness connect --tools)";
