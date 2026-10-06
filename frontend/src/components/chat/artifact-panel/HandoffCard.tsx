@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactElement } from 'react';
+import { ScrollText } from 'lucide-react';
 
 import { useThreadArtifacts } from '@/hooks/chat/useThreadArtifacts';
 import { useThreadHandoff } from '@/hooks/chat/useThreadHandoff';
@@ -109,12 +110,39 @@ export function HandoffCard({
 /** The handoff for the open chat, wired to the panel's artifact viewer. */
 export function ThreadHandoffCard({
   threadId,
+  showEmpty = false,
 }: {
   threadId: string | null | undefined;
+  /** In the handoff-only view, say so instead of rendering nothing. */
+  showEmpty?: boolean;
 }): ReactElement | null {
-  const { data: handoff } = useThreadHandoff(threadId);
+  const { data: handoff, isError, refetch } = useThreadHandoff(threadId);
   const { data: artifacts } = useThreadArtifacts(handoff ? threadId : null);
   const openArtifact = useArtifactPanelStore((s) => s.openArtifact);
+  if (isError) {
+    // A stable notice, never the raw error: a blank would read as "no handoff".
+    return (
+      <div
+        role="alert"
+        className="m-3 flex items-center gap-2 rounded-xl border border-(--nous-border-1) bg-(--nous-bg-2) p-3 text-xs text-(--nous-fg-2)"
+      >
+        <span>Couldn&apos;t load the chat handoff.</span>
+        <button
+          type="button"
+          onClick={() => void refetch()}
+          className="rounded-md border border-(--nous-border-1) px-2 py-1 text-(--nous-fg-1) hover:bg-(--nous-aurum) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (!handoff && showEmpty && handoff !== undefined)
+    return (
+      <p className="m-3 text-xs text-(--nous-fg-3)">
+        No handoff in this chat yet.
+      </p>
+    );
   return (
     <HandoffCard
       handoff={handoff}
@@ -131,5 +159,34 @@ export function ThreadHandoffCard({
         )
       }
     />
+  );
+}
+
+/**
+ * Header entry point: reachable without an open artifact. Shown only when the
+ * chat has a handoff and the panel is not already showing one.
+ */
+export function HandoffEntryButton({
+  threadId,
+}: {
+  threadId: string | null | undefined;
+}): ReactElement | null {
+  const { data: handoff } = useThreadHandoff(threadId);
+  const panelOpen = useArtifactPanelStore(
+    (s) => s.isOpen && s.artifact !== null
+  );
+  const openArtifact = useArtifactPanelStore((s) => s.openArtifact);
+  if (!handoff || panelOpen) return null;
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        openArtifact({ kind: 'handoff', title: 'Handoff' }, { source: 'user' })
+      }
+      className="font-nous-mono inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[11px] text-(--nous-fg-2) transition-colors hover:bg-(--nous-sol)/8 hover:text-(--nous-fg-1) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ScrollText aria-hidden="true" className="h-3.5 w-3.5" />
+      Handoff v{handoff.version}
+    </button>
   );
 }

@@ -380,22 +380,25 @@ async def publish_version(
         run_id=version.run_id,
         thread_id=context.thread_id,
     )
-    db.add(version)
-    db.add(reference)
     # Announcement intent commits with the version; the drain delivers it.
-    db.add(
-        ArtifactLifecycleOutbox(
-            id=uuid4(),
-            organization_id=context.organization_id,
-            artifact_id=artifact.id,
-            version_id=version.id,
-            kind=ARTIFACT_VERSION_CREATED,
-            run_id=version.run_id,
-            thread_id=context.thread_id,
-        )
+    outbox = ArtifactLifecycleOutbox(
+        id=uuid4(),
+        organization_id=context.organization_id,
+        artifact_id=artifact.id,
+        version_id=version.id,
+        kind=ARTIFACT_VERSION_CREATED,
+        run_id=version.run_id,
+        thread_id=context.thread_id,
     )
     upload_pk = upload.id  # rollback expires the row; keep the key as a plain value
     try:
+        # These models declare no relationship(), so the unit of work cannot
+        # order their foreign keys: flush the artifact and version before the
+        # rows that reference the version (PostgreSQL enforces the FKs).
+        db.add(version)
+        await db.flush()
+        db.add(reference)
+        db.add(outbox)
         await db.flush()
         # Claim the reservation conditionally: a sweep that soft-deleted it
         # meanwhile (or a racing finalize) makes this a no-op and we conflict

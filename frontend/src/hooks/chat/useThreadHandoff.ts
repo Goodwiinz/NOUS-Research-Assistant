@@ -32,6 +32,13 @@ export async function fetchThreadHandoff(
   }
 }
 
+/**
+ * A standalone CLI save emits no event to this browser, so poll while a
+ * handoff view is mounted and refresh on focus. Ceiling: a push event for
+ * handoff saves is the upgrade path if this is too slow or too chatty.
+ */
+export const HANDOFF_POLL_MS = 30_000;
+
 export function useThreadHandoff(
   threadId: string | null | undefined
 ): UseQueryResult<ApiHandoff | null> {
@@ -40,6 +47,9 @@ export function useThreadHandoff(
     queryFn: () => fetchThreadHandoff(threadId ?? ''),
     enabled: Boolean(threadId),
     staleTime: 5_000,
+    refetchInterval: HANDOFF_POLL_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
     retry: false,
   });
 }

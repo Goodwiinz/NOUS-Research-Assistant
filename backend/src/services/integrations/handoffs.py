@@ -10,13 +10,15 @@ content is never stored.
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.artifact import Artifact, ArtifactVersion
+from src.models.conversation import Conversation
 from src.models.integration_handoff import IntegrationHandoff
 from src.models.thread import Thread
+from src.models.workspace import Workspace
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_handoff import (
     HandoffConflict,
@@ -45,6 +47,29 @@ def _dto(row: IntegrationHandoff) -> HandoffDTO:
     return HandoffDTO.model_validate(row)
 
 
+def _live_chain(
+    organization_id: UUID, thread_id: UUID
+) -> Select[tuple[IntegrationHandoff]]:
+    """Handoffs of one chat whose thread, conversation and workspace are all
+    still live, checked in the same fetch as the read: an ancestor deleted
+    after the caller's access check hides the record instead of leaking it."""
+    return (
+        select(IntegrationHandoff)
+        .join(Thread, Thread.id == IntegrationHandoff.thread_id)
+        .join(Conversation, Conversation.id == Thread.conversation_id)
+        .join(Workspace, Workspace.id == Conversation.workspace_id)
+        .where(
+            IntegrationHandoff.organization_id == organization_id,
+            IntegrationHandoff.thread_id == thread_id,
+            IntegrationHandoff.is_deleted.is_(False),
+            Thread.is_deleted.is_(False),
+            Conversation.is_deleted.is_(False),
+            Workspace.is_deleted.is_(False),
+            Workspace.organization_id == organization_id,
+        )
+    )
+
+
 async def _latest_row(
     db: AsyncSession,
     *,
@@ -53,13 +78,8 @@ async def _latest_row(
     project_id: UUID,
 ) -> IntegrationHandoff | None:
     row = await db.scalar(
-        select(IntegrationHandoff)
-        .where(
-            IntegrationHandoff.organization_id == organization_id,
-            IntegrationHandoff.thread_id == thread_id,
-            IntegrationHandoff.project_id == project_id,
-            IntegrationHandoff.is_deleted.is_(False),
-        )
+        _live_chain(organization_id, thread_id)
+        .where(IntegrationHandoff.project_id == project_id)
         .order_by(IntegrationHandoff.version.desc())
         .limit(1)
         .execution_options(populate_existing=True)
@@ -174,17 +194,13 @@ async def read_latest(
 async def read_latest_for_thread(
     db: AsyncSession, *, organization_id: UUID, thread_id: UUID
 ) -> HandoffDTO | None:
-    """Browser path; the caller has already authorized the thread. Only the
-    chain of the thread's current project is shown."""
+    """Browser path; the caller has already authorized the thread, and
+    ``organization_id`` is the thread workspace's org (not the viewer's, who
+    may be a member from another org). Only the chain of the thread's current
+    project is shown."""
     row = await db.scalar(
-        select(IntegrationHandoff)
-        .join(Thread, Thread.id == IntegrationHandoff.thread_id)
-        .where(
-            IntegrationHandoff.organization_id == organization_id,
-            IntegrationHandoff.thread_id == thread_id,
-            IntegrationHandoff.project_id == Thread.source_project_id,
-            IntegrationHandoff.is_deleted.is_(False),
-        )
+        _live_chain(organization_id, thread_id)
+        .where(IntegrationHandoff.project_id == Thread.source_project_id)
         .order_by(IntegrationHandoff.version.desc())
         .limit(1)
     )
