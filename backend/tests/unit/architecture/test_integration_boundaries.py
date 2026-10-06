@@ -33,6 +33,8 @@ import pytest
 from src.services.artifacts.service import authorize_artifact
 from src.services.integrations.context import (
     authorized_project,
+    authorized_scope,
+    authorized_workspace,
     resolve_integration_context,
 )
 
@@ -56,11 +58,14 @@ KEYWORD_ONLY = inspect.Parameter.KEYWORD_ONLY
 POSITIONAL = inspect.Parameter.POSITIONAL_OR_KEYWORD
 
 # (getter, {identity parameter: required kind}). Pin what the code really
-# has: authorized_project takes identity positionally, resolve_integration_
-# context derives identity from the grant token.
+# has: authorized_project and authorized_workspace take identity positionally,
+# authorized_scope takes the resolved context that carries it, and
+# resolve_integration_context derives identity from the grant token.
 ACCESS_GETTERS: list[tuple[Callable[..., Any], dict[str, Any]]] = [
     (authorize_artifact, {"user_id": KEYWORD_ONLY, "organization_id": KEYWORD_ONLY}),
     (authorized_project, {"user_id": POSITIONAL, "organization_id": POSITIONAL}),
+    (authorized_workspace, {"user_id": POSITIONAL, "organization_id": POSITIONAL}),
+    (authorized_scope, {"context": POSITIONAL}),
     (
         resolve_integration_context,
         {"token": POSITIONAL, "required_scope": KEYWORD_ONLY},
