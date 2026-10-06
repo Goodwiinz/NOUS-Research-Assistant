@@ -1520,10 +1520,6 @@
         "errors": 0,
         "warnings": 1
       },
-      "src/services/__tests__/workspaceService.cache.test.ts": {
-        "errors": 2,
-        "warnings": 2
-      },
       "src/services/analytics/analyticsApi.ts": {
         "errors": 0,
         "warnings": 19
