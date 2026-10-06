@@ -489,6 +489,8 @@ test("App config snapshot follows model selection and server-assigned thread IDs
   await key(ui, "\r");
   await until(() => !!ui.lastFrame()?.includes("Configuration updated"));
   assert.match(ui.lastFrame()!, /NOUS · assigned-thread/);
+  // Response text can render before branch persistence releases the idle guard.
+  await until(() => !ui.lastFrame()?.includes("Working…"));
   await key(ui, "/new");
   await key(ui, "\r");
   await until(() => !!ui.lastFrame()?.includes("NOUS · New chat"));
