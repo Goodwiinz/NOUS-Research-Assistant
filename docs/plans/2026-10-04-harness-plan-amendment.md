@@ -112,6 +112,39 @@ NOT RUN. Live proof is runbook Phase 3
 ([`docs/testing/harness-live-proof.md`](../testing/harness-live-proof.md)),
 NOT RUN.
 
+## 2026-10-06: Plan 07, NOUS MCP alphaXiv parity
+
+The harness bridge's MCP server gets the job coverage of alphaXiv's MCP (find
+and read papers, look up researchers, curate a library) over NOUS data, under
+the existing grant and consent model. The plan is
+[`2026-10-05-nous-mcp-alphaxiv-parity.md`](2026-10-05-nous-mcp-alphaxiv-parity.md)
+and the approved design is
+[`2026-10-05-nous-mcp-alphaxiv-parity-design.md`](2026-10-05-nous-mcp-alphaxiv-parity-design.md).
+Both are dated records; the live contract is
+[`harness-bridge.md`](../engineering/harness-bridge.md). This section adds to
+the order above and replaces nothing in it. **Checked against:** `origin/develop`
+at `c04521730`, 2026-10-06.
+
+| Slice | Scope | PR / branch | Migration |
+| --- | --- | --- | --- |
+| 1 | Workspace-scoped grants, `library:read` and `library:write` scopes, `list_library`, `connect --workspace` and `--library`, consent-page labels | PR TBD (`feat/plan07-s1-workspace-grant-v2`, rebuilt from `feat/plan07-s1-workspace-grant`) | `hb03_workspace_grants` |
+| 2 | Read tools: arXiv full text, ingested paper content, passage retrieval | #1883, merged | none |
+| 3 | Library writes; reversible actions run inline under `library:write` | PR TBD (`feat/plan07-s3-library-actions`), depends on Slice 1 | none |
+| 4 | Researcher tools over knowledge-graph PERSON entities | #1887, merged | none |
+| 5 | `discover_papers` composite | not opened: eval-gated, and closed as not needed if the primitives pass the eval | none |
+
+Slice 1 carries the plan's only migration, so the serial-migration rule above
+applies to it. #1784 (`ic01_integration_context`) merged after the Slice 1
+branch was cut, and it also revises `hb06_integration_handoffs`, as
+`hb03_workspace_grants` does. Before the Slice 1 PR opens, merge fresh
+`origin/develop` and point `hb03_workspace_grants` at the head
+`check_alembic.py` prints there (`ic01_integration_context` on 2026-10-06).
+Update every place that names its parent: the migration, its test
+(`backend/tests/unit/test_workspace_grants_migration.py`), Gate 0a in
+[`harness-live-proof.md`](../testing/harness-live-proof.md) and the migration
+test paragraph in [`harness-bridge.md`](../engineering/harness-bridge.md).
+Two heads fail the blocking `migration-check`.
+
 ## Not verified here
 
 - Whether the running dev pod has the skill flags on.
