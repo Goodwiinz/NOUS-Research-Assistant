@@ -36,7 +36,11 @@ from src.services.integrations.read_tools import (
 )
 
 pytestmark = pytest.mark.unit
-USER, ORG, PROJECT, WORKSPACE, OTHER_PROJECT = (uuid4() for _ in range(5))
+USER, ORG, WORKSPACE = (uuid4() for _ in range(3))
+# Fixed, and in the reverse of the order of their names ("Other" sorts before
+# "Project"), so a page ordered by id instead of by name is a different page.
+# With random ids the ordering tests passed or failed by the luck of the draw.
+PROJECT, OTHER_PROJECT = UUID(int=1), UUID(int=2)
 DOC_IN_PROJECT, DOC_OUTSIDE_PROJECT = uuid4(), uuid4()
 # A second workspace of the same user: reachable by that user, but outside a
 # grant bound to WORKSPACE. One of its projects is named like str(None).
@@ -2473,6 +2477,40 @@ async def test_list_library_pages_by_name_with_next_offset(db: AsyncSession) -> 
     assert past_the_end.is_error is False
     assert past_the_end.content[0]["folders"] == []
     assert past_the_end.content[0]["next_offset"] is None
+
+
+async def test_list_library_breaks_name_ties_by_id_across_pages(
+    db: AsyncSession, executed_sql: list[tuple[str, Any]]
+) -> None:
+    # Two folders with one name, inserted in the opposite order of their ids:
+    # the id tie-break puts them in the same order on every query, which paging
+    # by offset needs so that no folder is skipped or listed twice.
+    low, high = UUID(int=3), UUID(int=4)
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(id=high, name="Twin", workspace_id=WORKSPACE),
+                dict(id=low, name="Twin", workspace_id=WORKSPACE),
+            ]
+        )
+    )
+    await db.commit()
+    context = _workspace_context(LIBRARY_READ)
+    seen: list[str] = []
+    next_offset: int | None = 0
+    while next_offset is not None:
+        page = await invoke_read(
+            db, context, _invocation("list_library", limit=1, offset=next_offset)
+        )
+        seen += [folder["id"] for folder in page.content[0]["folders"]]
+        next_offset = page.content[0]["next_offset"]
+    assert seen == [str(OTHER_PROJECT), str(PROJECT), str(low), str(high)]
+    # SQLite hands equal names back in id order whatever the query says, but
+    # PostgreSQL does not: so the clause itself is pinned as well.
+    pages = [sql for sql, _ in executed_sql if "ORDER BY" in sql]
+    assert pages and all(
+        "ORDER BY collections.name, collections.id" in sql for sql in pages
+    )
 
 
 async def test_list_library_counts_what_list_project_documents_reports(
