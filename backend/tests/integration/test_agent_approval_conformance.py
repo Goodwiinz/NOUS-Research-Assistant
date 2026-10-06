@@ -41,7 +41,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
 async def test_adapters_reject_stale_and_competing_decisions(
     monkeypatch: pytest.MonkeyPatch, winner: str
 ) -> None:
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL", "")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
     async with _postgres_run_schema(dsn) as (factory, user_id, org_id, _, thread_id):

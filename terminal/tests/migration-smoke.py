@@ -117,7 +117,10 @@ class Handler(BaseHTTPRequestHandler):
                         "confirmation",
                         {
                             "thread_id": body["thread_id"],
-                            "confirmation": {"tool_name": "create_note"},
+                            "confirmation": {
+                                "tool_name": "create_note",
+                                "approval_id": "a" * 64,
+                            },
                         },
                     )
                 ]
@@ -300,7 +303,11 @@ def check() -> None:
             send("\x1b")
             command("no", "Denied safely")
             assert confirmations == [
-                {"thread_id": "branch-3", "confirmed": False}
+                {
+                    "thread_id": "branch-3",
+                    "confirmed": False,
+                    "approval_id": "a" * 64,
+                }
             ], confirmations
             Handler.project_gate = threading.Event()
             send("/projects")
