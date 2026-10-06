@@ -53,6 +53,27 @@ function entryOf(value: unknown): QueueEntry | null {
   return value as QueueEntry;
 }
 
+/** A different save already journaled under this handoff_id; it is never overwritten. */
+export class HandoffIdInUse extends Error {
+  constructor(handoffId: string) {
+    super(
+      `handoff_id ${handoffId} is already queued with a different body or chat; run nous-harness handoff discard ${handoffId} or save with a new handoff_id`,
+    );
+  }
+}
+
+/** JSON with object keys sorted, so equal bodies compare equal whatever their key order. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (record(value))
+    return `{${Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+
 /** Retryable failures stay pending; any other refusal is terminal. */
 function classify(error: unknown): Extract<Attempt, { state: "pending" | "rejected" }> {
   const err = error instanceof Error ? error : new Error(String(error));
@@ -99,9 +120,25 @@ export class HandoffQueue {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  /** Journal the save, then POST it. */
+  /**
+   * Journal the save, then POST it. An existing entry for the handoff_id is
+   * the only copy of an earlier save: an identical retry (same chat, project
+   * and body) re-sends that entry; anything else is refused, never overwritten.
+   */
   async submit(binding: Binding, body: HandoffCreate): Promise<Attempt> {
     if (!uuid(body.handoff_id)) throw new Error("handoff_id must be a UUID");
+    const existing = await this.store.readLocal(PREFIX + body.handoff_id).catch(() => undefined);
+    if (existing !== undefined) {
+      const queued = entryOf(existing);
+      if (
+        queued === null ||
+        queued.thread_id !== binding.threadId ||
+        queued.project_id !== binding.projectId ||
+        canonical(queued.body) !== canonical(body)
+      )
+        throw new HandoffIdInUse(body.handoff_id);
+      return this.attempt(queued);
+    }
     const entry: QueueEntry = {
       handoff_id: body.handoff_id,
       thread_id: binding.threadId,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ReauthenticationRequired, ToolRequestRejected } from "../mcp/client.ts";
 import type { LocalTool } from "../mcp/server.ts";
 import { uuid, type Handoff, type HandoffCreate, type HandoffHttpClient } from "./client.ts";
-import type { Binding, HandoffQueue } from "./queue.ts";
+import { HandoffIdInUse, type Attempt, type Binding, type HandoffQueue } from "./queue.ts";
 const lines = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
@@ -118,7 +118,13 @@ export function saveHandoffTool(queue: HandoffQueue, binding: () => Promise<Bind
           isError: true,
         };
       // Journaled locally first; an unconfirmed save survives for `handoff flush`.
-      const attempt = await queue.submit(bound, payload);
+      let attempt: Attempt;
+      try {
+        attempt = await queue.submit(bound, payload);
+      } catch (error) {
+        if (error instanceof HandoffIdInUse) return { text: `Not saved: ${error.message}.`, isError: true };
+        throw error;
+      }
       if (attempt.state === "done")
         return { text: `Saved handoff version ${attempt.saved.version}. ${JSON.stringify(attempt.saved)}`, structured: structured(attempt.saved) };
       if (attempt.state === "conflicted") {

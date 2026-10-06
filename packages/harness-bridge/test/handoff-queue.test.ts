@@ -11,7 +11,7 @@ import { CredentialStore } from "../src/credentials.ts";
 import { GrantExpired } from "../src/grants.ts";
 import { HandoffHttpClient, type Handoff } from "../src/handoffs/client.ts";
 import { saveHandoffTool } from "../src/handoffs/mcp.ts";
-import { HandoffQueue, localBinding, type QueueEntry } from "../src/handoffs/queue.ts";
+import { HandoffIdInUse, HandoffQueue, localBinding, type QueueEntry } from "../src/handoffs/queue.ts";
 import { ToolRequestRejected } from "../src/mcp/client.ts";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
@@ -396,6 +396,52 @@ test("missing local credentials give the reconnect hint, not a store error", asy
     await t.store.removeLocal(state.credentialHandle);
     await assert.rejects(handoffShow(t.options), /local credentials are missing.*nous-harness connect --chat UUID --tools --handoff/);
     await assert.rejects(handoffSave({ ...t.options, file: t.file }), /nous-harness connect --chat/);
+    assert.deepEqual(await t.entries(), []);
+  } finally {
+    await nous.close();
+    t.cleanup();
+  }
+});
+
+test("a queued handoff_id is retried only by an identical save and never overwritten", async () => {
+  const nous = await backend();
+  const t = await connected(nous.origin);
+  try {
+    const client = new HandoffHttpClient(nous.origin, { accessToken: "a", grantToken: "b" });
+    const queue = new HandoffQueue(t.store, client);
+    const binding = { threadId: THREAD, projectId: PROJECT };
+    const id = randomUUID();
+    const body = { handoff_id: id, expected_parent_version: null, goal: "keep me", harness_name: "x", decisions: ["a"] };
+    nous.state.mode = "offline";
+    assert.equal((await queue.submit(binding, body)).state, "pending");
+    const [original] = await t.entries();
+
+    // Different body, or same body under another chat: refused, entry untouched, nothing sent.
+    const posts = nous.posts.get(id);
+    for (const [b, other] of [
+      [binding, { ...body, goal: "replace me" }],
+      [{ threadId: OTHER_THREAD, projectId: PROJECT }, body],
+    ] as const)
+      await assert.rejects(queue.submit(b, other), (error: unknown) =>
+        error instanceof HandoffIdInUse && error.message.includes(`handoff discard ${id}`),
+      );
+    assert.equal(nous.posts.get(id), posts);
+    assert.deepEqual(await t.entries(), [original]);
+
+    // The MCP tool reports the refusal as a tool error.
+    const tool = saveHandoffTool(queue, async () => binding);
+    const refused = await tool.call({ handoff_id: id, expected_parent_version: null, goal: "other" });
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /already queued/);
+    assert.equal(nous.posts.get(id), posts);
+
+    // An identical retry (keys in another order) re-sends the existing entry and clears it on 2xx.
+    nous.state.mode = "ok";
+    const retry = await queue.submit(binding, {
+      decisions: ["a"], harness_name: "x", goal: "keep me", expected_parent_version: null, handoff_id: id,
+    });
+    assert.equal(retry.state, "done");
+    assert.equal(nous.posts.get(id), (posts ?? 0) + 1);
     assert.deepEqual(await t.entries(), []);
   } finally {
     await nous.close();
