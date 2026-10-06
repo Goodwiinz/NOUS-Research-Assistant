@@ -1173,6 +1173,48 @@ def test_library_scopes_need_the_gateway_scopes_they_imply(scopes: set[str]) -> 
 @pytest.mark.parametrize(
     "scopes",
     [
+        {"library:read"},
+        {"tools:read", "library:write"},
+        {"tools:read", "tools:write", "library:write"},
+    ],
+    ids=["read-alone", "write-without-read-or-write-gateway", "write-without-read"],
+)
+@pytest.mark.parametrize("binding", ["project", "workspace"])
+async def test_incomplete_library_scopes_are_refused_wherever_scopes_are_checked(
+    db: AsyncSession, owner: Any, scopes: set[str], binding: str
+) -> None:
+    from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import create_request, register_device
+
+    bound: dict[str, Any] = (
+        {"project_id": PROJECT} if binding == "project" else {"workspace_id": WORKSPACE}
+    )
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    with pytest.raises(IntegrationAccessDenied):
+        await create_request(
+            db, owner, GrantRequestCreate(device_id=device.id, scopes=scopes, **bound)
+        )
+    with pytest.raises(IntegrationAccessDenied):
+        await mint_integration_grant(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            scopes=frozenset(scopes),
+            **bound,
+        )
+    # Refused before anything is stored, not merely hidden on read-back.
+    assert await db.scalar(select(func.count(IntegrationGrantRequest.id))) == 0
+    assert await db.scalar(select(func.count(IntegrationGrant.id))) == 0
+    # A row that slipped in some other way is refused when it is resolved.
+    token = await _mint(db, scopes=scopes, **bound)
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(db, token, required_scope=sorted(scopes)[0])
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
         {"tools:read", "library:read"},
         {"tools:read", "tools:write", "library:read", "library:write"},
         {"harness:execute", "tools:read", "tools:write", "library:read"},
