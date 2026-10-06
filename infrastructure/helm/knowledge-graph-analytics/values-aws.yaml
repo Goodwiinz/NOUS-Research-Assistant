@@ -177,6 +177,10 @@ backend:
     # GOO-338: default-off in code; dev opts in explicitly.
     - name: DAILY_RESEARCH_BRIEF_ENABLED
       value: "true"
+    # GOO-319: default-off in code; dev opts in explicitly. The celery worker
+    # runs the tick and reads this merged backend.env.
+    - name: SEARCH_UPDATES_ENABLED
+      value: "true"
     - name: PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS
       value: "30"
     - name: MALLOC_ARENA_MAX
