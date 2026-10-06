@@ -59,6 +59,7 @@ class LocalExtractionResponse(BaseModel):
 
 from src.models.vector import EmbeddingRequest  # noqa: E402
 from src.services.embedding.embedding_service import EmbeddingService  # noqa: E402
+from src.services.expensive_work_admission import metered_expensive_work
 
 _shared_embedding_service = None
 
@@ -123,6 +124,7 @@ async def list_local_papers(
 
 
 @router.post("/extract-local-features")
+@metered_expensive_work
 async def extract_features_from_local_pdfs(
     request: LocalExtractionRequest,
     background_tasks: BackgroundTasks,
@@ -134,6 +136,17 @@ async def extract_features_from_local_pdfs(
     This endpoint processes PDF files directly from the data/arxiv directory
     and extracts text, entities, topics, and other features.
     """
+    return await _extract_features_from_local_pdfs(
+        request, background_tasks, current_user
+    )
+
+
+async def _extract_features_from_local_pdfs(
+    request: LocalExtractionRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict,
+):
+    """Extract local PDFs for an already-admitted HTTP request."""
     try:
         logger.info(f"Starting local PDF feature extraction")
 
@@ -308,14 +321,14 @@ async def extract_features_from_local_pdfs(
                 extraction_results.append(extraction_result)
                 processed_count += 1
 
-            except Exception as e:
-                logger.error(f"Failed to process {pdf_file}: {e}")
+            except Exception:
+                logger.error("Failed to process %s", pdf_file, exc_info=True)
                 extraction_results.append(
                     {
                         "paper_id": pdf_file.stem,
                         "filename": pdf_file.name,
                         "extraction_status": "failed",
-                        "error": str(e),
+                        "error": "Failed to process PDF",
                     }
                 )
 
@@ -346,14 +359,11 @@ async def extract_features_from_local_pdfs(
             results=extraction_results,
         )
 
-    except Exception as e:
-        logger.error(f"Error in local PDF extraction: {e}")
-        import traceback
-
-        logger.error(traceback.format_exc())
+    except Exception:
+        logger.error("Error in local PDF extraction", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to extract features from local PDFs: {str(e)}",
+            detail="Failed to extract features from local PDFs",
         )
 
 
@@ -594,6 +604,7 @@ async def get_local_papers_stats(current_user: dict = Depends(get_current_user))
 
 
 @router.post("/process-batch")
+@metered_expensive_work
 async def process_batch_local_papers(
     background_tasks: BackgroundTasks,
     batch_size: int = Query(
@@ -636,7 +647,7 @@ async def process_batch_local_papers(
         # schedules per-paper KG tasks via background_tasks.add_task — a None
         # here raised AttributeError that the broad except reported as a failed
         # batch, silently dropping the KG update.
-        result = await extract_features_from_local_pdfs(
+        result = await _extract_features_from_local_pdfs(
             request=extraction_request,
             background_tasks=background_tasks,
             current_user=current_user,

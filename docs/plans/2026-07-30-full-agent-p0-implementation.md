@@ -12,7 +12,7 @@
 > Task numbers below are **cited** from here (each PR section in the P0 plan
 > names the tasks it covers); tasks are **not executed** from here. Where this
 > document and a PR plan disagree on scope, sequencing, or gates, the PR plan
-> wins. The authoritative audit is `docs/system-design-audit-2026-07-30.md`.
+> wins. The authoritative audit is `docs/audits/system/system-design-audit-2026-07-30.md`.
 >
 > Branch per the repository's normal workflow: a feature branch from
 > `origin/develop`, one PR per PR-plan row. No specific worktree path or branch

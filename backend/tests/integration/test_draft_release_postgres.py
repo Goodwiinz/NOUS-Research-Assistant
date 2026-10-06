@@ -746,10 +746,15 @@ async def test_release_gate_invalidation_graph_and_races(
 
     # 15. Downgrade drops only draft_releases (GOO-315's empty
     # manuscript_releases references it, so it comes off first, after
-    # GOO-316's empty venue checks and GOO-318's empty deposit tables that
-    # reference it).
+    # GOO-316's empty venue checks, GOO-318's empty deposit tables and
+    # GOO-320's empty review release links that reference it).
     async with factory() as db:
         connection = await db.connection()
+        await connection.run_sync(
+            lambda sync: _migration(
+                sync, "downgrade", "d4a6c8e0f2b3_create_review_versions.py"
+            )
+        )
         await connection.run_sync(
             lambda sync: _migration(
                 sync, "downgrade", "b0e2a4c6d8f9_create_archive_deposits.py"

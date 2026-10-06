@@ -1,0 +1,24 @@
+{
+  "step": "B4-05-approver-run-export",
+  "as": "approver",
+  "at": "2026-09-30T21:03:11.342259+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/a90c3860-2ed5-4e98-9a8c-390516f16fd3/export?format=json",
+    "body": null
+  },
+  "status": 404,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": {
+        "code": "run_not_found",
+        "message": "Run not found"
+      },
+      "status_code": 404,
+      "type": "http_error"
+    }
+  }
+}

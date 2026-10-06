@@ -7,8 +7,6 @@
     "src/components/layout/Sidebar.tsx",
     "src/components/monitoring/PerformanceMetricsDashboard.tsx",
     "src/components/monitoring/SystemOverviewDashboard.tsx",
-    "src/components/search/QueryRewriter.tsx",
-    "src/components/search/ResultAggregator.tsx",
     "src/components/ui/enhanced-new-chat-dialog.tsx",
     "src/components/ui/shadcn-io/**/*",
     "src/hooks/useAnalyticsTracking.ts",
@@ -23,8 +21,8 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 112,
-    "warnings": 2002,
+    "errors": 98,
+    "warnings": 1878,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,
@@ -582,10 +580,6 @@
         "errors": 0,
         "warnings": 4
       },
-      "src/components/citations/CitationEditModal.tsx": {
-        "errors": 1,
-        "warnings": 7
-      },
       "src/components/citations/CitationErrorBoundary.tsx": {
         "errors": 0,
         "warnings": 3
@@ -709,14 +703,6 @@
       "src/components/documents/DocumentCard.tsx": {
         "errors": 0,
         "warnings": 9
-      },
-      "src/components/documents/DocumentLibrary.tsx": {
-        "errors": 0,
-        "warnings": 11
-      },
-      "src/components/documents/DocumentMetadataEditor.tsx": {
-        "errors": 1,
-        "warnings": 5
       },
       "src/components/documents/DocumentMetadataTab.tsx": {
         "errors": 0,
@@ -1155,8 +1141,8 @@
         "warnings": 11
       },
       "src/components/research/LinkThreadModal.tsx": {
-        "errors": 2,
-        "warnings": 7
+        "errors": 0,
+        "warnings": 4
       },
       "src/components/research/NoteEditor.tsx": {
         "errors": 1,
@@ -1233,46 +1219,6 @@
       "src/components/research/WriterToolbar.tsx": {
         "errors": 0,
         "warnings": 1
-      },
-      "src/components/search/__tests__/ResultsPanel.test.tsx": {
-        "errors": 0,
-        "warnings": 1
-      },
-      "src/components/search/HybridSearchOrchestrator.tsx": {
-        "errors": 1,
-        "warnings": 8
-      },
-      "src/components/search/QueryIntentDetector.tsx": {
-        "errors": 1,
-        "warnings": 8
-      },
-      "src/components/search/QueryPerformanceMonitor.tsx": {
-        "errors": 1,
-        "warnings": 11
-      },
-      "src/components/search/QueryProcessor.tsx": {
-        "errors": 2,
-        "warnings": 9
-      },
-      "src/components/search/QueryRewriter.tsx": {
-        "errors": 1,
-        "warnings": 10
-      },
-      "src/components/search/ResultAggregator.tsx": {
-        "errors": 1,
-        "warnings": 25
-      },
-      "src/components/search/ResultsPanel.tsx": {
-        "errors": 1,
-        "warnings": 4
-      },
-      "src/components/search/SearchInterface.tsx": {
-        "errors": 1,
-        "warnings": 14
-      },
-      "src/components/search/ThreadMessageSearch.tsx": {
-        "errors": 1,
-        "warnings": 8
       },
       "src/components/security/SecurityComplianceChecker.tsx": {
         "errors": 0,

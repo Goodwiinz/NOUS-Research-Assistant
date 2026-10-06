@@ -398,6 +398,7 @@ class DraftGenerationService:
 
         # A registration is visible to duplicate callers only once its
         # retained row has committed; until then they wait (GOO-297).
+        existing: Optional[Dict[str, Any]] = None
         while True:
             with _generation_registration_lock(project_id):
                 active = self.get_latest_status(
@@ -427,20 +428,28 @@ class DraftGenerationService:
                         active.get("user_id") == str(user_id)
                         and active.get("generation_request_hash") == request_hash
                     ):
-                        return {
+                        existing = {
                             "task_id": active["task_id"],
                             "status": active["status"],
                             "message": "Matching draft generation already in progress",
                             "selection_mode": active.get("selection_mode"),
                             "document_ids": active.get("document_ids", []),
                         }
-                    return {
-                        "error": "A different draft generation is already in progress for this project.",
-                        "error_category": "draft_generation_conflict",
-                    }
+                    else:
+                        existing = {
+                            "error": "A different draft generation is already in progress for this project.",
+                            "error_category": "draft_generation_conflict",
+                        }
+                    break
             # ponytail: poll; bounded by the entry's own commit or, if its
             # caller vanished, by the stale-active cutoff.
             await asyncio.sleep(0.05)
+        if existing is not None:
+            # GOO-321: end the caller's authorization transaction like the
+            # new-task path's commit does. Callers wait on the running task,
+            # whose persist needs the project lock this session still holds.
+            await self.db.rollback()
+            return existing
         # GOO-297: the task is never fired without its retained row.
         try:
             await start_task(

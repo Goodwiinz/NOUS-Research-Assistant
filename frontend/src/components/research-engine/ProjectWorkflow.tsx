@@ -11,6 +11,7 @@ import { Loader2, Trash2, Workflow } from 'lucide-react';
 import { DraftClaimsPanel } from '@/components/research/DraftClaimsPanel';
 import { useAuth } from '@/hooks/useAuth';
 import { projectService, type Project } from '@/services/projectService';
+import { useProjectStore } from '@/store/projectStore';
 import {
   assignProjectRole,
   createProject,
@@ -27,8 +28,10 @@ import { JourneyRail } from './JourneyRail';
 import { PrismaFlowCard } from './PrismaFlowCard';
 import { ProtocolPanel } from './ProtocolPanel';
 import { ReportIdentityPanel } from './ReportIdentityPanel';
+import { ReviewVersionsPanel } from './ReviewVersionsPanel';
 import { ScreeningConflictsPanel } from './ScreeningConflictsPanel';
 import { ScreeningQueuePanel } from './ScreeningQueuePanel';
+import { SearchSchedulePanel } from './SearchSchedulePanel';
 
 interface ProjectWorkflowProps {
   project: Project;
@@ -139,6 +142,23 @@ export function ProjectWorkflow({
         engineProjectId: extension.research_engine_project_id,
       });
       void queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      // The page renders the project from the project store; patch it from
+      // the create response so a remount keeps research_engine_project_id.
+      // No fetchProject: it would join a pre-create in-flight GET, and if the
+      // user already left for another project it would supersede that fetch.
+      // ponytail: a pre-create GET still in flight can overwrite this patch;
+      // a store-level request generation counter fixes that if it shows up.
+      useProjectStore.setState((state) =>
+        state.currentProject?.id === project.id
+          ? {
+              currentProject: {
+                ...state.currentProject,
+                research_engine_project_id:
+                  extension.research_engine_project_id,
+              },
+            }
+          : {}
+      );
     },
   });
 
@@ -225,6 +245,16 @@ export function ProjectWorkflow({
       <Stage id="discover" title="Discover">
         <ReportIdentityPanel projectId={project.id} readOnly={archived} />
         <CorpusPanel projectId={project.id} readOnly={archived} />
+        <SearchSchedulePanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        <ReviewVersionsPanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
       </Stage>
       <Stage id="select" title="Select">
         <ScreeningQueuePanel

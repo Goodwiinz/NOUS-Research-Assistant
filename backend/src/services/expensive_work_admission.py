@@ -5,11 +5,17 @@ by research runs and direct ArXiv jobs so clients cannot evade the aggregate
 budget by switching endpoints or actors.
 """
 
+import functools
+import inspect
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional, TypeVar
+
+from fastapi import Depends, HTTPException, status
 
 from src.core.config import get_settings
+from src.core.dependencies import get_current_user
+from src.models.user import User
 from src.shared.utils import RateLimiter
 
 EXPENSIVE_WORK_RATE_KEY = "research_expensive_work"
@@ -67,3 +73,55 @@ async def admit_expensive_work(*, user_id: Any, organization_id: Any) -> bool:
         identifier=identifier,
     )
     return bool(allowed)
+
+
+async def require_expensive_work_admission(current_user: User) -> User:
+    """Consume one shared org-budget slot for ``current_user`` or reject."""
+    organization_id = getattr(current_user, "organization_id", None)
+    if not organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No organization associated with this account",
+        )
+    if not await admit_expensive_work(
+        user_id=current_user.id, organization_id=organization_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many expensive research jobs; retry later",
+        )
+    return current_user
+
+
+_F = TypeVar("_F", bound=Callable[..., Awaitable[Any]])
+_ADMISSION_USER_PARAM = "_expensive_work_user"
+
+
+def metered_expensive_work(endpoint: _F) -> _F:
+    """Route decorator: debit the shared org budget once per admitted request.
+
+    GOO-289: sibling arXiv routes share the budget of ``/ingest`` so the
+    aggregate limit cannot be bypassed by switching endpoint.  Admission runs
+    inside the wrapped handler, i.e. only after FastAPI has validated every
+    request parameter, so malformed requests (422) never consume budget.  A
+    plain ``Depends`` would be resolved before parameter validation.  Apply it
+    below ``@router.<method>``.
+    """
+    signature = inspect.signature(endpoint)
+    user_param = inspect.Parameter(
+        _ADMISSION_USER_PARAM,
+        inspect.Parameter.KEYWORD_ONLY,
+        default=Depends(get_current_user),  # cached per request; no second auth
+        annotation=User,
+    )
+
+    @functools.wraps(endpoint)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        await require_expensive_work_admission(kwargs.pop(_ADMISSION_USER_PARAM))
+        return await endpoint(*args, **kwargs)
+
+    wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[*signature.parameters.values(), user_param]
+    )
+    wrapper.expensive_work_admission = True  # type: ignore[attr-defined]
+    return wrapper  # type: ignore[return-value]

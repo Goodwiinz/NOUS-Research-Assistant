@@ -271,3 +271,23 @@ Record SHA/PR, CI and oasdiff links, both exports, junit, mutation transcripts a
 ## Out of scope
 
 `ponytail:` markers at each seam: automatic acceptance of deltas; carrying forward extraction/appraisal values (they are re-staled and re-accepted through GOO-304/309, not carried); branching review versions; a persisted stale flag; living-review publication cadence rules.
+
+---
+
+## Amendment 2026-10-01: as implemented
+
+The plan above is kept as written. Where the implementation differs:
+
+- **Root decisions:** the root's `carried` holds its own resolved tips on live reports (by reference). `input_versions.decision_tips` freezes every current tip the PRISMA loader would choose (latest non-superseded queue per stage and report), so the root's `prisma_body_hash` equals the live flow. Stream heads in every version's flow leave out the `research_review_update` stream itself (it moves on append).
+- **Successor records:** a successor's PRISMA records are the parent's plus the accepted delta's own receipts (the scheduled search and its citation chases). A report imported any other way is `needs_attention` with reason `not_in_delta`. Another schedule's import never joins the version.
+- **Missing history:** following the carry rule, an unchanged report with no resolved parent decision is neither carried nor queued; it stays `decision_missing` in every successor, a changed protocol included. `attribution_missing` is checked as "the tip's event is not an event of this Collection"; the event FK makes it practically unreachable.
+- **Uncertainty:** `carry_with_uncertainty` is a list on the successor request (only `unknown` reports, 422 otherwise); those references carry `uncertain: true` and the version's rationale.
+- **Full text:** `required_work.full_text` is the frozen full-text set (carried include, full text not carryable). The full-text queue is created only after the title/abstract work settles, over that set plus the new title/abstract includes (`waiting_on_title_abstract` until then). Derived statuses add `queue_mismatch`.
+- **Reviewers:** named on the request, checked up front (422) and stored in `input_versions.reviewer_user_ids`; `ensure_work` re-resolves SUPERVISE per stage, finds each queue by its key before creating it, and assigns only reviewers not already active. Right after a version commit a refusal is logged and left `queue_missing`; an explicit `/work` retry raises it.
+- **Fork guard:** there is no separate tip check; `UNIQUE(parent_review_version_id)` alone answers 409 `Review version is stale; reload`, and `UNIQUE(accepted_execution_id)` answers `Delta already accepted by a review version`.
+- **Accounting:** both flows are re-derived from retained rows. A version with a successor uses the decisions frozen at the successor's creation (`parent_decision_tips`) and full-text attempts and merges up to the successor's stream heads. Each flow is cross-checked against the study units of its decisions; a parent include left in `needs_attention` is `withheld_reports`, not an amendment. While the new work is unresolved the response carries `error` (200); a non-reconciling result is 409. `flow_matches_frozen_hash` re-derives the creation-time body.
+- **Staleness:** `graph_part` adds `report -> document` edges for the tip version's `changed`/`corrected_retracted` reports, and `_graph` bridges each such document to the source revisions pinned from it. Ceiling: only the tip's delta stales, so a claim re-assessed on a still-changed report stays stale until a later version accepts a delta where it is unchanged.
+- **Release links:** only a verified GOO-315 release can be linked. A successor's release must be created after the version; the root may link an earlier release.
+- **Bundle:** `review-versions.json` uses schema `nous.academic.review-versions.v1`.
+- **Proof step 5:** the two concurrent successors accept the first-fire deltas of two schedules, so only `UNIQUE(parent_review_version_id)` can refuse the fork.
+- **Current limits (ponytail):** a version's flow reads report merge and study-link state as it is now. The tip's stale counts walk the whole graph on every list.

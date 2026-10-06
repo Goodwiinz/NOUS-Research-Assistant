@@ -24,6 +24,7 @@ as-is.
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # Add backend to path
@@ -437,7 +438,13 @@ def tenant_gate_headers(test_db, test_user, monkeypatch):
         sessionmaker(test_db.bind, class_=AsyncSession, expire_on_commit=False),
     )
     token = jwt.encode(
-        {"sub": str(test_user.id), "aud": "authenticated", "app_metadata": {}},
+        {
+            "sub": str(test_user.id),
+            "aud": "authenticated",
+            "app_metadata": {},
+            # verify_token requires exp (audit I21).
+            "exp": int(time.time()) + 3600,
+        },
         secret,
         algorithm="HS256",
     )

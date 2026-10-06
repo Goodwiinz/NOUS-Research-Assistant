@@ -17,6 +17,9 @@ file it as a proposal instead.
   the Node/pnpm toolchain.
 - **[testing.md](testing.md)** — test layout, how to move a quality floor,
   and the mutation-verification rule for race/idempotency tests.
+- **[data-isolation-matrix.md](data-isolation-matrix.md)** — the
+  two-account allow/deny matrix for documents, citations, search, chat and
+  exports, row by row, with the test (or open issue) behind each row.
 - **[api-contracts.md](api-contracts.md)** — the OpenAPI → generated
   TypeScript pipeline and the adopt-on-touch migration rule.
 - **[gotchas.md](gotchas.md)** — operational invariants preserved from the
@@ -24,6 +27,13 @@ file it as a proposal instead.
   these are hard-won environment/API/tenancy facts, not CI-backed rules.
 - **[research-protocols.md](research-protocols.md)** — immutable methods versions,
   independent approval, retained decisions, and approved execution plans.
+- **[research-project-migration.md](research-project-migration.md)** — canonical
+  collection/project identities, access and decision roles, and retained-history
+  backfill operations.
+- **[paper-discovery.md](paper-discovery.md)** — scholarly-provider selection,
+  bounded search behavior and provider configuration.
+- **[harness-bridge.md](harness-bridge.md)** — local Codex pairing, scoped MCP,
+  artifact publication, recovery and live acceptance prerequisites.
 - **[typesafe-routing.md](typesafe-routing.md)** — opt-in routing configuration,
   offline replay, validation gates, and rollback; Azure remains the default.
 - **[nous-loop.md](nous-loop.md)** — canonical, cross-runtime workflow for one
@@ -54,3 +64,5 @@ Static regression tests that fail loudly if a boundary above erodes:
 ## Ownership
 
 See [`.github/CODEOWNERS`](../../.github/CODEOWNERS).
+
+[Back to documentation home](../README.md).

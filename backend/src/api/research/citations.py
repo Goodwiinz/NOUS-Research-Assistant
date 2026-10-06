@@ -14,7 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from structlog import get_logger
@@ -59,14 +59,35 @@ def _normalize_citation_relationship_type(value: str) -> str:
 
 
 def _document_is_accessible(document: object, current_user: User) -> bool:
+    """GOO-349: documents are organization-scoped. ``is_public`` / uploader
+    identity only narrow access *inside* the caller's current organization;
+    neither may bypass it (a foreign-org public document, or one the caller
+    uploaded in a previous org). An org-less caller gets no document path."""
     if document is None:
         return False
     if getattr(document, "is_deleted", False) is True:
+        return False
+    org_id = current_user.organization_id
+    if org_id is None or getattr(document, "organization_id", None) != org_id:
         return False
 
     return bool(
         getattr(document, "is_public", False)
         or getattr(document, "uploaded_by_user_id", None) == current_user.id
+    )
+
+
+def _document_access_clause(current_user: User):
+    """SQL mirror of ``_document_is_accessible`` (same org fail-closed rule)."""
+    if current_user.organization_id is None:
+        return false()
+    return and_(
+        Document.is_deleted.is_(False),
+        Document.organization_id == current_user.organization_id,
+        or_(
+            Document.is_public.is_(True),
+            Document.uploaded_by_user_id == current_user.id,
+        ),
     )
 
 
@@ -250,14 +271,14 @@ async def create_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
         logger.error(
-            "citation_creation_failed", error=str(e), user_id=str(current_user.id)
+            "citation_creation_failed", exc_info=True, user_id=str(current_user.id)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create citation: {str(e)}",
+            detail="Failed to create citation",
         )
 
 
@@ -310,17 +331,11 @@ async def list_citations(
             filters.append(Citation.needs_review == needs_review)
 
         # SQL equivalent of _citation_is_accessible: accessible via the
-        # document (public or uploaded by the caller) OR via the message's
+        # document (caller's org AND public-or-own) OR via the message's
         # thread → conversation → workspace ownership chain. All joins are
         # many-to-one from Citation, so no row multiplication.
         access_filter = or_(
-            and_(
-                Document.is_deleted.is_(False),
-                or_(
-                    Document.is_public.is_(True),
-                    Document.uploaded_by_user_id == current_user.id,
-                ),
-            ),
+            _document_access_clause(current_user),
             and_(
                 ChatMessage.is_deleted.is_(False),
                 Thread.is_deleted.is_(False),
@@ -369,11 +384,13 @@ async def list_citations(
             limit=limit,
         )
 
-    except Exception as e:
-        logger.error("citation_list_failed", error=str(e), user_id=str(current_user.id))
+    except Exception:
+        logger.error(
+            "citation_list_failed", exc_info=True, user_id=str(current_user.id)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list citations: {str(e)}",
+            detail="Failed to list citations",
         )
 
 
@@ -418,16 +435,16 @@ async def get_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.error(
             "citation_get_failed",
-            error=str(e),
+            exc_info=True,
             citation_id=str(citation_id),
             user_id=str(current_user.id),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get citation: {str(e)}",
+            detail="Failed to get citation",
         )
 
 
@@ -558,12 +575,12 @@ async def extract_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("citation_extraction_failed", error=str(e))
+        logger.error("citation_extraction_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to extract citation: {str(e)}",
+            detail="Failed to extract citation",
         )
 
 
@@ -681,11 +698,11 @@ async def lookup_citation(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("citation_lookup_failed", error=str(e))
+    except Exception:
+        logger.error("citation_lookup_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to lookup citation: {str(e)}",
+            detail="Failed to lookup citation",
         )
 
 
@@ -776,12 +793,19 @@ async def export_bibliography(
 
         # Fallback: build bibliography from Document metadata when no
         # Citation records exist (common for freshly ingested papers).
-        if not citations and resolved_project_id:
+        # GOO-349: a project-document link can be stale (document moved or
+        # foreign), so the fallback re-applies the org document boundary.
+        if (
+            not citations
+            and resolved_project_id
+            and current_user.organization_id is not None
+        ):
             from src.services.agent.tools_impl import _citations_from_documents
 
             doc_stmt = select(Document).where(
                 Document.id.in_(document_ids),
                 Document.is_deleted == False,
+                Document.organization_id == current_user.organization_id,
             )
             doc_result = await db.execute(doc_stmt)
             docs = list(doc_result.scalars().all())
@@ -823,13 +847,17 @@ async def export_bibliography(
 
     except HTTPException:
         raise
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
-        logger.error("bibliography_export_failed", error=str(e))
+    except ValueError:
+        logger.warning("Invalid bibliography export request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid bibliography export request",
+        )
+    except Exception:
+        logger.error("bibliography_export_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to export bibliography: {str(e)}",
+            detail="Failed to export bibliography",
         )
 
 
@@ -910,11 +938,11 @@ async def list_citation_relationships(
             "total": len(relationships),
         }
 
-    except Exception as e:
-        logger.error("list_relationships_failed", error=str(e))
+    except Exception:
+        logger.error("list_relationships_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list relationships: {str(e)}",
+            detail="Failed to list relationships",
         )
 
 
@@ -1018,12 +1046,12 @@ async def create_citation_relationship(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("create_relationship_failed", error=str(e))
+        logger.error("create_relationship_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create relationship: {str(e)}",
+            detail="Failed to create relationship",
         )
 
 
@@ -1098,11 +1126,11 @@ async def get_citation_graph(
         # Preserve authz 400/404s — never let them collapse into a 500 if a
         # future edit moves a guard inside this try.
         raise
-    except Exception as e:
-        logger.error("get_graph_failed", error=str(e))
+    except Exception:
+        logger.error("get_graph_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get citation graph: {str(e)}",
+            detail="Failed to get citation graph",
         )
 
 
@@ -1141,11 +1169,11 @@ async def get_graph_node_details(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.error(
-            "get_node_details_failed", error=str(e), citation_id=str(citation_id)
+            "get_node_details_failed", exc_info=True, citation_id=str(citation_id)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get node details: {str(e)}",
+            detail="Failed to get node details",
         )

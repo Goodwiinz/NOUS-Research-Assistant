@@ -1,0 +1,39 @@
+{
+  "step": "J2-06-owner-adjudicate-r2-exclude",
+  "as": "owner",
+  "at": "2026-09-30T21:11:48.977083+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/49931aa4-caf2-4013-b0bb-9806b039a615/reports/5d6149b8-5d7c-402a-9b80-353bf84d9154/adjudicate",
+    "body": {
+      "resolution_id": "3ddc1679-be5a-5d7c-b5a1-80bf97c3f440",
+      "input_observation_ids": [
+        "e60450df-6a78-4f58-af3f-f97cbffb834a",
+        "eeaa996e-60e2-4e87-b2c8-c8acd1f95f98"
+      ],
+      "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+      "decision": "exclude",
+      "exclusion_reason": "wrong study design",
+      "rationale": "Design is a position paper, not an evaluation",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "d806145f-8d2d-4b06-8fcb-29dd9d42745a",
+    "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+    "basis": "adjudicated",
+    "outcome": "exclude",
+    "exclusion_reason": "wrong study design",
+    "input_observation_ids": [
+      "e60450df-6a78-4f58-af3f-f97cbffb834a",
+      "eeaa996e-60e2-4e87-b2c8-c8acd1f95f98"
+    ],
+    "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+    "supersedes_resolution_id": "3ddc1679-be5a-5d7c-b5a1-80bf97c3f440",
+    "created_at": "2026-09-30T21:11:48.766724Z"
+  }
+}

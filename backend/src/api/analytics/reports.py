@@ -97,8 +97,12 @@ async def get_report(
             )
         return report
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -136,8 +140,12 @@ async def generate_report(
 
         return {"message": "Report generation started", "report_id": str(report_id)}
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error starting report generation: {e}")
         raise HTTPException(
@@ -160,8 +168,12 @@ async def delete_report(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Report not found"
             )
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error deleting report {report_id}: {e}")
         raise HTTPException(
@@ -297,8 +309,12 @@ async def schedule_report(
 
         return {"message": "Report schedule updated successfully"}
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error scheduling report: {e}")
         raise HTTPException(
@@ -341,8 +357,12 @@ async def get_report_history(
 
         return history
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error getting report history: {e}")
         raise HTTPException(
@@ -394,8 +414,12 @@ async def download_report(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Report file not found"
             )
 
-    except PermissionError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PermissionError:
+        logger.warning("Access denied", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
     except Exception as e:
         logger.error(f"Error downloading report: {e}")
         raise HTTPException(

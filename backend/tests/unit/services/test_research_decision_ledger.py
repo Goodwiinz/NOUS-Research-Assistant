@@ -22,7 +22,9 @@ from src.services.research_decisions.ledger import (
     _validate_peer_review_transitions,
     _validate_release_transitions,
     _validate_reproduction_transitions,
+    _validate_review_update_transitions,
     _validate_screening_transitions,
+    _validate_search_update_transitions,
     _validate_statements_transitions,
     _validate_synthesis_transitions,
     decision_request_fingerprint,
@@ -3506,3 +3508,253 @@ def test_deposit_payload_has_no_secret_keys() -> None:
             payload=approved[2],
             request_fingerprint="e" * 64,
         )
+
+
+# --- GOO-319: research_search_update ------------------------------------------
+
+
+class _SearchUpdate:
+    """Hand-built events for one Collection's research_search_update stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+        self.schedule = uuid4()
+
+    def versioned(self, version: UUID, supersedes: UUID | None = None) -> Any:
+        payload = {
+            "collection_id": str(self.collection_id),
+            "schedule_id": str(self.schedule),
+            "schedule_version_id": str(version),
+            "supersedes_schedule_version_id": (
+                None if supersedes is None else str(supersedes)
+            ),
+            "protocol_version_id": str(uuid4()),
+            "strategy_version": "sha256:" + "a" * 64,
+            "cron": "0 6 * * 1",
+            "timezone": "Europe/London",
+            "enabled": True,
+        }
+        return ("search_update.schedule_versioned", "supervisor", payload)
+
+    def executed(
+        self, execution: UUID, local: str, baseline: UUID | None = None
+    ) -> Any:
+        payload = {
+            "collection_id": str(self.collection_id),
+            "schedule_id": str(self.schedule),
+            "schedule_version_id": str(self.schedule),
+            "execution_id": str(execution),
+            "scheduled_local": local,
+            "import_receipt_id": str(uuid4()),
+            "baseline_execution_id": None if baseline is None else str(baseline),
+            "delta_hash": "b" * 64,
+            "counts": {
+                "new": 1,
+                "changed": 0,
+                "corrected_retracted": 0,
+                "unchanged": 2,
+                "unknown": 1,
+            },
+        }
+        return ("search_update.executed", "machine", payload)
+
+    def replay(self, *events: Any) -> None:
+        stored = []
+        for event_type, role, payload in events:
+            subject = (
+                "execution_id"
+                if event_type == "search_update.executed"
+                else "schedule_version_id"
+            )
+            _validate_event(
+                aggregate_type="research_search_update",
+                aggregate_id=self.collection_id,
+                event_type=event_type,
+                event_schema_version=1,
+                subject_type="search_schedule",
+                subject_id=UUID(payload[subject]),
+                subject_version_id=None,
+                subject_hash=decision_request_fingerprint(payload),
+                payload=payload,
+                request_fingerprint="e" * 64,
+            )
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_search_update_transitions(stored, self.collection_id)
+
+
+def test_search_update_replay_rejects_duplicate_fire() -> None:
+    s = _SearchUpdate()
+    first, second = uuid4(), uuid4()
+    happy = [
+        s.versioned(s.schedule),
+        s.executed(first, "2026-01-05T06:00"),
+        s.executed(second, "2026-01-12T06:00", first),
+    ]
+    s.replay(*happy)
+    with pytest.raises(DecisionReplayError, match="already executed"):
+        s.replay(*happy[:2], s.executed(second, "2026-01-05T06:00", first))
+    with pytest.raises(DecisionReplayError, match="worker's"):
+        event_type, _, payload = happy[1]
+        s.replay(happy[0], (event_type, "supervisor", payload))
+    with pytest.raises(DecisionReplayError, match="no version of its schedule"):
+        s.replay(happy[1])
+
+
+def test_search_update_replay_rejects_skipped_baseline() -> None:
+    s = _SearchUpdate()
+    first, second, third = uuid4(), uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="previous run"):
+        s.replay(
+            s.versioned(s.schedule),
+            s.executed(first, "2026-01-05T06:00"),
+            s.executed(second, "2026-01-12T06:00", first),
+            s.executed(third, "2026-01-19T06:00", first),
+        )
+    with pytest.raises(DecisionReplayError, match="previous run"):
+        s.replay(s.versioned(s.schedule), s.executed(first, "2026-01-05T06:00", third))
+    # A schedule chain is linear and rooted at the schedule id.
+    v2 = uuid4()
+    s.replay(s.versioned(s.schedule), s.versioned(v2, s.schedule))
+    with pytest.raises(DecisionReplayError, match="extend the tip"):
+        s.replay(
+            s.versioned(s.schedule),
+            s.versioned(v2, s.schedule),
+            s.versioned(uuid4(), s.schedule),
+        )
+    with pytest.raises(DecisionReplayError, match="root version"):
+        s.replay(s.versioned(uuid4()))
+    event_type, _, payload = s.executed(first, "2026-01-05T06:00")
+    with pytest.raises(DecisionValidationError, match="every delta class"):
+        s.replay(
+            s.versioned(s.schedule),
+            (event_type, "machine", {**payload, "counts": {"deleted": 1}}),
+        )
+
+
+# --- GOO-320: research_review_update ------------------------------------------
+
+
+class _ReviewUpdate:
+    """Hand-built events for one Collection's research_review_update stream."""
+
+    def __init__(self) -> None:
+        self.collection_id = uuid4()
+
+    def versioned(
+        self,
+        version: UUID,
+        number: int = 1,
+        parent: UUID | None = None,
+        execution: UUID | None = None,
+    ) -> Any:
+        payload = {
+            "collection_id": str(self.collection_id),
+            "review_version_id": str(version),
+            "parent_review_version_id": None if parent is None else str(parent),
+            "version_number": number,
+            "accepted_execution_id": None if execution is None else str(execution),
+            "delta_hash": None if execution is None else "d" * 64,
+            "protocol_version_id": str(uuid4()),
+            "carried_count": 2,
+            "required_work_counts": {"title_abstract": 3, "full_text": 0},
+            "needs_attention_count": 1,
+            "content_hash": "c" * 64,
+        }
+        return ("review_update.versioned", payload)
+
+    def linked(
+        self, version: UUID, release: UUID, supersedes: UUID | None = None
+    ) -> Any:
+        payload = {
+            "collection_id": str(self.collection_id),
+            "review_version_id": str(version),
+            "release_id": str(release),
+            "supersedes_release_id": None if supersedes is None else str(supersedes),
+        }
+        return ("review_update.release_linked", payload)
+
+    def replay(self, *events: Any, role: str = "supervisor") -> None:
+        stored = []
+        for event_type, payload in events:
+            _validate_event(
+                aggregate_type="research_review_update",
+                aggregate_id=self.collection_id,
+                event_type=event_type,
+                event_schema_version=1,
+                subject_type="review_version",
+                subject_id=UUID(payload["review_version_id"]),
+                subject_version_id=None,
+                subject_hash=decision_request_fingerprint(payload),
+                payload=payload,
+                request_fingerprint="e" * 64,
+                reason="update",
+            )
+            event = _stored(event_type, payload)
+            event.actor_role = role
+            stored.append(event)
+        _validate_review_update_transitions(stored, self.collection_id)
+
+
+def test_review_replay_rejects_fork() -> None:
+    r = _ReviewUpdate()
+    root, v2, v2b = uuid4(), uuid4(), uuid4()
+    r.replay(r.versioned(root), r.versioned(v2, 2, root, uuid4()))
+    with pytest.raises(DecisionReplayError, match="extend the tip"):
+        r.replay(
+            r.versioned(root),
+            r.versioned(v2, 2, root, uuid4()),
+            r.versioned(v2b, 2, root, uuid4()),
+        )
+    with pytest.raises(DecisionReplayError, match="extend the tip"):
+        r.replay(r.versioned(root), r.versioned(v2, 3, root, uuid4()))
+    with pytest.raises(DecisionReplayError, match="extend the tip"):
+        r.replay(r.versioned(root), r.versioned(v2))  # a second root
+    with pytest.raises(DecisionReplayError, match="supervisor's"):
+        r.replay(r.versioned(root), role="machine")
+    event_type, payload = r.versioned(v2, 2, root, None)
+    with pytest.raises(DecisionValidationError, match="root version"):
+        r.replay(r.versioned(root), (event_type, payload))
+    with pytest.raises(DecisionValidationError, match="rationale"):
+        _validate_event(
+            aggregate_type="research_review_update",
+            aggregate_id=r.collection_id,
+            event_type="review_update.versioned",
+            event_schema_version=1,
+            subject_type="review_version",
+            subject_id=root,
+            subject_version_id=None,
+            subject_hash=decision_request_fingerprint(r.versioned(root)[1]),
+            payload=r.versioned(root)[1],
+            request_fingerprint="e" * 64,
+        )
+
+
+def test_review_replay_rejects_reused_delta() -> None:
+    r = _ReviewUpdate()
+    root, v2, v3, execution = uuid4(), uuid4(), uuid4(), uuid4()
+    with pytest.raises(DecisionReplayError, match="already accepted"):
+        r.replay(
+            r.versioned(root),
+            r.versioned(v2, 2, root, execution),
+            r.versioned(v3, 3, v2, execution),
+        )
+
+
+def test_review_replay_rejects_wrong_superseded_release() -> None:
+    r = _ReviewUpdate()
+    root, v2 = uuid4(), uuid4()
+    p1, p2 = uuid4(), uuid4()
+    chain = [r.versioned(root), r.versioned(v2, 2, root, uuid4())]
+    r.replay(*chain, r.linked(root, p1), r.linked(v2, p2, p1))
+    with pytest.raises(DecisionReplayError, match="supersede the parent"):
+        r.replay(*chain, r.linked(root, p1), r.linked(v2, p2, uuid4()))
+    with pytest.raises(DecisionReplayError, match="supersede the parent"):
+        r.replay(*chain, r.linked(root, p1, uuid4()))
+    with pytest.raises(DecisionReplayError, match="supersede the parent"):
+        r.replay(*chain, r.linked(root, p1), r.linked(v2, p2))
+    with pytest.raises(DecisionReplayError, match="already has a release"):
+        r.replay(*chain, r.linked(root, p1), r.linked(root, p2))
+    with pytest.raises(DecisionReplayError, match="no recorded version"):
+        r.replay(r.versioned(root), r.linked(v2, p2))

@@ -2231,3 +2231,330 @@ class RerunResponse(BaseModel):
 
 class RerunListResponse(BaseModel):
     reruns: List[RerunResponse]
+
+
+# --- GOO-319: scheduled search updates ---------------------------------------
+
+DeltaClass = Literal["new", "changed", "corrected_retracted", "unchanged", "unknown"]
+DeltaUnknownReason = Literal[
+    "provider_failed",
+    "provider_capped",
+    "not_returned",
+    "no_doi_publication_check_not_performed",
+    "merge_unresolved",
+]
+ScheduleStatus = Literal["disabled", "scheduled", "running", "blocked", "failed", "ok"]
+_STRATEGY_VERSION = r"^sha256:[0-9a-f]{64}$"
+
+
+class SearchScheduleCreate(BaseModel):
+    """Pin one GOO-298 strategy (from a completed run's search journal)."""
+
+    source_run_id: UUID
+    step_id: str = Field(..., min_length=1, max_length=100)
+    strategy_version: str = Field(..., pattern=_STRATEGY_VERSION)
+    cron: str = Field(..., min_length=9, max_length=64)
+    timezone: str = Field(..., min_length=1, max_length=64)
+    enabled: bool = True
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+
+class SearchScheduleVersionCreate(BaseModel):
+    """Edit, enable or disable: a new version on top of ``expected_tip_id``.
+    A new strategy needs all three of run, step and strategy version."""
+
+    expected_tip_id: UUID
+    cron: Optional[str] = Field(default=None, min_length=9, max_length=64)
+    timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    enabled: Optional[bool] = None
+    source_run_id: Optional[UUID] = None
+    step_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    strategy_version: Optional[str] = Field(default=None, pattern=_STRATEGY_VERSION)
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _strategy_together(self) -> "SearchScheduleVersionCreate":
+        given = [self.source_run_id, self.step_id, self.strategy_version]
+        if any(v is not None for v in given) and any(v is None for v in given):
+            raise ValueError("source_run_id, step_id and strategy_version go together")
+        return self
+
+
+class SearchStrategyOption(BaseModel):
+    """A pinnable strategy from a completed run of this project."""
+
+    source_run_id: UUID
+    step_id: str
+    strategy_version: str
+    query: str
+    providers: List[str]
+    protocol_version_id: Optional[str] = None
+    current_protocol: bool
+
+
+class SearchScheduleVersionResponse(BaseModel):
+    id: UUID
+    schedule_id: UUID
+    owner_id: UUID
+    protocol_version_id: UUID
+    source_run_id: UUID
+    step_id: str
+    strategy_version: str
+    query: str
+    cron: str
+    timezone: str
+    enabled: bool
+    supersedes_schedule_version_id: Optional[UUID] = None
+    baseline_digest: Optional[str] = None
+    created_at: datetime
+
+
+class SearchAttemptResponse(BaseModel):
+    id: UUID
+    outcome: Literal["started", "succeeded", "failed", "skipped"]
+    reason: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
+    worker: str
+    created_at: datetime
+
+
+class SearchExecutionResponse(BaseModel):
+    id: UUID
+    schedule_id: UUID
+    schedule_version_id: UUID
+    scheduled_local: str
+    scheduled_for: datetime
+    missed_fires: int
+    created_at: datetime
+    status: Literal["pending", "started", "succeeded", "failed", "skipped"]
+    attempts: List[SearchAttemptResponse]
+    import_receipt_id: Optional[UUID] = None
+    baseline_execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = None
+    counts: Optional[Dict[DeltaClass, int]] = None
+
+
+class SearchScheduleResponse(BaseModel):
+    schedule_id: UUID
+    tip: SearchScheduleVersionResponse
+    versions: List[SearchScheduleVersionResponse]
+    status: ScheduleStatus
+    next_fire_local: Optional[str] = None
+    next_fire_utc: Optional[datetime] = None
+    last_execution: Optional[SearchExecutionResponse] = None
+
+
+class SearchScheduleListResponse(BaseModel):
+    schedules: List[SearchScheduleResponse]
+    strategies: List[SearchStrategyOption]
+
+
+class SearchExecutionListResponse(BaseModel):
+    executions: List[SearchExecutionResponse]
+
+
+class SearchDeltaItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    report_id: str
+    delta_class: DeltaClass = Field(alias="class")
+    reason: Optional[DeltaUnknownReason] = None
+    evidence: Dict[str, Any]
+    publication: Dict[str, Any]
+
+
+class SearchDeltaResponse(BaseModel):
+    """One succeeded execution's classified delta (GOO-320 accepts it by
+    ``(execution_id, delta_hash)``)."""
+
+    execution_id: UUID
+    collection_id: UUID
+    schedule_id: UUID
+    schedule_version_id: UUID
+    scheduled_local: str
+    baseline_execution_id: Optional[UUID] = None
+    baseline_digest: str
+    corpus_snapshot_digest: str
+    import_receipt_id: UUID
+    delta_hash: str
+    counts: Dict[DeltaClass, int]
+    items: List[SearchDeltaItem]
+    coverage: Dict[str, Any]
+    citation_chasing: Dict[str, Any]
+
+
+class SearchDeltaExportBody(SearchDeltaResponse):
+    filter: Optional[Dict[str, str]] = None
+    schedule_version: SearchScheduleVersionResponse
+    statement: str
+
+
+class SearchDeltaExport(BaseModel):
+    """The sealed ``nous.academic.search-delta.v1`` attachment:
+    ``body_sha256`` is the SHA-256 of ``body`` as canonical JSON."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    package_schema: str = Field(alias="schema")
+    exported_at: str
+    body_sha256: str
+    body: SearchDeltaExportBody
+
+
+# --- GOO-320: superseding review versions ----------------------------------
+
+ReviewWorkState = Literal[
+    "none", "queued", "queue_missing", "queue_mismatch", "waiting_on_title_abstract"
+]
+
+
+class ReviewVersionCreate(BaseModel):
+    """A root version (no parent) or a successor accepting one GOO-319 delta
+    by ``(execution_id, delta_hash)``. ``carry_with_uncertainty`` names
+    ``unknown`` reports whose parent decision is carried with an explicit
+    flag (the rationale covers it)."""
+
+    parent_review_version_id: Optional[UUID] = None
+    execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reviewer_user_ids: List[UUID] = Field(default_factory=list, max_length=20)
+    carry_with_uncertainty: List[UUID] = Field(default_factory=list, max_length=10_000)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+    @model_validator(mode="after")
+    def _successor_shape(self) -> "ReviewVersionCreate":
+        given = (
+            self.parent_review_version_id is not None,
+            self.execution_id is not None,
+            self.delta_hash is not None,
+        )
+        if len(set(given)) != 1:
+            raise ValueError(
+                "A successor names its parent, execution_id and delta_hash together"
+            )
+        if not given[0] and self.carry_with_uncertainty:
+            raise ValueError("A root version carries nothing with uncertainty")
+        return self
+
+
+class ReviewReleaseLinkCreate(BaseModel):
+    release_id: UUID
+    supersedes_release_id: Optional[UUID] = None
+    idempotency_key: _IdempotencyKey
+
+
+class ReviewDecisionRef(BaseModel):
+    """A decision carried by reference: attribution resolves via ``event_id``."""
+
+    report_id: UUID
+    stage: ScreeningStage
+    resolution_id: UUID
+    event_id: UUID
+    outcome: Optional[str] = None
+    basis: str
+    uncertain: bool = False
+
+
+class ReviewNeedsAttention(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    report_id: UUID
+    delta_class: Optional[DeltaClass] = Field(default=None, alias="class")
+    reason: Optional[str] = None
+
+
+class ReviewMissingHistory(BaseModel):
+    report_id: UUID
+    stage: ScreeningStage
+    kind: Literal["decision_missing", "attribution_missing"]
+
+
+class ReviewWorkStatus(BaseModel):
+    """Derived on read: the targeted GOO-301/302 queue for one stage."""
+
+    stage: ScreeningStage
+    status: ReviewWorkState
+    required_report_ids: List[UUID]
+    queue_id: Optional[UUID] = None
+    assigned_reviewer_ids: List[UUID] = Field(default_factory=list)
+    resolved_count: int = 0
+    unresolved_count: int = 0
+
+
+class ReviewReleaseLinkResponse(BaseModel):
+    id: UUID
+    review_version_id: UUID
+    release_id: UUID
+    supersedes_release_id: Optional[UUID] = None
+    package_sha256: str
+    linked_by_id: UUID
+    created_at: datetime
+
+
+class ReviewDeltaOption(BaseModel):
+    """A succeeded GOO-319 execution a successor of the tip may accept."""
+
+    execution_id: UUID
+    schedule_id: UUID
+    scheduled_local: str
+    baseline_execution_id: Optional[UUID] = None
+    delta_hash: str
+    counts: Dict[DeltaClass, int]
+
+
+class ReviewVersionResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    version_number: int
+    parent_review_version_id: Optional[UUID] = None
+    accepted_execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = None
+    protocol_version_id: UUID
+    strategy_version: Optional[str] = None
+    report_ids: List[UUID]
+    carried: List[ReviewDecisionRef]
+    required_work: Dict[ScreeningStage, List[UUID]]
+    needs_attention: List[ReviewNeedsAttention]
+    missing_history: List[ReviewMissingHistory]
+    prisma_body_hash: str
+    content_hash: str
+    rationale: str
+    created_by_id: UUID
+    created_at: datetime
+    is_tip: bool
+    work: List[ReviewWorkStatus]
+    release: Optional[ReviewReleaseLinkResponse] = None
+    # Only the tip's accepted delta stales anything (GOO-307 walk); counts
+    # by node kind.
+    stale_counts: Dict[str, int] = Field(default_factory=dict)
+
+
+class ReviewVersionListResponse(BaseModel):
+    versions: List[ReviewVersionResponse]
+    deltas: List[ReviewDeltaOption]
+
+
+class UpdateAccountingResponse(BaseModel):
+    """PRISMA 2020 for updated reviews: both flows plus the update boxes.
+    ``boxes`` is None (and ``error`` set) while the version does not
+    reconcile, e.g. its new work is unresolved."""
+
+    review_version_id: UUID
+    parent_review_version_id: Optional[UUID] = None
+    boxes: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    parent_flow: Optional[Dict[str, Any]] = None
+    flow: Dict[str, Any]
+    flow_matches_frozen_hash: bool
+
+
+class ReviewVersionExport(BaseModel):
+    """The sealed ``nous.academic.review-version.v1`` attachment."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    package_schema: str = Field(alias="schema")
+    exported_at: str
+    body_sha256: str
+    body: Dict[str, Any]
