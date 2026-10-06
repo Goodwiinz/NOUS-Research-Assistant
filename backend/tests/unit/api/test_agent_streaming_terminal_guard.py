@@ -295,7 +295,7 @@ async def test_confirm_park_failure_after_nested_confirmation_stays_clean(
     not produce a trailing ERROR frame."""
     from src.api.agent import streaming as streaming_mod
 
-    db = SimpleNamespace(close=AsyncMock())
+    db = SimpleNamespace(close=AsyncMock(), commit=AsyncMock())
     request = SimpleNamespace(
         state=SimpleNamespace(request_id="req-term-guard"),
         is_disconnected=AsyncMock(return_value=False),

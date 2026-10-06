@@ -21,7 +21,7 @@ NetworkPolicy, Alembic, OpenAPI/oasdiff, pytest, k6, Helm, ArgoCD.
 
 **Files:**
 
-- Modify: `docs/system-design-audit-2026-07-10.md`
+- Modify: `docs/audits/system/system-design-audit-2026-07-10.md`
 - Create: `docs/operations/agent-audit-verification-2026-07-30.md`
 
 For every X/B/C/D finding, record `closed`, `partial`, `open`, or `regressed`,

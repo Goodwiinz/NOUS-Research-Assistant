@@ -75,6 +75,12 @@ from .extraction_matrix import (
 from .integrity_score import IntegrityScore
 from .research_pipeline import ResearchPipeline
 from .draft_release import DraftRelease
+from .research_appraisal import AppraisalAssessment
+from .research_evidence_table import (
+    EvidenceContradiction,
+    EvidenceTableVersion,
+    OutcomeCertaintyAssessment,
+)
 from .draft_task_result import DraftTaskResult
 from .generated_draft import GeneratedDraft
 from .message_attachment import MessageAttachment
@@ -139,6 +145,39 @@ from .research_report import (
     ResearchReportIdentifier,
     ResearchReportObservation,
     ResearchStudy,
+)
+from .research_synthesis import SynthesisResult
+from .research_experiment import (
+    ResearchFigure,
+    ResearchRunArtifact,
+    ResearchRunManifest,
+)
+from .research_rerun import ExperimentRerun, ExperimentRerunAttempt
+from .manuscript_release import ManuscriptRelease
+from .research_deposit import (
+    ArchiveDepositApproval,
+    ArchiveDepositAttempt,
+    ArchiveDepositOutbox,
+)
+from .research_search_update import (
+    ResearchSearchExecution,
+    ResearchSearchExecutionAttempt,
+    ResearchSearchExecutionResult,
+    ResearchSearchSchedule,
+)
+from .research_review_version import ResearchReviewReleaseLink, ResearchReviewVersion
+from .manuscript_statements import (
+    ManuscriptStatementApproval,
+    ManuscriptStatementSet,
+    OrcidAuthentication,
+    VenueCheck,
+)
+from .peer_review import (
+    PeerReviewComment,
+    PeerReviewDecision,
+    PeerReviewResponse,
+    PeerReviewReviewer,
+    PeerReviewRound,
 )
 from .research_claim import (
     ResearchClaim,
@@ -240,6 +279,10 @@ __all__ = [
     "ProjectSkillVersionScan",
     "GeneratedDraft",
     "DraftRelease",
+    "AppraisalAssessment",
+    "EvidenceContradiction",
+    "EvidenceTableVersion",
+    "OutcomeCertaintyAssessment",
     "DraftTaskResult",
     "DraftCitation",
     "DraftReview",
@@ -297,6 +340,31 @@ __all__ = [
     "ExtractionObservation",
     "ExtractionAcceptedValue",
     # Versioned claims (GOO-306)
+    "SynthesisResult",
+    "ResearchRunManifest",
+    "ResearchRunArtifact",
+    "ResearchFigure",
+    "ExperimentRerun",
+    "ExperimentRerunAttempt",
+    "PeerReviewRound",
+    "PeerReviewReviewer",
+    "PeerReviewComment",
+    "PeerReviewResponse",
+    "PeerReviewDecision",
+    "ManuscriptRelease",
+    "ManuscriptStatementSet",
+    "ManuscriptStatementApproval",
+    "OrcidAuthentication",
+    "VenueCheck",
+    "ArchiveDepositApproval",
+    "ArchiveDepositAttempt",
+    "ArchiveDepositOutbox",
+    "ResearchSearchSchedule",
+    "ResearchSearchExecution",
+    "ResearchSearchExecutionAttempt",
+    "ResearchSearchExecutionResult",
+    "ResearchReviewVersion",
+    "ResearchReviewReleaseLink",
     "ResearchClaim",
     "ResearchClaimVersion",
     "ResearchClaimEvidenceLink",
@@ -373,6 +441,7 @@ from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
 from .integration_context_selection import IntegrationContextSelection
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
+from .integration_handoff import IntegrationHandoff
 from .tool_action import IntegrationToolAction
 
 __all__ += [
@@ -382,6 +451,7 @@ __all__ += [
     "IntegrationGrant",
     "IntegrationGrantRequest",
     "IntegrationContextSelection",
+    "IntegrationHandoff",
     "IntegrationToolAction",
     "Artifact",
     "ArtifactVersion",

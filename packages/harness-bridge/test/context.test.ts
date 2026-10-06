@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { connect, sessionOptionsFor, type LocalState } from "../src/cli.ts";
@@ -109,4 +110,15 @@ test("managed sessions pass --context only for context:read grants, and --contex
     connect({ stateDir: "/tmp/unused", apiUrl: "https://nous.example/api/v1", projectId: randomUUID(), label: "d", context: true }),
     /--context requires --tools/,
   );
+});
+
+test("stdio wires every scoped NOUS client through the renewing grant keeper", async () => {
+  // A client built without keeper.fetch keeps the first grant token and fails once it is renewed (15-minute grants).
+  const source = await readFile(new URL("../src/mcp/stdio.ts", import.meta.url), "utf8");
+  const clients = [...source.matchAll(/new (\w*HttpClient|CapabilityClient)\(([^)]*)\)/g)];
+  assert.deepEqual(
+    clients.map(([, name]) => name).sort(),
+    ["ActionHttpClient", "ArtifactHttpClient", "CapabilityClient", "ContextHttpClient", "HandoffHttpClient"],
+  );
+  for (const [, name, args] of clients) assert.match(args, /,\s*keeper\.fetch\s*$/, `${name} must use keeper.fetch`);
 });

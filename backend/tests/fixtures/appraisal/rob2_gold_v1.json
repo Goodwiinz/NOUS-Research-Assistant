@@ -1,0 +1,263 @@
+{
+  "instrument": "rob2",
+  "version": "2019-08-22",
+  "spec_hash": "ff4de1a2b6de36973141a84c61821bdabb4b2ef1466ea62eefe2d603f36dd5f1",
+  "expert_reviewed": false,
+  "reviewer": null,
+  "note": "Illustrative answers only; no RoB 2 question text or algorithm.",
+  "cases": [
+    {
+      "id": "all_low",
+      "study_design": "randomized_parallel_group",
+      "applicability": "applicable",
+      "domains": {
+        "D1": {
+          "judgment": "low",
+          "signals": {
+            "1.1": "Y",
+            "1.2": "Y",
+            "1.3": "N"
+          },
+          "rationale": "Computer-generated sequence; central allocation concealment.",
+          "evidence": []
+        },
+        "D2": {
+          "judgment": "low",
+          "signals": {
+            "2.1": "Y",
+            "2.2": "Y",
+            "2.3": "N"
+          },
+          "rationale": "Participants aware, but no deviations beyond usual practice.",
+          "evidence": []
+        },
+        "D3": {
+          "judgment": "low",
+          "signals": {
+            "3.1": "Y"
+          },
+          "rationale": "Outcome data available for 96% of randomized participants.",
+          "evidence": []
+        },
+        "D4": {
+          "judgment": "low",
+          "signals": {
+            "4.1": "N",
+            "4.2": "N"
+          },
+          "rationale": "Validated self-report scale identical across arms.",
+          "evidence": []
+        },
+        "D5": {
+          "judgment": "low",
+          "signals": {
+            "5.1": "Y",
+            "5.2": "N",
+            "5.3": "N"
+          },
+          "rationale": "Analysis matches the pre-registered statistical plan.",
+          "evidence": []
+        }
+      },
+      "overall": "low",
+      "expected": {
+        "overall_floor": "low",
+        "unresolved_domains": []
+      },
+      "explanation": "Every domain judged low, so the overall floor is low."
+    },
+    {
+      "id": "one_high",
+      "study_design": "randomized_parallel_group",
+      "applicability": "applicable",
+      "domains": {
+        "D1": {
+          "judgment": "low",
+          "signals": {
+            "1.1": "Y",
+            "1.2": "Y",
+            "1.3": "N"
+          },
+          "rationale": "Computer-generated sequence; central allocation concealment.",
+          "evidence": []
+        },
+        "D2": {
+          "judgment": "low",
+          "signals": {
+            "2.1": "Y",
+            "2.2": "Y",
+            "2.3": "N"
+          },
+          "rationale": "Participants aware, but no deviations beyond usual practice.",
+          "evidence": []
+        },
+        "D3": {
+          "judgment": "low",
+          "signals": {
+            "3.1": "Y"
+          },
+          "rationale": "Outcome data available for 96% of randomized participants.",
+          "evidence": []
+        },
+        "D4": {
+          "judgment": "high",
+          "signals": {
+            "4.1": "N",
+            "4.2": "N",
+            "4.3": "Y",
+            "4.4": "Y",
+            "4.5": "Y"
+          },
+          "rationale": "outcome assessors aware of allocation",
+          "evidence": []
+        },
+        "D5": {
+          "judgment": "low",
+          "signals": {
+            "5.1": "Y",
+            "5.2": "N",
+            "5.3": "N"
+          },
+          "rationale": "Analysis matches the pre-registered statistical plan.",
+          "evidence": []
+        }
+      },
+      "overall": "high",
+      "expected": {
+        "overall_floor": "high",
+        "unresolved_domains": []
+      },
+      "explanation": "One high domain sets the overall floor to high."
+    },
+    {
+      "id": "escalated",
+      "study_design": "randomized_parallel_group",
+      "applicability": "applicable",
+      "domains": {
+        "D1": {
+          "judgment": "low",
+          "signals": {
+            "1.1": "Y",
+            "1.2": "Y",
+            "1.3": "N"
+          },
+          "rationale": "Computer-generated sequence; central allocation concealment.",
+          "evidence": []
+        },
+        "D2": {
+          "judgment": "some_concerns",
+          "signals": {
+            "2.5": "NI"
+          },
+          "rationale": "Some protocol deviations; unclear whether balanced.",
+          "evidence": []
+        },
+        "D3": {
+          "judgment": "low",
+          "signals": {
+            "3.1": "Y"
+          },
+          "rationale": "Outcome data available for 96% of randomized participants.",
+          "evidence": []
+        },
+        "D4": {
+          "judgment": "low",
+          "signals": {
+            "4.1": "N",
+            "4.2": "N"
+          },
+          "rationale": "Validated self-report scale identical across arms.",
+          "evidence": []
+        },
+        "D5": {
+          "judgment": "some_concerns",
+          "signals": {
+            "5.1": "PN"
+          },
+          "rationale": "Registered plan lacks the analysis used.",
+          "evidence": []
+        }
+      },
+      "overall": "high",
+      "expected": {
+        "overall_floor": "some_concerns",
+        "unresolved_domains": []
+      },
+      "explanation": "Two some-concerns domains; the reviewer escalates the overall to high."
+    },
+    {
+      "id": "d3_unknown",
+      "study_design": "randomized_parallel_group",
+      "applicability": "applicable",
+      "domains": {
+        "D1": {
+          "judgment": "low",
+          "signals": {
+            "1.1": "Y",
+            "1.2": "Y",
+            "1.3": "N"
+          },
+          "rationale": "Computer-generated sequence; central allocation concealment.",
+          "evidence": []
+        },
+        "D2": {
+          "judgment": "low",
+          "signals": {
+            "2.1": "Y",
+            "2.2": "Y",
+            "2.3": "N"
+          },
+          "rationale": "Participants aware, but no deviations beyond usual practice.",
+          "evidence": []
+        },
+        "D3": {
+          "judgment": null,
+          "signals": {
+            "3.1": "NI"
+          },
+          "rationale": null,
+          "evidence": []
+        },
+        "D4": {
+          "judgment": "low",
+          "signals": {
+            "4.1": "N",
+            "4.2": "N"
+          },
+          "rationale": "Validated self-report scale identical across arms.",
+          "evidence": []
+        },
+        "D5": {
+          "judgment": "low",
+          "signals": {
+            "5.1": "Y",
+            "5.2": "N",
+            "5.3": "N"
+          },
+          "rationale": "Analysis matches the pre-registered statistical plan.",
+          "evidence": []
+        }
+      },
+      "overall": null,
+      "expected": {
+        "overall_floor": null,
+        "unresolved_domains": [
+          "D3"
+        ]
+      },
+      "explanation": "D3 unanswered stays unknown, so the overall stays unknown."
+    },
+    {
+      "id": "cohort_not_applicable",
+      "study_design": "cohort",
+      "applicability": "not_applicable",
+      "domains": {},
+      "overall": null,
+      "expected": {
+        "overall_floor": null,
+        "unresolved_domains": []
+      },
+      "explanation": "RoB 2 does not cover a cohort; recorded as not applicable, never scored."
+    }
+  ]
+}

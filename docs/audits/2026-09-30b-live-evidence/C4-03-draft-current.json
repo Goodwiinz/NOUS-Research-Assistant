@@ -1,0 +1,344 @@
+{
+  "step": "C4-03-draft-current",
+  "as": "owner",
+  "at": "2026-09-30T21:06:01.812227+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts/current",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "a941ca8e-ef56-4a50-b58e-29324ab03bd3",
+    "project_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+    "version": 1,
+    "title": "Literature Review - retrieval-augmented generation and hallucination",
+    "content": "## Retrieval-Augmented Generation and Evidence Grounding\n\nRetrieval-augmented generation (RAG) is presented as an approach for incorporating domain-specific knowledge into large language models without the computational expense of retraining. Its architecture depends on an information-retrieval layer, commonly implemented through vector databases that store pre-computed document embeddings and retrieve semantically relevant material for generation [Doc 1]. This design can support more knowledge-intensive generation by supplying external evidence at inference time; however, the document emphasizes that the retrieval layer introduces a separate security and reliability challenge. In particular, embeddings stored in cloud-based vector databases may be vulnerable to embedding inversion attacks, through which an attacker attempts to reconstruct the text underlying an embedding [Doc 1].\n\nThe proposed SHAQ method addresses this vulnerability by replacing direct document embeddings with embeddings of multiple “shadow queries.” A generative model produces queries that represent distinct semantic aspects of each document, after which these queries are encoded and stored instead of the original document representations [Doc 1]. This semantic decomposition is intended to weaken the correspondence between a stored vector and its source text while retaining enough semantic information for retrieval. Empirical results across diverse information-retrieval datasets indicate that the approach can preserve or improve retrieval effectiveness: SHAQ achieved up to 0.7967 MAP@10 and improved utility by as much as 5.53% relative to baseline defenses, while reducing text recovery rates to as low as 0.2104 [Doc 1]. These findings suggest that the design of the retrieval index—not only the generator—can shape the security and utility of RAG systems.\n\n## Hallucination, Retrieval Reliability, and Research Gaps\n\nThe available evidence does not directly evaluate hallucination, factuality, citation correctness, or the extent to which retrieved passages constrain model outputs. Nevertheless, it establishes a relevant distinction between retrieval utility and protection of the underlying knowledge source. SHAQ’s reported MAP@10 improvements demonstrate that semantically decomposed representations can remain effective for document retrieval, but retrieval performance alone does not establish that a downstream language model will generate factually supported responses [Doc 1]. A system may retrieve relevant material while still producing unsupported claims, misinterpreting evidence, or failing to use the retrieved content during generation. Accordingly, the document’s findings should be interpreted as addressing privacy-preserving retrieval rather than hallucination mitigation.\n\nThis limitation identifies an important direction for research on RAG and hallucination. Future evaluations should connect privacy-preserving indexing methods such as SHAQ with generation-level measures, including factual consistency with retrieved evidence, entailment, attribution accuracy, and rates of unsupported statements. They should also assess whether semantic decomposition changes the granularity, diversity, or completeness of retrieved evidence in ways that affect hallucination. The central unresolved question is therefore whether a representation that improves privacy while maintaining MAP@10 also preserves the evidentiary conditions required for grounded generation. In this respect, [Doc 1] contributes a method for securing the retrieval substrate, while leaving open the broader empirical relationship among embedding privacy, retrieval quality, and hallucination in generated outputs.",
+    "themes": [
+      "retrieval-augmented generation and hallucination"
+    ],
+    "word_count": 479,
+    "citation_count": 1,
+    "generation_params": {
+      "style": "academic",
+      "document_ids": [
+        "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c"
+      ],
+      "instructions": null,
+      "max_sections": 2,
+      "document_count": 1,
+      "selection_mode": "explicit",
+      "citation_review": {
+        "claims": [
+          {
+            "text": "Retrieval-augmented generation (RAG) is presented as an approach for incorporating domain-specific knowledge into large language models without the computational expense of retraining.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Its architecture depends on an information-retrieval layer, commonly implemented through vector databases that store pre-computed document embeddings and retrieve semantically relevant material for generation [Doc 1].",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "minor",
+            "citation_indices": [
+              1
+            ]
+          },
+          {
+            "text": "This design can support more knowledge-intensive generation by supplying external evidence at inference time; however, the document emphasizes that the retrieval layer introduces a separate security and reliability challenge.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "In particular, embeddings stored in cloud-based vector databases may be vulnerable to embedding inversion attacks, through which an attacker attempts to reconstruct the text underlying an embedding [Doc 1].",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "minor",
+            "citation_indices": [
+              1
+            ]
+          },
+          {
+            "text": "The proposed SHAQ method addresses this vulnerability by replacing direct document embeddings with embeddings of multiple “shadow queries.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "” A generative model produces queries that represent distinct semantic aspects of each document, after which these queries are encoded and stored instead of the original document representations [Doc 1].",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "minor",
+            "citation_indices": [
+              1
+            ]
+          },
+          {
+            "text": "This semantic decomposition is intended to weaken the correspondence between a stored vector and its source text while retaining enough semantic information for retrieval.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Empirical results across diverse information-retrieval datasets indicate that the approach can preserve or improve retrieval effectiveness: SHAQ achieved up to 0.7967 MAP@10 and improved utility by as much as 5.53% relative to baseline defenses, while reducing text recovery rates to as low as 0.2104 [Doc 1].",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "minor",
+            "citation_indices": [
+              1
+            ]
+          },
+          {
+            "text": "These findings suggest that the design of the retrieval index—not only the generator—can shape the security and utility of RAG systems.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "The available evidence does not directly evaluate hallucination, factuality, citation correctness, or the extent to which retrieved passages constrain model outputs.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Nevertheless, it establishes a relevant distinction between retrieval utility and protection of the underlying knowledge source.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "SHAQ’s reported MAP@10 improvements demonstrate that semantically decomposed representations can remain effective for document retrieval, but retrieval performance alone does not establish that a downstream language model will generate factually supported responses [Doc 1].",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "minor",
+            "citation_indices": [
+              1
+            ]
+          },
+          {
+            "text": "A system may retrieve relevant material while still producing unsupported claims, misinterpreting evidence, or failing to use the retrieved content during generation.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Accordingly, the document’s findings should be interpreted as addressing privacy-preserving retrieval rather than hallucination mitigation.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "This limitation identifies an important direction for research on RAG and hallucination.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Future evaluations should connect privacy-preserving indexing methods such as SHAQ with generation-level measures, including factual consistency with retrieved evidence, entailment, attribution accuracy, and rates of unsupported statements.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "They should also assess whether semantic decomposition changes the granularity, diversity, or completeness of retrieved evidence in ways that affect hallucination.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "The central unresolved question is therefore whether a representation that improves privacy while maintaining MAP@10 also preserves the evidentiary conditions required for grounded generation.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "In this respect, [Doc 1] contributes a method for securing the retrieval substrate, while leaving open the broader empirical relationship among embedding privacy, retrieval quality, and hallucination in generated outputs.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "minor",
+            "citation_indices": [
+              1
+            ]
+          }
+        ],
+        "summary": {
+          "exact": 0,
+          "major": 0,
+          "minor": 1,
+          "unverified": 0
+        },
+        "coverage": {
+          "complete": true,
+          "batch_size": 10,
+          "batch_count": 1,
+          "classification": "conservative_prose_heuristic",
+          "requested_indices": [
+            1
+          ],
+          "unresolved_indices": [],
+          "claim_excerpt_chars": 400,
+          "source_excerpt_chars": 8000,
+          "summary_excerpt_chars": 2000,
+          "factual_classification_complete": false
+        },
+        "verdicts": [
+          {
+            "checks": {
+              "support": {
+                "status": "minor",
+                "evidence": "These results demonstrate that semantic decomposition and embedding decoupling provide an effective alternative to directly modifying embeddings for defending against EIAs.",
+                "location": "legacy unanchored text",
+                "available": true,
+                "page_number": null
+              },
+              "identity": {
+                "source": null,
+                "status": "unresolved",
+                "available": false
+              },
+              "publication": {
+                "source": null,
+                "status": "unknown",
+                "available": false,
+                "performed": false,
+                "observations": [],
+                "observation_status": "unknown"
+              }
+            },
+            "verdict": "minor",
+            "evidence": "These results demonstrate that semantic decomposition and embedding decoupling provide an effective alternative to directly modifying embeddings for defending against EIAs.",
+            "identity": "unresolved",
+            "location": "legacy unanchored text",
+            "doc_index": 1,
+            "document_id": "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+            "page_number": null,
+            "claims_checked": 6,
+            "identity_source": null,
+            "escalated_to_fulltext": true
+          }
+        ],
+        "duration_ms": 5157,
+        "docs_checked": 1,
+        "docs_skipped": 0,
+        "fully_verified": false,
+        "uncited_assertions": [
+          {
+            "text": "Retrieval-augmented generation (RAG) is presented as an approach for incorporating domain-specific knowledge into large language models without the computational expense of retraining.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "This design can support more knowledge-intensive generation by supplying external evidence at inference time; however, the document emphasizes that the retrieval layer introduces a separate security and reliability challenge.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "The proposed SHAQ method addresses this vulnerability by replacing direct document embeddings with embeddings of multiple “shadow queries.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "This semantic decomposition is intended to weaken the correspondence between a stored vector and its source text while retaining enough semantic information for retrieval.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "These findings suggest that the design of the retrieval index—not only the generator—can shape the security and utility of RAG systems.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "The available evidence does not directly evaluate hallucination, factuality, citation correctness, or the extent to which retrieved passages constrain model outputs.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Nevertheless, it establishes a relevant distinction between retrieval utility and protection of the underlying knowledge source.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "A system may retrieve relevant material while still producing unsupported claims, misinterpreting evidence, or failing to use the retrieved content during generation.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Accordingly, the document’s findings should be interpreted as addressing privacy-preserving retrieval rather than hallucination mitigation.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "This limitation identifies an important direction for research on RAG and hallucination.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "Future evaluations should connect privacy-preserving indexing methods such as SHAQ with generation-level measures, including factual consistency with retrieved evidence, entailment, attribution accuracy, and rates of unsupported statements.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "They should also assess whether semantic decomposition changes the granularity, diversity, or completeness of retrieved evidence in ways that affect hallucination.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          },
+          {
+            "text": "The central unresolved question is therefore whether a representation that improves privacy while maintaining MAP@10 also preserves the evidentiary conditions required for grounded generation.",
+            "classification": "conservative_prose_heuristic",
+            "fully_verified": false,
+            "support_status": "uncited",
+            "citation_indices": []
+          }
+        ]
+      },
+      "include_abstract": false,
+      "citation_review_id": "d6eee1b0-1393-4190-8c08-750e5bc017d8",
+      "source_scope_version": 1,
+      "generation_request_hash": "5b32a797ace53ed08e44d11075b7300bda69437e0751bc7ef7c421e03fdc7def"
+    },
+    "is_current": true,
+    "created_at": "2026-09-30T21:05:39.966154+00:00"
+  }
+}

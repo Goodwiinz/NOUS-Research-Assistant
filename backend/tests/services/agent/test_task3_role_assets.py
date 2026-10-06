@@ -7,10 +7,9 @@ import json
 import re
 import subprocess
 import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, Iterator
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -154,11 +153,11 @@ def test_role_tool_call_examples_validate_real_decorated_schemas(
         TypeAdapter(args_schema).validate_python(arguments)
 
 
-async def _invoke_tool_coroutine(tool: Any, *args: Any, **kwargs: Any) -> Any:
-    """Call the async wrapper exposed by the decorated LangChain tool."""
-    coroutine = getattr(tool, "coroutine", None)
-    assert callable(coroutine)
-    return await coroutine(*args, **kwargs)
+async def _dispatch(name: str, args: dict[str, Any], db: Any, user: Any) -> Any:
+    """Call the production dispatcher; the @tool wrappers are schema-only."""
+    from src.services.agent import tools_impl
+
+    return await tools_impl._dispatch_tool(name, args, str(user.id), db, user)
 
 
 @pytest.mark.unit
@@ -166,38 +165,12 @@ async def _invoke_tool_coroutine(tool: Any, *args: Any, **kwargs: Any) -> Any:
 async def test_role_result_examples_match_actual_result_contracts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Role result JSON is checked against real wrappers and implementations."""
-    from src.services.agent import tools as tools_module
+    """Role result JSON is checked against the real dispatcher and impls."""
     from src.services.agent import tools_impl
-    from src.services.agent.tools import (
-        add_document_to_project,
-        do_kb_retrieve,
-        explore_entity_neighborhood,
-        extract_entities,
-        ingest_arxiv_papers,
-        search_documents,
-        search_knowledge_graph,
-    )
 
     document_id = UUID("11111111-1111-4111-8111-111111111111")
     project_id = UUID("22222222-2222-4222-8222-222222222222")
     user = SimpleNamespace(id=UUID(int=1), organization_id=UUID(int=10))
-    config = {
-        "configurable": {
-            "user_id": str(user.id),
-            "organization_id": str(user.organization_id),
-        }
-    }
-
-    def install_context(db: Any) -> None:
-        @asynccontextmanager
-        async def fake_context(
-            _config: Any,
-        ) -> AsyncIterator[tuple[Any, Any, dict[str, Any]]]:
-            yield db, user, {}
-
-        monkeypatch.setattr(tools_module, "_tool_context", fake_context)
-
     research_results = {
         example["tool"]: example["result"]
         for example in _json_examples("research", "result")
@@ -233,9 +206,8 @@ async def test_role_result_examples_match_actual_result_contracts(
         persistence, "persist_arxiv_documents", AsyncMock(return_value=persisted)
     )
     ingest_db = MagicMock()
-    install_context(ingest_db)
-    ingest_actual = await _invoke_tool_coroutine(
-        ingest_arxiv_papers, ["2401.12345"], config=config
+    ingest_actual = await _dispatch(
+        "ingest_arxiv_papers", {"paper_ids": ["2401.12345"]}, ingest_db, user
     )
     assert ingest_actual == research_results["ingest_arxiv_papers"]
 
@@ -261,9 +233,11 @@ async def test_role_result_examples_match_actual_result_contracts(
     search_result.scalars.return_value.all.return_value = [search_doc]
     search_db = MagicMock()
     search_db.execute = AsyncMock(return_value=search_result)
-    install_context(search_db)
-    search_actual = await _invoke_tool_coroutine(
-        search_documents, "Attention Is All You Need", max_results=10, config=config
+    search_actual = await _dispatch(
+        "search_documents",
+        {"query": "Attention Is All You Need", "max_results": 10},
+        search_db,
+        user,
     )
     assert search_actual == writing_results["search_documents"]
 
@@ -322,13 +296,15 @@ async def test_role_result_examples_match_actual_result_contracts(
     )
     kb_db = MagicMock()
     kb_db.execute = AsyncMock(side_effect=[authorized_rows, canonical_rows])
-    install_context(kb_db)
-    retrieval_actual = await _invoke_tool_coroutine(
-        do_kb_retrieve,
-        "attention mechanism",
-        8,
-        config,
-        document_ids=[str(document_id)],
+    retrieval_actual = await _dispatch(
+        "do_kb_retrieve",
+        {
+            "query": "attention mechanism",
+            "top_k": 8,
+            "document_ids": [str(document_id)],
+        },
+        kb_db,
+        user,
     )
     assert retrieval_actual == writing_results["do_kb_retrieve"]
     monkeypatch.setattr(core_config, "settings", original_settings)
@@ -350,9 +326,11 @@ async def test_role_result_examples_match_actual_result_contracts(
     )
     attach_db = MagicMock()
     attach_db.commit = AsyncMock()
-    install_context(attach_db)
-    attach_actual = await _invoke_tool_coroutine(
-        add_document_to_project, str(document_id), str(project_id), config
+    attach_actual = await _dispatch(
+        "add_document_to_project",
+        {"document_id": str(document_id), "project_id": str(project_id)},
+        attach_db,
+        user,
     )
     assert attach_actual == writing_results["add_document_to_project"]
 
@@ -379,15 +357,17 @@ async def test_role_result_examples_match_actual_result_contracts(
         lambda **_kwargs: {"entities": [], "relationships": []},
     )
     graph_db = MagicMock()
-    install_context(graph_db)
-    graph_search_actual = await _invoke_tool_coroutine(
-        search_knowledge_graph, "attention", config=config
+    graph_search_actual = await _dispatch(
+        "search_knowledge_graph", {"query": "attention"}, graph_db, user
     )
     assert graph_search_actual == data_results["search_knowledge_graph"]
 
     entity_id = str(document_id)
-    neighborhood_actual = await _invoke_tool_coroutine(
-        explore_entity_neighborhood, entity_id, 2, 30, config
+    neighborhood_actual = await _dispatch(
+        "explore_entity_neighborhood",
+        {"entity_id": entity_id, "max_depth": 2, "limit": 30},
+        graph_db,
+        user,
     )
     assert neighborhood_actual == data_results["explore_entity_neighborhood"]
 
@@ -410,8 +390,8 @@ async def test_role_result_examples_match_actual_result_contracts(
         "LLMEntityExtractionService",
         FakeEntityExtractionService,
     )
-    extraction_actual = await _invoke_tool_coroutine(
-        extract_entities, entity_id, config=config
+    extraction_actual = await _dispatch(
+        "extract_entities", {"document_id": entity_id}, graph_db, user
     )
     assert extraction_actual == data_results["extract_entities"]
 

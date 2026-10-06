@@ -269,7 +269,9 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
     ]
     merged: dict = {
         # Per-turn resets — must come BEFORE merging subtask results so a
-        # subtask that explicitly sets one of these keys still wins.
+        # subtask that explicitly sets one of these keys still wins. In-graph
+        # on purpose: callers that bypass runtime_snapshot.turn_reset_fields
+        # (langgraph.json, evals) get them too.
         "plan": [],
         "plan_reasoning": "",
         "reflection_count": 0,

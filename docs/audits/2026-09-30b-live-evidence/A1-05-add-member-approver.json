@@ -1,0 +1,29 @@
+{
+  "step": "A1-05-add-member-approver",
+  "as": "owner",
+  "at": "2026-09-30T20:55:05.968803+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v2/workspaces/f7538b4a-d043-4a10-b763-e45ce369d69e/members",
+    "body": {
+      "user_id": "4d2e5308-01b5-4e71-99e4-2e01295eb3a4",
+      "role": "editor"
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "created_at": "2026-09-30T20:55:05.891205",
+    "updated_at": "2026-09-30T20:55:05.891207",
+    "user_id": "4d2e5308-01b5-4e71-99e4-2e01295eb3a4",
+    "role": "editor",
+    "id": "1e8c4bb4-d286-40bd-b496-2291965aa8b7",
+    "workspace_id": "f7538b4a-d043-4a10-b763-e45ce369d69e",
+    "joined_at": "2026-09-30T20:55:05.891185",
+    "invited_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "user_email": "eval-2026-09-30-approver@nous.invalid",
+    "user_name": "Eval approver"
+  }
+}

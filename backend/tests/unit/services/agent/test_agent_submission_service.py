@@ -430,6 +430,178 @@ async def test_fresh_turn_atomically_abandons_awaiting_confirmation(
     assert events[-1].payload == {"reason": "superseded_by_new_turn"}
 
 
+async def test_editor_turn_cannot_supersede_another_users_parked_run(
+    db: AsyncSession,
+) -> None:
+    """R8-C2: only the run's own user may supersede its HITL pause.
+
+    A workspace editor's new turn on a shared thread used to cancel the
+    owner's parked run under the owner's identity. It now conflicts (409 on
+    the transport) and the owner's pause stays confirmable.
+
+    Mutation check: drop the ``active.user_id`` comparison in
+    ``agent_submission_service._ensure_thread_idle`` and
+    ``pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py
+    -k cannot_supersede`` fails with "DID NOT RAISE ActiveRunConflict".
+    """
+    editor_id = uuid.uuid4()
+    db.add(
+        WorkspaceMember(
+            workspace_id=WORKSPACE_ID,
+            user_id=editor_id,
+            role=WorkspaceRole.EDITOR,
+        )
+    )
+    first = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    owner_run = await db.get(AgentRun, first.run_id)
+    assert owner_run is not None
+    owner_run.status = JobStatus.AWAITING_CONFIRMATION.value
+    await db.commit()
+
+    with pytest.raises(ActiveRunConflict):
+        await accept_submission(
+            db,
+            current_user=_user(editor_id, ORG_B),
+            request=_request(uuid.uuid4(), "editor turn"),
+            thread=_thread(),
+        )
+
+    await db.refresh(owner_run)
+    assert owner_run.status == JobStatus.AWAITING_CONFIRMATION.value
+    assert owner_run.completed_at is None
+    assert await _count(db, AgentRun) == 1
+    events = (
+        (
+            await db.execute(
+                select(AgentRunEvent.event_type).where(
+                    AgentRunEvent.run_id == first.run_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert events == [RunEventType.RUN_CREATED.value]
+
+
+async def test_finalize_retry_recognises_its_own_landed_commit(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R8-C3: a COMMIT that lands server-side but loses its ack is a success.
+
+    The lost-connection retry sees the row already terminal, so its guarded
+    UPDATE matches nothing; it must recognise its own write instead of
+    reporting a lost race (which drops ``done`` on ``/stream``).
+
+    Mutation check: remove the ``_finalize_already_landed`` re-read in
+    ``agent_submission_service.finalize_submission`` and
+    ``pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py
+    -k own_landed_commit`` fails with ``assert False is True``.
+    """
+    from asyncpg.exceptions import ConnectionDoesNotExistError
+    from sqlalchemy.exc import DBAPIError
+
+    from src.services.agent.agent_submission_service import finalize_submission
+
+    accepted = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    monkeypatch.setattr(submission_mod, "_FINALIZE_RETRY_BACKOFF_S", 0.0)
+    real_commit = db.commit
+    commits = 0
+
+    async def commit_then_lose_ack() -> None:
+        nonlocal commits
+        commits += 1
+        await real_commit()
+        if commits == 1:
+            raise DBAPIError(
+                "COMMIT",
+                {},
+                ConnectionDoesNotExistError("connection closed mid-operation"),
+            )
+
+    monkeypatch.setattr(db, "commit", commit_then_lose_ack)
+
+    transitioned = await finalize_submission(
+        db,
+        run_id=accepted.run_id,
+        status=JobStatus.COMPLETED,
+        organization_id=ORG_A,
+        event_type=RunEventType.RUN_COMPLETED,
+    )
+
+    assert transitioned is True
+    assert commits == 2, "expected exactly one retry"
+    run = await db.get(AgentRun, accepted.run_id)
+    assert run is not None
+    await db.refresh(run)
+    assert run.status == JobStatus.COMPLETED.value
+    terminal = (
+        (
+            await db.execute(
+                select(AgentRunEvent.event_type).where(
+                    AgentRunEvent.run_id == accepted.run_id,
+                    AgentRunEvent.event_type == RunEventType.RUN_COMPLETED.value,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert terminal == [RunEventType.RUN_COMPLETED.value]
+
+
+async def test_finalize_retry_still_reports_a_lost_race(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R8-C3 bound: the retry re-read only accepts the requested transition.
+
+    A run another writer already closed differently stays ``False``.
+    """
+    from asyncpg.exceptions import ConnectionDoesNotExistError
+    from sqlalchemy.exc import DBAPIError
+
+    from src.services.agent.agent_submission_service import finalize_submission
+
+    accepted = await accept_submission(
+        db, current_user=_user(), request=_request(uuid.uuid4()), thread=_thread()
+    )
+    monkeypatch.setattr(submission_mod, "_FINALIZE_RETRY_BACKOFF_S", 0.0)
+    real_execute = db.execute
+    executes = 0
+
+    async def lose_first_update(*args: Any, **kwargs: Any) -> Any:
+        nonlocal executes
+        executes += 1
+        if executes == 1:
+            # Another terminalizer wins while this attempt's socket dies.
+            run = await db.get(AgentRun, accepted.run_id)
+            assert run is not None
+            run.status = JobStatus.CANCELLED.value
+            await db.commit()
+            raise DBAPIError(
+                "UPDATE agent_runs",
+                {},
+                ConnectionDoesNotExistError("connection closed mid-operation"),
+            )
+        return await real_execute(*args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", lose_first_update)
+
+    transitioned = await finalize_submission(
+        db,
+        run_id=accepted.run_id,
+        status=JobStatus.COMPLETED,
+        organization_id=ORG_A,
+        event_type=RunEventType.RUN_COMPLETED,
+    )
+
+    assert transitioned is False
+
+
 async def test_stale_parked_stop_cannot_cancel_replacement_run(
     db: AsyncSession,
 ) -> None:

@@ -8,20 +8,24 @@ multiple code executions within the same conversation.
 import asyncio
 import logging
 import os
+import shlex
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 # Lazy import to avoid hard dependency when E2B is not configured
 _e2b_available = False
 try:
+    from e2b import TimeoutException as E2BTimeoutException
     from e2b_code_interpreter import AsyncSandbox
 
     _e2b_available = True
 except ImportError:
     AsyncSandbox = None  # type: ignore[assignment,misc]
+    E2BTimeoutException = asyncio.TimeoutError
 
 
 @dataclass
@@ -75,6 +79,61 @@ MAX_EXECUTION_TIMEOUT = 300  # 5 minutes
 MAX_EXECUTIONS_PER_RUN = 5
 
 
+# GOO-312: one-shot isolated execution for the research ``analyze`` step.
+ISOLATED_WORKDIR = "/work"
+# Path inside the throwaway E2B sandbox, never on this host.
+_REQUIREMENTS_PATH = "/tmp/nous-requirements.txt"  # nosec B108
+
+
+@dataclass(frozen=True)
+class IsolatedSpec:
+    """``files`` are paths relative to ``/work`` (``main.py``, ``in/x.csv``);
+    each output is read back from ``/work/out/<name>``."""
+
+    template: str
+    requirements: tuple[str, ...]
+    files: Mapping[str, bytes]
+    command: str
+    output_names: tuple[str, ...]
+    timeout: int = MAX_EXECUTION_TIMEOUT
+
+
+@dataclass(frozen=True)
+class RestoreSpec:
+    """GOO-313 verified restore: the sandbox must report
+    ``expected_template_id``, install exactly ``lock_bytes`` (the archived
+    ``pip freeze --all``) and freeze back to the same bytes, and every file in
+    ``expected_sha256`` (paths relative to ``/work``) must hash to its digest
+    inside the sandbox before the command runs."""
+
+    expected_template_id: str
+    lock_bytes: bytes
+    expected_sha256: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class IsolatedResult:
+    status: Literal[
+        "completed", "failed", "timeout", "unavailable", "restoration_failed"
+    ]
+    outputs: Dict[str, bytes]
+    stdout: str
+    stderr: str
+    template_id: Optional[str]
+    sandbox_id: Optional[str]
+    lock: Optional[bytes]
+    python: Optional[str]
+    os_release: Optional[bytes]
+    started_at: datetime
+    completed_at: datetime
+    error: Optional[str] = None
+    reasons: Tuple[str, ...] = ()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class SandboxManager:
     """Manages E2B sandbox lifecycle with per-thread statefulness."""
 
@@ -105,15 +164,25 @@ class SandboxManager:
             logger.info(f"Creating new E2B sandbox for thread {thread_id}")
             sandbox = await AsyncSandbox.create(timeout=SANDBOX_IDLE_TIMEOUT)
 
-            # Pre-install default scientific packages
-            await sandbox.run_code(
-                f"import subprocess; subprocess.check_call("
-                f"['pip', 'install', '-q', {', '.join(repr(p) for p in DEFAULT_PACKAGES)}])"
-            )
+            # A failed or cancelled install must never cache an incomplete box.
+            try:
+                installed = await asyncio.wait_for(
+                    sandbox.run_code(
+                        f"import subprocess; subprocess.check_call("
+                        f"['pip', 'install', '-q', {', '.join(repr(p) for p in DEFAULT_PACKAGES)}])",
+                        timeout=MAX_EXECUTION_TIMEOUT,
+                    ),
+                    timeout=MAX_EXECUTION_TIMEOUT,
+                )
+                if installed.error:
+                    raise RuntimeError("Sandbox package initialization failed.")
+            except (Exception, asyncio.CancelledError):
+                await self._kill_sandbox(thread_id, sandbox)
+                raise
 
             self._sandboxes[thread_id] = sandbox
             self._last_used[thread_id] = time.monotonic()
-            self._execution_counts[thread_id] = 0
+            self._execution_counts.setdefault(thread_id, 0)
 
             # Start cleanup loop if not running
             if self._cleanup_task is None or self._cleanup_task.done():
@@ -141,11 +210,22 @@ class SandboxManager:
                 error="execution_limit_exceeded",
             )
 
-        sandbox = await self.get_or_create_sandbox(thread_id)
+        # Reserve before the first await: failed and concurrent calls cost an
+        # attempt too. Creating a replacement box must not replenish the budget.
+        self._execution_counts[thread_id] = count + 1
+        self._last_used[thread_id] = time.monotonic()
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        timeout = max(1, min(timeout, MAX_EXECUTION_TIMEOUT))
+        sandbox = None
         start = time.monotonic()
 
         try:
-            execution = await sandbox.run_code(code, timeout=timeout)
+            sandbox = await self.get_or_create_sandbox(thread_id)
+            execution = await asyncio.wait_for(
+                sandbox.run_code(code, language=language, timeout=timeout),
+                timeout=timeout,
+            )
 
             elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -164,7 +244,6 @@ class SandboxManager:
                     if result_data:
                         results.append(result_data)
 
-            self._execution_counts[thread_id] = count + 1
             self._last_used[thread_id] = time.monotonic()
 
             stdout = _cap_log(execution.logs.stdout if execution.logs else "")
@@ -179,7 +258,9 @@ class SandboxManager:
                 results=results,
             )
 
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, E2BTimeoutException):
+            if sandbox is not None:
+                await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return ExecutionResult(
                 stdout="",
@@ -188,12 +269,20 @@ class SandboxManager:
                 execution_time_ms=elapsed_ms,
                 error="timeout",
             )
+        except asyncio.CancelledError:
+            # The agent tool's outer wall-clock limit cancels this coroutine.
+            # Stopping the SDK stream alone does not stop remote user code.
+            if sandbox is not None:
+                await self._discard_sandbox(thread_id, sandbox)
+            raise
         except Exception as exc:
+            if sandbox is not None:
+                await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             logger.error(f"Sandbox execution failed: {exc}", exc_info=True)
             return ExecutionResult(
                 stdout="",
-                stderr=str(exc),
+                stderr="Code execution failed. Please try again.",
                 exit_code=1,
                 execution_time_ms=elapsed_ms,
                 error="execution_error",
@@ -224,6 +313,147 @@ class SandboxManager:
         )
         return await self.execute(thread_id, install_code)
 
+    async def run_isolated(
+        self, spec: IsolatedSpec, restore: Optional[RestoreSpec] = None
+    ) -> IsolatedResult:
+        """Run one command in a throwaway sandbox (GOO-312), never through the
+        per-thread cache. ``envs`` is always empty; only the pinned
+        requirements are installed (``--no-deps``, no DEFAULT_PACKAGES); the
+        environment capture is ``pip freeze --all``, ``python -VV`` and
+        ``/etc/os-release``, taken after the install and before the command.
+        The sandbox is killed in ``finally``.
+
+        With ``restore`` (GOO-313) the archived lock replaces
+        ``spec.requirements`` and every restoration is verified in the
+        sandbox; any mismatch returns ``restoration_failed`` with its reasons
+        and the command never runs."""
+        started = _now()
+        state: Dict[str, Any] = {"outputs": {}, "stdout": "", "stderr": ""}
+
+        def result(
+            status: Any, error: Optional[str] = None, reasons: Tuple[str, ...] = ()
+        ) -> IsolatedResult:
+            return IsolatedResult(
+                status=status,
+                outputs=state["outputs"],
+                stdout=state["stdout"],
+                stderr=state["stderr"],
+                template_id=state.get("template_id"),
+                sandbox_id=state.get("sandbox_id"),
+                lock=state.get("lock"),
+                python=state.get("python"),
+                os_release=state.get("os_release"),
+                started_at=started,
+                completed_at=_now(),
+                error=error,
+                reasons=reasons,
+            )
+
+        def refused(*reasons: str) -> IsolatedResult:
+            return result("restoration_failed", reasons[0], tuple(reasons))
+
+        if not self.is_available:
+            return result("unavailable", "sandbox_unavailable")
+        try:
+            sandbox = await AsyncSandbox.create(
+                template=spec.template, timeout=SANDBOX_IDLE_TIMEOUT, envs={}
+            )
+        except Exception as exc:
+            logger.warning("Isolated sandbox create failed: %s", type(exc).__name__)
+            return result("unavailable", "sandbox_unavailable")
+        try:
+            state["sandbox_id"] = sandbox.sandbox_id
+            info = await sandbox.get_info()
+            state["template_id"] = info.template_id
+            run = sandbox.commands.run
+            if restore is not None and info.template_id != restore.expected_template_id:
+                return refused("template_mismatch")
+            requirements: Any = (
+                restore.lock_bytes
+                if restore is not None
+                else ("\n".join(spec.requirements) + "\n" if spec.requirements else "")
+            )
+            if requirements:
+                await sandbox.files.write(_REQUIREMENTS_PATH, requirements)
+                try:
+                    await run(
+                        f"pip install -q --no-deps -r {_REQUIREMENTS_PATH}",
+                        envs={},
+                        timeout=spec.timeout,
+                    )
+                except Exception as exc:
+                    if restore is not None and hasattr(exc, "exit_code"):
+                        return refused("environment_install_failed")
+                    raise
+            state["lock"] = (
+                await run("pip freeze --all", envs={}, timeout=60)
+            ).stdout.encode("utf-8")
+            if restore is not None and state["lock"] != restore.lock_bytes:
+                return refused("environment_lock_mismatch")
+            state["python"] = (
+                await run("python -VV", envs={}, timeout=60)
+            ).stdout.strip()
+            state["os_release"] = await sandbox.files.read(
+                "/etc/os-release", format="bytes"
+            )
+            for name, data in spec.files.items():
+                await sandbox.files.write(f"{ISOLATED_WORKDIR}/{name}", data)
+            if restore is not None:
+                mismatched = await _verify_restored(run, restore.expected_sha256)
+                if mismatched:
+                    return refused(*mismatched)
+            await run(f"mkdir -p {ISOLATED_WORKDIR}/out", envs={}, timeout=60)
+            done = await run(
+                spec.command, cwd=ISOLATED_WORKDIR, envs={}, timeout=spec.timeout
+            )
+            state["stdout"], state["stderr"] = _cap_log(done.stdout), _cap_log(
+                done.stderr
+            )
+            for name in spec.output_names:
+                try:
+                    data = await sandbox.files.read(
+                        f"{ISOLATED_WORKDIR}/out/{name}", format="bytes"
+                    )
+                except Exception:
+                    return result("failed", f"missing_output:{name}")
+                state["outputs"][name] = bytes(data)
+            return result("completed")
+        except asyncio.TimeoutError:
+            return result("timeout", "timeout")
+        except Exception as exc:
+            if type(exc).__name__ == "TimeoutException":
+                return result("timeout", "timeout")
+            if hasattr(exc, "exit_code"):  # e2b CommandExitException
+                state["stdout"] = _cap_log(getattr(exc, "stdout", ""))
+                state["stderr"] = _cap_log(getattr(exc, "stderr", ""))
+                return result("failed", f"exit_code:{getattr(exc, 'exit_code')}")
+            logger.warning("Isolated sandbox run failed: %s", type(exc).__name__)
+            return result("failed", "sandbox_error")
+        finally:
+            try:
+                await sandbox.kill()
+            except Exception as exc:
+                logger.warning("Isolated sandbox kill failed: %s", type(exc).__name__)
+
+    async def _kill_sandbox(self, thread_id: str, sandbox: Any) -> None:
+        """Bound provider cleanup even after execution cancellation."""
+        try:
+            await asyncio.wait_for(sandbox.kill(), timeout=60)
+            logger.info("Sandbox cleaned up for thread %s", thread_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to kill sandbox for %s: %s", thread_id, type(exc).__name__
+            )
+
+    async def _discard_sandbox(self, thread_id: str, sandbox: Any) -> None:
+        """Evict this exact box without replenishing the execution budget."""
+        # No await between identity check and removal: atomic on this event loop.
+        # The creation lock can be held by another thread's package installation;
+        # stopping remote code must never wait for that unrelated work.
+        if self._sandboxes.get(thread_id) is sandbox:
+            self._sandboxes.pop(thread_id)
+        await self._kill_sandbox(thread_id, sandbox)
+
     async def cleanup(self, thread_id: str) -> None:
         """Kill and remove sandbox for a thread."""
         async with self._lock:
@@ -232,15 +462,11 @@ class SandboxManager:
             self._execution_counts.pop(thread_id, None)
 
         if sandbox:
-            try:
-                await sandbox.kill()
-                logger.info(f"Sandbox cleaned up for thread {thread_id}")
-            except Exception as exc:
-                logger.warning(f"Failed to kill sandbox for {thread_id}: {exc}")
+            await self._kill_sandbox(thread_id, sandbox)
 
     async def cleanup_all(self) -> None:
         """Kill all active sandboxes. Call on app shutdown."""
-        thread_ids = list(self._sandboxes.keys())
+        thread_ids = set(self._sandboxes) | set(self._execution_counts)
         for tid in thread_ids:
             await self.cleanup(tid)
 
@@ -262,9 +488,37 @@ class SandboxManager:
                 logger.info(f"Cleaning up idle sandbox for thread {tid}")
                 await self.cleanup(tid)
 
-            # Stop loop if no sandboxes remain
-            if not self._sandboxes:
+            # Discarded or failed boxes still retain a budget until idle expiry.
+            if not self._last_used:
                 break
+
+
+async def _verify_restored(run: Any, expected: Mapping[str, str]) -> List[str]:
+    """``sha256sum`` inside the sandbox over the restored files; one reason
+    per file whose in-sandbox digest is absent or differs."""
+    paths = " ".join(shlex.quote(name) for name in sorted(expected))
+    try:
+        done = await run(
+            f"sha256sum -- {paths}", cwd=ISOLATED_WORKDIR, envs={}, timeout=60
+        )
+        stdout = done.stdout
+    except Exception as exc:
+        if not hasattr(exc, "exit_code"):  # a missing file exits non-zero
+            raise
+        stdout = getattr(exc, "stdout", "") or ""
+    seen: Dict[str, str] = {}
+    for line in str(stdout).splitlines():
+        digest, _, name = line.partition("  ")
+        seen[name.strip()] = digest.strip()
+    reasons = []
+    for name in sorted(expected):
+        if seen.get(name) != expected[name]:
+            reasons.append(
+                "code_mismatch"
+                if name == "main.py"
+                else f"input_mismatch:{name.removeprefix('in/')}"
+            )
+    return reasons
 
 
 # Module-level singleton

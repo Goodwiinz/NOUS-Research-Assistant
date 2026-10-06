@@ -75,6 +75,14 @@ function ApprovalContent(): React.JSX.Element {
                 {consent.project_label} ({consent.project_id})
               </dd>
             </div>
+            {consent.thread_id && (
+              <div>
+                <dt className="font-semibold">Chat</dt>
+                <dd>
+                  {consent.thread_label} ({consent.thread_id})
+                </dd>
+              </div>
+            )}
             <div>
               <dt className="font-semibold">Request</dt>
               <dd>{consent.id}</dd>

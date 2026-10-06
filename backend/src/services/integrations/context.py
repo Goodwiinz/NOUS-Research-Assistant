@@ -10,6 +10,7 @@ from sqlalchemy import exists, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.cli_token_revocation import revoke_user_cli_tokens
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.collection import Collection
@@ -55,20 +56,24 @@ def check_scopes(scopes: Iterable[str]) -> None:
 async def authorized_project(
     db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
 ) -> Row[Any]:
-    member = exists().where(
-        WorkspaceMember.workspace_id == Workspace.id,
-        WorkspaceMember.user_id == user_id,
-        WorkspaceMember.is_deleted.is_(False),
-    )
     row = (
         await db.execute(
             select(Collection.id, Collection.name, Workspace.id.label("workspace_id"))
             .join(Workspace, Collection.workspace_id == Workspace.id)
             .where(
                 Collection.id == project_id,
-                Collection.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                or_(Workspace.owner_id == user_id, member),
+                # Owner or live member. Kept inline next to the Collection
+                # soft-delete filter for test_project_service_soft_delete's sweep.
+                Collection.is_deleted.is_(False),
+                or_(
+                    Workspace.owner_id == user_id,
+                    exists().where(
+                        WorkspaceMember.workspace_id == Workspace.id,
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.is_deleted.is_(False),
+                    ),
+                ),
                 exists().where(
                     Organization.id == Workspace.organization_id,
                     Organization.is_deleted.is_(False),
@@ -135,7 +140,14 @@ async def validate_binding(
                 Thread.is_deleted.is_(False),
                 Conversation.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                Workspace.owner_id == user_id,
+                or_(
+                    Workspace.owner_id == user_id,
+                    exists().where(
+                        WorkspaceMember.workspace_id == Workspace.id,
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.is_deleted.is_(False),
+                    ),
+                ),
                 Workspace.organization_id == organization_id,
                 Thread.source_project_id == project_id,
             )
@@ -222,8 +234,12 @@ async def mint_integration_grant(
             )
             .execution_options(populate_existing=True)
         )
+        # A chat-bound consent authorizes only its chat; a project-wide
+        # consent (thread_id NULL) authorizes any chat in the project.
         matching_consents = [
-            consent for consent in consents if scopes <= set(consent.scopes)
+            consent
+            for consent in consents
+            if scopes <= set(consent.scopes) and consent.thread_id in (None, thread_id)
         ]
         # A device may have more than one consumed consent lineage. Selecting
         # the first database row is nondeterministic and can mint run authority
@@ -312,7 +328,12 @@ async def resolve_integration_context(
     )
 
 
-async def revoke_integration_grant(db: AsyncSession, grant_id: UUID) -> None:
+async def revoke_integration_grant(
+    db: AsyncSession, grant_id: UUID, *, end_cli_sessions: bool = False
+) -> None:
+    """Revoke a grant and its consent. ``end_cli_sessions`` (set when the CLI
+    disconnects itself) also moves the owner's CLI revoked-before cutoff,
+    because CLI JWTs carry no device id."""
     grant = await db.scalar(
         select(IntegrationGrant)
         .where(IntegrationGrant.id == grant_id)
@@ -332,7 +353,11 @@ async def revoke_integration_grant(db: AsyncSession, grant_id: UUID) -> None:
                 .where(IntegrationGrantRequest.id == grant.request_id)
                 .values(consent_revoked_at=now())
             )
+    user_id = grant.user_id if grant is not None else None
     await db.commit()
+    if end_cli_sessions and user_id is not None:
+        # After the commit, never inside it: best-effort and never raises.
+        await revoke_user_cli_tokens(str(user_id))
 
 
 async def create_request(
@@ -345,6 +370,7 @@ async def create_request(
         organization_id=user.organization_id,
         project_id=data.project_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
     )
     request = IntegrationGrantRequest(
         id=uuid4(),
@@ -352,6 +378,7 @@ async def create_request(
         organization_id=user.organization_id,
         project_id=data.project_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
         scopes=sorted(data.scopes),
         status="pending",
         expires_at=now() + timedelta(minutes=10),
@@ -382,6 +409,7 @@ async def owned_request(
         organization_id=user.organization_id,
         project_id=request.project_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
     )
     return cast(IntegrationGrantRequest, request)
 
@@ -395,6 +423,14 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
     status = request.status
     if status in {"pending", "approved"} and not live(request.expires_at):
         status = "expired"
+    thread_label = None
+    if request.thread_id is not None:
+        title = await db.scalar(
+            select(Thread.title).where(
+                Thread.id == request.thread_id, Thread.is_deleted.is_(False)
+            )
+        )
+        thread_label = title or "Untitled chat"
     return GrantRequestDTO(
         id=request.id,
         status=cast(GrantRequestStatus, status),
@@ -405,6 +441,8 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         scopes=set(request.scopes),
         project_label=project.name,
         device_label=device.label,
+        thread_id=request.thread_id,
+        thread_label=thread_label,
     )
 
 
@@ -456,6 +494,7 @@ async def exchange_request(
         organization_id=user.organization_id,
         project_id=request.project_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
         scopes=request.scopes,
         request_id=request.id,
     )
