@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
 import { useAuth } from '@/hooks/useAuth';
+import { scopeLabel } from '@/lib/integrations/scopeLabels';
 import { api } from '@/services/api-client';
 import type { components } from '@/types/generated/api';
 
@@ -46,8 +47,8 @@ function ApprovalContent(): React.JSX.Element {
     <section className="mx-auto max-w-xl space-y-6 p-6">
       <h1 className="text-2xl font-semibold">Approve integration access</h1>
       <p>
-        Only approve a request you started. Check the device, project, and
-        permissions below against your terminal.
+        Only approve a request you started. Check the device, project or
+        workspace, and permissions below against your terminal.
       </p>
       {!requestId && (
         <p role="alert">This approval link is missing its request ID.</p>
@@ -68,12 +69,21 @@ function ApprovalContent(): React.JSX.Element {
                 {consent.device_label} ({consent.device_id})
               </dd>
             </div>
-            <div>
-              <dt className="font-semibold">Project</dt>
-              <dd>
-                {consent.project_label} ({consent.project_id})
-              </dd>
-            </div>
+            {consent.workspace_id ? (
+              <div>
+                <dt className="font-semibold">Workspace</dt>
+                <dd>
+                  {consent.workspace_label} ({consent.workspace_id})
+                </dd>
+              </div>
+            ) : (
+              <div>
+                <dt className="font-semibold">Project</dt>
+                <dd>
+                  {consent.project_label} ({consent.project_id})
+                </dd>
+              </div>
+            )}
             {consent.thread_id && (
               <div>
                 <dt className="font-semibold">Chat</dt>
@@ -91,7 +101,9 @@ function ApprovalContent(): React.JSX.Element {
               <dd>
                 <ul>
                   {consent.scopes.map((scope) => (
-                    <li key={scope}>{scope}</li>
+                    <li key={scope}>
+                      {scopeLabel(scope)} <code>{scope}</code>
+                    </li>
                   ))}
                 </ul>
               </dd>
