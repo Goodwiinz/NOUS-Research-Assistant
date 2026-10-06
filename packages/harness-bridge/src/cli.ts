@@ -572,7 +572,13 @@ function mcpSession(
     state.scopes?.includes("artifacts:publish")
       ? { outputRoot }
       : {}),
-    ...(state.scopes?.includes("tools:write") ? { actions: true } : {}),
+    // request_action creates a note in the granted project. A workspace grant
+    // has none and NOUS answers 422 to every request it makes, so the tool is
+    // not offered there: library actions get their own target in Plan 07
+    // slice 3, switched on by `library`, not by this flag.
+    ...(state.workspaceId === undefined && state.scopes?.includes("tools:write")
+      ? { actions: true }
+      : {}),
     ...(state.scopes?.includes("handoff:write") ? { handoff: true } : {}),
     ...(state.scopes?.includes("library:write") ? { library: true } : {}),
   };

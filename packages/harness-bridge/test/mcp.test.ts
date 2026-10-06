@@ -404,8 +404,9 @@ test("connect --workspace --library requests a workspace binding and the library
     assert.equal(messages.some((m) => m.includes("device and workspace")), true);
     assert.equal(messages.at(-1), `Connected to workspace ${WORKSPACE}.`);
     // The standalone MCP command knows the grant can write the library and is bound to no folder.
+    // It offers no request_action: NOUS refuses every request a workspace grant makes.
     const install = await mcpInstallCommand(dir);
-    assert.equal(install.includes("'--actions'"), true);
+    assert.equal(install.includes("'--actions'"), false);
     assert.equal(install.includes("'--library'"), true);
     assert.equal(install.includes("'--root'"), false);
   } finally {
@@ -655,6 +656,41 @@ test("workspace connections are MCP-only: no managed sessions, folders, bridge r
     } finally {
       clearTimeout(timer);
     }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("a workspace connection never launches the MCP child with --actions", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-actions-"));
+  const install = async (scopes: string[], binding: Record<string, string>) => {
+    await new CredentialStore(stateDir).writeLocal("connection", {
+      apiUrl: "https://nous.example/api/v1",
+      deviceId: randomUUID(),
+      credentialHandle: randomUUID(),
+      scopes,
+      workspaces: [],
+      ...binding,
+    });
+    return mcpInstallCommand(stateDir, { announce: () => {} });
+  };
+  try {
+    // tools:write is what offers request_action, but a workspace grant has no
+    // project to create a note in and NOUS answers 422 to every request it
+    // makes, so the model must not be offered a tool that can never succeed.
+    // Library actions get their own target in Plan 07 slice 3, switched on by --library.
+    const writer = await install(["tools:read", "tools:write"], { workspaceId: WORKSPACE });
+    assert.equal(writer.includes("'--actions'"), false);
+    assert.equal(writer.includes("'--library'"), false);
+    const library = await install(
+      ["tools:read", "tools:write", "library:read", "library:write"],
+      { workspaceId: WORKSPACE },
+    );
+    assert.equal(library.includes("'--actions'"), false);
+    assert.equal(library.includes("'--library'"), true);
+    // A project connection keeps the note request.
+    const project = await install(["harness:execute", "tools:read", "tools:write"], { projectId: PROJECT });
+    assert.equal(project.includes("'--actions'"), true);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
