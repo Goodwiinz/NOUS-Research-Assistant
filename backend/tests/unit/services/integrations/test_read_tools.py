@@ -1,7 +1,7 @@
 """Scoped integration read gateway, using a local SQLite database."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -1046,3 +1046,594 @@ async def test_returned_error_payloads_are_sanitized(
         assert result.is_error is True
         assert result.content == [{"error": "upstream_unavailable"}]
         assert result.source_refs == []
+
+
+# --- Plan 07 slice 4: researcher tools ---------------------------------------
+#
+# The researcher tools index Document.document_metadata["authors"] of the
+# grant's live documents; the sibling project's papers (same organization,
+# overlapping authors) are what the leak tests probe.
+
+
+async def _add_doc(
+    db: AsyncSession,
+    title: str,
+    metadata: Any,
+    *,
+    created: datetime,
+    project: UUID = PROJECT,
+    arxiv_id: str | None = None,
+) -> UUID:
+    document_id = uuid4()
+    await db.execute(
+        insert(Document).values(
+            dict(
+                _document_row(document_id, title),
+                arxiv_id=arxiv_id,
+                document_metadata=metadata,
+                created_at=created,
+            )
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            dict(collection_id=project, document_id=document_id)
+        )
+    )
+    await db.commit()
+    return document_id
+
+
+def _day(day: int) -> datetime:
+    return datetime(2026, 1, day)
+
+
+async def _seed_authors(db: AsyncSession) -> None:
+    """Two project papers sharing Turing, plus a sibling project's paper."""
+    await _add_doc(
+        db,
+        "Computing Machinery",
+        {"authors": ["Alan Turing", "Ada Lovelace"]},
+        created=_day(1),
+    )
+    await _add_doc(
+        db,
+        "Computable Numbers",
+        {"authors": ["alan   TURING", "Charles Babbage"]},
+        created=_day(2),
+    )
+    await _add_doc(
+        db,
+        "Secret Work",
+        {"authors": ["Alan Turing", "Yann LeCun"]},
+        created=_day(4),
+        project=OTHER_PROJECT,
+    )
+
+
+async def _find(db: AsyncSession, context: IntegrationContext, **arguments: Any) -> Any:
+    result = await invoke_read(
+        db, context, _invocation("find_researchers", **arguments)
+    )
+    assert result.source_refs == []
+    return result
+
+
+async def test_find_researchers_never_sees_another_projects_authors(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _seed_authors(db)
+    result = await _find(db, context, query="a")
+    assert result.is_error is False
+    # Turing's count is the two in-project papers, not the sibling's third.
+    assert result.content == [
+        {
+            "researchers": [
+                {
+                    "researcher_id": "alan turing",
+                    "name": "alan TURING",
+                    "paper_count": 2,
+                },
+                {
+                    "researcher_id": "ada lovelace",
+                    "name": "Ada Lovelace",
+                    "paper_count": 1,
+                },
+                {
+                    "researcher_id": "charles babbage",
+                    "name": "Charles Babbage",
+                    "paper_count": 1,
+                },
+            ]
+        }
+    ]
+    lecun = await _find(db, context, query="lecun")
+    assert lecun.content == [{"researchers": []}]
+    assert "LeCun" not in json.dumps(result.content)
+
+
+@pytest.mark.parametrize("query", ["TURING", "  alan   Tur ", "uring"])
+async def test_find_researchers_is_a_normalised_substring_match(
+    db: AsyncSession, context: IntegrationContext, query: str
+) -> None:
+    await _seed_authors(db)
+    result = await _find(db, context, query=query)
+    [researcher] = result.content[0]["researchers"]
+    # Spelling variants merge; the newest document's spelling is kept.
+    assert researcher["researcher_id"] == "alan turing"
+    assert researcher["name"] == "alan TURING"
+    assert researcher["paper_count"] == 2
+
+
+async def test_find_researchers_orders_by_papers_then_name_and_honours_limit(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _seed_authors(db)
+    two = await _find(db, context, query="a", limit=2)
+    assert [r["name"] for r in two.content[0]["researchers"]] == [
+        "alan TURING",
+        "Ada Lovelace",
+    ]
+    # Cut by limit: the caller is told the list is incomplete.
+    assert two.content[0]["truncated"] is True
+    for complete in (
+        await _find(db, context, query="a"),  # default limit 10
+        await _find(db, context, query="a", limit=3),  # exactly the matches
+    ):
+        assert len(complete.content[0]["researchers"]) == 3
+        assert "truncated" not in complete.content[0]
+
+
+async def test_find_researchers_internal_clamp_is_defence_in_depth(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    names = [f"Person {index:02d}" for index in range(30)]
+    await _add_doc(db, "Crowd", {"authors": names}, created=_day(1))
+    result = await read_tools._find_researchers(
+        db, context, {"query": "person", "limit": 99}
+    )
+    assert len(result.content[0]["researchers"]) == read_tools.MAX_RESEARCHERS == 25
+
+
+async def test_find_researchers_tolerates_documents_without_clean_authors(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _add_doc(db, "none", None, created=_day(1))
+    await _add_doc(db, "no-key", {"source": "arxiv"}, created=_day(2))
+    await _add_doc(db, "list-meta", ["authors"], created=_day(3))
+    await _add_doc(db, "null", {"authors": None}, created=_day(4))
+    await _add_doc(db, "lone", {"authors": "Solo Author"}, created=_day(5))
+    await _add_doc(
+        db,
+        "messy",
+        {
+            "authors": [
+                "Grace Hopper",
+                "grace  hopper",
+                "",
+                "  ",
+                None,
+                7,
+                {"nom": "x"},
+                {"name": "Edsger Dijkstra"},
+            ]
+        },
+        created=_day(6),
+    )
+    result = await _find(db, context, query="r")
+    assert {
+        r["researcher_id"]: r["paper_count"] for r in result.content[0]["researchers"]
+    } == {
+        "grace hopper": 1,
+        "edsger dijkstra": 1,
+        "solo author": 1,
+    }
+
+
+async def test_find_researchers_excludes_deleted_documents_and_ancestors(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    doc = await _add_doc(db, "Paper", {"authors": ["Ada Lovelace"]}, created=_day(1))
+    assert (await _find(db, context, query="ada")).content[0]["researchers"]
+    await db.execute(update(Document).where(Document.id == doc).values(is_deleted=True))
+    await db.commit()
+    assert (await _find(db, context, query="ada")).content == [{"researchers": []}]
+    await db.execute(
+        update(Document).where(Document.id == doc).values(is_deleted=False)
+    )
+    await db.execute(update(Collection).values(is_deleted=True))
+    await db.commit()
+    # invoke_read refuses a dead project first; the scan alone must also be empty.
+    assert await read_tools._scan_authored_papers(db, context) == ([], False)
+
+
+async def test_find_researchers_reports_when_the_scan_cap_hides_documents(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fixture's authorless document is the newest, so it uses one slot.
+    monkeypatch.setattr(read_tools, "MAX_SCANNED_DOCUMENTS", 3)
+    await _add_doc(db, "old", {"authors": ["Old Author"]}, created=_day(1))
+    await _add_doc(db, "mid", {"authors": ["Mid Author"]}, created=_day(2))
+    await _add_doc(db, "new", {"authors": ["New Author"]}, created=_day(3))
+    result = await _find(db, context, query="author")
+    assert {r["name"] for r in result.content[0]["researchers"]} == {
+        "Mid Author",
+        "New Author",
+    }
+    assert result.content[0]["truncated"] is True
+    # Truncation describes the scan, so it is reported even for a narrow hit.
+    assert (await _find(db, context, query="new")).content[0]["truncated"] is True
+
+
+async def test_researcher_id_round_trips_when_the_name_is_cut_at_the_cap(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    # The 200-character cut lands right after the space.
+    long_name = "A" * 199 + " B"
+    doc = await _add_doc(db, "Long Name", {"authors": [long_name]}, created=_day(1))
+    [found] = (await _find(db, context, query="a")).content[0]["researchers"]
+    assert found["researcher_id"] == "a" * 199
+    assert found["name"] == "A" * 199
+    result = await invoke_read(
+        db, context, _invocation("get_researcher", researcher_id=found["researcher_id"])
+    )
+    assert result.is_error is False
+    assert result.content[0]["papers"] == [
+        {"document_id": str(doc), "title": "Long Name"}
+    ]
+
+
+async def test_find_researchers_blank_query_is_an_argument_error(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(db, context, _invocation("find_researchers", query="   "))
+
+
+async def _seed_turing(db: AsyncSession) -> dict[str, UUID]:
+    """Four in-project Turing papers (mixed date keys) and a sibling's fifth."""
+    ids = {
+        "published": await _add_doc(
+            db,
+            "Published Later",
+            {
+                "authors": ["Alan Turing", "Ada Lovelace"],
+                "published": "2020-05-01T00:00:00+00:00",
+            },
+            created=_day(1),
+        ),
+        "arxiv": await _add_doc(
+            db,
+            "Ingested Newer",
+            {
+                "authors": ["alan  turing", "Charles Babbage", "Ada Lovelace"],
+                "publication_date": "2017-06-12T17:57:34+00:00",
+            },
+            created=_day(3),
+            arxiv_id="1706.03762",
+        ),
+        "undated_old": await _add_doc(
+            db,
+            "Undated Old",
+            {"authors": ["Alan Turing", "Charles Babbage"]},
+            created=_day(2),
+        ),
+        "undated_new": await _add_doc(
+            db,
+            "Undated New",
+            {"authors": ["Alan Turing", "Ada Lovelace"], "arxiv_id": "2401.00001"},
+            created=_day(4),
+        ),
+        "secret": await _add_doc(
+            db,
+            "Secret Work",
+            {"authors": ["Alan Turing", "Yann LeCun"]},
+            created=_day(5),
+            project=OTHER_PROJECT,
+        ),
+    }
+    return ids
+
+
+async def _get(
+    db: AsyncSession, context: IntegrationContext, researcher_id: str
+) -> Any:
+    return await invoke_read(
+        db, context, _invocation("get_researcher", researcher_id=researcher_id)
+    )
+
+
+async def test_get_researcher_reads_in_project_papers_and_coauthors(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    ids = await _seed_turing(db)
+    result = await _get(db, context, "alan turing")
+    assert result.is_error is False
+    assert result.content == [
+        {
+            "researcher": {"researcher_id": "alan turing", "name": "Alan Turing"},
+            # Published date first (either metadata key), then newest ingest.
+            "papers": [
+                {
+                    "document_id": str(ids["published"]),
+                    "title": "Published Later",
+                    "published": "2020-05-01T00:00:00+00:00",
+                },
+                {
+                    "document_id": str(ids["arxiv"]),
+                    "title": "Ingested Newer",
+                    "arxiv_id": "1706.03762",
+                    "published": "2017-06-12T17:57:34+00:00",
+                },
+                {
+                    "document_id": str(ids["undated_new"]),
+                    "title": "Undated New",
+                    "arxiv_id": "2401.00001",
+                },
+                {"document_id": str(ids["undated_old"]), "title": "Undated Old"},
+            ],
+            # Shared papers, most first; the sibling project's LeCun is absent.
+            "coauthors": [
+                {
+                    "researcher_id": "ada lovelace",
+                    "name": "Ada Lovelace",
+                    "paper_count": 3,
+                },
+                {
+                    "researcher_id": "charles babbage",
+                    "name": "Charles Babbage",
+                    "paper_count": 2,
+                },
+            ],
+        }
+    ]
+    assert result.source_refs == [
+        {"document_id": str(ids["published"])},
+        {"document_id": str(ids["arxiv"])},
+        {"document_id": str(ids["undated_new"])},
+        {"document_id": str(ids["undated_old"])},
+    ]
+    dumped = json.dumps(result.content)
+    assert "LeCun" not in dumped and str(ids["secret"]) not in dumped
+
+
+async def test_get_researcher_accepts_any_spelling_of_the_id(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _seed_turing(db)
+    result = await _get(db, context, "  ALAN   Turing ")
+    assert result.is_error is False
+    assert result.content[0]["researcher"]["researcher_id"] == "alan turing"
+    assert len(result.content[0]["papers"]) == 4
+
+
+@pytest.mark.parametrize("researcher_id", ["yann lecun", "nobody at all"])
+async def test_get_researcher_denies_other_projects_and_unknown_authors(
+    db: AsyncSession, context: IntegrationContext, researcher_id: str
+) -> None:
+    await _seed_turing(db)
+    result = await _get(db, context, researcher_id)
+    # An author who only wrote for the sibling project looks like no author.
+    assert result.is_error is True
+    assert result.content == [{"error": "researcher_not_found"}]
+    assert result.source_refs == []
+
+
+async def test_get_researcher_redacts_titles_it_returns(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _add_doc(
+        db,
+        "Contact bob@example.com",
+        {"authors": ["Ada Lovelace"]},
+        created=_day(1),
+    )
+    result = await _get(db, context, "ada lovelace")
+    assert result.content[0]["papers"][0]["title"] == "Contact <email>"
+    assert "bob@example.com" not in json.dumps(result.content)
+
+
+async def test_get_researcher_blank_id_is_an_argument_error(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await _get(db, context, "   ")
+
+
+async def test_get_researcher_tolerates_malformed_coauthor_entries(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _add_doc(
+        db,
+        "Messy",
+        {"authors": ["Grace Hopper", None, 7, "", {"name": "Ada Lovelace"}, {"x": 1}]},
+        created=_day(1),
+    )
+    await _add_doc(db, "No authors", {"source": "arxiv"}, created=_day(2))
+    result = await _get(db, context, "grace hopper")
+    assert result.is_error is False
+    assert result.content[0]["coauthors"] == [
+        {"researcher_id": "ada lovelace", "name": "Ada Lovelace", "paper_count": 1}
+    ]
+
+
+async def test_get_researcher_caps_papers_and_flags_truncation(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    ids = [uuid4() for _ in range(101)]
+    await db.execute(
+        insert(Document).values(
+            [
+                dict(
+                    _document_row(document_id, f"paper-{index:03d}"),
+                    document_metadata={"authors": ["Prolific Author"]},
+                    created_at=datetime(2025, 1, 1) + timedelta(minutes=index),
+                )
+                for index, document_id in enumerate(ids)
+            ]
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            [dict(collection_id=PROJECT, document_id=i) for i in ids]
+        )
+    )
+    await db.commit()
+    result = await _get(db, context, "prolific author")
+    payload = result.content[0]
+    assert len(payload["papers"]) == read_tools.MAX_RESEARCHER_PAPERS == 100
+    assert payload["truncated"] is True
+    titles = {paper["title"] for paper in payload["papers"]}
+    assert "paper-000" not in titles and "paper-100" in titles  # oldest dropped
+    assert len(result.source_refs) == 100
+
+
+async def test_get_researcher_caps_coauthors_and_flags_truncation(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    names = ["Lead Author"] + [f"Co {index:03d}" for index in range(150)]
+    await _add_doc(db, "Consortium", {"authors": names}, created=_day(1))
+    payload = (await _get(db, context, "lead author")).content[0]
+    assert len(payload["coauthors"]) == read_tools.MAX_COAUTHORS == 100
+    assert payload["coauthors"][0]["researcher_id"] == "co 000"
+    assert payload["truncated"] is True
+
+
+async def test_get_researcher_result_stays_under_the_size_cap(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 100 co-authors of ~370 UTF-8 bytes each; shrink the cap so the trim runs.
+    names = ["Lead Author"] + [("\u6587" * 60) + str(index) for index in range(100)]
+    await _add_doc(db, "Consortium", {"authors": names}, created=_day(1))
+    monkeypatch.setattr(read_tools, "MAX_RESULT_BYTES", 20_000)
+    result = await _get(db, context, "lead author")
+    assert result.is_error is False
+    payload = result.content[0]
+    assert 0 < len(payload["coauthors"]) < 100
+    assert payload["truncated"] is True
+    assert payload["papers"], "papers are kept while co-authors absorb the trim"
+    envelope = {
+        "content": result.content,
+        "is_error": result.is_error,
+        "source_refs": result.source_refs,
+    }
+    assert len(json.dumps(envelope, ensure_ascii=False).encode()) <= 20_000
+
+
+async def test_get_researcher_size_cap_counts_source_refs(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = [uuid4() for _ in range(100)]
+    await db.execute(
+        insert(Document).values(
+            [
+                dict(
+                    _document_row(document_id, f"p{index}"),
+                    document_metadata={"authors": ["Prolific Author"]},
+                    created_at=datetime(2025, 1, 1) + timedelta(minutes=index),
+                )
+                for index, document_id in enumerate(ids)
+            ]
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            [dict(collection_id=PROJECT, document_id=i) for i in ids]
+        )
+    )
+    await db.commit()
+    full = await _get(db, context, "prolific author")
+    assert len(full.source_refs) == 100 and "truncated" not in full.content[0]
+    content_bytes = len(json.dumps(full.content[0], ensure_ascii=False).encode())
+    # The content alone fits this cap; content plus the 100 refs does not.
+    cap = content_bytes + 200
+    monkeypatch.setattr(read_tools, "MAX_RESULT_BYTES", cap)
+    result = await _get(db, context, "prolific author")
+    assert result.is_error is False
+    assert result.content[0]["truncated"] is True
+    assert 0 < len(result.content[0]["papers"]) < 100
+    assert len(result.source_refs) == len(result.content[0]["papers"])
+    envelope = {
+        "content": result.content,
+        "is_error": result.is_error,
+        "source_refs": result.source_refs,
+    }
+    assert len(json.dumps(envelope, ensure_ascii=False).encode()) <= cap
+
+
+async def test_get_researcher_reports_when_the_scan_cap_hides_documents(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(read_tools, "MAX_SCANNED_DOCUMENTS", 2)
+    await _add_doc(db, "old", {"authors": ["Old Author"]}, created=_day(1))
+    await _add_doc(db, "new", {"authors": ["New Author"]}, created=_day(2))
+    assert (await _get(db, context, "new author")).content[0]["truncated"] is True
+    # Older than the scan window: an error that says the scan was incomplete,
+    # so it is not mistaken for an unknown id.
+    hidden = await _get(db, context, "old author")
+    assert hidden.is_error is True
+    assert hidden.content == [{"error": "researcher_not_found", "truncated": True}]
+    assert hidden.source_refs == []
+
+
+async def test_get_researcher_unknown_id_after_a_complete_scan_is_plain(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await _add_doc(db, "only", {"authors": ["Known Author"]}, created=_day(1))
+    unknown = await _get(db, context, "nobody")
+    assert unknown.is_error is True
+    assert unknown.content == [{"error": "researcher_not_found"}]
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        _invocation("find_researchers"),
+        _invocation("find_researchers", query=""),
+        _invocation("find_researchers", query="x" * 201),
+        _invocation("find_researchers", query="x", limit=26),
+        _invocation("find_researchers", query="x", limit=0),
+        _invocation("find_researchers", query="x", limit="5"),
+        _invocation("find_researchers", query="x", project_id=str(OTHER_PROJECT)),
+        _invocation("find_researchers", query="x", organization_id=str(ORG)),
+        _invocation("get_researcher"),
+        _invocation("get_researcher", researcher_id=""),
+        _invocation("get_researcher", researcher_id="r" * 201),
+        _invocation("get_researcher", researcher_id=7),
+        _invocation("get_researcher", entity_id="r"),
+        _invocation("get_researcher", researcher_id="r", project_id=str(PROJECT)),
+    ],
+    ids=[
+        "find-missing-query",
+        "find-empty-query",
+        "find-long-query",
+        "find-limit-over-cap",
+        "find-limit-zero",
+        "find-limit-string",
+        "find-project-identity",
+        "find-org-identity",
+        "get-missing-id",
+        "get-empty-id",
+        "get-long-id",
+        "get-int-id",
+        "get-old-entity-id-name",
+        "get-project-identity",
+    ],
+)
+async def test_researcher_argument_shapes_are_rejected(
+    db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(db, context, invocation)
+
+
+def test_researcher_tools_are_advertised_with_the_coverage_caveat() -> None:
+    catalog = {tool.name: tool for tool in list_read_tools()}
+    for name in ("find_researchers", "get_researcher"):
+        assert read_tools.TOOL_SCOPES[name] == "tools:read"
+        description = catalog[name].description
+        assert "ingested into this project" in description
+        assert "affiliations" in description
+        assert "project_id" not in catalog[name].input_schema["properties"]
+    assert catalog["find_researchers"].input_schema["required"] == ["query"]
+    assert catalog["get_researcher"].input_schema["required"] == ["researcher_id"]
