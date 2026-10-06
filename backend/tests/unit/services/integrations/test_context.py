@@ -30,6 +30,8 @@ USER, ORG, PROJECT, WORKSPACE = (uuid4() for _ in range(4))
 # PROJECT is the first live Collection of WORKSPACE; P2 is the second and P3 is
 # soft-deleted (the `library` fixture). OTHER_WORKSPACE is never seeded.
 P2, P3, OTHER_WORKSPACE = (uuid4() for _ in range(3))
+# The live Collection `_second_workspace` seeds in a workspace of its own.
+ELSEWHERE = uuid4()
 SOON = datetime.now(timezone.utc) + timedelta(hours=1)
 # An owned chat in WORKSPACE that belongs to no project (Thread.source_project_id
 # is NULL), and a run of it: the `chat` fixture.
@@ -862,12 +864,18 @@ async def _mint(
 
 
 async def _second_workspace(db: AsyncSession) -> UUID:
-    """Another workspace the same user owns, so only the binding differs."""
+    """Another workspace the same user owns, with a live Collection of its own.
+
+    The user can reach it, so only the grant's binding keeps it out of a scope.
+    """
     second = uuid4()
     await db.execute(
         insert(Workspace).values(
             id=second, name="Second workspace", owner_id=USER, organization_id=ORG
         )
+    )
+    await db.execute(
+        insert(Collection).values(id=ELSEWHERE, name="Elsewhere", workspace_id=second)
     )
     await db.commit()
     return second
@@ -916,6 +924,7 @@ async def test_authorized_scope_lists_live_collections_of_workspace(
     from src.schemas.integration_context import IntegrationContext
     from src.services.integrations.context import authorized_scope
 
+    await _second_workspace(db)  # a live Collection the user owns, elsewhere
     ctx = IntegrationContext(
         user_id=USER,
         organization_id=ORG,
@@ -923,7 +932,8 @@ async def test_authorized_scope_lists_live_collections_of_workspace(
         workspace_id=WORKSPACE,
         grant_id=uuid4(),
     )
-    assert await authorized_scope(db, ctx) == {PROJECT, P2}  # soft-deleted P3 out
+    # Only this workspace's live Collections: P3 is deleted, ELSEWHERE is not here.
+    assert await authorized_scope(db, ctx) == {PROJECT, P2}
 
 
 async def test_authorized_scope_of_a_project_grant_is_just_that_project(
