@@ -5,8 +5,8 @@ from fastapi import APIRouter
 from src.api.integrations.actions import router as actions_router
 from src.api.integrations.devices import router as devices_router
 from src.api.integrations.grants import router as grants_router
-from src.api.integrations.selected_context import router as context_router
 from src.api.integrations.handoffs import router as handoffs_router
+from src.api.integrations.selected_context import router as context_router
 from src.api.integrations.tools import router as tools_router
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
