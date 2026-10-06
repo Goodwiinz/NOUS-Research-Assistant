@@ -440,6 +440,7 @@ from .artifact import (
 from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
+from .integration_handoff import IntegrationHandoff
 from .tool_action import IntegrationToolAction
 
 __all__ += [
@@ -448,6 +449,7 @@ __all__ += [
     "WorkspaceBinding",
     "IntegrationGrant",
     "IntegrationGrantRequest",
+    "IntegrationHandoff",
     "IntegrationToolAction",
     "Artifact",
     "ArtifactVersion",

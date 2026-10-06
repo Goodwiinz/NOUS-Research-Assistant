@@ -750,3 +750,37 @@ async def test_lease_renewal_is_limited_to_authorized_run_scope(
     assert await lease_runs(db, scoped, DEVICE) == {
         str(command.runId): command.generation
     }
+
+
+async def test_chat_bound_grant_leases_only_runs_in_its_chat(
+    db: AsyncSession, context: IntegrationContext, external_run: Any
+) -> None:
+    """A device connected with --chat runs harness work only in that chat."""
+    from src.models.thread import Thread
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT
+
+    other_chat = uuid4()
+    db.add(
+        Thread(
+            id=other_chat,
+            conversation_id=CONVERSATION,
+            source_project_id=PROJECT,
+            title="other chat",
+            created_by_id=USER,
+        )
+    )
+    await db.commit()
+    assert await dispatch_pending(db) == 1  # the run lives in THREAD
+
+    async def bind(thread_id: Any) -> IntegrationContext:
+        await db.execute(
+            update(IntegrationGrant)
+            .where(IntegrationGrant.id == context.grant_id)
+            .values(thread_id=thread_id)
+        )
+        await db.commit()
+        return context.model_copy(update={"thread_id": thread_id})
+
+    assert await lease_commands(db, await bind(other_chat), DEVICE) == []
+    leased = await lease_commands(db, await bind(THREAD), DEVICE)
+    assert [c.runId for c in leased] == [external_run.id]

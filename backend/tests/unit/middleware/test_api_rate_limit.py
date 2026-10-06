@@ -30,6 +30,7 @@ from starlette.responses import Response
 from starlette.testclient import TestClient
 
 from src.core.config import settings
+from src.core.dependencies import get_current_user
 
 if TYPE_CHECKING:
     from src.middleware.rate_limiting import ApiRateLimiter
@@ -251,7 +252,12 @@ def test_auth_routes_count_against_default_bucket() -> None:
 
 @pytest.mark.parametrize("_repeat", range(2))
 def test_shared_app_limits_requests_without_leaking_between_tests(
-    test_client: TestClient, test_auth_headers: dict[str, str], _repeat: int
+    test_client: TestClient,
+    test_auth_headers: dict[str, str],
+    test_app: FastAPI,
+    mock_user: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    _repeat: int,
 ) -> None:
     """Real main stack keeps one quota across bearer casing, with CORS on 429.
 
@@ -259,6 +265,11 @@ def test_shared_app_limits_requests_without_leaking_between_tests(
     Removing main's ApiRateLimitMiddleware mount makes request 61 return 200;
     moving CORS inside the limiter removes the 429's allow-origin header.
     """
+    # Keep this response-contract test focused on the real middleware stack;
+    # I28's isolated router matrix covers the catalog's real auth dependency.
+    monkeypatch.setitem(
+        test_app.dependency_overrides, get_current_user, lambda: mock_user
+    )
     path = "/api/v1/research-engine/capabilities"
     origin = settings.cors_origins_list[0]
     headers = {"Origin": origin}
