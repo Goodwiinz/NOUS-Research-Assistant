@@ -54,8 +54,11 @@ _SCOPE_REQUIRES = {
     "library:read": frozenset({"tools:read"}),
     "library:write": frozenset({"library:read", "tools:write"}),
 }
-# Harness runs and artifact publication stay bound to one Collection.
-_PROJECT_ONLY_SCOPES = frozenset({"harness:execute", "artifacts:publish"})
+# Harness runs, artifact publication and chat handoffs stay bound to one
+# Collection (a handoff also needs a chat, which a workspace grant cannot have).
+_PROJECT_ONLY_SCOPES = frozenset(
+    {"harness:execute", "artifacts:publish", "handoff:read", "handoff:write"}
+)
 
 
 def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> None:

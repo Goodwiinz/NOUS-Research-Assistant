@@ -1056,7 +1056,10 @@ def test_complete_library_scope_sets_are_accepted(scopes: set[str]) -> None:
     check_scopes(scopes)
 
 
-@pytest.mark.parametrize("scope", ["harness:execute", "artifacts:publish"])
+@pytest.mark.parametrize(
+    "scope",
+    ["harness:execute", "artifacts:publish", "handoff:read", "handoff:write"],
+)
 async def test_workspace_grants_are_mcp_only(
     db: AsyncSession, owner: Any, scope: str
 ) -> None:
