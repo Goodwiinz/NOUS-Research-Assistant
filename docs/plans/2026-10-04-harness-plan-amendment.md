@@ -173,6 +173,19 @@ run oasdiff, so a green local run does not show the break. The label skips the
 whole gate, so run oasdiff by hand again after any later contract change and
 expect these eight and no more.
 
+**Amended 2026-10-06, after merging `origin/develop` at `664cee348` (#1784):**
+`context:read` and `read_selected_context` are project-only. `context:read`
+joins the scopes a workspace grant is refused (`_PROJECT_ONLY_SCOPES`),
+`connect --workspace` refuses `--context`, and `read_selected_context` stays out
+of the read-tool catalog because `GET /integrations/context` takes its project
+from the grant. [`harness-bridge.md`](../engineering/harness-bridge.md) is the
+contract. The merge added nothing to this slice's contract delta: a structural
+comparison of `backend/openapi.json` with `origin/develop`'s shows the same four
+widened response properties, the new optional `workspace_id` and
+`workspace_label` fields, and `GrantRequestCreate.project_id` no longer
+required. oasdiff itself is **NOT RUN** here (not installed), so run it as above
+before the label is applied.
+
 ## Not verified here
 
 - Whether the running dev pod has the skill flags on.
