@@ -56,6 +56,7 @@ const KIND_LABEL: Record<Artifact['kind'], string> = {
   note: 'Note',
   draft: 'Draft',
   generated: 'File',
+  handoff: 'Handoff',
   citations: 'Sources',
 };
 
@@ -518,7 +519,12 @@ export function ArtifactPanel({
 
         {/* Body */}
         <div className="nous-scrollbar flex-1 overflow-y-auto">
-          <ThreadHandoffCard threadId={threadId} />
+          {/* Every view leads with the chat handoff; the handoff-only view
+              (opened from the header) shows just that. */}
+          <ThreadHandoffCard
+            threadId={threadId}
+            showEmpty={artifact.kind === 'handoff'}
+          />
           {artifact.kind === 'document' && (
             <DocumentArtifactBody documentId={artifact.id} />
           )}
