@@ -148,6 +148,7 @@ export async function connect(
     write?: boolean;
     handoff?: boolean;
     library?: boolean;
+    context?: boolean;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
@@ -178,6 +179,8 @@ export async function connect(
     throw new Error("--library requires --tools");
   if (options.library && !options.write)
     throw new Error("--library requires --write");
+  if (options.context && !options.tools)
+    throw new Error("--context requires --tools");
   // A workspace grant is MCP-only: harness runs and artifact publication stay
   // bound to one project (NOUS refuses both scopes for a workspace grant), and
   // without tools:read it could do nothing at all.
@@ -193,6 +196,7 @@ export async function connect(
     ...(options.write ? ["tools:write"] : []),
     ...(options.handoff ? ["handoff:read", "handoff:write"] : []),
     ...(options.library ? ["library:read", "library:write"] : []),
+    ...(options.context ? ["context:read"] : []),
   ];
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
@@ -581,6 +585,7 @@ function mcpSession(
       : {}),
     ...(state.scopes?.includes("handoff:write") ? { handoff: true } : {}),
     ...(state.scopes?.includes("library:write") ? { library: true } : {}),
+    ...(state.scopes?.includes("context:read") ? { context: true } : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -844,7 +849,7 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list|discard ID
+const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat or --handoff, and cannot run harness sessions.
@@ -858,7 +863,7 @@ const help = `Usage: nous-harness connect --api https://host/api/v1 (--project U
   nous-harness handoff discard HANDOFF_ID    Drop one journaled save (pending, conflicted or rejected) and print what was dropped.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
-  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff] [--library]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools, --library marks a library:write grant.
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff] [--library] [--context]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools, --library marks a library:write grant, --context enables read_selected_context.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.
@@ -886,6 +891,7 @@ async function main(): Promise<void> {
       handoff: { type: "boolean" },
       file: { type: "string" },
       parent: { type: "string" },
+      context: { type: "boolean" },
       help: { type: "boolean" },
     },
   });
@@ -923,6 +929,7 @@ async function main(): Promise<void> {
       write: values.write,
       handoff: values.handoff,
       library: values.library,
+      context: values.context,
     });
   else if (positionals.join(" ") === "disconnect")
     await disconnect({ stateDir });
@@ -951,6 +958,7 @@ async function main(): Promise<void> {
       ...(values.actions ? { actions: true } : {}),
       ...(values.handoff ? { handoff: true } : {}),
       ...(values.library ? { library: true } : {}),
+      ...(values.context ? { context: true } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });

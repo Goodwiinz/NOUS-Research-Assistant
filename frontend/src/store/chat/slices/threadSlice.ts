@@ -15,6 +15,7 @@ import {
 } from '@/types/workspace';
 import type { Thread } from '@/types/workspace';
 import { workspaceService } from '@/services/workspaceService';
+import { captureChatSession } from '../requestCoordinator';
 import type { ChatSliceCreator } from '../types';
 import { removeItemFromRecord, updateItemInRecord } from '../recordIndex';
 import {
@@ -52,6 +53,7 @@ const loadThreadsRequestTokens = new Map<string, object>();
 
 export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   loadThreads: async (conversationId) => {
+    const isCurrentSession = captureChatSession();
     const requestToken = {};
     loadThreadsRequestTokens.set(conversationId, requestToken);
     set((state) => {
@@ -65,6 +67,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
         conversationId
       );
       const response = await workspaceService.listThreads(conversationId);
+      if (!isCurrentSession()) return;
       if (loadThreadsRequestTokens.get(conversationId) !== requestToken) {
         return; // superseded by a newer load — the newer request owns state
       }
@@ -82,6 +85,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
         state.isLoadingThreads = false;
       });
     } catch (error) {
+      if (!isCurrentSession()) return;
       if (loadThreadsRequestTokens.get(conversationId) !== requestToken) {
         return; // superseded — no stale error, no stale-data recovery
       }
@@ -131,8 +135,10 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   },
 
   createThread: async (data) => {
+    const isCurrentSession = captureChatSession();
     try {
       const thread = await workspaceService.createThread(data);
+      if (!isCurrentSession()) return null;
       set((state) => {
         const conversationId = data.conversation_id;
         if (!state.threads[conversationId]) {
@@ -144,6 +150,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
       });
       return thread;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error creating thread:', error);
       set((state) => {
         state.error = 'Failed to create thread';
@@ -153,8 +160,10 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   },
 
   updateThread: async (id, data) => {
+    const isCurrentSession = captureChatSession();
     try {
       const thread = await workspaceService.updateThread(id, data);
+      if (!isCurrentSession()) return null;
       set((state) => {
         const conversationId = thread.conversation_id;
         const threads = state.threads[conversationId] || [];
@@ -165,6 +174,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
       });
       return thread;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error updating thread:', error);
       set((state) => {
         state.error = 'Failed to update thread';
@@ -174,8 +184,10 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   },
 
   deleteThread: async (id) => {
+    const isCurrentSession = captureChatSession();
     try {
       await workspaceService.deleteThread(id);
+      if (!isCurrentSession()) return false;
       markThreadDeleted(id);
       abortNewestPageRequest(id);
       set((state) => {
@@ -193,6 +205,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
       });
       return true;
     } catch (error) {
+      if (!isCurrentSession()) return false;
       console.error('[ChatStore] Error deleting thread:', error);
       set((state) => {
         state.error = 'Failed to delete thread';
@@ -250,12 +263,14 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   },
 
   bulkResolveThreads: async () => {
+    const isCurrentSession = captureChatSession();
     const state = get();
     const threadIds = Array.from(state.selectedThreadIds);
     if (threadIds.length === 0) return null;
 
     try {
       const response = await workspaceService.bulkResolveThreads(threadIds);
+      if (!isCurrentSession()) return null;
 
       // Update local state for successful threads
       set((state) => {
@@ -276,6 +291,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
 
       return response;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error bulk resolving threads:', error);
       set((state) => {
         state.error = 'Failed to resolve threads';
@@ -285,12 +301,14 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   },
 
   bulkArchiveThreads: async () => {
+    const isCurrentSession = captureChatSession();
     const state = get();
     const threadIds = Array.from(state.selectedThreadIds);
     if (threadIds.length === 0) return null;
 
     try {
       const response = await workspaceService.bulkArchiveThreads(threadIds);
+      if (!isCurrentSession()) return null;
 
       set((state) => {
         for (const result of response.results) {
@@ -310,6 +328,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
 
       return response;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error bulk archiving threads:', error);
       set((state) => {
         state.error = 'Failed to archive threads';
@@ -319,12 +338,14 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   },
 
   bulkSummarizeThreads: async () => {
+    const isCurrentSession = captureChatSession();
     const state = get();
     const threadIds = Array.from(state.selectedThreadIds);
     if (threadIds.length === 0) return null;
 
     try {
       const response = await workspaceService.bulkSummarizeThreads(threadIds);
+      if (!isCurrentSession()) return null;
 
       // Summarization is async, so we just clear selection and wait for WebSocket updates
       // or return the response so the UI can show a toast
@@ -335,6 +356,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
 
       return response;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error bulk summarizing threads:', error);
       set((state) => {
         state.error = 'Failed to summarize threads';
@@ -344,6 +366,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
   },
 
   bulkDeleteThreads: async (ids) => {
+    const isCurrentSession = captureChatSession();
     const state = get();
     // Explicit ids come from the delete dialog; fall back to the sidebar's
     // select-mode set when invoked without arguments.
@@ -352,6 +375,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
 
     try {
       const response = await workspaceService.bulkDeleteThreads(threadIds);
+      if (!isCurrentSession()) return null;
       for (const result of response.results) {
         if (result.success) {
           abortNewestPageRequest(result.thread_id);
@@ -394,6 +418,7 @@ export const createThreadSlice: ChatSliceCreator<ThreadSlice> = (set, get) => ({
 
       return response;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error bulk deleting threads:', error);
       set((state) => {
         state.error = 'Failed to delete threads';
