@@ -79,7 +79,9 @@ MAX_RESULTS = 50
 # would only reach the database as an out-of-range bind.
 MAX_OFFSET = 2**31 - 1
 MAX_DOCUMENT_IDS = 20
-MAX_ARTIFACTS = 100
+# Every returned artifact row must carry a source ref, and _source_refs keeps
+# at most MAX_RESULTS, so the artifact page can never be larger.
+MAX_ARTIFACTS = MAX_RESULTS
 MAX_EXTERNAL_RESULTS = 20
 MAX_RESULT_BYTES = 64 * 1024
 # Bytes a content page may occupy once JSON-encoded; leaves headroom under

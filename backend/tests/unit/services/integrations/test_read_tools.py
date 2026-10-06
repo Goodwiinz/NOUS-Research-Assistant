@@ -27,6 +27,8 @@ from src.schemas.integration_tools import ToolInvocation
 from src.services.integrations import read_tools
 from src.services.integrations.context import IntegrationAccessDenied
 from src.services.integrations.read_tools import (
+    MAX_ARTIFACTS,
+    MAX_RESULTS,
     READ_TOOL_NAMES,
     ToolArgumentError,
     invoke_read,
@@ -189,7 +191,7 @@ def test_catalog_advertises_only_the_read_allowlist_without_identity_args() -> N
         _invocation("execute_code", code="print(1)"),
         _invocation("list_project_documents", project_id=str(PROJECT)),
         _invocation("list_project_artifacts", project_id=str(PROJECT)),
-        _invocation("list_project_artifacts", limit=101),
+        _invocation("list_project_artifacts", limit=MAX_ARTIFACTS + 1),
         _invocation("search_documents", query="x", organization_id=str(ORG)),
         _invocation("search_documents", query="x", unexpected="y"),
         _invocation("search_documents"),
@@ -494,7 +496,8 @@ async def _artifact(
             storage_key=f"private/{version_id}",
             producer="harness",
             provenance={"producer": "harness"},
-            created_at=datetime(2026, 10, 1, 0, minute, tzinfo=timezone.utc),
+            created_at=datetime(2026, 10, 1, tzinfo=timezone.utc)
+            + timedelta(minutes=minute),
         )
     )
     await db.execute(
@@ -543,12 +546,26 @@ async def test_list_project_artifacts_honours_limit(
     assert len(result.content[0]["artifacts"]) == 2
 
 
+async def test_every_artifact_row_at_the_cap_has_a_source_ref(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    for minute in range(MAX_ARTIFACTS + 1):
+        await _artifact(db, PROJECT, f"a{minute}.md", minute)
+    result = await invoke_read(db, context, _invocation("list_project_artifacts"))
+    rows = result.content[0]["artifacts"]
+    assert len(rows) == MAX_ARTIFACTS == MAX_RESULTS
+    assert result.source_refs == [
+        {"artifact_id": row["artifact_id"], "version_id": row["version_id"]}
+        for row in rows
+    ]
+
+
 async def test_list_project_artifacts_is_advertised_with_bounded_limit() -> None:
     tool = {t.name: t for t in list_read_tools()}["list_project_artifacts"]
     assert tool.input_schema["additionalProperties"] is False
     assert set(tool.input_schema["properties"]) == {"limit"}
     assert tool.input_schema["properties"]["limit"]["minimum"] == 1
-    assert tool.input_schema["properties"]["limit"]["maximum"] == 100
+    assert tool.input_schema["properties"]["limit"]["maximum"] == MAX_ARTIFACTS
 
 
 async def test_list_project_artifacts_denial_is_a_structured_error(
