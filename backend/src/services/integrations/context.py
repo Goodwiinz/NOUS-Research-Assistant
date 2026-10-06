@@ -54,10 +54,18 @@ _SCOPE_REQUIRES = {
     "library:read": frozenset({"tools:read"}),
     "library:write": frozenset({"library:read", "tools:write"}),
 }
-# Harness runs, artifact publication and chat handoffs stay bound to one
-# Collection (a handoff also needs a chat, which a workspace grant cannot have).
+# Harness runs, artifact publication, chat handoffs and selected memories stay
+# bound to one Collection. A handoff also needs a chat, which a workspace grant
+# cannot have; the memories a user selects are stored per consent of one
+# project, and read_selected_context takes its project from the grant.
 _PROJECT_ONLY_SCOPES = frozenset(
-    {"harness:execute", "artifacts:publish", "handoff:read", "handoff:write"}
+    {
+        "harness:execute",
+        "artifacts:publish",
+        "handoff:read",
+        "handoff:write",
+        "context:read",
+    }
 )
 
 

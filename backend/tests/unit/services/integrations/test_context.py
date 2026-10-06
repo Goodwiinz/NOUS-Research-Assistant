@@ -722,6 +722,20 @@ def test_unenforced_artifact_scopes_cannot_be_requested(scope: str) -> None:
         check_scopes({"harness:execute", scope})
 
 
+def test_context_read_belongs_to_project_grants_only() -> None:
+    # Selected memories belong to one project's consent, so a project grant
+    # keeps context:read and a workspace grant, which has no such project, is
+    # refused it wherever its scopes are checked.
+    check_scopes({"tools:read", "context:read"})
+    check_scopes({"harness:execute", "tools:read", "context:read"})
+    with pytest.raises(IntegrationAccessDenied):
+        check_scopes({"tools:read", "context:read"}, workspace_bound=True)
+    with pytest.raises(IntegrationAccessDenied):
+        check_scopes(
+            {"tools:read", "library:read", "context:read"}, workspace_bound=True
+        )
+
+
 def test_library_scopes_are_standard() -> None:
     from src.schemas.integration_context import STANDARD_SCOPES
 
@@ -1370,7 +1384,15 @@ def test_complete_library_scope_sets_are_accepted(scopes: set[str]) -> None:
 
 @pytest.mark.parametrize(
     "scope",
-    ["harness:execute", "artifacts:publish", "handoff:read", "handoff:write"],
+    [
+        "harness:execute",
+        "artifacts:publish",
+        "handoff:read",
+        "handoff:write",
+        # The memories a user selects are stored per project consent, and
+        # read_selected_context takes its project from the grant.
+        "context:read",
+    ],
 )
 async def test_workspace_grants_are_mcp_only(
     db: AsyncSession, owner: Any, scope: str

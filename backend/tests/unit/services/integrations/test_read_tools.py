@@ -189,6 +189,16 @@ def test_catalog_advertises_only_the_read_allowlist_without_identity_args() -> N
         assert "project_id" not in tool.input_schema.get("properties", {})
 
 
+def test_selected_context_is_not_a_gateway_read_tool() -> None:
+    # read_selected_context is served by GET /integrations/context and takes its
+    # project from the grant: the memories a user selects are stored per project
+    # consent. Listing it here would give a workspace grant a project_id selector
+    # over memories nobody selected for that project. A workspace grant cannot
+    # hold context:read, so a project grant is the only one that reaches it.
+    assert "read_selected_context" not in {tool.name for tool in list_read_tools()}
+    assert "context:read" not in set(read_tools.TOOL_SCOPES.values())
+
+
 @pytest.mark.parametrize(
     "invocation",
     [
