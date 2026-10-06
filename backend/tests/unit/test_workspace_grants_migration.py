@@ -23,8 +23,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 
 pytestmark = pytest.mark.unit
 
@@ -40,13 +38,20 @@ REQUESTS, GRANTS, ACTIONS = (
 TABLES = (REQUESTS, GRANTS, ACTIONS)
 
 
-def _render(*alembic_args: str) -> str:
-    """The SQL alembic prints for a revision range, whitespace collapsed."""
+def _alembic(*alembic_args: str) -> str:
+    """What ``python -m alembic ...`` prints, run in a child process.
+
+    Never ``from alembic.config import Config`` here: six other migration
+    tests put a stub in ``sys.modules["alembic"]`` when they are collected
+    before the real package is imported, so a module-level import of it fails to
+    collect after them. A child process sees the real package whatever this one
+    has imported (``tests/unit/ci/test_migration_tests_collect_together.py``).
+    """
     env = {k: v for k, v in os.environ.items() if k != "SUPABASE_DB_URL"}
-    # Only the dialect is read from the URL; nothing connects in --sql mode.
+    # Only the dialect is read from the URL; nothing connects.
     env["DATABASE_URL"] = "postgresql://offline.invalid/nous"
     done = subprocess.run(
-        [sys.executable, "-m", "alembic", *alembic_args, "--sql"],
+        [sys.executable, "-m", "alembic", *alembic_args],
         cwd=BACKEND_ROOT,
         env=env,
         capture_output=True,
@@ -55,7 +60,12 @@ def _render(*alembic_args: str) -> str:
         check=False,
     )
     assert done.returncode == 0, done.stderr
-    return re.sub(r"\s+", " ", done.stdout)
+    return done.stdout
+
+
+def _render(*alembic_args: str) -> str:
+    """The SQL alembic prints for a revision range, whitespace collapsed."""
+    return re.sub(r"\s+", " ", _alembic(*alembic_args, "--sql"))
 
 
 @pytest.fixture(scope="module")
@@ -74,11 +84,18 @@ def _position(sql: str, statement: str) -> int:
 
 
 def test_revision_follows_the_integration_handoffs_head() -> None:
-    config = Config(str(BACKEND_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
-    script = ScriptDirectory.from_config(config).get_revision(REVISION)
-    assert script is not None and script.down_revision == PARENT
+    shown = _alembic("show", REVISION)
+    assert re.search(rf"^Rev: {REVISION}\b", shown, re.MULTILINE), shown
+    parent = re.search(r"^Parent: (.+)$", shown, re.MULTILINE)
+    assert parent is not None and parent.group(1).strip() == PARENT, shown
     assert len(REVISION) <= 32
+
+
+def test_the_revision_chain_has_a_single_head() -> None:
+    # check_alembic.py checks the same in CI; here a fork shows up as soon as
+    # the unit tests run, before this revision is rebased onto another's head.
+    heads = [line for line in _alembic("heads").splitlines() if line.strip()]
+    assert len(heads) == 1, heads
 
 
 @pytest.mark.parametrize("table", TABLES)
