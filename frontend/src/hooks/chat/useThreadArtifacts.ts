@@ -11,6 +11,7 @@ import {
   type ProjectArtifact,
   type ThreadArtifact,
 } from '@/services/artifactService';
+import { threadHandoffKey } from '@/hooks/chat/useThreadHandoff';
 import { useChatStore } from '@/store/chat-store';
 
 /**
@@ -123,6 +124,10 @@ export function useInvalidateThreadArtifacts(): (
     async (threadId: string, ref?: { artifactId: string }) => {
       await queryClient.invalidateQueries({
         queryKey: threadArtifactsKey(threadId),
+      });
+      // A harness publishes its results, then saves the handoff naming them.
+      await queryClient.invalidateQueries({
+        queryKey: threadHandoffKey(threadId),
       });
       if (ref) {
         await queryClient.invalidateQueries({
