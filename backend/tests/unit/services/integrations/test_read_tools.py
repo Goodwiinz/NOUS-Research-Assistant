@@ -2681,6 +2681,97 @@ async def test_list_library_for_a_live_member_is_allowed(db: AsyncSession) -> No
     assert set(_library_folders(result)) == {str(PROJECT), str(OTHER_PROJECT)}
 
 
+@pytest.mark.parametrize(
+    "make_context", [_project_context, _workspace_context], ids=["project", "workspace"]
+)
+async def test_list_library_follows_membership_but_counts_documents_by_organization(
+    db: AsyncSession, make_context: Any
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # The tenancy contract (workspace_access.py, docs/engineering/backend.md,
+    # data-isolation-matrix.md) is two-scoped: workspaces and the folders in
+    # them follow membership, and a member can be invited from any
+    # organization; documents follow the organization. A workspace grant must
+    # not narrow the first to the second (no Workspace.organization_id filter),
+    # and must not widen the second to the first.
+    owning = uuid4()
+    shared_workspace, shared_folder = uuid4(), uuid4()
+    theirs, mine = uuid4(), uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning, name="Owning organization", storage_limit_bytes=1
+        )
+    )
+    await db.execute(
+        insert(Workspace).values(
+            id=shared_workspace, name="Shared", owner_id=uuid4(), organization_id=owning
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            id=shared_folder,
+            name="Shared thesis",
+            description="notes of the owning organization",
+            workspace_id=shared_workspace,
+        )
+    )
+    await db.execute(
+        insert(Document).values(
+            [
+                {**_document_row(theirs, "theirs"), "organization_id": owning},
+                _document_row(mine, "mine"),
+            ]
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            [
+                dict(collection_id=shared_folder, document_id=theirs),
+                dict(collection_id=shared_folder, document_id=mine),
+            ]
+        )
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=shared_workspace, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    scopes = TOOLS_READ | LIBRARY_READ
+    context = (
+        _workspace_context(scopes).model_copy(update={"workspace_id": shared_workspace})
+        if make_context is _workspace_context
+        else _project_context(scopes).model_copy(update={"project_id": shared_folder})
+    )
+
+    library = await invoke_read(db, context, _invocation("list_library"))
+    # The folder is listed: its name and description are workspace metadata.
+    assert library.is_error is False
+    (folder,) = library.content[0]["folders"]
+    assert folder["id"] == str(shared_folder)
+    assert folder["name"] == "Shared thesis"
+    assert folder["description"] == "notes of the owning organization"
+    # Its documents are counted per the grant's organization: the owning
+    # organization's document is neither counted nor named.
+    assert folder["document_count"] == 1
+    assert str(theirs) not in json.dumps(library.content)
+
+    # Everything behind the folder is organization-scoped and stays refused.
+    selector = {"project_id": str(shared_folder)} if context.workspace_id else {}
+    for tool, arguments in (
+        ("list_project_documents", {}),
+        ("search_documents", {"query": "mine"}),
+        ("get_current_draft", {}),
+    ):
+        refused = await invoke_read(
+            db, context, _invocation(tool, **selector, **arguments)
+        )
+        assert refused.is_error is True
+        assert refused.content == [{"error": "Project not found or access denied"}]
+        assert refused.source_refs == []
+
+
 # What ends a project grant's access. list_library resolves the scope again on
 # every call, so each change must turn the next call into a denial.
 LOST_ACCESS: dict[str, Any] = {
