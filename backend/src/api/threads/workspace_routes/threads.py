@@ -366,10 +366,14 @@ async def get_thread_handoff(
     thread = await workspace_access.get_thread(
         db, thread_id, current_user.id, include_messages=False
     )
-    if not thread or current_user.organization_id is None:
+    if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
+    # Scope by the chat's own workspace org: an authorized member or viewer
+    # may belong to another organization.
     latest = await handoffs.read_latest_for_thread(
-        db, organization_id=current_user.organization_id, thread_id=thread_id
+        db,
+        organization_id=thread.conversation.workspace.organization_id,
+        thread_id=thread_id,
     )
     if latest is None:
         raise HTTPException(status_code=404, detail="No handoff for this chat")

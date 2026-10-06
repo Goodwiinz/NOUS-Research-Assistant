@@ -66,7 +66,19 @@ def _headers(token: str) -> dict[str, str]:
 
 @pytest.fixture
 def state() -> dict[str, Any]:
-    return {"latest": LATEST, "save": LATEST, "saved": [], "thread": object()}
+    return {
+        "latest": LATEST,
+        "save": LATEST,
+        "saved": [],
+        "thread": _thread(ORG),
+        "read_orgs": [],
+    }
+
+
+def _thread(org: UUID) -> Any:
+    return SimpleNamespace(
+        conversation=SimpleNamespace(workspace=SimpleNamespace(organization_id=org))
+    )
 
 
 @pytest.fixture
@@ -112,7 +124,7 @@ def app(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]) -> FastAPI:
     async def read_for_thread(
         _db: Any, *, organization_id: UUID, thread_id: UUID
     ) -> Any:
-        assert organization_id == ORG
+        state["read_orgs"].append(organization_id)
         return state["latest"]
 
     async def get_thread(_db: Any, thread_id: UUID, user_id: UUID, **_: Any) -> Any:
@@ -267,8 +279,23 @@ def test_browser_route_404_for_outsider_and_empty(
     response = client.get(f"/api/v2/threads/{THREAD}/handoff")
     assert response.status_code == 404
     assert response.json() == {"detail": "Thread not found"}
-    state["thread"] = object()
+    state["thread"] = _thread(ORG)
     state["latest"] = None
     response = client.get(f"/api/v2/threads/{THREAD}/handoff")
     assert response.status_code == 404
     assert response.json() == {"detail": "No handoff for this chat"}
+
+
+def test_browser_route_scopes_by_the_chats_workspace_org(
+    app: FastAPI, state: dict[str, Any]
+) -> None:
+    """A workspace member from another org reads the chat's handoff."""
+    thread_org = uuid4()
+    state["thread"] = _thread(thread_org)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=USER, organization_id=uuid4()
+    )
+    with TestClient(app) as client:
+        response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+    assert response.status_code == 200
+    assert state["read_orgs"] == [thread_org]

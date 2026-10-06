@@ -496,3 +496,32 @@ def test_duplicate_result_versions_rejected() -> None:
                 {"artifact_version_id": VERSION, "summary": "b"},
             ]
         )
+
+
+@pytest.mark.parametrize("ancestor", ["workspace", "conversation", "thread"])
+async def test_deleted_ancestor_hides_the_handoff(
+    db: AsyncSession, ancestor: str
+) -> None:
+    await save(db, _ctx(), _payload())
+    model, key = {
+        "workspace": (Workspace, WORKSPACE),
+        "conversation": (Conversation, CONVERSATION),
+        "thread": (Thread, THREAD),
+    }[ancestor]
+    # Deleted after any access check the caller made.
+    await db.execute(update(model).where(model.id == key).values(is_deleted=True))
+    await db.commit()
+    assert (
+        await read_latest_for_thread(db, organization_id=ORG, thread_id=THREAD) is None
+    )
+    assert await read_latest(db, _ctx()) is None
+
+
+async def test_browser_read_requires_the_workspace_org(db: AsyncSession) -> None:
+    await save(db, _ctx(), _payload())
+    # The chat's workspace is in ORG; naming another org finds nothing even
+    # though the handoff row itself carries ORG.
+    assert (
+        await read_latest_for_thread(db, organization_id=OTHER_ORG, thread_id=THREAD)
+        is None
+    )
