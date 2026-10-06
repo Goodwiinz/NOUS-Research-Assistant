@@ -256,6 +256,103 @@ for (const approved of [true, false]) {
   });
 }
 
+test("an approval decision typed as soon as the prompt renders is not lost", async () => {
+  // Regression for GOO-397: the composer unmounts and the approval prompt
+  // mounts in the same commit, so a focus-based input only becomes active a
+  // few commits later and keystrokes in that window were silently dropped.
+  const calls: string[] = [];
+  mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+    calls.push(String(url));
+    return calls.length === 1
+      ? response([
+          [
+            "confirmation",
+            {
+              thread_id: "thread-1",
+              confirmation: { tool_name: "create_note", tool_args: {} },
+            },
+          ],
+        ])
+      : response([["token", { content: "Note created" }], ["done", {}]]);
+  });
+  const ui = render(<App />);
+  await until(
+    () =>
+      ui.frames.length > 1 && (ui.lastFrame()?.includes("Ask NOUS") ?? false),
+    "Composer mounts",
+  );
+  ui.stdin.write("Find papers");
+  await until(
+    () => ui.lastFrame()?.includes("Find papers") ?? false,
+    "Input is visible",
+  );
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Approval required") ?? false,
+    "Approval is visible",
+  );
+  // No delay: type the decision in the very next tick after the prompt shows.
+  ui.stdin.write("yes");
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Note created") ?? false,
+    "Resumed response renders without waiting for focus",
+  );
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /\/agent\/stream\/confirm$/);
+  ui.unmount();
+});
+
+test("a pasted single-chunk decision submits once and shows no control characters", async () => {
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return calls.length === 1
+        ? response([
+            [
+              "confirmation",
+              {
+                thread_id: "thread-1",
+                confirmation: { tool_name: "create_note", tool_args: {} },
+              },
+            ],
+          ])
+        : response([["token", { content: "Request denied" }], ["done", {}]]);
+    },
+  );
+  const ui = render(<App />);
+  await until(
+    () =>
+      ui.frames.length > 1 && (ui.lastFrame()?.includes("Ask NOUS") ?? false),
+    "Composer mounts",
+  );
+  ui.stdin.write("Find papers");
+  await until(
+    () => ui.lastFrame()?.includes("Find papers") ?? false,
+    "Input is visible",
+  );
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Approval required") ?? false,
+    "Approval is visible",
+  );
+  // One chunk, as a terminal paste delivers it; a second Enter must not
+  // post a second decision.
+  ui.stdin.write("no\r");
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Request denied") ?? false,
+    "Resumed response renders from a single-chunk paste",
+  );
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].body, { thread_id: "thread-1", confirmed: false });
+  assert.doesNotMatch(ui.frames.join("\n"), /no\r/);
+  ui.unmount();
+});
+
 test("Ctrl+C during approval cancels without posting a decision", async () => {
   const fetch = mock.method(globalThis, "fetch", async () =>
     response([
