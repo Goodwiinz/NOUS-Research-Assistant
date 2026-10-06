@@ -1,0 +1,27 @@
+{
+  "step": "I1-01-request-fulltext-r3",
+  "as": "owner",
+  "at": "2026-09-30T21:10:38.504226+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/fulltext/requests",
+    "body": {
+      "report_id": "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "request_id": "cdd09024-31e8-49e7-afca-f1305029187f",
+    "report_id": "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+    "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+    "requested_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "requested_at": "2026-09-30T21:10:38.322177Z",
+    "state": "pending",
+    "head_attempt_id": null,
+    "attempts": []
+  }
+}

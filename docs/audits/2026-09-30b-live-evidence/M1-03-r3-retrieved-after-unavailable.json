@@ -1,0 +1,27 @@
+{
+  "step": "M1-03-r3-retrieved-after-unavailable",
+  "as": "owner",
+  "at": "2026-09-30T21:16:27.081512+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/fulltext/requests/cdd09024-31e8-49e7-afca-f1305029187f/attempts",
+    "body": {
+      "outcome": "retrieved",
+      "attempted_on": "2026-09-30",
+      "document_id": "0d73d115-762d-4c3c-95bb-75ee470c6813",
+      "idempotency_key": "<redacted>",
+      "previous_attempt_id": "136fc61a-3e66-4b01-8f26-79de2867f2e1"
+    }
+  },
+  "status": 422,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Document has no content hash yet",
+      "status_code": 422,
+      "type": "http_error"
+    }
+  }
+}

@@ -119,5 +119,5 @@ async def delete_grant(
             raise HTTPException(403, "Integration access denied")
     else:
         await require_interactive_user(request, token, user)
-    await service.revoke_integration_grant(db, grant_id)
+    await service.revoke_integration_grant(db, grant_id, end_cli_sessions=token.is_cli)
     return Response(status_code=204)

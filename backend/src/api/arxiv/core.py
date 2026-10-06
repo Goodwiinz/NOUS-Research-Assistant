@@ -24,7 +24,10 @@ from src.core.config import get_settings
 from src.core.dependencies import get_current_user
 from src.services.arxiv.arxiv_service import ArXivIngestionService
 from src.services.arxiv.persistence import persist_arxiv_documents
-from src.services.expensive_work_admission import admit_expensive_work
+from src.services.expensive_work_admission import (
+    admit_expensive_work,
+    metered_expensive_work,
+)
 from src.shared.schemas import UserResponse
 
 logger = logging.getLogger(__name__)
@@ -364,6 +367,7 @@ async def get_arxiv_categories(current_user: UserResponse = Depends(get_current_
 
 
 @router.get("/download/{paper_id}")
+@metered_expensive_work
 async def download_paper(
     paper_id: str, current_user: UserResponse = Depends(get_current_user)
 ):
@@ -391,6 +395,7 @@ async def download_paper(
 
 
 @router.get("/statistics")
+@metered_expensive_work
 async def get_arxiv_statistics(
     query: Optional[str] = Query(None, description="Query to filter papers"),
     days: int = Query(30, ge=1, le=365, description="Number of days to look back"),

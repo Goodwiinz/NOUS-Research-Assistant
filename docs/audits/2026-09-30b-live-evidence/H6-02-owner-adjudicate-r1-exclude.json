@@ -1,0 +1,38 @@
+{
+  "step": "H6-02-owner-adjudicate-r1-exclude",
+  "as": "owner",
+  "at": "2026-09-30T21:10:13.583626+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/55fe3b95-e69b-4bd2-a3de-b59c251b0737/reports/4b755e8c-aec5-451e-b57c-39a679ffcf03/adjudicate",
+    "body": {
+      "resolution_id": "20b6d9f9-83c3-5e14-94f9-830e834b5725",
+      "input_observation_ids": [
+        "b6e995bc-e559-4ba3-a1c6-d125c1450e58",
+        "e2ccc9d5-0e40-4645-9031-43c9dfa482b7"
+      ],
+      "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+      "decision": "exclude",
+      "rationale": "Opinion piece; protocol excludes opinion pieces",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "8203f41f-e1c9-486b-b8c2-ad5cb849390e",
+    "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+    "basis": "adjudicated",
+    "outcome": "exclude",
+    "exclusion_reason": null,
+    "input_observation_ids": [
+      "b6e995bc-e559-4ba3-a1c6-d125c1450e58",
+      "e2ccc9d5-0e40-4645-9031-43c9dfa482b7"
+    ],
+    "criteria_hash": "0f57a4d8d25edfc62d39aaee60a01490173fcb5426938bfd0d650b84ce8bf980",
+    "supersedes_resolution_id": "20b6d9f9-83c3-5e14-94f9-830e834b5725",
+    "created_at": "2026-09-30T21:10:13.411768Z"
+  }
+}

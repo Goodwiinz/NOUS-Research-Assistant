@@ -1,0 +1,18 @@
+{
+  "step": "M1-06-prisma-final-md",
+  "as": "owner",
+  "at": "2026-09-30T21:16:27.914540+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/prisma/export?format=md",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/markdown; charset=utf-8",
+    "Content-Disposition": "attachment; filename=\"prisma-flow-2f7056ed-b0fb-488a-8290-8bf1c8502652-292967034a0f.md\""
+  },
+  "response_bytes": 924,
+  "response_sha256": "27137ecaa641715b5091c8cafc8037d4c06058779ba7edfa187d391290bce4d2",
+  "response_text": "# PRISMA 2020 flow\n\n| Count | Value |\n|---|---|\n| records_identified | 12 |\n| records_by_source | none |\n| records_by_import | Embase (Ovid): 7, eval-2026-09-30b synthetic: 5 |\n| import_rejected | 4 |\n| duplicates_removed | 4 |\n| unique_reports | 8 |\n| records_screened | 4 |\n| records_excluded | 1 |\n| records_awaiting_screening | 4 |\n| reports_sought | 4 |\n| reports_not_retrieved | 2 |\n| reports_awaiting_retrieval | 0 |\n| reports_assessed | 2 |\n| reports_excluded_by_reason | wrong study design: 1 |\n| included_reports | 1 |\n| included_studies | 1 |\n| unconfirmed_study_links | 0 |\n\n```mermaid\nflowchart TD\n  I[\"Records identified: 12\"] --> D[\"Duplicates removed: 4\"]\n  D --> S[\"Records screened: 4\"]\n  S --> SX[\"Records excluded: 1\"]\n  S --> R[\"Reports sought: 4\"]\n  R --> RN[\"Reports not retrieved: 2\"]\n  R --> A[\"Reports assessed: 2\"]\n  A --> AX[\"Reports excluded: 1\"]\n  A --> N[\"Included: 1 studies, 1 reports\"]\n```\n"
+}

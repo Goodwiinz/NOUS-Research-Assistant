@@ -8,8 +8,10 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
+from uuid import uuid4
 
 from celery import Task, current_app
+from sqlalchemy import select
 
 from src.core.config import settings
 from src.core.database import SessionLocal, get_db
@@ -24,6 +26,7 @@ from src.models.graph import EntityType as GraphEntityType
 from src.models.graph import ExtractionMethod as GraphExtractionMethod
 from src.models.graph import RelationshipType as GraphRelationshipType
 from src.models.processing import JobStatus, ProcessingJob
+from src.services.documents.satellite_state import begin_write, finish_write
 from src.services.knowledge_graph.knowledge_graph_service import knowledge_graph_service
 from src.services.processing.llm_entity_extraction import LLMEntityExtractionService
 from src.services.processing.processing_service import ProcessingPipeline
@@ -31,6 +34,7 @@ from src.services.search.fulltext_search_service import fulltext_search_service
 from src.shared.enums import SatelliteSyncStatus
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
+from src.tasks.processing_lifecycle import ProcessingStopped, require_active_ingestion
 from src.tasks.replay_guard import claim_job_for_processing
 
 logger = logging.getLogger(__name__)
@@ -69,9 +73,11 @@ def _sync_document_to_kb_blocking(
 
     DO KB (DigitalOcean Knowledge Base) is the retrieval backend after Qdrant
     was dropped. ``sync_document_to_kb`` is async and needs an async session,
-    while these tasks hold a sync ``SessionLocal`` — bridge the sync-loaded ORM
-    object into a fresh ``AsyncSessionLocal`` via async ``merge()``, mirroring
-    ``api/agent/tools_impl.py``.
+    while these tasks hold a sync ``SessionLocal``, so it runs on a fresh
+    ``AsyncSessionLocal`` against a freshly loaded, org-scoped copy of the row.
+    It used to ``merge()`` the caller's object instead, and committing that
+    wrote every stale loaded column back (e.g. reverting a sweep's FAILED
+    status). The sync only owns the DO KB columns it sets (GOO-358).
 
     ``trigger_indexing=False`` registers the data source without kicking the
     org-level indexing job — the satellite reconciler uses it to batch one
@@ -84,13 +90,79 @@ def _sync_document_to_kb_blocking(
     async def _run() -> str | None:
         from src.core.database import AsyncSessionLocal
         from src.services.do_kb import sync_document_to_kb
+        from src.services.do_kb.provisioner import ensure_kb_for_org
 
+        data_source_uuid = None
+        token = uuid4().hex
         async with AsyncSessionLocal() as kb_db:
-            merged = await kb_db.merge(document)
-            data_source_uuid = await sync_document_to_kb(
-                kb_db, merged, trigger_indexing=trigger_indexing
-            )
+            current = await kb_db.get(Document, document.id)
+            if (
+                current is None
+                or current.organization_id != document.organization_id
+                or current.is_deleted
+                or not settings.DO_KB_ENABLED
+            ):
+                return None
+            # Persist the KB mapping before dispatch, then a discoverable write
+            # intent under the document lock. Neither provider call holds that
+            # lock. A lost response/commit can be recovered by exact object key.
+            await ensure_kb_for_org(kb_db, current.organization_id)
             await kb_db.commit()
+            current = (
+                await kb_db.execute(
+                    select(Document)
+                    .where(
+                        Document.id == document.id,
+                        Document.organization_id == document.organization_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True, autoflush=False)
+                )
+            ).scalar_one_or_none()
+            if current is None or current.is_deleted:
+                await kb_db.rollback()
+                return None
+            begin_write(current, "do_kb", token)
+            await kb_db.commit()
+            try:
+                data_source_uuid = await sync_document_to_kb(
+                    kb_db, current, trigger_indexing=trigger_indexing
+                )
+                indexed_at, index_status = (
+                    current.do_kb_indexed_at,
+                    current.do_kb_index_status,
+                )
+                # Drop the provider's ORM snapshot before writing just its
+                # outcome to a fresh locked row; preserve concurrent deletion.
+                await kb_db.rollback()
+                current = (
+                    await kb_db.execute(
+                        select(Document)
+                        .where(
+                            Document.id == document.id,
+                            Document.organization_id == document.organization_id,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                ).scalar_one_or_none()
+                if current is not None and data_source_uuid:
+                    current.do_kb_data_source_uuid = data_source_uuid
+                    current.do_kb_indexed_at, current.do_kb_index_status = (
+                        indexed_at,
+                        index_status,
+                    )
+                    finish_write(current, "do_kb", token)
+                await kb_db.commit()
+            except Exception:
+                await kb_db.rollback()
+                logger.warning(
+                    "DO KB sync or outcome persistence failed; durable cleanup intent retained",
+                    exc_info=True,
+                )
+                # The remote identifier remains useful even when persistence
+                # fails. The caller can compensate; reconciliation can discover
+                # it independently if this process stops before compensation.
             return data_source_uuid
 
     try:
@@ -186,6 +258,52 @@ def _record_do_kb_sync_outcome(document, ds_uuid) -> None:
         document.do_kb_sync_status = SatelliteSyncStatus.FAILED.value
 
 
+def _compensate_late_remote_writes(
+    db, document_id, organization_id, writes: set[str]
+) -> None:
+    """Undo DO KB / Neo4j writes that finished after their document was deleted.
+
+    The delete's own satellite cleanup ran before these writes existed, so
+    nothing else would remove them. Cleanup is attempted now. If it fails, the
+    retry marker stays durable on the deleted row, where the satellite
+    reconciler picks it up: the data-source uuid for DO KB, or
+    ``neo4j_index_status=failed`` for Neo4j. Never raises; the task is already
+    stopping.
+    """
+    from src.tasks.reconcile_tasks import (
+        _cleanup_deleted_do_kb_document,
+        _cleanup_deleted_document_graph,
+    )
+
+    try:
+        current = (
+            db.query(Document)
+            .filter(
+                Document.id == document_id,
+                Document.organization_id == organization_id,
+            )
+            .populate_existing()
+            .first()
+        )
+        if current is None or not current.is_deleted:
+            return
+        if "graph" in writes:
+            _cleanup_deleted_document_graph(current)
+            # The graph outcome holds a short Document lock. Release it before
+            # DO cleanup opens its independent session for the same document.
+            db.commit()
+        if "do_kb" in writes:
+            _cleanup_deleted_do_kb_document(current)
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning(
+            "Cleanup of late satellite writes failed for deleted document %s",
+            document_id,
+            exc_info=True,
+        )
+
+
 class ProcessingTask(Task):
     """Base class for processing tasks"""
 
@@ -202,11 +320,22 @@ class ProcessingTask(Task):
             job_id = args[0]
             db = SessionLocal()
             try:
-                job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+                job = (
+                    db.query(ProcessingJob)
+                    .filter(ProcessingJob.id == job_id)
+                    .with_for_update()
+                    .first()
+                )
 
-                if job:
+                # Never overwrite a finished job (cancelled, swept, already
+                # failed by the task) or one a newer attempt has claimed.
+                if (
+                    job
+                    and not job.is_finished
+                    and job.celery_task_id in (None, task_id)
+                ):
                     job.fail_job(str(exc))
-                    db.commit()
+                db.commit()
             except Exception as e:
                 logger.error(f"Failed to update job status: {str(e)}")
             finally:
@@ -254,6 +383,10 @@ def _safe_relationship_type(raw_type: str) -> GraphRelationshipType:
 def process_document_ingestion(self, job_id: str):
     """Process complete document ingestion pipeline"""
     db = SessionLocal()
+    # Remote satellites this attempt wrote to; cleaned up if the document turns
+    # out to have been deleted while the write was in flight (GOO-358).
+    remote_writes: set[str] = set()
+    document_ids: tuple[Any, Any] | None = None
     try:
         # Get job and document
         job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
@@ -269,6 +402,7 @@ def process_document_ingestion(self, job_id: str):
 
         if not document:
             raise ValueError(f"Document not found for job {job_id}")
+        document_ids = (document.id, document.organization_id)
 
         # Atomic idempotency claim for acks_late redelivery. The Celery app sets
         # task_acks_late, so a worker killed mid-run never acks and the broker
@@ -298,16 +432,27 @@ def process_document_ingestion(self, job_id: str):
                 "skipped": claim.reason,
             }
 
+        # Every stage commit re-checks, under Document -> ProcessingJob row
+        # locks, that this attempt is still the live one: the document can be
+        # deleted, the job cancelled or swept, or a retry started while this
+        # worker parses or calls models. A stale attempt rolls back instead of
+        # writing (GOO-357). Slow work stays outside the locks.
+        def commit_if_active() -> None:
+            require_active_ingestion(
+                db, job_id, expected_task_id=self.request.id, lock=True
+            )
+            db.commit()
+
         # Initialize processing service
         processing_service = ProcessingPipeline(db)
 
         # Update document status (claim already moved the job to RUNNING).
         document.update_processing_status(ProcessingStatus.PROCESSING)
-        db.commit()
+        commit_if_active()
 
         # Step 1: Text Extraction
         job.update_progress("Extracting text content", 20)
-        db.commit()
+        commit_if_active()
 
         # Run async function in a managed event loop
         text_extraction_result = asyncio.run(
@@ -323,7 +468,7 @@ def process_document_ingestion(self, job_id: str):
             document.add_metadata(
                 "character_count", text_extraction_result["character_count"]
             )
-        db.commit()
+        commit_if_active()
 
         # Step 1b: Figure extraction (optional, flag-gated; never fails ingestion)
         if (
@@ -337,13 +482,15 @@ def process_document_ingestion(self, job_id: str):
                 )
 
                 job.update_progress("Extracting figures", 35)
-                db.commit()
+                commit_if_active()
                 fig_result = extract_figures_for_document(db, document)
                 if fig_result.get("captions_text"):
                     document.content_text = merge_captions_into_text(
                         document.content_text, fig_result["captions_text"]
                     )
-                db.commit()
+                commit_if_active()
+            except ProcessingStopped:
+                raise
             except Exception as fig_err:  # optional step, mirrors Neo4j tolerance above
                 db.rollback()
                 logger.warning(
@@ -352,7 +499,7 @@ def process_document_ingestion(self, job_id: str):
 
         # Step 2: Entity Extraction
         job.update_progress("Extracting entities", 50)
-        db.commit()
+        commit_if_active()
 
         if document.content_text:
             # Run entity extraction in event loop
@@ -370,11 +517,17 @@ def process_document_ingestion(self, job_id: str):
             # Replay-safe write: drop any spaCy/regex entities left by a prior
             # crashed run for this document before inserting the fresh set, so an
             # acks_late reclaim replaces rather than duplicates them. The delete
-            # and the inserts commit in one transaction (all-or-nothing).
+            # and the inserts commit in one transaction (all-or-nothing). The
+            # DELETE runs immediately, so take the guard's Document -> Job locks
+            # first: a delete cascading to these entities must not wait on this
+            # worker while the worker waits on the delete's Document lock.
+            require_active_ingestion(
+                db, job_id, expected_task_id=self.request.id, lock=True
+            )
             _reset_pipeline_entities(db, document.id)
             for entity in entities:
                 db.add(entity)
-            db.commit()
+            commit_if_active()
 
             # Index entities into Neo4j knowledge graph. Best-effort (a Neo4j
             # outage never fails ingestion) but no longer silent: the helper
@@ -383,10 +536,46 @@ def process_document_ingestion(self, job_id: str):
             # 'pending' first so a worker killed mid-fan-out is visible too.
             job.update_progress("Indexing knowledge graph", 60)
             document.neo4j_index_status = SatelliteSyncStatus.PENDING.value
-            db.commit()
+            commit_if_active()
 
-            _index_entities_to_graph(document, entities)
+            require_active_ingestion(
+                db, job_id, expected_task_id=self.request.id, lock=True
+            )
+            graph_token = uuid4().hex
+            begin_write(document, "graph", graph_token)
             db.commit()
+            remote_writes.add("graph")
+            try:
+                _index_entities_to_graph(document, entities)
+            finally:
+                # SIGKILL cannot reach this acknowledgement. Its token then
+                # keeps successful earlier cleanup from hiding the late write.
+                with SessionLocal() as outcome_db:
+                    current = (
+                        outcome_db.query(Document)
+                        .filter(
+                            Document.id == document.id,
+                            Document.organization_id == document.organization_id,
+                        )
+                        .populate_existing()
+                        .with_for_update()
+                        .one_or_none()
+                    )
+                    if current is not None:
+                        finish_write(current, "graph", graph_token)
+                        if (
+                            current.is_deleted
+                            and (current.document_metadata or {}).get(
+                                "graph_cleanup_requested"
+                            )
+                            is not False
+                        ):
+                            current.neo4j_index_status = (
+                                SatelliteSyncStatus.PENDING.value
+                            )
+                        outcome_db.commit()
+                db.refresh(document, attribute_names=["document_metadata"])
+            commit_if_active()
 
         # Step 3: Embedding Generation — push the document to DO KB, the
         # retrieval backend (replaces the dead Qdrant write). Idempotent and
@@ -394,24 +583,27 @@ def process_document_ingestion(self, job_id: str):
         # no-op so ingestion still completes — but the outcome is recorded in
         # do_kb_sync_status (audit D1) so a failed sync is reconcilable.
         job.update_progress("Generating embeddings", 75)
-        db.commit()
+        commit_if_active()
 
         if document.content_text:
             if settings.DO_KB_ENABLED:
                 # Visible in-flight marker; overwritten by the outcome below.
                 document.do_kb_sync_status = SatelliteSyncStatus.PENDING.value
-                db.commit()
+                commit_if_active()
             ds_uuid = _sync_document_to_kb_blocking(document)
             if ds_uuid:
+                remote_writes.add("do_kb")
                 document.is_embedded = True
             _record_do_kb_sync_outcome(document, ds_uuid)
-        db.commit()
+        commit_if_active()
 
         # Step 4: Generate Search Vector
         job.update_progress("Creating search index", 90)
-        db.commit()
+        commit_if_active()
 
-        # Update search vector for full-text search
+        # Update search vector for full-text search. The service commits its own
+        # raw UPDATE of search_vector only (no stale ORM state); the guarded
+        # finalize below still refuses to complete a lost attempt.
         search_vector_ok = False
         try:
             fulltext_search_service.update_document_search_vector(str(document.id), db)
@@ -424,7 +616,12 @@ def process_document_ingestion(self, job_id: str):
 
         # Step 5: Finalize
         job.update_progress("Finalizing", 95)
-        db.commit()
+
+        # Progress, document and job complete in one guarded commit. Check
+        # before mutating status so the flush cannot mask a cancellation.
+        require_active_ingestion(
+            db, job_id, expected_task_id=self.request.id, lock=True
+        )
 
         # Mark document as processed. is_indexed must reflect ACTUAL full-text
         # searchability: if the search-vector build above failed the document has
@@ -434,9 +631,6 @@ def process_document_ingestion(self, job_id: str):
         # re-index can be triggered for the not-yet-searchable docs.
         document.update_processing_status(ProcessingStatus.COMPLETED)
         document.is_indexed = search_vector_ok
-        db.commit()
-
-        # Complete job
         job.complete_job(
             result={
                 "text_extracted": bool(document.content_text),
@@ -459,6 +653,19 @@ def process_document_ingestion(self, job_id: str):
             "processing_time": job.duration_seconds,
         }
 
+    except ProcessingStopped as stop:
+        # Cancelled, deleted, swept or superseded mid-run: whoever did that
+        # already wrote the state, so drop this attempt's writes and stop.
+        db.rollback()
+        logger.info(
+            "Ingestion job %s stopped mid-run (%s); discarding stale writes",
+            job_id,
+            stop.reason,
+        )
+        if stop.reason == "deleted" and remote_writes and document_ids:
+            _compensate_late_remote_writes(db, *document_ids, remote_writes)
+        return {"status": "stopped", "job_id": job_id, "skipped": stop.reason}
+
     except Exception as e:
         logger.error(f"Document ingestion failed for job {job_id}: {str(e)}")
 
@@ -469,20 +676,23 @@ def process_document_ingestion(self, job_id: str):
         # content-hash dedup from ever re-uploading it.
         db.rollback()
 
-        # Update document and job status
+        # Record the failure only if this attempt still owns the job; never
+        # overwrite a cancellation, deletion, sweep or newer attempt.
         try:
-            document = (
-                db.query(Document)
-                .filter(Document.id == job.parameters["document_id"])
-                .first()
-            )
-
-            if document:
+            try:
+                job, document = require_active_ingestion(
+                    db, job_id, expected_task_id=self.request.id, lock=True
+                )
+            except ProcessingStopped as stop:
+                db.rollback()
+                # A remote write may have landed before the document was
+                # deleted and the stage then failed for an unrelated reason.
+                if stop.reason == "deleted" and remote_writes and document_ids:
+                    _compensate_late_remote_writes(db, *document_ids, remote_writes)
+            else:
                 document.update_processing_status(ProcessingStatus.FAILED, str(e))
-
-            if job:
                 job.fail_job(str(e))
-            db.commit()
+                db.commit()
 
         except Exception as update_error:
             logger.error(f"Failed to update failure status: {str(update_error)}")

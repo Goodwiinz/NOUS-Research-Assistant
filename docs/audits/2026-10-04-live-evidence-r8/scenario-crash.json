@@ -1,0 +1,55 @@
+{
+  "execution": {
+    "attempts": [
+      {
+        "at": "2026-10-04T03:09:19.43391-04:00",
+        "detail": null,
+        "id": "cb43cbe2-34e3-404c-a143-f05d6978f251",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:48682"
+      },
+      {
+        "at": "2026-10-04T03:39:19.461727-04:00",
+        "detail": {
+          "retry_of": "cb43cbe2-34e3-404c-a143-f05d6978f251"
+        },
+        "id": "0987b808-c001-447d-b7b7-4a9afceea25f",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:55389"
+      },
+      {
+        "at": "2026-10-04T03:39:22.851364-04:00",
+        "detail": {
+          "counts": {
+            "changed": 1,
+            "corrected_retracted": 1,
+            "new": 27,
+            "unchanged": 1,
+            "unknown": 1
+          },
+          "delta_hash": "19bc4a6b783eb804ac75da1e49712cbf8500d5ac5f0182ea1db84afee4db58b7"
+        },
+        "id": "9fb9efca-13ec-45c3-ab3d-c028a5299ba0",
+        "outcome": "succeeded",
+        "reason": null,
+        "worker": "Mac.lan:55389"
+      }
+    ],
+    "collection_id": "cfd0b4a4-c948-45c1-bdf2-8a07af1718aa",
+    "counts": {
+      "changed": 1,
+      "corrected_retracted": 1,
+      "new": 27,
+      "unchanged": 1,
+      "unknown": 1
+    },
+    "delta_hash": "19bc4a6b783eb804ac75da1e49712cbf8500d5ac5f0182ea1db84afee4db58b7",
+    "execution_id": "47c6d9e1-61ab-4c9a-9409-1208a9288b9b",
+    "missed_fires": 0,
+    "schedule_id": "471797d5-dafa-4903-9b9f-4eeec796bc9f",
+    "scheduled_local": "2026-10-04T08:09"
+  },
+  "import_receipts": 1
+}

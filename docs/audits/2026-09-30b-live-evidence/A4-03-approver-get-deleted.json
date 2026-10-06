@@ -1,0 +1,21 @@
+{
+  "step": "A4-03-approver-get-deleted",
+  "as": "approver",
+  "at": "2026-09-30T20:55:31.291722+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/e5160575-a1d7-43e0-a833-cf33efff2b7e",
+    "body": null
+  },
+  "status": 404,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Project not found",
+      "status_code": 404,
+      "type": "http_error"
+    }
+  }
+}

@@ -187,6 +187,9 @@ class Settings(BaseSettings):
     ZENODO_ACCOUNT_LABEL: str = ""
     ZENODO_SANDBOX_ONLY: bool = True
 
+    # GOO-319: the scheduled search beat tick self-skips until enabled.
+    SEARCH_UPDATES_ENABLED: bool = False
+
     # CORS Configuration (comma-separated string from env, parsed to list)
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Optional regex pattern (e.g. ^https://nous-platform-[a-z0-9-]+\.vercel\.app$).
@@ -526,6 +529,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_ATTEMPTS: int = 50  # Max auth attempts in window
     AUTH_RATE_LIMIT_WINDOW_MINUTES: int = 15  # Time window for rate limiting
+    # When true, a Redis outage makes the API rate limiter return 503 instead
+    # of degrading to the per-process in-memory fallback.
+    RATE_LIMIT_FAIL_CLOSED: bool = False
 
     # UUIDs of explicitly trusted platform operators.  This is intentionally
     # separate from tenant roles: an organization ADMIN must not gain access
@@ -605,7 +611,7 @@ class Settings(BaseSettings):
     # repository default exposes new work; operators can set this false as a
     # disable-first rollback. Existing runs remain readable/exportable while
     # disabled; only discovery and new work are gated.
-    DAILY_RESEARCH_BRIEF_ENABLED: bool = True
+    DAILY_RESEARCH_BRIEF_ENABLED: bool = False  # GOO-338: opt-in per environment
     AGENT_FAST_PATH_DEPLOYMENT: str = "gpt-5.6-luna"
     AGENT_FAST_PATH_MAX_INPUT_CHARS: int = 8_000
     AGENT_FAST_PATH_MAX_OUTPUT_TOKENS: int = 768

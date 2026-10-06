@@ -7296,6 +7296,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/research-engine/projects/{project_id}/review-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Versions
+         * @description The version chain with derived work status, stale counts and the
+         *     deltas a successor could accept.
+         */
+        get: operations["list_versions_api_v1_research_engine_projects__project_id__review_versions_get"];
+        put?: never;
+        /**
+         * Create Version
+         * @description Freeze the root (no parent) or a successor accepting one delta.
+         */
+        post: operations["create_version_api_v1_research_engine_projects__project_id__review_versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/accounting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Accounting
+         * @description Both PRISMA bodies plus the update boxes.
+         */
+        get: operations["get_accounting_api_v1_research_engine_projects__project_id__review_versions__version_id__accounting_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Version
+         * @description Corpus, decisions with actors, work, accounting and release (read-only).
+         */
+        get: operations["export_version_api_v1_research_engine_projects__project_id__review_versions__version_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link Release
+         * @description Link a verified GOO-315 release superseding the parent's release.
+         */
+        post: operations["link_release_api_v1_research_engine_projects__project_id__review_versions__version_id__release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/review-versions/{version_id}/work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ensure Work
+         * @description Retry the targeted queues and assignments with the same keys.
+         */
+        post: operations["ensure_work_api_v1_research_engine_projects__project_id__review_versions__version_id__work_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/research-engine/projects/{project_id}/roles": {
         parameters: {
             query?: never;
@@ -7479,6 +7584,91 @@ export interface paths {
         put?: never;
         /** Reopen Screening Report Route */
         post: operations["reopen_screening_report_route_api_v1_research_engine_projects__project_id__screening_queues__queue_id__reports__report_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/search-schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Schedules
+         * @description Schedules (tip, versions, derived status, next fire, last execution)
+         *     and the pinnable strategies of completed runs.
+         */
+        get: operations["list_schedules_api_v1_research_engine_projects__project_id__search_schedules_get"];
+        put?: never;
+        /**
+         * Create Schedule
+         * @description Pin one strategy to a schedule (SUPERVISE).
+         */
+        post: operations["create_schedule_api_v1_research_engine_projects__project_id__search_schedules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/search-schedules/executions/{execution_id}/delta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Delta
+         * @description The classified delta of one succeeded execution (read-only).
+         */
+        get: operations["export_delta_api_v1_research_engine_projects__project_id__search_schedules_executions__execution_id__delta_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/search-schedules/{schedule_id}/executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Executions
+         * @description Every execution of one schedule with all attempts (failures kept).
+         */
+        get: operations["list_executions_api_v1_research_engine_projects__project_id__search_schedules__schedule_id__executions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/research-engine/projects/{project_id}/search-schedules/{schedule_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Version Schedule
+         * @description Edit, enable or disable a schedule as a new version (SUPERVISE).
+         */
+        post: operations["version_schedule_api_v1_research_engine_projects__project_id__search_schedules__schedule_id__versions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16105,6 +16295,8 @@ export interface components {
             project_id: string;
             /** Scopes */
             scopes: string[];
+            /** Thread Id */
+            thread_id?: string | null;
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
@@ -16141,6 +16333,10 @@ export interface components {
              * @enum {string}
              */
             status: "pending" | "approved" | "denied" | "expired" | "consumed";
+            /** Thread Id */
+            thread_id?: string | null;
+            /** Thread Label */
+            thread_label?: string | null;
         };
         /**
          * GraphAnalytics
@@ -19586,6 +19782,67 @@ export interface components {
          */
         ReviewDecision: "approve" | "decline";
         /**
+         * ReviewDecisionRef
+         * @description A decision carried by reference: attribution resolves via ``event_id``.
+         */
+        ReviewDecisionRef: {
+            /** Basis */
+            basis: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Outcome */
+            outcome?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Resolution Id
+             * Format: uuid
+             */
+            resolution_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /**
+             * Uncertain
+             * @default false
+             */
+            uncertain: boolean;
+        };
+        /**
+         * ReviewDeltaOption
+         * @description A succeeded GOO-319 execution a successor of the tip may accept.
+         */
+        ReviewDeltaOption: {
+            /** Baseline Execution Id */
+            baseline_execution_id?: string | null;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Delta Hash */
+            delta_hash: string;
+            /**
+             * Execution Id
+             * Format: uuid
+             */
+            execution_id: string;
+            /**
+             * Schedule Id
+             * Format: uuid
+             */
+            schedule_id: string;
+            /** Scheduled Local */
+            scheduled_local: string;
+        };
+        /**
          * ReviewDescriptor
          * @description Content-free durable descriptor for the current review gate.
          */
@@ -19624,6 +19881,80 @@ export interface components {
          * @enum {string}
          */
         ReviewKind: "screening" | "extraction" | "final";
+        /** ReviewMissingHistory */
+        ReviewMissingHistory: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "decision_missing" | "attribution_missing";
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+        };
+        /** ReviewNeedsAttention */
+        ReviewNeedsAttention: {
+            /** Class */
+            class?: ("new" | "changed" | "corrected_retracted" | "unchanged" | "unknown") | null;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+        };
+        /** ReviewReleaseLinkCreate */
+        ReviewReleaseLinkCreate: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+            /** Supersedes Release Id */
+            supersedes_release_id?: string | null;
+        };
+        /** ReviewReleaseLinkResponse */
+        ReviewReleaseLinkResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Linked By Id
+             * Format: uuid
+             */
+            linked_by_id: string;
+            /** Package Sha256 */
+            package_sha256: string;
+            /**
+             * Release Id
+             * Format: uuid
+             */
+            release_id: string;
+            /**
+             * Review Version Id
+             * Format: uuid
+             */
+            review_version_id: string;
+            /** Supersedes Release Id */
+            supersedes_release_id?: string | null;
+        };
         /**
          * ReviewValidationVocabulary
          * @description Bounded decision vocabulary used to render a pending gate.
@@ -19633,6 +19964,149 @@ export interface components {
             item_decisions?: string[];
             /** Reason Required For */
             reason_required_for?: string[];
+        };
+        /**
+         * ReviewVersionCreate
+         * @description A root version (no parent) or a successor accepting one GOO-319 delta
+         *     by ``(execution_id, delta_hash)``. ``carry_with_uncertainty`` names
+         *     ``unknown`` reports whose parent decision is carried with an explicit
+         *     flag (the rationale covers it).
+         */
+        ReviewVersionCreate: {
+            /** Carry With Uncertainty */
+            carry_with_uncertainty?: string[];
+            /** Delta Hash */
+            delta_hash?: string | null;
+            /** Execution Id */
+            execution_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Parent Review Version Id */
+            parent_review_version_id?: string | null;
+            /** Rationale */
+            rationale: string;
+            /** Reviewer User Ids */
+            reviewer_user_ids?: string[];
+        };
+        /**
+         * ReviewVersionExport
+         * @description The sealed ``nous.academic.review-version.v1`` attachment.
+         */
+        ReviewVersionExport: {
+            /** Body */
+            body: {
+                [key: string]: unknown;
+            };
+            /** Body Sha256 */
+            body_sha256: string;
+            /** Exported At */
+            exported_at: string;
+            /** Schema */
+            schema: string;
+        };
+        /** ReviewVersionListResponse */
+        ReviewVersionListResponse: {
+            /** Deltas */
+            deltas: components["schemas"]["ReviewDeltaOption"][];
+            /** Versions */
+            versions: components["schemas"]["ReviewVersionResponse"][];
+        };
+        /** ReviewVersionResponse */
+        ReviewVersionResponse: {
+            /** Accepted Execution Id */
+            accepted_execution_id?: string | null;
+            /** Carried */
+            carried: components["schemas"]["ReviewDecisionRef"][];
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Created By Id
+             * Format: uuid
+             */
+            created_by_id: string;
+            /** Delta Hash */
+            delta_hash?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Tip */
+            is_tip: boolean;
+            /** Missing History */
+            missing_history: components["schemas"]["ReviewMissingHistory"][];
+            /** Needs Attention */
+            needs_attention: components["schemas"]["ReviewNeedsAttention"][];
+            /** Parent Review Version Id */
+            parent_review_version_id?: string | null;
+            /** Prisma Body Hash */
+            prisma_body_hash: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Rationale */
+            rationale: string;
+            release?: components["schemas"]["ReviewReleaseLinkResponse"] | null;
+            /** Report Ids */
+            report_ids: string[];
+            /** Required Work */
+            required_work: {
+                [key: string]: string[];
+            };
+            /** Stale Counts */
+            stale_counts?: {
+                [key: string]: number;
+            };
+            /** Strategy Version */
+            strategy_version?: string | null;
+            /** Version Number */
+            version_number: number;
+            /** Work */
+            work: components["schemas"]["ReviewWorkStatus"][];
+        };
+        /**
+         * ReviewWorkStatus
+         * @description Derived on read: the targeted GOO-301/302 queue for one stage.
+         */
+        ReviewWorkStatus: {
+            /** Assigned Reviewer Ids */
+            assigned_reviewer_ids?: string[];
+            /** Queue Id */
+            queue_id?: string | null;
+            /** Required Report Ids */
+            required_report_ids: string[];
+            /**
+             * Resolved Count
+             * @default 0
+             */
+            resolved_count: number;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "title_abstract" | "full_text";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "none" | "queued" | "queue_missing" | "queue_mismatch" | "waiting_on_title_abstract";
+            /**
+             * Unresolved Count
+             * @default 0
+             */
+            unresolved_count: number;
         };
         /**
          * ReviewerCreate
@@ -20509,6 +20983,125 @@ export interface components {
             /** Unique Users */
             unique_users: number;
         };
+        /** SearchAttemptResponse */
+        SearchAttemptResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "started" | "succeeded" | "failed" | "skipped";
+            /** Reason */
+            reason?: string | null;
+            /** Worker */
+            worker: string;
+        };
+        /**
+         * SearchDeltaExport
+         * @description The sealed ``nous.academic.search-delta.v1`` attachment:
+         *     ``body_sha256`` is the SHA-256 of ``body`` as canonical JSON.
+         */
+        SearchDeltaExport: {
+            body: components["schemas"]["SearchDeltaExportBody"];
+            /** Body Sha256 */
+            body_sha256: string;
+            /** Exported At */
+            exported_at: string;
+            /** Schema */
+            schema: string;
+        };
+        /** SearchDeltaExportBody */
+        SearchDeltaExportBody: {
+            /** Baseline Digest */
+            baseline_digest: string;
+            /** Baseline Execution Id */
+            baseline_execution_id?: string | null;
+            /** Citation Chasing */
+            citation_chasing: {
+                [key: string]: unknown;
+            };
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Corpus Snapshot Digest */
+            corpus_snapshot_digest: string;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Coverage */
+            coverage: {
+                [key: string]: unknown;
+            };
+            /** Delta Hash */
+            delta_hash: string;
+            /**
+             * Execution Id
+             * Format: uuid
+             */
+            execution_id: string;
+            /** Filter */
+            filter?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Import Receipt Id
+             * Format: uuid
+             */
+            import_receipt_id: string;
+            /** Items */
+            items: components["schemas"]["SearchDeltaItem"][];
+            /**
+             * Schedule Id
+             * Format: uuid
+             */
+            schedule_id: string;
+            schedule_version: components["schemas"]["SearchScheduleVersionResponse"];
+            /**
+             * Schedule Version Id
+             * Format: uuid
+             */
+            schedule_version_id: string;
+            /** Scheduled Local */
+            scheduled_local: string;
+            /** Statement */
+            statement: string;
+        };
+        /** SearchDeltaItem */
+        SearchDeltaItem: {
+            /**
+             * Class
+             * @enum {string}
+             */
+            class: "new" | "changed" | "corrected_retracted" | "unchanged" | "unknown";
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Publication */
+            publication: {
+                [key: string]: unknown;
+            };
+            /** Reason */
+            reason?: ("provider_failed" | "provider_capped" | "not_returned" | "no_doi_publication_check_not_performed" | "merge_unresolved") | null;
+            /** Report Id */
+            report_id: string;
+        };
         /**
          * SearchEvaluationRequest
          * @description Request for search evaluation
@@ -20551,6 +21144,60 @@ export interface components {
              * Format: date-time
              */
             timestamp: string;
+        };
+        /** SearchExecutionListResponse */
+        SearchExecutionListResponse: {
+            /** Executions */
+            executions: components["schemas"]["SearchExecutionResponse"][];
+        };
+        /** SearchExecutionResponse */
+        SearchExecutionResponse: {
+            /** Attempts */
+            attempts: components["schemas"]["SearchAttemptResponse"][];
+            /** Baseline Execution Id */
+            baseline_execution_id?: string | null;
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Delta Hash */
+            delta_hash?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Import Receipt Id */
+            import_receipt_id?: string | null;
+            /** Missed Fires */
+            missed_fires: number;
+            /**
+             * Schedule Id
+             * Format: uuid
+             */
+            schedule_id: string;
+            /**
+             * Schedule Version Id
+             * Format: uuid
+             */
+            schedule_version_id: string;
+            /**
+             * Scheduled For
+             * Format: date-time
+             */
+            scheduled_for: string;
+            /** Scheduled Local */
+            scheduled_local: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "started" | "succeeded" | "failed" | "skipped";
         };
         /**
          * SearchFilter
@@ -20957,11 +21604,163 @@ export interface components {
             url: string;
         };
         /**
+         * SearchScheduleCreate
+         * @description Pin one GOO-298 strategy (from a completed run's search journal).
+         */
+        SearchScheduleCreate: {
+            /** Cron */
+            cron: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Source Run Id
+             * Format: uuid
+             */
+            source_run_id: string;
+            /** Step Id */
+            step_id: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Timezone */
+            timezone: string;
+        };
+        /** SearchScheduleListResponse */
+        SearchScheduleListResponse: {
+            /** Schedules */
+            schedules: components["schemas"]["SearchScheduleResponse"][];
+            /** Strategies */
+            strategies: components["schemas"]["SearchStrategyOption"][];
+        };
+        /** SearchScheduleResponse */
+        SearchScheduleResponse: {
+            last_execution?: components["schemas"]["SearchExecutionResponse"] | null;
+            /** Next Fire Local */
+            next_fire_local?: string | null;
+            /** Next Fire Utc */
+            next_fire_utc?: string | null;
+            /**
+             * Schedule Id
+             * Format: uuid
+             */
+            schedule_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "disabled" | "scheduled" | "running" | "blocked" | "failed" | "ok";
+            tip: components["schemas"]["SearchScheduleVersionResponse"];
+            /** Versions */
+            versions: components["schemas"]["SearchScheduleVersionResponse"][];
+        };
+        /**
+         * SearchScheduleVersionCreate
+         * @description Edit, enable or disable: a new version on top of ``expected_tip_id``.
+         *     A new strategy needs all three of run, step and strategy version.
+         */
+        SearchScheduleVersionCreate: {
+            /** Cron */
+            cron?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /**
+             * Expected Tip Id
+             * Format: uuid
+             */
+            expected_tip_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Source Run Id */
+            source_run_id?: string | null;
+            /** Step Id */
+            step_id?: string | null;
+            /** Strategy Version */
+            strategy_version?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** SearchScheduleVersionResponse */
+        SearchScheduleVersionResponse: {
+            /** Baseline Digest */
+            baseline_digest?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Cron */
+            cron: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Owner Id
+             * Format: uuid
+             */
+            owner_id: string;
+            /**
+             * Protocol Version Id
+             * Format: uuid
+             */
+            protocol_version_id: string;
+            /** Query */
+            query: string;
+            /**
+             * Schedule Id
+             * Format: uuid
+             */
+            schedule_id: string;
+            /**
+             * Source Run Id
+             * Format: uuid
+             */
+            source_run_id: string;
+            /** Step Id */
+            step_id: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /** Supersedes Schedule Version Id */
+            supersedes_schedule_version_id?: string | null;
+            /** Timezone */
+            timezone: string;
+        };
+        /**
          * SearchSortOrder
          * @description Search result sort orders
          * @enum {string}
          */
         SearchSortOrder: "relevance" | "date_desc" | "date_asc" | "title_asc" | "title_desc";
+        /**
+         * SearchStrategyOption
+         * @description A pinnable strategy from a completed run of this project.
+         */
+        SearchStrategyOption: {
+            /** Current Protocol */
+            current_protocol: boolean;
+            /** Protocol Version Id */
+            protocol_version_id?: string | null;
+            /** Providers */
+            providers: string[];
+            /** Query */
+            query: string;
+            /**
+             * Source Run Id
+             * Format: uuid
+             */
+            source_run_id: string;
+            /** Step Id */
+            step_id: string;
+            /** Strategy Version */
+            strategy_version: string;
+        };
         /**
          * SearchType
          * @description Search types
@@ -22299,6 +23098,37 @@ export interface components {
         TriggerExtractionRequest: {
             /** Document Ids */
             document_ids: string[];
+        };
+        /**
+         * UpdateAccountingResponse
+         * @description PRISMA 2020 for updated reviews: both flows plus the update boxes.
+         *     ``boxes`` is None (and ``error`` set) while the version does not
+         *     reconcile, e.g. its new work is unresolved.
+         */
+        UpdateAccountingResponse: {
+            /** Boxes */
+            boxes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Error */
+            error?: string | null;
+            /** Flow */
+            flow: {
+                [key: string]: unknown;
+            };
+            /** Flow Matches Frozen Hash */
+            flow_matches_frozen_hash: boolean;
+            /** Parent Flow */
+            parent_flow?: {
+                [key: string]: unknown;
+            } | null;
+            /** Parent Review Version Id */
+            parent_review_version_id?: string | null;
+            /**
+             * Review Version Id
+             * Format: uuid
+             */
+            review_version_id: string;
         };
         /**
          * UpdateEntityRequest
@@ -36273,6 +37103,251 @@ export interface operations {
             };
         };
     };
+    list_versions_api_v1_research_engine_projects__project_id__review_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_version_api_v1_research_engine_projects__project_id__review_versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Replayed version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionResponse"];
+                };
+            };
+            /** @description Unknown parent version or execution */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale tip, delta changed or out of order, unresolved parent work, or a root already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Ineligible reviewer or invalid uncertainty carry */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_accounting_api_v1_research_engine_projects__project_id__review_versions__version_id__accounting_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateAccountingResponse"];
+                };
+            };
+            /** @description Update accounting does not reconcile */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_version_api_v1_research_engine_projects__project_id__review_versions__version_id__export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sealed nous.academic.review-version.v1 export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionExport"];
+                };
+            };
+            /** @description Unknown or foreign version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_release_api_v1_research_engine_projects__project_id__review_versions__version_id__release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewReleaseLinkCreate"];
+            };
+        };
+        responses: {
+            /** @description Replayed link */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewReleaseLinkResponse"];
+                };
+            };
+            /** @description Not verified, too old, or wrong superseded release */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ensure_work_api_v1_research_engine_projects__project_id__review_versions__version_id__work_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_project_roles_api_v1_research_engine_projects__project_id__roles_get: {
         parameters: {
             query?: never;
@@ -36712,6 +37787,205 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    list_schedules_api_v1_research_engine_projects__project_id__search_schedules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchScheduleListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_schedule_api_v1_research_engine_projects__project_id__search_schedules_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchScheduleCreate"];
+            };
+        };
+        responses: {
+            /** @description Replayed schedule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchScheduleResponse"];
+                };
+            };
+            /** @description Strategy built under a superseded protocol */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid cron, timezone or strategy hash */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    export_delta_api_v1_research_engine_projects__project_id__search_schedules_executions__execution_id__delta_get: {
+        parameters: {
+            query?: {
+                class?: ("new" | "changed" | "corrected_retracted" | "unchanged" | "unknown") | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sealed nous.academic.search-delta.v1 export */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchDeltaExport"];
+                };
+            };
+            /** @description Unknown, foreign or unfinished execution */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_executions_api_v1_research_engine_projects__project_id__search_schedules__schedule_id__executions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchExecutionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    version_schedule_api_v1_research_engine_projects__project_id__search_schedules__schedule_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchScheduleVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Replayed version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchScheduleResponse"];
+                };
+            };
+            /** @description Stale tip or superseded protocol */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid cron, timezone or strategy hash */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

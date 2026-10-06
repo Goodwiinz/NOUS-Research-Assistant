@@ -135,7 +135,7 @@ class StepExecutionError(RuntimeError):
 
 @dataclass
 class ExecutionBudget:
-    """Per-run admission budget shared with versioned model stages."""
+    """Per-run admission budget shared with all model stages."""
 
     max_total_tokens: int = 50_000
     max_total_calls: int = MAX_RUN_MODEL_CALLS
@@ -230,6 +230,11 @@ class StepExecutor:
         handler_name = self._LEGACY_HANDLER_NAMES.get(step_type)
         if handler_name is None:
             raise ValueError(f"Unknown step type: {step_type}")
+        if budget is not None and step_type in {"screen", "extract", "synthesize"}:
+            return cast(
+                StepResult,
+                await getattr(self, handler_name)(step_def, context, budget=budget),
+            )
         return cast(
             StepResult,
             await getattr(self, handler_name)(step_def, context),
@@ -417,6 +422,20 @@ class StepExecutor:
                 "semantic_scholar" if name == "web" else name for name in sources
             )
         )
+        if self._is_daily_brief_context(context):
+            # GOO-331: the executed search may narrow, never widen, the scope
+            # the researcher confirmed, whatever the resolved parameters say.
+            scope = context["scope_confirmation"]
+            confirmed_providers = scope.get("providers")
+            confirmed_limit = scope.get("limit_per_provider")
+            if not isinstance(confirmed_providers, list) or not set(
+                canonical_sources
+            ).issubset(confirmed_providers):
+                raise ValueError(
+                    "search providers exceed the confirmed Daily Brief scope"
+                )
+            if type(confirmed_limit) is not int or max_results > confirmed_limit:
+                raise ValueError("search limit exceeds the confirmed Daily Brief scope")
         strategy = {
             "schema_version": "nous.academic.search-strategy.v1",
             "project_id": self.strategy_context.get("canonical_project_id"),
@@ -516,14 +535,20 @@ class StepExecutor:
             sources_used=all_sources,
         )
 
-    async def _execute_screen(self, step_def: Dict, context: Dict) -> StepResult:
-        return await self._execute_llm_step(step_def, context)
+    async def _execute_screen(
+        self, step_def: Dict, context: Dict, *, budget: Optional[ExecutionBudget] = None
+    ) -> StepResult:
+        return await self._execute_llm_step(step_def, context, budget=budget)
 
-    async def _execute_extract(self, step_def: Dict, context: Dict) -> StepResult:
-        return await self._execute_llm_step(step_def, context)
+    async def _execute_extract(
+        self, step_def: Dict, context: Dict, *, budget: Optional[ExecutionBudget] = None
+    ) -> StepResult:
+        return await self._execute_llm_step(step_def, context, budget=budget)
 
-    async def _execute_synthesize(self, step_def: Dict, context: Dict) -> StepResult:
-        return await self._execute_llm_step(step_def, context)
+    async def _execute_synthesize(
+        self, step_def: Dict, context: Dict, *, budget: Optional[ExecutionBudget] = None
+    ) -> StepResult:
+        return await self._execute_llm_step(step_def, context, budget=budget)
 
     async def _execute_export(self, step_def: Dict, context: Dict) -> StepResult:
         params = self._get_params(step_def)
@@ -2001,7 +2026,9 @@ class StepExecutor:
 
         validate_envelope(envelope, str(envelope.get("stage_type")))
 
-    async def _execute_llm_step(self, step_def: Dict, context: Dict) -> StepResult:
+    async def _execute_llm_step(
+        self, step_def: Dict, context: Dict, *, budget: Optional[ExecutionBudget] = None
+    ) -> StepResult:
         """Execute a step that requires LLM completion."""
         params = self._get_params(step_def)
         model_id = step_def.get("model_id") or params.get("model_id", "")
@@ -2045,7 +2072,40 @@ class StepExecutor:
                 "complete rendered LLM request exceeds the UTF-8 byte limit"
             )
 
-        response: LLMResponse = await provider.complete(request)
+        try:
+            reservation = (
+                budget.reserve(
+                    len((system_prompt + prompt).encode("utf-8")), request.max_tokens
+                )
+                if budget is not None
+                else 0
+            )
+        except ValueError as exc:
+            raise StepExecutionError("research stage budget exhausted") from exc
+
+        try:
+            response: LLMResponse = await provider.complete(request)
+        except asyncio.CancelledError:
+            if budget is not None:
+                budget.release(reservation)
+            raise
+        except Exception as exc:
+            if budget is not None:
+                budget.release(reservation)
+            raise StepExecutionError(
+                "research stage provider call failed", model_calls=1
+            ) from exc
+
+        tokens = max(0, int(response.total_tokens or 0))
+        if budget is not None:
+            try:
+                budget.reconcile(reservation, tokens)
+            except ValueError as exc:
+                raise StepExecutionError(
+                    "research stage budget exhausted",
+                    consumed_tokens=tokens,
+                    model_calls=1,
+                ) from exc
 
         # full_prompt stores the exact permitted inputs needed to verify this
         # digest. Older rows may contain only the system-prompt string.

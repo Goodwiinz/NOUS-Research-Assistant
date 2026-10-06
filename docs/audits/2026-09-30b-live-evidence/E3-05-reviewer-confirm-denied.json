@@ -1,0 +1,25 @@
+{
+  "step": "E3-05-reviewer-confirm-denied",
+  "as": "reviewer",
+  "at": "2026-09-30T21:07:26.877805+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/reports/5d6149b8-5d7c-402a-9b80-353bf84d9154/study-link",
+    "body": {
+      "status": "confirmed",
+      "rationale": "confirm",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 403,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "adjudicator role required",
+      "status_code": 403,
+      "type": "http_error"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "step": "C1-01-generate-draft",
+  "as": "owner",
+  "at": "2026-09-30T21:03:23.448672+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts?themes=retrieval-augmented%20generation%20and%20hallucination&themes=grounding%20and%20verification%20of%20LLM%20outputs&style=academic&max_sections=4&include_abstract=true&document_ids=23ade6c7-10f1-4c95-9e4a-4bccff6ece2c&document_ids=0b861512-9a44-46d6-aa58-56ed0142adb0&document_ids=aa67db1b-8077-4c15-b9e5-9ec7a1beaa62&document_ids=f92e6be6-20b5-41b6-9300-b29b8b7e3fb1&document_ids=8f7f2119-182d-4a00-b19a-7a7e16abea17&document_ids=03be7c34-698e-4c1b-8df0-e2440a0db101&document_ids=0d73d115-762d-4c3c-95bb-75ee470c6813&document_ids=6a9b211c-5505-41c0-9ccc-c81c04c92c8a&document_ids=43d53bca-a5f4-4eda-9c43-ec91068e74e8&document_ids=b0fec607-9fe1-4024-a2bb-fb3201d709c3&document_ids=22aa7651-4a11-4a54-ae71-20af5a45dd70&document_ids=14c3a929-e371-461c-a76b-d38ed177a950",
+    "body": null
+  },
+  "status": 202,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "task_id": "6287c09a9769",
+    "status": "pending",
+    "message": "Draft generation started",
+    "selection_mode": "explicit",
+    "document_ids": [
+      "03be7c34-698e-4c1b-8df0-e2440a0db101",
+      "0b861512-9a44-46d6-aa58-56ed0142adb0",
+      "0d73d115-762d-4c3c-95bb-75ee470c6813",
+      "14c3a929-e371-461c-a76b-d38ed177a950",
+      "22aa7651-4a11-4a54-ae71-20af5a45dd70",
+      "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+      "43d53bca-a5f4-4eda-9c43-ec91068e74e8",
+      "6a9b211c-5505-41c0-9ccc-c81c04c92c8a",
+      "8f7f2119-182d-4a00-b19a-7a7e16abea17",
+      "aa67db1b-8077-4c15-b9e5-9ec7a1beaa62",
+      "b0fec607-9fe1-4024-a2bb-fb3201d709c3",
+      "f92e6be6-20b5-41b6-9300-b29b8b7e3fb1"
+    ]
+  }
+}
