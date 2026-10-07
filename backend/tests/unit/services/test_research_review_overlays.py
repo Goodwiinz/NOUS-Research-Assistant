@@ -164,13 +164,11 @@ async def test_approved_overlays_only_change_downstream_inputs_and_cold_resume_m
 
     uninterrupted = await _service(run, steps, reviews).apply_approved_overlays(
         run_id=run.id,
-        owner_id=uuid4(),
         context=uninterrupted_context,
     )
     cold_context = rehydrate_stage_outputs(copy.deepcopy(steps))
     cold = await _service(run, steps, reviews).apply_approved_overlays(
         run_id=run.id,
-        owner_id=uuid4(),
         context=cold_context,
     )
 
@@ -208,7 +206,6 @@ async def test_declined_reviews_never_become_downstream_overlays() -> None:
 
     projected = await _service(run, [step], []).apply_approved_overlays(
         run_id=run.id,
-        owner_id=uuid4(),
         context=original,
     )
 

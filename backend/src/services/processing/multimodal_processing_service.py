@@ -788,7 +788,7 @@ class MultimodalProcessingService:
                 audio_path = self.processed_dir / f"{document.id}_audio.wav"
 
                 (
-                    ffmpeg.input(file_path)
+                    ffmpeg.input(file_path, protocol_whitelist="file,pipe")
                     .audio.output(str(audio_path))
                     .overwrite_output()
                     .run(capture_stdout=True, capture_stderr=True)

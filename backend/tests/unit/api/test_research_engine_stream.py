@@ -36,6 +36,7 @@ from src.models.user import User
 from src.schemas.research_engine import RunResponse, RunResumeRequest
 from src.services.research_engine.contracts import canonical_stage_output_hash
 from src.services.research_engine.observability import ResearchObservability
+from src.services.research_engine.review_service import ResearchReviewService
 
 # ============================================================================
 # Helpers
@@ -1692,3 +1693,60 @@ def test_run_response_reloads_user_pause_descriptor():
     assert response["review_kind"] is None
     assert response["step_index"] == -1
     assert response["output_hash"] == "c" * 64
+
+
+@pytest.mark.asyncio
+async def test_review_overlays_resume_for_any_edit_member_without_owner_scope() -> None:
+    """GOO-404 (f): overlays must not be re-scoped to ResearchProject.owner_id.
+
+    Passing owner_id here made every non-creator EDIT member hit
+    409 review_overlay_reconstruction_failed once review_history existed.
+    """
+    run_id = uuid.uuid4()
+    bp_id = uuid.uuid4()
+    run = _make_run(
+        id=run_id,
+        blueprint_id=bp_id,
+        status="paused",
+        reproducibility_manifest={"review_history": [{"review_id": str(uuid.uuid4())}]},
+    )
+    blueprint = _make_blueprint(id=bp_id)
+    blueprint_result = Mock()
+    blueprint_result.scalars.return_value.first.return_value = blueprint
+    last_step_result = Mock()
+    last_step_result.scalars.return_value.first.return_value = None
+    history_result = Mock()
+    history_result.scalars.return_value.all.return_value = []
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[blueprint_result, last_step_result, history_result]
+    )
+    member = SimpleNamespace(id=uuid.uuid4(), organization_id=uuid.uuid4())
+    overlays = AsyncMock(
+        side_effect=lambda **kwargs: {
+            **kwargs["context"],
+            "approved_review_overlays": [],
+        }
+    )
+
+    class _StopAfterOverlays(Exception):
+        pass
+
+    with (
+        patch(
+            "src.api.research_engine.runs._get_owned_run",
+            new=AsyncMock(return_value=run),
+        ),
+        patch.object(ResearchReviewService, "apply_approved_overlays", overlays),
+        patch(
+            "src.api.research_engine.runs._build_providers",
+            side_effect=_StopAfterOverlays(),
+        ),
+    ):
+        with pytest.raises(_StopAfterOverlays):
+            await stream_run(run_id, cast(User, member), db)
+
+    overlays.assert_awaited_once()
+    assert overlays.await_args is not None
+    assert set(overlays.await_args.kwargs) == {"run_id", "context"}
+    assert overlays.await_args.kwargs["run_id"] == run_id

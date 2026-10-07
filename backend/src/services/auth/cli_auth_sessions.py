@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hmac
 import json
+import re
 import secrets
 import string
 from dataclasses import dataclass, field, replace
@@ -22,6 +24,28 @@ def _generate_verification_code() -> str:
     return f"{raw[:4]}-{raw[4:]}"
 
 
+_CODE_LENGTH = 8
+_MAX_USER_AGENT_LENGTH = 256
+
+
+def normalize_verification_code(value: str) -> str:
+    """Uppercase and drop separators so ``abcd 1234`` matches ``ABCD-1234``."""
+    return re.sub(r"[^A-Z0-9]", "", value.upper())
+
+
+def _codes_match(expected: str, supplied: str) -> bool:
+    supplied_normalized = normalize_verification_code(supplied)
+    if len(supplied_normalized) != _CODE_LENGTH:
+        return False
+    return hmac.compare_digest(
+        normalize_verification_code(expected), supplied_normalized
+    )
+
+
+def _clip_user_agent(value: str | None) -> str | None:
+    return value[:_MAX_USER_AGENT_LENGTH] if value else None
+
+
 @dataclass(frozen=True)
 class CLIAuthSession:
     session_id: str
@@ -35,6 +59,10 @@ class CLIAuthSession:
     approved_at: datetime | None = None
     denied_at: datetime | None = None
     expired_at: datetime | None = None
+    # GOO-403: who started the flow, shown on the approval page so the user can
+    # tell a sign-in they started from one someone else sent them.
+    requester_ip: str | None = None
+    requester_user_agent: str | None = None
 
     def is_expired(self, now: datetime | None = None) -> bool:
         current_time = now or _utc_now()
@@ -57,7 +85,12 @@ class InMemoryCLIAuthSessionStore:
             del self._sessions[sid]
             self._approve_attempts.pop(sid, None)
 
-    def create_session(self) -> CLIAuthSession:
+    def create_session(
+        self,
+        *,
+        requester_ip: str | None = None,
+        requester_user_agent: str | None = None,
+    ) -> CLIAuthSession:
         self._evict_expired()
         if len(self._sessions) >= self._MAX_SESSIONS:
             raise RuntimeError("Too many pending CLI auth sessions")
@@ -68,8 +101,23 @@ class InMemoryCLIAuthSessionStore:
             verification_code=_generate_verification_code(),
             created_at=now,
             expires_at=now + self._ttl,
+            requester_ip=requester_ip,
+            requester_user_agent=_clip_user_agent(requester_user_agent),
         )
         self._sessions[session.session_id] = session
+        return session
+
+    def get_session_for_approver(self, session_id: str) -> CLIAuthSession | None:
+        """Read a session for the signed-in approver (no poll token).
+
+        Callers must never return the code or poll token from this object.
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        if session.status == "pending" and session.is_expired():
+            session = self._mark_expired(session)
+            self._sessions[session_id] = session
         return session
 
     def get_session(self, session_id: str, poll_token: str) -> CLIAuthSession | None:
@@ -103,7 +151,7 @@ class InMemoryCLIAuthSessionStore:
             self.deny_session(session_id)
             return None
 
-        if session.verification_code != verification_code:
+        if not _codes_match(session.verification_code, verification_code):
             self._approve_attempts[session_id] = attempts + 1
             return None
 
@@ -186,6 +234,8 @@ class RedisCLIAuthSessionStore:
                 "approved_at": _iso(session.approved_at),
                 "denied_at": _iso(session.denied_at),
                 "expired_at": _iso(session.expired_at),
+                "requester_ip": session.requester_ip,
+                "requester_user_agent": session.requester_user_agent,
             }
         )
 
@@ -207,6 +257,9 @@ class RedisCLIAuthSessionStore:
             approved_at=_dt(d.get("approved_at")),
             denied_at=_dt(d.get("denied_at")),
             expired_at=_dt(d.get("expired_at")),
+            # .get: sessions written by an older image have no requester keys.
+            requester_ip=d.get("requester_ip"),
+            requester_user_agent=d.get("requester_user_agent"),
         )
 
     def _save(self, session: CLIAuthSession) -> None:
@@ -220,7 +273,12 @@ class RedisCLIAuthSessionStore:
     # Public interface (mirrors InMemoryCLIAuthSessionStore)
     # ------------------------------------------------------------------
 
-    def create_session(self) -> CLIAuthSession:
+    def create_session(
+        self,
+        *,
+        requester_ip: str | None = None,
+        requester_user_agent: str | None = None,
+    ) -> CLIAuthSession:
         now = _utc_now()
         session = CLIAuthSession(
             session_id=secrets.token_urlsafe(16),
@@ -228,8 +286,24 @@ class RedisCLIAuthSessionStore:
             verification_code=_generate_verification_code(),
             created_at=now,
             expires_at=now + timedelta(minutes=self._ttl_minutes),
+            requester_ip=requester_ip,
+            requester_user_agent=_clip_user_agent(requester_user_agent),
         )
         self._save(session)
+        return session
+
+    def get_session_for_approver(self, session_id: str) -> CLIAuthSession | None:
+        """Read a session for the signed-in approver (no poll token).
+
+        Callers must never return the code or poll token from this object.
+        """
+        raw = self._r.get(self._key(session_id))
+        if raw is None:
+            return None
+        session = self._load(raw)
+        if session.status == "pending" and session.is_expired():
+            session = self._mark_expired(session)
+            self._save(session)
         return session
 
     def get_session(self, session_id: str, poll_token: str) -> CLIAuthSession | None:
@@ -266,7 +340,7 @@ class RedisCLIAuthSessionStore:
             self.deny_session(session_id)
             return None
 
-        if session.verification_code != verification_code:
+        if not _codes_match(session.verification_code, verification_code):
             self._r.incr(self._attempts_key(session_id))
             self._r.expire(self._attempts_key(session_id), self._ttl_minutes * 60)
             return None

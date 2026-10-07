@@ -51,12 +51,15 @@ async def require_cli_user(
 
 async def integration_context(
     request: Request,
-    required_scope: str,
+    required_scope: str | tuple[str, ...],
     db: AsyncSession,
     token: TokenData,
     user: User,
 ) -> IntegrationContext:
-    """Reusable transport adapter for sibling plans; scope is server-selected."""
+    """Reusable transport adapter for sibling plans; scope is server-selected.
+
+    A tuple admits a grant holding any one of its scopes.
+    """
     await require_cli_user(request, token, user)
     try:
         context = await resolve_integration_context(
@@ -81,5 +84,27 @@ def require_integration_context(
         user: User = Depends(get_current_user),
     ) -> IntegrationContext:
         return await integration_context(request, required_scope, db, token, user)
+
+    return dependency
+
+
+def require_integration_context_any(
+    scopes: tuple[str, ...],
+) -> Callable[..., Awaitable[IntegrationContext]]:
+    """A grant holding at least one of ``scopes``.
+
+    Only for a route whose service authorizes each operation against the
+    context's scopes itself, as the action service does per action.
+    """
+    if not scopes:
+        raise ValueError("at least one scope is required")
+
+    async def dependency(
+        request: Request,
+        db: AsyncSession = Depends(get_db),
+        token: TokenData = Depends(get_current_user_token),
+        user: User = Depends(get_current_user),
+    ) -> IntegrationContext:
+        return await integration_context(request, scopes, db, token, user)
 
     return dependency
