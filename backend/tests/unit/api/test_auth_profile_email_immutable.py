@@ -242,6 +242,44 @@ async def test_disproved_stale_claim_does_not_repeat_provider_lookup(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_provider_email_conflict_backs_off_repeated_sync(
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider-confirmed local collision is retried only after backoff."""
+    import uuid
+
+    user.id = uuid.uuid4()
+    restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = restored_user
+    db.execute.return_value = result
+    db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
+    lookups = 0
+
+    def current_email(_user_id: str) -> str:
+        nonlocal lookups
+        lookups += 1
+        return VICTIM_EMAIL
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", current_email
+    )
+    service = AuthService(db)
+
+    current_user = await service.sync_user_email_from_provider(user, VICTIM_EMAIL)
+    second_user = await service.sync_user_email_from_provider(
+        current_user, VICTIM_EMAIL
+    )
+
+    assert current_user is restored_user
+    assert second_user is restored_user
+    assert lookups == 1
+    db.commit.assert_awaited_once()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_provider_lookup_failure_leaves_email_unchanged(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
