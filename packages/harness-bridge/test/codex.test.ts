@@ -153,6 +153,37 @@ for (const operation of ["start", "resume"])
       },
     );
   }
+// Mutation: src/adapters/codex.ts:213 remove the implicit cwd; :244 omit model.
+// Command: pnpm --dir packages/harness-bridge exec node --experimental-sqlite
+// --import tsx --test test/codex.test.ts
+test("accepts a reply that omits cwd from writableRoots (real 0.153.4)", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.replyToStart({
+    sandbox: {
+      type: "workspaceWrite",
+      writableRoots: [],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+  });
+  const session = await adapter.startSession(options);
+  assert.equal(session.id, "s");
+});
+test("pins a locally configured model in thread/start config", async (t) => {
+  const { server, adapter, options } = setup(t);
+  await adapter.startSession({ ...options, model: "gpt-6-astra" });
+  const call: any = server.calls("thread/start")[0];
+  assert.equal(call.params.config.model, "gpt-6-astra");
+});
+test("rejects a malformed local model name", async (t) => {
+  const { server, adapter, options } = setup(t);
+  await assert.rejects(
+    adapter.startSession({ ...options, model: "bad model/name" }),
+    /invalid local Codex model name/,
+  );
+  assert.equal(server.calls("thread/start").length, 0);
+});
 test("exact pinned version only", async (t) => {
   const { server, adapter } = setup(t);
   server.configure({ version: "0.153.5" });
@@ -936,3 +967,28 @@ test("unconfirmed app-server exit fails closed when termination signals cannot b
   await pending;
   assert.doesNotThrow(() => process.kill(child.pid!, 0));
 });
+
+
+// Mutation: src/cli.ts request() must not interpolate the HTTP response body.
+// Command: pnpm --dir packages/harness-bridge exec node --experimental-sqlite
+// --import tsx --test --test-name-pattern="request errors" test/codex.test.ts
+for (const body of ["<html>echoed-credential</html>", '{"detail":"echoed-credential"}'])
+  test("request errors omit arbitrary backend bodies: " + body, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "nous-error-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    await assert.rejects(
+      connect({
+        stateDir: dir,
+        apiUrl: "https://nous.test/api/v1",
+        projectId: "11111111-1111-4111-8111-111111111111",
+        label: "Laptop",
+        fetchFn: (async () => new Response(body, { status: 500 })) as typeof fetch,
+        announce: () => {},
+      }),
+      (error: Error) => {
+        assert.match(error.message, /NOUS request failed \(500\).*cli-auth\/start/);
+        assert.ok(!error.message.includes("echoed-credential"));
+        return true;
+      },
+    );
+  });

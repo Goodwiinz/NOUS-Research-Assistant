@@ -185,10 +185,27 @@ export async function connectBridge(options: {
   journal: Journal;
   adapterFor: (workspaceId: string, runId: string) => HarnessAdapter;
   signal: AbortSignal;
+  // Test seam; production uses the defaults below.
+  timing?: { pollMs?: number; livenessMs?: number; connectMs?: number };
 }): Promise<void> {
+  const pollMs = options.timing?.pollMs ?? 5000;
+  // The server answers every poll, so silence for three poll periods means
+  // the peer is gone even if no close frame ever arrives (a backend restart
+  // left a half-open socket and the bridge sat idle forever). Undici's
+  // WebSocket has no idle or connect timeout of its own.
+  const livenessMs = options.timing?.livenessMs ?? pollMs * 3;
+  const connectMs = options.timing?.connectMs ?? 15_000;
   const url = new URL(options.url);
-  if (url.protocol !== "wss:" || url.username || url.password || url.search)
-    throw new Error("WSS without URL credentials required");
+  const loopbackWs =
+    url.protocol === "ws:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (
+    (url.protocol !== "wss:" && !loopbackWs) ||
+    url.username ||
+    url.password ||
+    url.search
+  )
+    throw new Error("WSS (or local loopback ws) without URL credentials required");
   // Node 24's builtin Undici WebSocket accepts a WebSocketInit with headers.
   const Socket = WebSocket as unknown as new (
     url: string,
@@ -212,24 +229,36 @@ export async function connectBridge(options: {
   };
   await new Promise<void>((resolve, reject) => {
     let interval: ReturnType<typeof setInterval> | undefined;
+    let lastFrameAt = Date.now();
     const finish = (error?: Error) => {
       if (interval) clearInterval(interval);
+      clearTimeout(connectTimer);
       options.signal.removeEventListener("abort", abort);
       socket.close();
       error ? reject(error) : resolve();
     };
     const abort = () => finish();
     options.signal.addEventListener("abort", abort, { once: true });
+    const connectTimer = setTimeout(
+      () => finish(new Error("bridge connect timeout")),
+      connectMs,
+    );
     socket.addEventListener("open", () => {
+      clearTimeout(connectTimer);
+      lastFrameAt = Date.now();
       socket.send(JSON.stringify({ poll: true, deviceId: options.deviceId }));
       interval = setInterval(() => {
+        if (Date.now() - lastFrameAt > livenessMs) {
+          finish(new Error("bridge liveness timeout"));
+          return;
+        }
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(
             JSON.stringify({ poll: true, deviceId: options.deviceId }),
           );
           sendPending();
         }
-      }, 5000);
+      }, pollMs);
       sendPending();
       chain = chain
         .then(async () => {
@@ -241,6 +270,7 @@ export async function connectBridge(options: {
         .catch(finish);
     });
     socket.addEventListener("message", (message) => {
+      lastFrameAt = Date.now();
       chain = chain
         .then(async () => {
           if (

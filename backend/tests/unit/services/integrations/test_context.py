@@ -423,6 +423,61 @@ async def test_public_project_denied_but_explicit_cross_org_member_allowed(
         await resolve_integration_context(db, issued.token, required_scope="tools:read")
 
 
+# Mutation: context.py:105 and :276 remove each NULL-organization fallback.
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/services/integrations/test_context.py -k legacy_workspace
+async def test_legacy_workspace_without_organization_follows_web_semantics(
+    db: AsyncSession, owner: Any, chat: None
+) -> None:
+    from src.models.thread import Thread
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import create_request, register_device
+
+    await db.execute(update(Workspace).values(organization_id=None))
+    await db.execute(
+        update(Thread).where(Thread.id == CHAT_THREAD).values(source_project_id=PROJECT)
+    )
+    await db.commit()
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    request = GrantRequestCreate(
+        project_id=PROJECT,
+        thread_id=CHAT_THREAD,
+        device_id=device.id,
+        scopes={"tools:read"},
+    )
+    assert (await create_request(db, owner, request)).project_id == PROJECT
+    # A NULL workspace organization defers to the owner's, which must be ours.
+    other_org = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=other_org, name="Other", storage_limit_bytes=1000000
+        )
+    )
+    await db.execute(update(User).values(organization_id=other_org))
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await create_request(db, owner, request)
+
+
+async def test_workspace_with_different_missing_organization_still_denied(
+    db: AsyncSession, owner: Any
+) -> None:
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import create_request, register_device
+
+    await db.execute(update(Workspace).values(organization_id=uuid4()))
+    await db.commit()
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    with pytest.raises(IntegrationAccessDenied):
+        await create_request(
+            db,
+            owner,
+            GrantRequestCreate(
+                project_id=PROJECT, device_id=device.id, scopes={"tools:read"}
+            ),
+        )
+
+
 async def test_workspace_listing_rechecks_permissions_and_foreign_devices(
     db: AsyncSession, owner: Any, pending: Any
 ) -> None:
