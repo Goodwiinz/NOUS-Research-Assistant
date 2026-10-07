@@ -910,6 +910,53 @@ def test_graph_intent_is_durable_before_provider_and_survives_early_cleanup(stub
         assert _run(env, stubbed).get()["skipped"] == "deleted"
 
 
+def test_reprocessing_holds_document_lock_until_new_job_commit():
+    import asyncio
+
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from src.services.documents.file_service import FileService
+
+    with _ingestion() as env:
+        with env.Session() as db:
+            db.get(ProcessingJob, env.job_id).status = JobStatus.FAILED
+            db.commit()
+        user = SimpleNamespace(id=None, has_permission=lambda role: True)
+
+        async def reprocess():
+            async with env.AsyncSession() as db:
+                service = FileService(db)
+                document = await service.lock_document_for_reprocessing(
+                    env.doc_id, env.org_id, user
+                )
+                with env.Session() as observer:
+                    with pytest.raises(OperationalError) as error:
+                        observer.query(Document).filter_by(
+                            id=env.doc_id
+                        ).with_for_update(nowait=True).one()
+                    assert getattr(error.value.orig, "pgcode", None) == "55P03"
+                    observer.rollback()
+                db.add(
+                    ProcessingJob(
+                        job_type=JobType.DOCUMENT_INGESTION,
+                        status=JobStatus.PENDING,
+                        document_id=document.id,
+                        organization_id=env.org_id,
+                    )
+                )
+                await db.commit()
+            async with env.AsyncSession() as later:
+                with pytest.raises(HTTPException) as error:
+                    await FileService(later).lock_document_for_reprocessing(
+                        env.doc_id, env.org_id, user
+                    )
+                assert error.value.status_code == 409
+                await later.rollback()
+
+        asyncio.run(reprocess())
+
+
 @pytest.mark.parametrize("cleanup_ok", [True, False])
 def test_non_cascade_late_graph_write_is_retained(stubbed, cleanup_ok):
     """Retaining entities must also retain late graph writes and exclude retries."""

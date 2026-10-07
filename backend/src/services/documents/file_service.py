@@ -1412,6 +1412,70 @@ class FileService:
         # service is synchronous, so offload to a worker thread.
         await self.cleanup_deleted_document_graph(document_id, organization_id)
 
+    async def lock_document_for_reprocessing(
+        self,
+        document_id,
+        organization_id,
+        user,
+        *,
+        not_found_detail: str = "Document not found",
+        forbidden_detail: str = "Can only reprocess your own documents or require admin role",
+    ):
+        """Serialize reprocessing with claims, stage commits and deletion.
+
+        The caller retains this document lock through its job-creation commit.
+        Reject overlapping attempts instead of giving two jobs write authority.
+        """
+        document = (
+            await self.db.execute(
+                select(Document)
+                .where(
+                    Document.id == document_id,
+                    Document.organization_id == organization_id,
+                    Document.is_deleted == False,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+        ).scalar_one_or_none()
+        if document is None:
+            raise HTTPException(status_code=404, detail=not_found_detail)
+        if document.uploaded_by_user_id != user.id and not user.has_permission(
+            UserRole.ADMIN
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=forbidden_detail,
+            )
+        from src.models.processing import JobStatus, JobType, ProcessingJob
+
+        active = (
+            await self.db.execute(
+                select(ProcessingJob.id)
+                .where(
+                    ProcessingJob.document_id == document.id,
+                    ProcessingJob.organization_id == organization_id,
+                    ProcessingJob.is_deleted == False,
+                    ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                    ProcessingJob.status.in_(
+                        (
+                            JobStatus.PENDING,
+                            JobStatus.QUEUED,
+                            JobStatus.RUNNING,
+                            JobStatus.RETRYING,
+                        )
+                    ),
+                )
+                .execution_options(autoflush=False)
+                .limit(1)
+            )
+        ).first()
+        if active is not None:
+            raise HTTPException(
+                status_code=409, detail="Document processing is already active"
+            )
+        return document
+
     async def cleanup_deleted_document_graph(
         self, document_id: str, organization_id: str
     ) -> bool:

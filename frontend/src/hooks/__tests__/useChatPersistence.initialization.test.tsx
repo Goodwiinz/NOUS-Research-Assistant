@@ -529,4 +529,83 @@ describe('useChatPersistence initialization', () => {
       'conversation-B'
     );
   });
+  it('reinitializes B when A signed out while no chat consumer was mounted', async () => {
+    const first = renderHook(() => useChatPersistence());
+    await act(async () => {
+      await first.result.current.initialize();
+    });
+    first.unmount();
+    useAuthStore
+      .getState()
+      .invalidateRejectedSession(useAuthStore.getState().user?.id ?? null);
+    useAuthStore.setState({
+      user: { id: 'B' } as never,
+      isAuthenticated: true,
+    });
+    const second = renderHook(() => useChatPersistence());
+    await act(async () => {
+      await second.result.current.initialize();
+    });
+    expect(serviceMocks.getOrCreateDefaultWorkspace).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().currentConversationId).toBe(
+      'conversation-1'
+    );
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'ignores A default conversation %s while B initialization is pending',
+    async (outcome) => {
+      const oldConversation = deferred<never>();
+      const newWorkspace = deferred<never>();
+      serviceMocks.listConversations.mockResolvedValueOnce(
+        conversationPage([])
+      );
+      serviceMocks.getOrCreateDefaultConversation.mockReturnValueOnce(
+        oldConversation.promise
+      );
+      const first = renderHook(() => useChatPersistence());
+      await waitFor(() =>
+        expect(
+          serviceMocks.getOrCreateDefaultConversation
+        ).toHaveBeenCalledOnce()
+      );
+      first.unmount();
+      act(() => {
+        useChatStore.getState().reset();
+      });
+      serviceMocks.getOrCreateDefaultWorkspace.mockReturnValueOnce(
+        newWorkspace.promise
+      );
+      const second = renderHook(() => useChatPersistence());
+      let secondFinished = false;
+      let pending!: Promise<void>;
+      act(() => {
+        pending = second.result.current.initialize().then(() => {
+          secondFinished = true;
+        });
+      });
+      await act(async () => {
+        if (outcome === 'resolve')
+          oldConversation.resolve({
+            id: 'A-private',
+            workspace_id: 'workspace-1',
+          } as never);
+        else oldConversation.reject(new Error('A private error'));
+      });
+      expect(useChatStore.getState().conversations).toEqual({});
+      expect(useChatStore.getState().currentConversationId).toBeNull();
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      expect(secondFinished).toBe(false);
+      const third = renderHook(() => useChatPersistence());
+      await act(async () => {
+        newWorkspace.resolve(workspace);
+        await pending;
+        await third.result.current.initialize();
+      });
+      expect(serviceMocks.getOrCreateDefaultWorkspace).toHaveBeenCalledTimes(2);
+      expect(useChatStore.getState().currentConversationId).toBe(
+        'conversation-1'
+      );
+    }
+  );
 });
