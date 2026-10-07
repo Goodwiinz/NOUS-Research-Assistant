@@ -579,10 +579,10 @@ function mcpSession(
     state.scopes?.includes("artifacts:publish")
       ? { outputRoot }
       : {}),
-    // request_action creates a note in the granted project. A workspace grant
-    // has none and NOUS answers 422 to every request it makes, so the tool is
-    // not offered there: library actions get their own target in Plan 07
-    // slice 3, switched on by `library`, not by this flag.
+    // `actions` offers request_action to a project grant, for notes and for
+    // library actions that wait for approval. A workspace grant cannot ask for
+    // a note (NOUS answers 422), so it never gets this flag, even with
+    // tools:write: `library` alone offers it request_action, for library actions.
     ...(state.workspaceId === undefined && state.scopes?.includes("tools:write")
       ? { actions: true }
       : {}),
@@ -871,7 +871,7 @@ const help = `Usage: nous-harness connect --api https://host/api/v1 (--project U
   nous-harness handoff discard HANDOFF_ID    Drop one journaled save (pending, conflicted or rejected) and print what was dropped.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
-  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff] [--library] [--context]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools, --library marks a library:write grant, --context enables read_selected_context.
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff] [--library] [--context]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action and get_action_status, --handoff enables the chat handoff tools, --library enables request_action and get_action_status for a library:write grant (the only way on a workspace connection), --context enables read_selected_context.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.

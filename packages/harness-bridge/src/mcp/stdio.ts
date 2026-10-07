@@ -49,7 +49,9 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
       local.push(unavailablePublishTool(session.outputRoot, reason));
     }
   }
-  if (session.actions) {
+  // A workspace connection is never launched with --actions (it cannot ask
+  // for a note); --library is what offers it the library actions.
+  if (session.actions || session.library) {
     // Requests only: approval stays a browser action the model cannot take.
     const actions = new ActionHttpClient(session.apiOrigin, credentials, keeper.fetch);
     local.push(requestActionTool(actions), actionStatusTool(actions));
