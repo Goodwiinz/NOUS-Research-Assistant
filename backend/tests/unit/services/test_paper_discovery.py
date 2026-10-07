@@ -202,6 +202,48 @@ async def test_search_merges_doi_and_preserves_provider_evidence_on_resume() -> 
 
 
 @pytest.mark.asyncio
+async def test_search_step_without_id_checkpoints_under_the_event_step_id() -> None:
+    """Template steps carry no ``id``. The journal checkpoint, the completed
+    event and the pinned strategy must name the same step, or
+    ``finalize_search_step`` rejects every template run."""
+    checkpointed: set[str] = set()
+
+    async def on_search_page(*, step_id, **_kwargs):
+        checkpointed.add(step_id)
+
+    executor = StepExecutor(
+        {
+            "crossref": AsyncMock(
+                search=AsyncMock(
+                    return_value=[
+                        SourceDocument(
+                            connector_type="crossref", external_id="10.1/x", title="X"
+                        )
+                    ]
+                )
+            )
+        },
+        {},
+        on_search_page=on_search_page,
+    )
+    events = [
+        event
+        async for event in WorkflowEngine(executor).run(
+            {
+                "parameters": {"query": "q"},
+                "steps": [{"type": "search", "params": {"sources": ["crossref"]}}],
+            },
+            uuid4(),
+        )
+    ]
+    complete = next(e for e in events if e["event"] == "step_complete")
+    strategy = complete["output"]["coverage"]["search_strategy"]
+
+    assert checkpointed == {complete["step_id"]}
+    assert strategy["step_id"] == complete["step_id"]
+
+
+@pytest.mark.asyncio
 async def test_partial_failure_is_visible_without_exposing_exception_secrets() -> None:
     executor = StepExecutor(
         {

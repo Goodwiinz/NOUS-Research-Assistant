@@ -27,6 +27,11 @@ vi.mock('@/services/entityService', () => ({
   },
 }));
 
+// The handoff entry point has its own suite (HandoffCard.test.tsx).
+vi.mock('../artifact-panel/HandoffCard', () => ({
+  HandoffEntryButton: () => null,
+}));
+
 import { ChatHeader } from '../ChatHeader';
 
 describe('ChatHeader', () => {
