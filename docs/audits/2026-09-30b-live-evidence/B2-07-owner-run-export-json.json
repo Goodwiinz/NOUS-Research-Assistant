@@ -1,0 +1,24 @@
+{
+  "step": "B2-07-owner-run-export-json",
+  "as": "owner",
+  "at": "2026-09-30T21:01:18.451144+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/a90c3860-2ed5-4e98-9a8c-390516f16fd3/export?format=json",
+    "body": null
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": {
+        "code": "run_not_completed",
+        "message": "Run is not completed"
+      },
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}

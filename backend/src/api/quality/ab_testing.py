@@ -104,8 +104,9 @@ async def create_experiment(
 
         return ExperimentResponse.from_experiment(experiment)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Failed to create experiment: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -250,8 +251,9 @@ async def update_experiment(
 
         return ExperimentResponse.from_experiment(experiment)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -295,8 +297,9 @@ async def start_experiment(
 
         return ExperimentResponse.from_experiment(experiment)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -340,8 +343,9 @@ async def stop_experiment(
 
         return ExperimentResponse.from_experiment(experiment)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -388,8 +392,9 @@ async def delete_experiment(
 
         return JSONResponse(status_code=204, content=None)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -445,8 +450,9 @@ async def create_variant(
 
         return VariantResponse.from_variant(variant)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -487,8 +493,9 @@ async def list_variants(
 
         return [VariantResponse.from_variant(variant) for variant in variants]
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Failed to list variants for experiment {experiment_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -533,8 +540,9 @@ async def update_variant(
 
         return VariantResponse.from_variant(variant)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -573,8 +581,9 @@ async def delete_variant(
 
         return JSONResponse(status_code=204, content=None)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -697,8 +706,9 @@ async def bulk_assign_experiment_variants(
 
         return results
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Failed to bulk assign experiment variants: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -761,8 +771,9 @@ async def submit_metric(
             },
         )
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Failed to submit metric: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -820,8 +831,9 @@ async def submit_metrics_bulk(
             },
         )
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Failed to submit bulk metrics: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -874,8 +886,9 @@ async def analyze_experiment(
 
         return analysis_result
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -923,8 +936,9 @@ async def get_experiment_summary(
 
         return summary
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         raise
     except Exception as e:
@@ -971,8 +985,9 @@ async def create_user_segment(
 
         return UserSegmentResponse.from_segment(segment)
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        logger.warning("Invalid request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Failed to create user segment: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

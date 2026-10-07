@@ -30,6 +30,7 @@ overrides the user resolution, so a client really is the account it claims.
 
 from __future__ import annotations
 
+import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict
@@ -225,7 +226,12 @@ async def add_member(db: AsyncSession, workspace_key: str, who: str) -> None:
 def _token(user_id: uuid.UUID) -> str:
     return str(
         jwt.encode(
-            {"sub": str(user_id), "aud": "authenticated", "app_metadata": {}},
+            {
+                "sub": str(user_id),
+                "aud": "authenticated",
+                "app_metadata": {},
+                "exp": int(time.time()) + 3600,
+            },
             _SIGNING_KEY,
             algorithm="HS256",
         )

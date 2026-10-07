@@ -482,7 +482,8 @@ async def execute_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid thread ID") from exc
     except AgentThreadResolutionError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        logger.warning("Agent thread resolution failed", exc_info=True)
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
     if thread is not None:
         request.thread_id = str(thread.id) if thread is not None else None
 
@@ -1626,6 +1627,7 @@ async def get_thread_messages(
             select(ChatMessage)
             .where(
                 ChatMessage.thread_id == thread_id,
+                ChatMessage.is_deleted == False,
                 # Edit-and-resend tombstones: a superseded turn (and everything
                 # after it) must never render, or a reload shows the answer to a
                 # question the user replaced.
@@ -1649,6 +1651,7 @@ async def get_thread_messages(
         # full-thread total instead of the filtered one).
         filters = [
             ChatMessage.thread_id == thread_id,
+            ChatMessage.is_deleted == False,
             ChatMessage.superseded_by_message_id.is_(None),
         ]
         if before is not None:

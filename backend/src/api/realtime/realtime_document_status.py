@@ -218,11 +218,11 @@ async def subscribe_document_status_updates(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error subscribing to document updates: {e}")
+    except Exception:
+        logger.error("Error subscribing to document updates", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to subscribe to document updates: {str(e)}",
+            detail="Failed to subscribe to document updates",
         )
 
 
@@ -422,11 +422,11 @@ async def get_realtime_document_status(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error getting realtime document status: {e}")
+    except Exception:
+        logger.error("Error getting realtime document status", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get document status: {str(e)}",
+            detail="Failed to get document status",
         )
 
 
@@ -526,20 +526,20 @@ async def get_bulk_realtime_status(
         if request.group_by_status:
             status_groups = {}
             for doc_status in document_statuses.values():
-                status = doc_status["processing_status"]
-                if status not in status_groups:
-                    status_groups[status] = []
-                status_groups[status].append(doc_status["id"])
+                doc_status_value = doc_status["processing_status"]
+                if doc_status_value not in status_groups:
+                    status_groups[doc_status_value] = []
+                status_groups[doc_status_value].append(doc_status["id"])
 
             response["status_groups"] = status_groups
 
         return response
 
-    except Exception as e:
-        logger.error(f"Error getting bulk realtime status: {e}")
+    except Exception:
+        logger.error("Error getting bulk realtime status", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get bulk status: {str(e)}",
+            detail="Failed to get bulk status",
         )
 
 
@@ -657,11 +657,11 @@ async def get_realtime_system_metrics(
 
         return metrics
 
-    except Exception as e:
-        logger.error(f"Error getting system metrics: {e}")
+    except Exception:
+        logger.error("Error getting system metrics", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get system metrics: {str(e)}",
+            detail="Failed to get system metrics",
         )
 
 
@@ -709,11 +709,11 @@ async def trigger_document_status_broadcast(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error triggering status broadcast: {e}")
+    except Exception:
+        logger.error("Error triggering status broadcast", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to trigger status broadcast: {str(e)}",
+            detail="Failed to trigger status broadcast",
         )
 
 
@@ -764,9 +764,9 @@ async def get_realtime_connection_status(
             ],
         }
 
-    except Exception as e:
-        logger.error(f"Error getting connection status: {e}")
+    except Exception:
+        logger.error("Error getting connection status", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get connection status: {str(e)}",
+            detail="Failed to get connection status",
         )

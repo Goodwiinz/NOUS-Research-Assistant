@@ -1317,8 +1317,14 @@ class KnowledgeGraphService:
         relationship_types: Optional[List[RelationshipType]] = None,
         source_document_ids: Optional[List[str]] = None,
         organization_id: Optional[str] = None,
+        strict: bool = False,
     ) -> List[RelationshipResponse]:
-        """Get all relationships for an entity, optionally scoped to organization documents"""
+        """Get all relationships for an entity, optionally scoped to organization documents
+
+        Read errors are swallowed into ``[]`` by default. Pass ``strict=True``
+        when an empty list would be acted on as "no relationships" (entity
+        merge deletes the duplicate) so an outage raises instead.
+        """
         try:
             with self.get_session() as session:
                 conditions = ["(source.id = $entity_id OR target.id = $entity_id)"]
@@ -1398,6 +1404,8 @@ class KnowledgeGraphService:
                 return relationships
         except Exception as e:
             logger.error(f"Error retrieving relationships for {entity_id}: {e}")
+            if strict:
+                raise
             return []
 
     @staticmethod
