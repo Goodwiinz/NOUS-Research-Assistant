@@ -245,6 +245,17 @@ class TestMissingOrgContext:
         assert resp.status_code == 403
         svc_cls.return_value.rotate_encryption_keys.assert_not_called()
 
+    def test_orgless_audit_logs_is_403_not_is_null(
+        self, client_with_db: ClientWithDb, operator_allowlist: SetOperator
+    ) -> None:
+        query = _RecordingQuery([])
+        db = MagicMock()
+        db.query.return_value = query
+        resp = client_with_db(db, user=_orgless_admin).get(f"{API}/audit/logs")
+        assert resp.status_code == 403
+        assert "Organization context required" in resp.text
+        assert query.filters == []
+
 
 def _log_row() -> SimpleNamespace:
     return SimpleNamespace(

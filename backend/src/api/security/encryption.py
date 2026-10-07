@@ -533,10 +533,10 @@ async def get_encryption_audit_logs(
 
         # GOO-406 E2: tenant callers see only their own organization's rows;
         # the legacy users.role "admin" is per-org and no longer unscopes this.
+        # _bind_caller_org 403s an org-less caller (never an IS NULL filter).
         if not is_platform_operator(current_user):
-            query = query.filter(
-                EncryptionAuditLog.organization_id == current_user.organization_id
-            )
+            own_org_id = _bind_caller_org(None, current_user)
+            query = query.filter(EncryptionAuditLog.organization_id == own_org_id)
 
         # Apply pagination and ordering
         logs = (
