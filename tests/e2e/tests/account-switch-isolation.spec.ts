@@ -3,7 +3,8 @@ import { createTestHelpers, TEST_DATA } from "./utils/test-helpers";
 
 /**
  * GOO-354: shared-browser account switching must not show the previous
- * account's chat. Matrix: docs/engineering/data-isolation-matrix.md.
+ * account's chat, agent panel, project, or search data. Matrix:
+ * docs/engineering/data-isolation-matrix.md.
  *
  * Account A puts a canary into the chat transcript (agent stream
  * intercepted, so nothing depends on a model), signs out, and account B signs
@@ -97,6 +98,55 @@ test.describe("Account switch isolation @smoke @regression", () => {
     expect(threadA).toBeTruthy();
     expect(persisted).not.toContain(threadA as string);
     expect(persisted).not.toContain(canary);
+  });
+
+  test("agent panel clears A's canary before B opens it", async ({
+    page,
+    context,
+  }, testInfo) => {
+    const helpers = createTestHelpers(page, context, testInfo);
+    const marker = `iso-agent-${Date.now()}`;
+    let account: "A" | "B" = "A";
+    const answer = (owner: "A" | "B") => `${owner}-agent-${marker}`;
+    await page.route(STREAM_URL, (route: Route) => {
+      const owner = account;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body:
+          `event: token\ndata: ${JSON.stringify({ content: answer(owner) })}\n\n` +
+          `event: done\ndata: ${JSON.stringify({ thread_id: null })}\n\n`,
+      });
+    });
+
+    await helpers.login(TEST_DATA.USERS.ADMIN);
+    await page.getByRole("button", { name: "Open agent chat" }).click();
+    let panel = page.getByRole("dialog", { name: "Agent chat panel" });
+    await panel.getByPlaceholder("Ask the agent...").fill(marker);
+    await panel.getByRole("button", { name: "Send message" }).click();
+    await expect(panel.getByText(answer("A"))).toBeVisible();
+    await page.evaluate((value) => {
+      (window as Window & { __isolationRuntime?: string }).__isolationRuntime =
+        value;
+    }, marker);
+
+    await helpers.logout();
+    account = "B";
+    await signInOnCurrentPage(page, TEST_DATA.USERS.REGULAR);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as Window & { __isolationRuntime?: string })
+            .__isolationRuntime,
+      ),
+    ).toBe(marker);
+    await page.getByRole("button", { name: "Open agent chat" }).click();
+    panel = page.getByRole("dialog", { name: "Agent chat panel" });
+    await expect(panel.getByText(answer("A"))).toHaveCount(0);
+    await panel.getByPlaceholder("Ask the agent...").fill(`B-${marker}`);
+    await panel.getByRole("button", { name: "Send message" }).click();
+    await expect(panel.getByText(answer("B"))).toBeVisible();
+    await expect(panel.getByText(answer("A"))).toHaveCount(0);
   });
 
   test("project and search canaries follow the active account", async ({

@@ -54,9 +54,9 @@ test is `xfail(strict=True, raises=AssertionError)` and will fail loudly
 | CI1+ | A → `a-cit` | `GET /api/v1/citations/{id}` | 200 | pass |
 | CI2 | A → `b-pub-cit` (foreign `is_public`) | detail, list + `total`, export | 404 / absent / `total == 1` | pass (GOO-349) |
 | CI3 | A → `a-old-org-cit` (A uploaded it in org-b) | detail, list + `total`, export | 404 / absent | pass (GOO-349) |
-| CI4 | C → `b-cit` (same org, private) | citation reads | Today: denied (uploader-or-public rule, stricter than D2). GOO-349 decides the intended rule. | not covered |
-| CI5 | any | project bibliography fallback (`citations.py` export by `project_id`) | org-guarded | not covered (GOO-349) |
-| S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | not covered: PostgreSQL full-text only (SQLite cannot run them); GOO-351 owns the fail-closed service guard |
+| CI4 | C → `b-cit` (same org, private) | citation reads | Today: denied (uploader-or-public rule, stricter than D2). GOO-398 tracks the policy decision and matching HTTP check. | not covered |
+| CI5 | any | project bibliography fallback (`citations.py` export by `project_id`) | org-guarded | not covered: unit guard check exists; authenticated HTTP follow-up GOO-400 |
+| S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | not covered: PostgreSQL full-text only (SQLite cannot run them); GOO-351 owns the fail-closed service guard; HTTP follow-up GOO-399 |
 
 ### Chat and exports (`test_chat_isolation.py`)
 
@@ -78,7 +78,7 @@ workspace list, and the owner-only `GET /api/v1/agent/threads/{id}/messages`.
 | X1 | A (other org) → B's thread | single, stream and batch export in markdown/json/html: 404 or absent from the ZIP | pass |
 | X2 | B → own thread after its conversation is soft-deleted | export 404 | pass |
 | X3 | A, removed member who created a thread in `b` | single + stream export (md/json/html), preview, batch ZIP + non-ZIP: no B-only message, 404 | pass (GOO-348) |
-| X4 | any | PDF export | not covered: needs a PDF renderer in CI |
+| X4 | any | PDF export | not covered: needs a PDF renderer in CI (GOO-400) |
 | X5 | B → own thread | export returns content (positive control) | pass |
 
 Note: thread export is creator-based, so a current member who did not create
@@ -88,13 +88,16 @@ current workspace access, so a creator removed from the workspace cannot export.
 
 ### Browser account switching (GOO-354)
 
-`tests/e2e/tests/account-switch-isolation.spec.ts`: sign in as one seeded
-account, put a canary message in the chat transcript (stream intercepted),
-sign out, sign in as another account in the same browser, and assert the
-canary never renders and no previous-account thread id survives in
-`localStorage`. The test is selected by the PR E2E smoke lane; client-store
-clearing itself is GOO-350 (PR #1854), with chat request lifetime handling in
-PR #1776. A passing source or PR test does not prove a deployed browser run.
+`tests/e2e/tests/account-switch-isolation.spec.ts`: four Chromium smoke cases
+sign in as seeded account A, switch to B in the same browser, and check chat,
+agent panel, project, and search canaries. One holds an A search response across
+sign-out; another rejects an A chat stream before B signs in. The chat case
+also checks the selected thread in `localStorage`. The tests intercept synthetic
+agent, project, and search responses while real credentials exercise sign-in.
+Client store clearing is GOO-350 (PR #1854), with chat request lifetime
+handling in PR #1776. Real two-JWT Data API probes and a deployed browser run
+are still pending; a passing source or PR test does not prove deployed
+isolation.
 
 ## Commands
 
