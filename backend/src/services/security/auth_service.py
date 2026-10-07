@@ -33,8 +33,8 @@ _STALE_EMAIL_CLAIM_CACHE_LIMIT = 2048
 _STALE_EMAIL_CLAIM_HASH_KEY = secrets.token_bytes(32)
 
 
-class _StaleEmailClaimCache:
-    """Bounded process-local cache of provider-disproved JWT email claims."""
+class _EmailReconciliationBackoff:
+    """Bounded process-local backoff for disproved claims and local conflicts."""
 
     def __init__(self) -> None:
         self._entries: OrderedDict[tuple[str, str], float] = OrderedDict()
@@ -75,7 +75,7 @@ class _StaleEmailClaimCache:
                 self._entries.popitem(last=False)
 
 
-_stale_email_claims = _StaleEmailClaimCache()
+_email_reconciliation_backoff = _EmailReconciliationBackoff()
 
 
 class AuthenticationError(Exception):
@@ -274,7 +274,7 @@ class AuthService:
             return user
 
         subject_id = str(user.id)
-        if _stale_email_claims.contains(subject_id, claimed_email):
+        if _email_reconciliation_backoff.contains(subject_id, claimed_email):
             return user
 
         from src.core.user_provisioning import get_verified_supabase_email
@@ -285,7 +285,7 @@ class AuthService:
         if not provider_email:
             return user
         if provider_email != claimed_email:
-            _stale_email_claims.remember(subject_id, claimed_email)
+            _email_reconciliation_backoff.remember(subject_id, claimed_email)
         if user.email.lower() == provider_email:
             return user
 
@@ -293,6 +293,7 @@ class AuthService:
         try:
             await self.db.commit()
         except IntegrityError:
+            _email_reconciliation_backoff.remember(subject_id, provider_email)
             await self.db.rollback()
             result = await self.db.execute(
                 select(User)
