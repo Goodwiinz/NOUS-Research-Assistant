@@ -5,7 +5,10 @@ import type { ReactElement } from 'react';
 
 import { useAuth } from '@/hooks/useAuth';
 import { integrationActionService } from '@/services/integrationActionService';
-import type { ActionState } from '@/types/api/integration-action-contract';
+import type {
+  ActionState,
+  ApiActionReview,
+} from '@/types/api/integration-action-contract';
 
 const STATE_TEXT: Record<ActionState, string> = {
   awaiting_approval: 'Waiting for your decision. Nothing has been created yet.',
@@ -26,6 +29,25 @@ export function revealHidden(value: string): string {
     HIDDEN,
     (ch) =>
       `⟨U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}⟩`
+  );
+}
+
+/** A project action names its project; a workspace-level one, its workspace. */
+function TargetRow({ action }: { action: ApiActionReview }): ReactElement {
+  const inWorkspace = action.project_label === null;
+  const kind = inWorkspace ? 'Workspace' : 'Project';
+  const label = inWorkspace ? action.workspace_label : action.project_label;
+  const id = inWorkspace ? action.workspace_id : action.project_id;
+  return (
+    <div>
+      <dt className="font-semibold">{kind}</dt>
+      <dd>
+        {revealHidden(label ?? '')} ({id})
+        {!action.project_available && (
+          <span role="alert"> This {kind.toLowerCase()} was deleted.</span>
+        )}
+      </dd>
+    </div>
   );
 }
 
@@ -85,15 +107,7 @@ export function IntegrationActionApproval({
       {action && (
         <>
           <dl className="space-y-3 break-words">
-            <div>
-              <dt className="font-semibold">Project</dt>
-              <dd>
-                {revealHidden(action.project_label)} ({action.project_id})
-                {!action.project_available && (
-                  <span role="alert"> This project was deleted.</span>
-                )}
-              </dd>
-            </div>
+            <TargetRow action={action} />
             <div>
               <dt className="font-semibold">Title</dt>
               <dd>{revealHidden(action.title)}</dd>

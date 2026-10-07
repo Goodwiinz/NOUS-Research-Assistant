@@ -24,8 +24,7 @@ export interface WorkspaceSlice {
 
 // Helper type for the recovery handler
 type RecoveryResult =
-  | { shouldProceed: false }
-  | { shouldProceed: true; triggerReinit: () => void };
+  { shouldProceed: false } | { shouldProceed: true; triggerReinit: () => void };
 
 /**
  * Helper to handle stale data recovery (404 errors) atomically.

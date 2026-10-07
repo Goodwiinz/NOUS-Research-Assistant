@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator, cast
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models.collection import Collection
@@ -279,6 +279,63 @@ async def test_a_grant_without_consent_has_no_selection(db: AsyncSession) -> Non
     result = await read_selected_context(db, _grant_context(INTERNAL))
     assert result.is_error is True
     assert result.content == [{"error": "no_context_selection"}]
+
+
+@pytest.mark.parametrize(
+    "grant_id",
+    [GRANT, uuid4()],
+    ids=["grant-of-a-project-with-a-selection", "unknown-grant"],
+)
+async def test_a_workspace_bound_context_never_reads_a_selection(
+    db: AsyncSession, grant_id: UUID
+) -> None:
+    # A selection is stored per project consent and the read takes its project
+    # from the grant. A workspace grant has no such project (and cannot hold
+    # context:read), so a context that reached the service anyway gets the same
+    # stable error whatever the grant row says, and nothing is read.
+    await save_selection(db, await _user(db), CONSENT, [KEEP])
+    workspace_context = IntegrationContext(
+        user_id=USER, organization_id=ORG, workspace_id=WORKSPACE, grant_id=grant_id
+    )
+    result = await read_selected_context(db, workspace_context)
+    assert result.is_error is True
+    assert result.content == [{"error": "context_unavailable"}]
+    assert result.source_refs == []
+    assert "Cite in APA" not in json.dumps(result.model_dump(mode="json"))
+
+
+async def test_a_workspace_consent_cannot_hold_a_selection(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # check_scopes refuses context:read for a workspace consent. A row that got
+    # in another way still has no project to pick memories from, so the owner
+    # can neither list options for it nor save a selection under it, and no
+    # project is ever resolved for it (a NULL project would match nothing, but
+    # that is luck of the SQL, not a rule).
+    async def no_project(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a workspace consent has no project to resolve")
+
+    monkeypatch.setattr(selected_context, "authorized_project", no_project)
+    consent = uuid4()
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=consent,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            device_id=uuid4(),
+            scopes=["tools:read", "context:read"],
+            status="consumed",
+            expires_at=SOON,
+        )
+    )
+    await db.commit()
+    with pytest.raises(ContextNotFound):
+        await context_options(db, await _user(db), consent)
+    with pytest.raises(ContextNotFound):
+        await save_selection(db, await _user(db), consent, [KEEP])
+    assert await db.scalar(select(func.count(IntegrationContextSelection.id))) == 0
 
 
 async def test_concurrent_first_save_applies_instead_of_failing(

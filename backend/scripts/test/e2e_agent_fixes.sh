@@ -77,7 +77,7 @@ cli_auth_dance() {
   timeout_s="${AGENT_E2E_AUTH_TIMEOUT:-180}"
   elapsed=0
   while [ $elapsed -lt $timeout_s ]; do
-    body=$(curl -s "$API/api/v1/cli-auth/status/$sid?poll_token=$poll_token")
+    body=$(curl -s -H "X-CLI-Poll-Token: $poll_token" "$API/api/v1/cli-auth/status/$sid")
     status=$(echo "$body" | jq -r '.status // "unknown"')
     case "$status" in
       approved|completed|success)

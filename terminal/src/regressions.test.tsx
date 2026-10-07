@@ -416,6 +416,87 @@ test("Ctrl+C parks queued prompts until an explicit send", async () => {
   assert.deepEqual(prompts, ["first", "parked", "resume"]);
 });
 
+test("App token renders do not read or chmod the config file", async () => {
+  const fs = await import("node:fs");
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  mock.method(
+    globalThis,
+    "fetch",
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            body = controller;
+          },
+        }),
+      ),
+  );
+  const ui = await mount();
+  await key(ui, "stream a response");
+  await key(ui, "\r");
+  await until(() => !!body);
+  const emit = (event: string, data: unknown) =>
+    body.enqueue(
+      new TextEncoder().encode(
+        `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+      ),
+    );
+  emit("token", { content: "first" });
+  await until(() => !!ui.lastFrame()?.includes("first"));
+  const reads = mock.method(fs.default, "readFileSync");
+  const chmods = mock.method(fs.default, "chmodSync");
+  try {
+    for (let i = 0; i < 4; i++) {
+      emit("token", { content: "!" });
+      await until(
+        () => !!ui.lastFrame()?.includes("first" + "!".repeat(i + 1)),
+      );
+    }
+    assert.equal(
+      reads.mock.calls.filter((call) =>
+        String(call.arguments[0]).endsWith("config.json"),
+      ).length,
+      0,
+      "App token updates must not read credentials from disk",
+    );
+    assert.equal(
+      chmods.mock.callCount(),
+      0,
+      "App token updates must not chmod config",
+    );
+  } finally {
+    emit("done", {});
+    body.close();
+    await until(() => !ui.lastFrame()?.includes("Working…"));
+    await delay(50);
+  }
+});
+
+test("App config snapshot follows model selection and server-assigned thread IDs", async () => {
+  saveConfig({ ...loadConfig()!, thread_id: null });
+  mock.method(globalThis, "fetch", async () =>
+    response([
+      ["trace", { thread_id: "assigned-thread" }],
+      ["token", { content: "Configuration updated" }],
+      ["done", {}],
+    ]),
+  );
+  const ui = await mount();
+  await key(ui, "/model gpt-5-mini");
+  await key(ui, "\r");
+  await until(() => !!ui.lastFrame()?.includes("gpt-5-mini"));
+  await key(ui, "hello");
+  await key(ui, "\r");
+  await until(() => !!ui.lastFrame()?.includes("Configuration updated"));
+  assert.match(ui.lastFrame()!, /NOUS · assigned-thread/);
+  // Response text can render before branch persistence releases the idle guard.
+  await until(() => !ui.lastFrame()?.includes("Working…"));
+  await key(ui, "/new");
+  await key(ui, "\r");
+  await until(() => !!ui.lastFrame()?.includes("NOUS · New chat"));
+  assert.doesNotMatch(ui.lastFrame()!, /assigned-thread/);
+});
+
 test("stream events do not reread config or recreate the user node", async () => {
   const fs = await import("node:fs");
   const { useTerminalSession } = await import("./session");

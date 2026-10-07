@@ -3,12 +3,14 @@ import { test } from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect, status } from "../src/cli.ts";
+import { connect, handoffFlush, handoffShow, status } from "../src/cli.ts";
 import { CredentialStore } from "../src/credentials.ts";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const DEVICE = "22222222-2222-4222-8222-222222222222";
 const GRANT = "33333333-3333-4333-8333-333333333333";
+const WORKSPACE = "77777777-7777-4777-8777-777777777777";
+const OTHER_WORKSPACE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CHAT = "99999999-9999-4999-8999-999999999999";
 const OTHER_CHAT = "88888888-8888-4888-8888-888888888888";
 
@@ -188,6 +190,123 @@ test("status reports the binding offline, and says not connected without state",
     assert.match(out, /Grant: expires \d{4}-\d{2}-\d{2}T/);
     assert.match(out, /Pending handoffs: 2/);
     assert.ok(!out.includes("secret"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a workspace binding is reused like a project one, and the two never reuse each other", async () => {
+  const t = setup();
+  try {
+    const { projectId: _project, ...noProject } = t.base;
+    const workspace = { ...noProject, workspaceId: WORKSPACE, tools: true };
+    const first = await connect(workspace);
+    assert.equal(t.state().workspaceId, WORKSPACE);
+    assert.equal(t.state().projectId, undefined);
+    // Same API and workspace, scopes already granted, grant still renews: one probe, no login.
+    const sameMark = t.calls.length;
+    assert.deepEqual(await connect(workspace), first);
+    assert.deepEqual(t.since(sameMark), [`https://nous.test/api/v1/integrations/grants/${GRANT}/renew`]);
+    assert.match(t.messages.at(-1)!, new RegExp(`^Reusing binding: workspace ${WORKSPACE}`));
+    // A project connection on the same API is another binding: full flow, and the
+    // workspace connection's local credential goes.
+    const projectMark = t.calls.length;
+    const project = await connect({ ...t.base, tools: true });
+    assert.ok(t.since(projectMark).some((u) => u.endsWith("/cli-auth/start")));
+    assert.equal(t.since(projectMark).some((u) => u.endsWith("/renew")), false);
+    assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false);
+    assert.equal(t.state().projectId, PROJECT);
+    assert.equal(t.state().workspaceId, undefined);
+    // And back again: a workspace connection never reuses a project grant.
+    const backMark = t.calls.length;
+    await connect(workspace);
+    assert.ok(t.since(backMark).some((u) => u.endsWith("/cli-auth/start")));
+    assert.equal(existsSync(join(t.dir, `${project.credentialHandle}.json`)), false);
+    assert.equal(t.state().workspaceId, WORKSPACE);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a different workspace runs the full flow and removes the superseded credential", async () => {
+  const t = setup();
+  try {
+    const { projectId: _project, ...noProject } = t.base;
+    const first = await connect({ ...noProject, workspaceId: WORKSPACE, tools: true });
+    const mark = t.calls.length;
+    const second = await connect({ ...noProject, workspaceId: OTHER_WORKSPACE, tools: true });
+    const later = t.since(mark);
+    // The workspace is the whole binding: a grant for another one must neither
+    // be probed nor reused, whatever scopes it holds.
+    assert.ok(later.some((u) => u.endsWith("/cli-auth/start")));
+    assert.ok(later.some((u) => u.endsWith("/grant-requests")), "a new consent is requested");
+    assert.equal(later.some((u) => u.endsWith("/renew")), false);
+    assert.equal(t.messages.some((m) => m.startsWith("Reusing binding")), false);
+    assert.notEqual(second.credentialHandle, first.credentialHandle);
+    assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false);
+    assert.equal(existsSync(join(t.dir, `${second.credentialHandle}.json`)), true);
+    assert.equal(t.state().workspaceId, OTHER_WORKSPACE);
+    assert.equal(t.state().projectId, undefined);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a stored connection with both a project and a workspace, or with neither, is not connected", async () => {
+  for (const [name, binding] of [
+    ["both", { projectId: PROJECT, workspaceId: WORKSPACE }],
+    ["neither", {}],
+  ] as const) {
+    const t = setup();
+    try {
+      await connect({ ...t.base, tools: true });
+      const { projectId: _project, workspaceId: _workspace, ...rest } = t.state();
+      await new CredentialStore(t.dir).writeLocal("connection", { ...rest, ...binding });
+      const lines: string[] = [];
+      await status({ stateDir: t.dir, announce: (m) => lines.push(m) });
+      const out = lines.join("\n");
+      assert.match(out, /not connected/i, name);
+      assert.doesNotMatch(out, /Project:|Workspace:|Device:/, name);
+      await assert.rejects(handoffShow({ stateDir: t.dir, fetchFn: t.base.fetchFn }), /connect this device first/, name);
+      // And it is never taken for the binding of the next connect.
+      const mark = t.calls.length;
+      await connect({ ...t.base, tools: true });
+      assert.ok(t.since(mark).some((u) => u.endsWith("/cli-auth/start")), name);
+      assert.equal(t.since(mark).some((u) => u.endsWith("/renew")), false, name);
+    } finally {
+      t.cleanup();
+    }
+  }
+});
+
+test("status names a workspace binding and shows neither a project nor a chat", async () => {
+  const t = setup();
+  try {
+    const { projectId: _project, ...noProject } = t.base;
+    await connect({ ...noProject, workspaceId: WORKSPACE, tools: true });
+    const lines: string[] = [];
+    await status({ stateDir: t.dir, announce: (m) => lines.push(m) });
+    const out = lines.join("\n");
+    assert.match(out, new RegExp(`Workspace: ${WORKSPACE} \\(every project in it; MCP-only\\)`));
+    assert.doesNotMatch(out, /Project:|Chat:/);
+    assert.match(out, /Scopes: tools:read/);
+    assert.ok(!out.includes("secret"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("handoff commands refuse a workspace connection and say how to get a chat one", async () => {
+  const t = setup();
+  try {
+    const { projectId: _project, ...noProject } = t.base;
+    await connect({ ...noProject, workspaceId: WORKSPACE, tools: true });
+    const mark = t.calls.length;
+    const refusal = /workspace, which is MCP-only.*connect --project UUID --chat UUID --tools --handoff/;
+    const options = { stateDir: t.dir, fetchFn: t.base.fetchFn };
+    await assert.rejects(handoffShow(options), refusal);
+    await assert.rejects(handoffFlush(options), refusal);
+    assert.equal(t.calls.length, mark, "refused before any request");
   } finally {
     t.cleanup();
   }
