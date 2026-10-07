@@ -153,10 +153,11 @@ TARGET_NOT_FOUND = "target not found"
 INSUFFICIENT_PERMISSIONS = "insufficient permissions"
 INGEST_FAILED = "ingest failed"
 INGEST_UNKNOWN = "ingest outcome unknown"
+INGEST_NOT_LINKED = "papers ingested but not saved to the folder"
 INGEST_ATOMICITY = (
-    "Papers are stored and saved to the folder in transactions of their own "
+    "Papers are stored, then saved to the folder, in transactions of their own "
     "before this receipt is written: those listed here stay in the library "
-    "even when the action failed."
+    "even when the action failed, and are in the folder only when linked is true."
 )
 # The ingest tool's statuses (tools_impl.INGEST_STATUS_*). A missing or
 # unknown status counts as a failure.
@@ -164,7 +165,7 @@ _INGEST_COMPLETE = "ingestion_complete"
 _INGEST_REASONS: Mapping[str, str] = MappingProxyType(
     {
         "ingestion_partial": "ingest partially failed",
-        "ingestion_complete_link_failed": "papers ingested but not saved to the folder",
+        "ingestion_complete_link_failed": INGEST_NOT_LINKED,
         "ingestion_failed": INGEST_FAILED,
     }
 )
@@ -1438,6 +1439,11 @@ def _ingest_receipt(
     """The ingest's outcome in fixed fields, and its stable failure reason.
 
     Never the tool's messages: they quote exception text and per-paper causes.
+    ``linked`` says whether the papers listed were saved to the folder: only
+    when the tool names that folder as the one it linked them to. The status
+    alone cannot tell, because a partial ingest keeps its status when the link
+    fails as well; stored papers that were not linked get INGEST_NOT_LINKED,
+    whatever the status.
     """
     status = payload.get("status")
     if status != _INGEST_COMPLETE and status not in _INGEST_REASONS:
@@ -1449,14 +1455,21 @@ def _ingest_receipt(
         for item in payload.get("failed_papers") or []
         if isinstance(item, dict)
     }
+    document_ids = [str(d) for d in payload.get("document_ids") or []]
+    linked = bool(document_ids) and (
+        _review_id(payload.get("project_id")) == row.project_id
+    )
+    if document_ids and not linked:
+        reason = INGEST_NOT_LINKED
     receipt: dict[str, Any] = {
         "ok": reason is None,
         "tool_name": row.tool_name,
         "project_id": str(row.project_id),
         "paper_ids": requested,
-        "document_ids": [str(d) for d in payload.get("document_ids") or []],
+        "document_ids": document_ids,
         "failed_paper_ids": [p for p in requested if p in failed],
         "ingest_status": status,
+        "linked": linked,
         "atomicity": INGEST_ATOMICITY,
     }
     if reason is not None:

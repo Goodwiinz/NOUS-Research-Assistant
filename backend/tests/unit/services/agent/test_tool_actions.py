@@ -2701,6 +2701,7 @@ async def test_ingest_runs_through_the_drain_outside_the_action_transaction(
         "document_ids": [LANDED],
         "failed_paper_ids": [],
         "ingest_status": "ingestion_complete",
+        "linked": True,
         "atomicity": tool_actions.INGEST_ATOMICITY,
     }
     assert done.result is not None
@@ -2714,8 +2715,10 @@ async def test_ingest_runs_through_the_drain_outside_the_action_transaction(
 SECRET = "s3cr3t from the adapter"
 
 
+# The ingest tool's payload names the folder it linked the papers to in
+# project_id, None when it saved them to none (the link was refused or raised).
 @pytest.mark.parametrize(
-    ("outcome", "state", "reason", "document_ids", "failed_paper_ids"),
+    ("outcome", "state", "reason", "document_ids", "failed_paper_ids", "linked"),
     [
         (
             {
@@ -2725,36 +2728,59 @@ SECRET = "s3cr3t from the adapter"
                     {"paper_id": "2401.00001", "reason": SECRET},
                     {"paper_id": "2401.00002", "reason": SECRET},
                 ],
+                "project_id": None,
                 "error": f"Ingested 0 of 2 paper(s). Details: {SECRET}",
             },
             "failed",
             "ingest failed",
             [],
             ["2401.00001", "2401.00002"],
+            False,
         ),
         (
             {
                 "status": "ingestion_partial",
                 "document_ids": [LANDED],
                 "failed_papers": [{"paper_id": "2401.00002", "reason": SECRET}],
+                "project_id": str(SECOND),
                 "error": f"Ingested 1 of 2 paper(s). {SECRET}",
             },
             "failed",
             "ingest partially failed",
             [LANDED],
             ["2401.00002"],
+            True,
+        ),
+        (
+            # A partial ingest keeps its status when the link fails too (only
+            # a complete one becomes ingestion_complete_link_failed).
+            {
+                "status": "ingestion_partial",
+                "document_ids": [LANDED],
+                "failed_papers": [{"paper_id": "2401.00002", "reason": SECRET}],
+                "project_id": None,
+                "link_error": f"Project link failed: {SECRET}",
+                "error": f"Ingested 1 of 2 paper(s). {SECRET}",
+            },
+            "failed",
+            "papers ingested but not saved to the folder",
+            [LANDED],
+            ["2401.00002"],
+            False,
         ),
         (
             {
                 "status": "ingestion_complete_link_failed",
                 "document_ids": [LANDED],
                 "failed_papers": [],
+                "project_id": None,
                 "link_error": f"Project link failed: {SECRET}",
             },
             "failed",
             "papers ingested but not saved to the folder",
             [LANDED],
             [],
+            False,
         ),
         (
             {"error": SECRET, "error_type": "internal"},
@@ -2762,10 +2788,25 @@ SECRET = "s3cr3t from the adapter"
             "ingest failed",
             [],
             [],
+            False,
         ),
-        (RuntimeError(SECRET), "outcome_unknown", "ingest outcome unknown", None, None),
+        (
+            RuntimeError(SECRET),
+            "outcome_unknown",
+            "ingest outcome unknown",
+            None,
+            None,
+            None,
+        ),
     ],
-    ids=["nothing-landed", "partial", "not-saved-to-folder", "adapter-error", "raised"],
+    ids=[
+        "nothing-landed",
+        "partial",
+        "partial-not-saved-to-folder",
+        "not-saved-to-folder",
+        "adapter-error",
+        "raised",
+    ],
 )
 async def test_ingest_outcomes_are_recorded_with_stable_reasons(
     db: AsyncSession,
@@ -2776,6 +2817,7 @@ async def test_ingest_outcomes_are_recorded_with_stable_reasons(
     reason: str,
     document_ids: list[str] | None,
     failed_paper_ids: list[str] | None,
+    linked: bool | None,
 ) -> None:
     calls: list[dict[str, Any]] = []
     _fake_ingest(monkeypatch, outcome, calls)
@@ -2798,6 +2840,8 @@ async def test_ingest_outcomes_are_recorded_with_stable_reasons(
                 "document_ids": document_ids,
                 "failed_paper_ids": failed_paper_ids,
                 "ingest_status": outcome.get("status", "ingestion_failed"),
+                # Whether the papers listed were saved to project_id.
+                "linked": linked,
                 "atomicity": tool_actions.INGEST_ATOMICITY,
                 "error": reason,
             }
