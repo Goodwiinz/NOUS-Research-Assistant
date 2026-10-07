@@ -476,6 +476,14 @@ async def test_artifact_read_rechecks_access_after_route_authorization(
     or ResearchReviewService._load_run, run this test with the corresponding
     endpoint, then restore and rerun. The mutant returns private content (200)
     after revocation; the protected artifact query must return 404.
+
+    Query guards: backend/src/services/research_engine/export_service.py:113,
+    review_service.py:629; shared predicates in project_access.py:83,87,91,113
+    (the last two paths share the same services/research_engine directory).
+    With RESEARCH_PROJECT_DATABASE_URL set to an owned PostgreSQL database:
+    PYTHONPATH=backend python -m pytest -c backend/pytest.ini --no-cov -q
+    backend/tests/integration/test_research_run_review_export_access_postgres.py
+    -k artifact_read_rechecks
     """
     access = access_db
     authorized = asyncio.Event()

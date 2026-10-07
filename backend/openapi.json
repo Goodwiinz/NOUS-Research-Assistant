@@ -16924,7 +16924,7 @@
       },
       "PendingReviewResponse": {
         "additionalProperties": false,
-        "description": "Owned pending review state, optionally including bounded stage output.",
+        "description": "Pending review state for a run the caller can view, with bounded stage output.",
         "properties": {
           "accepted_review": {
             "anyOf": [

@@ -18179,7 +18179,7 @@ export interface components {
         };
         /**
          * PendingReviewResponse
-         * @description Owned pending review state, optionally including bounded stage output.
+         * @description Pending review state for a run the caller can view, with bounded stage output.
          */
         PendingReviewResponse: {
             accepted_review?: components["schemas"]["StageReviewResponse"] | null;
