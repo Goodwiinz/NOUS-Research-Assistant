@@ -1087,7 +1087,14 @@ async def test_native_actor_without_grant_executes_after_decision(
 
 async def test_effect_rejected_by_the_adapter_leaves_no_note(db: AsyncSession) -> None:
     invocation_id = await _approved_action(db)
-    await db.execute(update(Collection).values(is_deleted=True))
+    # Still a live member, so the authority re-check passes, but a viewer may
+    # not edit the project: the note adapter's own check refuses the effect.
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(owner_id=OTHER_USER)
+    )
+    db.add(
+        WorkspaceMember(workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER)
+    )
     await db.commit()
     failed = await execute_action(db, invocation_id)
     assert failed is not None and failed.state == "failed"
@@ -2491,6 +2498,75 @@ async def test_create_folder_rechecks_workspace_access_when_it_runs(
         select(func.count()).select_from(Collection).where(Collection.name == "Reading")
     )
     assert created == 0
+
+
+# What a project connection can lose between the decision and the run, each a
+# state authorized_project refuses: the binding (project_id) alone still matches.
+ACCESS_LOST: dict[str, tuple[Any, dict[str, Any]]] = {
+    "workspace-deleted": (
+        update(Workspace).where(Workspace.id == WORKSPACE),
+        {"is_deleted": True},
+    ),
+    "membership-removed": (
+        update(Workspace).where(Workspace.id == WORKSPACE),
+        {"owner_id": OTHER_USER},
+    ),
+    "organization-deactivated": (
+        update(Organization).where(Organization.id == ORG),
+        {"is_active": False},
+    ),
+    "project-deleted": (
+        update(Collection).where(Collection.id == PROJECT),
+        {"is_deleted": True},
+    ),
+}
+
+
+@pytest.mark.parametrize("lost", list(ACCESS_LOST))
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("update_document_metadata", {"document_id": str(PAPER), "title": "Hacked"}),
+        ("remove_papers_from_folder", {"document_ids": [str(PAPER)], "project_id": P}),
+        ("create_project_note", NOTE_ARGS),
+    ],
+    ids=[
+        "update_document_metadata",
+        "remove_papers_from_folder",
+        "create_project_note",
+    ],
+)
+async def test_a_project_bound_action_rechecks_live_access_when_it_runs(
+    db: AsyncSession,
+    library: None,
+    lost: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> None:
+    # The same live check a workspace-bound row gets: a project grant's row
+    # must not run once the user could no longer reach the project, whatever
+    # the effect itself would still have allowed.
+    status = await request_action(db, _actor(), _call(tool_name, **arguments))
+    assert status.state == "awaiting_approval"
+    row = await _row(db, status.invocation_id)
+    assert (row.project_id, row.workspace_id) == (PROJECT, None)
+    await _approve(db, status.invocation_id)
+    statement, values = ACCESS_LOST[lost]
+    await db.execute(statement.values(**values))
+    await db.commit()
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert await _last_error(db, status.invocation_id) == (
+        "grant no longer authorizes this action"
+    )
+    assert await _linked(db, PROJECT, PAPER)
+    document = await db.scalar(
+        select(Document)
+        .where(Document.id == PAPER)
+        .execution_options(populate_existing=True)
+    )
+    assert document is not None and document.title == "Paper"
+    assert await _note_count(db) == 0
 
 
 # --- the arXiv ingest: approval path, outside the action's transaction -----

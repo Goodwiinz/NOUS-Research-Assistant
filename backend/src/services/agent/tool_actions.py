@@ -985,19 +985,26 @@ async def _target_reason(
     """A stable reason when the grant no longer reaches what the action
     touches, else None.
 
-    A row bound to one project was compared by that binding, so a selector may
-    only name the same Collection. For a workspace-bound row, comparing only
-    the binding would let the grant authorise whatever the row names, so every
-    Collection it touches (a move's destination too) must still be one of the
-    workspace's live Collections that the requesting user can reach; a
-    workspace-level action (``create_folder``) needs the workspace itself.
+    Both bindings get the per-call access re-check every read makes
+    (``authorized_scope_filter``): the binding's project, or its workspace,
+    is not deleted, the user still owns the workspace or is a live member, and
+    the user and both organizations are active. Matching grant and consent
+    rows prove none of that, and most library effects only scope their own
+    lookup. A row bound to one project was compared by that binding, so a
+    selector may only name the same Collection. For a workspace-bound row,
+    comparing only the binding would let the grant authorise whatever the row
+    names, so every Collection it touches (a move's destination too) must
+    still be one of the workspace's live Collections; a workspace-level action
+    (``create_folder``) needs the workspace itself.
     """
     targets = _targets(row)
-    if row.workspace_id is None:
-        return None if targets <= {row.project_id} else GRANT_DENIED
+    project_bound = row.workspace_id is None
+    if project_bound and row.project_id is None:
+        return GRANT_DENIED  # bound to nothing: never authorisable
     context = IntegrationContext(
         user_id=row.user_id,
         organization_id=row.organization_id,
+        project_id=row.project_id if project_bound else None,
         workspace_id=row.workspace_id,
         grant_id=grant.id,
     )
@@ -1005,6 +1012,8 @@ async def _target_reason(
         scope = await authorized_scope_filter(db, context)
     except IntegrationAccessDenied:
         return GRANT_DENIED
+    if project_bound:
+        return None if targets <= {row.project_id} else GRANT_DENIED
     if not targets:
         return None
     reachable = set(
@@ -1487,12 +1496,16 @@ async def _execute_row(db: AsyncSession, row_id: UUID) -> ActionStatus | None:
     invocation = {"invocation_id": str(row.invocation_id)}
 
     try:
-        reason = await _authority_intact(db, row)
-        user = None if reason else await db.get(User, row.user_id)
+        # The requester first: the authority re-check also refuses an
+        # inactive or departed user, but only as a lost grant.
+        user = await db.get(User, row.user_id)
+        reason: str | None
         if user is None or not user.is_active or user.is_deleted:
-            reason = reason or "requesting user is not active"
+            reason = "requesting user is not active"
         elif user.organization_id != row.organization_id:
             reason = "requesting user left the organization"
+        else:
+            reason = await _authority_intact(db, row)
     except Exception as error:  # noqa: BLE001 - the outcome is known: nothing ran
         logger.error(
             "integration action authority check failed",
