@@ -15,12 +15,38 @@ it changes. The ``email`` field stays in the request schema so the OpenAPI
 contract does not break, but only an echo of the caller's current address
 (compared case-insensitively) is accepted. Any other value rejects the WHOLE
 request with 400 before anything is written.
+
+GOO-405 reconciliation backoff mutation evidence (run from ``backend/``):
+
+* Guard at ``src/services/security/auth_service.py:339``: a provider-disproved
+  JWT email claim is remembered. Removing that call makes
+  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_disproved_stale_claim_does_not_repeat_provider_lookup`` fail
+  because it performs a second provider lookup.
+* Guard at ``src/services/security/auth_service.py:347``: a confirmed email
+  collision is remembered after rollback. Removing that call makes
+  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_email_conflict_backs_off_repeated_sync`` fail
+  because it repeats the lookup and commit.
+* Guard at ``src/services/security/auth_service.py:332``: provider lookup
+  failures receive a short backoff. Removing it makes
+  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_lookup_failure_leaves_email_unchanged`` fail
+  because every request retries the failed lookup.
+* Guard at ``src/services/security/auth_service.py:103``: same-key
+  requests are coalesced around the lookup and write. Bypassing the keyed lock
+  makes
+  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_concurrent_reconciliation_uses_one_provider_lookup`` fail
+  because both concurrent calls reach the provider.
+
+Each proof disables one guard, observes its focused failure, then restores the
+source byte-for-byte before running the focused test on the restored source.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import uuid
 from collections.abc import Iterator
+from time import sleep
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -171,6 +197,7 @@ async def test_verified_supabase_email_change_syncs_by_subject_id(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The current provider email is reconciled before /auth/me sees the user."""
+    setattr(user, "id", uuid.uuid4())
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: "new-owner@example.com",
@@ -193,6 +220,7 @@ async def test_stale_supabase_claim_cannot_roll_email_back(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """JWT A must not overwrite the provider's current address B."""
+    setattr(user, "id", uuid.uuid4())
     setattr(user, "email", "intermediate@example.com")
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email",
@@ -216,8 +244,6 @@ async def test_disproved_stale_claim_does_not_repeat_provider_lookup(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A provider-disproved claim is cached by subject and claim, briefly."""
-    import uuid
-
     setattr(user, "id", uuid.uuid4())
     setattr(user, "email", "current@example.com")
     lookups = 0
@@ -242,12 +268,72 @@ async def test_disproved_stale_claim_does_not_repeat_provider_lookup(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_concurrent_reconciliation_uses_one_provider_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent requests for the same claim share one provider round trip."""
+    subject_id = str(uuid.uuid4())
+    first_user = User(
+        id=subject_id,
+        email="intermediate@example.com",
+        password_hash="unused-jit-secret",
+        first_name="Ada",
+        last_name="Lovelace",
+        role=UserRole.USER,
+        is_active=True,
+        is_deleted=False,
+        organization_id=None,
+    )
+    stale_loaded_user = User(
+        id=subject_id,
+        email="intermediate@example.com",
+        password_hash="unused-jit-secret",
+        first_name="Ada",
+        last_name="Lovelace",
+        role=UserRole.USER,
+        is_active=True,
+        is_deleted=False,
+        organization_id=None,
+    )
+    refreshed_user = SimpleNamespace(id=subject_id, email="current@example.com")
+    first_db = AsyncMock()
+    second_db = AsyncMock()
+    refreshed_result = MagicMock()
+    refreshed_result.scalars.return_value.first.return_value = refreshed_user
+    second_db.execute.return_value = refreshed_result
+    lookups = 0
+
+    def current_email(_user_id: str) -> str:
+        nonlocal lookups
+        lookups += 1
+        sleep(0.05)
+        return "current@example.com"
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", current_email
+    )
+    first_service = AuthService(first_db)
+    second_service = AuthService(second_db)
+
+    first_result, second_result = await asyncio.gather(
+        first_service.sync_user_email_from_provider(first_user, OWNER_EMAIL),
+        second_service.sync_user_email_from_provider(stale_loaded_user, OWNER_EMAIL),
+    )
+
+    assert lookups == 1
+    assert first_result is not None
+    assert first_result.email == "current@example.com"
+    assert second_result is refreshed_user
+    first_db.commit.assert_awaited_once()
+    second_db.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_provider_email_conflict_backs_off_repeated_sync(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A provider-confirmed local collision is retried only after backoff."""
-    import uuid
-
     setattr(user, "id", uuid.uuid4())
     restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
     result = MagicMock()
@@ -285,8 +371,16 @@ async def test_provider_lookup_failure_leaves_email_unchanged(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A token claim alone is never enough to change the stored address."""
+    setattr(user, "id", uuid.uuid4())
+    lookups = 0
+
+    def unavailable(_user_id: str) -> None:
+        nonlocal lookups
+        lookups += 1
+        return None
+
     monkeypatch.setattr(
-        "src.core.user_provisioning.get_verified_supabase_email", lambda _user_id: None
+        "src.core.user_provisioning.get_verified_supabase_email", unavailable
     )
     result = MagicMock()
     result.scalars.return_value.first.return_value = user
@@ -297,6 +391,8 @@ async def test_provider_lookup_failure_leaves_email_unchanged(
 
     assert current_user is user
     assert user.email == OWNER_EMAIL
+    await AuthService(db).sync_user_email_from_provider(user, VICTIM_EMAIL)
+    assert lookups == 1
     db.commit.assert_not_awaited()
 
 
@@ -305,6 +401,7 @@ def test_profile_accepts_the_email_from_the_current_provider_record(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The auth dependency reconciles current provider state before route checks."""
+    setattr(user, "id", uuid.uuid4())
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: "new-owner@example.com",
@@ -359,6 +456,7 @@ async def test_verified_email_conflict_keeps_user_bound_to_subject(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A unique-email collision fails closed without looking up by email."""
+    setattr(user, "id", uuid.uuid4())
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: VICTIM_EMAIL,

@@ -14,8 +14,9 @@ import secrets
 import threading
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Depends
 from sqlalchemy import and_, func, select
@@ -29,6 +30,7 @@ from src.models.user import User, UserRole
 logger = __import__("logging").getLogger(__name__)
 
 _STALE_EMAIL_CLAIM_TTL_SECONDS = 60
+_PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS = 5
 _STALE_EMAIL_CLAIM_CACHE_LIMIT = 2048
 _STALE_EMAIL_CLAIM_HASH_KEY = secrets.token_bytes(32)
 
@@ -62,20 +64,54 @@ class _EmailReconciliationBackoff:
             self._entries.move_to_end(key)
             return True
 
-    def remember(self, user_id: str, email: str) -> None:
+    def remember(
+        self,
+        user_id: str,
+        email: str,
+        ttl_seconds: float = _STALE_EMAIL_CLAIM_TTL_SECONDS,
+    ) -> None:
         key = self._key(user_id, email)
         now = time.monotonic()
         with self._lock:
             for expired_key, expires_at in list(self._entries.items()):
                 if expires_at <= now:
                     del self._entries[expired_key]
-            self._entries[key] = now + _STALE_EMAIL_CLAIM_TTL_SECONDS
+            self._entries[key] = now + ttl_seconds
             self._entries.move_to_end(key)
             while len(self._entries) > _STALE_EMAIL_CLAIM_CACHE_LIMIT:
                 self._entries.popitem(last=False)
 
 
 _email_reconciliation_backoff = _EmailReconciliationBackoff()
+
+
+class _KeyedEmailReconciliationLocks:
+    """Coalesce same-subject, same-claim reconciliation within this process."""
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
+        self._guard = threading.Lock()
+
+    @asynccontextmanager
+    async def hold(self, user_id: str, email: str) -> AsyncIterator[None]:
+        key = _email_reconciliation_backoff._key(user_id, email)
+        with self._guard:
+            entry = self._entries.get(key)
+            lock, users = entry if entry is not None else (asyncio.Lock(), 0)
+            self._entries[key] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            with self._guard:
+                lock, users = self._entries[key]
+                if users == 1:
+                    del self._entries[key]
+                else:
+                    self._entries[key] = (lock, users - 1)
+
+
+_email_reconciliation_locks = _KeyedEmailReconciliationLocks()
 
 
 class AuthenticationError(Exception):
@@ -274,42 +310,59 @@ class AuthService:
             return user
 
         subject_id = str(user.id)
-        if _email_reconciliation_backoff.contains(subject_id, claimed_email):
-            return user
-
-        from src.core.user_provisioning import get_verified_supabase_email
-
-        provider_email = await asyncio.to_thread(
-            get_verified_supabase_email, subject_id
-        )
-        if not provider_email:
-            return user
-        if provider_email != claimed_email:
-            _email_reconciliation_backoff.remember(subject_id, claimed_email)
-        if user.email.lower() == provider_email:
-            return user
-
-        user.email = provider_email
-        try:
-            await self.db.commit()
-        except IntegrityError:
-            _email_reconciliation_backoff.remember(subject_id, provider_email)
-            await self.db.rollback()
-            result = await self.db.execute(
-                select(User)
-                .options(selectinload(User.organization))
-                .where(
-                    User.id == subject_id,
-                    User.is_active == True,
-                    User.is_deleted == False,
+        async with _email_reconciliation_locks.hold(subject_id, claimed_email):
+            if _email_reconciliation_backoff.contains(subject_id, claimed_email):
+                result = await self.db.execute(
+                    select(User)
+                    .options(selectinload(User.organization))
+                    .where(
+                        User.id == subject_id,
+                        User.is_active == True,
+                        User.is_deleted == False,
+                    )
                 )
+                return result.scalars().first()
+
+            from src.core.user_provisioning import get_verified_supabase_email
+
+            provider_email = await asyncio.to_thread(
+                get_verified_supabase_email, subject_id
             )
-            user = result.scalars().first()
-            logger.warning(
-                "Current provider email sync for user %s conflicts with another "
-                "account; operator reconciliation required",
-                subject_id,
-            )
+            if not provider_email:
+                _email_reconciliation_backoff.remember(
+                    subject_id,
+                    claimed_email,
+                    ttl_seconds=_PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS,
+                )
+                return user
+            if provider_email != claimed_email:
+                _email_reconciliation_backoff.remember(subject_id, claimed_email)
+            if user.email.lower() == provider_email:
+                return user
+
+            user.email = provider_email
+            try:
+                await self.db.commit()
+            except IntegrityError:
+                _email_reconciliation_backoff.remember(subject_id, provider_email)
+                await self.db.rollback()
+                result = await self.db.execute(
+                    select(User)
+                    .options(selectinload(User.organization))
+                    .where(
+                        User.id == subject_id,
+                        User.is_active == True,
+                        User.is_deleted == False,
+                    )
+                )
+                user = result.scalars().first()
+                logger.warning(
+                    "Current provider email sync for user %s conflicts with another "
+                    "account; operator reconciliation required",
+                    subject_id,
+                )
+            else:
+                _email_reconciliation_backoff.remember(subject_id, provider_email)
         return user
 
     async def update_user_role(
