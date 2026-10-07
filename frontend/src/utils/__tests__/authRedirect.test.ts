@@ -54,3 +54,55 @@ describe('getSafeAuthRedirect', () => {
     expect(getLoginPathWithRedirect('/\\evil.example/phish')).toBe('/login');
   });
 });
+
+describe('getSafeAuthRedirect — normalization bypasses (GOO-402)', () => {
+  const origin = 'http://localhost:3000';
+
+  // Each payload is a same-origin URL whose normalized pathname collapses to
+  // `//host` (or `///host`), which callers would resolve as protocol-relative.
+  it.each([
+    ['/.//evil.com'],
+    ['/%2e//evil.com'],
+    ['/a/..//evil.com'],
+    ['/..//evil.com'],
+    ['/%2e%2e//evil.com'],
+    ['/./\\evil.com'],
+    ['/.\\/evil.com'],
+    ['/.//\\evil.com'],
+    ['/x/../\\evil.com'],
+    ['/.\t//evil.com'],
+  ])('rejects dot-segment payload %j', (candidate) => {
+    expect(getSafeAuthRedirect(candidate, origin)).toBe('/dashboard');
+  });
+
+  it('rejects an absolute same-origin URL whose path is protocol-relative', () => {
+    expect(getSafeAuthRedirect(`${origin}//evil.com`, origin)).toBe(
+      '/dashboard'
+    );
+  });
+
+  it('honours a custom fallback when rejecting', () => {
+    expect(getSafeAuthRedirect('/.//evil.com', origin, '/chat')).toBe('/chat');
+  });
+
+  it('still preserves path, query and hash for a normal destination', () => {
+    expect(getSafeAuthRedirect('/dashboard?x=1#h', origin)).toBe(
+      '/dashboard?x=1#h'
+    );
+  });
+
+  it('still resolves a harmless dot-segment to its normalized internal path', () => {
+    expect(getSafeAuthRedirect('/a/../b', origin)).toBe('/b');
+  });
+
+  it('keeps percent-encoded slashes literal (not a host)', () => {
+    expect(getSafeAuthRedirect('/%2fnot-a-host', origin)).toBe(
+      '/%2fnot-a-host'
+    );
+  });
+
+  it('omits next in the login path for a dot-segment payload', () => {
+    expect(getLoginPathWithRedirect('/.//evil.example/phish')).toBe('/login');
+    expect(getLoginPathWithRedirect('/%2e//evil.example/phish')).toBe('/login');
+  });
+});
