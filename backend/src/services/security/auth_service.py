@@ -7,7 +7,13 @@ statistics.
 """
 
 import asyncio
+import hashlib
+import hmac
 import inspect
+import secrets
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -21,6 +27,55 @@ from src.core.database import get_db
 from src.models.user import User, UserRole
 
 logger = __import__("logging").getLogger(__name__)
+
+_STALE_EMAIL_CLAIM_TTL_SECONDS = 60
+_STALE_EMAIL_CLAIM_CACHE_LIMIT = 2048
+_STALE_EMAIL_CLAIM_HASH_KEY = secrets.token_bytes(32)
+
+
+class _StaleEmailClaimCache:
+    """Bounded process-local cache of provider-disproved JWT email claims."""
+
+    def __init__(self) -> None:
+        self._entries: OrderedDict[tuple[str, str], float] = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(user_id: str, email: str) -> tuple[str, str]:
+        digest = hmac.new(
+            _STALE_EMAIL_CLAIM_HASH_KEY,
+            email.strip().lower().encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return user_id, digest
+
+    def contains(self, user_id: str, email: str) -> bool:
+        key = self._key(user_id, email)
+        now = time.monotonic()
+        with self._lock:
+            for expired_key, expires_at in list(self._entries.items()):
+                if expires_at <= now:
+                    del self._entries[expired_key]
+            expires_at = self._entries.get(key)
+            if expires_at is None:
+                return False
+            self._entries.move_to_end(key)
+            return True
+
+    def remember(self, user_id: str, email: str) -> None:
+        key = self._key(user_id, email)
+        now = time.monotonic()
+        with self._lock:
+            for expired_key, expires_at in list(self._entries.items()):
+                if expires_at <= now:
+                    del self._entries[expired_key]
+            self._entries[key] = now + _STALE_EMAIL_CLAIM_TTL_SECONDS
+            self._entries.move_to_end(key)
+            while len(self._entries) > _STALE_EMAIL_CLAIM_CACHE_LIMIT:
+                self._entries.popitem(last=False)
+
+
+_stale_email_claims = _StaleEmailClaimCache()
 
 
 class AuthenticationError(Exception):
@@ -218,15 +273,22 @@ class AuthService:
         if not claimed_email or user.email.lower() == claimed_email:
             return user
 
+        subject_id = str(user.id)
+        if _stale_email_claims.contains(subject_id, claimed_email):
+            return user
+
         from src.core.user_provisioning import get_verified_supabase_email
 
         provider_email = await asyncio.to_thread(
-            get_verified_supabase_email, str(user.id)
+            get_verified_supabase_email, subject_id
         )
-        if not provider_email or user.email.lower() == provider_email:
+        if not provider_email:
+            return user
+        if provider_email != claimed_email:
+            _stale_email_claims.remember(subject_id, claimed_email)
+        if user.email.lower() == provider_email:
             return user
 
-        subject_id = str(user.id)
         user.email = provider_email
         try:
             await self.db.commit()
@@ -236,7 +298,7 @@ class AuthService:
                 select(User)
                 .options(selectinload(User.organization))
                 .where(
-                    User.id == user.id,
+                    User.id == subject_id,
                     User.is_active == True,
                     User.is_deleted == False,
                 )

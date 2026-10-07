@@ -212,6 +212,36 @@ async def test_stale_supabase_claim_cannot_roll_email_back(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_disproved_stale_claim_does_not_repeat_provider_lookup(
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider-disproved claim is cached by subject and claim, briefly."""
+    import uuid
+
+    user.id = uuid.uuid4()
+    user.email = "current@example.com"
+    lookups = 0
+
+    def current_email(_user_id: str) -> str:
+        nonlocal lookups
+        lookups += 1
+        return "current@example.com"
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", current_email
+    )
+    service = AuthService(db)
+
+    await service.sync_user_email_from_provider(user, OWNER_EMAIL)
+    await service.sync_user_email_from_provider(user, OWNER_EMAIL)
+
+    assert lookups == 1
+    assert user.email == "current@example.com"
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_provider_lookup_failure_leaves_email_unchanged(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
