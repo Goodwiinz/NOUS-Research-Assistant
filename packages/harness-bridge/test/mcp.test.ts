@@ -404,9 +404,9 @@ test("connect --workspace --library requests a workspace binding and the library
     assert.equal(messages.some((m) => m.includes("device and workspace")), true);
     assert.equal(messages.at(-1), `Connected to workspace ${WORKSPACE}.`);
     // The standalone MCP command knows the grant can write the library and is bound to no folder.
-    // It offers no request_action: NOUS refuses every request a workspace grant makes.
+    // tools:write brings --actions as on a project: NOUS refuses a workspace grant only a note.
     const install = await mcpInstallCommand(dir);
-    assert.equal(install.includes("'--actions'"), false);
+    assert.equal(install.includes("'--actions'"), true);
     assert.equal(install.includes("'--library'"), true);
     assert.equal(install.includes("'--root'"), false);
   } finally {
@@ -767,7 +767,7 @@ test("workspace connections are MCP-only: no managed sessions, folders, bridge r
   }
 });
 
-test("a workspace connection never launches the MCP child with --actions", async () => {
+test("a workspace connection holding tools:write launches the MCP child with --actions", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-actions-"));
   const install = async (scopes: string[], binding: Record<string, string>) => {
     await new CredentialStore(stateDir).writeLocal("connection", {
@@ -781,19 +781,23 @@ test("a workspace connection never launches the MCP child with --actions", async
     return mcpInstallCommand(stateDir, { announce: () => {} });
   };
   try {
-    // tools:write is what offers request_action, but a workspace grant has no
-    // project to create a note in and NOUS answers 422 to every request it
-    // makes, so the model must not be offered a tool that can never succeed.
-    // Library actions get their own target in Plan 07 slice 3, switched on by --library.
+    // tools:write lets a workspace grant ask for every library action, each
+    // waiting for the user's approval (NOUS answers 422 only to a note there),
+    // so a connection made with --write but without --library can use the
+    // scope it asked the user for.
     const writer = await install(["tools:read", "tools:write"], { workspaceId: WORKSPACE });
-    assert.equal(writer.includes("'--actions'"), false);
+    assert.equal(writer.includes("'--actions'"), true);
     assert.equal(writer.includes("'--library'"), false);
     const library = await install(
       ["tools:read", "tools:write", "library:read", "library:write"],
       { workspaceId: WORKSPACE },
     );
-    assert.equal(library.includes("'--actions'"), false);
+    assert.equal(library.includes("'--actions'"), true);
     assert.equal(library.includes("'--library'"), true);
+    // Without tools:write there is nothing it may ask for.
+    const reader = await install(["tools:read", "library:read"], { workspaceId: WORKSPACE });
+    assert.equal(reader.includes("'--actions'"), false);
+    assert.equal(reader.includes("'--library'"), false);
     // A project connection keeps the note request.
     const project = await install(["harness:execute", "tools:read", "tools:write"], { projectId: PROJECT });
     assert.equal(project.includes("'--actions'"), true);

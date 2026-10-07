@@ -21,12 +21,13 @@ export type McpSession = {
   outputRoot?: string;
   // Grant carries context:read; enables read_selected_context.
   context?: boolean;
-  // A project grant carries tools:write; enables request_action / get_action_status.
+  // Grant carries tools:write (either binding); enables request_action /
+  // get_action_status.
   actions?: boolean;
   // Grant carries handoff:read/handoff:write; enables get/save_nous_handoff.
   handoff?: boolean;
-  // Grant carries library:write; also enables request_action / get_action_status,
-  // the only way a workspace connection (never launched with --actions) gets them.
+  // Grant carries library:write (which needs tools:write); also enables
+  // request_action / get_action_status.
   library?: boolean;
 };
 export const REAUTH_MESSAGE =

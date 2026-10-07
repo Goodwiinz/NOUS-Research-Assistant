@@ -441,7 +441,7 @@ test("a library:write connection is offered the action tools without --actions",
   const stateDir = mkdtempSync(join(tmpdir(), "nous-actions-library-"));
   try {
     const credentialHandle = await new CredentialStore(stateDir).save(credentials);
-    // What a workspace connection holding library:write launches: --library, never --actions.
+    // --library alone offers the action tools: the child needs no --actions for them.
     const { command, args } = buildManagedMcpConfig({ apiOrigin: server.origin, credentialHandle, stateDir, library: true }).nous!;
     assert.equal(args.includes("--actions"), false);
     assert.equal(args.includes("--library"), true);
