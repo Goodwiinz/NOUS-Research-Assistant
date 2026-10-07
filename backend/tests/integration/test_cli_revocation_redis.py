@@ -56,7 +56,9 @@ async def test_out_of_order_revocations_never_move_cutoff_backwards(
         await ctr.revoke_user_cli_tokens(user_id, require_success=True)
         release.set()
         await asyncio.wait_for(delayed, timeout=5)
-        assert int(await second.get(key)) == int(newer.timestamp()) + 1
+        raw_cutoff = await second.get(key)
+        assert raw_cutoff is not None
+        assert int(raw_cutoff) == int(newer.timestamp()) + 1
         assert 0 < await second.ttl(key) <= ctr._TTL_SECONDS
         token_clock = Mock(wraps=datetime)
         token_clock.now.return_value = newer
@@ -72,5 +74,5 @@ async def test_out_of_order_revocations_never_move_cutoff_backwards(
             delayed.cancel()
         await asyncio.gather(delayed, return_exceptions=True)
         await second.delete(key)
-        await first.aclose()
-        await second.aclose()
+        await first.connection_pool.disconnect()
+        await second.connection_pool.disconnect()
