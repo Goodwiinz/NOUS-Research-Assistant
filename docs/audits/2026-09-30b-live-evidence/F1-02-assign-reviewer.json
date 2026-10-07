@@ -1,0 +1,26 @@
+{
+  "step": "F1-02-assign-reviewer",
+  "as": "owner",
+  "at": "2026-09-30T21:08:59.088617+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/screening/queues/c3b56c4c-6b21-40fc-bbe1-19357e91b428/assignments",
+    "body": {
+      "reviewer_user_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "8a67c8c8-870d-40d3-98a1-d6fe2b7bc596",
+    "queue_id": "c3b56c4c-6b21-40fc-bbe1-19357e91b428",
+    "reviewer_id": "0747f5eb-7df2-4e9f-95c1-9ab91db3ac9b",
+    "assigned_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "created_at": "2026-09-30T21:08:58.980539Z",
+    "revoked_at": null,
+    "revoked_by_id": null
+  }
+}

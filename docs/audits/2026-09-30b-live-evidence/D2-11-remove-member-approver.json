@@ -1,0 +1,15 @@
+{
+  "step": "D2-11-remove-member-approver",
+  "as": "owner",
+  "at": "2026-09-30T21:05:15.094657+00:00",
+  "request": {
+    "method": "DELETE",
+    "path": "/api/v2/workspaces/d7612a30-602e-488b-b6ee-6a3bf9e9f94d/members/4d2e5308-01b5-4e71-99e4-2e01295eb3a4",
+    "body": null
+  },
+  "status": 204,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": ""
+}

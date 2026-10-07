@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.core.cli_token_revocation import CliTokenRevocationUnavailable
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.security import TokenData, get_current_user_token
@@ -151,3 +152,22 @@ def test_unknown_or_foreign_targets_are_404(
         missing = client.post(path, headers=BROWSER)
         assert missing.status_code == 404
         assert missing.json()["detail"] == "Connection not found"
+
+
+def test_cli_cutoff_failure_is_a_safe_retryable_503(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api.integrations import connections
+
+    monkeypatch.setattr(
+        connections,
+        "disconnect_device",
+        lambda *_a, **_k: _completed(
+            CliTokenRevocationUnavailable("private redis address")
+        ),
+    )
+    response = client.post(
+        f"/api/v1/integrations/devices/{DEVICE}/revoke", headers=BROWSER
+    )
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Disconnect unavailable. Please retry."}

@@ -4,12 +4,14 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, AsyncIterator, cast
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.core import cli_token_revocation as ctr
 from src.models.bridge_device import BridgeDevice
 from src.models.collection import Collection
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
@@ -33,6 +35,14 @@ LAPTOP, DESKTOP = uuid4(), uuid4()
 CONSENT_A, CONSENT_B, CONSENT_DESKTOP, CONSENT_DENIED = (uuid4() for _ in range(4))
 SOON = datetime.now(timezone.utc) + timedelta(hours=1)
 TOKENS = {name: "nous_ig_" + name.ljust(43, "x") for name in ("a", "a2", "b", "d")}
+
+
+@pytest.fixture(autouse=True)
+def cli_store(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    client = AsyncMock()
+    client.eval.return_value = 1
+    monkeypatch.setattr(ctr, "_get_redis", AsyncMock(return_value=client))
+    return client
 
 
 async def _seed(session: AsyncSession) -> None:
@@ -204,3 +214,95 @@ async def test_a_user_without_an_organization_sees_nothing(db: AsyncSession) -> 
     setattr(orphan, "organization_id", None)
     with pytest.raises(ConnectionNotFound):
         await list_connections(db, orphan)
+
+
+@pytest.mark.parametrize("ancestor", ["project", "workspace", "organization", "member"])
+async def test_listing_hides_projects_after_access_is_lost(
+    db: AsyncSession, ancestor: str
+) -> None:
+    if ancestor == "project":
+        await db.execute(
+            update(Collection).where(Collection.id == PROJECT).values(is_deleted=True)
+        )
+    elif ancestor == "workspace":
+        await db.execute(
+            update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+        )
+    elif ancestor == "organization":
+        await db.execute(
+            update(Organization).where(Organization.id == ORG).values(is_active=False)
+        )
+    else:
+        await db.execute(
+            update(Workspace)
+            .where(Workspace.id == WORKSPACE)
+            .values(owner_id=OTHER_USER)
+        )
+        await db.execute(
+            insert(WorkspaceMember).values(workspace_id=WORKSPACE, user_id=USER)
+        )
+        await db.commit()
+        assert any(d.consents for d in await list_connections(db, await _user(db)))
+        await db.execute(
+            update(WorkspaceMember)
+            .where(WorkspaceMember.user_id == USER)
+            .values(is_deleted=True)
+        )
+    await db.commit()
+    devices = await list_connections(db, await _user(db))
+    assert len(devices) == 2
+    consents = [c for d in devices for c in d.consents]
+    assert all(c.project_id != PROJECT for c in consents)
+    if ancestor == "project":
+        assert [c.project_id for c in consents] == [OTHER_PROJECT]
+    else:
+        assert consents == []
+
+
+async def test_expired_approval_is_hidden_but_consumed_consent_remains(
+    db: AsyncSession,
+) -> None:
+    expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db.execute(update(IntegrationGrantRequest).values(expires_at=expired))
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == CONSENT_A)
+        .values(status="approved")
+    )
+    await db.commit()
+    devices = await list_connections(db, await _user(db))
+    ids = {c.request_id for d in devices for c in d.consents}
+    assert ids == {CONSENT_B, CONSENT_DESKTOP}
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == CONSENT_A)
+        .values(expires_at=SOON)
+    )
+    await db.commit()
+    assert CONSENT_A in {
+        c.request_id
+        for d in await list_connections(db, await _user(db))
+        for c in d.consents
+    }
+
+
+@pytest.mark.parametrize("failure", ["missing", "error", "unconfirmed"])
+async def test_failed_cli_revocation_rolls_back_device_and_grants(
+    db: AsyncSession,
+    cli_store: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    if failure == "missing":
+        monkeypatch.setattr(ctr, "_get_redis", AsyncMock(return_value=None))
+    elif failure == "error":
+        cli_store.eval.side_effect = RuntimeError("private redis address")
+    else:
+        cli_store.eval.return_value = 0
+    with pytest.raises(ctr.CliTokenRevocationUnavailable):
+        await disconnect_device(db, await _user(db), LAPTOP)
+    device = await db.get(BridgeDevice, LAPTOP)
+    consent = await db.get(IntegrationGrantRequest, CONSENT_A)
+    assert device is not None and device.revoked_at is None
+    assert consent is not None and consent.consent_revoked_at is None
+    assert all([await _works(db, t) for t in ("a", "a2", "b", "d")])

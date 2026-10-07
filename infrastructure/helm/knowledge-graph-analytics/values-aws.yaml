@@ -61,9 +61,9 @@ backend:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
     repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
-    tag: "8ad2c82fa61e3b9725dffb824c0cb0174c97500a"
-    digest: "sha256:daf546b41a64abb9a7f58542e33e546f84f4dbadbb990b37a377d685773ce1cb"
-    sourceSha: "8ad2c82fa61e3b9725dffb824c0cb0174c97500a"
+    tag: "63595530e9c43227d830537a899be2fbbf38d3f3"
+    digest: "sha256:4177e1fd8209fc77a090a0d883a9226e74e0e699bcae9820b2e60bc193b6fb1a"
+    sourceSha: "63595530e9c43227d830537a899be2fbbf38d3f3"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -173,6 +173,13 @@ backend:
     - name: PROJECT_SKILL_CATALOG_ENABLED
       value: "true"
     - name: PROJECT_SKILL_RUNTIME_ENABLED
+      value: "true"
+    # GOO-338: default-off in code; dev opts in explicitly.
+    - name: DAILY_RESEARCH_BRIEF_ENABLED
+      value: "true"
+    # GOO-319: default-off in code; dev opts in explicitly. The celery worker
+    # runs the tick and reads this merged backend.env.
+    - name: SEARCH_UPDATES_ENABLED
       value: "true"
     - name: PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS
       value: "30"

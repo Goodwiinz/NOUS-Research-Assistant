@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 
 import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
 import { enhancedDocumentService } from '@/services/enhancedDocumentService';
-import type { Workspace } from '@/types/workspace';
+import type { MessageAttachment, Workspace } from '@/types/workspace';
 
 // ============================================
 // HOOK PARAMS
@@ -16,7 +16,8 @@ export interface UseChatComposerActionsParams {
     contentOverride?: string,
     historyOverride?: ChatPageMessage[],
     supersedesClientMessageId?: string,
-    attachmentIds?: string[]
+    attachmentIds?: string[],
+    attachments?: MessageAttachment[]
   ) => Promise<void>;
   isLoading: boolean;
   storeIsStreaming: boolean;
@@ -152,8 +153,19 @@ export function useChatComposerActions({
       // renders both answers after reconcile/reload. Omitted for legacy rows
       // with no persisted client_message_id (FE-only truncation, as before).
       const supersedes = priorUser.clientMessageId;
+      // The replacement keeps the turn's attachments: ids for the server,
+      // metadata for the optimistic bubble's chips.
+      const attachments = priorUser.attachments;
+      const attachmentIds = attachments?.map((file) => file.document_id);
       setTimeout(
-        () => handleSubmit(contentToSend, regenerationHistory, supersedes),
+        () =>
+          handleSubmit(
+            contentToSend,
+            regenerationHistory,
+            supersedes,
+            attachmentIds,
+            attachments
+          ),
         0
       );
     },
@@ -179,10 +191,19 @@ export function useChatComposerActions({
       // client_message_id — a legacy row or one that never reached the server;
       // the FE-only truncation is then the same behaviour as before.
       const supersedes = edited.clientMessageId;
+      const attachments = edited.attachments;
+      const attachmentIds = attachments?.map((file) => file.document_id);
       // Pass content explicitly — setInput only schedules an update, and the
       // deferred handleSubmit would otherwise read the stale input value.
       setTimeout(
-        () => handleSubmit(content, editedHistory, supersedes),
+        () =>
+          handleSubmit(
+            content,
+            editedHistory,
+            supersedes,
+            attachmentIds,
+            attachments
+          ),
         0
       );
     },

@@ -10,6 +10,7 @@
  */
 import { ChatMessage, ChatMessageUpdate } from '@/types/workspace';
 import { workspaceService } from '@/services/workspaceService';
+import { captureChatSession } from '../requestCoordinator';
 import type { ChatSliceCreator, RefreshExpectation } from '../types';
 import { removeItemFromRecord } from '../recordIndex';
 import { MAX_CACHED_THREADS, INITIAL_MESSAGE_PAGE_SIZE } from '../initialState';
@@ -278,6 +279,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
   },
 
   loadOlderMessages: async (threadId) => {
+    const isCurrentSession = captureChatSession();
     if (deletedThreadIds.has(threadId)) return;
     const pagination = get().messagePagination[threadId];
     if (!pagination || !pagination.hasMore || pagination.loadingOlder) {
@@ -305,6 +307,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
         order: 'desc',
         before_id: oldestLoaded.id,
       });
+      if (!isCurrentSession()) return;
 
       // Runtime validation: a malformed payload must not corrupt the
       // message list. Bail out (the finally block clears loadingOlder).
@@ -358,6 +361,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
         };
       });
     } catch (error) {
+      if (!isCurrentSession()) return;
       console.error('[ChatStore] Error loading older messages:', error);
       set((state) => {
         // Same guard as the commit: a superseded request failing against an
@@ -392,6 +396,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
   },
 
   sendMessage: async (content, threadId) => {
+    const isCurrentSession = captureChatSession();
     const state = get();
     const targetThreadId = threadId || state.currentThreadId;
 
@@ -410,6 +415,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
         thread_id: targetThreadId,
         content,
       });
+      if (!isCurrentSession()) return null;
 
       set((state) => {
         if (!state.messages[targetThreadId]) {
@@ -423,6 +429,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
 
       return message;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error sending message:', error);
       set((state) => {
         state.error = 'Failed to send message';
@@ -468,8 +475,10 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
   },
 
   updateMessageFeedback: async (id, data) => {
+    const isCurrentSession = captureChatSession();
     try {
       const message = await workspaceService.updateMessage(id, data);
+      if (!isCurrentSession()) return null;
       set((state) => {
         const threadId = message.thread_id;
         const messages = state.messages[threadId] || [];
@@ -480,6 +489,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
       });
       return message;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error updating message feedback:', error);
       set((state) => {
         state.error = 'Failed to update message feedback';
@@ -489,14 +499,17 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
   },
 
   deleteMessage: async (id) => {
+    const isCurrentSession = captureChatSession();
     try {
       await workspaceService.deleteMessage(id);
+      if (!isCurrentSession()) return false;
       set((state) => {
         // Use O(1) reverse index lookup (GOO-86)
         removeItemFromRecord(state.messages, id, state.messageToThread);
       });
       return true;
     } catch (error) {
+      if (!isCurrentSession()) return false;
       console.error('[ChatStore] Error deleting message:', error);
       set((state) => {
         state.error = 'Failed to delete message';

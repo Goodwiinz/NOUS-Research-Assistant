@@ -36,13 +36,30 @@ async def test_loader_requires_server_snapshot_context_and_never_accepts_ids_fro
         "user_id",
     } & set(schema["properties"])
 
+    from src.services.agent.tools_impl import execute_tool
+
+    # A model-supplied id is dropped by schema validation; the dispatcher only
+    # forwards server-owned config ids, and none are set here.
+    session = Mock()
+    session.get = AsyncMock()
     with patch(
-        "src.core.config.get_settings",
+        "src.services.agent.runtime_snapshot.get_settings",
         return_value=SimpleNamespace(PROJECT_SKILL_RUNTIME_ENABLED=True),
     ):
-        result = await load_project_skill.ainvoke({"skill_name": "literature-review"})
+        result = await execute_tool(
+            "load_project_skill",
+            {
+                "skill_name": "literature-review",
+                "runtime_snapshot_id": str(uuid4()),
+                "project_id": str(uuid4()),
+            },
+            user_id=str(uuid4()),
+            db=session,
+            current_user=SimpleNamespace(id=uuid4(), organization_id=uuid4()),
+        )
 
     assert result["error_type"] == "runtime_snapshot_required"
+    session.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio

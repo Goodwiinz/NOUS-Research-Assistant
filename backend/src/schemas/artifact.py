@@ -94,3 +94,12 @@ class ArtifactReferenceDTO(BaseModel):
 class ThreadArtifactDTO(BaseModel):
     version: ArtifactVersionDTO
     reference: ArtifactReferenceDTO
+
+
+class ProjectArtifactDTO(BaseModel):
+    artifact_id: UUID
+    title: str
+    kind: str
+    current_version: ArtifactVersionDTO
+    thread_id: UUID | None  # chat the current version was produced in, if any
+    updated_at: datetime

@@ -22,7 +22,10 @@ class IntegrationGrantRequest(BaseModel):
         GUID(), ForeignKey("collections.id"), nullable=False
     )
     device_id: Mapped[UUID] = mapped_column(
-        GUID(), ForeignKey("bridge_devices.id"), nullable=False
+        GUID(), ForeignKey("bridge_devices.id"), nullable=False, index=True
+    )
+    thread_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("threads.id"), index=True
     )
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
@@ -46,10 +49,10 @@ class IntegrationGrant(BaseModel):
         GUID(), ForeignKey("collections.id"), nullable=False
     )
     device_id: Mapped[UUID | None] = mapped_column(
-        GUID(), ForeignKey("bridge_devices.id")
+        GUID(), ForeignKey("bridge_devices.id"), index=True
     )
     request_id: Mapped[UUID | None] = mapped_column(
-        GUID(), ForeignKey("integration_grant_requests.id")
+        GUID(), ForeignKey("integration_grant_requests.id"), index=True
     )
     thread_id: Mapped[UUID | None] = mapped_column(GUID(), ForeignKey("threads.id"))
     run_id: Mapped[str | None] = mapped_column(

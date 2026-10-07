@@ -131,8 +131,9 @@ async def update_pipeline(
         )
         await db.commit()
         return _pipeline_to_response(pipeline)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError:
+        logger.warning("Pipeline not found", exc_info=True)
+        raise HTTPException(status_code=404, detail="Pipeline not found")
 
 
 @router.post(
@@ -150,5 +151,6 @@ async def reset_pipeline(
         pipeline = await PipelineService.reset_pipeline(db, project_id)
         await db.commit()
         return _pipeline_to_response(pipeline)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError:
+        logger.warning("Pipeline not found", exc_info=True)
+        raise HTTPException(status_code=404, detail="Pipeline not found")

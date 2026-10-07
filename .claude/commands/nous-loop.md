@@ -4,9 +4,10 @@ description: Run one evidence-driven NOUS self-improvement tick
 
 # /nous-loop
 
-Read `docs/engineering/nous-loop.md` completely and execute one tick. That file
-is canonical; this adapter may not weaken its gates and only maps Claude Code
-capabilities onto them.
+Read `docs/engineering/nous-loop.md` completely and execute one tick, or its
+bounded existing-PR reconciliation mode when requested. That file is canonical;
+this adapter may not weaken its gates and only maps Claude Code capabilities
+onto them.
 
 ## Capability mapping
 

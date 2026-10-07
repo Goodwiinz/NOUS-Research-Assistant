@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.integrations.auth import require_interactive_user
+from src.core.cli_token_revocation import CliTokenRevocationUnavailable
 from src.core.database import get_db
 from src.models.user import User
 from src.schemas.integration_connections import ConnectedDevice
@@ -43,7 +44,17 @@ async def post_revoke_consent(
     return Response(status_code=204)
 
 
-@router.post("/devices/{device_id}/revoke", status_code=204)
+@router.post(
+    "/devices/{device_id}/revoke",
+    status_code=204,
+    description=(
+        "Disconnect this device and revoke its integration grants. Also ends all "
+        "existing CLI sign-ins for this account because CLI tokens are not device "
+        "bound. Other devices' integration grants remain active. Returns 503 "
+        "without committing device revocation if the shared CLI cutoff fails."
+    ),
+    responses={503: {"description": "Revocation unavailable; retry disconnect"}},
+)
 async def post_disconnect_device(
     device_id: UUID,
     user: User = Depends(require_interactive_user),
@@ -53,4 +64,6 @@ async def post_disconnect_device(
         await disconnect_device(db, user, device_id)
     except ConnectionNotFound as error:
         raise HTTPException(404, "Connection not found") from error
+    except CliTokenRevocationUnavailable as error:
+        raise HTTPException(503, "Disconnect unavailable. Please retry.") from error
     return Response(status_code=204)

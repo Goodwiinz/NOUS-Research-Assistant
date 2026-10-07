@@ -58,6 +58,8 @@ def _resolution(link: Row, version: Row, accepted: Mapping[str, Row]) -> dict[st
         "source_hash": link["source_hash"],
         "text_sha256": link["text_sha256"],
         "span": span,
+        # GOO-311: a pooled estimate resolves to its synthesis result.
+        "synthesis_result_id": link.get("synthesis_result_id"),
     }
 
 

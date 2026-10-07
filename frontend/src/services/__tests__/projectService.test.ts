@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import { listWorkflowLinkOptions, projectService } from '../projectService';
+import { api } from '../api-client';
 
 describe('listWorkflowLinkOptions', () => {
   it('paginates at the API maximum and returns only manageable live projects', async () => {
@@ -87,5 +88,55 @@ describe('projectService.downloadBibliography', () => {
     expect(createdAnchor.download).toBe('alpha-project-bibliography.bib');
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:download-url');
+  });
+});
+
+describe('reference exports (GOO-317)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('default export format still markdown', async () => {
+    const download = vi.spyOn(api, 'download').mockResolvedValue(undefined);
+    await projectService.downloadDraftExport('p1', 'd1');
+    expect(download).toHaveBeenCalledWith(
+      '/projects/p1/drafts/d1/export?format=markdown&include_bibliography=true&bib_format=bibtex',
+      'draft.md'
+    );
+    await projectService.downloadDraftExport('p1', 'd1', 'latex');
+    expect(download).toHaveBeenLastCalledWith(
+      expect.stringContaining('format=latex'),
+      'draft.zip'
+    );
+  });
+
+  it('csl and ris options call the right format', async () => {
+    const download = vi.spyOn(api, 'download').mockResolvedValue(undefined);
+    await projectService.downloadDraftExport('p1', 'd1', 'csl-json');
+    expect(download).toHaveBeenLastCalledWith(
+      expect.stringContaining('/projects/p1/drafts/d1/export?format=csl-json'),
+      'references.json'
+    );
+    await projectService.exportDraft('p1', 'd1', 'ris');
+    expect(download).toHaveBeenLastCalledWith(
+      expect.stringContaining('/projects/p1/drafts/d1/export?format=ris'),
+      'references.ris'
+    );
+  });
+
+  it('release reference download uses release endpoint', async () => {
+    const download = vi.spyOn(api, 'download').mockResolvedValue(undefined);
+    await projectService.downloadReleaseReferences('p1', 'r1', 'ris');
+    expect(download).toHaveBeenCalledWith(
+      '/projects/p1/manuscript-releases/r1/references?format=ris',
+      'references.ris'
+    );
+    const get = vi
+      .spyOn(api, 'get')
+      .mockResolvedValue({ format: 'csl-json', records: 0, omissions: [] });
+    await projectService.getReleaseReferenceReport('p1', 'r1');
+    expect(get).toHaveBeenCalledWith(
+      '/projects/p1/manuscript-releases/r1/references?format=csl-json&report=true'
+    );
   });
 });

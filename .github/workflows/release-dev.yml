@@ -1,6 +1,6 @@
 name: Release Dev
 
-# A green source commit produces a digest-pinned GitOps PR. GITHUB_TOKEN
+# A green full push run produces a digest-pinned GitOps PR. GITHUB_TOKEN
 # cannot bypass develop's required checks; auto-merge waits for those checks.
 # Propose values-aws.yaml only; DO values-dev.yaml stays frozen for rollback.
 on:
@@ -22,7 +22,10 @@ permissions:
 jobs:
   prepare:
     name: Check release source
+    # PR runs can use a lighter profile, including PRs whose head is develop.
+    # Only a protected-branch push proves the full source verification ran.
     if: >-
+      github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'develop' &&
       github.event.workflow_run.head_repository.full_name == github.repository
@@ -53,7 +56,9 @@ jobs:
       - name: Verify release branch protection
         if: steps.source.outputs.needed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Reading branchProtectionRule needs administration:read, which the
+          # job token lacks; the release PAT has it.
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
           # Preserve GraphQL variables as literals instead of shell expressions.
           GRAPHQL_QUERY: >-
@@ -90,7 +95,7 @@ jobs:
 
       - name: Verify release branch protection
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
           GH_REPO: ${{ github.repository }}
           # Preserve GraphQL variables as literals instead of shell expressions.
           GRAPHQL_QUERY: >-

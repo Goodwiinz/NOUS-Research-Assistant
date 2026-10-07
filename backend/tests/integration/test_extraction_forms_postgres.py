@@ -71,6 +71,10 @@ MIGRATION = (
 )
 ANCHORS_MIGRATION = MIGRATION.with_name("b8d0f2a4c6e9_add_extraction_source_anchors.py")
 CLAIMS_MIGRATION = MIGRATION.with_name("c4e6a8b0d2f5_create_research_claims.py")
+EVIDENCE_MIGRATION = MIGRATION.with_name("f4b6d8a0c2e3_create_evidence_certainty.py")
+SYNTHESIS_MIGRATION = MIGRATION.with_name("a6c8e0b2d4f5_create_synthesis_results.py")
+MANIFEST_MIGRATION = MIGRATION.with_name("b8e0c2d4f6a7_create_run_manifests.py")
+RERUN_MIGRATION = MIGRATION.with_name("c0f2a4b6d8e9_create_experiment_reruns.py")
 
 
 class _LLM:
@@ -97,26 +101,47 @@ def _module(path: Path) -> Any:
 async def _migration(factory: Factory, *steps: str) -> None:
     """Run a3c5e7f9b1d4's steps. Its upgrade also re-applies the GOO-305
     anchor columns (b8d0f2a4c6e9), which the ORM models now carry; the GOO-306
-    claim tables (c4e6a8b0d2f5) reference it, so they come off first and go
+    claim tables (c4e6a8b0d2f5), GOO-310's evidence tables (f4b6d8a0c2e3) and
+    GOO-311's synthesis results (a6c8e0b2d4f5) reference it, and GOO-312's
+    figure link (b8e0c2d4f6a7) widens the claim links (and GOO-313's reruns,
+    c0f2a4b6d8e9, reference its manifests), so they come off first and go
     back on last."""
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
 
     module, anchors = _module(MIGRATION), _module(ANCHORS_MIGRATION)
-    claims = _module(CLAIMS_MIGRATION)
+    claims, evidence = _module(CLAIMS_MIGRATION), _module(EVIDENCE_MIGRATION)
+    synthesis, manifests = _module(SYNTHESIS_MIGRATION), _module(MANIFEST_MIGRATION)
+    reruns = _module(RERUN_MIGRATION)
     async with factory() as db:
 
         def run(sync_connection: Any) -> None:
-            module.op = anchors.op = claims.op = Operations(
-                MigrationContext.configure(sync_connection)
-            )
+            operations = Operations(MigrationContext.configure(sync_connection))
+            for migration in (
+                module,
+                anchors,
+                claims,
+                evidence,
+                synthesis,
+                manifests,
+                reruns,
+            ):
+                migration.op = operations
             for step in steps:
                 if step == "downgrade":
+                    reruns.downgrade()
+                    manifests.downgrade()
+                    synthesis.downgrade()
+                    evidence.downgrade()
                     claims.downgrade()
                 getattr(module, step)()
                 if step == "upgrade":
                     anchors.upgrade()
                     claims.upgrade()
+                    evidence.upgrade()
+                    synthesis.upgrade()
+                    manifests.upgrade()
+                    reruns.upgrade()
 
         await (await db.connection()).run_sync(run)
         await db.commit()

@@ -141,6 +141,7 @@ def test_claim_matrix(
     started = (
         None if started_delta is None else datetime.now(timezone.utc) - started_delta
     )
+    _seed_document(db, doc_id=doc_id, org_id=org_id, content_text=None)
     _seed_job(
         db,
         job_id=job_id,
@@ -172,6 +173,7 @@ def test_reclaim_moves_started_at_forward(session_factory):
     db = Session()
     org_id, doc_id, job_id = uuid4(), uuid4(), uuid4()
     stale = datetime.now(timezone.utc) - timedelta(hours=6)
+    _seed_document(db, doc_id=doc_id, org_id=org_id, content_text=None)
     _seed_job(
         db,
         job_id=job_id,
@@ -206,6 +208,7 @@ def test_claim_reads_freshly_locked_row_not_stale_cache(session_factory):
     db = Session()
     other = Session()
     org_id, doc_id, job_id = uuid4(), uuid4(), uuid4()
+    _seed_document(db, doc_id=doc_id, org_id=org_id, content_text=None)
     _seed_job(
         db,
         job_id=job_id,
@@ -233,6 +236,49 @@ def test_claim_reads_freshly_locked_row_not_stale_cache(session_factory):
     assert result.proceed is False
     assert result.reason == "running"
     db.close()
+
+
+@pytest.mark.parametrize("deleted", ["job", "document"])
+def test_claim_refuses_deleted_ingestion(session_factory, deleted):
+    """A message delivered after its job or document was deleted must not start
+    work, even while the job row itself still says QUEUED (GOO-356)."""
+    db = session_factory()
+    org_id, doc_id, job_id = uuid4(), uuid4(), uuid4()
+    doc = _seed_document(db, doc_id=doc_id, org_id=org_id, content_text=None)
+    job = _seed_job(
+        db, job_id=job_id, doc_id=doc_id, org_id=org_id, status=JobStatus.QUEUED
+    )
+    (job if deleted == "job" else doc).soft_delete()
+    db.commit()
+
+    result = claim_job_for_processing(db, job, worker_id="w1")
+
+    assert result.proceed is False
+    assert result.reason == "deleted"
+    assert job.status == JobStatus.QUEUED
+    db.close()
+
+
+@pytest.mark.parametrize("document_state", ["missing", "foreign", "unlinked"])
+def test_claim_refuses_missing_or_foreign_document(session_factory, document_state):
+    """A queued ingestion cannot start without its own live document."""
+    with session_factory() as db:
+        org_id, doc_id, job_id = uuid4(), uuid4(), uuid4()
+        if document_state == "foreign":
+            _seed_document(db, doc_id=doc_id, org_id=uuid4(), content_text=None)
+        job = _seed_job(
+            db,
+            job_id=job_id,
+            doc_id=None if document_state == "unlinked" else doc_id,
+            org_id=org_id,
+            status=JobStatus.QUEUED,
+        )
+        db.commit()
+
+        result = claim_job_for_processing(db, job, worker_id="w1")
+
+        assert not result.proceed, "Ingestion started without an accessible document"
+        assert job.status == JobStatus.QUEUED
 
 
 # ---------------------------------------------------------------------------

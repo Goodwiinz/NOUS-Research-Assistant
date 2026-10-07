@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 
 import { useAuth } from '@/hooks/useAuth';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
@@ -20,6 +20,7 @@ const SCOPE_TEXT: Record<string, string> = {
  */
 export function ConnectedDevices(): ReactElement {
   const { user } = useAuth();
+  const [confirmDeviceId, setConfirmDeviceId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const queryKey = ['integration-connections', user?.id];
   const connections = useQuery({
@@ -40,6 +41,7 @@ export function ConnectedDevices(): ReactElement {
     mutationFn: (deviceId: string) =>
       integrationConnectionsService.disconnect(deviceId),
     onSettled: refresh,
+    onSuccess: () => setConfirmDeviceId(null),
   });
   const busy = revokeConsent.isPending || disconnect.isPending;
 
@@ -67,19 +69,48 @@ export function ConnectedDevices(): ReactElement {
               <h2 className="font-semibold">
                 {device.device_label}{' '}
                 <span className="text-sm font-normal text-muted-foreground">
-                  connected {new Date(device.connected_at).toLocaleDateString()}
+                  connected {new Date(device.connected_at).toLocaleString()}
                 </span>
               </h2>
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => disconnect.mutate(device.device_id)}
+                onClick={() => setConfirmDeviceId(device.device_id)}
                 className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-                aria-label={`Disconnect ${device.device_label}`}
+                aria-label={`Disconnect ${device.device_label} (${device.device_id})`}
               >
                 Disconnect
               </button>
             </div>
+            <p className="break-all text-xs text-muted-foreground">
+              Device ID: {device.device_id}
+            </p>
+            {confirmDeviceId === device.device_id && (
+              <div className="space-y-2 rounded border p-3">
+                <p>
+                  Disconnect {device.device_label} ({device.device_id})? This
+                  revokes its project access and ends all existing CLI sign-ins
+                  for your account. Other devices keep their integration project
+                  access. Sign in to the CLI again to continue using it.
+                </p>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => disconnect.mutate(device.device_id)}
+                  className="rounded border px-3 py-1 text-sm disabled:opacity-50"
+                >
+                  Disconnect and end CLI sign-ins
+                </button>{' '}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setConfirmDeviceId(null)}
+                  className="rounded border px-3 py-1 text-sm disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
             {device.consents.length === 0 ? (
               <p className="text-sm">No active project access.</p>
             ) : (

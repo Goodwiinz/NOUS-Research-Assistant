@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.services.research_engine import manifest_rules
+
 # These limits are deliberately server-owned.  They protect both newly
 # validated blueprints and the legacy JSONB rows that are revalidated by the
 # execution path before a paid call is made.
@@ -68,11 +70,20 @@ def validate_blueprint_runtime(blueprint: Dict[str, Any]) -> None:
     if not isinstance(steps, list) or len(steps) > MAX_BLUEPRINT_STEPS:
         raise ValueError(f"blueprint exceeds the {MAX_BLUEPRINT_STEPS}-step limit")
     _bounded_payload(blueprint.get("parameters") or {}, "blueprint parameters")
+    analyze_steps = 0
     for step in steps:
         if not isinstance(step, dict):
             raise ValueError("blueprint step must be an object")
         params = step.get("params") or step.get("parameters") or {}
         _bounded_payload(params, "step parameters")
+        if step.get("type") == manifest_rules.STEP_TYPE:
+            # GOO-312: a bad experiment plan fails before any sandbox runs.
+            manifest_rules.parse_analyze_step(params)
+            analyze_steps += 1
+        # ponytail: one manifest binds one analyze step; chains of experiments
+        # in one run wait for a pilot that needs them.
+        if analyze_steps > 1:
+            raise ValueError("multiple_analyze_steps")
         prompt = step.get("system_prompt_template")
         if prompt is None:
             prompt = params.get("system_prompt_template")
@@ -96,6 +107,8 @@ class StepType(str, Enum):
     SYNTHESIZE = "synthesize"
     VERIFY = "verify"
     EXPORT = "export"
+    # GOO-312: a computational experiment bound to the approved plan.
+    ANALYZE = "analyze"
 
 
 class ExportFormat(str, Enum):
@@ -781,6 +794,583 @@ class JourneyResponse(BaseModel):
     current: Optional[JourneyStageKey] = None
 
 
+# --- Study-design appraisal (GOO-309) ------------------------------------------
+
+AppraisalResponseCode = Literal["Y", "PY", "PN", "N", "NI", "NA"]
+AppraisalJudgment = Literal["low", "some_concerns", "high"]
+AppraisalDesign = Literal[
+    "randomized_parallel_group",
+    "randomized_cluster",
+    "randomized_crossover",
+    "non_randomized_intervention",
+    "cohort",
+    "case_control",
+    "cross_sectional",
+    "other",
+]
+AppraisalStatus = Literal["awaiting_independent", "agreed", "conflict", "adjudicated"]
+
+
+class AppraisalEvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["accepted_value", "observation"]
+    id: UUID
+
+
+class AppraisalDomain(BaseModel):
+    """One RoB 2 domain; ``None`` means unknown and is never derived."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    judgment: Optional[AppraisalJudgment] = None
+    signals: Dict[str, Optional[AppraisalResponseCode]] = Field(default_factory=dict)
+    rationale: Optional[str] = Field(None, min_length=1, max_length=4000)
+    evidence: List[AppraisalEvidenceRef] = Field(default_factory=list, max_length=20)
+
+
+class AppraisalSubmit(BaseModel):
+    protocol_version_id: UUID
+    instrument_key: str = Field(..., min_length=1, max_length=32)
+    instrument_version: str = Field(..., min_length=1, max_length=32)
+    study_id: Optional[UUID] = None
+    report_id: Optional[UUID] = None
+    outcome_key: str = Field(..., min_length=1, max_length=100)
+    timepoint: str = Field(..., min_length=1, max_length=100)
+    study_design: AppraisalDesign
+    applicability: Literal["applicable", "not_applicable"]
+    domains: Dict[str, AppraisalDomain] = Field(default_factory=dict, max_length=5)
+    overall: Optional[AppraisalJudgment] = None
+    supersedes_assessment_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def one_target(self) -> "AppraisalSubmit":
+        if (self.study_id is None) == (self.report_id is None):
+            raise ValueError("Name exactly one of study_id or report_id")
+        return self
+
+
+class AppraisalAdjudicate(AppraisalSubmit):
+    resolves_assessment_ids: List[UUID] = Field(..., min_length=1, max_length=10)
+    rationale: str = Field(..., min_length=1, max_length=4000)
+
+
+class AppraisalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    protocol_version_id: UUID
+    instrument_key: str
+    instrument_version: str
+    instrument_spec_hash: str
+    study_id: Optional[UUID] = None
+    report_id: Optional[UUID] = None
+    target_key: str
+    outcome_key: str
+    timepoint: str
+    study_design: str
+    applicability: str
+    domains: Dict[str, AppraisalDomain]
+    overall: Optional[str] = None
+    kind: Literal["independent", "adjudicated"]
+    actor_role: str
+    assessor_id: UUID
+    assessor_name: Optional[str] = None
+    resolves_assessment_ids: Optional[List[UUID]] = None
+    rationale: Optional[str] = None
+    input_hash: str
+    supersedes_assessment_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class AppraisalEvidenceOption(BaseModel):
+    """An accepted-value tip of this unit's documents that a domain may cite."""
+
+    kind: Literal["accepted_value"] = "accepted_value"
+    id: UUID
+    document_id: UUID
+    field_id: UUID
+    value: Any = None
+    missingness: Optional[str] = None
+    quote: Optional[str] = None
+
+
+class AppraisalResult(BaseModel):
+    target_key: str
+    study_id: Optional[UUID] = None
+    report_id: Optional[UUID] = None
+    outcome_key: str
+    timepoint: str
+    status: AppraisalStatus
+    unresolved_domains: List[str]
+    stale: bool
+    mine: bool
+    rows: List[AppraisalResponse]
+    evidence_options: List[AppraisalEvidenceOption] = Field(default_factory=list)
+
+
+class AppraisalInstrumentDomain(BaseModel):
+    id: str
+    name: str
+    signals: List[str]
+
+
+class AppraisalInstrument(BaseModel):
+    key: str
+    version: str
+    spec_hash: str
+    mode: str
+    variant: str
+    domains: List[AppraisalInstrumentDomain]
+    responses: List[str]
+    judgments: List[str]
+    designs: List[str]
+    applies_to: List[str]
+    licence: str
+    encoding: str
+    source: str
+
+
+class AppraisalListResponse(BaseModel):
+    """Status, staleness and visibility are derived on every read."""
+
+    protocol_version_id: Optional[UUID] = None
+    instrument: Optional[AppraisalInstrument] = None
+    outcomes: Dict[str, List[str]] = Field(default_factory=dict)
+    results: List[AppraisalResult]
+
+
+# --- Evidence tables, contradictions and outcome certainty (GOO-310) ----------
+
+EvidenceCellState = Literal["value", "missingness", "missing", "conflict"]
+ContradictionKind = Literal["opened", "resolved", "acknowledged", "dissent"]
+ContradictionStatus = Literal["unresolved", "resolved", "acknowledged"]
+CertaintyLevel = Literal["very_low", "low", "moderate", "high"]
+CertaintyRating = Optional[Literal[0, -1, -2]]
+
+
+class EvidenceTip(BaseModel):
+    """One accepted value behind a cell, pinned to its source revision."""
+
+    accepted_value_id: UUID
+    document_id: UUID
+    report_id: UUID
+    source_hash: str
+    text_sha256: Optional[str] = None
+    value: Any = None
+    missingness: Optional[str] = None
+
+
+class EvidenceCell(BaseModel):
+    """``missing`` (no accepted value) is its own state, never a blank."""
+
+    state: EvidenceCellState
+    value: Any = None
+    missingness: Optional[str] = None
+    tips: List[EvidenceTip]
+
+
+class EvidenceRow(BaseModel):
+    """Exactly one row per analysis unit (``study:<id>`` or ``report:<id>``)."""
+
+    row_key: str
+    unit: str
+    report_ids: List[UUID]
+    cells: Dict[str, EvidenceCell]
+
+
+class EvidenceExcluded(BaseModel):
+    document_id: UUID
+    report_id: Optional[UUID] = None
+    reason: Literal["study_link_unresolved", "no_report_identity"]
+
+
+class EvidenceUnreviewedCell(BaseModel):
+    """A machine or legacy matrix cell: shown, never written into a version."""
+
+    document_id: UUID
+    field_id: UUID
+    column_name: str
+    value: Any = None
+    missingness: Optional[str] = None
+    source: Literal["machine", "legacy"]
+    review_state: Literal["unreviewed"] = "unreviewed"
+
+
+class StanceSuggestion(BaseModel):
+    id: UUID
+    source_id: UUID
+    stance: str
+    confidence: float
+    model_version: str
+    inference_model_version: Optional[str] = None
+
+
+class StanceSuggestionGroup(BaseModel):
+    """Model output grouped by claim; it never creates or resolves anything."""
+
+    claim_hash: str
+    claim_text: Optional[str] = None
+    review_state: Literal["unreviewed_model_suggestion"]
+    suggestions: List[StanceSuggestion]
+
+
+class EvidenceTablePreview(BaseModel):
+    protocol_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    matrix_id: UUID
+    form_version_id: UUID
+    field_ids: List[UUID]
+    rows: List[EvidenceRow]
+    excluded: List[EvidenceExcluded]
+    content_hash: str
+    tip_id: Optional[UUID] = None
+    differs_from_tip: bool
+    unreviewed_cells: List[EvidenceUnreviewedCell]
+    stance_suggestions: List[StanceSuggestionGroup]
+
+
+class EvidenceTableCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome_key: str = Field(..., min_length=1, max_length=100)
+    timepoint: str = Field(..., min_length=1, max_length=100)
+    matrix_id: UUID
+    field_ids: List[UUID] = Field(..., min_length=1, max_length=50)
+    supersedes_table_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @field_validator("field_ids")
+    @classmethod
+    def unique_fields(cls, value: List[UUID]) -> List[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("field_ids must be unique")
+        return value
+
+
+class EvidenceTableResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    protocol_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    matrix_id: UUID
+    form_version_id: UUID
+    field_ids: List[UUID]
+    rows: List[EvidenceRow]
+    excluded: List[EvidenceExcluded]
+    content_hash: str
+    created_by_id: UUID
+    supersedes_table_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class ContradictionCreate(BaseModel):
+    """``opened`` names a table version, a field and 2+ of its cell values;
+    every later row names its group and the chain tip it follows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: ContradictionKind
+    contradiction_id: Optional[UUID] = None
+    previous_id: Optional[UUID] = None
+    table_version_id: Optional[UUID] = None
+    field_id: Optional[UUID] = None
+    accepted_value_ids: Optional[List[UUID]] = Field(None, max_length=50)
+    stance_classification_ids: List[UUID] = Field(default_factory=list, max_length=20)
+    explanation: str = Field(..., min_length=1, max_length=4000)
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def shape(self) -> "ContradictionCreate":
+        if self.kind == "opened":
+            members = self.accepted_value_ids or []
+            if (
+                self.table_version_id is None
+                or self.field_id is None
+                or len(members) < 2
+                or len(set(members)) != len(members)
+            ):
+                raise ValueError(
+                    "An opened contradiction names a table version, a field"
+                    " and 2+ distinct accepted values"
+                )
+            if self.contradiction_id is not None or self.previous_id is not None:
+                raise ValueError("An opened contradiction starts a new chain")
+        else:
+            if self.contradiction_id is None or self.previous_id is None:
+                raise ValueError("Name the contradiction and the row it follows")
+            if (
+                self.table_version_id is not None
+                or self.field_id is not None
+                or self.accepted_value_ids is not None
+                or self.stance_classification_ids
+            ):
+                raise ValueError("Only an opened contradiction cites members")
+        return self
+
+
+class ContradictionRowResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    contradiction_id: UUID
+    table_version_id: UUID
+    field_id: UUID
+    accepted_value_ids: Optional[List[UUID]] = None
+    kind: ContradictionKind
+    explanation: str
+    actor_id: UUID
+    actor_name: Optional[str] = None
+    actor_role: str
+    suggestion: Optional[Dict[str, Any]] = None
+    previous_id: Optional[UUID] = None
+    created_at: datetime
+
+
+class ContradictionDissent(BaseModel):
+    """A dissent row, or a resolution a later one superseded."""
+
+    id: UUID
+    contradiction_id: UUID
+    kind: ContradictionKind
+    actor_id: UUID
+    actor_role: str
+    explanation: str
+    superseded: bool
+
+
+class ContradictionResponse(BaseModel):
+    """One group: the derived status, every row and the dissent kept visible."""
+
+    contradiction_id: UUID
+    table_version_id: UUID
+    field_id: UUID
+    status: ContradictionStatus
+    rows: List[ContradictionRowResponse]
+    dissent: List[ContradictionDissent]
+    stale: bool = False
+
+
+class CertaintyRatings(BaseModel):
+    """GRADE's five downgrade domains; ``None`` is unknown, never derived."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    risk_of_bias: CertaintyRating = None
+    inconsistency: CertaintyRating = None
+    indirectness: CertaintyRating = None
+    imprecision: CertaintyRating = None
+    publication_bias: CertaintyRating = None
+
+
+class CertaintyCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table_version_id: UUID
+    starting_level: Literal["high", "low"]
+    ratings: CertaintyRatings
+    level: Optional[CertaintyLevel] = None
+    appraisal_assessment_ids: List[UUID] = Field(default_factory=list, max_length=200)
+    contradiction_ids: List[UUID] = Field(default_factory=list, max_length=200)
+    rationale: str = Field(..., min_length=1, max_length=4000)
+    supersedes_certainty_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class CertaintyResponse(BaseModel):
+    """Certainty only; agreement (contradictions) and model confidence live
+    elsewhere. Unresolved contradictions and dissent ride along, always."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    table_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    method_key: str
+    method_version: str
+    starting_level: str
+    domains: Dict[str, CertaintyRating]
+    level: Optional[CertaintyLevel] = None
+    appraisal_assessment_ids: List[UUID]
+    contradiction_ids: List[UUID]
+    rationale: str
+    assessed_by_id: UUID
+    assessor_name: Optional[str] = None
+    actor_role: str
+    input_hash: str
+    supersedes_certainty_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+    unresolved_contradictions: List[UUID] = Field(default_factory=list)
+    dissent: List[ContradictionDissent] = Field(default_factory=list)
+
+
+class EvidenceOutcome(BaseModel):
+    outcome_key: str
+    timepoint: str
+    tables: List[EvidenceTableResponse]
+    contradictions: List[ContradictionResponse]
+    certainty: List[CertaintyResponse]
+
+
+class EvidenceCertaintyMethod(BaseModel):
+    method: str
+    version: str
+    domains: List[str]
+    levels: List[str]
+    starting_levels: List[str]
+
+
+class EvidenceOutcomeListResponse(BaseModel):
+    """Every version, chain and stale flag; staleness is derived on read."""
+
+    protocol_version_id: Optional[UUID] = None
+    certainty_method: Optional[EvidenceCertaintyMethod] = None
+    outcomes: List[EvidenceOutcome]
+
+
+# --- Quantitative synthesis (GOO-311) ----------------------------------------
+
+SynthesisStatus = Literal["computed", "validation_failed"]
+_SHA256 = r"^[0-9a-f]{64}$"
+
+
+class SynthesisRoles(BaseModel):
+    """Which evidence-table field carries each arm statistic."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mean_i: UUID
+    sd_i: UUID
+    n_i: UUID
+    mean_c: UUID
+    sd_c: UUID
+    n_c: UUID
+
+
+class SynthesisInputs(BaseModel):
+    mean_i: float
+    sd_i: float
+    n_i: int
+    mean_c: float
+    sd_c: float
+    n_c: int
+
+
+class SynthesisIncluded(BaseModel):
+    """One analysis unit; ``g``, ``v`` and weights only once computed."""
+
+    unit: str
+    report_ids: List[UUID]
+    accepted_value_ids: List[UUID]
+    inputs: SynthesisInputs
+    g: Optional[float] = None
+    v: Optional[float] = None
+    w_fixed: Optional[float] = None
+    w_random: Optional[float] = None
+
+
+class SynthesisExclusion(BaseModel):
+    """A structured reason; run-level failures name no unit."""
+
+    unit: Optional[str] = None
+    report_ids: List[str]
+    reason: str
+    detail: str
+
+
+class SynthesisSelection(BaseModel):
+    measure: str
+    model: str
+    outcome_key: str
+    timepoint: str
+
+
+class SynthesisPreview(BaseModel):
+    """Exactly the input set ``POST`` would use, with zero writes."""
+
+    selection: SynthesisSelection
+    table_version_id: UUID
+    protocol_version_id: UUID
+    config: Dict[str, Any]
+    config_hash: str
+    estimator_version: str
+    included: List[SynthesisIncluded]
+    excluded: List[SynthesisExclusion]
+    run_failures: List[SynthesisExclusion]
+    input_hash: str
+    tip_id: Optional[UUID] = None
+    tip_input_hash: Optional[str] = None
+
+
+class SynthesisExecute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table_version_id: UUID
+    roles: SynthesisRoles
+    expected_input_hash: str = Field(..., pattern=_SHA256)
+    supersedes_result_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=240)
+
+
+class SynthesisResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    protocol_version_id: UUID
+    table_version_id: UUID
+    outcome_key: str
+    timepoint: str
+    measure: str
+    model: str
+    config: Dict[str, Any]
+    config_hash: str
+    estimator_version: str
+    software: Dict[str, Any]
+    status: SynthesisStatus
+    included: List[SynthesisIncluded]
+    excluded: List[SynthesisExclusion]
+    estimate: Optional[float] = None
+    se: Optional[float] = None
+    ci_low: Optional[float] = None
+    ci_high: Optional[float] = None
+    q: Optional[float] = None
+    df: Optional[int] = None
+    tau2: Optional[float] = None
+    i2: Optional[float] = None
+    input_hash: str
+    result_hash: str
+    executed_by_id: UUID
+    actor_role: str
+    supersedes_result_id: Optional[UUID] = None
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class SynthesisListResponse(BaseModel):
+    """Every result, stale and failed ones included; staleness is derived."""
+
+    selection: Optional[SynthesisSelection] = None
+    selection_error: Optional[str] = None
+    results: List[SynthesisResultResponse]
+
+
 # --- Search import / corpus (GOO-300) --------------------------------------
 
 
@@ -931,6 +1521,12 @@ class BlueprintStepDefinition(BaseModel):
     @classmethod
     def parameters_are_bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
         return _bounded_step_parameters(value)
+
+    @model_validator(mode="after")
+    def analyze_plan_is_valid(self) -> "BlueprintStepDefinition":
+        if self.type == StepType.ANALYZE:  # GOO-312
+            manifest_rules.parse_analyze_step(self.parameters)
+        return self
 
 
 class BlueprintCreate(BaseModel):
@@ -1456,3 +2052,509 @@ class EvidenceResponse(BaseModel):
     confidence: Optional[float] = None
     grounding_status: GroundingStatus
     page_reference: Optional[str] = None
+
+
+# --- Run manifests and figures (GOO-312) ------------------------------------
+
+ManifestCompleteness = Literal["complete", "incomplete"]
+FigureKind = Literal["figure", "table"]
+
+
+class RunManifestV2Response(BaseModel):
+    """A run's ``nous.run-manifest/2`` (or the legacy view when absent).
+    ``completeness`` is derived from ``missing``; it is never asserted."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str = Field(..., alias="schema")
+    manifest: Optional[Dict[str, Any]] = None
+    manifest_hash: Optional[str] = None
+    completeness: ManifestCompleteness
+    missing: List[str]
+    legacy: Optional[Dict[str, Any]] = None
+
+
+class RunArtifactResponse(BaseModel):
+    """A retained run file; its bytes stream through the artifact route."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    role: str
+    name: str
+    media_type: str
+    sha256: str
+    byte_size: int
+
+
+class FigureCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    figure_key: str = Field(
+        ..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+    kind: FigureKind
+    caption: str = Field(..., min_length=1, max_length=4000)
+    output_artifact_id: UUID
+    supersedes_figure_id: Optional[UUID] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+
+
+class FigureResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    collection_id: UUID
+    figure_key: str
+    kind: FigureKind
+    caption: str
+    output_artifact_id: UUID
+    run_id: UUID
+    manifest_id: UUID
+    supersedes_figure_id: Optional[UUID] = None
+    created_by_id: UUID
+    created_at: datetime
+    superseded: bool = False
+    stale: bool = False
+
+
+class FigureListResponse(BaseModel):
+    figures: List[FigureResponse]
+
+
+class FigureLineageResponse(BaseModel):
+    """output -> run -> code/environment/data -> hypothesis/protocol."""
+
+    figure: FigureResponse
+    output: RunArtifactResponse
+    run_id: UUID
+    run_status: str
+    manifest_id: UUID
+    manifest_hash: str
+    completeness: ManifestCompleteness
+    missing: List[str]
+    code: Dict[str, Any]
+    environment: Optional[Dict[str, Any]] = None
+    inputs: List[Dict[str, Any]]
+    parameters: Dict[str, Any]
+    seed: Optional[int] = None
+    question_version_id: Optional[str] = None
+    hypothesis_sha256: Optional[str] = None
+    protocol_version_id: Optional[str] = None
+    protocol_content_hash: Optional[str] = None
+    effective_plan_hash: Optional[str] = None
+
+
+# --- Fresh reruns (GOO-313) ----------------------------------------------------
+
+RerunAttemptStatus = Literal[
+    "queued",
+    "running",
+    "restoration_failed",
+    "environment_unavailable",
+    "execution_failed",
+    "cancelled",
+    "interrupted",
+    "executed",
+]
+RerunReproduction = Literal["reproduced", "not_reproduced"]
+
+
+class RerunCreate(BaseModel):
+    """``rule`` is a ``nous.rerun-rule/1`` naming every manifest output once;
+    omitted, byte equality for every output. It is hashed before enqueue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule: Optional[Dict[str, Any]] = None
+    idempotency_key: str = Field(..., min_length=1, max_length=128)
+
+
+class RerunEligibilityResponse(BaseModel):
+    eligible: bool
+    reasons: List[str]
+    default_rule: Optional[Dict[str, Any]] = None
+
+
+class RerunComparisonRow(BaseModel):
+    name: str
+    mode: Literal["bytes", "json_numeric"]
+    expected_sha256: Optional[str] = None
+    actual_sha256: Optional[str] = None
+    equal: bool
+    numeric: Optional[List[Dict[str, Any]]] = None
+    reason: Optional[str] = None
+
+
+class RerunOutputResponse(BaseModel):
+    """A retained rerun output; its bytes stream through the output route."""
+
+    name: str
+    sha256: str
+    byte_size: int
+
+
+class RerunAttemptResponse(BaseModel):
+    """``queued``/``running``/``interrupted`` without ``finished_at`` are
+    derived (no terminal row yet); every other status is a terminal row.
+    ``reproduction`` exists iff ``status == "executed"``."""
+
+    attempt: int
+    status: RerunAttemptStatus
+    reproduction: Optional[RerunReproduction] = None
+    reasons: List[str] = Field(default_factory=list)
+    environment_validation: Dict[str, Any] = Field(default_factory=dict)
+    input_validation: Dict[str, Any] = Field(default_factory=dict)
+    comparison: Optional[List[RerunComparisonRow]] = None
+    comparison_hash: Optional[str] = None
+    outputs: List[RerunOutputResponse] = Field(default_factory=list)
+    template_id: Optional[str] = None
+    sandbox_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    lease_expires_at: Optional[datetime] = None
+
+
+class RerunResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    run_id: UUID
+    manifest_id: UUID
+    manifest_hash: str
+    rule: Dict[str, Any]
+    rule_hash: str
+    requested_by_id: UUID
+    created_at: datetime
+    attempts: List[RerunAttemptResponse]
+
+
+class RerunListResponse(BaseModel):
+    reruns: List[RerunResponse]
+
+
+# --- GOO-319: scheduled search updates ---------------------------------------
+
+DeltaClass = Literal["new", "changed", "corrected_retracted", "unchanged", "unknown"]
+DeltaUnknownReason = Literal[
+    "provider_failed",
+    "provider_capped",
+    "not_returned",
+    "no_doi_publication_check_not_performed",
+    "merge_unresolved",
+]
+ScheduleStatus = Literal["disabled", "scheduled", "running", "blocked", "failed", "ok"]
+_STRATEGY_VERSION = r"^sha256:[0-9a-f]{64}$"
+
+
+class SearchScheduleCreate(BaseModel):
+    """Pin one GOO-298 strategy (from a completed run's search journal)."""
+
+    source_run_id: UUID
+    step_id: str = Field(..., min_length=1, max_length=100)
+    strategy_version: str = Field(..., pattern=_STRATEGY_VERSION)
+    cron: str = Field(..., min_length=9, max_length=64)
+    timezone: str = Field(..., min_length=1, max_length=64)
+    enabled: bool = True
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+
+class SearchScheduleVersionCreate(BaseModel):
+    """Edit, enable or disable: a new version on top of ``expected_tip_id``.
+    A new strategy needs all three of run, step and strategy version."""
+
+    expected_tip_id: UUID
+    cron: Optional[str] = Field(default=None, min_length=9, max_length=64)
+    timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    enabled: Optional[bool] = None
+    source_run_id: Optional[UUID] = None
+    step_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    strategy_version: Optional[str] = Field(default=None, pattern=_STRATEGY_VERSION)
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _strategy_together(self) -> "SearchScheduleVersionCreate":
+        given = [self.source_run_id, self.step_id, self.strategy_version]
+        if any(v is not None for v in given) and any(v is None for v in given):
+            raise ValueError("source_run_id, step_id and strategy_version go together")
+        return self
+
+
+class SearchStrategyOption(BaseModel):
+    """A pinnable strategy from a completed run of this project."""
+
+    source_run_id: UUID
+    step_id: str
+    strategy_version: str
+    query: str
+    providers: List[str]
+    protocol_version_id: Optional[str] = None
+    current_protocol: bool
+
+
+class SearchScheduleVersionResponse(BaseModel):
+    id: UUID
+    schedule_id: UUID
+    owner_id: UUID
+    protocol_version_id: UUID
+    source_run_id: UUID
+    step_id: str
+    strategy_version: str
+    query: str
+    cron: str
+    timezone: str
+    enabled: bool
+    supersedes_schedule_version_id: Optional[UUID] = None
+    baseline_digest: Optional[str] = None
+    created_at: datetime
+
+
+class SearchAttemptResponse(BaseModel):
+    id: UUID
+    outcome: Literal["started", "succeeded", "failed", "skipped"]
+    reason: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
+    worker: str
+    created_at: datetime
+
+
+class SearchExecutionResponse(BaseModel):
+    id: UUID
+    schedule_id: UUID
+    schedule_version_id: UUID
+    scheduled_local: str
+    scheduled_for: datetime
+    missed_fires: int
+    created_at: datetime
+    status: Literal["pending", "started", "succeeded", "failed", "skipped"]
+    attempts: List[SearchAttemptResponse]
+    import_receipt_id: Optional[UUID] = None
+    baseline_execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = None
+    counts: Optional[Dict[DeltaClass, int]] = None
+
+
+class SearchScheduleResponse(BaseModel):
+    schedule_id: UUID
+    tip: SearchScheduleVersionResponse
+    versions: List[SearchScheduleVersionResponse]
+    status: ScheduleStatus
+    next_fire_local: Optional[str] = None
+    next_fire_utc: Optional[datetime] = None
+    last_execution: Optional[SearchExecutionResponse] = None
+
+
+class SearchScheduleListResponse(BaseModel):
+    schedules: List[SearchScheduleResponse]
+    strategies: List[SearchStrategyOption]
+
+
+class SearchExecutionListResponse(BaseModel):
+    executions: List[SearchExecutionResponse]
+
+
+class SearchDeltaItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    report_id: str
+    delta_class: DeltaClass = Field(alias="class")
+    reason: Optional[DeltaUnknownReason] = None
+    evidence: Dict[str, Any]
+    publication: Dict[str, Any]
+
+
+class SearchDeltaResponse(BaseModel):
+    """One succeeded execution's classified delta (GOO-320 accepts it by
+    ``(execution_id, delta_hash)``)."""
+
+    execution_id: UUID
+    collection_id: UUID
+    schedule_id: UUID
+    schedule_version_id: UUID
+    scheduled_local: str
+    baseline_execution_id: Optional[UUID] = None
+    baseline_digest: str
+    corpus_snapshot_digest: str
+    import_receipt_id: UUID
+    delta_hash: str
+    counts: Dict[DeltaClass, int]
+    items: List[SearchDeltaItem]
+    coverage: Dict[str, Any]
+    citation_chasing: Dict[str, Any]
+
+
+class SearchDeltaExportBody(SearchDeltaResponse):
+    filter: Optional[Dict[str, str]] = None
+    schedule_version: SearchScheduleVersionResponse
+    statement: str
+
+
+class SearchDeltaExport(BaseModel):
+    """The sealed ``nous.academic.search-delta.v1`` attachment:
+    ``body_sha256`` is the SHA-256 of ``body`` as canonical JSON."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    package_schema: str = Field(alias="schema")
+    exported_at: str
+    body_sha256: str
+    body: SearchDeltaExportBody
+
+
+# --- GOO-320: superseding review versions ----------------------------------
+
+ReviewWorkState = Literal[
+    "none", "queued", "queue_missing", "queue_mismatch", "waiting_on_title_abstract"
+]
+
+
+class ReviewVersionCreate(BaseModel):
+    """A root version (no parent) or a successor accepting one GOO-319 delta
+    by ``(execution_id, delta_hash)``. ``carry_with_uncertainty`` names
+    ``unknown`` reports whose parent decision is carried with an explicit
+    flag (the rationale covers it)."""
+
+    parent_review_version_id: Optional[UUID] = None
+    execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reviewer_user_ids: List[UUID] = Field(default_factory=list, max_length=20)
+    carry_with_uncertainty: List[UUID] = Field(default_factory=list, max_length=10_000)
+    rationale: str = Field(..., min_length=1, max_length=10_000)
+    idempotency_key: _IdempotencyKey
+
+    @model_validator(mode="after")
+    def _successor_shape(self) -> "ReviewVersionCreate":
+        given = (
+            self.parent_review_version_id is not None,
+            self.execution_id is not None,
+            self.delta_hash is not None,
+        )
+        if len(set(given)) != 1:
+            raise ValueError(
+                "A successor names its parent, execution_id and delta_hash together"
+            )
+        if not given[0] and self.carry_with_uncertainty:
+            raise ValueError("A root version carries nothing with uncertainty")
+        return self
+
+
+class ReviewReleaseLinkCreate(BaseModel):
+    release_id: UUID
+    supersedes_release_id: Optional[UUID] = None
+    idempotency_key: _IdempotencyKey
+
+
+class ReviewDecisionRef(BaseModel):
+    """A decision carried by reference: attribution resolves via ``event_id``."""
+
+    report_id: UUID
+    stage: ScreeningStage
+    resolution_id: UUID
+    event_id: UUID
+    outcome: Optional[str] = None
+    basis: str
+    uncertain: bool = False
+
+
+class ReviewNeedsAttention(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    report_id: UUID
+    delta_class: Optional[DeltaClass] = Field(default=None, alias="class")
+    reason: Optional[str] = None
+
+
+class ReviewMissingHistory(BaseModel):
+    report_id: UUID
+    stage: ScreeningStage
+    kind: Literal["decision_missing", "attribution_missing"]
+
+
+class ReviewWorkStatus(BaseModel):
+    """Derived on read: the targeted GOO-301/302 queue for one stage."""
+
+    stage: ScreeningStage
+    status: ReviewWorkState
+    required_report_ids: List[UUID]
+    queue_id: Optional[UUID] = None
+    assigned_reviewer_ids: List[UUID] = Field(default_factory=list)
+    resolved_count: int = 0
+    unresolved_count: int = 0
+
+
+class ReviewReleaseLinkResponse(BaseModel):
+    id: UUID
+    review_version_id: UUID
+    release_id: UUID
+    supersedes_release_id: Optional[UUID] = None
+    package_sha256: str
+    linked_by_id: UUID
+    created_at: datetime
+
+
+class ReviewDeltaOption(BaseModel):
+    """A succeeded GOO-319 execution a successor of the tip may accept."""
+
+    execution_id: UUID
+    schedule_id: UUID
+    scheduled_local: str
+    baseline_execution_id: Optional[UUID] = None
+    delta_hash: str
+    counts: Dict[DeltaClass, int]
+
+
+class ReviewVersionResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    version_number: int
+    parent_review_version_id: Optional[UUID] = None
+    accepted_execution_id: Optional[UUID] = None
+    delta_hash: Optional[str] = None
+    protocol_version_id: UUID
+    strategy_version: Optional[str] = None
+    report_ids: List[UUID]
+    carried: List[ReviewDecisionRef]
+    required_work: Dict[ScreeningStage, List[UUID]]
+    needs_attention: List[ReviewNeedsAttention]
+    missing_history: List[ReviewMissingHistory]
+    prisma_body_hash: str
+    content_hash: str
+    rationale: str
+    created_by_id: UUID
+    created_at: datetime
+    is_tip: bool
+    work: List[ReviewWorkStatus]
+    release: Optional[ReviewReleaseLinkResponse] = None
+    # Only the tip's accepted delta stales anything (GOO-307 walk); counts
+    # by node kind.
+    stale_counts: Dict[str, int] = Field(default_factory=dict)
+
+
+class ReviewVersionListResponse(BaseModel):
+    versions: List[ReviewVersionResponse]
+    deltas: List[ReviewDeltaOption]
+
+
+class UpdateAccountingResponse(BaseModel):
+    """PRISMA 2020 for updated reviews: both flows plus the update boxes.
+    ``boxes`` is None (and ``error`` set) while the version does not
+    reconcile, e.g. its new work is unresolved."""
+
+    review_version_id: UUID
+    parent_review_version_id: Optional[UUID] = None
+    boxes: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    parent_flow: Optional[Dict[str, Any]] = None
+    flow: Dict[str, Any]
+    flow_matches_frozen_hash: bool
+
+
+class ReviewVersionExport(BaseModel):
+    """The sealed ``nous.academic.review-version.v1`` attachment."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    package_schema: str = Field(alias="schema")
+    exported_at: str
+    body_sha256: str
+    body: Dict[str, Any]

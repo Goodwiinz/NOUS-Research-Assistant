@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.core.dependencies import require_platform_operator
+from src.core.neo4j_auth import get_neo4j_auth
 from src.services.ingestion.kaggle_bulk_ingestion import (
     IngestionProgress,
     KaggleBulkIngestionService,
@@ -31,6 +32,9 @@ router = APIRouter(
 # Global progress tracker
 _current_ingestion: Optional[IngestionProgress] = None
 _ingestion_task: Optional[asyncio.Task] = None
+
+# Stable public detail for a /start request made without Neo4j credentials.
+NEO4J_UNCONFIGURED_DETAIL = "Neo4j credentials are not configured"
 
 
 class BulkIngestionRequest(BaseModel):
@@ -109,6 +113,13 @@ async def start_bulk_ingestion(
             message="Ingestion already in progress",
         )
 
+    # Resolve credentials before scheduling: a detached task would otherwise
+    # report "Started" and then die on the missing password unobserved.
+    try:
+        get_neo4j_auth()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail=NEO4J_UNCONFIGURED_DETAIL)
+
     # Reset progress
     _current_ingestion = None
 
@@ -169,16 +180,11 @@ async def get_ingestion_stats():
     """
     Get statistics about ingested papers in Neo4j.
     """
-    import os
-
     from neo4j import AsyncGraphDatabase
 
-    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-    neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
-
     try:
-        driver = AsyncGraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        auth = get_neo4j_auth()
+        driver = AsyncGraphDatabase.driver(auth.uri, auth=(auth.user, auth.password))
 
         async with driver.session() as session:
             # Get document count
@@ -229,9 +235,8 @@ async def test_small_batch():
     Test ingestion with a small batch of 100 papers.
     Useful for verifying setup before large-scale ingestion.
     """
-    service = KaggleBulkIngestionService(batch_size=50, max_papers=100)
-
     try:
+        service = KaggleBulkIngestionService(batch_size=50, max_papers=100)
         result = await service.run_ingestion(
             categories=["cs.AI", "cs.LG"], resume=False  # Focus on AI/ML papers
         )

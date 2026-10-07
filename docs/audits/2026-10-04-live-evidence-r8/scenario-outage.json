@@ -1,0 +1,96 @@
+{
+  "counts": {
+    "changed": 0,
+    "corrected_retracted": 0,
+    "new": 20,
+    "unchanged": 0,
+    "unknown": 4
+  },
+  "coverage_providers": {
+    "crossref": {
+      "completion": "failed",
+      "error_type": "ConnectError",
+      "limit": 10,
+      "returned": 0,
+      "status": "failed"
+    },
+    "openalex": {
+      "completion": "cap_reached",
+      "error_type": null,
+      "limit": 10,
+      "returned": 10,
+      "status": "ok"
+    },
+    "pubmed": {
+      "completion": "cap_reached",
+      "error_type": null,
+      "limit": 10,
+      "returned": 10,
+      "status": "ok"
+    }
+  },
+  "execution": {
+    "attempts": [
+      {
+        "at": "2026-10-04T03:01:19.430301-04:00",
+        "detail": null,
+        "id": "a4c1201a-168f-48b0-bd53-a682ac20929b",
+        "outcome": "started",
+        "reason": null,
+        "worker": "Mac.lan:47828"
+      },
+      {
+        "at": "2026-10-04T03:01:30.595815-04:00",
+        "detail": {
+          "counts": {
+            "changed": 0,
+            "corrected_retracted": 0,
+            "new": 20,
+            "unchanged": 0,
+            "unknown": 4
+          },
+          "delta_hash": "c3c1f818435d54e89de03a6da9b813cab6ed447e9a5b36b4057aa90b7eab18df"
+        },
+        "id": "e9446c28-8c12-4f60-b95e-3735f5cc8ee3",
+        "outcome": "succeeded",
+        "reason": null,
+        "worker": "Mac.lan:47828"
+      }
+    ],
+    "collection_id": "f5504c77-e690-4b37-927f-bd2d1495f970",
+    "counts": {
+      "changed": 0,
+      "corrected_retracted": 0,
+      "new": 20,
+      "unchanged": 0,
+      "unknown": 4
+    },
+    "delta_hash": "c3c1f818435d54e89de03a6da9b813cab6ed447e9a5b36b4057aa90b7eab18df",
+    "execution_id": "04c72a3f-8956-4165-930a-23a2308dcbce",
+    "missed_fires": 0,
+    "schedule_id": "3064ac20-b17f-4a38-ba9c-e882c75b3aa8",
+    "scheduled_local": "2026-10-04T08:01"
+  },
+  "retracted_doi_item": {
+    "class": "unknown",
+    "evidence": {
+      "providers": {
+        "crossref": {
+          "completion": "failed",
+          "status": "failed"
+        },
+        "openalex": {
+          "completion": "cap_reached",
+          "status": "ok"
+        }
+      }
+    },
+    "publication": {
+      "check": "failed",
+      "doi": "10.1016/s0140-6736(97)11096-0",
+      "source": "crossref"
+    },
+    "reason": "provider_failed",
+    "report_id": "6e4db698-6577-4037-9f76-d5119709e386"
+  }
+}

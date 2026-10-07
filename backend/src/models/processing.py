@@ -40,6 +40,12 @@ class JobType(PyEnum):
     CLEANUP = "cleanup"
 
 
+def _as_utc(value: datetime) -> datetime:
+    """``started_at`` is timestamptz, but a refreshed row can come back naive
+    on SQLite (unit tests); treat naive as UTC so durations stay computable."""
+    return value if value.tzinfo else value.replace(tzinfo=dt_timezone.utc)
+
+
 class JobStatus(PyEnum):
     """Status of processing jobs"""
 
@@ -207,7 +213,7 @@ class ProcessingJob(BaseModel):
         # Calculate duration
         if self.started_at:
             self.duration_seconds = (
-                self.completed_at - self.started_at
+                self.completed_at - _as_utc(self.started_at)
             ).total_seconds()
 
     def fail_job(self, error_message: str, error_type: str = None):
@@ -221,7 +227,7 @@ class ProcessingJob(BaseModel):
         # Calculate duration
         if self.started_at:
             self.duration_seconds = (
-                self.completed_at - self.started_at
+                self.completed_at - _as_utc(self.started_at)
             ).total_seconds()
 
     def cancel_job(self):
@@ -232,7 +238,7 @@ class ProcessingJob(BaseModel):
         # Calculate duration
         if self.started_at:
             self.duration_seconds = (
-                self.completed_at - self.started_at
+                self.completed_at - _as_utc(self.started_at)
             ).total_seconds()
 
     def retry_job(self):

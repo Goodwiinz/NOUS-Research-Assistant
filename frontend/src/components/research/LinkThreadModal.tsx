@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link2, Loader2, Search, MessageSquare, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,7 +30,6 @@ export const LinkThreadModal: React.FC<LinkThreadModalProps> = ({
   onLinkThread,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [filteredThreads, setFilteredThreads] = useState<Thread[]>([]);
   const [isLoadingThreads, setIsLoadingThreads] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
@@ -38,28 +37,17 @@ export const LinkThreadModal: React.FC<LinkThreadModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isOpen && projectWorkspaceId) {
-      fetchThreads();
-    }
-  }, [isOpen, projectWorkspaceId]);
-
-  useEffect(() => {
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      setFilteredThreads(
-        threads.filter(
-          (t) =>
-            t.title?.toLowerCase().includes(query) ||
-            t.id.toLowerCase().includes(query)
-        )
-      );
-    } else {
-      setFilteredThreads(threads);
-    }
+  const filteredThreads = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return threads;
+    return threads.filter(
+      (t) =>
+        t.title?.toLowerCase().includes(query) ||
+        t.id.toLowerCase().includes(query)
+    );
   }, [searchQuery, threads]);
 
-  const fetchThreads = async () => {
+  const fetchThreads = useCallback(async () => {
     setIsLoadingThreads(true);
     setError(null);
     try {
@@ -87,14 +75,21 @@ export const LinkThreadModal: React.FC<LinkThreadModalProps> = ({
       );
 
       setThreads(allThreads);
-      setFilteredThreads(allThreads);
     } catch (err) {
       console.error('Failed to fetch threads:', err);
       setError('Failed to load threads');
     } finally {
       setIsLoadingThreads(false);
     }
-  };
+  }, [projectWorkspaceId]);
+
+  useEffect(() => {
+    if (isOpen && projectWorkspaceId) {
+      // Fetch-on-open (not TanStack yet); the loading flip is intended.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchThreads();
+    }
+  }, [isOpen, projectWorkspaceId, fetchThreads]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,11 +107,12 @@ export const LinkThreadModal: React.FC<LinkThreadModalProps> = ({
       setContextNote('');
       setSearchQuery('');
       onClose();
-    } catch (err: any) {
-      if (err?.message?.includes('already linked')) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '';
+      if (message.includes('already linked')) {
         setError('This thread is already linked to this project');
       } else {
-        setError(err instanceof Error ? err.message : 'Failed to link thread');
+        setError(message || 'Failed to link thread');
       }
     } finally {
       setIsSubmitting(false);

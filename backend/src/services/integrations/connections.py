@@ -10,16 +10,21 @@ from datetime import datetime, timezone
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.cli_token_revocation import (
+    CliTokenRevocationUnavailable,
+    revoke_user_cli_tokens,
+)
 from src.models.bridge_device import BridgeDevice
-from src.models.collection import Collection
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.user import User
 from src.schemas.integration_connections import ConnectedDevice, ConnectionConsent
-
-ACTIVE_STATUSES = ("approved", "consumed")
+from src.services.integrations.context import (
+    IntegrationAccessDenied,
+    authorized_project,
+)
 
 
 class ConnectionNotFound(Exception):
@@ -52,15 +57,20 @@ async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice
     ).all()
     if not devices:
         return []
-    rows = (
-        await db.execute(
-            select(IntegrationGrantRequest, Collection.name)
-            .join(Collection, Collection.id == IntegrationGrantRequest.project_id)
+    consents = (
+        await db.scalars(
+            select(IntegrationGrantRequest)
             .where(
                 IntegrationGrantRequest.user_id == user_id,
                 IntegrationGrantRequest.organization_id == organization_id,
                 IntegrationGrantRequest.device_id.in_([d.id for d in devices]),
-                IntegrationGrantRequest.status.in_(ACTIVE_STATUSES),
+                or_(
+                    IntegrationGrantRequest.status == "consumed",
+                    and_(
+                        IntegrationGrantRequest.status == "approved",
+                        IntegrationGrantRequest.expires_at > _now(),
+                    ),
+                ),
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
                 IntegrationGrantRequest.is_deleted.is_(False),
             )
@@ -68,7 +78,19 @@ async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice
         )
     ).all()
     by_device: dict[UUID, list[ConnectionConsent]] = {d.id: [] for d in devices}
-    for consent, label in rows:
+    labels: dict[UUID, str | None] = {}
+    for consent in consents:
+        if consent.project_id not in labels:
+            try:
+                project = await authorized_project(
+                    db, user_id, organization_id, consent.project_id
+                )
+                labels[consent.project_id] = str(project.name)
+            except IntegrationAccessDenied:
+                labels[consent.project_id] = None
+        label = labels[consent.project_id]
+        if label is None:
+            continue
         by_device[consent.device_id].append(
             ConnectionConsent(
                 request_id=consent.id,
@@ -125,7 +147,7 @@ async def revoke_consent(db: AsyncSession, user: User, request_id: UUID) -> None
 
 
 async def disconnect_device(db: AsyncSession, user: User, device_id: UUID) -> None:
-    """Disconnect a device: it, its consents and its grants stop working."""
+    """End this device's grants and all account CLI tokens (not device bound)."""
     user_id, organization_id = _identity(user)
     revoked = await db.execute(
         update(BridgeDevice)
@@ -154,4 +176,11 @@ async def disconnect_device(db: AsyncSession, user: User, device_id: UUID) -> No
     await _revoke_grants(
         db, device_id=device_id, user_id=user_id, organization_id=organization_id
     )
+    try:
+        # CLI JWTs have no device id. A shared account cutoff must succeed
+        # before committing the device change or reporting it disconnected.
+        await revoke_user_cli_tokens(str(user_id), require_success=True)
+    except CliTokenRevocationUnavailable:
+        await db.rollback()
+        raise
     await db.commit()

@@ -70,7 +70,14 @@ describe('ConnectedDevices', () => {
     vi.mocked(integrationConnectionsService.disconnect).mockResolvedValue();
     const { user } = render(<ConnectedDevices />);
     await user.click(
-      await screen.findByRole('button', { name: 'Disconnect Laptop' })
+      await screen.findByRole('button', { name: 'Disconnect Laptop (d1)' })
+    );
+    expect(integrationConnectionsService.disconnect).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/ends all existing CLI sign-ins/)
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: 'Disconnect and end CLI sign-ins' })
     );
     expect(integrationConnectionsService.disconnect).toHaveBeenCalledWith('d1');
     expect(
@@ -85,7 +92,10 @@ describe('ConnectedDevices', () => {
     );
     const { user, unmount } = render(<ConnectedDevices />);
     await user.click(
-      await screen.findByRole('button', { name: 'Disconnect Laptop' })
+      await screen.findByRole('button', { name: 'Disconnect Laptop (d1)' })
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Disconnect and end CLI sign-ins' })
     );
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
@@ -100,5 +110,24 @@ describe('ConnectedDevices', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'could not be loaded'
     );
+  });
+
+  it('distinguishes devices with the same label and allows canceling', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      laptop,
+      { ...laptop, device_id: 'd2', consents: [] },
+    ]);
+    const { user } = render(<ConnectedDevices />);
+    await user.click(
+      await screen.findByRole('button', { name: 'Disconnect Laptop (d2)' })
+    );
+    expect(screen.getByText(/Disconnect Laptop \(d2\)\?/)).toBeInTheDocument();
+    expect(screen.getByText('Device ID: d1')).toBeInTheDocument();
+    expect(screen.getByText('Device ID: d2')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(
+      screen.queryByText(/ends all existing CLI sign-ins/)
+    ).not.toBeInTheDocument();
+    expect(integrationConnectionsService.disconnect).not.toHaveBeenCalled();
   });
 });

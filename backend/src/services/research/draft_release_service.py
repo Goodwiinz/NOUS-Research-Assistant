@@ -167,6 +167,10 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
             parent = rules.source_node(
                 row.document_id, row.source_hash, row.text_sha256
             )
+        elif row.kind == "synthesis_result":  # GOO-311
+            parent = rules.node("synthesis", row.synthesis_result_id)
+        elif row.kind == "figure":  # GOO-312
+            parent = rules.node("figure", row.figure_id)
         else:
             continue
         edges.append((parent, rules.node("link", row.id)))
@@ -184,7 +188,45 @@ async def _graph(db: AsyncSession, collection_id: UUID) -> Graph:
             *(row.interpretation_claim_version_ids or []),
         ]:
             edges.append((rules.node("claim_version", value), target))
+    # GOO-309: appraisals hang off accepted values, sources and protocols.
+    # GOO-310: evidence tables, contradictions and certainty hang off accepted
+    # values, protocols and appraisals. GOO-311: synthesis results hang off
+    # evidence tables and protocols. GOO-312: figures hang off runs, which
+    # hang off their input revisions. Local imports: these services read this
+    # graph for their stale flags. GOO-315: verified manuscript releases hang
+    # off their draft release. GOO-320: the tip review version's changed or
+    # corrected reports hang their documents off the report.
+    from src.services.research import manuscript_release_service
+    from src.services.research_engine import (
+        appraisal_service,
+        evidence_service,
+        experiment_service,
+        review_update_service,
+        synthesis_service,
+    )
+
+    part_changed: set[rules.Node] = set()
+    for part in (
+        appraisal_service.graph_part,
+        evidence_service.graph_part,
+        synthesis_service.graph_part,
+        experiment_service.graph_part,
+        manuscript_release_service.graph_part,
+        review_update_service.graph_part,
+    ):
+        more_edges, more_changed = await part(db, collection_id)
+        edges += more_edges
+        part_changed |= more_changed
+    # GOO-320: a document node reaches every source revision pinned from it.
+    documents = {child for _parent, child in edges if child[0] == "document"}
+    edges += [
+        (document, source)
+        for source in sorted({p for p, _c in edges if p[0] == "source"})
+        if (document := rules.node("document", rules.parse_source(source[1])[0]))
+        in documents
+    ]
     changed = await _changed_sources(db, edges)
+    changed |= part_changed
     changed |= {
         rules.node("accepted", row.id)
         for row in accepted

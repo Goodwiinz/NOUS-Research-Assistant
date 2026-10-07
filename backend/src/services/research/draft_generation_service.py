@@ -16,7 +16,7 @@ from uuid import UUID
 from weakref import WeakValueDictionary
 
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -30,9 +30,19 @@ from src.models.draft_release import DraftRelease
 from src.models.draft_review import DraftReview
 from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
+from src.models.manuscript_release import ManuscriptRelease
+from src.models.peer_review import (
+    PeerReviewComment,
+    PeerReviewResponse,
+    PeerReviewRound,
+)
 from src.models.research_claim import ResearchClaimVersion
 from src.services.agent.job_store import get_redis
-from src.services.research.bibliography_service import BibliographyService
+from src.services.research import peer_review_rules
+from src.services.research.bibliography_service import (
+    REFERENCE_FILES,
+    BibliographyService,
+)
 from src.services.research.evidence_selection import select_relevant_passages
 from src.services.research_engine.report_rendering import publication_year
 
@@ -388,6 +398,7 @@ class DraftGenerationService:
 
         # A registration is visible to duplicate callers only once its
         # retained row has committed; until then they wait (GOO-297).
+        existing: Optional[Dict[str, Any]] = None
         while True:
             with _generation_registration_lock(project_id):
                 active = self.get_latest_status(
@@ -417,20 +428,28 @@ class DraftGenerationService:
                         active.get("user_id") == str(user_id)
                         and active.get("generation_request_hash") == request_hash
                     ):
-                        return {
+                        existing = {
                             "task_id": active["task_id"],
                             "status": active["status"],
                             "message": "Matching draft generation already in progress",
                             "selection_mode": active.get("selection_mode"),
                             "document_ids": active.get("document_ids", []),
                         }
-                    return {
-                        "error": "A different draft generation is already in progress for this project.",
-                        "error_category": "draft_generation_conflict",
-                    }
+                    else:
+                        existing = {
+                            "error": "A different draft generation is already in progress for this project.",
+                            "error_category": "draft_generation_conflict",
+                        }
+                    break
             # ponytail: poll; bounded by the entry's own commit or, if its
             # caller vanished, by the stale-active cutoff.
             await asyncio.sleep(0.05)
+        if existing is not None:
+            # GOO-321: end the caller's authorization transaction like the
+            # new-task path's commit does. Callers wait on the running task,
+            # whose persist needs the project lock this session still holds.
+            await self.db.rollback()
+            return existing
         # GOO-297: the task is never fired without its retained row.
         try:
             await start_task(
@@ -2211,12 +2230,31 @@ Key takeaways include the importance of continued investigation and the potentia
         # research_claim_versions.draft_id is the backstop.
         # GOO-307: a verified (or once-verified) version is never deleted;
         # the RESTRICT FK on draft_releases.draft_id is the backstop.
+        # GOO-314: reviewed and revised versions stay resolvable; the
+        # peer-review RESTRICT FKs are the backstop.
+        # GOO-315: a packaged version stays resolvable; the RESTRICT FK on
+        # manuscript_releases.draft_id is the backstop.
         pinned = (
             await self.db.execute(
                 select(ResearchClaimVersion.id)
                 .where(ResearchClaimVersion.draft_id == draft_id)
                 .union_all(
-                    select(DraftRelease.id).where(DraftRelease.draft_id == draft_id)
+                    select(DraftRelease.id).where(DraftRelease.draft_id == draft_id),
+                    select(ManuscriptRelease.id).where(
+                        ManuscriptRelease.draft_id == draft_id
+                    ),
+                    select(PeerReviewRound.id).where(
+                        PeerReviewRound.draft_id == draft_id
+                    ),
+                    select(PeerReviewComment.id).where(
+                        PeerReviewComment.draft_id == draft_id
+                    ),
+                    select(PeerReviewResponse.id).where(
+                        or_(
+                            PeerReviewResponse.revised_draft_id == draft_id,
+                            PeerReviewResponse.base_draft_id == draft_id,
+                        )
+                    ),
                 )
                 .limit(1)
             )
@@ -2283,6 +2321,40 @@ Key takeaways include the importance of continued investigation and the potentia
 
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def diff_drafts(
+        self, project_id: UUID, from_id: UUID, to_id: UUID
+    ) -> Optional[Dict[str, Any]]:
+        """GOO-314: the sentence-level anchored diff between two saved
+        versions of this project (``compare_drafts`` is unchanged)."""
+        drafts = {
+            d.id: d
+            for d in (
+                await self.db.execute(
+                    select(GeneratedDraft).where(
+                        GeneratedDraft.project_id == project_id,
+                        GeneratedDraft.id.in_([from_id, to_id]),
+                    )
+                )
+            ).scalars()
+        }
+        if from_id not in drafts or to_id not in drafts:
+            return None
+
+        def ref(draft: GeneratedDraft) -> Dict[str, Any]:
+            return {
+                "id": draft.id,
+                "version": draft.version,
+                "content_hash": peer_review_rules.sha256(draft.content),
+            }
+
+        return {
+            "from": ref(drafts[from_id]),
+            "to": ref(drafts[to_id]),
+            "hunks": peer_review_rules.anchored_diff(
+                drafts[from_id].content, drafts[to_id].content
+            ),
+        }
 
     async def compare_drafts(
         self,
@@ -2351,8 +2423,22 @@ Key takeaways include the importance of continued investigation and the potentia
         draft = await self.get_draft(project_id, draft_id)
         if not draft:
             return {"error": "Draft not found"}
-        if format not in ("markdown", "latex"):
+        if format not in ("markdown", "latex", *REFERENCE_FILES):
             return {"error": f"Unsupported format: {format}"}
+        if format in REFERENCE_FILES:
+            # GOO-317: a references-only file from the same canonical records
+            # as BibTeX; include_bibliography/bib_format do not apply.
+            records, keys = self._canonical_citation_records(
+                await self.get_draft_citations(project_id, draft_id)
+            )
+            serialize, filename, mime_type = REFERENCE_FILES[format]
+            return {
+                "format": format,
+                "filename": filename,
+                "content": serialize(records, keys),
+                "mime_type": mime_type,
+                "omissions": BibliographyService.omissions(records, keys),
+            }
         # GOO-307: the stored content is wrapped, never altered: a status
         # header plus the gate's unresolved and interpretation labels.
         from src.services.research import draft_release_service, release_rules
@@ -2507,6 +2593,7 @@ Key takeaways include the importance of continued investigation and the potentia
         for c in citations:
             if c.citation is not None:
                 citation = c.citation
+                linked = (c.document.document_metadata or {}) if c.document else {}
                 canonical = SimpleNamespace(
                     document_title=citation.document_title,
                     authors=DraftGenerationService._canonical_author_names(
@@ -2520,6 +2607,7 @@ Key takeaways include the importance of continued investigation and the potentia
                     doi=citation.doi,
                     arxiv_id=citation.arxiv_id,
                     abstract=citation.abstract,
+                    type=citation.document_type or linked.get("type"),
                 )
             else:
                 document = c.document
@@ -2537,6 +2625,7 @@ Key takeaways include the importance of continued investigation and the potentia
                         or (document.arxiv_id if document else None)
                     ),
                     abstract=metadata.get("abstract"),
+                    type=metadata.get("type"),
                 )
             canonical_citations.append(canonical)
             keys.append(f"doc{c.citation_index}")

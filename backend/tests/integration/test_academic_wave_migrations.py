@@ -476,6 +476,8 @@ def test_academic_wave_migrations_upgrade_downgrade_round_trip(
     assert "research_project_role_assignments" in inspect(connection).get_table_names()
 
 
+# GOO-309: references research_reports and research_studies.
+_APPRAISAL_TABLES = ("appraisal_assessments",)
 # GOO-303: references research_reports, documents and protocol versions.
 _ACQUISITION_TABLES = ("research_fulltext_attempts", "research_fulltext_requests")
 _RESOLUTION_TABLES = ("screening_resolutions",)  # GOO-302: drop first
@@ -486,6 +488,18 @@ _SCREENING_TABLES = (
     "screening_queues",
 )
 _IMPORT_TABLES = ("research_import_records", "research_import_receipts")
+# GOO-320: review versions reference accepted execution results.
+_REVIEW_VERSION_TABLES = (
+    "research_review_release_links",
+    "research_review_versions",
+)
+# GOO-319: execution results reference import receipts; drop before them.
+_SEARCH_UPDATE_TABLES = (
+    "research_search_execution_results",
+    "research_search_execution_attempts",
+    "research_search_executions",
+    "research_search_schedules",
+)
 _IDENTITY_TABLES = (
     "research_report_observations",
     "research_report_identifiers",
@@ -501,9 +515,12 @@ def test_report_identity_migration_upgrade_downgrade_round_trip(
     connection = pre_wave_connection
     # GOO-301/302 screening tables reference research_reports: drop them first.
     for table in (
+        *_APPRAISAL_TABLES,
         *_ACQUISITION_TABLES,
         *_RESOLUTION_TABLES,
         *_SCREENING_TABLES,
+        *_REVIEW_VERSION_TABLES,
+        *_SEARCH_UPDATE_TABLES,
         *_IMPORT_TABLES,
         *_IDENTITY_TABLES,
     ):
@@ -537,7 +554,7 @@ def test_search_import_migration_upgrade_downgrade_round_trip(
 ) -> None:
     """GOO-300 tables are created by d4e6f8a0b2c3 itself, with RLS enabled."""
     connection = pre_wave_connection
-    for table in _IMPORT_TABLES:
+    for table in (*_REVIEW_VERSION_TABLES, *_SEARCH_UPDATE_TABLES, *_IMPORT_TABLES):
         connection.exec_driver_sql(f'DROP TABLE "{table}"')
     migration = _load_migration("d4e6f8a0b2c3_create_search_imports.py")
     assert migration.down_revision == "c9d1e2f3a4b5"
