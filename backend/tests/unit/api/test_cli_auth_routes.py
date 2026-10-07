@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
+from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 
@@ -113,3 +115,31 @@ def test_cli_auth_status_legacy_query_token_warns_without_logging_secret(
     assert response.status_code == 200
     assert "query string" in caplog.text
     assert started["poll_token"] not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cli_poll_token_is_redacted_from_audit_request_details() -> None:
+    from src.middleware.audit import AuditMiddleware
+
+    middleware = AuditMiddleware(FastAPI(), audit_service=MagicMock())
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/api/v1/cli-auth/status/session-1",
+            "query_string": b"",
+            "headers": [
+                (b"x-cli-poll-token", b"audit-poll-secret"),
+                (b"x-request-id", b"request-1"),
+            ],
+            "server": ("testserver", 443),
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+    details = await middleware._extract_request_info(request)
+
+    assert details["headers"]["x-cli-poll-token"] == "[REDACTED]"
+    assert details["headers"]["x-request-id"] == "request-1"
+    assert "audit-poll-secret" not in json.dumps(details)

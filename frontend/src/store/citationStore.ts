@@ -3,6 +3,7 @@
  */
 
 import { create } from 'zustand';
+import { captureAccountSession } from '@/lib/account-session';
 import { citationService } from '@/services/citationService';
 import type { CitationResponse } from '@/types/research';
 
@@ -32,10 +33,12 @@ export const useCitationStore = create<CitationState>((set, get) => ({
 
   // Fetch citations for a specific message
   fetchCitationsForMessage: async (messageId: string) => {
+    const isCurrentAccount = captureAccountSession();
     set({ loading: true, error: null });
 
     try {
       const citations = await citationService.getCitationsForMessage(messageId);
+      if (!isCurrentAccount()) return;
 
       set((state) => {
         // Dedup: only add citations not already present by id
@@ -58,6 +61,7 @@ export const useCitationStore = create<CitationState>((set, get) => ({
         };
       });
     } catch (error: any) {
+      if (!isCurrentAccount()) return;
       console.error('[CitationStore] Failed to fetch citations:', error);
       set({
         error: error?.message || 'Failed to fetch citations',
@@ -90,7 +94,10 @@ export const useCitationStore = create<CitationState>((set, get) => ({
       }
 
       // Add to message-specific citations
-      const messageCitations = [...(state.citationsByMessage[messageId] || []), citation];
+      const messageCitations = [
+        ...(state.citationsByMessage[messageId] || []),
+        citation,
+      ];
 
       return {
         citations: updatedCitations,
@@ -107,6 +114,7 @@ export const useCitationStore = create<CitationState>((set, get) => ({
     set({
       citations: [],
       citationsByMessage: {},
+      loading: false,
       error: null,
     });
   },

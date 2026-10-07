@@ -32,12 +32,8 @@
         "errors": 0,
         "warnings": 1
       },
-      "app/(auth)/login/page.tsx": {
-        "errors": 1,
-        "warnings": 0
-      },
       "app/(auth)/register/page.tsx": {
-        "errors": 1,
+        "errors": 0,
         "warnings": 5
       },
       "app/(auth)/reset-password/page.tsx": {
@@ -1069,12 +1065,12 @@
         "warnings": 1
       },
       "src/components/research-engine/ResearchDashboard.tsx": {
-        "errors": 1,
+        "errors": 0,
         "warnings": 2
       },
       "src/components/research-engine/RunView.tsx": {
         "errors": 0,
-        "warnings": 4
+        "warnings": 0
       },
       "src/components/research-engine/SourceSelector.tsx": {
         "errors": 0,
@@ -1396,13 +1392,9 @@
         "errors": 0,
         "warnings": 2
       },
-      "src/hooks/chat/useChatSession.ts": {
-        "errors": 5,
-        "warnings": 1
-      },
       "src/hooks/chat/useChatStreaming.ts": {
         "errors": 0,
-        "warnings": 9
+        "warnings": 8
       },
       "src/hooks/upload/useDocumentUpload.stories.tsx": {
         "errors": 0,
@@ -1535,10 +1527,6 @@
       "src/services/analyticsService.ts": {
         "errors": 0,
         "warnings": 20
-      },
-      "src/services/api-client.ts": {
-        "errors": 0,
-        "warnings": 1
       },
       "src/services/citationService.ts": {
         "errors": 0,
@@ -1819,9 +1807,9 @@
     }
   },
   "coverage": {
-    "lines": 19.36,
-    "statements": 19.36,
-    "functions": 52.19,
-    "branches": 76.3
+    "lines": 47.6,
+    "statements": 47.6,
+    "functions": 62.38,
+    "branches": 79.24
   }
 }
