@@ -28,6 +28,7 @@ from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobStatus, ProcessingJob
 from src.models.user import User, UserRole
+from src.services.documents import file_metadata_service
 from src.services.documents.file_service import (
     FileService,
     FileStorageError,
@@ -557,55 +558,35 @@ async def update_file_metadata(
     db: AsyncSession = Depends(get_db),
 ):
     """Update file metadata"""
-    stmt = select(Document).where(
-        Document.id == file_id,
-        Document.organization_id == organization.id,
-        Document.is_deleted == False,
-    )
-    result = await db.execute(stmt)
-    document = result.scalars().first()
-
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+    # Transport only. file_metadata_service scopes the lookup to
+    # current_user.organization_id (the organization this dependency loads; it
+    # still 404s a user without one), checks owner-or-admin and owns the
+    # commit or rollback.
+    try:
+        document = await file_metadata_service.update_file_metadata(
+            db, file_id, current_user, title=title, tags=tags, is_public=is_public
         )
-
-    # Check permissions (owner or admin)
-    if (
-        document.uploaded_by_user_id != current_user.id
-        and not current_user.has_permission(UserRole.ADMIN)
-    ):
+    except file_metadata_service.FileMetadataPermissionError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Can only update your own files or require admin role",
         )
-
-    try:
-        # Update fields
-        if title is not None:
-            document.title = title
-
-        if tags is not None:
-            document.tags = tags
-
-        if is_public is not None:
-            document.is_public = is_public
-
-        await db.commit()
-        await db.refresh(document)
-
-        return {
-            "message": "File metadata updated successfully",
-            "file": document.to_dict(),
-        }
-
-    except Exception:
-        await db.rollback()
+    except file_metadata_service.FileMetadataUpdateError:
         logger.error("Failed to update file", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to update file",
         )
+
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+        )
+
+    return {
+        "message": "File metadata updated successfully",
+        "file": document.to_dict(),
+    }
 
 
 @router.delete("/{file_id}")

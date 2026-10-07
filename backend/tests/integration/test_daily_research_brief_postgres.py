@@ -169,6 +169,7 @@ async def _scenario_database(
                 owner_id=owner_id,
                 organization_id=organization_id,
                 additional_user_organizations={other_owner_id: organization_id},
+                reviewer_ids=(owner_id,),
             )
         async with factory() as db:
             db.add_all(
@@ -538,6 +539,7 @@ async def _daily_brief_lifecycle(
                 owner_id=owner_id,
                 organization_id=organization_id,
                 additional_user_organizations={other_owner_id: organization_id},
+                reviewer_ids=(owner_id,),
             )
 
         template = cast(
@@ -1645,6 +1647,7 @@ def create_e2e_app() -> FastAPI:
                         intruder_id: intruder_org_id,
                     },
                     additional_organization_ids=(intruder_org_id,),
+                    reviewer_ids=(owner_id,),
                 )
                 fixture_state["collection_id"] = canonical_scope.collection_id
             app.state.db_factory = async_sessionmaker(

@@ -443,6 +443,43 @@ async def test_cancel_race_requires_terminal_and_projects(
     assert session is not None and not session.workspace_locked
 
 
+# Mutation: delivery.py:488 content=text -> content="".join(content).
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/services/harness/test_delivery.py -k failed_turn_without_output
+async def test_failed_turn_without_output_projects_non_empty_assistant_text(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn that fails before any delta must not persist an empty assistant
+    row: ChatMessageResponse requires content, so the thread would 500 on read."""
+    from src.services.agent import agent_execution_service as execution
+
+    persist = AsyncMock(return_value=str(uuid4()))
+    monkeypatch.setattr(execution, "_persist_assistant_message_safe", persist)
+    await running(db, context, command)
+    await ingest_bridge_event(
+        db,
+        context,
+        event(
+            command,
+            2,
+            body={
+                "kind": "observation",
+                "state": "failed",
+                "sessionId": "native",
+                "turnId": "turn",
+            },
+        ),
+    )
+    persist.assert_awaited_once()
+    assert persist.await_args.kwargs["content"] == "External execution failed."
+    db.expire_all()
+    run = await db.get(AgentRun, str(command.runId))
+    assert run is not None and run.status == "failed"
+
+
 async def test_projection_failure_retains_ownership_and_retries_after_restart(
     db: AsyncSession,
     context: IntegrationContext,
@@ -750,6 +787,65 @@ async def test_lease_renewal_is_limited_to_authorized_run_scope(
     assert await lease_runs(db, scoped, DEVICE) == {
         str(command.runId): command.generation
     }
+
+
+# Mutation: delivery.py:243 and :597 remove each IntegrationAccessDenied catch.
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/services/harness/test_delivery.py -k poll_skips_session
+async def test_poll_skips_session_that_fails_authorization(
+    db: AsyncSession, context: IntegrationContext, command: Any
+) -> None:
+    from types import SimpleNamespace
+
+    from src.models.bridge_device import WorkspaceBinding
+    from src.models.thread import Thread
+    from src.services.agent.agent_submission_service import accept_submission
+    from src.services.harness.delivery import lease_runs
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
+
+    other_thread, other_workspace = uuid4(), uuid4()
+    db.add_all(
+        [
+            Thread(
+                id=other_thread,
+                conversation_id=CONVERSATION,
+                source_project_id=PROJECT,
+                title="stale",
+                created_by_id=USER,
+            ),
+            WorkspaceBinding(
+                device_id=DEVICE,
+                workspace_id=other_workspace,
+                project_id=PROJECT,
+                label="stale",
+            ),
+        ]
+    )
+    await db.commit()
+    stale = await accept_submission(
+        db,
+        current_user=SimpleNamespace(id=USER, organization_id=ORG),
+        request=request().model_copy(
+            update={"thread_id": str(other_thread), "workspace_id": other_workspace}
+        ),
+        thread=await db.get(Thread, other_thread),
+        integration_context=context,
+    )
+    # A UI flow dropping the thread's project makes its session unauthorizable.
+    await db.execute(
+        update(Thread).where(Thread.id == other_thread).values(source_project_id=None)
+    )
+    await db.execute(
+        update(HarnessCommand).values(lease_until=None, acknowledged=False)
+    )
+    await db.commit()
+    assert [c.runId for c in await lease_commands(db, context, DEVICE)] == [
+        command.runId
+    ]
+    assert await lease_runs(db, context, DEVICE) == {
+        str(command.runId): command.generation
+    }
+    assert stale.run_id not in await lease_runs(db, context, DEVICE)
 
 
 async def test_chat_bound_grant_leases_only_runs_in_its_chat(

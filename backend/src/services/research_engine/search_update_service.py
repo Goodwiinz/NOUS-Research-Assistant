@@ -1052,8 +1052,10 @@ async def _import(
     )
 
 
-async def _current(db: AsyncSession, receipt_id: Any) -> dict[str, dict[str, Any]]:
-    """``report_id -> parsed record`` for this execution's accepted records."""
+async def _current(
+    db: AsyncSession, receipt_id: Any
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Last accepted record per report, plus DOIs from every accepted record."""
     rows = await _all(
         db,
         select(ResearchImportRecord)
@@ -1063,7 +1065,17 @@ async def _current(db: AsyncSession, receipt_id: Any) -> dict[str, dict[str, Any
         )
         .order_by(ResearchImportRecord.record_index),
     )
-    return {str(r.report_id): dict(r.parsed or {}) for r in rows if r.report_id}
+    records: dict[str, dict[str, Any]] = {}
+    dois: set[str] = set()
+    for row in rows:
+        if not row.report_id:
+            continue
+        record = dict(row.parsed or {})
+        records[str(row.report_id)] = record
+        doi = (record.get("identifiers") or {}).get("doi")
+        if doi:
+            dois.add(str(doi).lower())
+    return records, dois
 
 
 async def _baseline(
@@ -1086,20 +1098,13 @@ async def _baseline(
     return None, dict(root.baseline_snapshot)
 
 
-def _dois(
-    baseline: Mapping[str, Any], current: Mapping[str, Mapping[str, Any]]
-) -> list[str]:
+def _dois(baseline: Mapping[str, Any], current_dois: set[str]) -> list[str]:
     found = {
         doi
         for entry in (baseline.get("reports") or {}).values()
         for doi in (entry.get("identifiers") or {}).get("doi") or []
     }
-    found |= {
-        str(record["identifiers"]["doi"]).lower()
-        for record in current.values()
-        if (record.get("identifiers") or {}).get("doi")
-    }
-    return sorted(found)
+    return sorted(found | current_dois)
 
 
 async def _notices(
@@ -1264,7 +1269,7 @@ async def _finish(
     baseline_id, baseline = await _baseline(db, job)
     package = await corpus_export.build_package(db, context)
     snapshot = rules.snapshot_from_package(package["body"])
-    records = await _current(db, receipt_id)
+    records, _notice_dois = await _current(db, receipt_id)
     baseline_reports = dict(baseline.get("reports") or {})
     merged_into = await _merged_into(db, job["collection_id"])
     current: dict[str, dict[str, Any]] = {}
@@ -1370,9 +1375,9 @@ async def run_execution(
         await db.commit()
     receipt_id, coverage = cast(tuple[Any, dict[str, Any]], saved)
     baseline_id, baseline = await _baseline(db, job)
-    records = await _current(db, receipt_id)
+    records, notice_dois = await _current(db, receipt_id)
     await db.rollback()
-    notices, failed = await _notices(connectors, _dois(baseline, records))
+    notices, failed = await _notices(connectors, _dois(baseline, notice_dois))
     known = set((baseline.get("reports") or {}))
     seeds = sorted(rid for rid in records if rid not in known)
     chasing = await _chase(db, job, seeds, connectors)

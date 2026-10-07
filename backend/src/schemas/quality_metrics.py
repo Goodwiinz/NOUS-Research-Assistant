@@ -2,6 +2,7 @@
 Pydantic schemas for quality metrics and analytics
 """
 
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -335,6 +336,24 @@ class AnalyticsExportRequest(BaseModel):
     format: str = Field("csv", description="Export format")
     filters: Optional[Dict[str, Any]] = Field(None, description="Export filters")
     include_metadata: bool = Field(True, description="Include metadata in export")
+
+
+class BehaviorReportRequest(BaseModel):
+    """Body for POST /api/v1/analytics/behavior/reports/generate.
+
+    ``user_id`` (optional) adds a per-user section to the org report; the route
+    rejects it unless the target user belongs to the caller's organization.
+    Unknown keys are ignored (pydantic default) for backward compatibility with
+    the previous untyped ``Dict[str, Any]`` body.
+    """
+
+    user_id: Optional[uuid.UUID] = Field(
+        None, description="Target user (must be in the caller's organization)"
+    )
+    days_back: int = Field(30, ge=1, le=365, description="Days of history to analyze")
+    report_type: str = Field(
+        "organization", max_length=64, description="Label echoed back in the report"
+    )
 
 
 class AnalyticsExportResponse(BaseModel):
