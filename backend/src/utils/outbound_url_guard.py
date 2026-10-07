@@ -3,7 +3,7 @@
 Rejects anything that is not public HTTPS: non-https schemes, URL credentials,
 ``localhost`` names, and literal or resolved addresses that are not globally
 routable (loopback, RFC 1918, CGNAT 100.64/10, link-local including the cloud
-metadata address 169.254.169.254, ULA fc00::/7, multicast, reserved,
+metadata address 169.254.169.254, ULA fc00::/7, site-local fec0::/10, multicast, reserved,
 unspecified). IPv6 forms that embed an IPv4 address (IPv4-mapped, 6to4,
 Teredo, NAT64 64:ff9b::/96) are checked against the embedded address too.
 A hostname is rejected if any of its resolved addresses is non-public.
@@ -50,6 +50,10 @@ def _is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         return False
     if isinstance(ip, ipaddress.IPv6Address):
+        # Python marks deprecated site-local addresses as global, although
+        # networks can still route them to internal services.
+        if ip.is_site_local:
+            return False
         return all(_is_public_ip(inner) for inner in _embedded_ipv4(ip))
     return True
 

@@ -59,6 +59,20 @@ def test_rejects_hostname_with_mixed_resolution() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "address", ["fec0::1", "fedc::1", "feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"]
+)
+@pytest.mark.parametrize("literal", [True, False])
+def test_rejects_site_local_ipv6(address: str, literal: bool) -> None:
+    url = f"https://[{address}]/hook" if literal else "https://mixed.example.com/hook"
+    with pytest.raises(UnsafeDestinationError):
+        assert_public_https_url(url, resolver=lambda host: ["93.184.216.34", address])
+
+
+def test_accepts_public_ipv6_literal() -> None:
+    assert_public_https_url("https://[2001:4860:4860::8888]/hook", resolver=_public)
+
+
 def test_rejects_empty_resolution() -> None:
     with pytest.raises(UnsafeDestinationError):
         assert_public_https_url("https://empty.example.com/", resolver=lambda host: [])
