@@ -184,25 +184,18 @@ class AuthService:
         user: User,
         first_name: str = None,
         last_name: str = None,
-        email: str = None,
     ) -> User:
-        """Update user profile information"""
+        """Update the caller-editable profile fields (display names only).
+
+        ``users.email`` is deliberately NOT writable here (GOO-405). The
+        identity provider owns it, and JIT provisioning writes it from the
+        verified token. A client-supplied address allowed pre-registration
+        squatting of another person's email.
+        """
         if first_name:
             user.first_name = first_name
         if last_name:
             user.last_name = last_name
-        if email and email.lower() != user.email:
-            # Check if new email is already taken
-            stmt = select(User).where(
-                and_(User.email == email.lower(), User.id != user.id)
-            )
-            result = await self.db.execute(stmt)
-            existing_user = result.scalar_one_or_none()
-
-            if existing_user:
-                raise RegistrationError("Email already in use")
-
-            user.email = email.lower()
 
         await self.db.commit()
         await self.db.refresh(user)
