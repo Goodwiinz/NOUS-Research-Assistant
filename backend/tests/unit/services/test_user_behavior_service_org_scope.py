@@ -19,6 +19,11 @@ from src.services.quality.user_behavior_service import UserBehaviorService
 
 pytestmark = pytest.mark.unit
 
+# Causal guards: backend/src/services/quality/user_behavior_service.py:232
+# (cache tenant key), :246 (session query tenant), and :947 (report forwarding).
+# Independently removing each fails its named test; exact restoration passes.
+# Run: python -m pytest -c backend/pytest.ini --no-cov -q backend/tests/unit/services/test_user_behavior_service_org_scope.py
+
 ORG_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 ORG_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 USER = "11111111-1111-1111-1111-111111111111"

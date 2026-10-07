@@ -208,6 +208,10 @@ async def test_session_analysis_passes_caller_org(monkeypatch):
 
 
 # ---- generate_behavior_report: body user_id bound to the caller's org (GOO-407)
+# Causal guard: backend/src/api/quality/user_behavior.py:592-597.
+# Removing only the report tenant guard fails all three foreign/missing/null
+# report tests; exact restoration passes. Run the two modules below together:
+# python -m pytest -c backend/pytest.ini --no-cov -q backend/tests/unit/api/test_user_behavior_org_scope.py backend/tests/unit/services/test_user_behavior_service_org_scope.py
 
 _TARGET = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
