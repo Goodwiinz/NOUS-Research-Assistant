@@ -2742,6 +2742,41 @@
         "title": "BatchProcessingRequest",
         "type": "object"
       },
+      "BehaviorReportRequest": {
+        "description": "Body for POST /api/v1/analytics/behavior/reports/generate.\n\n``user_id`` (optional) adds a per-user section to the org report; the route\nrejects it unless the target user belongs to the caller's organization.\nUnknown keys are ignored (pydantic default) for backward compatibility with\nthe previous untyped ``Dict[str, Any]`` body.",
+        "properties": {
+          "days_back": {
+            "default": 30,
+            "description": "Days of history to analyze",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Days Back",
+            "type": "integer"
+          },
+          "report_type": {
+            "default": "organization",
+            "description": "Label echoed back in the report",
+            "maxLength": 64,
+            "title": "Report Type",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Target user (must be in the caller's organization)",
+            "title": "User Id"
+          }
+        },
+        "title": "BehaviorReportRequest",
+        "type": "object"
+      },
       "BenchmarkRequest": {
         "description": "Request for search quality benchmark",
         "properties": {
@@ -33746,9 +33781,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Report Request",
-                "type": "object"
+                "$ref": "#/components/schemas/BehaviorReportRequest"
               }
             }
           },
