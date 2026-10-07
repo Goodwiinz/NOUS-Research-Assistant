@@ -12,12 +12,20 @@ Authority is bound to the consent chain (the consumed grant request), not to
 one grant token: grants expire in minutes and renewal revokes the old token,
 while an approval is human-paced. A grant issued without a consent request
 (trusted internal issuance) is checked as itself.
+
+The catalogue: every action in ``ALLOWED_ACTIONS`` has its own argument
+validator (``validate_arguments``) and names the narrowest scope that may
+request it (``REQUIRED_SCOPE_FOR``, checked per action by ``scope_allows``).
+``AUTO_RUN_ACTIONS`` are the reversible library changes a ``library:write``
+grant may run without a per-action decision (``runs_without_approval``).
 """
 
 import hashlib
 import json
 import logging
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Any, cast
 from uuid import UUID
 
@@ -34,6 +42,7 @@ from src.models.workspace import Workspace
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation, ToolResult
 from src.schemas.tool_actions import ActionActor, ActionReview, ActionStatus
+from src.services.agent.tool_helpers import _reject_invalid_arxiv_ids
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     authorized_scope_filter,
@@ -42,15 +51,74 @@ from src.services.integrations.context import (
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_ACTIONS = frozenset({"create_project_note"})
-# Identity comes from the session binding, never from the model's arguments.
-IDENTITY_KEYS = frozenset({"project_id", "user_id", "organization_id", "thread_id"})
+ALLOWED_ACTIONS = frozenset(
+    {
+        "create_project_note",
+        "save_papers_to_folder",
+        "remove_papers_from_folder",
+        "move_papers_between_folders",
+        "create_folder",
+        "rename_folder",
+        "delete_folder",
+        "update_document_metadata",
+        "ingest_arxiv_papers",
+    }
+)
+# Reversible library changes: a library:write grant may run them without a
+# per-action decision. A note, a deletion and an ingest always wait for one.
+AUTO_RUN_ACTIONS = frozenset(
+    {
+        "save_papers_to_folder",
+        "remove_papers_from_folder",
+        "move_papers_between_folders",
+        "create_folder",
+        "rename_folder",
+        "update_document_metadata",
+    }
+)
+REQUIRED_SCOPE = "tools:write"
+LIBRARY_SCOPE = "library:write"
+# The narrowest scope that may request each action. Checked per action, never
+# per route: library:write reaches only the reversible library actions, so a
+# note, a deletion and an ingest always need tools:write (scope_allows).
+REQUIRED_SCOPE_FOR: Mapping[str, str] = MappingProxyType(
+    {
+        "create_project_note": REQUIRED_SCOPE,
+        "delete_folder": REQUIRED_SCOPE,
+        "ingest_arxiv_papers": REQUIRED_SCOPE,
+        **{name: LIBRARY_SCOPE for name in AUTO_RUN_ACTIONS},
+    }
+)
+# Who acts, and under which grant, comes from the session binding, never from
+# the model's arguments.
+IDENTITY_KEYS = frozenset(
+    {
+        "user_id",
+        "organization_id",
+        "workspace_id",
+        "thread_id",
+        "run_id",
+        "grant_id",
+        "consent_id",
+    }
+)
+# Which Collection an action aims at is the one thing an argument may choose.
+# Each validator only parses the selectors its action takes; the request path
+# must check them against the grant's authorized scope (a project grant: its
+# own project only) before it stores a row.
+SELECTOR_KEYS = frozenset({"project_id", "from_project_id", "to_project_id"})
 STALE_EXECUTION = timedelta(minutes=5)
 MAX_TITLE = 255
 MAX_CONTENT = 200_000
 MAX_TAG = 64
 MAX_TAGS = 20
-REQUIRED_SCOPE = "tools:write"
+MAX_DESCRIPTION = 2000
+MAX_DOCUMENT_IDS = 20
+MAX_PAPER_IDS = 10
+# The actions request_action can bind to a target and run. The library actions
+# validate, but stay refused there until their target resolution and effects
+# exist: a row stored now would wait for an approval that nothing could run.
+_REQUESTABLE_ACTIONS = frozenset({"create_project_note"})
 
 
 class ToolActionError(Exception):
@@ -83,8 +151,30 @@ def canonical_hash(tool_name: str, arguments: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def scope_allows(tool_name: str, scopes: Iterable[str]) -> bool:
+    """Whether a grant holding ``scopes`` may request ``tool_name``.
+
+    ``tools:write`` may request any action, for a per-action decision.
+    ``library:write`` may request only the actions whose narrowest scope it is
+    (``REQUIRED_SCOPE_FOR``), which it then runs without one. Not an action:
+    False, whatever the scopes.
+    """
+    required = REQUIRED_SCOPE_FOR.get(tool_name)
+    if required is None:
+        return False
+    held = frozenset(scopes)
+    return required in held or REQUIRED_SCOPE in held
+
+
+def runs_without_approval(tool_name: str, scopes: Iterable[str]) -> bool:
+    """Whether ``tool_name`` may skip the per-action decision under ``scopes``."""
+    return tool_name in AUTO_RUN_ACTIONS and LIBRARY_SCOPE in frozenset(scopes)
+
+
 def _validate_note_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
-    if IDENTITY_KEYS & arguments.keys():
+    # A note always lands in the grant's own project, so a selector is
+    # refused like identity.
+    if (IDENTITY_KEYS | SELECTOR_KEYS) & arguments.keys():
         raise ToolActionArgumentError("identity arguments are not accepted")
     if arguments.keys() - {"title", "content", "tags"}:
         raise ToolActionArgumentError("only title, content and tags are accepted")
@@ -105,6 +195,189 @@ def _validate_note_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     if len(tags) > MAX_TAGS:
         raise ToolActionArgumentError("at most 20 tags are accepted")
     return {"title": title, "content": content, "tags": tags}
+
+
+def _accepted(keys: tuple[str, ...]) -> str:
+    if len(keys) == 1:
+        return f"only {keys[0]} is accepted"
+    return f"only {', '.join(keys[:-1])} and {keys[-1]} are accepted"
+
+
+def _only(arguments: dict[str, Any], *keys: str) -> None:
+    """Refuse identity first, then any key (a selector included) not in keys."""
+    if IDENTITY_KEYS & arguments.keys():
+        raise ToolActionArgumentError("identity arguments are not accepted")
+    if arguments.keys() - set(keys):
+        raise ToolActionArgumentError(_accepted(keys))
+
+
+def _uuid(value: Any, field: str) -> str:
+    """One UUID string in canonical form.
+
+    Never a name: the agent helpers resolve any other string as a project NAME.
+    """
+    if value is None:
+        raise ToolActionArgumentError(f"{field} is required")
+    if not isinstance(value, str):
+        raise ToolActionArgumentError(f"{field} must be a UUID")
+    try:
+        return str(UUID(value))
+    except ValueError as error:
+        raise ToolActionArgumentError(f"{field} must be a UUID") from error
+
+
+def _uuid_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_DOCUMENT_IDS:
+        raise ToolActionArgumentError(
+            f"{field} must contain 1-{MAX_DOCUMENT_IDS} UUIDs"
+        )
+    if not all(isinstance(item, str) for item in value):
+        raise ToolActionArgumentError(f"{field} must be UUIDs")
+    try:
+        ids = [str(UUID(item)) for item in value]
+    except ValueError as error:
+        raise ToolActionArgumentError(f"{field} must be UUIDs") from error
+    if len(set(ids)) != len(ids):
+        raise ToolActionArgumentError(f"{field} must not repeat an id")
+    return ids
+
+
+def _name(value: Any, field: str) -> str:
+    name = value.strip() if isinstance(value, str) else ""
+    if not name or len(name) > MAX_TITLE:
+        raise ToolActionArgumentError(f"{field} must be 1-{MAX_TITLE} characters")
+    return name
+
+
+def _tags(value: Any) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or len(value) > MAX_TAGS
+        or not all(isinstance(t, str) and 0 < len(t) <= MAX_TAG for t in value)
+    ):
+        raise ToolActionArgumentError(
+            f"tags must be at most {MAX_TAGS} strings of 1-{MAX_TAG} characters"
+        )
+    return list(value)
+
+
+def _validate_folder_documents(arguments: dict[str, Any]) -> dict[str, Any]:
+    """save_papers_to_folder and remove_papers_from_folder."""
+    _only(arguments, "document_ids", "project_id")
+    return {
+        "document_ids": _uuid_list(arguments.get("document_ids"), "document_ids"),
+        "project_id": _uuid(arguments.get("project_id"), "project_id"),
+    }
+
+
+def _validate_move(arguments: dict[str, Any]) -> dict[str, Any]:
+    _only(arguments, "document_ids", "from_project_id", "to_project_id")
+    document_ids = _uuid_list(arguments.get("document_ids"), "document_ids")
+    source = _uuid(arguments.get("from_project_id"), "from_project_id")
+    destination = _uuid(arguments.get("to_project_id"), "to_project_id")
+    if source == destination:
+        raise ToolActionArgumentError("from_project_id and to_project_id must differ")
+    return {
+        "document_ids": document_ids,
+        "from_project_id": source,
+        "to_project_id": destination,
+    }
+
+
+def _validate_create_folder(arguments: dict[str, Any]) -> dict[str, Any]:
+    _only(arguments, "name", "description")
+    validated: dict[str, Any] = {"name": _name(arguments.get("name"), "name")}
+    description = arguments.get("description")
+    if description is not None:
+        if not isinstance(description, str) or len(description) > MAX_DESCRIPTION:
+            raise ToolActionArgumentError(
+                f"description must be at most {MAX_DESCRIPTION} characters"
+            )
+        validated["description"] = description
+    return validated
+
+
+def _validate_rename_folder(arguments: dict[str, Any]) -> dict[str, Any]:
+    _only(arguments, "project_id", "name")
+    return {
+        "project_id": _uuid(arguments.get("project_id"), "project_id"),
+        "name": _name(arguments.get("name"), "name"),
+    }
+
+
+def _validate_delete_folder(arguments: dict[str, Any]) -> dict[str, Any]:
+    _only(arguments, "project_id")
+    return {"project_id": _uuid(arguments.get("project_id"), "project_id")}
+
+
+def _validate_document_metadata(arguments: dict[str, Any]) -> dict[str, Any]:
+    """No selector: the target follows from the document's own Collections."""
+    _only(arguments, "document_id", "title", "tags")
+    validated: dict[str, Any] = {
+        "document_id": _uuid(arguments.get("document_id"), "document_id")
+    }
+    if "title" in arguments:
+        validated["title"] = _name(arguments["title"], "title")
+    if "tags" in arguments:
+        validated["tags"] = _tags(arguments["tags"])  # [] clears them
+    if len(validated) == 1:
+        raise ToolActionArgumentError("title or tags is required")
+    return validated
+
+
+def _validate_arxiv_ingest(arguments: dict[str, Any]) -> dict[str, Any]:
+    """The optional project_id selector is only parsed here; whether a grant
+    needs one (workspace) or may not name another (project) is the target
+    check's call."""
+    _only(arguments, "paper_ids", "project_id")
+    raw = arguments.get("paper_ids")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_PAPER_IDS:
+        raise ToolActionArgumentError(
+            f"paper_ids must contain 1-{MAX_PAPER_IDS} arXiv ids"
+        )
+    # Strings only (str(2401.00001) would pass the grammar), stripped because
+    # the stored ids are what the ingest puts into the arXiv URL.
+    if not all(isinstance(paper_id, str) for paper_id in raw):
+        raise ToolActionArgumentError("paper_ids contains invalid arXiv ids")
+    paper_ids = [paper_id.strip() for paper_id in raw]
+    if _reject_invalid_arxiv_ids(paper_ids) is not None:
+        # Its payload quotes the rejected ids; the public reason never does.
+        raise ToolActionArgumentError("paper_ids contains invalid arXiv ids")
+    if len(set(paper_ids)) != len(paper_ids):
+        raise ToolActionArgumentError("paper_ids must not repeat an id")
+    validated: dict[str, Any] = {"paper_ids": paper_ids}
+    if arguments.get("project_id") is not None:
+        validated["project_id"] = _uuid(arguments["project_id"], "project_id")
+    return validated
+
+
+_VALIDATORS: Mapping[str, Callable[[dict[str, Any]], dict[str, Any]]] = (
+    MappingProxyType(
+        {
+            "create_project_note": _validate_note_arguments,
+            "save_papers_to_folder": _validate_folder_documents,
+            "remove_papers_from_folder": _validate_folder_documents,
+            "move_papers_between_folders": _validate_move,
+            "create_folder": _validate_create_folder,
+            "rename_folder": _validate_rename_folder,
+            "delete_folder": _validate_delete_folder,
+            "update_document_metadata": _validate_document_metadata,
+            "ingest_arxiv_papers": _validate_arxiv_ingest,
+        }
+    )
+)
+
+
+def validate_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The canonical arguments of one action: what is stored and hashed.
+
+    Identity is refused on every action. Selectors are parsed into canonical
+    UUID strings, never resolved here. Raises ``ToolActionArgumentError`` with
+    a fixed reason, a public 422 detail that never echoes the caller's values.
+    """
+    if tool_name not in ALLOWED_ACTIONS:
+        raise ToolActionArgumentError("tool is not available as an action")
+    return _VALIDATORS[tool_name](arguments)
 
 
 def approval_url(invocation_id: UUID) -> str | None:
@@ -158,7 +431,9 @@ async def request_action(
         raise ToolActionArgumentError(
             "workspace connections cannot request this action"
         )
-    arguments = _validate_note_arguments(invocation.arguments)
+    arguments = validate_arguments(invocation.tool_name, invocation.arguments)
+    if invocation.tool_name not in _REQUESTABLE_ACTIONS:
+        raise ToolActionArgumentError("tool is not available as an action")
     digest = canonical_hash(invocation.tool_name, arguments)
     existing = await db.scalar(_scoped(actor, invocation.invocation_id))
     if existing is None:

@@ -19,6 +19,7 @@ from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
+from src.schemas.integration_context import STANDARD_SCOPES
 from src.schemas.integration_tools import ToolInvocation
 from src.services.agent import tool_actions
 from src.services.agent.tool_actions import (
@@ -377,6 +378,418 @@ def test_canonical_hash_is_key_order_independent_and_tag_order_sensitive() -> No
         canonical_hash("create_project_note", NOTE_ARGS)
         == "00a5154393874069399bf67465b173839a3e66f20a100749cb771b201cba36be"
     )
+
+
+# --- action catalogue and argument validators ------------------------------
+
+TARGET, DOC, DOC2 = uuid4(), uuid4(), uuid4()
+P, D = str(PROJECT), str(DOC)  # ids as a harness sends them: JSON strings
+# The smallest valid arguments of every action.
+MINIMAL_ARGUMENTS: dict[str, dict[str, Any]] = {
+    "create_project_note": NOTE_ARGS,
+    "save_papers_to_folder": {"document_ids": [D], "project_id": P},
+    "remove_papers_from_folder": {"document_ids": [D], "project_id": P},
+    "move_papers_between_folders": {
+        "document_ids": [D],
+        "from_project_id": P,
+        "to_project_id": str(TARGET),
+    },
+    "create_folder": {"name": "Reading"},
+    "rename_folder": {"project_id": P, "name": "Read"},
+    "delete_folder": {"project_id": P},
+    "update_document_metadata": {"document_id": D, "title": "New"},
+    "ingest_arxiv_papers": {"paper_ids": ["2401.00001"]},
+}
+LIBRARY_ACTIONS = sorted(set(MINIMAL_ARGUMENTS) - {"create_project_note"})
+IDENTITY = (
+    "user_id",
+    "organization_id",
+    "workspace_id",
+    "thread_id",
+    "run_id",
+    "grant_id",
+    "consent_id",
+)
+
+
+def test_catalogue_names_each_actions_scope_and_whether_it_auto_runs() -> None:
+    assert tool_actions.ALLOWED_ACTIONS == set(MINIMAL_ARGUMENTS)
+    # Reversible library changes may run without a per-action decision. A
+    # note, a deletion and an ingest (which writes object storage outside the
+    # action's transaction) always wait for one.
+    assert tool_actions.AUTO_RUN_ACTIONS == {
+        "save_papers_to_folder",
+        "remove_papers_from_folder",
+        "move_papers_between_folders",
+        "create_folder",
+        "rename_folder",
+        "update_document_metadata",
+    }
+    assert set(tool_actions.REQUIRED_SCOPE_FOR) == tool_actions.ALLOWED_ACTIONS
+    by_scope: dict[str, set[str]] = {}
+    for name, scope in tool_actions.REQUIRED_SCOPE_FOR.items():
+        by_scope.setdefault(scope, set()).add(name)
+    assert by_scope == {
+        "tools:write": {"create_project_note", "delete_folder", "ingest_arxiv_papers"},
+        "library:write": set(tool_actions.AUTO_RUN_ACTIONS),
+    }
+    assert set(by_scope) <= STANDARD_SCOPES  # a grant can hold each one
+
+
+def test_arguments_never_carry_identity_and_may_only_select_a_project() -> None:
+    assert tool_actions.IDENTITY_KEYS == set(IDENTITY)
+    assert tool_actions.SELECTOR_KEYS == {
+        "project_id",
+        "from_project_id",
+        "to_project_id",
+    }
+    assert not tool_actions.IDENTITY_KEYS & tool_actions.SELECTOR_KEYS
+
+
+def test_scope_is_checked_per_action_not_per_route() -> None:
+    write, library = {"tools:write"}, {"library:write"}
+    for name in tool_actions.ALLOWED_ACTIONS:
+        # tools:write may request any action, and it waits for a decision.
+        assert tool_actions.scope_allows(name, write)
+        assert not tool_actions.runs_without_approval(name, write)
+        assert not tool_actions.scope_allows(name, {"tools:read", "library:read"})
+        assert not tool_actions.scope_allows(name, set())
+    for name in ("create_project_note", "delete_folder", "ingest_arxiv_papers"):
+        # library:write never reaches a note, a deletion or an ingest, and
+        # never lets one skip the decision.
+        assert not tool_actions.scope_allows(name, library)
+        assert not tool_actions.runs_without_approval(name, write | library)
+    for name in tool_actions.AUTO_RUN_ACTIONS:
+        assert tool_actions.scope_allows(name, library)
+        assert tool_actions.runs_without_approval(name, write | library)
+    # Not an action: no scope reaches it.
+    assert not tool_actions.scope_allows("forget_memory", write | library)
+    assert not tool_actions.runs_without_approval("forget_memory", write | library)
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        *MINIMAL_ARGUMENTS.items(),
+        (
+            "remove_papers_from_folder",
+            {"document_ids": [D, str(DOC2)], "project_id": P},
+        ),
+        ("create_folder", {"name": "Reading", "description": "Papers to read"}),
+        ("update_document_metadata", {"document_id": D, "tags": []}),
+        ("update_document_metadata", {"document_id": D, "title": "T", "tags": ["ml"]}),
+        (
+            "ingest_arxiv_papers",
+            {"paper_ids": ["2401.00001v2", "math.GT/0309136"], "project_id": P},
+        ),
+    ],
+    ids=[
+        *MINIMAL_ARGUMENTS,
+        "two-documents",
+        "described-folder",
+        "clear-tags",
+        "title-and-tags",
+        "versions-and-selector",
+    ],
+)
+def test_validators_accept_valid_arguments_as_given(
+    name: str, arguments: dict[str, Any]
+) -> None:
+    assert tool_actions.validate_arguments(name, arguments) == arguments
+
+
+def test_validators_return_the_canonical_form_the_hash_covers() -> None:
+    # One request spelled two ways hashes alike, so its replay finds the row.
+    assert tool_actions.validate_arguments(
+        "rename_folder", {"project_id": P.upper(), "name": "  Read  "}
+    ) == {"project_id": P, "name": "Read"}
+    assert tool_actions.validate_arguments(
+        "save_papers_to_folder", {"document_ids": [D.upper()], "project_id": P}
+    ) == {"document_ids": [D], "project_id": P}
+    assert tool_actions.validate_arguments(
+        "ingest_arxiv_papers", {"paper_ids": [" 2401.00001\n"]}
+    ) == {"paper_ids": ["2401.00001"]}
+    # An optional field sent as null is the same request as one left out.
+    assert tool_actions.validate_arguments(
+        "create_folder", {"name": "R", "description": None}
+    ) == {"name": "R"}
+    assert tool_actions.validate_arguments(
+        "ingest_arxiv_papers", {"paper_ids": ["2401.00001"], "project_id": None}
+    ) == {"paper_ids": ["2401.00001"]}
+
+
+@pytest.mark.parametrize("key", IDENTITY)
+@pytest.mark.parametrize("name", sorted(MINIMAL_ARGUMENTS))
+def test_no_action_accepts_an_identity_argument(name: str, key: str) -> None:
+    with pytest.raises(ToolActionArgumentError) as raised:
+        tool_actions.validate_arguments(
+            name, {**MINIMAL_ARGUMENTS[name], key: str(uuid4())}
+        )
+    assert str(raised.value) == "identity arguments are not accepted"
+
+
+ONLY_METADATA = "only document_id, title and tags are accepted"
+BAD_TAGS = "tags must be at most 20 strings of 1-64 characters"
+BAD_DOCUMENT_IDS = "document_ids must contain 1-20 UUIDs"
+BAD_PAPER_IDS = "paper_ids must contain 1-10 arXiv ids"
+HEX_LOOKALIKE = 12345678901234567890123456789012
+REJECTED: dict[str, tuple[str, dict[str, Any], str]] = {
+    "unknown-tool": ("forget_memory", {}, "tool is not available as an action"),
+    # A note always lands in the grant's own project.
+    "note-selector": (
+        "create_project_note",
+        {**NOTE_ARGS, "project_id": P},
+        "identity arguments are not accepted",
+    ),
+    "save-no-documents": (
+        "save_papers_to_folder",
+        {"document_ids": [], "project_id": P},
+        BAD_DOCUMENT_IDS,
+    ),
+    "save-21-documents": (
+        "save_papers_to_folder",
+        {"document_ids": [str(uuid4()) for _ in range(21)], "project_id": P},
+        BAD_DOCUMENT_IDS,
+    ),
+    "save-documents-string": (
+        "save_papers_to_folder",
+        {"document_ids": D, "project_id": P},
+        BAD_DOCUMENT_IDS,
+    ),
+    "save-document-not-uuid": (
+        "save_papers_to_folder",
+        {"document_ids": ["paper"], "project_id": P},
+        "document_ids must be UUIDs",
+    ),
+    # A JSON number of 32 decimal digits reads as hex: only strings are ids.
+    "save-document-number": (
+        "save_papers_to_folder",
+        {"document_ids": [HEX_LOOKALIKE], "project_id": P},
+        "document_ids must be UUIDs",
+    ),
+    "save-repeated-document": (
+        "save_papers_to_folder",
+        {"document_ids": [D, D.upper()], "project_id": P},
+        "document_ids must not repeat an id",
+    ),
+    "save-no-selector": (
+        "save_papers_to_folder",
+        {"document_ids": [D]},
+        "project_id is required",
+    ),
+    # Never a NAME: the agent helpers resolve any non-UUID as a project name.
+    "save-selector-name": (
+        "save_papers_to_folder",
+        {"document_ids": [D], "project_id": "Project"},
+        "project_id must be a UUID",
+    ),
+    "save-other-selector": (
+        "save_papers_to_folder",
+        {"document_ids": [D], "project_id": P, "to_project_id": P},
+        "only document_ids and project_id are accepted",
+    ),
+    "remove-selector-number": (
+        "remove_papers_from_folder",
+        {"document_ids": [D], "project_id": HEX_LOOKALIKE},
+        "project_id must be a UUID",
+    ),
+    "move-same-folder": (
+        "move_papers_between_folders",
+        {"document_ids": [D], "from_project_id": P, "to_project_id": P.upper()},
+        "from_project_id and to_project_id must differ",
+    ),
+    "move-no-destination": (
+        "move_papers_between_folders",
+        {"document_ids": [D], "from_project_id": P},
+        "to_project_id is required",
+    ),
+    "move-plain-selector": (
+        "move_papers_between_folders",
+        {"document_ids": [D], "project_id": P, "to_project_id": str(TARGET)},
+        "only document_ids, from_project_id and to_project_id are accepted",
+    ),
+    "create-no-name": ("create_folder", {}, "name must be 1-255 characters"),
+    "create-blank-name": (
+        "create_folder",
+        {"name": "   "},
+        "name must be 1-255 characters",
+    ),
+    "create-long-name": (
+        "create_folder",
+        {"name": "x" * 256},
+        "name must be 1-255 characters",
+    ),
+    "create-name-int": ("create_folder", {"name": 5}, "name must be 1-255 characters"),
+    "create-long-description": (
+        "create_folder",
+        {"name": "R", "description": "x" * 2001},
+        "description must be at most 2000 characters",
+    ),
+    "create-description-int": (
+        "create_folder",
+        {"name": "R", "description": 5},
+        "description must be at most 2000 characters",
+    ),
+    "create-selector": (
+        "create_folder",
+        {"name": "R", "project_id": P},
+        "only name and description are accepted",
+    ),
+    "rename-no-selector": ("rename_folder", {"name": "R"}, "project_id is required"),
+    "rename-empty-name": (
+        "rename_folder",
+        {"project_id": P, "name": ""},
+        "name must be 1-255 characters",
+    ),
+    "delete-no-selector": ("delete_folder", {}, "project_id is required"),
+    "delete-with-name": (
+        "delete_folder",
+        {"project_id": P, "name": "R"},
+        "only project_id is accepted",
+    ),
+    "metadata-nothing-to-change": (
+        "update_document_metadata",
+        {"document_id": D},
+        "title or tags is required",
+    ),
+    "metadata-no-document": (
+        "update_document_metadata",
+        {"title": "T"},
+        "document_id is required",
+    ),
+    "metadata-document-not-uuid": (
+        "update_document_metadata",
+        {"document_id": "paper", "title": "T"},
+        "document_id must be a UUID",
+    ),
+    "metadata-blank-title": (
+        "update_document_metadata",
+        {"document_id": D, "title": " "},
+        "title must be 1-255 characters",
+    ),
+    "metadata-long-title": (
+        "update_document_metadata",
+        {"document_id": D, "title": "x" * 256},
+        "title must be 1-255 characters",
+    ),
+    "metadata-null-title": (
+        "update_document_metadata",
+        {"document_id": D, "title": None},
+        "title must be 1-255 characters",
+    ),
+    "metadata-tags-string": (
+        "update_document_metadata",
+        {"document_id": D, "tags": "a"},
+        BAD_TAGS,
+    ),
+    "metadata-tag-empty": (
+        "update_document_metadata",
+        {"document_id": D, "tags": [""]},
+        BAD_TAGS,
+    ),
+    "metadata-tag-long": (
+        "update_document_metadata",
+        {"document_id": D, "tags": ["x" * 65]},
+        BAD_TAGS,
+    ),
+    "metadata-tag-int": (
+        "update_document_metadata",
+        {"document_id": D, "tags": [1]},
+        BAD_TAGS,
+    ),
+    "metadata-21-tags": (
+        "update_document_metadata",
+        {"document_id": D, "tags": [f"t{i}" for i in range(21)]},
+        BAD_TAGS,
+    ),
+    "metadata-selector": (
+        "update_document_metadata",
+        {"document_id": D, "title": "T", "project_id": P},
+        ONLY_METADATA,
+    ),
+    "ingest-no-papers": ("ingest_arxiv_papers", {"paper_ids": []}, BAD_PAPER_IDS),
+    "ingest-11-papers": (
+        "ingest_arxiv_papers",
+        {"paper_ids": [f"2401.{i:05d}" for i in range(11)]},
+        BAD_PAPER_IDS,
+    ),
+    "ingest-papers-string": (
+        "ingest_arxiv_papers",
+        {"paper_ids": "2401.00001"},
+        BAD_PAPER_IDS,
+    ),
+    "ingest-path-traversal": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["../../robots.txt?x="]},
+        "paper_ids contains invalid arXiv ids",
+    ),
+    # str(2401.00001) is a valid id, so only strings count as ids.
+    "ingest-paper-float": (
+        "ingest_arxiv_papers",
+        {"paper_ids": [2401.00001]},
+        "paper_ids contains invalid arXiv ids",
+    ),
+    "ingest-repeated-paper": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["2401.00001", " 2401.00001"]},
+        "paper_ids must not repeat an id",
+    ),
+    "ingest-selector-name": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["2401.00001"], "project_id": "Project"},
+        "project_id must be a UUID",
+    ),
+    "ingest-move-selector": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["2401.00001"], "to_project_id": P},
+        "only paper_ids and project_id are accepted",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "reason"), REJECTED.values(), ids=list(REJECTED)
+)
+def test_validators_reject_with_a_stable_reason(
+    name: str, arguments: dict[str, Any], reason: str
+) -> None:
+    # The reason is a public 422 detail: fixed text, never the caller's values.
+    with pytest.raises(ToolActionArgumentError) as raised:
+        tool_actions.validate_arguments(name, arguments)
+    assert str(raised.value) == reason
+
+
+async def test_request_validates_a_library_action_but_cannot_bind_one_yet(
+    db: AsyncSession,
+) -> None:
+    # Each action's own validator runs on the request path ...
+    with pytest.raises(ToolActionArgumentError) as invalid:
+        await request_action(
+            db,
+            _actor(),
+            ToolInvocation(
+                tool_name="rename_folder",
+                arguments={"project_id": P, "name": " "},
+                invocation_id=uuid4(),
+            ),
+        )
+    assert str(invalid.value) == "name must be 1-255 characters"
+    # ... and a valid library action is still refused: until its target is
+    # resolved against the grant and its effect exists, a stored row would
+    # wait for an approval that nothing could run.
+    for name in LIBRARY_ACTIONS:
+        with pytest.raises(ToolActionArgumentError) as refused:
+            await request_action(
+                db,
+                _actor(),
+                ToolInvocation(
+                    tool_name=name,
+                    arguments=MINIMAL_ARGUMENTS[name],
+                    invocation_id=uuid4(),
+                ),
+            )
+        assert str(refused.value) == "tool is not available as an action"
+    assert await _row_count(db) == 0
 
 
 # --- decide ----------------------------------------------------------------
