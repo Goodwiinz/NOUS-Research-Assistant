@@ -22,8 +22,10 @@ from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
 from src.models.project_note import ProjectNote
+from src.models.research_project import ResearchProject
+from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.user import User
-from src.models.workspace import Workspace
+from src.models.workspace import Workspace, WorkspaceMember
 from src.services.agent.tool_operations import ToolOperationKey
 from src.services.agent.tools_impl import _MAX_TOOL_RESULT_BYTES
 
@@ -53,6 +55,17 @@ class _InsertWatchingSession:
         if "INSERT INTO agent_tool_operations" in str(statement):
             self._insert_started.set()
         return await self._db.execute(statement, *args, **kwargs)
+
+
+def _test_database_url() -> str:
+    # CI enrolls this suite independently; the shared orchestration variable
+    # remains supported for existing local database-proof commands.
+    dsn = os.getenv("AGENT_TOOL_OPERATION_TEST_DATABASE_URL") or os.getenv(
+        "ORCHESTRATION_TEST_DATABASE_URL", ""
+    )
+    if not dsn:
+        pytest.skip("Agent tool-operation PostgreSQL test database is not configured")
+    return dsn
 
 
 def _async_dsn(dsn: str) -> str:
@@ -105,7 +118,10 @@ async def _postgres_tool_schema(dsn: str | None) -> AsyncIterator[_ToolDatabase]
                     Organization,
                     User,
                     Workspace,
+                    WorkspaceMember,
                     Collection,
+                    ResearchProject,
+                    ResearchProjectRoleAssignment,
                     Document,
                     CollectionDocument,
                     ProjectNote,
@@ -307,9 +323,7 @@ def _encoded_result_size(result: Any) -> int:
 
 async def test_postgres_local_effects_commit_with_results_and_replay_ids() -> None:
     """All three local mutations persist their actual effects with results."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent.tools_impl import execute_tool
 
@@ -431,9 +445,7 @@ async def test_postgres_cap_is_the_saved_returned_and_replayed_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real executor stores exactly the bounded artifact response."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
 
@@ -525,9 +537,7 @@ async def test_postgres_local_effect_and_claim_roll_back_on_result_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A post-flush result write failure leaves neither durable half behind."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tool_operations
     from src.services.agent.tools_impl import execute_tool
@@ -575,9 +585,7 @@ async def test_postgres_local_effect_and_claim_roll_back_on_result_failure(
 
 async def test_postgres_only_claim_owner_can_record_completion() -> None:
     """A stale worker token cannot complete another operation's claim."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent.tool_operations import claim_operation, complete_operation
 
@@ -670,9 +678,7 @@ async def test_postgres_same_scoped_operation_concurrently_creates_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A real unique-index loser returns the committed winner's result."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
 
@@ -738,9 +744,7 @@ async def test_postgres_same_scoped_operation_concurrently_creates_once(
 
 async def test_postgres_raw_call_id_is_scoped_and_fingerprint_conflicts() -> None:
     """Turn and actor scopes separate calls while changed args cannot reuse one."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tool_operations
     from src.services.agent.tools_impl import execute_tool
@@ -891,9 +895,7 @@ async def test_postgres_raw_call_id_is_scoped_and_fingerprint_conflicts() -> Non
 
 async def test_postgres_authentication_precedes_saved_result_lookup() -> None:
     """A result is hidden from unauthenticated and wrong-actor scalar callers."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent.tools_impl import execute_tool
 
@@ -984,9 +986,7 @@ async def test_postgres_external_claim_store_failure_never_dispatches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """External effects fail closed when their durable claim cannot be written."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tool_operations, tools_impl
 
@@ -1069,9 +1069,7 @@ async def test_postgres_draft_identity_is_committed_before_status_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Draft polling sees a durable task key with no request-session transaction."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
     from src.services.research import draft_generation_service
@@ -1126,12 +1124,18 @@ async def test_postgres_draft_identity_is_committed_before_status_wait(
             user_id: uuid.UUID,
             themes: list[str],
             style: str,
+            document_ids: list[str] | None,
+            instructions: str | None,
         ) -> dict[str, Any]:
-            assert self.db.in_transaction() is False
+            assert self.db.in_transaction() is True
             observed["project_id"] = project_id
             observed["user_id"] = user_id
             observed["themes"] = themes
             observed["style"] = style
+            assert document_ids is None
+            assert instructions is None
+            # The real service commits validated source selection before dispatch.
+            await self.db.commit()
             return {
                 "task_id": task_id,
                 "status": "pending",
@@ -1221,9 +1225,7 @@ async def test_postgres_draft_replay_uses_shared_status_and_bounds_saved_results
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A saved draft task resumes by status lookup and generation runs once."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
     from src.services.research import draft_generation_service
@@ -1286,14 +1288,20 @@ async def test_postgres_draft_replay_uses_shared_status_and_bounds_saved_results
             user_id: uuid.UUID,
             themes: list[str],
             style: str,
+            document_ids: list[str] | None,
+            instructions: str | None,
         ) -> dict[str, Any]:
             nonlocal generation_calls
             generation_calls += 1
-            assert self.db.in_transaction() is False
+            assert self.db.in_transaction() is True
             assert project_id == uuid.UUID(project["project_id"])
             assert user_id == database.user_id
             assert themes == ["recover the accepted task"]
             assert style == "summary"
+            assert document_ids is None
+            assert instructions is None
+            # The real service commits validated source selection before dispatch.
+            await self.db.commit()
             return {
                 "task_id": task_id,
                 "status": "pending",
@@ -1497,9 +1505,7 @@ async def test_postgres_draft_cancellation_preserves_dispatched_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancellation after record_dispatch keeps the task recoverable."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
     from src.services.research import draft_generation_service
@@ -1533,14 +1539,20 @@ async def test_postgres_draft_cancellation_preserves_dispatched_identity(
             user_id: uuid.UUID,
             themes: list[str],
             style: str,
+            document_ids: list[str] | None,
+            instructions: str | None,
         ) -> dict[str, Any]:
             nonlocal generation_calls
             generation_calls += 1
-            assert self.db.in_transaction() is False
+            assert self.db.in_transaction() is True
             assert project_id == uuid.UUID(cast(str, arguments["project_id"]))
             assert user_id == database.user_id
             assert themes == arguments["themes"]
             assert style == arguments["style"]
+            assert document_ids is None
+            assert instructions is None
+            # The real service commits validated source selection before dispatch.
+            await self.db.commit()
             return {"task_id": task_id, "status": "pending"}
 
         async def _wait(
@@ -1640,9 +1652,7 @@ async def test_postgres_draft_status_poll_exception_returns_recoverable_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A poll exception after dispatch does not replace the task identity."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
     from src.services.research import draft_generation_service
@@ -1674,9 +1684,15 @@ async def test_postgres_draft_status_poll_exception_returns_recoverable_pending(
             user_id: uuid.UUID,
             themes: list[str],
             style: str,
+            document_ids: list[str] | None,
+            instructions: str | None,
         ) -> dict[str, Any]:
             nonlocal generation_calls
             generation_calls += 1
+            assert document_ids is None
+            assert instructions is None
+            # The real service commits validated source selection before dispatch.
+            await self.db.commit()
             return {"task_id": task_id, "status": "pending"}
 
         async def _wait(
@@ -1735,9 +1751,7 @@ async def test_postgres_draft_status_poll_exception_returns_recoverable_pending(
 
 async def test_postgres_mark_unknown_cannot_erase_recorded_dispatch() -> None:
     """The store rejects any attempt to clear an already dispatched identity."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent.tool_operations import mark_unknown
 
@@ -1783,9 +1797,7 @@ async def test_postgres_draft_pre_recorder_cancellation_and_record_failure_stay_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Unrecorded external dispatches stay non-replayable after failures."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tool_operations, tools_impl
     from src.services.research import draft_generation_service
@@ -1847,7 +1859,13 @@ async def test_postgres_draft_pre_recorder_cancellation_and_record_failure_stay_
             user_id: uuid.UUID,
             themes: list[str],
             style: str,
+            document_ids: list[str] | None,
+            instructions: str | None,
         ) -> dict[str, Any]:
+            assert document_ids is None
+            assert instructions is None
+            # The real service commits validated source selection before dispatch.
+            await self.db.commit()
             return {"task_id": "started-but-not-recorded", "status": "pending"}
 
         monkeypatch.setattr(
@@ -1891,9 +1909,7 @@ async def test_postgres_graph_keeps_bounded_failed_observation_on_fresh_and_repl
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Graph messages retain the exact protected error observation on replay."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import _nodes_tools, graph, tools_impl
 
@@ -2000,9 +2016,7 @@ async def test_postgres_draft_recovery_store_failure_is_uncertain_and_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed recovered-result write reports uncertainty and retains dispatch."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tool_operations, tools_impl
 
@@ -2101,9 +2115,7 @@ async def test_postgres_concurrent_draft_recovery_returns_committed_winner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A completion CAS loser returns the exact committed database winner."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
 
@@ -2194,9 +2206,7 @@ async def test_postgres_uncertain_external_effect_blocks_new_call_id_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A new provider call ID cannot bypass an uncertain same-turn operation."""
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import tools_impl
 
@@ -2278,9 +2288,7 @@ async def test_postgres_errored_external_replay_is_marked_and_counted(
     - ``services/agent/_nodes_tools.py:_execute_single_tool`` (~L759): delete
       ``or result.get("replayed_from_operation")`` → fails on ``assert 0 == 1``.
     """
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    dsn = _test_database_url()
 
     from src.services.agent import _nodes_tools, graph, tools_impl
 
