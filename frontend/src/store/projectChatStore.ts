@@ -10,6 +10,7 @@
  */
 
 import { create } from 'zustand';
+import { captureAccountSession } from '@/lib/account-session';
 import { immer } from 'zustand/middleware/immer';
 import { projectChatService } from '@/services/projectChatService';
 import { useChatStore } from '@/store/chat-store';
@@ -118,6 +119,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
      * Fetch all threads linked to a project
      */
     fetchProjectThreads: async (projectId: string) => {
+      const isCurrentAccount = captureAccountSession();
       // Guard against invalid project IDs
       if (!projectId || projectId === 'undefined') {
         console.warn(
@@ -137,6 +139,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
 
       try {
         const response = await projectChatService.listProjectThreads(projectId);
+        if (!isCurrentAccount()) return;
         if (fetchThreadsSeq[projectId] !== seq) return; // superseded by a newer fetch
 
         set((state) => {
@@ -144,6 +147,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
           state.loadingThreads[projectId] = false;
         });
       } catch (error: any) {
+        if (!isCurrentAccount()) return;
         if (fetchThreadsSeq[projectId] !== seq) return;
         console.error('[ProjectChatStore] fetchProjectThreads failed:', error);
         set((state) => {
@@ -160,6 +164,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
       projectId: string,
       request: StartChatFromProjectRequest
     ) => {
+      const isCurrentAccount = captureAccountSession();
       // Guard against invalid project IDs
       if (!projectId || projectId === 'undefined') {
         console.warn(
@@ -182,6 +187,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
           projectId,
           request
         );
+        if (!isCurrentAccount()) return null;
 
         if (startingChatTokens.get(projectId) === requestToken) {
           set((state) => {
@@ -193,9 +199,11 @@ export const useProjectChatStore = create<ProjectChatState>()(
         // fetchProjectThreads has its own supersession guard, so a stale
         // refresh can't clobber a newer one.
         await get().fetchProjectThreads(projectId);
+        if (!isCurrentAccount()) return null;
 
         return response;
       } catch (error: any) {
+        if (!isCurrentAccount()) return null;
         console.error('[ProjectChatStore] startChatFromProject failed:', error);
         if (startingChatTokens.get(projectId) === requestToken) {
           set((state) => {
@@ -218,6 +226,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
       projectId: string,
       request: LinkThreadRequest
     ) => {
+      const isCurrentAccount = captureAccountSession();
       // Guard against invalid project IDs
       if (!projectId || projectId === 'undefined') {
         console.warn(
@@ -242,6 +251,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
           projectId,
           request
         );
+        if (!isCurrentAccount()) return null;
 
         // Optimistic update - add to local state immediately. Re-linking is
         // idempotent on the backend (returns the existing link), so replace
@@ -277,6 +287,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
 
         return response;
       } catch (error: any) {
+        if (!isCurrentAccount()) return null;
         // The backend link endpoint is idempotent (upsert) and never returns
         // 409, so re-linking an already-attached thread succeeds rather than
         // erroring. Any error reaching here is a real failure (400 same-
@@ -304,6 +315,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
      * Unlink a thread from a project
      */
     unlinkThreadFromProject: async (projectId: string, threadId: string) => {
+      const isCurrentAccount = captureAccountSession();
       // Guard against invalid project IDs
       if (!projectId || projectId === 'undefined') {
         console.warn(
@@ -325,6 +337,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
 
       try {
         await projectChatService.unlinkThreadFromProject(projectId, threadId);
+        if (!isCurrentAccount()) return;
 
         // Optimistic update - remove from local state immediately. Reflects
         // genuine backend state regardless of call ordering, so it's
@@ -354,13 +367,15 @@ export const useProjectChatStore = create<ProjectChatState>()(
           useChatStore.getState().setThreadProjectBinding(threadId, null);
         }
       } catch (error: any) {
+        if (!isCurrentAccount()) return;
         console.error(
           '[ProjectChatStore] unlinkThreadFromProject failed:',
           error
         );
         if (unlinkingThreadTokens.get(projectId) === requestToken) {
           set((state) => {
-            state.errors[projectId] = error?.message || 'Failed to unlink thread';
+            state.errors[projectId] =
+              error?.message || 'Failed to unlink thread';
             state.unlinkingThread[projectId] = false;
           });
         }
@@ -381,6 +396,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
       projectId: string,
       request: SaveThreadToNoteRequest
     ) => {
+      const isCurrentAccount = captureAccountSession();
       // Guard against invalid project IDs
       if (!projectId || projectId === 'undefined') {
         console.warn(
@@ -403,6 +419,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
           projectId,
           request
         );
+        if (!isCurrentAccount()) return null;
 
         if (savingToNoteTokens.get(projectId) === requestToken) {
           set((state) => {
@@ -412,6 +429,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
 
         return response;
       } catch (error: any) {
+        if (!isCurrentAccount()) return null;
         console.error('[ProjectChatStore] saveThreadToNote failed:', error);
         if (savingToNoteTokens.get(projectId) === requestToken) {
           set((state) => {
@@ -441,6 +459,13 @@ export const useProjectChatStore = create<ProjectChatState>()(
      * Reset entire store to initial state
      */
     reset: () => {
+      for (const key of Object.keys(fetchThreadsSeq))
+        delete fetchThreadsSeq[key];
+      startingChatTokens.clear();
+      linkingThreadTokens.clear();
+      unlinkingThreadTokens.clear();
+      savingToNoteTokens.clear();
+      threadBindingTokens.clear();
       set(initialState);
     },
   }))

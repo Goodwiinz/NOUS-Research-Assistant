@@ -1192,28 +1192,11 @@ async def reprocess_document(
     """
     validate_uuid(document_id, "document_id")
 
-    stmt = select(Document).where(
-        Document.id == document_id,
-        Document.organization_id == organization.id,
-        Document.is_deleted == False,
+    from src.services.documents.file_service import FileService
+
+    document = await FileService(db).lock_document_for_reprocessing(
+        document_id, organization.id, current_user
     )
-    result = await db.execute(stmt)
-    document = result.scalars().first()
-
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        )
-
-    # Check permissions
-    if (
-        document.uploaded_by_user_id != current_user.id
-        and not current_user.has_permission(UserRole.ADMIN)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Can only reprocess your own documents or require admin role",
-        )
 
     # Check if reprocessing is needed
     if document.processing_status == ProcessingStatus.COMPLETED and not force_reprocess:

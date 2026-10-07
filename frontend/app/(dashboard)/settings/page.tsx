@@ -9,6 +9,7 @@ import {
   Clock3,
   KeyRound,
   HardDrive,
+  Laptop,
   UserCog,
   UserCircle2,
 } from 'lucide-react';
@@ -167,6 +168,13 @@ export default function SettingsPage(): ReactElement {
   ];
 
   const settingsCards: SettingsCardItem[] = [
+    {
+      title: 'Connected devices',
+      description: 'Review coding devices and revoke their project access.',
+      href: '/integrations/devices',
+      cta: 'Manage connected devices',
+      icon: Laptop,
+    },
     {
       title: 'Workspace and organization',
       description:

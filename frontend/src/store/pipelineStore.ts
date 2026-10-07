@@ -23,6 +23,7 @@ interface PipelineStore {
   ) => Promise<void>;
   resetPipeline: (projectId: string) => Promise<void>;
   clearError: () => void;
+  reset: () => void;
 }
 
 // Identity for the in-flight pipeline fetch. Module scope (outside the store)
@@ -77,7 +78,11 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
         completed_steps: completedSteps,
         invalidated_steps: invalidatedSteps,
       });
-      if (pipelineRequestToken !== requestToken || updated.project_id !== projectId) return; // superseded
+      if (
+        pipelineRequestToken !== requestToken ||
+        updated.project_id !== projectId
+      )
+        return; // superseded
       set({ pipeline: updated });
     } catch (err) {
       if (pipelineRequestToken !== requestToken) return; // superseded
@@ -104,7 +109,11 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
         current_step: nextStep,
         skipped_steps: skippedSteps,
       });
-      if (pipelineRequestToken !== requestToken || updated.project_id !== projectId) return; // superseded
+      if (
+        pipelineRequestToken !== requestToken ||
+        updated.project_id !== projectId
+      )
+        return; // superseded
       set({ pipeline: updated });
     } catch (err) {
       if (pipelineRequestToken !== requestToken) return; // superseded
@@ -123,7 +132,11 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       const updated = await scispaceService.updatePipeline(projectId, {
         current_step: step,
       });
-      if (pipelineRequestToken !== requestToken || updated.project_id !== projectId) return; // superseded
+      if (
+        pipelineRequestToken !== requestToken ||
+        updated.project_id !== projectId
+      )
+        return; // superseded
       set({ pipeline: updated });
     } catch (err) {
       if (pipelineRequestToken !== requestToken) return; // superseded
@@ -146,7 +159,11 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
       const updated = await scispaceService.updatePipeline(projectId, {
         step_data: { [String(step)]: data },
       });
-      if (pipelineRequestToken !== requestToken || updated.project_id !== projectId) return; // superseded
+      if (
+        pipelineRequestToken !== requestToken ||
+        updated.project_id !== projectId
+      )
+        return; // superseded
       set({ pipeline: updated });
     } catch (err) {
       if (pipelineRequestToken !== requestToken) return; // superseded
@@ -163,7 +180,11 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const pipeline = await scispaceService.resetPipeline(projectId);
-      if (pipelineRequestToken !== requestToken || pipeline.project_id !== projectId) return; // superseded
+      if (
+        pipelineRequestToken !== requestToken ||
+        pipeline.project_id !== projectId
+      )
+        return; // superseded
       set({ pipeline, loading: false });
     } catch (err) {
       if (pipelineRequestToken !== requestToken) return; // superseded
@@ -174,4 +195,8 @@ export const usePipelineStore = create<PipelineStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+  reset: () => {
+    pipelineRequestToken = {};
+    set({ pipeline: null, loading: false, error: null });
+  },
 }));
