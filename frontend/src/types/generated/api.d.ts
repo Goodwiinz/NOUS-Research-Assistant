@@ -11100,6 +11100,10 @@ export interface components {
          * @description What the interactive owner sees before deciding: the exact stored target.
          */
         ActionReview: {
+            /** Arguments */
+            arguments: {
+                [key: string]: unknown;
+            };
             /** Content */
             content: string;
             /** Decided At */
@@ -11128,6 +11132,8 @@ export interface components {
              * @enum {string}
              */
             state: "awaiting_approval" | "approved" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+            /** Summary */
+            summary: string;
             /** Tags */
             tags: string[];
             /** Title */

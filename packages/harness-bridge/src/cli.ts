@@ -593,13 +593,11 @@ function mcpSession(
     state.scopes?.includes("artifacts:publish")
       ? { outputRoot }
       : {}),
-    // request_action creates a note in the granted project. A workspace grant
-    // has none and NOUS answers 422 to every request it makes, so the tool is
-    // not offered there: library actions get their own target in Plan 07
-    // slice 3, switched on by `library`, not by this flag.
-    ...(state.workspaceId === undefined && state.scopes?.includes("tools:write")
-      ? { actions: true }
-      : {}),
+    // `actions` offers request_action to a grant holding tools:write, on either
+    // binding: a project grant for notes and library actions, a workspace grant
+    // for library actions (NOUS answers 422 to a note there). Without
+    // library:write each one waits for the user's approval.
+    ...(state.scopes?.includes("tools:write") ? { actions: true } : {}),
     ...(state.scopes?.includes("handoff:write") ? { handoff: true } : {}),
     ...(state.scopes?.includes("library:write") ? { library: true } : {}),
     // read_selected_context reads the memories chosen for the granted project.
@@ -890,7 +888,7 @@ const help = `Usage: nous-harness connect --api https://host/api/v1 (--project U
   nous-harness handoff discard HANDOFF_ID    Drop one journaled save (pending, conflicted or rejected) and print what was dropped.
   nous-harness disconnect    Revoke this device's NOUS access and remove its local credentials.
   nous-harness mcp install [--root PATH]    Print the Codex command that registers NOUS tools for a --tools connection; --root picks the publish folder.
-  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff] [--library] [--context]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action, --handoff enables the chat handoff tools, --library marks a library:write grant, --context enables read_selected_context.
+  nous-harness mcp --api URL --session HANDLE [--store PATH] [--root PATH] [--actions] [--handoff] [--library] [--context]    Serve NOUS tools over stdio (Codex launches this); --root enables artifacts_publish, --actions enables request_action and get_action_status for a tools:write grant, --handoff enables the chat handoff tools, --library enables them for a library:write grant too, --context enables read_selected_context.
   nous-harness recover-interrupt [--command UUID] [--store PATH]
 List uncertain interrupt IDs, or recover exactly one after a verified reboot on the same machine.
 Stop the bridge, run recovery once to record any missing legacy boot baseline, wait at least ten seconds, and reboot this machine.

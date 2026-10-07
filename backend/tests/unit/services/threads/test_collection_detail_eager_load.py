@@ -14,12 +14,14 @@ import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from src.api.threads.workspace_routes.presenters import _collection_to_detail_response
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document, DocumentType
+from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.services.threads import collection_service, workspace_access
 
@@ -35,6 +37,7 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], 
     )
     async with engine.begin() as conn:
         for model in (
+            User,
             Workspace,
             WorkspaceMember,
             Collection,
@@ -57,6 +60,12 @@ async def _seed(
     user_id, organization_id = uuid.uuid4(), uuid.uuid4()
     collection_id, document_id = uuid.uuid4(), uuid.uuid4()
     async with session_factory() as db:
+        await db.execute(
+            text(
+                "INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role, is_active, login_count, created_at, updated_at, is_deleted) VALUES (:id, :org, 'owner@example.test', 'unused', 'Test', 'User', 'USER', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+            ),
+            {"id": str(user_id), "org": str(organization_id)},
+        )
         workspace = Workspace(
             id=uuid.uuid4(),
             name="ws",

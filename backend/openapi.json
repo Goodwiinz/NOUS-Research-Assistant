@@ -192,6 +192,11 @@
       "ActionReview": {
         "description": "What the interactive owner sees before deciding: the exact stored target.",
         "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
           "content": {
             "title": "Content",
             "type": "string"
@@ -278,6 +283,10 @@
             "title": "State",
             "type": "string"
           },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
           "tags": {
             "items": {
               "type": "string"
@@ -321,6 +330,8 @@
           "invocation_id",
           "state",
           "tool_name",
+          "summary",
+          "arguments",
           "project_id",
           "project_label",
           "project_available",

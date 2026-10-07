@@ -165,6 +165,21 @@ async def test_scope_cannot_be_broadened(db: AsyncSession, issued: Any) -> None:
         )
 
 
+async def test_a_route_may_accept_any_one_of_several_scopes(
+    db: AsyncSession, issued: Any
+) -> None:
+    # `issued` holds tools:read alone. A tuple admits a grant holding any one
+    # of its scopes (the action routes: tools:write or library:write).
+    ctx = await resolve_integration_context(
+        db, issued.token, required_scope=("tools:write", "tools:read")
+    )
+    assert ctx.grant_id == issued.grant_id
+    assert ctx.scopes == frozenset({"tools:read"})
+    for scopes in (("tools:write", "library:write"), ()):
+        with pytest.raises(IntegrationAccessDenied):
+            await resolve_integration_context(db, issued.token, required_scope=scopes)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [("user_id", uuid4()), ("organization_id", uuid4()), ("project_id", uuid4())],

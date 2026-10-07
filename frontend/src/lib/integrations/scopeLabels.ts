@@ -14,8 +14,10 @@ const LABELS: Record<string, string> = {
   'handoff:write':
     'Save a handoff for this chat (goal, decisions, remaining work and results)',
   'library:read': 'List the folders (projects) in this workspace',
+  // update_document_metadata runs without asking too, and edits the paper
+  // itself, so the sentence names it and where the change shows.
   'library:write':
-    'Add, remove, move and rename items in this workspace without asking each time. Deleting folders and ingesting papers still require your approval.',
+    'Add, remove, move and rename items in this workspace, and change the title and tags of a paper in it (including removing every tag), without asking each time. An edited paper changes everywhere it appears. Deleting folders and ingesting papers still require your approval.',
 };
 
 // Own keys only: a scope named like an Object.prototype member ("constructor")

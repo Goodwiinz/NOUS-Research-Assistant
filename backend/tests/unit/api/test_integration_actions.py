@@ -29,6 +29,10 @@ CLI_HEADERS = {
     "Authorization": "Bearer cli-jwt",
     "X-NOUS-Integration-Grant": "opaque-grant",
 }
+# Either write scope admits a caller to the action routes; request_action then
+# checks the scope each action needs.
+WRITE_SCOPES = ("tools:write", "library:write")
+GRANT_SCOPES = frozenset({"tools:read", "tools:write", "library:read", "library:write"})
 BODY: dict[str, Any] = {
     "tool_name": "create_project_note",
     "arguments": {"title": "t", "content": "c"},
@@ -50,7 +54,7 @@ async def _completed(value: Any) -> Any:
 
 @pytest.fixture
 def calls() -> dict[str, list[Any]]:
-    return {"request": [], "decide": [], "status": [], "review": []}
+    return {"request": [], "decide": [], "status": [], "review": [], "resolve": []}
 
 
 @pytest.fixture
@@ -61,11 +65,16 @@ def app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]) -> FastAPI
 
     monkeypatch.setattr(settings, "NOUS_MCP_ENABLED", True)
 
-    async def resolve(_db: Any, token: str, *, required_scope: str) -> Any:
-        if token != "opaque-grant" or required_scope != "tools:write":
+    async def resolve(_db: Any, token: str, *, required_scope: Any) -> Any:
+        calls["resolve"].append(required_scope)
+        if token != "opaque-grant" or required_scope != WRITE_SCOPES:
             raise IntegrationAccessDenied()
         return IntegrationContext(
-            user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=GRANT
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            grant_id=GRANT,
+            scopes=GRANT_SCOPES,
         )
 
     monkeypatch.setattr(
@@ -93,6 +102,8 @@ def app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]) -> FastAPI
                 invocation_id=INVOCATION,
                 state="awaiting_approval",
                 tool_name="create_project_note",
+                summary="Create note “t” in project “Project”",
+                arguments={"title": "t", "content": "c", "tags": []},
                 project_id=PROJECT,
                 project_label="Project",
                 project_available=True,
@@ -162,8 +173,8 @@ def test_workspace_grant_actor_carries_its_workspace_binding(
     calls: dict[str, list[Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def resolve_workspace(_db: Any, token: str, *, required_scope: str) -> Any:
-        if token != "opaque-grant" or required_scope != "tools:write":
+    async def resolve_workspace(_db: Any, token: str, *, required_scope: Any) -> Any:
+        if token != "opaque-grant" or required_scope != WRITE_SCOPES:
             raise IntegrationAccessDenied()
         return IntegrationContext(
             user_id=USER,
@@ -235,6 +246,9 @@ def test_review_is_browser_only(
     ok = client.get(path, headers={"Authorization": "Bearer browser"})
     assert ok.status_code == 200
     assert ok.json()["title"] == "t" and ok.json()["project_label"] == "Project"
+    # The sentence and the stored arguments the page shows travel as given.
+    assert ok.json()["summary"] == "Create note “t” in project “Project”"
+    assert ok.json()["arguments"] == {"title": "t", "content": "c", "tags": []}
     assert calls["review"][0][1] == INVOCATION
 
 
@@ -340,3 +354,35 @@ def test_argument_errors_are_422_with_the_stable_reason(
     )
     assert real.status_code == 422
     assert real.json()["detail"] == "identity arguments are not accepted"
+
+
+def test_either_write_scope_admits_and_the_actor_carries_the_grant_scopes(
+    client: TestClient, calls: dict[str, list[Any]]
+) -> None:
+    created = client.post(
+        "/api/v1/integrations/actions", json=BODY, headers=CLI_HEADERS
+    )
+    assert created.status_code == 200
+    # One grant lookup that accepts tools:write or library:write ...
+    assert calls["resolve"] == [WRITE_SCOPES]
+    # ... and the service gets every scope of that grant to check per action.
+    actor, _invocation = calls["request"][0]
+    assert actor.scopes == GRANT_SCOPES
+    read = client.get(f"/api/v1/integrations/actions/{INVOCATION}", headers=CLI_HEADERS)
+    assert read.status_code == 200
+    assert calls["resolve"] == [WRITE_SCOPES, WRITE_SCOPES]
+
+
+def test_an_action_out_of_the_grants_reach_is_a_stable_403(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api.integrations import actions
+
+    monkeypatch.setattr(
+        actions,
+        "request_action",
+        lambda *_a, **_k: _completed(IntegrationAccessDenied("foreign project")),
+    )
+    denied = client.post("/api/v1/integrations/actions", json=BODY, headers=CLI_HEADERS)
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Integration access denied"
