@@ -112,7 +112,10 @@ describe('useChatSession overlay parking', () => {
     // while it is the streaming thread. Nine is one past MAX_PARKED_THREADS.
     for (let i = 1; i <= 9; i += 1) {
       await act(async () => {
-        useChatStore.setState({ streamingThreadId: null, currentThreadId: `thread-${i}` });
+        useChatStore.setState({
+          streamingThreadId: null,
+          currentThreadId: `thread-${i}`,
+        });
       });
       await act(async () => {
         result.current.setMessages([
@@ -137,9 +140,41 @@ describe('useChatSession overlay parking', () => {
     // it. A bare `.set` on this path bypassed eviction, so the map grew for the
     // whole session and overlay 1 came back.
     await act(async () => {
-      useChatStore.setState({ streamingThreadId: null, currentThreadId: 'thread-1' });
+      useChatStore.setState({
+        streamingThreadId: null,
+        currentThreadId: 'thread-1',
+      });
     });
 
     expect(result.current.messages).toHaveLength(0);
+  });
+  it('clears A parked overlays when the account resets before the same thread is reopened', async () => {
+    const { result } = renderHook(() => useChatSession());
+    await act(async () => {
+      useChatStore.setState({ currentThreadId: 'shared-thread' });
+    });
+    await act(async () => {
+      result.current.setMessages([
+        makeChatPageMessage({
+          id: 'A-private',
+          role: 'user',
+          content: 'A unsaved draft',
+          source: 'optimistic',
+        }),
+      ]);
+    });
+    await act(async () => {
+      useChatStore.setState({
+        streamingThreadId: 'shared-thread',
+        currentThreadId: 'other-thread',
+      });
+    });
+    await act(async () => {
+      useChatStore.getState().reset();
+    });
+    await act(async () => {
+      useChatStore.setState({ currentThreadId: 'shared-thread' });
+    });
+    expect(result.current.messages).toEqual([]);
   });
 });

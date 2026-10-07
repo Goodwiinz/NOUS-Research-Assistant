@@ -146,7 +146,11 @@ export const useChatStore = create<ChatStore>()(
 // ============================================================================
 
 export type { MessageFreshness, RefreshExpectation } from './chat/types';
-export { captureChatSession, onChatSessionReset } from './chat/requestCoordinator';
+export {
+  captureChatSession,
+  onChatSessionReset,
+  getChatSessionSignal,
+} from './chat/requestCoordinator';
 
 // ============================================================================
 // Selectors (compatibility re-exports)

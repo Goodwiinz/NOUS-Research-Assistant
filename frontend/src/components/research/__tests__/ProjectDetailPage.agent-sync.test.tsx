@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@/test/test-utils';
+import { resetAccountSession } from '@/lib/account-session';
 import { useAgentChatStore } from '@/store/agentChatStore';
 import ProjectDetailPage from '../../../../app/(dashboard)/projects/[id]/page';
 import { useProjectStore } from '@/store/projectStore';
@@ -48,7 +49,24 @@ vi.mock('@/components/research/DocumentList', () => ({
   DocumentList: () => <div>Documents Content</div>,
 }));
 vi.mock('@/components/research/DraftGenerator', () => ({
-  DraftGenerator: () => <div>Draft Generator</div>,
+  DraftGenerator: ({
+    onGenerate,
+  }: {
+    onGenerate: (config: unknown) => void;
+  }) => (
+    <button
+      onClick={() =>
+        onGenerate({
+          themes: ['A private theme'],
+          style: 'academic',
+          maxSections: 2,
+          includeAbstract: true,
+        })
+      }
+    >
+      Draft Generator
+    </button>
+  ),
 }));
 vi.mock('@/components/research/DraftViewer', () => ({
   DraftViewer: ({ draft }: { draft: { title: string } }) => (
@@ -378,4 +396,42 @@ describe('ProjectDetailPage agent sync', () => {
 
     expect(await screen.findByText('Project Skills Tab')).toBeInTheDocument();
   });
+  it.each(['resolve', 'reject'] as const)(
+    'stops draft polling after account reset when A poll %s',
+    async (outcome) => {
+      mockProjectService.generateDraft.mockResolvedValue({
+        task_id: 'A-task',
+      } as never);
+      let resolve!: (value: never) => void;
+      let reject!: (error: Error) => void;
+      mockProjectService.getGenerationStatus.mockReturnValueOnce(
+        new Promise((yes, no) => {
+          resolve = yes;
+          reject = no;
+        })
+      );
+      render(<ProjectDetailPage />);
+      fireEvent.click(await screen.findByRole('tab', { name: /drafts/i }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Draft Generator' })
+      );
+      await waitFor(() =>
+        expect(mockProjectService.getGenerationStatus).toHaveBeenCalledOnce()
+      );
+      vi.useFakeTimers();
+      try {
+        act(() => {
+          resetAccountSession();
+        });
+        await act(async () => {
+          if (outcome === 'resolve') resolve({ status: 'running' } as never);
+          else reject(new Error('A poll failed'));
+          await vi.advanceTimersByTimeAsync(2500);
+        });
+        expect(mockProjectService.getGenerationStatus).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 });

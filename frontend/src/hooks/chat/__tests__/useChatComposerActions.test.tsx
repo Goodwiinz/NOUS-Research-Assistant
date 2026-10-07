@@ -6,6 +6,7 @@ import {
   type UseChatComposerActionsReturn,
 } from '@/hooks/chat/useChatComposerActions';
 import { makeChatPageMessage } from '@/test/chatMessageFactory';
+import { useChatStore } from '@/store/chat-store';
 import type { Workspace } from '@/types/workspace';
 
 const toastErrorMock = vi.fn();
@@ -36,8 +37,18 @@ function setup(overrides: Record<string, unknown> = {}): {
     isLoading: false,
     storeIsStreaming: false,
     displayedMessages: [
-      makeChatPageMessage({ id: 'u1', role: 'user', content: 'first turn', timestamp: 1 }),
-      makeChatPageMessage({ id: 'a1', role: 'assistant', content: 'first reply', timestamp: 2 }),
+      makeChatPageMessage({
+        id: 'u1',
+        role: 'user',
+        content: 'first turn',
+        timestamp: 1,
+      }),
+      makeChatPageMessage({
+        id: 'a1',
+        role: 'assistant',
+        content: 'first reply',
+        timestamp: 2,
+      }),
     ],
     ...overrides,
   };
@@ -140,10 +151,30 @@ describe('useChatComposerActions', () => {
     function setupFour(): ReturnType<typeof setup> {
       return setup({
         displayedMessages: [
-          makeChatPageMessage({ id: 'u1', role: 'user', content: 'first', timestamp: 1 }),
-          makeChatPageMessage({ id: 'a1', role: 'assistant', content: 'reply 1', timestamp: 2 }),
-          makeChatPageMessage({ id: 'u2', role: 'user', content: 'second', timestamp: 3 }),
-          makeChatPageMessage({ id: 'a2', role: 'assistant', content: 'reply 2', timestamp: 4 }),
+          makeChatPageMessage({
+            id: 'u1',
+            role: 'user',
+            content: 'first',
+            timestamp: 1,
+          }),
+          makeChatPageMessage({
+            id: 'a1',
+            role: 'assistant',
+            content: 'reply 1',
+            timestamp: 2,
+          }),
+          makeChatPageMessage({
+            id: 'u2',
+            role: 'user',
+            content: 'second',
+            timestamp: 3,
+          }),
+          makeChatPageMessage({
+            id: 'a2',
+            role: 'assistant',
+            content: 'reply 2',
+            timestamp: 4,
+          }),
         ],
       });
     }
@@ -152,10 +183,30 @@ describe('useChatComposerActions', () => {
       const { result, handleSubmit } = setup({
         storeIsStreaming: true,
         displayedMessages: [
-          makeChatPageMessage({ id: 'u1', role: 'user', content: 'first', timestamp: 1 }),
-          makeChatPageMessage({ id: 'a1', role: 'assistant', content: 'reply 1', timestamp: 2 }),
-          makeChatPageMessage({ id: 'u2', role: 'user', content: 'second', timestamp: 3 }),
-          makeChatPageMessage({ id: 'a2', role: 'assistant', content: 'reply 2', timestamp: 4 }),
+          makeChatPageMessage({
+            id: 'u1',
+            role: 'user',
+            content: 'first',
+            timestamp: 1,
+          }),
+          makeChatPageMessage({
+            id: 'a1',
+            role: 'assistant',
+            content: 'reply 1',
+            timestamp: 2,
+          }),
+          makeChatPageMessage({
+            id: 'u2',
+            role: 'user',
+            content: 'second',
+            timestamp: 3,
+          }),
+          makeChatPageMessage({
+            id: 'a2',
+            role: 'assistant',
+            content: 'reply 2',
+            timestamp: 4,
+          }),
         ],
       });
       act(() => {
@@ -187,10 +238,9 @@ describe('useChatComposerActions', () => {
       expect(handleSubmit).toHaveBeenCalledTimes(1);
       const [, historyOverride] = handleSubmit.mock.calls[0];
       expect(historyOverride).toHaveLength(2);
-      expect(historyOverride.map((m: { content: string }) => m.content)).toEqual([
-        'first',
-        'reply 1',
-      ]);
+      expect(
+        historyOverride.map((m: { content: string }) => m.content)
+      ).toEqual(['first', 'reply 1']);
     });
 
     it('names the edited turn as superseded when it has a persisted cmid', async () => {
@@ -199,8 +249,18 @@ describe('useChatComposerActions', () => {
       const cmid = '11111111-1111-4111-8111-111111111111';
       const { result, handleSubmit } = setup({
         displayedMessages: [
-          makeChatPageMessage({ id: 'u1', role: 'user', content: 'first', timestamp: 1 }),
-          makeChatPageMessage({ id: 'a1', role: 'assistant', content: 'reply 1', timestamp: 2 }),
+          makeChatPageMessage({
+            id: 'u1',
+            role: 'user',
+            content: 'first',
+            timestamp: 1,
+          }),
+          makeChatPageMessage({
+            id: 'a1',
+            role: 'assistant',
+            content: 'reply 1',
+            timestamp: 2,
+          }),
           makeChatPageMessage({
             id: 'u2',
             role: 'user',
@@ -208,7 +268,12 @@ describe('useChatComposerActions', () => {
             timestamp: 3,
             clientMessageId: cmid,
           }),
-          makeChatPageMessage({ id: 'a2', role: 'assistant', content: 'reply 2', timestamp: 4 }),
+          makeChatPageMessage({
+            id: 'a2',
+            role: 'assistant',
+            content: 'reply 2',
+            timestamp: 4,
+          }),
         ],
       });
 
@@ -321,4 +386,23 @@ describe('useChatComposerActions', () => {
       'No workspace available — attachment was not uploaded.'
     );
   });
+});
+
+describe('account lifetime of queued composer actions', () => {
+  it.each(['edit', 'regenerate'] as const)(
+    'drops a queued %s across account reset',
+    async (action) => {
+      const { result, handleSubmit } = setup();
+      act(() => {
+        if (action === 'edit')
+          result.current.handleEditUserMessage(0, 'A private revision');
+        else result.current.handleRegenerate(1);
+        useChatStore.getState().reset();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(handleSubmit).not.toHaveBeenCalled();
+    }
+  );
 });
