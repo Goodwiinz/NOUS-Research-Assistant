@@ -9,11 +9,12 @@ nothing, and every request from the victim returned 401
 "User not found or inactive". The attacker could also show the victim's
 address to collaborators.
 
-``users.email`` is now owned by the identity provider. It is written once, at
-JIT provisioning, from the verified token. The ``email`` field stays in the
-request schema so the OpenAPI contract does not break, but only an echo of the
-caller's current address (compared case-insensitively) is accepted. Any other
-value rejects the WHOLE request with 400 before anything is written.
+``users.email`` is now owned by the identity provider. It is initialized at JIT
+provisioning and reconciled from the provider's current confirmed account when
+it changes. The ``email`` field stays in the request schema so the OpenAPI
+contract does not break, but only an echo of the caller's current address
+(compared case-insensitively) is accepted. Any other value rejects the WHOLE
+request with 400 before anything is written.
 """
 
 from __future__ import annotations
@@ -167,9 +168,13 @@ def test_service_no_longer_accepts_an_email_argument() -> None:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_verified_supabase_email_change_syncs_by_subject_id(
-    user: User, db: AsyncMock
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A changed provider email is reconciled before /auth/me sees the user."""
+    """The current provider email is reconciled before /auth/me sees the user."""
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "new-owner@example.com",
+    )
     result = MagicMock()
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
@@ -183,10 +188,58 @@ async def test_verified_supabase_email_change_syncs_by_subject_id(
 
 
 @pytest.mark.unit
-def test_profile_accepts_the_email_from_the_verified_provider_token(
-    user: User, db: AsyncMock
+@pytest.mark.asyncio
+async def test_stale_supabase_claim_cannot_roll_email_back(
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The auth dependency reconciles the provider value before route checks."""
+    """JWT A must not overwrite the provider's current address B."""
+    user.email = "intermediate@example.com"
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "current@example.com",
+    )
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
+    token_data = TokenData(user_id=str(user.id), email=OWNER_EMAIL)
+
+    current_user = await get_current_user(token_data, db)
+
+    assert current_user is user
+    assert user.email == "current@example.com"
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_provider_lookup_failure_leaves_email_unchanged(
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token claim alone is never enough to change the stored address."""
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", lambda _user_id: None
+    )
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
+    token_data = TokenData(user_id=str(user.id), email=VICTIM_EMAIL)
+
+    current_user = await get_current_user(token_data, db)
+
+    assert current_user is user
+    assert user.email == OWNER_EMAIL
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+def test_profile_accepts_the_email_from_the_current_provider_record(
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The auth dependency reconciles current provider state before route checks."""
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "new-owner@example.com",
+    )
     result = MagicMock()
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
@@ -231,9 +284,16 @@ async def test_stale_cli_email_cannot_overwrite_provider_email(
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_verified_email_conflict_keeps_user_bound_to_subject(
-    user: User, db: AsyncMock, caplog: pytest.LogCaptureFixture
+    user: User,
+    db: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A unique-email collision fails closed without looking up by email."""
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: VICTIM_EMAIL,
+    )
     current_result = MagicMock()
     current_result.scalars.return_value.first.return_value = user
     restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
@@ -243,7 +303,7 @@ async def test_verified_email_conflict_keeps_user_bound_to_subject(
     db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
     token_data = TokenData(user_id=str(user.id), email=VICTIM_EMAIL)
 
-    with caplog.at_level("WARNING", logger="src.core.user_provisioning"):
+    with caplog.at_level("WARNING", logger="src.services.security.auth_service"):
         current_user = await get_current_user(token_data, db)
 
     assert current_user is restored_user

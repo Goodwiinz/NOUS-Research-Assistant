@@ -6,13 +6,16 @@ reset. This service provides profile management, admin operations, and user
 statistics.
 """
 
+import asyncio
 import inspect
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.core.database import get_db
 from src.models.user import User, UserRole
@@ -200,6 +203,50 @@ class AuthService:
         await self.db.commit()
         await self.db.refresh(user)
 
+        return user
+
+    async def sync_user_email_from_provider(
+        self, user: User, token_email: str
+    ) -> Optional[User]:
+        """Persist a changed email only after confirming GoTrue's current value.
+
+        Access-token claims may be stale, so they are only a signal to perform
+        the provider lookup. This service owns commit/rollback and never adopts
+        another row by email if the unique constraint detects a collision.
+        """
+        claimed_email = token_email.strip().lower()
+        if not claimed_email or user.email.lower() == claimed_email:
+            return user
+
+        from src.core.user_provisioning import get_verified_supabase_email
+
+        provider_email = await asyncio.to_thread(
+            get_verified_supabase_email, str(user.id)
+        )
+        if not provider_email or user.email.lower() == provider_email:
+            return user
+
+        subject_id = str(user.id)
+        user.email = provider_email
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            result = await self.db.execute(
+                select(User)
+                .options(selectinload(User.organization))
+                .where(
+                    User.id == user.id,
+                    User.is_active == True,
+                    User.is_deleted == False,
+                )
+            )
+            user = result.scalars().first()
+            logger.warning(
+                "Current provider email sync for user %s conflicts with another "
+                "account; operator reconciliation required",
+                subject_id,
+            )
         return user
 
     async def update_user_role(

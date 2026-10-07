@@ -46,46 +46,34 @@ async def ensure_user_and_org(
     return await _create_user(db, token_data, org)
 
 
-async def sync_user_email_from_supabase_token(
-    db: AsyncSession,
-    user: User,
-    token_data: TokenData,
-) -> Optional[User]:
-    """Reconcile an existing subject's email from a verified Supabase JWT.
+def get_verified_supabase_email(user_id: str) -> Optional[str]:
+    """Return the provider's current confirmed email for a subject.
 
-    Locally issued CLI tokens carry a snapshot of the email from when they were
-    minted, so they are deliberately not a source for synchronization. If the
-    verified provider address is held by another row, preserve the subject-id
-    identity, roll back the failed update, and leave the collision for operator
-    reconciliation. Never adopt a row by email.
+    JWT email claims are snapshots and can outlive an address change. This
+    server-side admin lookup is used only when a non-CLI token's claim differs
+    from the stored profile. Keep the network operation synchronous here so
+    callers can move it to a worker thread without blocking the event loop.
     """
-    provider_email = token_data.email.strip().lower() if token_data.email else ""
-    if token_data.is_cli or not provider_email or user.email.lower() == provider_email:
-        return user
+    from src.core.supabase_client import get_supabase_client
 
-    user.email = provider_email
+    client = get_supabase_client()
+    if client is None:
+        return None
+
     try:
-        # Authenticated dependencies run before route handlers; commit this
-        # provider-owned identity update so the next API response sees it.
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        result = await db.execute(
-            select(User)
-            .options(selectinload(User.organization))
-            .where(
-                User.id == token_data.user_id,
-                User.is_active == True,
-                User.is_deleted == False,
-            )
-        )
-        user = result.scalars().first()
+        response = client.auth.admin.get_user_by_id(user_id)
+        provider_user = response.user
+        if provider_user is None or provider_user.email_confirmed_at is None:
+            return None
+        email = (provider_user.email or "").strip().lower()
+        return email or None
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "Verified email sync for user %s conflicts with another account; "
-            "operator reconciliation required",
-            token_data.user_id,
+            "Current Supabase email lookup failed for user %s: %s",
+            user_id,
+            type(exc).__name__,
         )
-    return user
+        return None
 
 
 async def _resolve_or_create_org(
