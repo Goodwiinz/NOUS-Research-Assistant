@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -578,6 +579,89 @@ async def test_pending_review_is_owner_scoped_and_same_org_does_not_grant_access
             ),
         )
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_pending_review_requires_current_mapped_project_access(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner_id, _organization_id, run, _step = await _seed_gate(db)
+    project = (
+        await db.execute(
+            select(ResearchProject)
+            .join(ResearchBlueprint, ResearchBlueprint.project_id == ResearchProject.id)
+            .where(ResearchBlueprint.id == run.blueprint_id)
+        )
+    ).scalar_one()
+    project.collection_id = uuid4()
+    await db.commit()
+    require_access = AsyncMock(
+        side_effect=HTTPException(status_code=404, detail="Run not found")
+    )
+    service_module = _review_module()
+    monkeypatch.setattr(service_module, "_require_mapped_run_access", require_access)
+
+    with pytest.raises(HTTPException) as error:
+        await service_module.ResearchReviewService(db).get_pending_review(
+            run_id=run.id,
+            owner_id=owner_id,
+        )
+
+    assert error.value.status_code == 404
+    require_access.assert_awaited_once_with(
+        db,
+        run.id,
+        owner_id,
+        "view",
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_review_rechecks_current_mapped_project_access_in_transaction(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner_id, organization_id, run, step = await _seed_gate(db)
+    run_id = run.id
+    step_index = step.step_index
+    project = (
+        await db.execute(
+            select(ResearchProject)
+            .join(ResearchBlueprint, ResearchBlueprint.project_id == ResearchProject.id)
+            .where(ResearchBlueprint.id == run.blueprint_id)
+        )
+    ).scalar_one()
+    project.collection_id = uuid4()
+    await db.commit()
+    require_access = AsyncMock(
+        side_effect=HTTPException(status_code=404, detail="Run not found")
+    )
+    service_module = _review_module()
+    monkeypatch.setattr(service_module, "_require_mapped_run_access", require_access)
+
+    with pytest.raises(HTTPException) as error:
+        await service_module.ResearchReviewService(db).submit_review(
+            run_id=run_id,
+            step_index=step_index,
+            owner_id=owner_id,
+            organization_id=organization_id,
+            reviewer_id=owner_id,
+            request=_request(
+                kind="screening",
+                output_hash=canonical_stage_output_hash(_screen_output()),
+                payload=_screen_payload(),
+            ),
+        )
+
+    assert error.value.status_code == 404
+    require_access.assert_awaited_once_with(
+        db,
+        run_id,
+        owner_id,
+        "edit",
+    )
+    assert (
+        await db.execute(select(func.count()).select_from(ResearchStageReview))
+    ).scalar_one() == 0
 
 
 @pytest.mark.asyncio

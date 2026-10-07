@@ -45,6 +45,19 @@ from src.services.research_engine.observability import (
 )
 
 
+async def _require_mapped_run_access(
+    session: AsyncSession,
+    run_id: UUID,
+    owner_id: UUID,
+    action: str,
+) -> ResearchRun:
+    """Lazy adapter to avoid loading unrelated service packages for legacy runs."""
+
+    from src.services.research_engine.project_access import ResearchAction, require_run
+
+    return await require_run(session, run_id, owner_id, ResearchAction(action))
+
+
 class ResearchReviewError(ValueError):
     """Safe service error for the public review API."""
 
@@ -98,7 +111,12 @@ class ResearchReviewService:
     async def get_pending_review(
         self, *, run_id: UUID, owner_id: UUID
     ) -> PendingReviewResponse:
-        run = await self._load_owned_run(run_id, owner_id, lock=False)
+        run = await self._load_owned_run(
+            run_id,
+            owner_id,
+            lock=False,
+            action="view",
+        )
         pending = self._pending_mapping(run)
         if pending is None:
             return PendingReviewResponse(pending=False)
@@ -254,6 +272,12 @@ class ResearchReviewService:
             # transaction waited. Reload its immutable row after clearing the
             # failed transaction and compare the canonical decision.
             await self.session.rollback()
+            await self._load_owned_run(
+                run_id,
+                owner_id,
+                lock=False,
+                action="edit",
+            )
             existing = await self._load_review(
                 run_id=run_id,
                 step_index=step_index,
@@ -291,6 +315,7 @@ class ResearchReviewService:
                 owner_id,
                 lock=True,
                 shared=shared_lock,
+                action="edit",
             )
             pending = self._pending_mapping(run)
             if pending is None or run.status != "paused":
@@ -447,7 +472,12 @@ class ResearchReviewService:
     ) -> dict[str, Any]:
         """Return deterministic downstream projections without rewriting outputs."""
 
-        run = await self._load_owned_run(run_id, owner_id, lock=False)
+        run = await self._load_owned_run(
+            run_id,
+            owner_id,
+            lock=False,
+            action="view",
+        )
         reviews_result = await self.session.execute(
             select(ResearchStageReview)
             .where(
@@ -549,9 +579,10 @@ class ResearchReviewService:
         *,
         lock: bool,
         shared: bool = False,
+        action: str,
     ) -> ResearchRun:
-        statement = (
-            select(ResearchRun)
+        owned_statement = (
+            select(ResearchRun, ResearchProject.collection_id)
             .join(
                 ResearchBlueprint,
                 cast(Any, ResearchBlueprint.id) == cast(Any, ResearchRun.blueprint_id),
@@ -564,19 +595,50 @@ class ResearchReviewService:
             .where(
                 cast(Any, ResearchRun.id) == run_id,
                 cast(Any, ResearchProject.owner_id) == owner_id,
+                cast(Any, ResearchRun.is_deleted).is_(False),
+                cast(Any, ResearchBlueprint.is_deleted).is_(False),
+                cast(Any, ResearchProject.is_deleted).is_(False),
             )
         )
-        if lock:
-            statement = statement.with_for_update(read=shared)
-        result = await self.session.execute(statement)
-        run = result.scalars().first()
-        if run is None:
+        owned = (await self.session.execute(owned_statement)).first()
+        if owned is None:
             raise ResearchReviewError(
                 status_code=404,
                 code="review_not_found",
                 message="Run not found",
             )
-        return cast(ResearchRun, run)
+        run = cast(ResearchRun, owned[0])
+        if owned[1] is not None:
+            # The project owner is historical metadata, not an access grant.
+            # Resolve mapped runs through the canonical workspace, organization,
+            # role, and ancestor-lifecycle policy before exposing or changing a
+            # review. Mutating actions acquire the canonical parent locks before
+            # this aggregate's row lock, preventing revocation races.
+            run = await _require_mapped_run_access(
+                self.session,
+                run_id,
+                owner_id,
+                action,
+            )
+        if not lock:
+            return run
+
+        locked = await self.session.execute(
+            select(ResearchRun)
+            .where(
+                cast(Any, ResearchRun.id) == run_id,
+                cast(Any, ResearchRun.is_deleted).is_(False),
+            )
+            .with_for_update(read=shared)
+        )
+        locked_run = locked.scalars().first()
+        if locked_run is None:
+            raise ResearchReviewError(
+                status_code=404,
+                code="review_not_found",
+                message="Run not found",
+            )
+        return cast(ResearchRun, locked_run)
 
     async def _load_step(
         self,
