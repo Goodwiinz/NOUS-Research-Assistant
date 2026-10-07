@@ -17,10 +17,11 @@ from fastapi import (
 )
 from pydantic import BaseModel
 
+from src.api.integrations.auth import require_interactive_user
 from src.core.config import settings
-from src.core.dependencies import get_current_user
 from src.core.security import auth_rate_limiter, create_cli_token
 from src.services.auth.cli_auth_sessions import (
+    CLIAuthSessionStatus,
     InMemoryCLIAuthSessionStore,
     RedisCLIAuthSessionStore,
 )
@@ -56,6 +57,21 @@ class CLIAuthApproveRequest(BaseModel):
     verification_code: str
 
 
+class CLIAuthSessionInfo(BaseModel):
+    """What the approving browser may see about a pending CLI sign-in.
+
+    Never carries the verification code or poll token. The user must read the
+    code from their own terminal (RFC 8628 §5.4 remote-phishing defence).
+    """
+
+    session_id: str
+    status: CLIAuthSessionStatus
+    started_at: str
+    expires_at: str
+    requester_ip: str | None = None
+    requester_user_agent: str | None = None
+
+
 def get_cli_auth_session_store() -> (
     RedisCLIAuthSessionStore | InMemoryCLIAuthSessionStore
 ):
@@ -78,19 +94,25 @@ async def start_cli_auth(
     request: Request,
     store: InMemoryCLIAuthSessionStore = Depends(get_cli_auth_session_store),
 ) -> dict[str, Any]:
+    # request.client.host honours X-Forwarded-For only when TRUSTED_PROXY_ENABLED
+    # installed the proxy patch (core/security.py), so it is the IP the rate
+    # limiter keys on and cannot be spoofed when that patch is off. Do not use
+    # get_client_ip() here: it trusts X-Forwarded-For unconditionally.
     client_ip = request.client.host if request.client else "unknown"
     if not await auth_rate_limiter.is_allowed(client_ip, prefix="cli_start"):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many CLI auth requests. Try again later.",
         )
-    session = store.create_session()
-    # The code rides in the fragment, which browsers never send to a server,
-    # proxy or Referer, so it stays out of request logs.
-    browser_url = (
-        f"{_frontend_base_url()}/cli-auth"
-        f"?session_id={session.session_id}#code={session.verification_code}"
+    session = store.create_session(
+        requester_ip=client_ip,
+        requester_user_agent=request.headers.get("user-agent"),
     )
+    # GOO-403 (RFC 8628 §5.4): the link carries the session only, never the
+    # code. The user types the code their own terminal printed, so a link
+    # someone else sends cannot be approved in one click. The code is returned
+    # to the CLI caller below so it can print it.
+    browser_url = f"{_frontend_base_url()}/cli-auth?session_id={session.session_id}"
     return {
         "session_id": session.session_id,
         "verification_code": session.verification_code,
@@ -137,17 +159,59 @@ async def get_cli_auth_status(
     return body
 
 
-@router.post("/approve")
+@router.get("/session/{session_id}", response_model=CLIAuthSessionInfo)
+async def get_cli_auth_session_info(
+    session_id: str,
+    response: Response,
+    store: InMemoryCLIAuthSessionStore = Depends(get_cli_auth_session_store),
+    _user: Any = Depends(require_interactive_user),
+) -> CLIAuthSessionInfo:
+    """Requester details for the approval page. Never returns the code."""
+    response.headers["Cache-Control"] = "no-store"
+    session = store.get_session_for_approver(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CLI auth session not found",
+            headers={"Cache-Control": "no-store"},
+        )
+    return CLIAuthSessionInfo(
+        session_id=session.session_id,
+        status=session.status,
+        started_at=_serialize_datetime(session.created_at),
+        expires_at=_serialize_datetime(session.expires_at),
+        requester_ip=session.requester_ip,
+        requester_user_agent=session.requester_user_agent,
+    )
+
+
+@router.post(
+    "/approve",
+    responses={
+        400: {"description": "Verification code does not match"},
+        403: {"description": "A browser session is required to approve"},
+        404: {"description": "CLI auth session not found or no longer pending"},
+    },
+)
 async def approve_cli_auth(
     request: CLIAuthApproveRequest,
     store: InMemoryCLIAuthSessionStore = Depends(get_cli_auth_session_store),
-    current_user: Any = Depends(get_current_user),
+    # GOO-403: only an interactive browser login may approve. A CLI token (or an
+    # integration grant) approving would let a stolen token renew itself forever.
+    current_user: Any = Depends(require_interactive_user),
 ) -> dict[str, Any]:
     organization_id = str(current_user.organization_id or "")
     if not organization_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Authenticated user must belong to an organization",
+        )
+
+    pending = store.get_session_for_approver(request.session_id)
+    if pending is None or pending.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CLI auth session not found",
         )
 
     # Mint a long-lived CLI token rather than passing the caller's short-lived
@@ -178,11 +242,29 @@ async def approve_cli_auth(
         credential_payload=credential_payload,
     )
     if session is None:
+        # After 5 wrong codes the store denies the session, even when this
+        # attempt carried the right code. Report that as not pending (404) so
+        # the user does not keep retyping into a dead session.
+        current = store.get_session_for_approver(request.session_id)
+        if current is None or current.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="CLI auth session not found",
+            )
+        # Still pending, so the typed code is wrong (the store counted it).
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="CLI auth session not found",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code does not match the one shown in your terminal",
         )
 
+    logger.info(
+        "cli-auth: session approved",
+        extra={
+            "cli_auth_session_id": session.session_id,
+            "user_id": str(current_user.id),
+            "requester_ip": session.requester_ip,
+        },
+    )
     return {
         "session_id": session.session_id,
         "status": session.status,
