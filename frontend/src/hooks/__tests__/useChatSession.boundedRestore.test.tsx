@@ -80,7 +80,8 @@ vi.mock('@/hooks/useChatPersistence', () => ({
   useChatPersistence: () => ({ initialize: persistenceMocks.initialize }),
 }));
 
-vi.mock('@/store/chat-store', () => ({
+vi.mock('@/store/chat-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/chat-store')>()),
   useChatStore: chatStoreMocks.useStore,
 }));
 
