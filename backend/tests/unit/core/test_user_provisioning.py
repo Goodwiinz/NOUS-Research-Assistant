@@ -316,6 +316,64 @@ async def test_user_race_refetches_concurrently_created_user():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_user_email_conflict_warns_with_user_id_and_never_resolves_by_email(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """GOO-405 hardening: the user INSERT conflicts, but no row with our own id
+    exists. In practice another row already holds this verified address in
+    ``users.email``.
+
+    Provisioning must (a) return None, which the caller turns into a 401,
+    (b) log a WARNING naming the user id but NOT the email, and (c) never
+    look the user up by email. Adopting the conflicting row would turn email
+    squatting into account takeover.
+    """
+    db = _session(
+        execute_results=[None, None, None],
+        #                 ^user  ^org  ^refetch-by-id finds nothing
+        flush_side_effects=[None, _integrity_error()],
+    )
+    token = _token(
+        user_id="victim-id", email="victim@example.com", organization_id="org-42"
+    )
+
+    with caplog.at_level("WARNING", logger="src.core.user_provisioning"):
+        result = await ensure_user_and_org(db, token)
+
+    assert result is None
+    db.rollback.assert_awaited_once()
+    # Exactly user lookup, org lookup, and ONE refetch, and that refetch is by id.
+    assert db.execute.await_count == 3
+    refetch_where = str(db.execute.await_args_list[2].args[0]).split("WHERE", 1)[1]
+    assert "users.id" in refetch_where
+    assert "users.email" not in refetch_where
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "victim-id" in message
+    assert "victim@example.com" not in message
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_user_id_race_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    """The benign same-subject race (refetch by id succeeds) stays quiet."""
+    concurrent_user = SimpleNamespace(id="user-1", organization_id="org-42")
+    db = _session(
+        execute_results=[None, None, concurrent_user],
+        flush_side_effects=[None, _integrity_error()],
+    )
+
+    with caplog.at_level("WARNING", logger="src.core.user_provisioning"):
+        result = await ensure_user_and_org(db, _token(organization_id="org-42"))
+
+    assert result is concurrent_user
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_simultaneous_provisioning_converges_on_one_user():
     """Two first-time requests for the SAME subject provision concurrently.
 

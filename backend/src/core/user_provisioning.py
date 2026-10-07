@@ -177,5 +177,20 @@ async def _create_user(
         await db.rollback()
         result = await db.execute(select(User).where(User.id == token_data.user_id))
         user = result.scalars().first()
+        if user is None:
+            # The INSERT conflicted, but not with a row for this subject. In
+            # practice another row already holds this verified address in
+            # users.email (UNIQUE): a stale row, or a squat via the pre-GOO-405
+            # PUT /auth/me. Do NOT add a fallback lookup by email that adopts
+            # that row. Whoever wrote that email would then get this person's
+            # identity, which turns squatting into account takeover. Fail
+            # closed (the caller returns 401) and leave reconciliation to an
+            # operator. Log the subject id, never the email (PII).
+            logger.warning(
+                "JIT provisioning for user %s failed: unique conflict on a row "
+                "that is not this user's (likely users.email held by another "
+                "account); operator reconciliation required",
+                token_data.user_id,
+            )
 
     return user
