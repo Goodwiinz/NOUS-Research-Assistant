@@ -5,7 +5,7 @@ Manages roles, permissions, and user assignments for fine-grained access control
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from fastapi import Depends
 from sqlalchemy import and_, exists, func, or_
@@ -199,9 +199,15 @@ class RBACService:
         description: str = None,
         permission_names: List[str] = None,
         priority: int = 0,
+        created_by: Optional[str] = None,
     ) -> Role:
         """Create a new custom role for an organization"""
         try:
+            # GOO-406 (A4): a caller may only mint a role it could itself hold.
+            self.assert_caller_can_delegate(
+                created_by, organization_id, permission_names or [], priority
+            )
+
             # Check if role name already exists for this organization
             existing_role = (
                 self.db.query(Role)
@@ -335,6 +341,14 @@ class RBACService:
                     reason="Role not found or inactive for this organization",
                 )
 
+            # GOO-406 (A4): the grantor's own authority bounds what it can grant.
+            self.assert_caller_can_delegate(
+                assigned_by,
+                organization_id,
+                [p.name for p in role.permissions if p.is_active],
+                role.priority,
+            )
+
             # Validate the target user is a member of this organization. Without
             # this check a caller could grant a role to a user in another tenant
             # (the user_id is path-controlled), since only the role's org was
@@ -405,7 +419,11 @@ class RBACService:
             raise
 
     def revoke_role_from_user(
-        self, user_id: str, role_id: str, organization_id: str
+        self,
+        user_id: str,
+        role_id: str,
+        organization_id: str,
+        revoked_by: Optional[str] = None,
     ) -> bool:
         """Revoke a role from a user"""
         try:
@@ -423,13 +441,21 @@ class RBACService:
             )
 
             if assignment:
+                # GOO-406 (A4): a caller cannot strip a role it could not grant.
+                role = assignment.role
+                self.assert_caller_can_delegate(
+                    revoked_by,
+                    organization_id,
+                    [p.name for p in role.permissions if p.is_active] if role else [],
+                    role.priority if role else 0,
+                )
                 assignment.is_active = False
                 self.db.commit()
                 logger.info(
                     f"Revoked role {role_id} from user {user_id} in organization {organization_id}"
                 )
                 self._audit_role_change(
-                    "role_revoked", user_id, role_id, organization_id, None
+                    "role_revoked", user_id, role_id, organization_id, revoked_by
                 )
                 return True
 
@@ -439,6 +465,50 @@ class RBACService:
             self.db.rollback()
             logger.error(f"Failed to revoke role {role_id} from user {user_id}: {e}")
             raise
+
+    def assert_caller_can_delegate(
+        self,
+        caller_id: Optional[str],
+        organization_id: str,
+        permission_names: Iterable[str],
+        priority: Optional[int],
+    ) -> None:
+        """Refuse to delegate authority the caller does not itself hold.
+
+        GOO-406 (A4): ``user_manage_roles`` alone let an RBAC ``admin`` grant
+        itself ``super_admin`` (or revoke it from the real super admin). A
+        caller may grant, revoke, create or edit a role only when
+        (a) every permission on that role is in the caller's own effective
+        permission set for this organization, and
+        (b) the role's priority is <= the caller's highest active role priority.
+        Fails closed: no caller id, no roles, or a lookup error (which
+        ``get_user_permissions``/``get_user_roles`` turn into empty results)
+        all deny.
+        """
+        if not caller_id:
+            raise PermissionDeniedException(
+                required_permission="role_delegation",
+                user_role="unknown",
+                details={"reason": "Caller identity is required to delegate roles"},
+            )
+
+        caller_permissions = self.get_user_permissions(caller_id, organization_id)
+        caller_roles = self.get_user_roles(caller_id, organization_id)
+        caller_priority = max((r.priority or 0 for r in caller_roles), default=None)
+        missing = sorted(set(permission_names) - caller_permissions)
+        requested_priority = priority or 0
+
+        if caller_priority is None or missing or requested_priority > caller_priority:
+            raise PermissionDeniedException(
+                required_permission=",".join(missing) or "role_priority",
+                user_role=caller_roles[0].name if caller_roles else "none",
+                details={
+                    "reason": "Role exceeds the caller's own authority",
+                    "missing_permissions": missing,
+                    "role_priority": requested_priority,
+                    "caller_priority": caller_priority,
+                },
+            )
 
     def _audit_role_change(
         self,
