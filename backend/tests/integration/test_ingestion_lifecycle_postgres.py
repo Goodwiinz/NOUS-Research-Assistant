@@ -246,6 +246,7 @@ def lifecycle(
     dsn = os.getenv("INGESTION_TEST_DATABASE_URL")
     if not broker or not dsn:
         pytest.skip("disposable INGESTION_TEST_DATABASE_URL and REDIS_URL required")
+    assert broker is not None and dsn is not None
     if "fork" not in multiprocessing.get_all_start_methods():
         pytest.skip("lifecycle process-loss fixture requires Linux fork")
     if not spacy.util.is_package("en_core_web_sm"):

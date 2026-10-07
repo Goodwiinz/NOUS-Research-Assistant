@@ -869,6 +869,12 @@ jobs:
             exit 0
           fi
 
+          if printf '%s\n' "$files" | grep -Fxq 'backend/tests/integration/test_ingestion_lifecycle_postgres.py'; then
+            # Match the production image's model without changing dependencies.
+            pip install --no-deps \
+              https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+          fi
+
           set +e
           # shellcheck disable=SC2086 # one test file path per word, no spaces
           pytest $files \
@@ -894,6 +900,9 @@ jobs:
           SHARDS: ${{ strategy.job-total }}
           DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # Lifecycle fixtures own a schema and queue in these throwaway services.
+          INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          INGESTION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
       - name: Upload coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
