@@ -20,6 +20,7 @@ from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
+from src.schemas.chat import CollectionCreate
 from src.schemas.integration_context import STANDARD_SCOPES
 from src.schemas.integration_tools import ToolInvocation
 from src.services.agent import tool_actions
@@ -3171,3 +3172,161 @@ async def test_review_of_an_unknown_action_still_loads(db: AsyncSession) -> None
     assert review.summary == "Run the action “forget_memory”"
     assert review.arguments == {"key": "x"}
     assert (review.title, review.content, review.tags) == ("", "", [])
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "save_papers_to_folder",
+        "remove_papers_from_folder",
+        "move_papers_between_folders",
+    ],
+)
+@pytest.mark.parametrize(
+    "workspace_org", [ORG, ORG2], ids=["own-workspace", "shared-workspace"]
+)
+async def test_library_document_mutations_use_actor_organization(
+    db: AsyncSession, library: None, tool_name: str, workspace_org: UUID
+) -> None:
+    # The user remains an authorized owner/member when workspace metadata is
+    # foreign. Folder access never grants authority over foreign documents.
+    if workspace_org == ORG2:
+        await db.execute(
+            update(User).where(User.id == OTHER_USER).values(organization_id=ORG2)
+        )
+        await db.execute(
+            update(Workspace)
+            .where(Workspace.id == WORKSPACE)
+            .values(organization_id=ORG2, owner_id=OTHER_USER)
+        )
+        db.add(
+            WorkspaceMember(
+                workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.EDITOR
+            )
+        )
+    foreign, retired, absent = uuid4(), uuid4(), uuid4()
+    db.add_all([_paper(foreign, organization_id=ORG2), _paper(retired)])
+    await db.flush()
+    await db.execute(
+        update(Document).where(Document.id == retired).values(is_deleted=True)
+    )
+    saving = tool_name == "save_papers_to_folder"
+    source = SECOND if saving else PROJECT
+    own = PAPER2 if saving else PAPER
+    # Existing links must neither disclose foreign/retired membership in the
+    # receipt nor authorize mutating those rows.
+    db.add_all(
+        [
+            CollectionDocument(collection_id=source, document_id=d)
+            for d in (foreign, retired)
+        ]
+    )
+    await db.commit()
+    requested = [str(d) for d in (own, foreign, retired, absent)]
+    arguments: dict[str, Any] = {"document_ids": requested}
+    if tool_name == "move_papers_between_folders":
+        arguments.update(from_project_id=P, to_project_id=str(SECOND))
+    else:
+        arguments["project_id"] = str(source)
+    status = await request_action(
+        db, await _library_actor(db), _call(tool_name, **arguments)
+    )
+    assert status.state == "succeeded"
+    receipt = _receipt(status)
+    assert receipt["document_ids"] == [str(own)]
+    assert receipt["skipped_document_ids"] == [str(foreign), str(retired), str(absent)]
+    assert status.result is not None
+    assert status.result.source_refs == [{"document_id": str(own)}]
+    for blocked in (foreign, retired):
+        assert await _linked(db, source, blocked)
+        if tool_name == "move_papers_between_folders":
+            assert not await _linked(db, SECOND, blocked)
+    if saving:
+        assert await _linked(db, SECOND, own)
+    elif tool_name == "remove_papers_from_folder":
+        assert not await _linked(db, source, own)
+    else:
+        assert not await _linked(db, source, own)
+        assert await _linked(db, SECOND, own)
+
+
+async def test_project_remove_cannot_change_foreign_document_membership(
+    db: AsyncSession, library: None
+) -> None:
+    foreign = uuid4()
+    db.add(_paper(foreign, organization_id=ORG2))
+    await db.flush()
+    db.add(CollectionDocument(collection_id=PROJECT, document_id=foreign))
+    await db.commit()
+    status = await request_action(
+        db,
+        _actor(scopes=LIBRARY),
+        _call(
+            "remove_papers_from_folder",
+            project_id=P,
+            document_ids=[str(PAPER), str(foreign)],
+        ),
+    )
+    assert status.state == "succeeded"
+    assert await _linked(db, PROJECT, foreign)
+    assert not await _linked(db, PROJECT, PAPER)
+    assert _receipt(status)["document_ids"] == [str(PAPER)]
+    assert _receipt(status)["skipped_document_ids"] == [str(foreign)]
+
+
+@pytest.mark.parametrize("operation", ["create", "add", "remove"])
+@pytest.mark.parametrize(
+    "shared", [False, True], ids=["own-workspace", "shared-workspace"]
+)
+async def test_collection_membership_writes_use_actor_organization(
+    db: AsyncSession, library: None, operation: str, shared: bool
+) -> None:
+    # Exercise the shared persistence boundary directly as well as through
+    # the action adapter. Workspace metadata must not supply document identity.
+    if shared:
+        await db.execute(
+            update(User).where(User.id == OTHER_USER).values(organization_id=ORG2)
+        )
+        await db.execute(
+            update(Workspace)
+            .where(Workspace.id == WORKSPACE)
+            .values(organization_id=ORG2, owner_id=OTHER_USER)
+        )
+        db.add(
+            WorkspaceMember(
+                workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.EDITOR
+            )
+        )
+    foreign, retired = uuid4(), uuid4()
+    db.add_all([_paper(foreign, organization_id=ORG2), _paper(retired)])
+    await db.flush()
+    await db.execute(
+        update(Document).where(Document.id == retired).values(is_deleted=True)
+    )
+    requested = [PAPER2, foreign, retired]
+    if operation == "remove":
+        db.add_all(
+            [CollectionDocument(collection_id=SECOND, document_id=d) for d in requested]
+        )
+    await db.commit()
+    if operation == "create":
+        collection = await collection_service.create_collection(
+            db,
+            CollectionCreate(
+                workspace_id=WORKSPACE, name="Scoped", document_ids=requested
+            ),
+            USER,
+        )
+    elif operation == "add":
+        collection = await collection_service.add_documents_to_collection(
+            db, SECOND, requested, USER
+        )
+    else:
+        collection = await collection_service.remove_documents_from_collection(
+            db, SECOND, requested, USER
+        )
+    assert collection is not None
+    await db.commit()
+    assert await _linked(db, collection.id, PAPER2) is (operation != "remove")
+    for blocked in (foreign, retired):
+        assert await _linked(db, collection.id, blocked) is (operation == "remove")

@@ -1148,16 +1148,23 @@ def _refused(row: IntegrationToolAction, reason: str) -> dict[str, Any]:
 
 
 async def _live_members(
-    db: AsyncSession, collection_id: UUID, document_ids: list[str]
+    db: AsyncSession,
+    collection_id: UUID,
+    document_ids: list[str],
+    organization_id: UUID,
 ) -> set[str]:
-    """Which of ``document_ids`` are live members of the Collection."""
+    """Live members whose live documents belong to the action's actor."""
     if not document_ids:
         return set()
     found = await db.scalars(
-        select(CollectionDocument.document_id).where(
+        select(CollectionDocument.document_id)
+        .join(Document, Document.id == CollectionDocument.document_id)
+        .where(
             CollectionDocument.collection_id == collection_id,
             CollectionDocument.document_id.in_([UUID(d) for d in document_ids]),
             CollectionDocument.is_deleted.is_(False),
+            Document.organization_id == organization_id,
+            Document.is_deleted.is_(False),
         )
     )
     return {str(value) for value in found.all()}
@@ -1183,7 +1190,7 @@ async def _save_papers(
     if saved is None:
         return _refused(row, TARGET_NOT_FOUND)
     # The service skips a document that is missing or not the organization's.
-    held = await _live_members(db, folder, requested)
+    held = await _live_members(db, folder, requested, row.organization_id)
     return _receipt(
         row,
         folder,
@@ -1197,11 +1204,11 @@ async def _remove_papers(
 ) -> dict[str, Any]:
     folder = UUID(row.arguments["project_id"])
     requested = list(row.arguments["document_ids"])
-    held = await _live_members(db, folder, requested)
+    held = await _live_members(db, folder, requested, row.organization_id)
     removed = await collection_service.remove_documents_from_collection(
         db,
         folder,
-        [UUID(d) for d in requested],
+        [UUID(d) for d in requested if d in held],
         row.user_id,
         workspace_id=row.workspace_id,
     )
@@ -1224,7 +1231,7 @@ async def _move_papers(
     source = UUID(row.arguments["from_project_id"])
     destination = UUID(row.arguments["to_project_id"])
     requested = list(row.arguments["document_ids"])
-    held = await _live_members(db, source, requested)
+    held = await _live_members(db, source, requested, row.organization_id)
     moving = [d for d in requested if d in held]
     ids = [UUID(d) for d in moving]
     unlinked = await collection_service.remove_documents_from_collection(
@@ -1235,7 +1242,9 @@ async def _move_papers(
     linked = await collection_service.add_documents_to_collection(
         db, destination, ids, row.user_id, workspace_id=row.workspace_id
     )
-    if linked is None or await _live_members(db, destination, moving) != set(moving):
+    if linked is None or await _live_members(
+        db, destination, moving, row.organization_id
+    ) != set(moving):
         # A paper left the source but could not be linked (a deleted
         # document, say): refusing rolls both halves back.
         return _refused(row, TARGET_NOT_FOUND)

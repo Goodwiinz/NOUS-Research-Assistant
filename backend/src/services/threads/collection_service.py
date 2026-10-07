@@ -78,12 +78,13 @@ async def create_collection(
     db.add(collection)
 
     if data.document_ids:
-        organization_id = getattr(workspace, "organization_id", None)
-        for i, doc_id in enumerate(data.document_ids):
-            doc = await workspace_access.get_accessible_document_or_none(
-                db, doc_id, user_id, organization_id
+        owned = set(
+            await workspace_access.filter_owned_document_ids(
+                db, data.document_ids, user_id
             )
-            if doc:
+        )
+        for i, doc_id in enumerate(data.document_ids):
+            if doc_id in owned:
                 db.add(
                     CollectionDocument(
                         collection=collection, document_id=doc_id, sort_order=i
@@ -247,12 +248,11 @@ async def add_documents_to_collection(
         )
     ).scalar() or 0
 
-    organization_id = getattr(collection.workspace, "organization_id", None)
+    owned = set(
+        await workspace_access.filter_owned_document_ids(db, document_ids, user_id)
+    )
     for i, doc_id in enumerate(document_ids):
-        doc = await workspace_access.get_accessible_document_or_none(
-            db, doc_id, user_id, organization_id
-        )
-        if not doc:
+        if doc_id not in owned:
             continue
 
         existing = (
@@ -315,7 +315,8 @@ async def remove_documents_from_collection(
     if not collection.workspace.can_user_edit(str(user_id)):
         raise PermissionError("Insufficient permissions")
 
-    for doc_id in document_ids:
+    owned = await workspace_access.filter_owned_document_ids(db, document_ids, user_id)
+    for doc_id in owned:
         collection_doc = (
             (
                 await db.execute(

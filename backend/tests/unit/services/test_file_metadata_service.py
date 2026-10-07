@@ -119,7 +119,7 @@ async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 async def _user(db: AsyncSession, user_id: UUID) -> User:
     user = await db.get(User, user_id)
-    assert user is not None
+    assert isinstance(user, User)
     return user
 
 
@@ -127,7 +127,7 @@ async def _committed(engine: AsyncEngine, document_id: UUID = DOC) -> Document:
     """Read through a separate session: only committed state is visible."""
     async with async_sessionmaker(engine, expire_on_commit=False)() as observer:
         document = await observer.get(Document, document_id)
-        assert document is not None
+        assert isinstance(document, Document)
         return document
 
 

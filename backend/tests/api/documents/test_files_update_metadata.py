@@ -79,7 +79,7 @@ class Api:
         factory = async_sessionmaker(self.engine, expire_on_commit=False)
         async with factory() as observer:
             document = await observer.get(Document, document_id)
-            assert document is not None
+            assert isinstance(document, Document)
             return document
 
 
