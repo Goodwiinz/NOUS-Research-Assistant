@@ -33,7 +33,7 @@ class IntegrationGrantRequest(BaseModel):
         GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
     )
     device_id: Mapped[UUID] = mapped_column(
-        GUID(), ForeignKey("bridge_devices.id"), nullable=False
+        GUID(), ForeignKey("bridge_devices.id"), nullable=False, index=True
     )
     thread_id: Mapped[UUID | None] = mapped_column(
         GUID(), ForeignKey("threads.id"), index=True
@@ -71,10 +71,10 @@ class IntegrationGrant(BaseModel):
         GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
     )
     device_id: Mapped[UUID | None] = mapped_column(
-        GUID(), ForeignKey("bridge_devices.id")
+        GUID(), ForeignKey("bridge_devices.id"), index=True
     )
     request_id: Mapped[UUID | None] = mapped_column(
-        GUID(), ForeignKey("integration_grant_requests.id")
+        GUID(), ForeignKey("integration_grant_requests.id"), index=True
     )
     thread_id: Mapped[UUID | None] = mapped_column(GUID(), ForeignKey("threads.id"))
     run_id: Mapped[str | None] = mapped_column(

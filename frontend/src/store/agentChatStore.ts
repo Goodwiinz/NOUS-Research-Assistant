@@ -563,6 +563,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             );
             return; // SSE streaming succeeded
           } catch {
+            if (abortController.signal.aborted) return;
             // R4-L19: the SSE transport died after the backend had already
             // parked this turn awaiting confirmation. The durable fallback
             // below re-runs the turn from the original request payload —
@@ -1162,6 +1163,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             },
             abortController.signal
           );
+          if (confirmEpoch !== transcriptEpoch) return;
           if (abortController.signal.aborted) {
             set((state) => {
               state.pendingConfirmations[threadId] ??= pendingConfirmation;
@@ -1176,6 +1178,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
         } catch {
           // SSE confirm failed — fall back to polling
         }
+
+        if (abortController.signal.aborted || confirmEpoch !== transcriptEpoch)
+          return;
 
         // Durable run or legacy polling fallback. waitTokenId was captured
         // up-front (before pendingConfirmation was nulled) so this branch is

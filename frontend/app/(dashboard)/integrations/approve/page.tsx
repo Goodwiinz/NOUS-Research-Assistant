@@ -51,6 +51,11 @@ function ApprovalContent(): React.JSX.Element {
         Only approve a request you started. Check the device, project or
         workspace, and permissions below against your terminal.
       </p>
+      <p>
+        <Link href="/integrations/devices" className="underline">
+          Manage connected devices
+        </Link>
+      </p>
       {!requestId && (
         <p role="alert">This approval link is missing its request ID.</p>
       )}

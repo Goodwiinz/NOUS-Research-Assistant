@@ -27,10 +27,10 @@ import pytest
 pytestmark = pytest.mark.unit
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-# The head this revision chains after. #1784 (ic01) merged after this branch
-# was cut and also revises hb06_integration_handoffs, so hb03 follows ic01:
-# the revision ids are not ordered by name.
-PARENT = "ic01_integration_context"
+# The head this revision chains after. #1784 (ic01) and then #1788 (ir01)
+# merged after this branch was cut, so hb03 follows ir01: the revision ids
+# are not ordered by name.
+PARENT = "ir01_revocation_indexes"
 REVISION = "hb03_workspace_grants"
 # Upgrade order; the downgrade reverses it (a grant cites its request).
 REQUESTS, GRANTS, ACTIONS = (

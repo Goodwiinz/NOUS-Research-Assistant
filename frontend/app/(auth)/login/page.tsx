@@ -136,6 +136,7 @@ function LoginPageContent(): React.JSX.Element | null {
       }
       router.push(nextPath);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Authentication failed');
     } finally {
       setIsSubmitting(false);

@@ -46,6 +46,9 @@ describe('Settings page', () => {
     expect(
       screen.getByRole('link', { name: /open developer access/i })
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: /manage connected devices/i })
+    ).toHaveAttribute('href', '/integrations/devices');
     expect(screen.getByText(/last sign-in/i)).toBeInTheDocument();
     // Honest empty states replace fabricated status values.
     expect(screen.getByText('No workspace connected')).toBeInTheDocument();
