@@ -150,7 +150,11 @@ class WorkflowEngine:
                     }
                     return
 
-                step_id = step_def.get("id", f"step_{idx}")
+                step_id = step_def.get("id") or f"step_{idx}"
+                # Template steps carry no id. The executor names the search
+                # strategy and journal checkpoints by this id, so it must see
+                # the same one the events (and finalize_search_step) use.
+                step_def = {**step_def, "id": step_id}
 
                 yield {
                     "event": "step_start",
