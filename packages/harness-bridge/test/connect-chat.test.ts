@@ -8,7 +8,10 @@ import { connect } from "../src/cli.ts";
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const CHAT = "99999999-9999-4999-8999-999999999999";
 
-function fakeNous(calls: { url: string; body: any }[]): typeof fetch {
+function fakeNous(
+  calls: { url: string; body: any }[],
+  verificationCode: unknown = "ABCD-1234",
+): typeof fetch {
   return (async (input: any, init: any) => {
     const url = String(input);
     calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
@@ -18,7 +21,7 @@ function fakeNous(calls: { url: string; body: any }[]): typeof fetch {
         session_id: "s",
         poll_token: "p",
         browser_url: "https://nous.test/l",
-        verification_code: "ABCD-1234",
+        verification_code: verificationCode,
       };
     else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli" };
     else if (url.endsWith("/integrations/devices"))
@@ -87,4 +90,25 @@ test("connect --chat rejects a missing project and a non-UUID chat before any re
     /--chat must be a chat UUID/,
   );
   assert.equal(calls.length, 0);
+});
+
+test("connect refuses a login response whose code it cannot print", async () => {
+  // GOO-403: the approval page needs the code, so printing only the link would
+  // strand the user. A malformed code (or terminal escapes) is rejected outright.
+  for (const bad of [null, "ABCD-1234\x1b[2J", "abcd"]) {
+    const calls: { url: string; body: any }[] = [];
+    const messages: string[] = [];
+    await assert.rejects(
+      connect({
+        fetchFn: fakeNous(calls, bad),
+        announce: (m: string) => messages.push(m),
+        apiUrl: "https://nous.test/api/v1",
+        projectId: PROJECT,
+        label: "Laptop",
+        stateDir: join(tmpdir(), "nous-connect-chat-bad-code"),
+      }),
+      /invalid CLI login response/,
+    );
+    assert.ok(!messages.some((m) => m.includes("https://nous.test/l")));
+  }
 });

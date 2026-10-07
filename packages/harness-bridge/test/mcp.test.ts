@@ -251,7 +251,7 @@ test("connect --tools requests and persists tools:read; plain connect does not",
     calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
     let data: object;
     if (url.endsWith("/cli-auth/start"))
-      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l" };
+      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l", verification_code: "ABCD-1234" };
     else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
     else if (url.endsWith("/integrations/devices"))
       data = { id: "22222222-2222-4222-8222-222222222222" };

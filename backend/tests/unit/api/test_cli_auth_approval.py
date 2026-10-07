@@ -224,3 +224,36 @@ def test_cli_auth_session_info_unknown_session_is_404(
 
     assert response.status_code == 404
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_cli_auth_approve_after_five_wrong_codes_is_404_even_with_right_code(
+    app: FastAPI, client: TestClient
+) -> None:
+    # The store denies the session once 5 wrong codes were tried. Telling the
+    # user "code does not match" after that would have them retype a correct
+    # code into a dead session, so the route reports it as no longer pending.
+    session = client.post("/api/v1/cli-auth/start").json()
+    _sign_in(app)
+    wrong = {
+        "session_id": session["session_id"],
+        "verification_code": _wrong_code(session["verification_code"]),
+    }
+    for _ in range(5):
+        assert client.post("/api/v1/cli-auth/approve", json=wrong).status_code == 400
+
+    sixth = client.post(
+        "/api/v1/cli-auth/approve",
+        json={
+            "session_id": session["session_id"],
+            "verification_code": session["verification_code"],
+        },
+    )
+
+    assert sixth.status_code == 404
+    assert "token" not in sixth.text
+    status_body = client.get(
+        f"/api/v1/cli-auth/status/{session['session_id']}",
+        headers={"X-CLI-Poll-Token": session["poll_token"]},
+    ).json()
+    assert status_body["status"] == "denied"
+    assert "token" not in status_body

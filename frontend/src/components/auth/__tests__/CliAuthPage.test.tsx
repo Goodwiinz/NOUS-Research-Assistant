@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { api } from '@/services/api-client';
 
@@ -190,5 +191,54 @@ describe('CliAuthPage', () => {
     );
     expect(mockPush.mock.calls.flat().join(' ')).not.toContain('ABCD');
     expect(getSpy).not.toHaveBeenCalled();
+  });
+  it('shows an error instead of loading forever when the link has no session id', async () => {
+    mockSearchParams = new URLSearchParams('');
+    const getSpy = vi.spyOn(api, 'get');
+
+    render(<CliAuthPage />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /missing its sign-in request/i
+    );
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
+  });
+
+  it('enables Approve after pasting a code copied with a leading space', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue(PENDING as never);
+    const user = userEvent.setup();
+
+    render(<CliAuthPage />);
+    await screen.findByText('203.0.113.7');
+    await user.click(codeInput());
+    await user.paste(' ABCD-1234');
+
+    expect(codeInput().value).toBe('ABCD-1234');
+    expect(screen.getByRole('button', { name: /approve/i })).toBeEnabled();
+  });
+
+  it('names the Approve button by its visible text', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue(PENDING as never);
+
+    render(<CliAuthPage />);
+    await screen.findByText('203.0.113.7');
+
+    expect(
+      screen.getByRole('button', { name: 'Approve sign-in' })
+    ).toBeInTheDocument();
+  });
+
+  it('labels requester details as reported and possibly inaccurate', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue(PENDING as never);
+
+    render(<CliAuthPage />);
+    await screen.findByText('203.0.113.7');
+
+    expect(
+      screen.getByText(/device \(as reported by the requester\)/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/may be inaccurate/i)).toBeInTheDocument();
   });
 });

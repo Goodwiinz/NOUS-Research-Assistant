@@ -44,7 +44,7 @@ function CliAuthPageContent(): React.JSX.Element {
   const linkCarriesCode = searchParams.has('code');
   const [codeChars, setCodeChars] = useState('');
   const [details, setDetails] = useState<CliAuthSessionInfo | null>(null);
-  const [detailsError, setDetailsError] = useState('');
+  const [fetchError, setFetchError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState('');
@@ -90,7 +90,7 @@ function CliAuthPageContent(): React.JSX.Element {
       })
       .catch(() => {
         if (!cancelled) {
-          setDetailsError(
+          setFetchError(
             'This sign-in request was not found or has expired. Run the login command in your terminal again.'
           );
         }
@@ -100,6 +100,11 @@ function CliAuthPageContent(): React.JSX.Element {
     };
   }, [isAuthenticated, sessionId]);
 
+  // Derived during render (no set-state in an effect): a link without a
+  // session id can never load details, so say so instead of "Loading…".
+  const detailsError = sessionId
+    ? fetchError
+    : 'This link is missing its sign-in request. Run the login command in your terminal again.';
   const isPending = details?.status === 'pending';
   const canApprove =
     Boolean(sessionId) &&
@@ -176,7 +181,7 @@ function CliAuthPageContent(): React.JSX.Element {
         <dl className="mb-6 space-y-4 rounded-xl border border-border bg-background/60 p-5">
           <div>
             <dt className="text-sm font-medium text-muted-foreground">
-              Requested from
+              Requested from (IP address)
             </dt>
             <dd className="mt-1.5 break-all font-mono text-sm text-foreground">
               {details?.requester_ip ??
@@ -185,7 +190,7 @@ function CliAuthPageContent(): React.JSX.Element {
           </div>
           <div>
             <dt className="text-sm font-medium text-muted-foreground">
-              Device
+              Device (as reported by the requester)
             </dt>
             <dd className="mt-1.5 break-all font-mono text-sm text-foreground">
               {details?.requester_user_agent ??
@@ -205,6 +210,10 @@ function CliAuthPageContent(): React.JSX.Element {
             </dd>
           </div>
         </dl>
+        <p className="-mt-4 mb-6 text-xs leading-5 text-muted-foreground">
+          These details come from the device that started the request and may be
+          inaccurate.
+        </p>
 
         <label
           htmlFor="cli-auth-code"
@@ -219,7 +228,6 @@ function CliAuthPageContent(): React.JSX.Element {
           autoComplete="off"
           autoCapitalize="characters"
           spellCheck={false}
-          maxLength={CODE_LENGTH + 1}
           placeholder="XXXX-XXXX"
           aria-describedby="cli-auth-warning"
           value={formatCode(codeChars)}
@@ -268,7 +276,6 @@ function CliAuthPageContent(): React.JSX.Element {
         <div className="flex flex-col gap-3 sm:flex-row">
           <button
             type="button"
-            aria-label="Approve CLI login"
             onClick={handleApprove}
             disabled={!canApprove}
             className={cn(

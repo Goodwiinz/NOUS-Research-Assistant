@@ -204,17 +204,17 @@ export async function connect(
     typeof login.browser_url !== "string"
   )
     throw new Error("invalid CLI login response");
-  // GOO-403: the link no longer carries the code; print it so the user can
-  // type it on the approval page.
-  const code =
-    typeof login.verification_code === "string" &&
-    /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(login.verification_code)
-      ? login.verification_code
-      : null;
+  // GOO-403: the link no longer carries the code; the user must type it on the
+  // approval page, so a login response without a printable code is unusable.
+  // The format check also keeps server-supplied text from injecting terminal
+  // control sequences.
+  if (
+    typeof login.verification_code !== "string" ||
+    !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(login.verification_code)
+  )
+    throw new Error("invalid CLI login response");
   announce(
-    code
-      ? `Authorize CLI login in your browser: ${login.browser_url}\nType this code on that page: ${code}`
-      : `Authorize CLI login in your browser: ${login.browser_url}`,
+    `Authorize CLI login in your browser: ${login.browser_url}\nType this code on that page: ${login.verification_code}`,
   );
   const auth = await poll(
     () =>

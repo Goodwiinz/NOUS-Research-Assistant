@@ -242,8 +242,16 @@ async def approve_cli_auth(
         credential_payload=credential_payload,
     )
     if session is None:
-        # The session was pending a moment ago, so the typed code is wrong (the
-        # store counts the attempt and denies the session after 5 misses).
+        # After 5 wrong codes the store denies the session, even when this
+        # attempt carried the right code. Report that as not pending (404) so
+        # the user does not keep retyping into a dead session.
+        current = store.get_session_for_approver(request.session_id)
+        if current is None or current.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="CLI auth session not found",
+            )
+        # Still pending, so the typed code is wrong (the store counted it).
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Verification code does not match the one shown in your terminal",
