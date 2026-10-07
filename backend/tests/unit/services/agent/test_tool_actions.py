@@ -2757,6 +2757,109 @@ async def test_ingest_outcomes_are_recorded_with_stable_reasons(
     assert len(calls) == 1
 
 
+def _stalled_ingest(
+    monkeypatch: pytest.MonkeyPatch, started: asyncio.Event, seen: dict[str, bool]
+) -> None:
+    """An ingest that never returns on its own, as a hung arXiv fetch would."""
+    from src.services.agent import tools_impl
+
+    async def stalled(*_args: Any, **_kwargs: Any) -> Any:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+
+    monkeypatch.setattr(tools_impl, "_tool_ingest_arxiv", stalled)
+
+
+async def test_an_ingest_that_outlasts_its_timeout_ends_outcome_unknown(
+    db: AsyncSession, library: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = {"cancelled": False}
+    _stalled_ingest(monkeypatch, asyncio.Event(), seen)
+    monkeypatch.setattr(tool_actions, "DETACHED_TIMEOUT", timedelta(milliseconds=50))
+    _, invocation_id = await _approved_ingest(db, "2401.00001")
+    # Bounded, so a missing timeout fails here instead of hanging the suite.
+    assert await asyncio.wait_for(drain_integration_actions(db), timeout=10) == 1
+    row = await _row(db, invocation_id)
+    # Recorded by the worker at once, not left `executing` for the sweeper.
+    assert (row.state, row.last_error, row.result) == (
+        "outcome_unknown",
+        "ingest outcome unknown",
+        None,
+    )
+    assert seen["cancelled"] is True
+    assert await drain_integration_actions(db) == 0
+
+
+async def test_a_drain_cancelled_mid_ingest_records_the_outcome_unknown(
+    db: AsyncSession, library: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started, seen = asyncio.Event(), {"cancelled": False}
+    _stalled_ingest(monkeypatch, started, seen)
+    _, invocation_id = await _approved_ingest(db, "2401.00001")
+    drain = asyncio.create_task(drain_integration_actions(db))
+    await asyncio.wait_for(started.wait(), timeout=10)
+    # What Celery's soft time limit does to a running drain: run_async
+    # cancels the coroutine.
+    drain.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await drain
+    row = await _row(db, invocation_id)
+    assert (row.state, row.last_error) == ("outcome_unknown", "ingest outcome unknown")
+    assert seen["cancelled"] is True
+
+
+async def test_a_drain_starts_an_ingest_only_while_its_whole_timeout_fits(
+    db: AsyncSession, library: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.agent import tools_impl
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(tool_actions, "_clock", lambda: clock["now"])
+    calls: list[list[str]] = []
+
+    async def slow_ingest(args: dict[str, Any], *_args: Any, **_kwargs: Any) -> Any:
+        calls.append(list(args["paper_ids"]))
+        clock["now"] += 150  # most of the drain's budget
+        return {
+            "status": "ingestion_complete",
+            "document_ids": [LANDED],
+            "failed_papers": [],
+            "project_id": str(SECOND),
+        }
+
+    monkeypatch.setattr(tools_impl, "_tool_ingest_arxiv", slow_ingest)
+    _, first = await _approved_ingest(db, "2401.00001")
+    _, second = await _approved_ingest(db, "2401.00002")
+    assert await drain_integration_actions(db) == 1
+    assert (await _row(db, first)).state == "succeeded"
+    # 90 s of this drain's budget left, less than an ingest may take: it waits,
+    # still approved and unclaimed, for a drain with time to bound it.
+    assert (await _row(db, second)).state == "approved"
+    assert calls == [["2401.00001"]]
+    assert await drain_integration_actions(db) == 1
+    assert (await _row(db, second)).state == "succeeded"
+    assert calls == [["2401.00001"], ["2401.00002"]]
+
+
+def test_an_ingest_ends_inside_every_limit_that_could_cut_it_short() -> None:
+    from src.tasks.integration_action_tasks import drain_integration_actions as task
+
+    timeout = tool_actions.DETACHED_TIMEOUT
+    budget = tool_actions.DRAIN_BUDGET
+    # A drain starts an ingest only while the whole timeout fits in its budget,
+    # and the sweeper never calls a bounded ingest stale.
+    assert timeout < budget
+    assert timeout < tool_actions.STALE_EXECUTION
+    # Celery cancels the drain at its soft limit and kills it at its hard one:
+    # both only after the budget a drain may spend.
+    assert task.soft_time_limit is not None and task.time_limit is not None
+    assert budget.total_seconds() < task.soft_time_limit < task.time_limit
+
+
 # --- review: one summary sentence, and the stored arguments ----------------
 
 # Distinct titles, so a summary that names the wrong paper fails.

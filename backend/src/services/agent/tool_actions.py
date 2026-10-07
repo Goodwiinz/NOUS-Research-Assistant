@@ -27,12 +27,16 @@ its live scope reaches (``_resolve_target``).
 ``DETACHED_ACTIONS`` (the arXiv ingest) cannot share the receipt's
 transaction: the ingest stores papers through sessions of its own and object
 storage. It always waits for a decision, runs from the same worker drain once
-claimed, and its receipt is written afterwards and says so.
+claimed, and its receipt is written afterwards and says so. It runs for at most
+``DETACHED_TIMEOUT``, and a drain starts one only while that whole timeout
+still fits in its own ``DRAIN_BUDGET``.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -134,6 +138,15 @@ MAX_PAPER_IDS = 10
 # sessions of its own (per-paper persistence, object storage), so it runs
 # outside the transaction that writes the receipt. Never auto-run.
 DETACHED_ACTIONS = frozenset({"ingest_arxiv_papers"})
+# The longest a detached effect may run: the agent graph's bound for the same
+# tool (_nodes_tools._SLOW_TOOL_TIMEOUT_SECONDS). It stays under DRAIN_BUDGET
+# and STALE_EXECUTION, so the worker records how an ingest ended, not Celery's
+# time limit or the sweeper.
+DETACHED_TIMEOUT = timedelta(seconds=120)
+# How long one drain keeps starting rows. The drain task's Celery time limits
+# (integration_action_tasks) sit above it, and a drain starts an ingest only
+# while the whole DETACHED_TIMEOUT still fits inside it.
+DRAIN_BUDGET = timedelta(seconds=240)
 GRANT_DENIED = "grant no longer authorizes this action"
 # Stable reasons a library effect records instead of a service's own text.
 TARGET_NOT_FOUND = "target not found"
@@ -175,6 +188,11 @@ class ActionNotFound(ToolActionError):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _clock() -> float:
+    """Monotonic seconds, for the drain's budget."""
+    return time.monotonic()
 
 
 def canonical_hash(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -1393,6 +1411,12 @@ async def _fail_after_rollback(
     return await _current_status(db, row_id)
 
 
+async def _finish_unknown(db: AsyncSession, row_id: UUID) -> None:
+    """An ingest that may have stored papers but returned no payload."""
+    await db.rollback()
+    await _finish(db, row_id, state="outcome_unknown", last_error=INGEST_UNKNOWN)
+
+
 def _ingest_receipt(
     row: IntegrationToolAction, payload: dict[str, Any]
 ) -> tuple[dict[str, Any], str | None]:
@@ -1434,8 +1458,12 @@ async def _execute_detached(
     ingest stores and links each paper in transactions of its own (and in
     object storage) before the receipt is written. The claim ``_execute_row``
     committed is its idempotency key: one worker ever starts it and nothing
-    re-runs it. Papers that landed stay when the receipt reports a failure, and
-    when a stalled receipt loses to the sweeper (``outcome_unknown``).
+    re-runs it. Papers that landed stay when the receipt reports a failure.
+
+    The ingest gets ``DETACHED_TIMEOUT``. One that raises, outlasts it, or is
+    cancelled with the drain (Celery's soft time limit, a worker shutdown)
+    ends ``outcome_unknown`` (``INGEST_UNKNOWN``), recorded here rather than
+    left ``executing`` for the sweeper; a cancellation is then re-raised.
     """
     from src.services.agent.tools_impl import _tool_ingest_arxiv
 
@@ -1451,11 +1479,22 @@ async def _execute_detached(
     # and commits through sessions of its own.
     await db.commit()
     try:
-        payload = await _tool_ingest_arxiv(arguments, str(user.id), db, user)
+        payload = await asyncio.wait_for(
+            _tool_ingest_arxiv(arguments, str(user.id), db, user),
+            timeout=DETACHED_TIMEOUT.total_seconds(),
+        )
+    except asyncio.CancelledError:
+        # The drain itself is being cancelled: say what is known, then go.
+        logger.error("integration ingest cancelled", extra=log)
+        await _finish_unknown(db, row_id)
+        raise
+    except TimeoutError:
+        logger.error("integration ingest timed out", extra=log)
+        await _finish_unknown(db, row_id)
+        return await _current_status(db, row_id)
     except Exception as error:  # noqa: BLE001 - papers may have landed: unknown
         logger.error("integration ingest raised", extra=log, exc_info=error)
-        await db.rollback()
-        await _finish(db, row_id, state="outcome_unknown", last_error=INGEST_UNKNOWN)
+        await _finish_unknown(db, row_id)
         return await _current_status(db, row_id)
     receipt, reason = _ingest_receipt(row, payload)
     result = ToolResult(
@@ -1572,13 +1611,19 @@ async def drain_integration_actions(db: AsyncSession, *, limit: int = 50) -> int
     """Execute approved rows oldest first. Returns how many finished (any outcome).
 
     Gated by the same kill switch as new requests: with the flag off, approved
-    rows wait instead of running.
+    rows wait instead of running. One drain starts rows for ``DRAIN_BUDGET``
+    at most, and an ingest only while its whole ``DETACHED_TIMEOUT`` still
+    fits: rows run one after another, so an ingest claimed late in a busy
+    drain would otherwise get whatever time the earlier rows left. A row it
+    leaves stays approved, unclaimed, for a later drain (the beat starts one
+    every two seconds).
     """
     if not settings.NOUS_MCP_ENABLED:
         return 0
-    row_ids = (
-        await db.scalars(
-            select(IntegrationToolAction.id)
+    deadline = _clock() + DRAIN_BUDGET.total_seconds()
+    rows = (
+        await db.execute(
+            select(IntegrationToolAction.id, IntegrationToolAction.tool_name)
             .where(
                 IntegrationToolAction.state == "approved",
                 IntegrationToolAction.is_deleted.is_(False),
@@ -1588,7 +1633,12 @@ async def drain_integration_actions(db: AsyncSession, *, limit: int = 50) -> int
         )
     ).all()
     finished = 0
-    for row_id in row_ids:
+    for row_id, tool_name in rows:
+        left = deadline - _clock()
+        if left <= 0:
+            break
+        if tool_name in DETACHED_ACTIONS and left < DETACHED_TIMEOUT.total_seconds():
+            continue
         if await _execute_row(db, row_id) is not None:
             finished += 1
     return finished
