@@ -71,12 +71,14 @@ async def get_current_user(
             detail="User not found or inactive",
         )
 
-    # A user's verified Supabase address can change after JIT provisioning.
-    # Reconcile the database before routes compare profile input with the
-    # provider-owned value. The helper ignores locally issued CLI token claims.
-    from src.core.user_provisioning import sync_user_email_from_supabase_token
+    # JWT email values are snapshots. Reconcile only through the provider's
+    # current user record, and let AuthService own the database transaction.
+    if not token_data.is_cli and token_data.email:
+        from src.services.security.auth_service import AuthService
 
-    user = await sync_user_email_from_supabase_token(db, user, token_data)
+        user = await AuthService(db).sync_user_email_from_provider(
+            user, token_data.email
+        )
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -14,12 +14,12 @@ it serializes writers, so the unique-violation window never opens.
 
 GOO-405 mutation evidence (run from ``backend/``):
 
-* Guard at ``src/core/user_provisioning.py:221-223``: the user-race refetch.
-  Replacing its assignment with ``user = None`` made
+* Guard in ``_create_user``: the user-race refetch. Replacing its assignment
+  with ``user = None`` made
   ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_race_refetches_concurrently_created_user``
   fail because the returned user was ``None`` instead of the concurrent row.
-* Guard at ``src/core/user_provisioning.py:223``: warn only when the ID refetch
-  finds no subject row. Replacing the condition with ``if False`` made
+* Guard in ``_create_user``: warn only when the ID refetch finds no subject
+  row. Replacing the condition with ``if False`` made
   ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_email_conflict_warns_with_user_id_and_never_resolves_by_email``
   fail because the required warning was absent. Replacing it with ``if True``
   made ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_id_race_does_not_warn``
