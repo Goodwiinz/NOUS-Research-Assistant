@@ -20,14 +20,18 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Iterator
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from src.api.auth.auth import router as auth_router
+from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.core.security import TokenData, get_current_user_token
 from src.models.user import User, UserRole
 from src.services.security.auth_service import AuthService, get_auth_service
 
@@ -158,3 +162,97 @@ def test_service_no_longer_accepts_an_email_argument() -> None:
     ``users.email``."""
     params = inspect.signature(AuthService.update_user_profile).parameters
     assert "email" not in params
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_verified_supabase_email_change_syncs_by_subject_id(
+    user: User, db: AsyncMock
+) -> None:
+    """A changed provider email is reconciled before /auth/me sees the user."""
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
+    token_data = TokenData(user_id=str(user.id), email="new-owner@example.com")
+
+    current_user = await get_current_user(token_data, db)
+
+    assert current_user is user
+    assert user.email == "new-owner@example.com"
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.unit
+def test_profile_accepts_the_email_from_the_verified_provider_token(
+    user: User, db: AsyncMock
+) -> None:
+    """The auth dependency reconciles the provider value before route checks."""
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
+    token_data = TokenData(user_id=str(user.id), email="new-owner@example.com")
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/v1")
+    app.dependency_overrides[get_current_user_token] = lambda: token_data
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_auth_service] = lambda: AuthService(db)
+    try:
+        with TestClient(app) as test_client:
+            response = test_client.put(
+                PROFILE_URL, json={"email": "new-owner@example.com"}
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["user"]["email"] == "new-owner@example.com"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_stale_cli_email_cannot_overwrite_provider_email(
+    user: User, db: AsyncMock
+) -> None:
+    """CLI tokens contain a minted snapshot, so they are not sync authority."""
+    setattr(user, "email", "current@example.com")
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
+    token_data = TokenData(user_id=str(user.id), email=OWNER_EMAIL, is_cli=True)
+
+    current_user = await get_current_user(token_data, db)
+
+    assert current_user is user
+    assert user.email == "current@example.com"
+    db.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_verified_email_conflict_keeps_user_bound_to_subject(
+    user: User, db: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A unique-email collision fails closed without looking up by email."""
+    current_result = MagicMock()
+    current_result.scalars.return_value.first.return_value = user
+    restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
+    restored_result = MagicMock()
+    restored_result.scalars.return_value.first.return_value = restored_user
+    db.execute = AsyncMock(side_effect=[current_result, restored_result])
+    db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
+    token_data = TokenData(user_id=str(user.id), email=VICTIM_EMAIL)
+
+    with caplog.at_level("WARNING", logger="src.core.user_provisioning"):
+        current_user = await get_current_user(token_data, db)
+
+    assert current_user is restored_user
+    assert current_user.email == OWNER_EMAIL
+    db.rollback.assert_awaited_once()
+    assert db.execute.await_count == 2
+    refetch_where = str(db.execute.await_args_list[1].args[0]).split("WHERE", 1)[1]
+    assert "users.id" in refetch_where
+    assert "users.email" not in refetch_where
+    warning = next(record.getMessage() for record in caplog.records)
+    assert str(user.id) in warning
+    assert VICTIM_EMAIL not in warning

@@ -5,6 +5,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.core.security import TokenData, get_password_hash
 from src.models.organization import Organization, StorageTier
@@ -43,6 +44,48 @@ async def ensure_user_and_org(
 
     org = await _resolve_or_create_org(db, token_data)
     return await _create_user(db, token_data, org)
+
+
+async def sync_user_email_from_supabase_token(
+    db: AsyncSession,
+    user: User,
+    token_data: TokenData,
+) -> Optional[User]:
+    """Reconcile an existing subject's email from a verified Supabase JWT.
+
+    Locally issued CLI tokens carry a snapshot of the email from when they were
+    minted, so they are deliberately not a source for synchronization. If the
+    verified provider address is held by another row, preserve the subject-id
+    identity, roll back the failed update, and leave the collision for operator
+    reconciliation. Never adopt a row by email.
+    """
+    provider_email = token_data.email.strip().lower() if token_data.email else ""
+    if token_data.is_cli or not provider_email or user.email.lower() == provider_email:
+        return user
+
+    user.email = provider_email
+    try:
+        # Authenticated dependencies run before route handlers; commit this
+        # provider-owned identity update so the next API response sees it.
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        result = await db.execute(
+            select(User)
+            .options(selectinload(User.organization))
+            .where(
+                User.id == token_data.user_id,
+                User.is_active == True,
+                User.is_deleted == False,
+            )
+        )
+        user = result.scalars().first()
+        logger.warning(
+            "Verified email sync for user %s conflicts with another account; "
+            "operator reconciliation required",
+            token_data.user_id,
+        )
+    return user
 
 
 async def _resolve_or_create_org(
