@@ -92,9 +92,9 @@ current workspace access, so a creator removed from the workspace cannot export.
 account, put a canary message in the chat transcript (stream intercepted),
 sign out, sign in as another account in the same browser, and assert the
 canary never renders and no previous-account thread id survives in
-`localStorage`. It is opt-in (`E2E_ACCOUNT_SWITCH=1`) until it has been run
-once against the CI stack; client-store clearing itself is GOO-350
-(PR #1776). Deployed Data API grants remain GOO-285.
+`localStorage`. The test is selected by the PR E2E smoke lane; client-store
+clearing itself is GOO-350 (PR #1854), with chat request lifetime handling in
+PR #1776. A passing source or PR test does not prove a deployed browser run.
 
 ## Commands
 

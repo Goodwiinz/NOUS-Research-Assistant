@@ -10,19 +10,14 @@ import { createTestHelpers, TEST_DATA } from "./utils/test-helpers";
  * in on the same page. B's view must never render the canary, and the
  * persisted chat selection must not still point at A's thread.
  *
- * Opt-in (E2E_ACCOUNT_SWITCH=1) until it has run once against the CI stack;
- * the in-memory store clearing it checks is GOO-350 (PR #1776).
+ * This is part of the PR smoke lane. The in-memory store clearing it checks
+ * is GOO-350 (PR #1854); the chat request lifetime is also guarded by #1776.
  */
 
 const STREAM_URL = "**/api/v1/agent/stream";
 const RESUME_URL = "**/agent/stream/resume/**";
 
-test.describe("Account switch isolation @regression", () => {
-  test.skip(
-    !process.env.E2E_ACCOUNT_SWITCH,
-    "opt-in until verified on the CI stack (GOO-354)",
-  );
-
+test.describe("Account switch isolation @smoke @regression", () => {
   test("account B never sees account A's chat after a same-tab switch", async ({
     page,
     context,
