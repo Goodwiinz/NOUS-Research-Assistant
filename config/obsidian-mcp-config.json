@@ -8,7 +8,7 @@
         "/Users/goodwiinz/Documents/Mysynic"
       ],
       "env": {
-        "OBSIDIAN_API_KEY": "6437951bb0ab0855d6e77f0cd9b83513b9fa5282140cc54abe0842156e9b4f7e"
+        "OBSIDIAN_API_KEY": "${OBSIDIAN_API_KEY}"
       }
     }
   }
