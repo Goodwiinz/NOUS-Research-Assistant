@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Protocol, Sequence
 from uuid import UUID
 
-POLICY_VERSION = 1
+# Version 2 also rejects superseded interpretation claims.
+POLICY_VERSION = 2
 # A supported *statement of uncertainty* is still ``supporting``.
 SUPPORTING_STANCES = frozenset({"supporting"})
 BLOCKER_CODES = (
