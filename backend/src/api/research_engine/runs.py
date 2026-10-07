@@ -7,6 +7,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Dict, List, Optional
+from typing import cast as typing_cast
 from uuid import UUID
 
 from anyio import CancelScope
@@ -542,13 +543,11 @@ async def export_run(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Download an owner-scoped artifact for a completed research run."""
+    """Download the artifact for a completed research run the caller can view."""
+    await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
     try:
         artifact = await ExportService().export(
-            run_id,
-            UUID(str(current_user.id)),
-            format.value,
-            db,
+            run_id, format.value, db, user_id=typing_cast(UUID, current_user.id)
         )
     except ResearchExportError as exc:
         raise HTTPException(
@@ -665,7 +664,6 @@ async def stream_run(
         try:
             prior_outputs = await ResearchReviewService(db).apply_approved_overlays(
                 run_id=run_id,
-                owner_id=current_user.id,
                 context=prior_outputs,
             )
         except ValueError:

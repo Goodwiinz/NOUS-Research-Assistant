@@ -16924,7 +16924,7 @@
       },
       "PendingReviewResponse": {
         "additionalProperties": false,
-        "description": "Owned pending review state, optionally including bounded stage output.",
+        "description": "Pending review state for a run the caller can view, with bounded stage output.",
         "properties": {
           "accepted_review": {
             "anyOf": [
@@ -57275,7 +57275,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/export": {
       "get": {
-        "description": "Download an owner-scoped artifact for a completed research run.",
+        "description": "Download the artifact for a completed research run the caller can view.",
         "operationId": "export_run_api_v1_research_engine_runs__run_id__export_get",
         "parameters": [
           {
@@ -57740,7 +57740,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/reviews/pending": {
       "get": {
-        "description": "Return the current owned review gate and its bounded persisted output.",
+        "description": "Return the current review gate for a run the caller can view.",
         "operationId": "get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get",
         "parameters": [
           {
@@ -57789,7 +57789,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/reviews/{step_index}": {
       "post": {
-        "description": "Append one review bound to the current persisted stage envelope.",
+        "description": "Append one review bound to the current persisted stage envelope.\n\nRequires current project membership and the REVIEWER role.",
         "operationId": "submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post",
         "parameters": [
           {

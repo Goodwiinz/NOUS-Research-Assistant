@@ -8121,7 +8121,7 @@ export interface paths {
         };
         /**
          * Export Run
-         * @description Download an owner-scoped artifact for a completed research run.
+         * @description Download the artifact for a completed research run the caller can view.
          */
         get: operations["export_run_api_v1_research_engine_runs__run_id__export_get"];
         put?: never;
@@ -8270,7 +8270,7 @@ export interface paths {
         };
         /**
          * Get Pending Review
-         * @description Return the current owned review gate and its bounded persisted output.
+         * @description Return the current review gate for a run the caller can view.
          */
         get: operations["get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get"];
         put?: never;
@@ -8293,6 +8293,8 @@ export interface paths {
         /**
          * Submit Review
          * @description Append one review bound to the current persisted stage envelope.
+         *
+         *     Requires current project membership and the REVIEWER role.
          */
         post: operations["submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post"];
         delete?: never;
@@ -18177,7 +18179,7 @@ export interface components {
         };
         /**
          * PendingReviewResponse
-         * @description Owned pending review state, optionally including bounded stage output.
+         * @description Pending review state for a run the caller can view, with bounded stage output.
          */
         PendingReviewResponse: {
             accepted_review?: components["schemas"]["StageReviewResponse"] | null;
