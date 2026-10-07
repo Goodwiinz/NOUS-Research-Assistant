@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { JobsIndicator } from './JobsIndicator';
+import { HandoffEntryButton } from './artifact-panel/HandoffCard';
 
 export const EXPORT_BLOCKED_REASON =
   'Export is available when the response finishes';
@@ -134,6 +135,8 @@ export const ChatHeader = memo(function ChatHeader({
         {/* Background work (uploads, ingests, extraction) — renders nothing
             until there is a job to report. */}
         <JobsIndicator />
+
+        <HandoffEntryButton threadId={threadId} />
 
         {messages.length > 0 && onCopyAll && (
           <IconButton

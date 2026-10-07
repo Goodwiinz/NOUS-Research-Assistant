@@ -23,6 +23,7 @@ import {
   useNoteArtifact,
 } from '@/components/chat/artifact-panel/useArtifactContent';
 import { GeneratedArtifactBody } from '@/components/chat/artifact-panel/GeneratedArtifactBody';
+import { ThreadHandoffCard } from '@/components/chat/artifact-panel/HandoffCard';
 import { DocumentInlineViewer } from '@/components/documents/DocumentInlineViewer';
 import { cn } from '@/lib/utils';
 import { documentService } from '@/services/documentService';
@@ -31,6 +32,7 @@ import {
   useArtifactPanelStore,
   type Artifact,
 } from '@/store/artifactPanelStore';
+import { useChatStore } from '@/store/chat-store';
 import type { Citation } from '@/utils/citationParser';
 
 // Version suffix included: the backend stores versioned external references
@@ -54,6 +56,7 @@ const KIND_LABEL: Record<Artifact['kind'], string> = {
   note: 'Note',
   draft: 'Draft',
   generated: 'File',
+  handoff: 'Handoff',
   citations: 'Sources',
 };
 
@@ -325,6 +328,7 @@ export function ArtifactPanel({
   const pinned = useArtifactPanelStore((s) => s.pinned);
   const togglePin = useArtifactPanelStore((s) => s.togglePin);
   const openArtifact = useArtifactPanelStore((s) => s.openArtifact);
+  const threadId = useChatStore((s) => s.currentThreadId);
 
   // Escape closes the panel. Handling it on the <aside> only worked while
   // focus was already inside the panel — opening it never moves focus (it
@@ -515,6 +519,12 @@ export function ArtifactPanel({
 
         {/* Body */}
         <div className="nous-scrollbar flex-1 overflow-y-auto">
+          {/* Every view leads with the chat handoff; the handoff-only view
+              (opened from the header) shows just that. */}
+          <ThreadHandoffCard
+            threadId={threadId}
+            showEmpty={artifact.kind === 'handoff'}
+          />
           {artifact.kind === 'document' && (
             <DocumentArtifactBody documentId={artifact.id} />
           )}

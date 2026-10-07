@@ -4,6 +4,9 @@ import { api } from '@/services/api-client';
 import { clearWorkspaceServiceCache } from '@/services/workspaceService';
 import { getAppQueryClient } from '@/lib/query-client';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
+import { useChatStore } from '@/store/chat-store';
+import { useAgentChatStore } from '@/store/agentChatStore';
+import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { Organization, RegisterResult, User } from '@/types';
 import { supabaseAuthErrorMessage } from '@/utils/supabaseAuthError';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -91,8 +94,48 @@ let signInInFlight = 0;
 // explicit callers) onto a single /auth/me round-trip.
 let profileFetchInFlight: Promise<void> | null = null;
 
+// Auth generation: bumped by every account transition (sign-in, sign-out,
+// rejected session). A profile request captures it before its first await
+// and publishes nothing once it changed, so a late /auth/me (or its 401) for
+// user A can neither clear user B's client state nor flip the store back to A.
+let authGeneration = 0;
+
+/**
+ * Rejection for a sign-in whose result was superseded by a later auth
+ * transition (sign-out, another sign-in). It is not a success: the caller must
+ * not continue its post-login flow, and the store already reflects the newer
+ * transition.
+ */
+export class SignInSupersededError extends Error {
+  constructor() {
+    super(
+      'This sign-in was interrupted by another sign-in or sign-out. Please try again.'
+    );
+    this.name = 'SignInSupersededError';
+  }
+}
+
+// A request fenced out of its generation leaves the loading flag to whichever
+// sign-in still owns it; with none in flight, nothing else would clear it.
+function settleSupersededLoading(): void {
+  if (signInInFlight === 0 && useAuthStore.getState().isLoading) {
+    useAuthStore.setState({ isLoading: false });
+  }
+}
+
+function beginAuthGeneration(): number {
+  authGeneration += 1;
+  // A profile read issued for the previous account must not be joined.
+  profileFetchInFlight = null;
+  return authGeneration;
+}
+
 function clearUserScopedClientState(): void {
+  beginAuthGeneration();
   clearWorkspaceServiceCache();
+  useChatStore.getState().reset();
+  useAgentChatStore.getState().reset();
+  useAgentActivityStore.setState({ runs: {}, currentThreadId: null });
   useArtifactPanelStore.getState().reset();
   // The root QueryClient and APIClient singleton survive client-side auth
   // transitions, so neither may retain the previous user's private data or
@@ -122,6 +165,7 @@ function getSupabaseClient(): SupabaseClient {
           user: null,
           organization: null,
           isAuthenticated: false,
+          isLoading: false,
           error: null,
           ...CLEARED_PENDING_CONFIRMATION,
         });
@@ -146,6 +190,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   signIn: async (email: string, password: string) => {
     set({ isLoading: true, error: null });
     signInInFlight += 1;
+    const generation = beginAuthGeneration();
 
     try {
       const supabase = getSupabaseClient();
@@ -171,7 +216,11 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const profileData = await api.get<ProfileResponse>('/auth/me', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
+        if (generation !== authGeneration) throw new SignInSupersededError();
 
+        if (get().user && get().user?.id !== profileData.user.id) {
+          clearUserScopedClientState();
+        }
         set({
           user: profileData.user,
           organization: profileData.organization ?? null,
@@ -185,6 +234,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     } catch (error) {
       const authError =
         error instanceof Error ? error : new Error('Login failed');
+      if (generation !== authGeneration) {
+        // Superseded: never write this attempt's error onto the newer
+        // session. This call is still counted in signInInFlight.
+        if (signInInFlight === 1) set({ isLoading: false });
+        throw authError;
+      }
       set({
         error: authError.message,
         isLoading: false,
@@ -362,6 +417,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       return;
     }
 
+    const generation = authGeneration;
+    const isCurrentGeneration = (): boolean => generation === authGeneration;
     const request = (async () => {
       try {
         const supabase = getSupabaseClient();
@@ -374,8 +431,10 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           data: { user },
           error: userError,
         } = await supabase.auth.getUser();
+        if (!isCurrentGeneration()) return settleSupersededLoading();
 
         if (userError || !user) {
+          clearUserScopedClientState();
           set({
             user: null,
             organization: null,
@@ -388,9 +447,11 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const {
           data: { session },
         } = await supabase.auth.getSession();
+        if (!isCurrentGeneration()) return settleSupersededLoading();
         const accessToken = session?.access_token;
 
         if (!accessToken) {
+          clearUserScopedClientState();
           set({
             user: null,
             organization: null,
@@ -403,7 +464,11 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const profileData = await api.get<ProfileResponse>('/auth/me', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
+        if (!isCurrentGeneration()) return settleSupersededLoading();
 
+        if (get().user && get().user?.id !== profileData.user.id) {
+          clearUserScopedClientState();
+        }
         set({
           user: profileData.user,
           organization: profileData.organization ?? null,
@@ -412,6 +477,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           ...CLEARED_PENDING_CONFIRMATION,
         });
       } catch (error) {
+        if (!isCurrentGeneration()) return settleSupersededLoading();
         const message =
           error instanceof Error ? error.message : 'Failed to fetch profile';
         const statusCode = errorStatusCode(error);
@@ -429,6 +495,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           return;
         }
 
+        clearUserScopedClientState();
         set({
           user: null,
           organization: null,
@@ -443,7 +510,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     try {
       await request;
     } finally {
-      profileFetchInFlight = null;
+      if (profileFetchInFlight === request) {
+        profileFetchInFlight = null;
+      }
     }
   },
 
