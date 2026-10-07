@@ -3278,8 +3278,9 @@ async def test_project_remove_cannot_change_foreign_document_membership(
 @pytest.mark.parametrize(
     "shared", [False, True], ids=["own-workspace", "shared-workspace"]
 )
+@pytest.mark.parametrize("identity", ["active", "no-organization", "missing-user"])
 async def test_collection_membership_writes_use_actor_organization(
-    db: AsyncSession, library: None, operation: str, shared: bool
+    db: AsyncSession, library: None, operation: str, shared: bool, identity: str
 ) -> None:
     # Exercise the shared persistence boundary directly as well as through
     # the action adapter. Workspace metadata must not supply document identity.
@@ -3303,6 +3304,12 @@ async def test_collection_membership_writes_use_actor_organization(
     await db.execute(
         update(Document).where(Document.id == retired).values(is_deleted=True)
     )
+    if identity == "no-organization":
+        await db.execute(
+            update(User).where(User.id == USER).values(organization_id=None)
+        )
+    elif identity == "missing-user":
+        await db.execute(User.__table__.delete().where(User.id == USER))
     requested = [PAPER2, foreign, retired]
     if operation == "remove":
         db.add_all(
@@ -3327,6 +3334,9 @@ async def test_collection_membership_writes_use_actor_organization(
         )
     assert collection is not None
     await db.commit()
-    assert await _linked(db, collection.id, PAPER2) is (operation != "remove")
+    expected_owned = (
+        operation != "remove" if identity == "active" else operation == "remove"
+    )
+    assert await _linked(db, collection.id, PAPER2) is expected_owned
     for blocked in (foreign, retired):
         assert await _linked(db, collection.id, blocked) is (operation == "remove")
