@@ -12,13 +12,13 @@ from sqlalchemy.orm import selectinload
 
 from src.core.config import settings
 from src.core.database import get_db
-from src.core.security import get_current_user_token
+from src.core.security import TokenData, get_current_user_token
 from src.models.organization import Organization
 from src.models.user import User, UserRole
 
 
 async def get_current_user(
-    token_data: dict = Depends(get_current_user_token),
+    token_data: TokenData = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Get current authenticated user with eagerly loaded organization"""
@@ -65,11 +65,23 @@ async def get_current_user(
             )
             user = result.scalars().first()
 
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive",
-            )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
+
+    # A user's verified Supabase address can change after JIT provisioning.
+    # Reconcile the database before routes compare profile input with the
+    # provider-owned value. The helper ignores locally issued CLI token claims.
+    from src.core.user_provisioning import sync_user_email_from_supabase_token
+
+    user = await sync_user_email_from_supabase_token(db, user, token_data)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
 
     return user
 
