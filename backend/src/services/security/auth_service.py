@@ -86,15 +86,15 @@ _email_reconciliation_backoff = _EmailReconciliationBackoff()
 
 
 class _KeyedEmailReconciliationLocks:
-    """Coalesce same-subject, same-claim reconciliation within this process."""
+    """Serialize email reconciliation by subject within this process."""
 
     def __init__(self) -> None:
-        self._entries: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
+        self._entries: dict[str, tuple[asyncio.Lock, int]] = {}
         self._guard = threading.Lock()
 
     @asynccontextmanager
-    async def hold(self, user_id: str, email: str) -> AsyncIterator[None]:
-        key = _email_reconciliation_backoff._key(user_id, email)
+    async def hold(self, user_id: str) -> AsyncIterator[None]:
+        key = user_id
         with self._guard:
             entry = self._entries.get(key)
             lock, users = entry if entry is not None else (asyncio.Lock(), 0)
@@ -310,18 +310,22 @@ class AuthService:
             return user
 
         subject_id = str(user.id)
-        async with _email_reconciliation_locks.hold(subject_id, claimed_email):
+        # get_current_user has only read the row at this point. End that read
+        # transaction before waiting for a same-subject request or calling
+        # Supabase, so neither wait holds a scarce pool connection.
+        await self.db.rollback()
+        async with _email_reconciliation_locks.hold(subject_id):
+            current_user = await self._get_active_user(subject_id)
+            if current_user is None:
+                return None
+            if current_user.email.lower() == claimed_email:
+                return current_user
             if _email_reconciliation_backoff.contains(subject_id, claimed_email):
-                result = await self.db.execute(
-                    select(User)
-                    .options(selectinload(User.organization))
-                    .where(
-                        User.id == subject_id,
-                        User.is_active == True,
-                        User.is_deleted == False,
-                    )
-                )
-                return result.scalars().first()
+                return current_user
+
+            # The row read above opened another transaction. Release it before
+            # the provider round trip, then load the subject again afterward.
+            await self.db.rollback()
 
             from src.core.user_provisioning import get_verified_supabase_email
 
@@ -334,28 +338,21 @@ class AuthService:
                     claimed_email,
                     ttl_seconds=_PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS,
                 )
-                return user
+                return await self._get_active_user(subject_id)
             if provider_email != claimed_email:
                 _email_reconciliation_backoff.remember(subject_id, claimed_email)
-            if user.email.lower() == provider_email:
-                return user
 
-            user.email = provider_email
+            current_user = await self._get_active_user(subject_id)
+            if current_user is None or current_user.email.lower() == provider_email:
+                return current_user
+
+            current_user.email = provider_email
             try:
                 await self.db.commit()
             except IntegrityError:
                 _email_reconciliation_backoff.remember(subject_id, provider_email)
                 await self.db.rollback()
-                result = await self.db.execute(
-                    select(User)
-                    .options(selectinload(User.organization))
-                    .where(
-                        User.id == subject_id,
-                        User.is_active == True,
-                        User.is_deleted == False,
-                    )
-                )
-                user = result.scalars().first()
+                current_user = await self._get_active_user(subject_id)
                 logger.warning(
                     "Current provider email sync for user %s conflicts with another "
                     "account; operator reconciliation required",
@@ -363,7 +360,19 @@ class AuthService:
                 )
             else:
                 _email_reconciliation_backoff.remember(subject_id, provider_email)
-        return user
+            return current_user
+
+    async def _get_active_user(self, subject_id: str) -> Optional[User]:
+        result = await self.db.execute(
+            select(User)
+            .options(selectinload(User.organization))
+            .where(
+                User.id == subject_id,
+                User.is_active == True,
+                User.is_deleted == False,
+            )
+        )
+        return result.scalars().first()
 
     async def update_user_role(
         self, admin_user: User, target_user: User, new_role: UserRole

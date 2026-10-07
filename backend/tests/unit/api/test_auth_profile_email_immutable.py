@@ -18,23 +18,32 @@ request with 400 before anything is written.
 
 GOO-405 reconciliation backoff mutation evidence (run from ``backend/``):
 
-* Guard at ``src/services/security/auth_service.py:339``: a provider-disproved
+* Guard at ``src/services/security/auth_service.py:343``: a provider-disproved
   JWT email claim is remembered. Removing that call makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_disproved_stale_claim_does_not_repeat_provider_lookup`` fail
   because it performs a second provider lookup.
-* Guard at ``src/services/security/auth_service.py:347``: a confirmed email
+* Guard at ``src/services/security/auth_service.py:353``: a confirmed email
   collision is remembered after rollback. Removing that call makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_email_conflict_backs_off_repeated_sync`` fail
   because it repeats the lookup and commit.
-* Guard at ``src/services/security/auth_service.py:332``: provider lookup
+* Guard at ``src/services/security/auth_service.py:336``: provider lookup
   failures receive a short backoff. Removing it makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_lookup_failure_leaves_email_unchanged`` fail
   because every request retries the failed lookup.
-* Guard at ``src/services/security/auth_service.py:103``: same-key
-  requests are coalesced around the lookup and write. Bypassing the keyed lock
-  makes
-  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_concurrent_reconciliation_uses_one_provider_lookup`` fail
-  because both concurrent calls reach the provider.
+* Guard at ``src/services/security/auth_service.py:97``: the lock key is the
+  subject, so different JWT claims for one account are serialized. Making the
+  key unique per request makes
+  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_different_claims_for_same_subject_serialize_without_holding_connections``
+  fail because the stale provider result can overwrite the newer result.
+* Guard at ``src/services/security/auth_service.py:316``: the initial read
+  transaction is ended before waiting on the per-subject lock. Removing this
+  rollback makes
+  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_different_claims_for_same_subject_serialize_without_holding_connections``
+  fail because the waiting request has not released its session connection.
+* Guard at ``src/services/security/auth_service.py:328``: the refreshed read
+  transaction is ended before the provider request. Removing this rollback
+  makes the same focused test fail because the first lookup starts while its
+  session still owns a connection.
 
 Each proof disables one guard, observes its focused failure, then restores the
 source byte-for-byte before running the focused test on the restored source.
@@ -46,6 +55,7 @@ import asyncio
 import inspect
 import uuid
 from collections.abc import Iterator
+from threading import Event as ThreadingEvent
 from time import sleep
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -256,6 +266,9 @@ async def test_disproved_stale_claim_does_not_repeat_provider_lookup(
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email", current_email
     )
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
     service = AuthService(db)
 
     await service.sync_user_email_from_provider(user, OWNER_EMAIL)
@@ -298,6 +311,9 @@ async def test_concurrent_reconciliation_uses_one_provider_lookup(
     refreshed_user = SimpleNamespace(id=subject_id, email="current@example.com")
     first_db = AsyncMock()
     second_db = AsyncMock()
+    first_result = MagicMock()
+    first_result.scalars.return_value.first.return_value = first_user
+    first_db.execute.return_value = first_result
     refreshed_result = MagicMock()
     refreshed_result.scalars.return_value.first.return_value = refreshed_user
     second_db.execute.return_value = refreshed_result
@@ -315,17 +331,88 @@ async def test_concurrent_reconciliation_uses_one_provider_lookup(
     first_service = AuthService(first_db)
     second_service = AuthService(second_db)
 
-    first_result, second_result = await asyncio.gather(
+    reconciled_users = await asyncio.gather(
         first_service.sync_user_email_from_provider(first_user, OWNER_EMAIL),
         second_service.sync_user_email_from_provider(stale_loaded_user, OWNER_EMAIL),
     )
+    first_user_result = reconciled_users[0]
+    second_user_result = reconciled_users[1]
 
     assert lookups == 1
-    assert first_result is not None
-    assert first_result.email == "current@example.com"
-    assert second_result is refreshed_user
+    assert first_user_result is not None
+    assert first_user_result.email == "current@example.com"
+    assert second_user_result is refreshed_user
     first_db.commit.assert_awaited_once()
     second_db.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_different_claims_for_same_subject_serialize_without_holding_connections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Different JWT snapshots cannot race writes or hold DB connections."""
+    subject_id = str(uuid.uuid4())
+    user = User(
+        id=subject_id,
+        email="stored@example.com",
+        password_hash="unused-jit-secret",
+        first_name="Ada",
+        last_name="Lovelace",
+        role=UserRole.USER,
+        is_active=True,
+        is_deleted=False,
+        organization_id=None,
+    )
+    first_db = AsyncMock()
+    second_db = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    first_db.execute.return_value = result
+    second_db.execute.return_value = result
+    first_lookup_started = ThreadingEvent()
+    release_first_lookup = ThreadingEvent()
+    provider_calls: list[str] = []
+    first_session_rollbacks_at_lookup: list[int] = []
+
+    def current_email(_user_id: str) -> str:
+        provider_calls.append(_user_id)
+        if len(provider_calls) == 1:
+            first_session_rollbacks_at_lookup.append(first_db.rollback.await_count)
+            first_lookup_started.set()
+            assert release_first_lookup.wait(timeout=2)
+            return "middle@example.com"
+        return "latest@example.com"
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", current_email
+    )
+    first_service = AuthService(first_db)
+    second_service = AuthService(second_db)
+    first_request = asyncio.create_task(
+        first_service.sync_user_email_from_provider(user, "claim-b@example.com")
+    )
+    assert await asyncio.to_thread(first_lookup_started.wait, 2)
+    second_request = asyncio.create_task(
+        second_service.sync_user_email_from_provider(user, "claim-c@example.com")
+    )
+    await asyncio.sleep(0.05)
+    provider_calls_while_waiting = len(provider_calls)
+    second_rollbacks_while_waiting = second_db.rollback.await_count
+    release_first_lookup.set()
+    results = await asyncio.gather(first_request, second_request)
+    first_result = results[0]
+    second_result = results[1]
+
+    assert len(provider_calls) == 2
+    assert provider_calls_while_waiting == 1
+    assert second_rollbacks_while_waiting == 1
+    assert first_session_rollbacks_at_lookup == [2]
+    assert first_result is user
+    assert second_result is user
+    assert user.email == "latest@example.com"
+    first_db.commit.assert_awaited_once()
+    second_db.commit.assert_awaited_once()
 
 
 @pytest.mark.unit
@@ -336,9 +423,13 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
     """A provider-confirmed local collision is retried only after backoff."""
     setattr(user, "id", uuid.uuid4())
     restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
-    result = MagicMock()
-    result.scalars.return_value.first.return_value = restored_user
-    db.execute.return_value = result
+    current_result = MagicMock()
+    current_result.scalars.return_value.first.return_value = user
+    restored_result = MagicMock()
+    restored_result.scalars.return_value.first.return_value = restored_user
+    db.execute = AsyncMock(
+        side_effect=[current_result, current_result, restored_result, restored_result]
+    )
     db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
     lookups = 0
 
@@ -362,7 +453,7 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
     assert second_user is restored_user
     assert lookups == 1
     db.commit.assert_awaited_once()
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 4
 
 
 @pytest.mark.unit
@@ -466,7 +557,9 @@ async def test_verified_email_conflict_keeps_user_bound_to_subject(
     restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
     restored_result = MagicMock()
     restored_result.scalars.return_value.first.return_value = restored_user
-    db.execute = AsyncMock(side_effect=[current_result, restored_result])
+    db.execute = AsyncMock(
+        side_effect=[current_result, current_result, current_result, restored_result]
+    )
     db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
     token_data = TokenData(user_id=str(user.id), email=VICTIM_EMAIL)
 
@@ -475,9 +568,9 @@ async def test_verified_email_conflict_keeps_user_bound_to_subject(
 
     assert current_user is restored_user
     assert current_user.email == OWNER_EMAIL
-    db.rollback.assert_awaited_once()
-    assert db.execute.await_count == 2
-    refetch_where = str(db.execute.await_args_list[1].args[0]).split("WHERE", 1)[1]
+    assert db.rollback.await_count == 3
+    assert db.execute.await_count == 4
+    refetch_where = str(db.execute.await_args_list[-1].args[0]).split("WHERE", 1)[1]
     assert "users.id" in refetch_where
     assert "users.email" not in refetch_where
     warning = next(record.getMessage() for record in caplog.records)
