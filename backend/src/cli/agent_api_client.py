@@ -96,8 +96,7 @@ class AgentAPIClient:
     ) -> dict[str, Any]:
         response = await self._client.get(
             f"/api/v1/cli-auth/status/{session_id}",
-            params={"poll_token": poll_token},
-            headers=self._headers,
+            headers={**self._headers, "X-CLI-Poll-Token": poll_token},
         )
         response.raise_for_status()
         return response.json()

@@ -26,7 +26,11 @@ import {
 } from "@assistant-ui/core";
 import { useChatRuntimeAdapter } from "@nous/chat-runtime";
 import { convertMessage, HITL_APPROVAL_TOOL } from "@nous/chat-runtime/message";
-import { loadConfig, saveConfig } from "../../frontend/cli/auth/store";
+import {
+  loadConfig,
+  saveConfig,
+  subscribeConfig,
+} from "../../frontend/cli/auth/store";
 
 import {
   readDraft,
@@ -249,7 +253,13 @@ export function App({
   }>();
   const historyIndex = useRef(-1);
   const contextVersion = useRef(0);
-  const config = loadConfig();
+  const [config, setConfig] = useState(loadConfig);
+  useEffect(() => {
+    const unsubscribe = subscribeConfig(setConfig);
+    // Reconcile any write between the initial render and subscription.
+    setConfig(loadConfig());
+    return unsubscribe;
+  }, []);
   const report = (promise: Promise<unknown>) => {
     void promise.catch((error) =>
       session.setNotice(

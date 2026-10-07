@@ -75,7 +75,8 @@ vi.mock('@/hooks/useChatPersistence', () => ({
   useChatPersistence: () => ({ initialize: persistenceMocks.initialize }),
 }));
 
-vi.mock('@/store/chat-store', () => ({
+vi.mock('@/store/chat-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/chat-store')>()),
   useChatStore: chatStoreMocks.useStore,
 }));
 
@@ -88,6 +89,7 @@ vi.mock('react-hot-toast', () => ({
 }));
 
 import { useChatSession } from '@/hooks/chat/useChatSession';
+import toast from 'react-hot-toast';
 
 function thread(id: string, conversationId: string, title = id): Thread {
   return {
@@ -493,5 +495,36 @@ describe('useChatSession workspace-wide thread pages', () => {
     expect(
       workspaceMocks.getOrCreateDefaultConversation
     ).not.toHaveBeenCalled();
+  });
+
+  it('ignores a pagination error after the account session ends', async () => {
+    authMocks.isAuthenticated = false;
+    const { result } = renderHook(() => useChatSession());
+    await act(async () => {
+      await result.current.loadThreadsFromDb('ws-1');
+    });
+    let reject!: (error: Error) => void;
+    workspaceMocks.listWorkspaceThreads.mockReturnValueOnce(
+      new Promise((_resolve, rejectRequest) => {
+        reject = rejectRequest;
+      })
+    );
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.loadMoreThreads();
+    });
+    const { useChatStore: actualChatStore } =
+      await vi.importActual<typeof import('@/store/chat-store')>(
+        '@/store/chat-store'
+      );
+    act(() => {
+      actualChatStore.getState().reset();
+    });
+    vi.mocked(toast.error).mockClear();
+    await act(async () => {
+      reject(new Error('A private failure'));
+      await pending;
+    });
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

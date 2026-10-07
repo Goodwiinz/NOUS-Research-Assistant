@@ -41,7 +41,20 @@ from src.services.artifacts.service import (
 )
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
-_PUBLISH = Depends(require_integration_context("artifacts:publish"))
+
+
+async def _project_bound(
+    context: IntegrationContext = Depends(
+        require_integration_context("artifacts:publish")
+    ),
+) -> IntegrationContext:
+    """Publication stays bound to one Collection; a workspace grant is refused."""
+    if context.project_id is None:
+        raise HTTPException(403, "Integration access denied")
+    return context
+
+
+_PUBLISH = Depends(_project_bound)
 _STATUS: dict[type[ArtifactError], tuple[int, str]] = {
     ArtifactNotFound: (404, "Artifact not found"),
     ArtifactAccessDenied: (403, "Integration access denied"),

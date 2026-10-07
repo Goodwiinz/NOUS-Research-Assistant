@@ -25,6 +25,28 @@ export interface NousConfig {
   paper_title?: string | null;
 }
 
+type ConfigListener = (config: NousConfig | null) => void;
+const configListeners = new Set<ConfigListener>();
+
+/** Subscribe to successful writes made by this CLI process. */
+export function subscribeConfig(listener: ConfigListener): () => void {
+  configListeners.add(listener);
+  return () => {
+    configListeners.delete(listener);
+  };
+}
+
+function publishConfig(config: NousConfig | null): void {
+  for (const listener of configListeners) {
+    try {
+      listener(config ? { ...config } : null);
+    } catch {
+      // Persistence already succeeded; a subscriber must not fail the save.
+      console.warn('Failed to notify a config change listener.');
+    }
+  }
+}
+
 function configDir(): string {
   return process.env.NOUS_CONFIG_DIR ?? path.join(os.homedir(), '.nous');
 }
@@ -60,9 +82,11 @@ export function saveConfig(config: NousConfig): void {
   } finally {
     rmSync(temporary, { force: true });
   }
+  publishConfig(config);
 }
 
 export function clearConfig(): void {
   const p = configPath();
   if (existsSync(p)) rmSync(p);
+  publishConfig(null);
 }
