@@ -242,8 +242,15 @@ describe('useAuthStore profile responses across account transitions', () => {
   it.each(['signOutThenSignIn', 'switchAccount'] as const)(
     'discards user A’s late /auth/me after %s to user B',
     async (transition) => {
-      const { useAuthStore, useChatStore, apiGet, profileA, pendingA } =
-        await startWithUserAProfileInFlight();
+      const {
+        useAuthStore,
+        useChatStore,
+        apiGet,
+        getUser,
+        getSession,
+        profileA,
+        pendingA,
+      } = await startWithUserAProfileInFlight();
 
       if (transition === 'signOutThenSignIn') {
         await useAuthStore.getState().signOut();
@@ -253,6 +260,16 @@ describe('useAuthStore profile responses across account transitions', () => {
         .signIn('user-b@example.invalid', 'synthetic-password');
       expect(useAuthStore.getState().user?.id).toBe('user-B');
       seedUserBChat(useChatStore);
+      // The verified SDK identity must follow the completed account switch.
+      // Leaving its default user-1 would correctly start another transition
+      // when B explicitly verifies the session below.
+      getUser.mockResolvedValue({
+        data: { user: PROFILE_B.user },
+        error: null,
+      });
+      getSession.mockResolvedValue({
+        data: { session: { ...SESSION, user: PROFILE_B.user } },
+      });
 
       // B's own profile read starts and owns the in-flight slot: it is not
       // joined onto A's abandoned request.
