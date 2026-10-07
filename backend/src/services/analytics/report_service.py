@@ -703,10 +703,13 @@ class ReportGenerationService:
             async with aiofiles.open(file_path, "rb") as f:
                 file_data = await f.read()
 
-            files = {"file": (file_path.name, file_data)}
+            form = aiohttp.FormData()
+            for key, value in payload.items():
+                form.add_field(key, str(value))
+            form.add_field("file", file_data, filename=file_path.name)
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    url, data=payload, files=files, allow_redirects=False
+                    url, data=form, allow_redirects=False
                 ) as response:
                     if response.status != 200:
                         logger.error(f"Webhook failed with status {response.status}")
