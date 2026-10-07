@@ -567,7 +567,9 @@ async def test_release_gate_invalidation_graph_and_races(
         )
         == 1
     )
-    assert len(await _events(factory, "release.promoted")) == 1
+    promotion_events = await _events(factory, "release.promoted")
+    assert len(promotion_events) == 1
+    assert promotion_events[0]["policy_version"] == 2
     assert await _count(factory, "SELECT 1") == 1
     again, replayed = await _promote(w, "A", w.v1, 1, "j-1", v1_hash)
     assert replayed and again.id == release1
@@ -579,6 +581,7 @@ async def test_release_gate_invalidation_graph_and_races(
     }
     assert row["interpretation_claim_version_ids"] == [str(c3.version.id)]
     assert row["content_hash"] == v1_hash and row["draft_version"] == 1
+    assert row["policy_version"] == 2
     assert row["actor_role"] in ("adjudicator", "supervisor")
     assert (await _check(w, w.v1, 1)).release_status == "verified"
     assert f"VERIFIED release {release1}" in await _export(factory, w, w.v1)
