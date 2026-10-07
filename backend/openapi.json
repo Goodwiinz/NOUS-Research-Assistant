@@ -2429,8 +2429,7 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ToolExecutionActivityResponse"
                 },
                 "type": "array"
               },
@@ -12550,6 +12549,69 @@
         ],
         "title": "ToneOption",
         "type": "string"
+      },
+      "ToolExecutionActivityResponse": {
+        "description": "Display-safe summary of a persisted agent tool execution.",
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "tool_display_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Display Name"
+          },
+          "tool_name": {
+            "maxLength": 128,
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name"
+        ],
+        "title": "ToolExecutionActivityResponse",
+        "type": "object"
       },
       "TriggerExtractionRequest": {
         "description": "Request to trigger extraction on selected documents.",

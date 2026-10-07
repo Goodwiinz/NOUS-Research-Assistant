@@ -9426,9 +9426,7 @@ export interface components {
             /** Tool Call Id */
             tool_call_id?: string | null;
             /** Tool Executions */
-            tool_executions?: {
-                [key: string]: unknown;
-            }[] | null;
+            tool_executions?: components["schemas"]["ToolExecutionActivityResponse"][] | null;
             /** Tool Name */
             tool_name?: string | null;
             /** Ttft Ms */
@@ -14027,6 +14025,22 @@ export interface components {
          * @enum {string}
          */
         ToneOption: "academic" | "simplified" | "concise" | "expanded";
+        /**
+         * ToolExecutionActivityResponse
+         * @description Display-safe summary of a persisted agent tool execution.
+         */
+        ToolExecutionActivityResponse: {
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Id */
+            id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Tool Display Name */
+            tool_display_name?: string | null;
+            /** Tool Name */
+            tool_name: string;
+        };
         /**
          * TriggerExtractionRequest
          * @description Request to trigger extraction on selected documents.

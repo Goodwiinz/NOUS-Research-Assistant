@@ -47,6 +47,14 @@ _TOKEN_RE: Final = re.compile(
     r"|github_pat_[A-Za-z0-9_]{30,})\b"
 )
 
+_MAX_PUBLIC_TOOL_EXECUTIONS: Final = 100
+_PUBLIC_TOOL_TEXT_LIMITS: Final = {
+    "id": 128,
+    "tool_name": 128,
+    "tool_display_name": 200,
+    "status": 32,
+}
+
 
 # NOTE: ``text`` is intentionally ``Any``. LangGraph HumanMessage.content
 # can be ``list[dict]`` for multimodal messages, and upstream callers may
@@ -131,7 +139,40 @@ def redact_tool_executions(entries: Any) -> Any:
     ]
 
 
+def public_tool_execution_activity(entries: Any) -> list[dict[str, Any]] | None:
+    """Project persisted tool traces onto the display-safe public activity DTO.
+
+    General workspace APIs can be read under public-workspace access rules, so
+    they must never expose raw arguments, results, errors, or unknown fields.
+    Invalid legacy entries are ignored rather than reflected or allowed to
+    break a message response.
+    """
+    if entries is None:
+        return None
+    if not isinstance(entries, list):
+        return []
+
+    activity = []
+    for entry in entries[:_MAX_PUBLIC_TOOL_EXECUTIONS]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("tool_name"), str):
+            continue
+
+        item: dict[str, Any] = {}
+        for field, limit in _PUBLIC_TOOL_TEXT_LIMITS.items():
+            value = entry.get(field)
+            if isinstance(value, str):
+                item[field] = value[:limit]
+
+        duration_ms = entry.get("duration_ms")
+        if isinstance(duration_ms, int) and not isinstance(duration_ms, bool):
+            item["duration_ms"] = max(0, duration_ms)
+        activity.append(item)
+
+    return activity
+
+
 __all__ = [
+    "public_tool_execution_activity",
     "redact_nested_pii",
     "redact_pii",
     "redact_tool_args",

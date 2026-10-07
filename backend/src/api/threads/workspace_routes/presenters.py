@@ -35,7 +35,7 @@ from src.schemas.chat import (
     WorkspaceMemberResponse,
     WorkspaceResponse,
 )
-from src.services.agent._pii_redact import redact_tool_executions
+from src.services.agent._pii_redact import public_tool_execution_activity
 from src.services.threads.thread_service import THREAD_PREVIEW_MAX_CHARS
 
 __all__ = [
@@ -220,7 +220,7 @@ def _message_to_response(message: ChatMessage) -> ChatMessageResponse:
         tool_call_id=message.tool_call_id,
         feedback_rating=message.feedback_rating,
         feedback_text=message.feedback_text,
-        tool_executions=redact_tool_executions(message.tool_executions),
+        tool_executions=public_tool_execution_activity(message.tool_executions),
         plan=message.plan,
         plan_reasoning=message.plan_reasoning,
         token_usage=message.token_usage,

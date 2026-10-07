@@ -370,6 +370,16 @@ class MessageAttachmentResponse(BaseModel):
         from_attributes = True
 
 
+class ToolExecutionActivityResponse(BaseModel):
+    """Display-safe summary of a persisted agent tool execution."""
+
+    id: Optional[str] = Field(None, max_length=128)
+    tool_name: str = Field(..., max_length=128)
+    tool_display_name: Optional[str] = Field(None, max_length=200)
+    status: Optional[str] = Field(None, max_length=32)
+    duration_ms: Optional[int] = Field(None, ge=0)
+
+
 class ChatMessageResponse(ChatMessageBase, TimestampMixin):
     """Chat message response"""
 
@@ -392,10 +402,9 @@ class ChatMessageResponse(ChatMessageBase, TimestampMixin):
     tool_call_id: Optional[str] = None
     feedback_rating: Optional[int] = None
     feedback_text: Optional[str] = None
-    # Agent tool executions recorded for this turn (JSONB passthrough:
-    # [{id, tool_name, tool_display_name, args, status, result, error,
-    # duration_ms}, ...]). Null for legacy rows and non-agent messages.
-    tool_executions: Optional[List[dict]] = None
+    # Display-safe agent activity. Raw persisted args, results, errors, and
+    # unknown fields are deliberately excluded from general workspace APIs.
+    tool_executions: Optional[List[ToolExecutionActivityResponse]] = None
     # Per-turn agent provenance (JSONB passthrough). plan: planner steps
     # [{step, description, tool, args_hint, depends_on}]; token_usage:
     # {input_tokens, output_tokens}. Null for legacy/non-agent rows.
