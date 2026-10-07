@@ -45,6 +45,7 @@ from src.services.research_engine.observability import (
 )
 from src.services.research_engine.project_access import (
     ResearchAction,
+    accessible_research_collection_ids_query,
     require_run_context,
 )
 
@@ -114,9 +115,13 @@ class ResearchReviewService:
         self.observer = observer or research_observability
         self.now = now
 
-    async def get_pending_review(self, *, run_id: UUID) -> PendingReviewResponse:
-        """Return the pending gate; the route has already required VIEW."""
-        run = await self._load_run(run_id, lock=False)
+    async def get_pending_review(
+        self, *, run_id: UUID, user_id: UUID
+    ) -> PendingReviewResponse:
+        """Return a gate still visible in the artifact query's access snapshot."""
+        if user_id is None:
+            raise self._run_not_found()
+        run = await self._load_run(run_id, lock=False, user_id=user_id)
         pending = self._pending_mapping(run)
         if pending is None:
             return PendingReviewResponse(pending=False)
@@ -596,8 +601,13 @@ class ResearchReviewService:
         *,
         lock: bool,
         shared: bool = False,
+        user_id: UUID | None = None,
     ) -> ResearchRun:
-        """Load a live run by id. Callers authorize through project_access first."""
+        """Load a live run, scoping pending reads to their current caller.
+
+        Mutation/overlay callers already hold canonical access locks in their
+        transaction. Pending reads instead embed access in this query itself.
+        """
         statement = (
             select(ResearchRun)
             .join(
@@ -616,6 +626,12 @@ class ResearchReviewService:
                 cast(Any, ResearchProject.is_deleted).is_(False),
             )
         )
+        if user_id is not None:
+            statement = statement.where(
+                ResearchProject.collection_id.in_(
+                    accessible_research_collection_ids_query(user_id)
+                )
+            )
         if lock:
             # _authorize_review already loaded this run (unlocked) in the same
             # session; refresh it from the locked row so a review committed

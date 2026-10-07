@@ -14,12 +14,13 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import src.models  # noqa: F401 - register every relationship target
 from src.models.base import Base
+from src.models.collection import Collection
 from src.models.organization import Organization
 from src.models.research_blueprint import ResearchBlueprint
 from src.models.research_project import ResearchProject
@@ -27,6 +28,7 @@ from src.models.research_run import ResearchRun
 from src.models.research_stage_review import ResearchStageReview
 from src.models.research_step import ResearchStep
 from src.models.user import User
+from src.models.workspace import Workspace, WorkspaceMember
 from src.services.research_engine.contracts import (
     canonical_json_sha256,
     canonical_stage_output_hash,
@@ -233,6 +235,9 @@ async def db() -> AsyncIterator[AsyncSession]:
     tables = [
         Organization.__table__,
         User.__table__,
+        Workspace.__table__,
+        WorkspaceMember.__table__,
+        Collection.__table__,
         ResearchProject.__table__,
         ResearchBlueprint.__table__,
         ResearchRun.__table__,
@@ -257,6 +262,7 @@ async def _seed_gate(
     owner_id: UUID | None = None,
     organization_id: UUID | None = None,
     step_index: int = 1,
+    read_access: bool = False,
 ) -> tuple[UUID, UUID, ResearchRun, ResearchStep]:
     owner_id = owner_id or uuid4()
     organization_id = organization_id or uuid4()
@@ -265,6 +271,45 @@ async def _seed_gate(
     project = ResearchProject(
         id=uuid4(), name="Owned project", owner_id=owner_id, status="active"
     )
+    if read_access:
+        # Review-semantic fixtures use a real principal and canonical parents
+        # only when exercising the public pending-read access query.
+        db.add(
+            Organization(
+                id=organization_id,
+                name=f"read-org-{organization_id.hex}",
+                storage_limit_bytes=1000,
+            )
+        )
+        await db.flush()
+        await db.execute(
+            text(
+                "INSERT INTO users "
+                "(id,email,password_hash,first_name,last_name,role,is_active,"
+                "login_count,organization_id,created_at,updated_at,is_deleted) "
+                "VALUES (:id,:email,'x','x','x','USER',1,0,:org,"
+                "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)"
+            ),
+            {
+                "id": str(owner_id),
+                "email": f"read-{owner_id.hex}@test.invalid",
+                "org": str(organization_id),
+            },
+        )
+        workspace = Workspace(
+            id=uuid4(),
+            name="Read fixture",
+            owner_id=owner_id,
+            organization_id=organization_id,
+        )
+        db.add(workspace)
+        await db.flush()
+        collection = Collection(
+            id=uuid4(), workspace_id=workspace.id, name="Read project", tags=[]
+        )
+        db.add(collection)
+        await db.flush()
+        project.collection_id = collection.id
     blueprint = ResearchBlueprint(
         id=uuid4(),
         project_id=project.id,
@@ -565,14 +610,14 @@ def test_public_schema_forbids_extra_fields_and_bounds_note() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pending_review_loads_only_live_runs_without_owner_predicate(
+async def test_pending_review_loads_only_live_runs_with_canonical_access(
     db: AsyncSession,
 ) -> None:
-    _owner_id, _organization_id, run, _step = await _seed_gate(db)
+    owner_id, _organization_id, run, _step = await _seed_gate(db, read_access=True)
     service_module = _review_module()
     service = service_module.ResearchReviewService(db)
 
-    pending = await service.get_pending_review(run_id=run.id)
+    pending = await service.get_pending_review(run_id=run.id, user_id=owner_id)
     assert pending.pending is True
     assert pending.descriptor.output_hash == canonical_stage_output_hash(
         _screen_output()
@@ -580,8 +625,12 @@ async def test_pending_review_loads_only_live_runs_without_owner_predicate(
     assert pending.stage_output == _screen_output()
 
     with pytest.raises(service_module.ResearchReviewError) as missing:
-        await service.get_pending_review(run_id=uuid4())
+        await service.get_pending_review(run_id=uuid4(), user_id=owner_id)
     assert missing.value.status_code == 404
+
+    with pytest.raises(service_module.ResearchReviewError) as anonymous:
+        await service.get_pending_review(run_id=run.id, user_id=cast(UUID, None))
+    assert anonymous.value.status_code == 404
 
     blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
     assert blueprint is not None
@@ -590,7 +639,7 @@ async def test_pending_review_loads_only_live_runs_without_owner_predicate(
     project.is_deleted = True
     await db.commit()
     with pytest.raises(service_module.ResearchReviewError) as deleted:
-        await service.get_pending_review(run_id=run.id)
+        await service.get_pending_review(run_id=run.id, user_id=owner_id)
     assert deleted.value.status_code == 404
 
 
@@ -1002,7 +1051,7 @@ async def test_pending_large_output_projects_every_ordered_identity_within_bound
     assert len(json.dumps(output).encode("utf-8")) > 32 * 1024
     original = copy.deepcopy(output)
     owner_id, _organization_id, run, step = await _seed_gate(
-        db, output=output, review_kind="extraction", step_index=2
+        db, output=output, review_kind="extraction", step_index=2, read_access=True
     )
 
     pending = (
@@ -1010,6 +1059,7 @@ async def test_pending_large_output_projects_every_ordered_identity_within_bound
         .ResearchReviewService(db)
         .get_pending_review(
             run_id=run.id,
+            user_id=owner_id,
         )
     )
 
@@ -1066,6 +1116,7 @@ async def test_pending_projection_covers_200_near_worst_case_identities(
         output=output,
         review_kind="screening",
         step_index=1,
+        read_access=True,
     )
 
     pending = (
@@ -1073,6 +1124,7 @@ async def test_pending_projection_covers_200_near_worst_case_identities(
         .ResearchReviewService(db)
         .get_pending_review(
             run_id=run.id,
+            user_id=owner_id,
         )
     )
 

@@ -30,6 +30,9 @@ from src.services.research_engine.observability import (
     research_observability,
     safely_observe,
 )
+from src.services.research_engine.project_access import (
+    accessible_research_collection_ids_query,
+)
 from src.services.research_engine.report_rendering import (
     build_report,
     render_csv,
@@ -81,11 +84,14 @@ class ExportService:
         run_id: UUID,
         format: ExportFormat | str,
         db: AsyncSession,
+        *,
+        user_id: UUID,
     ) -> ExportArtifact:
         """Return a deterministic artifact for a terminal run.
 
-        Authorization is the caller's job (``require_run(..., VIEW)`` in the
-        route); this query only enforces liveness of the run's ancestry.
+        The route uses ``require_run(..., VIEW)`` for canonical errors. This
+        query rechecks caller access in the snapshot that loads the artifact,
+        so a revocation committed after the route gate cannot expose it.
         """
         export_format = ExportFormat(format)
         statement = (
@@ -104,6 +110,9 @@ class ExportService:
                 cast(Any, ResearchRun.is_deleted).is_(False),
                 cast(Any, ResearchBlueprint.is_deleted).is_(False),
                 cast(Any, ResearchProject.is_deleted).is_(False),
+                ResearchProject.collection_id.in_(
+                    accessible_research_collection_ids_query(user_id)
+                ),
             )
             .options(
                 selectinload(ResearchRun.blueprint),

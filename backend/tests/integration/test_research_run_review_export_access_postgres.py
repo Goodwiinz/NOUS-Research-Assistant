@@ -7,6 +7,7 @@ revocation while every other member was locked out.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -18,6 +19,8 @@ from fastapi import FastAPI
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from src.api.research_engine import reviews as reviews_api
+from src.api.research_engine import runs as runs_api
 from src.api.research_engine.reviews import router as reviews_router
 from src.api.research_engine.runs import router as runs_router
 from src.core.database import get_db
@@ -455,3 +458,114 @@ async def test_unmapped_legacy_project_requires_mapping(access_db: _Access) -> N
     assert export.json()["detail"] == "mapping_required"
     assert pending.status_code == 409
     assert pending.json()["detail"] == "mapping_required"
+
+
+@pytest.mark.parametrize("endpoint", ["pending", "export"])
+@pytest.mark.parametrize(
+    "revocation", ["membership", "collection", "workspace", "actor_organization"]
+)
+async def test_artifact_read_rechecks_access_after_route_authorization(
+    access_db: _Access,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    revocation: str,
+) -> None:
+    """Commit revocation in a second session between route gate and artifact fetch.
+
+    Causal check: remove the canonical-access predicate from ExportService.export
+    or ResearchReviewService._load_run, run this test with the corresponding
+    endpoint, then restore and rerun. The mutant returns private content (200)
+    after revocation; the protected artifact query must return 404.
+    """
+    access = access_db
+    authorized = asyncio.Event()
+    continue_read = asyncio.Event()
+    module = reviews_api if endpoint == "pending" else runs_api
+    gate_name = "require_run" if endpoint == "pending" else "_get_owned_run"
+    original_gate = getattr(module, gate_name)
+
+    async def pause_after_authorization(*args: Any, **kwargs: Any) -> Any:
+        result = await original_gate(*args, **kwargs)
+        authorized.set()
+        await asyncio.wait_for(continue_read.wait(), timeout=10)
+        return result
+
+    monkeypatch.setattr(module, gate_name, pause_after_authorization)
+    statements = {
+        "membership": "UPDATE workspace_members SET is_deleted=true "
+        "WHERE workspace_id=:workspace AND user_id=:actor",
+        "collection": "UPDATE collections SET is_deleted=true WHERE id=:collection",
+        "workspace": "UPDATE workspaces SET is_deleted=true WHERE id=:workspace",
+        "actor_organization": "UPDATE users SET organization_id=NULL WHERE id=:actor",
+    }
+    run_id = access.gate_run_id if endpoint == "pending" else access.completed_run_id
+    suffix = "reviews/pending" if endpoint == "pending" else "export"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(access, access.viewer_id)),
+        base_url="http://run-access.test",
+    ) as client:
+        request = asyncio.create_task(
+            client.get(
+                f"/research-engine/runs/{run_id}/{suffix}",
+                params={"format": "json"} if endpoint == "export" else None,
+            )
+        )
+        try:
+            await asyncio.wait_for(authorized.wait(), timeout=10)
+            async with access.factory() as writer:
+                changed = await writer.execute(
+                    text(statements[revocation]),
+                    {
+                        "workspace": access.workspace_id,
+                        "collection": access.collection_id,
+                        "actor": access.viewer_id,
+                    },
+                )
+                assert changed.rowcount == 1
+                await writer.commit()
+            continue_read.set()
+            response = await asyncio.wait_for(request, timeout=10)
+        finally:
+            continue_read.set()
+            if not request.done():
+                request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+    assert response.status_code == 404, response.text
+
+
+@pytest.mark.parametrize("endpoint", ["pending", "export"])
+@pytest.mark.parametrize("archived_parent", ["workspace", "collection"])
+async def test_archived_parent_still_allows_authorized_artifact_reads(
+    access_db: _Access, endpoint: str, archived_parent: str
+) -> None:
+    """VIEW stays available on archives; only mutations are read-only."""
+    statement = (
+        "UPDATE workspaces SET is_archived=true WHERE id=:id"
+        if archived_parent == "workspace"
+        else "UPDATE collections SET research_status='archived' WHERE id=:id"
+    )
+    async with access_db.factory() as writer:
+        await writer.execute(
+            text(statement),
+            {
+                "id": (
+                    access_db.workspace_id
+                    if archived_parent == "workspace"
+                    else access_db.collection_id
+                )
+            },
+        )
+        await writer.commit()
+    run_id = (
+        access_db.gate_run_id if endpoint == "pending" else access_db.completed_run_id
+    )
+    suffix = "reviews/pending" if endpoint == "pending" else "export"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(access_db, access_db.viewer_id)),
+        base_url="http://run-access.test",
+    ) as client:
+        response = await client.get(
+            f"/research-engine/runs/{run_id}/{suffix}",
+            params={"format": "json"} if endpoint == "export" else None,
+        )
+    assert response.status_code == 200, response.text

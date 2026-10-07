@@ -130,7 +130,7 @@ def _mock_db_for_manifest(run):
 
 
 # ---------------------------------------------------------------------------
-# Tests: export artifacts (route authorizes via require_run)
+# Tests: export artifacts (query rechecks canonical caller access)
 # ---------------------------------------------------------------------------
 
 
@@ -142,7 +142,7 @@ async def test_owned_export_returns_stable_not_found_error() -> None:
     db.execute.return_value = result
 
     with pytest.raises(ResearchExportError) as raised:
-        await ExportService().export(uuid4(), ExportFormat.JSON, db)
+        await ExportService().export(uuid4(), ExportFormat.JSON, db, user_id=uuid4())
 
     assert raised.value.status_code == 404
     assert raised.value.detail() == {
@@ -160,22 +160,22 @@ async def test_owned_export_rejects_non_completed_run() -> None:
     db.execute.return_value = result
 
     with pytest.raises(ResearchExportError) as raised:
-        await ExportService().export(run.id, ExportFormat.MARKDOWN, db)
+        await ExportService().export(run.id, ExportFormat.MARKDOWN, db, user_id=uuid4())
 
     assert raised.value.status_code == 409
     assert raised.value.code == "run_not_completed"
 
 
 @pytest.mark.asyncio
-async def test_export_loads_live_run_without_owner_predicate() -> None:
-    """GOO-404: authorization lives in require_run; the query only filters liveness."""
+async def test_export_loads_live_run_with_canonical_caller_scope() -> None:
+    """GOO-404: the artifact query must recheck live canonical access."""
     db = AsyncMock()
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     db.execute.return_value = result
 
     with pytest.raises(ResearchExportError):
-        await ExportService().export(uuid4(), ExportFormat.JSON, db)
+        await ExportService().export(uuid4(), ExportFormat.JSON, db, user_id=uuid4())
 
     statement = db.execute.await_args.args[0]
     sql = str(statement.compile())
@@ -183,6 +183,10 @@ async def test_export_loads_live_run_without_owner_predicate() -> None:
     assert "research_runs.is_deleted" in sql
     assert "research_blueprints.is_deleted" in sql
     assert "research_projects.is_deleted" in sql
+    assert "collections.is_deleted" in sql
+    assert "workspaces.is_deleted" in sql
+    assert "workspace_members.is_deleted" in sql
+    assert "IS NOT DISTINCT FROM" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -763,7 +767,9 @@ async def test_export_service_json_has_complete_daily_brief_provenance() -> None
         run.steps.append(step)
     db = _mock_db_for_run(run)
 
-    artifact = await ExportService().export(run.id, ExportFormat.JSON, db)
+    artifact = await ExportService().export(
+        run.id, ExportFormat.JSON, db, user_id=uuid4()
+    )
     payload = json.loads(artifact.content)
 
     assert artifact.media_type == "application/json"
@@ -910,7 +916,7 @@ async def test_csv_keeps_accepted_and_rejected_extraction_audit_rows() -> None:
     run.steps = [search, extract]
 
     artifact = await ExportService().export(
-        run.id, ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
     rows = list(csv.DictReader(io.StringIO(artifact.content.decode("utf-8"))))
 
@@ -927,13 +933,13 @@ async def test_legacy_completed_export_is_readable_but_never_approved_daily_brie
     run, _step, _source = _make_run(status="completed")
 
     json_artifact = await ExportService().export(
-        run.id, ExportFormat.JSON, _mock_db_for_run(run)
+        run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
     )
     markdown_artifact = await ExportService().export(
-        run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run)
+        run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
     )
     csv_artifact = await ExportService().export(
-        run.id, ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
 
     assert json.loads(json_artifact.content)["final_status"] == "unverified"
@@ -949,19 +955,17 @@ async def test_no_evidence_has_audit_exports_but_no_markdown_brief() -> None:
     run.blueprint.template_source = "daily_research_brief"
 
     json_artifact = await ExportService().export(
-        run.id, ExportFormat.JSON, _mock_db_for_run(run)
+        run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
     )
     csv_artifact = await ExportService().export(
-        run.id, ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
 
     assert json.loads(json_artifact.content)["final_status"] == "no_evidence"
     assert b"no_evidence" in csv_artifact.content
     with pytest.raises(ResearchExportError) as error:
         await ExportService().export(
-            run.id,
-            ExportFormat.MARKDOWN,
-            _mock_db_for_run(run),
+            run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
         )
     assert error.value.code == "brief_not_available_no_evidence"
 
@@ -1078,7 +1082,7 @@ async def test_markdown_download_uses_exact_persisted_approved_artifact_bytes(
     observer = ResearchObservability()
 
     artifact = await ExportService(observer=observer).export(
-        run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run)
+        run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
     )
 
     assert artifact.content[: len(expected)] == expected
@@ -1134,7 +1138,7 @@ async def test_export_reconstruction_gap_returns_stable_content_free_error() -> 
 
     with pytest.raises(ResearchExportError) as raised:
         await ExportService(observer=observer).export(
-            run.id, ExportFormat.JSON, _mock_db_for_run(run)
+            run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
         )
 
     assert raised.value.status_code == 500
@@ -1198,9 +1202,7 @@ async def test_exporters_reject_malformed_contiguous_persisted_output(
     with pytest.raises(ResearchExportError) as raised:
         if exporter == "v1":
             await service.export(
-                run.id,
-                ExportFormat.JSON,
-                _mock_db_for_run(run),
+                run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
             )
         else:
             await service.export_json(run.id, _mock_db_for_run(run))
@@ -1272,9 +1274,7 @@ async def test_exporters_validate_canonical_looking_persisted_outputs(
     async def export() -> object:
         if exporter == "v1":
             return await service.export(
-                run.id,
-                ExportFormat.JSON,
-                _mock_db_for_run(run),
+                run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
             )
         return await service.export_json(run.id, _mock_db_for_run(run))
 
@@ -1309,14 +1309,14 @@ async def test_verified_daily_export_requires_all_durable_trust_evidence(
 
     if missing == "terminal_status":
         artifact = await ExportService().export(
-            run.id, ExportFormat.JSON, _mock_db_for_run(run)
+            run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
         )
         payload = json.loads(artifact.content)
         assert payload["final_status"] == "unverified"
     else:
         with pytest.raises(ResearchExportError) as raised:
             await ExportService().export(
-                run.id, ExportFormat.JSON, _mock_db_for_run(run)
+                run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
             )
         assert raised.value.code == "verified_artifact_attestation_invalid"
 
@@ -1356,9 +1356,7 @@ async def test_verified_markdown_requires_exact_canonical_persisted_bytes(
 
     with pytest.raises(ResearchExportError) as raised:
         await ExportService().export(
-            run.id,
-            ExportFormat.MARKDOWN,
-            _mock_db_for_run(run),
+            run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
         )
     assert raised.value.code == "verified_artifact_attestation_invalid"
 
@@ -1371,7 +1369,7 @@ async def test_verified_json_wraps_immutable_report_with_complete_approval_audit
     original_report = copy.deepcopy(run.steps[-1].output["exported"])
 
     artifact = await ExportService().export(
-        run.id, ExportFormat.JSON, _mock_db_for_run(run)
+        run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
     )
     payload = json.loads(artifact.content)
 
@@ -1405,7 +1403,9 @@ async def test_verified_download_fails_closed_on_missing_or_wrong_attestation(
         )
 
     with pytest.raises(ResearchExportError) as raised:
-        await ExportService().export(run.id, ExportFormat.JSON, _mock_db_for_run(run))
+        await ExportService().export(
+            run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
+        )
 
     assert raised.value.code == "verified_artifact_attestation_invalid"
 
@@ -1415,7 +1415,7 @@ async def test_verified_csv_exposes_complete_review_and_final_attestation() -> N
     run = _trusted_daily_export_run()
 
     artifact = await ExportService().export(
-        run.id, ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
     rows = list(csv.DictReader(io.StringIO(artifact.content.decode("utf-8"))))
 
@@ -1503,7 +1503,7 @@ async def test_csv_review_projection_is_order_independent_and_extraction_owned()
         run.steps = [search, extract]
         run.reviews = review_rows
         return await ExportService().export(
-            run.id, ExportFormat.CSV, _mock_db_for_run(run)
+            run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
         )
 
     forward = await rendered(reviews)

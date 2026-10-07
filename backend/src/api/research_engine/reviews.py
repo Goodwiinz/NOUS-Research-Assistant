@@ -59,7 +59,9 @@ async def get_pending_review(
 
     await require_run(db, run_id, cast(UUID, current_user.id), ResearchAction.VIEW)
     try:
-        return await ResearchReviewService(db).get_pending_review(run_id=run_id)
+        return await ResearchReviewService(db).get_pending_review(
+            run_id=run_id, user_id=cast(UUID, current_user.id)
+        )
     except ResearchReviewError as error:
         return _error_response(error)
 

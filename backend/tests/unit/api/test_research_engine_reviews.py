@@ -151,7 +151,7 @@ def test_pending_review_route_authorizes_view_then_returns_stage_output(
     assert response.status_code == 200
     assert response.json()["stage_output"] == stage_output
     review_access.assert_awaited_once_with(db, run_id, user.id, ResearchAction.VIEW)
-    get_pending.assert_awaited_once_with(run_id=run_id)
+    get_pending.assert_awaited_once_with(run_id=run_id, user_id=user.id)
 
 
 def test_pending_review_route_denies_before_service_when_access_fails(

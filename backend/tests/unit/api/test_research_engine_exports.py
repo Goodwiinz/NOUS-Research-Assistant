@@ -78,7 +78,7 @@ def test_owned_completed_run_downloads_each_format_with_safe_headers(
     media_type: str,
     suffix: str,
 ) -> None:
-    """The route must pass authenticated owner identity and safe filenames."""
+    """The route must pass authenticated caller identity and safe filenames."""
     client, user, db = export_client
     run_id = uuid4()
     artifact = ExportArtifact(
@@ -104,6 +104,7 @@ def test_owned_completed_run_downloads_each_format_with_safe_headers(
     assert export.await_args.args[:2] == (run_id, format_name)
     assert export.await_args.args[2] is db
     assert len(export.await_args.args) == 3
+    assert export.await_args.kwargs == {"user_id": user.id}
     export_access.assert_awaited_once_with(db, run_id, user.id, ResearchAction.VIEW)
     assert "question" not in response.headers["content-disposition"].lower()
 

@@ -67,13 +67,11 @@ def _workspace_role(workspace: Workspace, user_id: UUID) -> Optional[WorkspaceRo
     return None
 
 
-async def accessible_research_workspace_ids(
-    db: AsyncSession, user_id: UUID
-) -> list[UUID]:
-    """Return private-artifact workspace ids in one same-organization query."""
+def accessible_research_workspace_ids_query(user_id: UUID) -> Select[tuple[UUID]]:
+    """Build the canonical private-artifact workspace scope without executing it."""
     owner = aliased(User)
     actor = aliased(User)
-    result = await db.execute(
+    return (
         select(Workspace.id)
         .join(owner, owner.id == Workspace.owner_id)
         .join(actor, actor.id == user_id)
@@ -94,7 +92,27 @@ async def accessible_research_workspace_ids(
         )
         .distinct()
     )
+
+
+async def accessible_research_workspace_ids(
+    db: AsyncSession, user_id: UUID
+) -> list[UUID]:
+    """Return private-artifact workspace ids in one same-organization query."""
+    result = await db.execute(accessible_research_workspace_ids_query(user_id))
     return list(result.scalars().all())
+
+
+def accessible_research_collection_ids_query(user_id: UUID) -> Select[tuple[UUID]]:
+    """Scope artifact fetches in their own SQL snapshot, including live parents.
+
+    VIEW permits archives. Membership, tenant identity and soft-deletion are
+    evaluated in the artifact query, rather than materializing access ids in
+    an earlier statement that can become stale before the artifact is read.
+    """
+    return select(Collection.id).where(
+        Collection.is_deleted.is_(False),
+        Collection.workspace_id.in_(accessible_research_workspace_ids_query(user_id)),
+    )
 
 
 def project_documents_query(project_id: UUID) -> Select[tuple[Document]]:
