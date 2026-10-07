@@ -7018,6 +7018,89 @@
         "title": "ConfirmationRequest",
         "type": "object"
       },
+      "ConnectedDevice": {
+        "properties": {
+          "connected_at": {
+            "format": "date-time",
+            "title": "Connected At",
+            "type": "string"
+          },
+          "consents": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionConsent"
+            },
+            "title": "Consents",
+            "type": "array"
+          },
+          "device_id": {
+            "format": "uuid",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_label": {
+            "title": "Device Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "device_label",
+          "connected_at",
+          "consents"
+        ],
+        "title": "ConnectedDevice",
+        "type": "object"
+      },
+      "ConnectionConsent": {
+        "properties": {
+          "approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_label": {
+            "title": "Project Label",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "project_id",
+          "project_label",
+          "scopes",
+          "status"
+        ],
+        "title": "ConnectionConsent",
+        "type": "object"
+      },
       "ConnectorCapabilityResponse": {
         "additionalProperties": false,
         "description": "Non-sensitive connector metadata returned to setup clients.",
@@ -43103,6 +43186,37 @@
         ]
       }
     },
+    "/api/v1/integrations/connections": {
+      "get": {
+        "operationId": "get_connections_api_v1_integrations_connections_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectedDevice"
+                  },
+                  "title": "Response Get Connections Api V1 Integrations Connections Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Connections",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/context": {
       "get": {
         "operationId": "get_selected_context_api_v1_integrations_context_get",
@@ -43296,6 +43410,52 @@
         ],
         "summary": "Create Device",
         "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/devices/{device_id}/revoke": {
+      "post": {
+        "description": "Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound. Other devices' integration grants remain active. Returns 503 without committing device revocation if the shared CLI cutoff fails.",
+        "operationId": "post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Revocation unavailable; retry disconnect"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Disconnect Device",
+        "tags": [
+          "integrations",
           "integrations"
         ]
       }
@@ -43604,6 +43764,48 @@
         ],
         "summary": "Exchange Grant Request",
         "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grant-requests/{request_id}/revoke": {
+      "post": {
+        "operationId": "post_revoke_consent_api_v1_integrations_grant_requests__request_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Revoke Consent",
+        "tags": [
+          "integrations",
           "integrations"
         ]
       }
