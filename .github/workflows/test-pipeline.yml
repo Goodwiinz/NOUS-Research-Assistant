@@ -869,6 +869,12 @@ jobs:
             exit 0
           fi
 
+          if printf '%s\n' "$files" | grep -Fxq 'backend/tests/integration/test_ingestion_lifecycle_postgres.py'; then
+            # Match the production image's model without changing dependencies.
+            pip install --no-deps \
+              https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+          fi
+
           set +e
           # shellcheck disable=SC2086 # one test file path per word, no spaces
           pytest $files \
@@ -893,8 +899,55 @@ jobs:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ strategy.job-total }}
           DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # Enable the enrolled tool-operation suite without activating other
+          # optional orchestration suites that have separate prerequisites.
+          AGENT_TOOL_OPERATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # Enroll the artifact FK-order regression independently of other
+          # optional orchestration suites.
+          ARTIFACT_PUBLISH_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # Lifecycle fixtures own a schema and queue in these throwaway services.
+          INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          INGESTION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
           CLI_REVOCATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+      - name: Run ingestion recovery PostgreSQL tests
+        if: matrix.shard == 1
+        # These integration-marked tests live outside the sharded directory.
+        # Give them a real database once, and reject a green all-skipped run.
+        run: |
+          mkdir -p test-results
+          pytest backend/tests/unit/tasks/test_stuck_processing_recovery.py \
+            backend/tests/unit/tasks/test_stuck_recovery_terminal_retry.py \
+            backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py \
+            -c backend/pytest.ini -m integration \
+            --junitxml=test-results/ingestion-recovery.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("test-results/ingestion-recovery.xml").findall(".//testcase")
+          if not cases or any(
+              case.find(outcome) is not None
+              for case in cases
+              for outcome in ("skipped", "failure", "error")
+          ):
+              raise SystemExit("Recovery PostgreSQL tests must execute without skips")
+          print(f"PostgreSQL recovery: {len(cases)} tests executed without skips")
+          PY
+        env:
+          ENVIRONMENT: testing
+          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          DATABASE_URL: "sqlite:///:memory:"
+          ASYNC_DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          AZURE_OPENAI_CHAT_ENDPOINT: "https://example.invalid"
+          AZURE_OPENAI_CHAT_API_KEY: "test-key-not-real"
+      - name: Save ingestion recovery test results
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ingestion-recovery-results
+          path: test-results/ingestion-recovery.xml
+          retention-days: 7
       - name: Upload coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:

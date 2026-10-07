@@ -42,3 +42,17 @@ test('rejects when status is expired', async () => {
     })
   ).rejects.toThrow('expired');
 });
+
+test('sends the poll token in a header, never in the URL', async () => {
+  const mockFetch = vi.fn().mockResolvedValue({
+    ok: true,
+    json: () => Promise.resolve({ status: 'approved', token: 't' }),
+  });
+  await pollForApproval('sess_1', 'pt_secret', {
+    fetchFn: mockFetch as any,
+    intervalMs: 0,
+  });
+  const [url, init] = mockFetch.mock.calls[0];
+  expect(String(url)).not.toContain('pt_secret');
+  expect(init.headers['X-CLI-Poll-Token']).toBe('pt_secret');
+});

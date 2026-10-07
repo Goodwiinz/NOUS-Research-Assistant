@@ -3,6 +3,8 @@ import { integrationHeaders, type IntegrationCredentials } from "../credentials.
 import { apiBase, throwForStatus } from "../mcp/client.ts";
 
 export type ActionStatus = components["schemas"]["ActionStatus"];
+type ToolInvocation = components["schemas"]["ToolInvocation"];
+/** A `create_project_note` request; see `ActionHttpClient.requestNote`. */
 export type ActionRequest = {
   invocationId: string;
   title: string;
@@ -12,7 +14,7 @@ export type ActionRequest = {
 
 const MESSAGES = {
   forbidden:
-    "NOUS denied this action: the grant may lack tools:write (reconnect with nous-harness connect --tools --write) or the project is outside the grant",
+    "NOUS denied this action: the grant may lack the scope it needs (tools:write; library:write covers only the reversible library changes; reconnect with nous-harness connect --tools --write --library), or a project or document it names is outside the grant (a project connection reaches only its own project, so it cannot create a folder or move papers between two)",
   disabled: "NOUS integration actions are disabled",
 };
 const STATES = new Set([
@@ -48,18 +50,28 @@ export class ActionHttpClient {
     this.headers = integrationHeaders(credentials);
     this.fetchFn = fetchFn;
   }
+  /**
+   * Ask NOUS for one action. NOUS validates the arguments, checks the scope and
+   * target against the grant, and either runs it or holds it for approval.
+   */
+  async request(
+    toolName: string,
+    invocationId: string,
+    args: Record<string, unknown>,
+  ): Promise<ActionStatus> {
+    const invocation: ToolInvocation = {
+      tool_name: toolName,
+      invocation_id: invocationId,
+      arguments: args,
+    };
+    return parseStatus(await this.send("POST", "/integrations/actions", invocation));
+  }
   async requestNote(request: ActionRequest): Promise<ActionStatus> {
-    return parseStatus(
-      await this.send("POST", "/integrations/actions", {
-        tool_name: "create_project_note",
-        invocation_id: request.invocationId,
-        arguments: {
-          title: request.title,
-          content: request.content,
-          ...(request.tags ? { tags: request.tags } : {}),
-        },
-      }),
-    );
+    return this.request("create_project_note", request.invocationId, {
+      title: request.title,
+      content: request.content,
+      ...(request.tags ? { tags: request.tags } : {}),
+    });
   }
   async status(invocationId: string): Promise<ActionStatus> {
     if (!uuid(invocationId)) throw new Error("invalid invocation id");

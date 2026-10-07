@@ -503,8 +503,10 @@ async def test_cancellation_does_not_lock_job_while_waiting_for_document(
                 user = await db.get(User, env.ids.user)
                 document = await db.get(Document, env.ids.doc)
                 job = await db.get(ProcessingJob, env.ids.job)
-                job.error_message = "Stale cached update"
                 await db.execute(text("SET LOCAL lock_timeout = '3s'"))
+                # SQLAlchemy 2.1 autoflushes textual SQL too. Configure the
+                # timeout before dirtying the job so setup cannot take its lock.
+                job.error_message = "Stale cached update"
                 if operation == "document":
                     return await FileService(db).delete_file(document, user)
                 return await cancel_upload(task_id, user, db, FileService(db))

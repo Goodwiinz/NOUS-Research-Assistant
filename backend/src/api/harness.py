@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.integrations.auth import require_interactive_user
+from src.core.config import settings
 from src.core.database import AsyncSessionLocal, get_db
 from src.core.dependencies import get_current_user
 from src.core.websocket_auth import WebSocketAuthenticator, WebSocketAuthError
@@ -100,7 +101,15 @@ async def decide_native_request(
 @router.websocket("/connect")
 async def connect(websocket: WebSocket) -> None:
     try:
-        if websocket.url.scheme != "wss":
+        # Loopback-only exception for a local dev backend (no TLS); mirrors the
+        # bridge CLI, which also allows plain ws only to localhost.
+        client = getattr(websocket, "client", None)
+        loopback = (
+            settings.ENVIRONMENT in {"development", "local"}
+            and client is not None
+            and client.host in ("127.0.0.1", "::1")
+        )
+        if websocket.url.scheme != "wss" and not loopback:
             raise IntegrationAccessDenied()
         identity = await WebSocketAuthenticator.authenticate(websocket)
         token = websocket.headers.get("x-nous-integration-grant", "")
@@ -108,7 +117,10 @@ async def connect(websocket: WebSocket) -> None:
             context = await resolve_integration_context(
                 db, token, required_scope="harness:execute"
             )
-            if str(context.user_id) != str(identity.get("sub")):
+            # Harness runs stay bound to one Collection; refuse a workspace grant.
+            if context.project_id is None or str(context.user_id) != str(
+                identity.get("sub")
+            ):
                 raise IntegrationAccessDenied()
         await websocket.accept(
             subprotocol=WebSocketAuthenticator.get_subprotocol_response(websocket)
@@ -124,7 +136,9 @@ async def connect(websocket: WebSocket) -> None:
                 context = await resolve_integration_context(
                     db, token, required_scope="harness:execute"
                 )
-                if str(context.user_id) != str(identity.get("sub")):
+                if context.project_id is None or str(context.user_id) != str(
+                    identity.get("sub")
+                ):
                     raise IntegrationAccessDenied()
                 if (
                     isinstance(value, dict)

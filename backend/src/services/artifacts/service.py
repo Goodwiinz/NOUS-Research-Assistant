@@ -106,6 +106,9 @@ async def _authorize_context(
     db: AsyncSession, context: IntegrationContext, *, edit: bool = False
 ) -> None:
     """Membership authorizes reads; publication also needs Workspace.can_user_edit."""
+    if context.project_id is None:
+        # Artifacts stay bound to one Collection; a workspace grant has none.
+        raise ArtifactAccessDenied()
     try:
         await authorized_project(
             db, context.user_id, context.organization_id, context.project_id

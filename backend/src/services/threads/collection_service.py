@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.models.collection import Collection, CollectionDocument
+from src.models.user import User
 from src.schemas.chat import CollectionCreate, CollectionUpdate
 from src.services.threads import workspace_access
 
@@ -78,10 +79,17 @@ async def create_collection(
     db.add(collection)
 
     if data.document_ids:
-        organization_id = getattr(workspace, "organization_id", None)
+        organization_id = await db.scalar(
+            select(User.organization_id).where(User.id == user_id)
+        )
         for i, doc_id in enumerate(data.document_ids):
-            doc = await workspace_access.get_accessible_document_or_none(
-                db, doc_id, user_id, organization_id
+            # Do not use the uploader fallback when caller identity is absent.
+            doc = (
+                await workspace_access.get_accessible_document_or_none(
+                    db, doc_id, user_id, organization_id
+                )
+                if organization_id is not None
+                else None
             )
             if doc:
                 db.add(
@@ -247,10 +255,16 @@ async def add_documents_to_collection(
         )
     ).scalar() or 0
 
-    organization_id = getattr(collection.workspace, "organization_id", None)
+    organization_id = await db.scalar(
+        select(User.organization_id).where(User.id == user_id)
+    )
     for i, doc_id in enumerate(document_ids):
-        doc = await workspace_access.get_accessible_document_or_none(
-            db, doc_id, user_id, organization_id
+        doc = (
+            await workspace_access.get_accessible_document_or_none(
+                db, doc_id, user_id, organization_id
+            )
+            if organization_id is not None
+            else None
         )
         if not doc:
             continue
@@ -315,7 +329,19 @@ async def remove_documents_from_collection(
     if not collection.workspace.can_user_edit(str(user_id)):
         raise PermissionError("Insufficient permissions")
 
+    organization_id = await db.scalar(
+        select(User.organization_id).where(User.id == user_id)
+    )
     for doc_id in document_ids:
+        doc = (
+            await workspace_access.get_accessible_document_or_none(
+                db, doc_id, user_id, organization_id
+            )
+            if organization_id is not None
+            else None
+        )
+        if not doc:
+            continue
         collection_doc = (
             (
                 await db.execute(

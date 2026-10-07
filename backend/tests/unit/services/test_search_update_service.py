@@ -64,3 +64,49 @@ async def test_required_chase_uses_run_connector_and_caps_seeds(
         f"scheduled:{job['execution_id']}:{seeds[0]}:backward"
     )
     assert all("receipt_id" in c for c in result["chases"])
+
+
+async def test_duplicate_report_import_checks_every_accepted_doi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Last-wins metadata must not discard an earlier observation's DOI."""
+    db, job = _db(), _job()
+    report_id, receipt_id = uuid4(), uuid4()
+    first = {"title": "Earlier", "identifiers": {"doi": "10.1/EARLIER"}}
+    latest = {"title": "Latest", "identifiers": {"doi": "10.1/latest"}}
+    rows = [
+        SimpleNamespace(report_id=report_id, parsed=first),
+        SimpleNamespace(report_id=report_id, parsed=latest),
+    ]
+    monkeypatch.setattr(svc, "_all", AsyncMock(return_value=rows))
+    monkeypatch.setattr(svc, "_start", AsyncMock(return_value=("running", job)))
+    monkeypatch.setattr(
+        svc,
+        "_recheck",
+        AsyncMock(return_value=(None, SimpleNamespace(organization_id=uuid4()))),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_receipt",
+        AsyncMock(return_value=SimpleNamespace(id=receipt_id, observed={})),
+    )
+    monkeypatch.setattr(svc, "_baseline", AsyncMock(return_value=(None, {})))
+    monkeypatch.setattr(svc, "_chase", AsyncMock(return_value={}))
+    finish = AsyncMock(return_value="succeeded")
+    monkeypatch.setattr(svc, "_finish", finish)
+    notice = {"notice_doi": "10.1/earlier.retraction", "type": "retraction"}
+    crossref = SimpleNamespace(
+        update_notices=AsyncMock(
+            return_value={"10.1/earlier": [notice], "10.1/latest": []}
+        )
+    )
+
+    result = await svc.run_execution(
+        db, job["execution_id"], lambda _organization_id: {"crossref": crossref}
+    )
+
+    assert result == "succeeded"
+    crossref.update_notices.assert_awaited_once_with(["10.1/earlier", "10.1/latest"])
+    assert finish.await_args.args[5] == {"10.1/earlier": [notice], "10.1/latest": []}
+    records, _dois = await svc._current(db, receipt_id)
+    assert records == {str(report_id): latest}
