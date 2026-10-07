@@ -42,6 +42,9 @@ type Field = keyof typeof FIELDS;
 type ActionFields = {
   required: readonly Field[];
   optional?: readonly Field[];
+  // Optional fields whose validator in NOUS reads null as left out: a null
+  // there is dropped. Any other null is refused, as NOUS refuses it.
+  nullable?: readonly Field[];
   // At least one of the optional fields must be given.
   atLeastOneOptional?: true;
 };
@@ -57,12 +60,12 @@ const ACTION_FIELDS: Record<string, ActionFields> = {
   save_papers_to_folder: { required: ["document_ids", "project_id"] },
   remove_papers_from_folder: { required: ["document_ids", "project_id"] },
   move_papers_between_folders: { required: ["document_ids", "from_project_id", "to_project_id"] },
-  create_folder: { required: ["name"], optional: ["description"] },
+  create_folder: { required: ["name"], optional: ["description"], nullable: ["description"] },
   rename_folder: { required: ["project_id", "name"] },
   delete_folder: { required: ["project_id"] },
   update_document_metadata: { required: ["document_id"], optional: ["title", "tags"], atLeastOneOptional: true },
   // A workspace connection must name the folder; a project connection may only name its own.
-  ingest_arxiv_papers: { required: ["paper_ids"], optional: ["project_id"] },
+  ingest_arxiv_papers: { required: ["paper_ids"], optional: ["project_id"], nullable: ["project_id"] },
 };
 const ACTIONS = Object.keys(ACTION_FIELDS);
 
@@ -75,11 +78,12 @@ function signature(action: string): string {
 
 /** The action's own fields from the model's arguments, or why they are refused. Every other key is dropped. */
 function actionArguments(action: string, args: Record<string, unknown>): Record<string, unknown> | string {
-  const { required, optional = [], atLeastOneOptional } = ACTION_FIELDS[action]!;
+  const { required, optional = [], nullable = [], atLeastOneOptional } = ACTION_FIELDS[action]!;
   const picked: Record<string, unknown> = {};
   for (const field of [...required, ...optional]) {
     const value = args[field];
-    if (value === undefined && !required.includes(field)) continue;
+    const absent = value === undefined || (value === null && nullable.includes(field));
+    if (absent && !required.includes(field)) continue;
     if (!FIELDS[field].valid(value)) return `${field} must be ${FIELDS[field].expected}`;
     picked[field] = value;
   }

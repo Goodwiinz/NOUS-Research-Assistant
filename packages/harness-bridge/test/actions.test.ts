@@ -265,6 +265,28 @@ test("optional action fields may be left out", async () => {
   }
 });
 
+test("a null optional field NOUS reads as left out is dropped, not refused", async () => {
+  const server = await backend(() => ({ code: 200, body: status("awaiting_approval") }));
+  try {
+    const tool = requestActionTool(new ActionHttpClient(server.origin, credentials));
+    // NOUS's validators read null as absent for these two fields only
+    // (_validate_create_folder, _validate_arxiv_ingest); models filling a flat
+    // schema often send null for a field they do not use.
+    const cases: [string, Record<string, unknown>, Record<string, unknown>][] = [
+      ["create_folder", { name: "Reading", description: null }, { name: "Reading" }],
+      ["ingest_arxiv_papers", { paper_ids: ["2401.00001"], project_id: null }, { paper_ids: ["2401.00001"] }],
+    ];
+    for (const [action, fields, sent] of cases) {
+      const outcome = await tool.call({ action, invocation_id: randomUUID(), ...fields });
+      assert.equal(outcome.isError, undefined, `${action}: ${outcome.text}`);
+      assert.deepEqual(JSON.parse(server.requests.at(-1)?.body ?? "{}").arguments, sent, action);
+    }
+    assert.equal(server.requests.length, cases.length);
+  } finally {
+    await server.close();
+  }
+});
+
 test("invalid arguments are refused locally before any request", async () => {
   const server = await backend(() => ({ code: 200, body: status("awaiting_approval") }));
   try {
