@@ -102,6 +102,8 @@ def app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]) -> FastAPI
                 invocation_id=INVOCATION,
                 state="awaiting_approval",
                 tool_name="create_project_note",
+                summary="Create note “t” in project “Project”",
+                arguments={"title": "t", "content": "c", "tags": []},
                 project_id=PROJECT,
                 project_label="Project",
                 project_available=True,
@@ -244,6 +246,9 @@ def test_review_is_browser_only(
     ok = client.get(path, headers={"Authorization": "Bearer browser"})
     assert ok.status_code == 200
     assert ok.json()["title"] == "t" and ok.json()["project_label"] == "Project"
+    # The sentence and the stored arguments the page shows travel as given.
+    assert ok.json()["summary"] == "Create note “t” in project “Project”"
+    assert ok.json()["arguments"] == {"title": "t", "content": "c", "tags": []}
     assert calls["review"][0][1] == INVOCATION
 
 

@@ -1,7 +1,7 @@
 """Transport shapes for durable, approval-gated tool actions."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -55,6 +55,13 @@ class ActionReview(BaseModel):
     invocation_id: UUID
     state: ActionState
     tool_name: str
+    # One sentence saying what the action does: a template per action, filled
+    # with the stored arguments and the names of the folders and papers they
+    # point at. An id it may not name stays an id.
+    summary: str
+    # The stored arguments exactly as the action will run them (selectors
+    # included, identity never), so nothing the sentence leaves out is hidden.
+    arguments: dict[str, Any]
     project_id: UUID | None
     project_label: str | None
     # Set when the grant behind the action is bound to a workspace. The review
@@ -63,6 +70,7 @@ class ActionReview(BaseModel):
     workspace_label: str | None = None
     # Whether the target (project, else workspace) is still live.
     project_available: bool
+    # A note's own fields, as before; empty for every other action.
     title: str
     content: str
     tags: list[str]

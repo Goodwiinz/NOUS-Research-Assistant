@@ -34,6 +34,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, cast
@@ -703,7 +704,12 @@ async def get_action_status(
 async def get_action_for_review(
     db: AsyncSession, user: User, invocation_id: UUID
 ) -> ActionReview:
-    """The requester's own action with its stored target, for the decision page."""
+    """The requester's own action with its stored target, for the decision page.
+
+    ``summary`` is one sentence from the action's template (``_summary``);
+    ``arguments`` are the stored arguments as they will run. The note fields
+    (title, content, tags) are filled for a note only.
+    """
     if user.organization_id is None:
         raise ActionNotFound()
     found = (
@@ -737,25 +743,197 @@ async def get_action_for_review(
     if found is None:
         raise ActionNotFound()
     row, project_label, project_deleted, workspace_label, workspace_deleted = found
-    arguments = row.arguments or {}
+    arguments = dict(row.arguments or {})
+    folders = await _selected_folder_names(db, row)
+    if row.project_id is not None and project_label is not None:
+        folders[row.project_id] = str(project_label)
+    names = _ReviewNames(
+        folders=folders,
+        papers=await _paper_titles(db, row),
+        workspace=None if workspace_label is None else str(workspace_label),
+    )
+    note = row.tool_name == "create_project_note"
     return ActionReview(
         invocation_id=row.invocation_id,
         state=cast(Any, row.state),
         tool_name=row.tool_name,
+        summary=_summary(row, names),
+        arguments=arguments,
         project_id=row.project_id,
         project_label=None if row.project_id is None else str(project_label),
         workspace_id=row.workspace_id,
         workspace_label=None if row.workspace_id is None else str(workspace_label),
         # Kept visible so it can still be denied; approval would fail closed.
         project_available=not (project_deleted or workspace_deleted),
-        title=str(arguments.get("title", "")),
-        content=str(arguments.get("content", "")),
-        tags=[str(t) for t in arguments.get("tags", [])],
+        title=str(arguments.get("title", "")) if note else "",
+        content=str(arguments.get("content", "")) if note else "",
+        tags=[str(t) for t in arguments.get("tags", [])] if note else [],
         requested_at=row.created_at,
         decided_at=row.decided_at,
         result=ToolResult.model_validate(row.result) if row.result else None,
         last_error=row.last_error,
     )
+
+
+def _review_id(value: Any) -> UUID | None:
+    """A stored id as a UUID; None for anything else, so a review never fails."""
+    try:
+        return UUID(str(value))
+    except ValueError:
+        return None
+
+
+def _review_ids(values: Iterable[Any]) -> set[UUID]:
+    return {found for found in map(_review_id, values) if found is not None}
+
+
+async def _selected_folder_names(
+    db: AsyncSession, row: IntegrationToolAction
+) -> dict[UUID, str]:
+    """Names of the Collections the row's selectors name besides its target.
+
+    Only within the row's own workspace: request_action let a workspace grant
+    select its own workspace's Collections and a project grant only its
+    project, whose name the review's own join already carries. A soft-deleted
+    Collection keeps its name, as the target's label does.
+    """
+    if row.workspace_id is None:
+        return {}
+    arguments = row.arguments or {}
+    wanted = _review_ids(arguments[key] for key in SELECTOR_KEYS if key in arguments)
+    wanted -= {row.project_id}
+    if not wanted:
+        return {}
+    found = await db.execute(
+        select(Collection.id, Collection.name).where(
+            Collection.id.in_(wanted), Collection.workspace_id == row.workspace_id
+        )
+    )
+    return {UUID(str(folder_id)): str(name) for folder_id, name in found.all()}
+
+
+async def _paper_titles(
+    db: AsyncSession, row: IntegrationToolAction
+) -> dict[UUID, str]:
+    """Titles of the live documents of the row's organization its arguments
+    name. Any other id (another organization's, a deleted one) stays unnamed:
+    a harness may put any id in a request, and the page must not read out a
+    title the requester could not open."""
+    arguments = row.arguments or {}
+    listed = arguments.get("document_ids")
+    wanted = _review_ids(listed if isinstance(listed, list) else [])
+    if arguments.get("document_id") is not None:
+        wanted |= _review_ids([arguments["document_id"]])
+    if not wanted:
+        return {}
+    found = await db.execute(
+        select(Document.id, Document.title).where(
+            Document.id.in_(wanted),
+            Document.organization_id == row.organization_id,
+            Document.is_deleted.is_(False),
+        )
+    )
+    return {UUID(str(document_id)): str(title) for document_id, title in found.all()}
+
+
+def _quoted(text: Any) -> str:
+    return f"“{text}”"
+
+
+def _counted(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def _listing(sentence: str, items: Iterable[str]) -> str:
+    listed = ", ".join(items)
+    return f"{sentence}: {listed}" if listed else sentence
+
+
+@dataclass(frozen=True)
+class _ReviewNames:
+    """What a review may call the folders and papers its row points at."""
+
+    folders: Mapping[UUID, str]
+    papers: Mapping[UUID, str]
+    workspace: str | None
+
+    def folder(self, value: Any, noun: str = "folder") -> str:
+        """``folder “Name”``; the stored id when the name is not known."""
+        key = _review_id(value)
+        name = self.folders.get(key) if key is not None else None
+        return f"{noun} {value}" if name is None else f"{noun} {_quoted(name)}"
+
+    def paper(self, value: Any) -> str:
+        """``“Title”``; the stored id of a paper the review may not name."""
+        key = _review_id(value)
+        title = self.papers.get(key) if key is not None else None
+        return str(value) if title is None else _quoted(title)
+
+    def in_workspace(self) -> str:
+        """`` in workspace “Name”``, or nothing when the row names none."""
+        if self.workspace is None:
+            return ""
+        return f" in workspace {_quoted(self.workspace)}"
+
+
+def _metadata_summary(arguments: Mapping[str, Any], names: _ReviewNames) -> str:
+    paper = f"paper {names.paper(arguments.get('document_id'))}"
+    tags = arguments.get("tags")
+    listed = ", ".join(_quoted(t) for t in tags) if isinstance(tags, list) else ""
+    if "title" in arguments:
+        renamed = f"Rename {paper} to {_quoted(arguments['title'])}"
+        if "tags" not in arguments:
+            return renamed
+        if listed:
+            return f"{renamed} and set its tags to {listed}"
+        return f"{renamed} and remove every tag"
+    if listed:
+        return f"Set the tags of {paper} to {listed}"
+    if "tags" in arguments:
+        return f"Remove every tag from {paper}"
+    return f"Edit {paper}"
+
+
+def _summary(row: IntegrationToolAction, names: _ReviewNames) -> str:
+    """One sentence for the review page: the action's template, filled in.
+
+    The folder acted on is the stored target, not an argument: a project
+    grant's ingest may leave it implicit. Papers are listed in the order asked.
+    """
+    arguments = row.arguments or {}
+    tool_name = row.tool_name
+    asked = arguments.get("document_ids")
+    document_ids = asked if isinstance(asked, list) else []
+    papers = [names.paper(document_id) for document_id in document_ids]
+    count = _counted(len(document_ids), "paper")
+    target = names.folder(row.project_id)
+    if tool_name == "create_project_note":
+        title = _quoted(arguments.get("title", ""))
+        if row.project_id is not None:
+            return f"Create note {title} in {names.folder(row.project_id, 'project')}"
+        return f"Create note {title}{names.in_workspace()}"
+    if tool_name == "save_papers_to_folder":
+        return _listing(f"Save {count} to {target}", papers)
+    if tool_name == "remove_papers_from_folder":
+        return _listing(f"Remove {count} from {target} (documents are kept)", papers)
+    if tool_name == "move_papers_between_folders":
+        destination = names.folder(arguments.get("to_project_id"))
+        return _listing(f"Move {count} from {target} to {destination}", papers)
+    if tool_name == "create_folder":
+        name = _quoted(arguments.get("name", ""))
+        return f"Create folder {name}{names.in_workspace()}"
+    if tool_name == "rename_folder":
+        return f"Rename {target} to {_quoted(arguments.get('name', ''))}"
+    if tool_name == "delete_folder":
+        return f"Delete {target} (documents are kept)"
+    if tool_name == "update_document_metadata":
+        return _metadata_summary(arguments, names)
+    if tool_name == "ingest_arxiv_papers":
+        asked = arguments.get("paper_ids")
+        paper_ids = [str(p) for p in asked] if isinstance(asked, list) else []
+        ingest = f"Ingest {_counted(len(paper_ids), 'arXiv paper')} into {target}"
+        return _listing(ingest, paper_ids)
+    return f"Run the action {_quoted(tool_name)}"
 
 
 def _binding_matches(

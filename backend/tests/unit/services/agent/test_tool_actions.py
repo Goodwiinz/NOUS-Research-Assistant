@@ -2679,3 +2679,223 @@ async def test_ingest_outcomes_are_recorded_with_stable_reasons(
         ]
     assert (await get_action_status(db, actor, invocation_id)).state == state
     assert len(calls) == 1
+
+
+# --- review: one summary sentence, and the stored arguments ----------------
+
+# Distinct titles, so a summary that names the wrong paper fails.
+TITLES = {PAPER: "Attention Is All You Need", PAPER2: "BERT"}
+# Each library action as a tools:write workspace grant asks for it (so it waits
+# for a decision), with the sentence the review page leads with.
+SUMMARIES: dict[str, tuple[str, dict[str, Any], str]] = {
+    "save": (
+        "save_papers_to_folder",
+        {"document_ids": [str(PAPER), str(PAPER2)], "project_id": str(SECOND)},
+        "Save 2 papers to folder “Second”: “Attention Is All You Need”, “BERT”",
+    ),
+    "remove": (
+        "remove_papers_from_folder",
+        {"document_ids": [str(PAPER)], "project_id": P},
+        "Remove 1 paper from folder “Project” (documents are kept): "
+        "“Attention Is All You Need”",
+    ),
+    "move": (
+        "move_papers_between_folders",
+        {
+            "document_ids": [str(PAPER)],
+            "from_project_id": P,
+            "to_project_id": str(SECOND),
+        },
+        "Move 1 paper from folder “Project” to folder “Second”: "
+        "“Attention Is All You Need”",
+    ),
+    "create-folder": (
+        "create_folder",
+        {"name": "Reading", "description": "Papers to read"},
+        "Create folder “Reading” in workspace “Workspace”",
+    ),
+    "rename-folder": (
+        "rename_folder",
+        {"project_id": P, "name": "Read"},
+        "Rename folder “Project” to “Read”",
+    ),
+    "delete-folder": (
+        "delete_folder",
+        {"project_id": str(SECOND)},
+        "Delete folder “Second” (documents are kept)",
+    ),
+    "retitle": (
+        "update_document_metadata",
+        {"document_id": str(PAPER), "title": "Attention (v2)"},
+        "Rename paper “Attention Is All You Need” to “Attention (v2)”",
+    ),
+    "retag": (
+        "update_document_metadata",
+        {"document_id": str(PAPER), "tags": ["ml", "nlp"]},
+        "Set the tags of paper “Attention Is All You Need” to “ml”, “nlp”",
+    ),
+    "untag": (
+        "update_document_metadata",
+        {"document_id": str(PAPER), "tags": []},
+        "Remove every tag from paper “Attention Is All You Need”",
+    ),
+    "retitle-and-retag": (
+        "update_document_metadata",
+        {"document_id": str(PAPER), "title": "T", "tags": ["ml"]},
+        "Rename paper “Attention Is All You Need” to “T” and set its tags to “ml”",
+    ),
+    "retitle-and-untag": (
+        "update_document_metadata",
+        {"document_id": str(PAPER), "title": "T", "tags": []},
+        "Rename paper “Attention Is All You Need” to “T” and remove every tag",
+    ),
+    "ingest": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["2401.00001", "math.GT/0309136"], "project_id": str(SECOND)},
+        "Ingest 2 arXiv papers into folder “Second”: 2401.00001, math.GT/0309136",
+    ),
+}
+
+
+@pytest.fixture
+async def titled(db: AsyncSession, library: None) -> None:
+    for document_id, title in TITLES.items():
+        await db.execute(
+            update(Document).where(Document.id == document_id).values(title=title)
+        )
+    await db.commit()
+
+
+async def _stored_review(
+    db: AsyncSession, tool_name: str, arguments: dict[str, Any], target: UUID | None
+) -> Any:
+    """Review a workspace row stored as given, bypassing the request checks."""
+    row = await _workspace_row(
+        db,
+        tool_name=tool_name,
+        arguments=arguments,
+        argument_hash=canonical_hash(tool_name, arguments),
+        project_id=target,
+    )
+    return await get_action_for_review(db, await _user(db), row.invocation_id)
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "summary"),
+    list(SUMMARIES.values()),
+    ids=list(SUMMARIES),
+)
+async def test_review_summarises_each_library_action_and_lists_its_arguments(
+    db: AsyncSession,
+    titled: None,
+    tool_name: str,
+    arguments: dict[str, Any],
+    summary: str,
+) -> None:
+    status = await request_action(
+        db, await _library_actor(db, WRITE), _call(tool_name, **arguments)
+    )
+    assert status.state == "awaiting_approval"
+    review = await get_action_for_review(db, await _user(db), status.invocation_id)
+    assert review.tool_name == tool_name
+    assert review.summary == summary
+    # Exactly what is stored and will run, selectors included, so the page can
+    # list what the sentence names.
+    assert review.arguments == arguments
+    # The note fields describe a note only: a document edit's title and tags
+    # never pose as one.
+    assert (review.title, review.content, review.tags) == ("", "", [])
+
+
+async def test_review_of_a_note_keeps_its_fields_and_names_where_it_lands(
+    db: AsyncSession,
+) -> None:
+    status = await request_action(db, _actor(), _invocation(tags=["x"]))
+    review = await get_action_for_review(db, await _user(db), status.invocation_id)
+    assert review.summary == "Create note “Findings” in project “Project”"
+    assert review.arguments == {**NOTE_ARGS, "tags": ["x"]}
+    assert (review.title, review.content, review.tags) == (
+        "Findings",
+        "# Findings\n",
+        ["x"],
+    )
+    # A workspace-level row names its workspace instead.
+    row = await _workspace_row(db)
+    review = await get_action_for_review(db, await _user(db), row.invocation_id)
+    assert review.summary == "Create note “Findings” in workspace “Workspace”"
+
+
+async def test_review_names_only_live_documents_of_the_users_organization(
+    db: AsyncSession, titled: None
+) -> None:
+    # A harness may name any id; the service skips foreign and deleted
+    # documents, and the review must not read out their titles either.
+    foreign, retired = uuid4(), uuid4()
+    db.add_all([_paper(foreign, organization_id=ORG2), _paper(retired)])
+    await db.flush()
+    await db.execute(
+        update(Document)
+        .where(Document.id == foreign)
+        .values(title="Their confidential paper")
+    )
+    await db.execute(
+        update(Document)
+        .where(Document.id == retired)
+        .values(title="Withdrawn paper", is_deleted=True)
+    )
+    await db.commit()
+    arguments = {
+        "document_ids": [str(PAPER), str(foreign), str(retired)],
+        "project_id": str(SECOND),
+    }
+    review = await _stored_review(db, "save_papers_to_folder", arguments, SECOND)
+    # A paper it cannot name is shown by its id.
+    assert review.summary == (
+        "Save 3 papers to folder “Second”: “Attention Is All You Need”, "
+        f"{foreign}, {retired}"
+    )
+    assert "confidential" not in review.summary
+    assert "Withdrawn" not in review.summary
+    metadata = await _stored_review(
+        db,
+        "update_document_metadata",
+        {"document_id": str(foreign), "title": "Mine now"},
+        SECOND,
+    )
+    assert metadata.summary == f"Rename paper {foreign} to “Mine now”"
+
+
+async def test_review_names_folders_only_within_the_actions_workspace(
+    db: AsyncSession, titled: None
+) -> None:
+    # The request path refuses a destination outside the grant's workspace; a
+    # row that names one anyway never reads out a foreign folder's name.
+    theirs, secret = uuid4(), uuid4()
+    await db.execute(
+        insert(Workspace).values(
+            id=theirs, name="Theirs", owner_id=OTHER_USER, organization_id=ORG2
+        )
+    )
+    await db.execute(
+        insert(Collection).values(id=secret, name="Secret folder", workspace_id=theirs)
+    )
+    await db.commit()
+    arguments = {
+        "document_ids": [str(PAPER)],
+        "from_project_id": P,
+        "to_project_id": str(secret),
+    }
+    review = await _stored_review(db, "move_papers_between_folders", arguments, PROJECT)
+    assert review.summary == (
+        f"Move 1 paper from folder “Project” to folder {secret}: "
+        "“Attention Is All You Need”"
+    )
+
+
+async def test_review_of_an_unknown_action_still_loads(db: AsyncSession) -> None:
+    # Never a 500 on the decision page: an action this server no longer
+    # catalogues is named as stored and can still be denied.
+    review = await _stored_review(db, "forget_memory", {"key": "x"}, None)
+    assert review.summary == "Run the action “forget_memory”"
+    assert review.arguments == {"key": "x"}
+    assert (review.title, review.content, review.tags) == ("", "", [])
