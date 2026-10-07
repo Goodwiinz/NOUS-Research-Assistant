@@ -88,6 +88,9 @@ describe('IntegrationApprovalPage', () => {
     expect(
       screen.getByText(/Deleting folders and ingesting papers still require/)
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/change the title and tags of a paper/)
+    ).toBeInTheDocument();
     for (const scope of workspaceRequest.scopes) {
       expect(screen.getByText(scope, { selector: 'code' })).toBeInTheDocument();
     }

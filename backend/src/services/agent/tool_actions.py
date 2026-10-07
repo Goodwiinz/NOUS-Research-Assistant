@@ -1306,7 +1306,12 @@ async def _delete_folder(
 async def _update_document_metadata(
     db: AsyncSession, row: IntegrationToolAction, user: User
 ) -> dict[str, Any]:
-    """Edit the document itself; the target is the folder that put it in scope."""
+    """Edit the document itself; the target is the folder that put it in scope.
+
+    The receipt keeps the values the edit replaced (``previous_title``,
+    ``previous_tags``, for the fields it set): NOUS keeps no other history,
+    and this action runs without a per-action decision.
+    """
     if row.project_id is None:
         raise ToolActionError("action has no target project")
     document_id = UUID(row.arguments["document_id"])
@@ -1319,6 +1324,15 @@ async def _update_document_metadata(
     if row.project_id not in folders:
         # It left the folder the action was aimed at.
         return _refused(row, TARGET_NOT_FOUND)
+    before = await db.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            Document.organization_id == row.organization_id,
+        )
+    )
+    if before is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    replaced = {"title": str(before.title), "tags": list(before.tags or [])}
     updated = await file_metadata_service.update_file_metadata(
         db,
         document_id,
@@ -1339,6 +1353,7 @@ async def _update_document_metadata(
         # Every folder of the scope holding it, the target first by name.
         project_ids=[str(folder) for folder in folders],
         **changed,
+        **{f"previous_{key}": replaced[key] for key in changed},
     )
 
 

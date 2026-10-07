@@ -20,6 +20,14 @@ describe('scopeLabel', () => {
   it('explains library:write as running without per-action approval', () => {
     expect(scopeLabel('library:write')).toMatch(/without asking each time/);
   });
+  it('names the paper edits library:write runs without asking', () => {
+    // update_document_metadata auto-runs too: it replaces a paper's title or
+    // tags (or clears every tag) on the paper itself, in every folder.
+    const label = scopeLabel('library:write');
+    expect(label).toMatch(/change the title and tags of a paper/);
+    expect(label).toMatch(/removing every tag/);
+    expect(label).toMatch(/changes everywhere it appears/);
+  });
   it('says what library:write still leaves to the user', () => {
     expect(scopeLabel('library:write')).toMatch(
       /Deleting folders and ingesting papers still require your approval/

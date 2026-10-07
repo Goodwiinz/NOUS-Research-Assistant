@@ -2344,6 +2344,9 @@ async def test_update_document_metadata_targets_the_first_folder_by_name(
         "project_ids": [str(ALPHA), str(SECOND)],
         "title": "Renamed",
         "tags": ["ml"],
+        # What it replaced, so the edit can be undone.
+        "previous_title": "Paper",
+        "previous_tags": ["seed"],
     }
     document = await db.scalar(
         select(Document)
@@ -2352,6 +2355,52 @@ async def test_update_document_metadata_targets_the_first_folder_by_name(
     )
     assert document is not None
     assert (document.title, list(document.tags)) == ("Renamed", ["ml"])
+
+
+async def test_a_metadata_edit_records_only_what_it_replaced_and_can_be_undone(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _library_actor(db)
+    cleared = await request_action(
+        db, actor, _call("update_document_metadata", document_id=str(PAPER), tags=[])
+    )
+    assert cleared.state == "succeeded"
+    receipt = _receipt(cleared)
+    assert (receipt["tags"], receipt["previous_tags"]) == ([], ["seed"])
+    assert "title" not in receipt and "previous_title" not in receipt
+    # The previous values are valid arguments: asking for them again undoes it.
+    undone = await request_action(
+        db,
+        actor,
+        _call(
+            "update_document_metadata",
+            document_id=str(PAPER),
+            tags=receipt["previous_tags"],
+        ),
+    )
+    assert undone.state == "succeeded"
+    assert _receipt(undone)["previous_tags"] == []
+    # A paper stored without tags (NULL) reads back as none.
+    untagged = await db.get(Document, PAPER)
+    assert untagged is not None
+    untagged.tags = None
+    await db.commit()
+    retitled = await request_action(
+        db,
+        actor,
+        _call(
+            "update_document_metadata", document_id=str(PAPER), title="New", tags=["a"]
+        ),
+    )
+    receipt = _receipt(retitled)
+    assert (receipt["previous_title"], receipt["previous_tags"]) == ("Paper", [])
+    document = await db.scalar(
+        select(Document)
+        .where(Document.id == PAPER)
+        .execution_options(populate_existing=True)
+    )
+    assert document is not None
+    assert (document.title, list(document.tags)) == ("New", ["a"])
 
 
 @pytest.mark.parametrize(

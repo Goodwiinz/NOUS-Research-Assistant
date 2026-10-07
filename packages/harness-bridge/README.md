@@ -75,7 +75,7 @@ With `tools:write` on a `--project` connection, or `library:write` on any connec
 | `delete_folder` | `project_id` | after approval |
 | `ingest_arxiv_papers` | `paper_ids` (1-10 arXiv ids), `project_id` (required on `--workspace`) | after approval |
 
-After approval means the reply carries an approval link and nothing changes until the signed-in user approves the request in NOUS; the model can never approve. `get_action_status` reports `awaiting_approval`, `approved`, `executing`, `succeeded`, `failed` (including a denial) or `outcome_unknown`, and only `succeeded` is described to the model as done. A 403 means the grant lacks the scope the action needs or the action names a project or document outside the grant.
+After approval means the reply carries an approval link and nothing changes until the signed-in user approves the request in NOUS; the model can never approve. `get_action_status` reports `awaiting_approval`, `approved`, `executing`, `succeeded`, `failed` (including a denial) or `outcome_unknown`, and only `succeeded` is described to the model as done. A 403 means the grant lacks the scope the action needs or the action names a project or document outside the grant. `update_document_metadata` changes the paper itself, wherever it appears; its receipt keeps the `previous_title` or `previous_tags` it replaced, so asking for those values again undoes the edit.
 
 The backend contract, including what each action may target, the move's single transaction and the arXiv ingest's receipt, is in [`docs/engineering/harness-bridge.md`](../../docs/engineering/harness-bridge.md#library-actions).
 
