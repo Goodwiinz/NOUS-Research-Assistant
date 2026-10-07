@@ -186,6 +186,26 @@ widened response properties, the new optional `workspace_id` and
 required. oasdiff itself is **NOT RUN** here (not installed), so run it as above
 before the label is applied.
 
+**Amended 2026-10-07, for Slice 3, checked on `feat/plan07-s3-library-actions`
+at `fad8034f2`:** Slice 1 opened as #1901 (`feat/plan07-s1-workspace-grant-v2`,
+labelled `api-breaking-approved`, not merged). Slice 3 is stacked on it at
+`fb6de7990`, carries no migration and applies the plan's six review amendments;
+[`harness-bridge.md`](../engineering/harness-bridge.md#library-actions) is the
+contract for what it does. Its only contract change is additive: `ActionReview`
+(`GET /integrations/actions/{invocation_id}/review`) gains the required response
+properties `summary` and `arguments`, and both generated files are regenerated.
+oasdiff 1.23.0, the version CI pins (darwin tarball checked against the
+release's `checksums.txt`), reports two `response-required-property-added` INFO
+changes and nothing at WARN or ERR from Slice 1's `backend/openapi.json`
+(`fb6de7990`) to Slice 3's, and from the merge base with `origin/develop`
+(`61e9f016d`) only Slice 1's eight ERR widenings. The CI gate compares against
+the PR's base branch, so a Slice 3 PR needs the label only while Slice 1's
+changes are part of its diff. The Slice 4 row above is inaccurate: #1887
+(`a41d4cd63`) reads the author lists of the documents in the grant's project,
+not knowledge-graph PERSON entities, which cannot be restricted to a project;
+[`harness-bridge.md`](../engineering/harness-bridge.md#nous-read-tools-over-mcp)
+is the contract.
+
 ## Not verified here
 
 - Whether the running dev pod has the skill flags on.
