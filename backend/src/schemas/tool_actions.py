@@ -34,6 +34,10 @@ class ActionActor(BaseModel):
     grant_id: UUID | None = None
     # Consumed grant request behind the grant, when it was issued by consent.
     consent_id: UUID | None = None
+    # The scopes of that grant. request_action checks each action against the
+    # one it needs (tools:write, or library:write for the reversible library
+    # actions, which then run without a per-action decision). Empty: nothing.
+    scopes: frozenset[str] = frozenset()
 
 
 class ActionStatus(BaseModel):

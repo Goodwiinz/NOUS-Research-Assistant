@@ -10,7 +10,8 @@ import pytest
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.models.collection import Collection
+from src.models.collection import Collection, CollectionDocument
+from src.models.document import Document, DocumentType
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
 from src.models.project_note import ProjectNote
@@ -18,7 +19,7 @@ from src.models.research_project import ResearchProject
 from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
-from src.models.workspace import Workspace, WorkspaceMember
+from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.integration_context import STANDARD_SCOPES
 from src.schemas.integration_tools import ToolInvocation
 from src.services.agent import tool_actions
@@ -37,12 +38,16 @@ from src.services.agent.tool_actions import (
     request_action,
     sweep_stale_actions,
 )
+from src.services.integrations.context import IntegrationAccessDenied
+from src.services.threads import collection_service
 
 pytestmark = pytest.mark.unit
 USER, OTHER_USER, ORG, ORG2, PROJECT, WORKSPACE = (uuid4() for _ in range(6))
 DEVICE, CONSENT, GRANT, RENEWED_GRANT, INTERNAL_GRANT = (uuid4() for _ in range(5))
 NOTE_ARGS = {"title": "Findings", "content": "# Findings\n", "tags": ["a"]}
 SOON = datetime.now(timezone.utc) + timedelta(hours=1)
+# The scopes of the seeded grants. A library:write grant holds these too.
+WRITE = frozenset({"tools:read", "tools:write"})
 
 
 def _grant_values(grant_id: UUID, **overrides: Any) -> dict[str, Any]:
@@ -118,6 +123,8 @@ async def engine(tmp_path: Path) -> AsyncIterator[Any]:
         Workspace,
         WorkspaceMember,
         Collection,
+        Document,
+        CollectionDocument,
         ResearchProject,
         ResearchProjectRoleAssignment,
         ProjectNote,
@@ -150,6 +157,7 @@ def _actor(
     consent_id: UUID | None = CONSENT,
     user_id: UUID = USER,
     organization_id: UUID = ORG,
+    scopes: frozenset[str] = WRITE,
 ) -> ActionActor:
     return ActionActor(
         user_id=user_id,
@@ -157,6 +165,7 @@ def _actor(
         project_id=PROJECT,
         grant_id=grant_id,
         consent_id=consent_id,
+        scopes=scopes,
     )
 
 
@@ -247,18 +256,29 @@ async def test_replay_with_a_different_server_binding_conflicts(
     invocation = _invocation()
     await request_action(db, NATIVE, invocation)
     for actor in (
-        ActionActor(user_id=USER, organization_id=ORG, project_id=uuid4()),
         ActionActor(
-            user_id=USER, organization_id=ORG, project_id=PROJECT, thread_id=uuid4()
+            user_id=USER, organization_id=ORG, project_id=uuid4(), scopes=WRITE
         ),
         ActionActor(
-            user_id=USER, organization_id=ORG, project_id=PROJECT, run_id=uuid4()
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            thread_id=uuid4(),
+            scopes=WRITE,
+        ),
+        ActionActor(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=PROJECT,
+            run_id=uuid4(),
+            scopes=WRITE,
         ),
         ActionActor(
             user_id=USER,
             organization_id=ORG,
             project_id=PROJECT,
             workspace_id=WORKSPACE,
+            scopes=WRITE,
         ),
     ):
         with pytest.raises(ActionConflict):
@@ -400,7 +420,6 @@ MINIMAL_ARGUMENTS: dict[str, dict[str, Any]] = {
     "update_document_metadata": {"document_id": D, "title": "New"},
     "ingest_arxiv_papers": {"paper_ids": ["2401.00001"]},
 }
-LIBRARY_ACTIONS = sorted(set(MINIMAL_ARGUMENTS) - {"create_project_note"})
 IDENTITY = (
     "user_id",
     "organization_id",
@@ -759,14 +778,15 @@ def test_validators_reject_with_a_stable_reason(
     assert str(raised.value) == reason
 
 
-async def test_request_validates_a_library_action_but_cannot_bind_one_yet(
+async def test_request_runs_each_actions_own_validator_first(
     db: AsyncSession,
 ) -> None:
-    # Each action's own validator runs on the request path ...
+    # The validator runs before the scope, the target or any row: an actor
+    # with no scope at all still gets the argument's fixed reason.
     with pytest.raises(ToolActionArgumentError) as invalid:
         await request_action(
             db,
-            _actor(),
+            _actor(scopes=frozenset()),
             ToolInvocation(
                 tool_name="rename_folder",
                 arguments={"project_id": P, "name": " "},
@@ -774,21 +794,23 @@ async def test_request_validates_a_library_action_but_cannot_bind_one_yet(
             ),
         )
     assert str(invalid.value) == "name must be 1-255 characters"
-    # ... and a valid library action is still refused: until its target is
-    # resolved against the grant and its effect exists, a stored row would
-    # wait for an approval that nothing could run.
-    for name in LIBRARY_ACTIONS:
-        with pytest.raises(ToolActionArgumentError) as refused:
+    assert await _row_count(db) == 0
+
+
+async def test_an_actor_without_the_actions_scope_is_refused(
+    db: AsyncSession,
+) -> None:
+    for name in sorted(MINIMAL_ARGUMENTS):
+        with pytest.raises(IntegrationAccessDenied):
             await request_action(
                 db,
-                _actor(),
+                _actor(scopes=frozenset({"tools:read", "library:read"})),
                 ToolInvocation(
                     tool_name=name,
                     arguments=MINIMAL_ARGUMENTS[name],
                     invocation_id=uuid4(),
                 ),
             )
-        assert str(refused.value) == "tool is not available as an action"
     assert await _row_count(db) == 0
 
 
@@ -1246,6 +1268,7 @@ def _workspace_actor(**overrides: Any) -> ActionActor:
         "workspace_id": WORKSPACE,
         "grant_id": GRANT,
         "consent_id": CONSENT,
+        "scopes": WRITE,
     }
     values.update(overrides)
     return ActionActor(**values)
@@ -1307,9 +1330,30 @@ async def _workspace_authority(db: AsyncSession) -> tuple[UUID, UUID]:
     return grant_id, consent_id
 
 
+def _rename_project(invocation_id: UUID | None = None) -> ToolInvocation:
+    """Rename PROJECT: an action a workspace grant aims at one Collection."""
+    return ToolInvocation(
+        tool_name="rename_folder",
+        arguments={"project_id": P, "name": "Renamed"},
+        invocation_id=invocation_id or uuid4(),
+    )
+
+
+async def _project_name(db: AsyncSession) -> str:
+    return str(
+        await db.scalar(
+            select(Collection.name)
+            .where(Collection.id == PROJECT)
+            .execution_options(populate_existing=True)
+        )
+    )
+
+
 async def test_workspace_binding_is_stored_with_the_action(db: AsyncSession) -> None:
-    invocation = _invocation()
-    status = await request_action(db, _workspace_actor(), invocation)
+    # A workspace grant's actor names its workspace and no project; the
+    # project_id selector chooses the Collection the action aims at.
+    invocation = _rename_project()
+    status = await request_action(db, _workspace_actor(project_id=None), invocation)
     assert status.state == "awaiting_approval"
     row = await db.scalar(
         select(IntegrationToolAction).where(
@@ -1321,18 +1365,18 @@ async def test_workspace_binding_is_stored_with_the_action(db: AsyncSession) -> 
     # The same binding replays; a project-bound actor under the same consent
     # is a different target.
     assert (
-        await request_action(db, _workspace_actor(), invocation)
+        await request_action(db, _workspace_actor(project_id=None), invocation)
     ).state == "awaiting_approval"
     with pytest.raises(ActionConflict):
         await request_action(db, _actor(), invocation)
     assert await _row_count(db) == 1
 
 
-async def test_workspace_actor_cannot_request_a_project_action_yet(
+async def test_workspace_actor_cannot_request_a_note(
     db: AsyncSession,
 ) -> None:
-    # Every action row names a project, and create_project_note has no way to
-    # select one: a workspace connection is refused, not stored.
+    # A note lands in the grant's own project and takes no selector, so a
+    # workspace connection has nowhere to put one: refused, not stored.
     with pytest.raises(
         ToolActionArgumentError, match="workspace connections cannot request"
     ):
@@ -1345,14 +1389,16 @@ async def test_grant_bound_to_another_workspace_cannot_run_the_action(
 ) -> None:
     # GRANT is a project grant: it binds PROJECT and no workspace, and the row
     # asks for a workspace grant.
-    status = await request_action(db, _workspace_actor(), _invocation())
+    status = await request_action(
+        db, _workspace_actor(project_id=None), _rename_project()
+    )
     await _approve(db, status.invocation_id)
     failed = await execute_action(db, status.invocation_id)
     assert failed is not None and failed.state == "failed"
     assert (await _last_error(db, status.invocation_id)) == (
         "grant no longer authorizes this action"
     )
-    assert await _note_count(db) == 0
+    assert await _project_name(db) == "Project"
 
 
 async def test_review_of_a_workspace_level_action_names_the_workspace(
@@ -1382,7 +1428,9 @@ async def test_review_names_the_workspace_only_for_workspace_bound_actions(
         None,
         None,
     )
-    bound = await request_action(db, _workspace_actor(), _invocation())
+    bound = await request_action(
+        db, _workspace_actor(project_id=None), _rename_project()
+    )
     review = await get_action_for_review(db, await _user(db), bound.invocation_id)
     assert (review.project_id, review.project_label) == (PROJECT, "Project")
     assert (review.workspace_id, review.workspace_label) == (WORKSPACE, "Workspace")
@@ -1671,3 +1719,963 @@ def test_a_workspace_grants_action_replays_for_its_workspace_actor() -> None:
         bound_to_project, _workspace_actor(project_id=None)
     )
     assert not tool_actions._same_target(bound_to_project, _workspace_actor())
+
+
+# --- library actions: target, per-action scope, auto-run -------------------
+
+# Every scope a library:write grant holds: check_scopes makes write carry its
+# read and the tools:write gateway.
+LIBRARY = frozenset({"tools:read", "tools:write", "library:read", "library:write"})
+# What no grant can hold (check_scopes refuses it). Seeded straight into rows to
+# prove each action is checked against its own scope, never just the route's.
+LIBRARY_ONLY = frozenset({"library:read", "library:write"})
+# SECOND is another live Collection of WORKSPACE and RETIRED a soft-deleted one;
+# ELSEWHERE lives in OTHER_WORKSPACE, which USER owns too. UNKNOWN is no row.
+SECOND, RETIRED, OTHER_WORKSPACE, ELSEWHERE, UNKNOWN = (uuid4() for _ in range(5))
+ALPHA = uuid4()  # a Collection named "Alpha", seeded by the tests that need it
+# PAPER sits in PROJECT; PAPER2 in no folder.
+PAPER, PAPER2 = uuid4(), uuid4()
+LANDED = str(uuid4())  # a document an arXiv ingest stored
+
+
+def _paper(document_id: UUID, organization_id: UUID = ORG) -> Document:
+    return Document(
+        id=document_id,
+        organization_id=organization_id,
+        uploaded_by_user_id=USER,
+        title="Paper",
+        filename="paper.pdf",
+        file_path="/unused/paper.pdf",
+        file_size_bytes=100,
+        mime_type="application/pdf",
+        document_type=DocumentType.PDF,
+        tags=["seed"],
+    )
+
+
+@pytest.fixture
+async def library(db: AsyncSession) -> None:
+    await db.execute(
+        insert(Workspace).values(
+            id=OTHER_WORKSPACE, name="Other", owner_id=USER, organization_id=ORG
+        )
+    )
+    for collection_id, name, workspace_id, deleted in (
+        (SECOND, "Second", WORKSPACE, False),
+        (RETIRED, "Retired", WORKSPACE, True),
+        (ELSEWHERE, "Elsewhere", OTHER_WORKSPACE, False),
+    ):
+        await db.execute(
+            insert(Collection).values(
+                id=collection_id,
+                name=name,
+                workspace_id=workspace_id,
+                is_deleted=deleted,
+            )
+        )
+    db.add_all([_paper(PAPER), _paper(PAPER2)])
+    await db.flush()
+    db.add(CollectionDocument(collection_id=PROJECT, document_id=PAPER))
+    await db.commit()
+
+
+async def _library_actor(
+    db: AsyncSession,
+    scopes: frozenset[str] = LIBRARY,
+    *,
+    consent_scopes: frozenset[str] | None = None,
+) -> ActionActor:
+    """The actor of a live workspace grant on WORKSPACE and of its consent."""
+    grant_id, consent_id = uuid4(), uuid4()
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=consent_id,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            device_id=DEVICE,
+            scopes=sorted(scopes if consent_scopes is None else consent_scopes),
+            status="consumed",
+            expires_at=SOON,
+            approved_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.execute(
+        insert(IntegrationGrant).values(
+            **_grant_values(
+                grant_id,
+                project_id=None,
+                workspace_id=WORKSPACE,
+                request_id=consent_id,
+                scopes=sorted(scopes),
+            )
+        )
+    )
+    await db.commit()
+    return ActionActor(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=None,
+        workspace_id=WORKSPACE,
+        grant_id=grant_id,
+        consent_id=consent_id,
+        scopes=scopes,
+    )
+
+
+def _call(
+    tool_name: str, invocation_id: UUID | None = None, **arguments: Any
+) -> ToolInvocation:
+    return ToolInvocation(
+        tool_name=tool_name,
+        arguments=arguments,
+        invocation_id=invocation_id or uuid4(),
+    )
+
+
+async def _linked(db: AsyncSession, collection_id: UUID, document_id: UUID) -> bool:
+    """Whether the document is a live member of the Collection."""
+    count = await db.scalar(
+        select(func.count())
+        .select_from(CollectionDocument)
+        .where(
+            CollectionDocument.collection_id == collection_id,
+            CollectionDocument.document_id == document_id,
+            CollectionDocument.is_deleted.is_(False),
+        )
+    )
+    return bool(count)
+
+
+async def _row(db: AsyncSession, invocation_id: UUID) -> IntegrationToolAction:
+    row = await db.scalar(
+        select(IntegrationToolAction)
+        .where(IntegrationToolAction.invocation_id == invocation_id)
+        .execution_options(populate_existing=True)
+    )
+    assert row is not None
+    return cast(IntegrationToolAction, row)
+
+
+async def _collection(db: AsyncSession, collection_id: UUID) -> Collection:
+    found = await db.scalar(
+        select(Collection)
+        .where(Collection.id == collection_id)
+        .execution_options(populate_existing=True)
+    )
+    assert found is not None
+    return cast(Collection, found)
+
+
+def _receipt(status: Any) -> dict[str, Any]:
+    assert status is not None and status.result is not None
+    return dict(status.result.content[0])
+
+
+async def test_library_write_grant_auto_runs_save_papers(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _library_actor(db)
+    arguments = {"document_ids": [str(PAPER2)], "project_id": str(SECOND)}
+    status = await request_action(
+        db, actor, _call("save_papers_to_folder", **arguments)
+    )
+    assert status.state == "succeeded" and status.approval_url is None
+    assert await _linked(db, SECOND, PAPER2)
+    assert _receipt(status) == {
+        "ok": True,
+        "tool_name": "save_papers_to_folder",
+        "project_id": str(SECOND),
+        "document_ids": [str(PAPER2)],
+        "skipped_document_ids": [],
+    }
+    assert status.result is not None
+    assert status.result.source_refs == [{"document_id": str(PAPER2)}]
+    row = await _row(db, status.invocation_id)
+    # Aimed at one Collection of the grant's workspace: both columns are set.
+    assert (row.project_id, row.workspace_id) == (SECOND, WORKSPACE)
+    # The grant's library:write consent stands in for a per-action decision.
+    assert (row.approved, row.decided_by) == (True, USER)
+    assert row.decided_at is not None
+    # A replay returns the receipt and runs nothing again.
+    again = await request_action(
+        db, actor, _call("save_papers_to_folder", status.invocation_id, **arguments)
+    )
+    assert again.state == "succeeded"
+    assert await _row_count(db) == 1
+
+
+async def test_tools_write_only_grant_waits_for_a_decision_on_a_library_action(
+    db: AsyncSession, library: None
+) -> None:
+    status = await request_action(
+        db,
+        await _library_actor(db, WRITE),
+        _call(
+            "save_papers_to_folder",
+            document_ids=[str(PAPER2)],
+            project_id=str(SECOND),
+        ),
+    )
+    assert status.state == "awaiting_approval"
+    assert not await _linked(db, SECOND, PAPER2)
+    await _approve(db, status.invocation_id)
+    done = await execute_action(db, status.invocation_id)
+    assert done is not None and done.state == "succeeded"
+    assert await _linked(db, SECOND, PAPER2)
+
+
+DESTRUCTIVE: dict[str, tuple[str, dict[str, Any]]] = {
+    "delete": ("delete_folder", {"project_id": str(SECOND)}),
+    "ingest": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["2401.00001"], "project_id": str(SECOND)},
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"), DESTRUCTIVE.values(), ids=list(DESTRUCTIVE)
+)
+async def test_deletion_and_ingest_never_auto_run(
+    db: AsyncSession, library: None, name: str, arguments: dict[str, Any]
+) -> None:
+    status = await request_action(
+        db, await _library_actor(db), _call(name, **arguments)
+    )
+    assert status.state == "awaiting_approval"
+    assert (await _collection(db, SECOND)).is_deleted is False
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("create_project_note", NOTE_ARGS),
+        ("delete_folder", {"project_id": P}),
+        ("ingest_arxiv_papers", {"paper_ids": ["2401.00001"]}),
+    ],
+    ids=["note", "delete", "ingest"],
+)
+async def test_library_write_alone_cannot_request_a_note_a_deletion_or_an_ingest(
+    db: AsyncSession, name: str, arguments: dict[str, Any]
+) -> None:
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(db, _actor(scopes=LIBRARY_ONLY), _call(name, **arguments))
+    assert await _row_count(db) == 0
+
+
+@pytest.mark.parametrize("held_by", ["internal-grant", "consented-grant", "consent"])
+@pytest.mark.parametrize(
+    ("name", "arguments"), DESTRUCTIVE.values(), ids=list(DESTRUCTIVE)
+)
+async def test_library_write_alone_cannot_execute_a_deletion_or_an_ingest(
+    db: AsyncSession,
+    library: None,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    arguments: dict[str, Any],
+    held_by: str,
+) -> None:
+    from src.services.agent import tools_impl
+
+    ingests: list[Any] = []
+
+    async def ingest(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        ingests.append(args)
+        return {"status": "ingestion_complete", "document_ids": [LANDED]}
+
+    monkeypatch.setattr(tools_impl, "_tool_ingest_arxiv", ingest)
+    consent_id: UUID | None
+    if held_by == "internal-grant":
+        grant_id, consent_id = uuid4(), None
+        await db.execute(
+            insert(IntegrationGrant).values(
+                **_grant_values(
+                    grant_id,
+                    project_id=None,
+                    workspace_id=WORKSPACE,
+                    device_id=None,
+                    request_id=None,
+                    scopes=sorted(LIBRARY_ONLY),
+                )
+            )
+        )
+        await db.commit()
+    else:
+        library_grant = held_by == "consented-grant"
+        actor = await _library_actor(
+            db,
+            LIBRARY_ONLY if library_grant else LIBRARY,
+            consent_scopes=LIBRARY if library_grant else LIBRARY_ONLY,
+        )
+        grant_id, consent_id = cast(UUID, actor.grant_id), actor.consent_id
+    # Stored as if approved; request_action itself refuses such an actor.
+    row = await _workspace_row(
+        db,
+        tool_name=name,
+        arguments=arguments,
+        argument_hash=canonical_hash(name, arguments),
+        project_id=SECOND,
+        grant_id=grant_id,
+        consent_id=consent_id,
+        state="approved",
+        approved=True,
+    )
+    failed = await execute_action(db, row.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert await _last_error(db, row.invocation_id) == (
+        "consent revoked"
+        if held_by == "consent"
+        else "grant no longer authorizes this action"
+    )
+    assert (await _collection(db, SECOND)).is_deleted is False
+    assert ingests == []
+
+
+OUT_OF_SCOPE: dict[str, tuple[str, dict[str, Any]]] = {
+    "rename-another-workspace": (
+        "rename_folder",
+        {"project_id": str(ELSEWHERE), "name": "X"},
+    ),
+    "rename-deleted-folder": (
+        "rename_folder",
+        {"project_id": str(RETIRED), "name": "X"},
+    ),
+    "rename-unknown-folder": (
+        "rename_folder",
+        {"project_id": str(UNKNOWN), "name": "X"},
+    ),
+    "save-another-workspace": (
+        "save_papers_to_folder",
+        {"document_ids": [str(PAPER2)], "project_id": str(ELSEWHERE)},
+    ),
+    "remove-another-workspace": (
+        "remove_papers_from_folder",
+        {"document_ids": [str(PAPER)], "project_id": str(ELSEWHERE)},
+    ),
+    "move-to-another-workspace": (
+        "move_papers_between_folders",
+        {
+            "document_ids": [str(PAPER)],
+            "from_project_id": P,
+            "to_project_id": str(ELSEWHERE),
+        },
+    ),
+    "move-from-another-workspace": (
+        "move_papers_between_folders",
+        {
+            "document_ids": [str(PAPER)],
+            "from_project_id": str(ELSEWHERE),
+            "to_project_id": P,
+        },
+    ),
+    "delete-another-workspace": ("delete_folder", {"project_id": str(ELSEWHERE)}),
+    "ingest-another-workspace": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["2401.00001"], "project_id": str(ELSEWHERE)},
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"), OUT_OF_SCOPE.values(), ids=list(OUT_OF_SCOPE)
+)
+async def test_target_outside_scope_is_denied(
+    db: AsyncSession, library: None, name: str, arguments: dict[str, Any]
+) -> None:
+    # Every case is a Collection the user could change in the app: only the
+    # grant's workspace keeps it out.
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(db, await _library_actor(db), _call(name, **arguments))
+    assert await _row_count(db) == 0
+    assert (await _collection(db, ELSEWHERE)).name == "Elsewhere"
+    assert await _linked(db, PROJECT, PAPER)
+
+
+PROJECT_GRANT_REFUSED: dict[str, tuple[str, dict[str, Any]]] = {
+    "rename-a-sibling": ("rename_folder", {"project_id": str(SECOND), "name": "X"}),
+    "save-into-a-sibling": (
+        "save_papers_to_folder",
+        {"document_ids": [str(PAPER2)], "project_id": str(SECOND)},
+    ),
+    "move-out": (
+        "move_papers_between_folders",
+        {
+            "document_ids": [str(PAPER)],
+            "from_project_id": P,
+            "to_project_id": str(SECOND),
+        },
+    ),
+    "delete-a-sibling": ("delete_folder", {"project_id": str(SECOND)}),
+    "ingest-into-a-sibling": (
+        "ingest_arxiv_papers",
+        {"paper_ids": ["2401.00001"], "project_id": str(SECOND)},
+    ),
+    "create-a-folder": ("create_folder", {"name": "Reading"}),
+    "metadata-of-a-document-outside-it": (
+        "update_document_metadata",
+        {"document_id": str(PAPER2), "title": "T"},
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    PROJECT_GRANT_REFUSED.values(),
+    ids=list(PROJECT_GRANT_REFUSED),
+)
+async def test_project_grant_reaches_its_own_project_only(
+    db: AsyncSession, library: None, name: str, arguments: dict[str, Any]
+) -> None:
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(db, _actor(scopes=LIBRARY), _call(name, **arguments))
+    assert await _row_count(db) == 0
+
+
+async def test_project_grant_may_name_its_own_project(
+    db: AsyncSession, library: None
+) -> None:
+    actor = _actor()
+    for invocation in (
+        _call("rename_folder", project_id=P, name="Renamed"),
+        _call("ingest_arxiv_papers", paper_ids=["2401.00001"]),
+        _call("ingest_arxiv_papers", paper_ids=["2401.00002"], project_id=P),
+        _call("update_document_metadata", document_id=str(PAPER), title="T"),
+    ):
+        status = await request_action(db, actor, invocation)
+        assert status.state == "awaiting_approval"
+        row = await _row(db, status.invocation_id)
+        assert (row.project_id, row.workspace_id) == (PROJECT, None)
+
+
+async def test_an_actor_must_carry_exactly_one_binding(
+    db: AsyncSession, library: None
+) -> None:
+    for actor in (
+        _workspace_actor(scopes=LIBRARY),  # a project and a workspace
+        _workspace_actor(project_id=None, workspace_id=None, scopes=LIBRARY),
+    ):
+        with pytest.raises(IntegrationAccessDenied):
+            await request_action(db, actor, _rename_project())
+    assert await _row_count(db) == 0
+
+
+async def test_a_grant_whose_user_lost_the_workspace_cannot_request(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _library_actor(db)
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(owner_id=OTHER_USER)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(db, actor, _call("create_folder", name="Reading"))
+    assert await _row_count(db) == 0
+
+
+async def test_move_unlinks_and_links_in_one_effect(
+    db: AsyncSession, library: None
+) -> None:
+    status = await request_action(
+        db,
+        await _library_actor(db),
+        _call(
+            "move_papers_between_folders",
+            document_ids=[str(PAPER), str(PAPER2)],
+            from_project_id=P,
+            to_project_id=str(SECOND),
+        ),
+    )
+    assert status.state == "succeeded"
+    assert not await _linked(db, PROJECT, PAPER)
+    assert await _linked(db, SECOND, PAPER)
+    # PAPER2 was in no folder: a move never adds what it did not take out.
+    assert not await _linked(db, SECOND, PAPER2)
+    assert _receipt(status) == {
+        "ok": True,
+        "tool_name": "move_papers_between_folders",
+        "project_id": P,
+        "from_project_id": P,
+        "to_project_id": str(SECOND),
+        "document_ids": [str(PAPER)],
+        "skipped_document_ids": [str(PAPER2)],
+    }
+    row = await _row(db, status.invocation_id)
+    assert (row.project_id, row.workspace_id) == (PROJECT, WORKSPACE)
+
+
+async def test_move_is_atomic(
+    db: AsyncSession, library: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def link_fails(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("link failed after the unlink was flushed")
+
+    monkeypatch.setattr(collection_service, "add_documents_to_collection", link_fails)
+    status = await request_action(
+        db,
+        await _library_actor(db),
+        _call(
+            "move_papers_between_folders",
+            document_ids=[str(PAPER)],
+            from_project_id=P,
+            to_project_id=str(SECOND),
+        ),
+    )
+    assert status.state == "failed"
+    assert await _last_error(db, status.invocation_id) == "effect failed before commit"
+    # The unlink rolled back with the failed link: the paper never left PROJECT.
+    assert await _linked(db, PROJECT, PAPER)
+    assert not await _linked(db, SECOND, PAPER)
+
+
+async def test_rename_and_remove_run_without_a_decision(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _library_actor(db)
+    renamed = await request_action(
+        db, actor, _call("rename_folder", project_id=str(SECOND), name="Renamed")
+    )
+    assert renamed.state == "succeeded"
+    assert (await _collection(db, SECOND)).name == "Renamed"
+    assert _receipt(renamed) == {
+        "ok": True,
+        "tool_name": "rename_folder",
+        "project_id": str(SECOND),
+        "name": "Renamed",
+    }
+    removed = await request_action(
+        db,
+        actor,
+        _call(
+            "remove_papers_from_folder",
+            document_ids=[str(PAPER), str(PAPER2)],
+            project_id=P,
+        ),
+    )
+    assert removed.state == "succeeded"
+    assert not await _linked(db, PROJECT, PAPER)
+    assert _receipt(removed) == {
+        "ok": True,
+        "tool_name": "remove_papers_from_folder",
+        "project_id": P,
+        "document_ids": [str(PAPER)],
+        "skipped_document_ids": [str(PAPER2)],
+    }
+
+
+async def test_create_folder_binds_the_workspace_and_no_collection(
+    db: AsyncSession, library: None
+) -> None:
+    status = await request_action(
+        db,
+        await _library_actor(db),
+        _call("create_folder", name="Reading", description="To read"),
+    )
+    assert status.state == "succeeded"
+    row = await _row(db, status.invocation_id)
+    assert (row.project_id, row.workspace_id) == (None, WORKSPACE)
+    created = await db.scalar(select(Collection).where(Collection.name == "Reading"))
+    assert created is not None
+    assert (created.workspace_id, created.description) == (WORKSPACE, "To read")
+    assert _receipt(status) == {
+        "ok": True,
+        "tool_name": "create_folder",
+        "project_id": str(created.id),
+        "workspace_id": str(WORKSPACE),
+        "name": "Reading",
+    }
+
+
+async def test_an_approved_deletion_soft_deletes_the_folder(
+    db: AsyncSession, library: None
+) -> None:
+    status = await request_action(
+        db, await _library_actor(db), _call("delete_folder", project_id=str(SECOND))
+    )
+    await _approve(db, status.invocation_id)
+    done = await execute_action(db, status.invocation_id)
+    assert done is not None and done.state == "succeeded"
+    assert (await _collection(db, SECOND)).is_deleted is True
+    assert _receipt(done) == {
+        "ok": True,
+        "tool_name": "delete_folder",
+        "project_id": str(SECOND),
+    }
+
+
+async def test_update_document_metadata_targets_the_first_folder_by_name(
+    db: AsyncSession, library: None
+) -> None:
+    # PAPER2 joins SECOND first, then ALPHA: by name, ALPHA comes first.
+    await db.execute(
+        insert(Collection).values(id=ALPHA, name="Alpha", workspace_id=WORKSPACE)
+    )
+    db.add(CollectionDocument(collection_id=SECOND, document_id=PAPER2))
+    await db.flush()
+    db.add(CollectionDocument(collection_id=ALPHA, document_id=PAPER2))
+    await db.commit()
+    status = await request_action(
+        db,
+        await _library_actor(db),
+        _call(
+            "update_document_metadata",
+            document_id=str(PAPER2),
+            title="Renamed",
+            tags=["ml"],
+        ),
+    )
+    assert status.state == "succeeded"
+    row = await _row(db, status.invocation_id)
+    assert (row.project_id, row.workspace_id) == (ALPHA, WORKSPACE)
+    assert _receipt(status) == {
+        "ok": True,
+        "tool_name": "update_document_metadata",
+        "project_id": str(ALPHA),
+        "document_ids": [str(PAPER2)],
+        # Every folder of the grant's scope that holds it, first by name.
+        "project_ids": [str(ALPHA), str(SECOND)],
+        "title": "Renamed",
+        "tags": ["ml"],
+    }
+    document = await db.scalar(
+        select(Document)
+        .where(Document.id == PAPER2)
+        .execution_options(populate_existing=True)
+    )
+    assert document is not None
+    assert (document.title, list(document.tags)) == ("Renamed", ["ml"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "in-no-folder",
+        "only-in-another-workspace",
+        "link-removed",
+        "document-deleted",
+        "another-organization",
+    ],
+)
+async def test_update_document_metadata_needs_the_document_in_scope(
+    db: AsyncSession, library: None, case: str
+) -> None:
+    document = PAPER2
+    if case == "only-in-another-workspace":
+        db.add(CollectionDocument(collection_id=ELSEWHERE, document_id=PAPER2))
+    elif case == "link-removed":
+        document = PAPER
+        await db.execute(update(CollectionDocument).values(is_deleted=True))
+    elif case == "document-deleted":
+        document = PAPER
+        await db.execute(
+            update(Document).where(Document.id == PAPER).values(is_deleted=True)
+        )
+    elif case == "another-organization":
+        document = uuid4()
+        db.add(_paper(document, organization_id=ORG2))
+        await db.flush()
+        db.add(CollectionDocument(collection_id=PROJECT, document_id=document))
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(
+            db,
+            await _library_actor(db),
+            _call("update_document_metadata", document_id=str(document), title="T"),
+        )
+    assert await _row_count(db) == 0
+
+
+async def test_ingest_under_a_workspace_grant_must_name_its_folder(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _library_actor(db)
+    with pytest.raises(ToolActionArgumentError) as unnamed:
+        await request_action(
+            db, actor, _call("ingest_arxiv_papers", paper_ids=["2401.00001"])
+        )
+    assert str(unnamed.value) == "project_id is required"
+    assert await _row_count(db) == 0
+    status = await request_action(
+        db,
+        actor,
+        _call("ingest_arxiv_papers", paper_ids=["2401.00001"], project_id=str(SECOND)),
+    )
+    assert status.state == "awaiting_approval"
+    row = await _row(db, status.invocation_id)
+    assert (row.project_id, row.workspace_id) == (SECOND, WORKSPACE)
+
+
+async def test_library_effect_failures_use_stable_reasons(
+    db: AsyncSession, library: None
+) -> None:
+    # A viewer of WORKSPACE reaches PROJECT but may not change it.
+    db.add(
+        WorkspaceMember(
+            workspace_id=WORKSPACE, user_id=OTHER_USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    viewer = ActionActor(
+        user_id=OTHER_USER, organization_id=ORG, project_id=PROJECT, scopes=WRITE
+    )
+    status = await request_action(db, viewer, _rename_project())
+    await decide_action(
+        db, await _user(db, OTHER_USER), status.invocation_id, approved=True
+    )
+    refused = await execute_action(db, status.invocation_id)
+    assert refused is not None and refused.state == "failed"
+    assert await _last_error(db, status.invocation_id) == "insufficient permissions"
+    assert _receipt(refused) == {
+        "ok": False,
+        "tool_name": "rename_folder",
+        "error": "insufficient permissions",
+    }
+    assert await _project_name(db) == "Project"
+    # Gone by the time it runs: the service finds nothing to change.
+    gone = await request_action(db, NATIVE, _rename_project())
+    await db.execute(
+        update(Collection).where(Collection.id == PROJECT).values(is_deleted=True)
+    )
+    await db.commit()
+    await _approve(db, gone.invocation_id)
+    missing = await execute_action(db, gone.invocation_id)
+    assert missing is not None and missing.state == "failed"
+    assert await _last_error(db, gone.invocation_id) == "target not found"
+
+
+async def test_move_destination_is_rechecked_when_it_runs(
+    db: AsyncSession, library: None
+) -> None:
+    status = await request_action(
+        db,
+        await _library_actor(db, WRITE),
+        _call(
+            "move_papers_between_folders",
+            document_ids=[str(PAPER)],
+            from_project_id=P,
+            to_project_id=str(SECOND),
+        ),
+    )
+    await _approve(db, status.invocation_id)
+    # After the decision the destination left the workspace's live folders.
+    await db.execute(
+        update(Collection).where(Collection.id == SECOND).values(is_deleted=True)
+    )
+    await db.commit()
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert await _last_error(db, status.invocation_id) == (
+        "grant no longer authorizes this action"
+    )
+    assert await _linked(db, PROJECT, PAPER)
+
+
+async def test_create_folder_rechecks_workspace_access_when_it_runs(
+    db: AsyncSession, library: None
+) -> None:
+    status = await request_action(
+        db, await _library_actor(db, WRITE), _call("create_folder", name="Reading")
+    )
+    await _approve(db, status.invocation_id)
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(owner_id=OTHER_USER)
+    )
+    await db.commit()
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert await _last_error(db, status.invocation_id) == (
+        "grant no longer authorizes this action"
+    )
+    created = await db.scalar(
+        select(func.count()).select_from(Collection).where(Collection.name == "Reading")
+    )
+    assert created == 0
+
+
+# --- the arXiv ingest: approval path, outside the action's transaction -----
+
+
+def _fake_ingest(
+    monkeypatch: pytest.MonkeyPatch, outcome: Any, calls: list[dict[str, Any]]
+) -> None:
+    from src.services.agent import tools_impl
+
+    async def ingest(
+        args: dict[str, Any], user_id: str, session: AsyncSession, user: User
+    ) -> Any:
+        calls.append(
+            {
+                "args": args,
+                "user_id": user_id,
+                "user": user.id,
+                # The ingest commits through sessions of its own and takes
+                # minutes: nothing of the action may hold a transaction open.
+                "in_transaction": session.in_transaction(),
+            }
+        )
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(tools_impl, "_tool_ingest_arxiv", ingest)
+
+
+async def _approved_ingest(
+    db: AsyncSession, *paper_ids: str
+) -> tuple[ActionActor, UUID]:
+    actor = await _library_actor(db, WRITE)
+    status = await request_action(
+        db,
+        actor,
+        _call("ingest_arxiv_papers", paper_ids=list(paper_ids), project_id=str(SECOND)),
+    )
+    await _approve(db, status.invocation_id)
+    return actor, status.invocation_id
+
+
+async def test_ingest_runs_through_the_drain_outside_the_action_transaction(
+    db: AsyncSession, library: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+    _fake_ingest(
+        monkeypatch,
+        {
+            "status": "ingestion_complete",
+            "paper_ids": ["2401.00001"],
+            "document_ids": [LANDED],
+            "failed_papers": [],
+            "project_id": str(SECOND),
+            "message": "Ingested 1 paper(s) into the RAG system.",
+        },
+        calls,
+    )
+
+    async def transactional_effect(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("an ingest never runs inside the action's transaction")
+
+    monkeypatch.setattr(tool_actions, "_run_effect", transactional_effect)
+    actor, invocation_id = await _approved_ingest(db, "2401.00001")
+    # The same worker drain that runs approved notes.
+    assert await drain_integration_actions(db) == 1
+    assert calls == [
+        {
+            "args": {"paper_ids": ["2401.00001"], "project_id": str(SECOND)},
+            "user_id": str(USER),
+            "user": USER,
+            "in_transaction": False,
+        }
+    ]
+    done = await get_action_status(db, actor, invocation_id)
+    assert done.state == "succeeded"
+    assert _receipt(done) == {
+        "ok": True,
+        "tool_name": "ingest_arxiv_papers",
+        "project_id": str(SECOND),
+        "paper_ids": ["2401.00001"],
+        "document_ids": [LANDED],
+        "failed_paper_ids": [],
+        "ingest_status": "ingestion_complete",
+        "atomicity": tool_actions.INGEST_ATOMICITY,
+    }
+    assert done.result is not None
+    assert done.result.source_refs == [{"document_id": LANDED}]
+    # Claimed once: neither the drain nor a direct call runs it again.
+    assert await drain_integration_actions(db) == 0
+    assert await execute_action(db, invocation_id) is None
+    assert len(calls) == 1
+
+
+SECRET = "s3cr3t from the adapter"
+
+
+@pytest.mark.parametrize(
+    ("outcome", "state", "reason", "document_ids", "failed_paper_ids"),
+    [
+        (
+            {
+                "status": "ingestion_failed",
+                "document_ids": [],
+                "failed_papers": [
+                    {"paper_id": "2401.00001", "reason": SECRET},
+                    {"paper_id": "2401.00002", "reason": SECRET},
+                ],
+                "error": f"Ingested 0 of 2 paper(s). Details: {SECRET}",
+            },
+            "failed",
+            "ingest failed",
+            [],
+            ["2401.00001", "2401.00002"],
+        ),
+        (
+            {
+                "status": "ingestion_partial",
+                "document_ids": [LANDED],
+                "failed_papers": [{"paper_id": "2401.00002", "reason": SECRET}],
+                "error": f"Ingested 1 of 2 paper(s). {SECRET}",
+            },
+            "failed",
+            "ingest partially failed",
+            [LANDED],
+            ["2401.00002"],
+        ),
+        (
+            {
+                "status": "ingestion_complete_link_failed",
+                "document_ids": [LANDED],
+                "failed_papers": [],
+                "link_error": f"Project link failed: {SECRET}",
+            },
+            "failed",
+            "papers ingested but not saved to the folder",
+            [LANDED],
+            [],
+        ),
+        (
+            {"error": SECRET, "error_type": "internal"},
+            "failed",
+            "ingest failed",
+            [],
+            [],
+        ),
+        (RuntimeError(SECRET), "outcome_unknown", "ingest outcome unknown", None, None),
+    ],
+    ids=["nothing-landed", "partial", "not-saved-to-folder", "adapter-error", "raised"],
+)
+async def test_ingest_outcomes_are_recorded_with_stable_reasons(
+    db: AsyncSession,
+    library: None,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: Any,
+    state: str,
+    reason: str,
+    document_ids: list[str] | None,
+    failed_paper_ids: list[str] | None,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    _fake_ingest(monkeypatch, outcome, calls)
+    actor, invocation_id = await _approved_ingest(db, "2401.00001", "2401.00002")
+    assert await drain_integration_actions(db) == 1
+    row = await _row(db, invocation_id)
+    assert (row.state, row.last_error) == (state, reason)
+    # Fixed text only: the adapter's messages and exceptions never reach it.
+    assert SECRET not in str(row.result) and SECRET not in str(row.last_error)
+    if document_ids is None:
+        assert row.result is None
+    else:
+        assert row.result is not None and row.result["is_error"] is True
+        assert row.result["content"] == [
+            {
+                "ok": False,
+                "tool_name": "ingest_arxiv_papers",
+                "project_id": str(SECOND),
+                "paper_ids": ["2401.00001", "2401.00002"],
+                "document_ids": document_ids,
+                "failed_paper_ids": failed_paper_ids,
+                "ingest_status": outcome.get("status", "ingestion_failed"),
+                "atomicity": tool_actions.INGEST_ATOMICITY,
+                "error": reason,
+            }
+        ]
+    assert (await get_action_status(db, actor, invocation_id)).state == state
+    assert len(calls) == 1

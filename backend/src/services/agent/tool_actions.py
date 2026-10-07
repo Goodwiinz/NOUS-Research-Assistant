@@ -15,39 +15,53 @@ while an approval is human-paced. A grant issued without a consent request
 
 The catalogue: every action in ``ALLOWED_ACTIONS`` has its own argument
 validator (``validate_arguments``) and names the narrowest scope that may
-request it (``REQUIRED_SCOPE_FOR``, checked per action by ``scope_allows``).
+request it (``REQUIRED_SCOPE_FOR``, checked per action by ``scope_allows`` on
+request, and again on the live grant and consent before the effect).
 ``AUTO_RUN_ACTIONS`` are the reversible library changes a ``library:write``
-grant may run without a per-action decision (``runs_without_approval``).
+grant runs without a per-action decision (``runs_without_approval``):
+``request_action`` stores them approved by the grant's own consent and runs
+them at once through the same claim the drain uses. Every target comes from
+the grant's binding; a selector argument only chooses among the Collections
+its live scope reaches (``_resolve_target``).
+
+``DETACHED_ACTIONS`` (the arXiv ingest) cannot share the receipt's
+transaction: the ingest stores papers through sessions of its own and object
+storage. It always waits for a decision, runs from the same worker drain once
+claimed, and its receipt is written afterwards and says so.
 """
 
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import CursorResult, func, or_, select, update
+from sqlalchemy import ColumnElement, CursorResult, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
-from src.models.collection import Collection
+from src.models.collection import Collection, CollectionDocument
+from src.models.document import Document
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.tool_action import IntegrationToolAction
 from src.models.user import User
 from src.models.workspace import Workspace
+from src.schemas.chat import CollectionCreate, CollectionUpdate
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation, ToolResult
 from src.schemas.tool_actions import ActionActor, ActionReview, ActionStatus
 from src.services.agent.tool_helpers import _reject_invalid_arxiv_ids
+from src.services.documents import file_metadata_service
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     authorized_scope_filter,
     live,
 )
+from src.services.threads import collection_service
 
 logger = logging.getLogger(__name__)
 
@@ -115,10 +129,31 @@ MAX_TAGS = 20
 MAX_DESCRIPTION = 2000
 MAX_DOCUMENT_IDS = 20
 MAX_PAPER_IDS = 10
-# The actions request_action can bind to a target and run. The library actions
-# validate, but stay refused there until their target resolution and effects
-# exist: a row stored now would wait for an approval that nothing could run.
-_REQUESTABLE_ACTIONS = frozenset({"create_project_note"})
+# Claimed and authorised like any action, but the effect commits through
+# sessions of its own (per-paper persistence, object storage), so it runs
+# outside the transaction that writes the receipt. Never auto-run.
+DETACHED_ACTIONS = frozenset({"ingest_arxiv_papers"})
+GRANT_DENIED = "grant no longer authorizes this action"
+# Stable reasons a library effect records instead of a service's own text.
+TARGET_NOT_FOUND = "target not found"
+INSUFFICIENT_PERMISSIONS = "insufficient permissions"
+INGEST_FAILED = "ingest failed"
+INGEST_UNKNOWN = "ingest outcome unknown"
+INGEST_ATOMICITY = (
+    "Papers are stored and saved to the folder in transactions of their own "
+    "before this receipt is written: those listed here stay in the library "
+    "even when the action failed."
+)
+# The ingest tool's statuses (tools_impl.INGEST_STATUS_*). A missing or
+# unknown status counts as a failure.
+_INGEST_COMPLETE = "ingestion_complete"
+_INGEST_REASONS: Mapping[str, str] = MappingProxyType(
+    {
+        "ingestion_partial": "ingest partially failed",
+        "ingestion_complete_link_failed": "papers ingested but not saved to the folder",
+        "ingestion_failed": INGEST_FAILED,
+    }
+)
 
 
 class ToolActionError(Exception):
@@ -421,26 +456,30 @@ def _scoped(actor: ActionActor, invocation_id: UUID) -> Any:
 async def request_action(
     db: AsyncSession, actor: ActionActor, invocation: ToolInvocation
 ) -> ActionStatus:
-    """Record the intent once. Same id + same payload replays; a different payload conflicts."""
-    if invocation.tool_name not in ALLOWED_ACTIONS:
-        raise ToolActionArgumentError("tool is not available as an action")
-    if actor.project_id is None:
-        # Every action row names a project, and none of these actions can
-        # select one: refuse a workspace connection rather than store a row
-        # whose target cannot be resolved.
-        raise ToolActionArgumentError(
-            "workspace connections cannot request this action"
-        )
+    """Record the intent once. Same id + same payload replays; a different payload conflicts.
+
+    In order: the action's own validator, its own scope (``scope_allows``),
+    then, for a new row, its target against the grant's live scope
+    (``_resolve_target``). An action the grant may run without a decision
+    (``runs_without_approval``) is stored approved by the grant's consent and
+    run at once through the claim the drain uses; any other waits for one.
+    Raises ``ToolActionArgumentError`` (422), ``IntegrationAccessDenied``
+    (403) or ``ActionConflict`` (409).
+    """
     arguments = validate_arguments(invocation.tool_name, invocation.arguments)
-    if invocation.tool_name not in _REQUESTABLE_ACTIONS:
-        raise ToolActionArgumentError("tool is not available as an action")
+    if not scope_allows(invocation.tool_name, actor.scopes):
+        raise IntegrationAccessDenied()
     digest = canonical_hash(invocation.tool_name, arguments)
     existing = await db.scalar(_scoped(actor, invocation.invocation_id))
     if existing is None:
+        target = await _resolve_target(db, actor, invocation.tool_name, arguments)
+        auto_run = runs_without_approval(invocation.tool_name, actor.scopes)
         row = IntegrationToolAction(
             organization_id=actor.organization_id,
             user_id=actor.user_id,
-            project_id=actor.project_id,
+            # The Collection the action aims at (None: the workspace itself),
+            # and the binding of the grant that asked for it.
+            project_id=target,
             workspace_id=actor.workspace_id,
             thread_id=actor.thread_id,
             run_id=str(actor.run_id) if actor.run_id else None,
@@ -452,6 +491,13 @@ async def request_action(
             argument_hash=digest,
             state="awaiting_approval",
         )
+        if auto_run:
+            # The user agreed to these when they granted library:write: the
+            # grant's own consent stands in for the per-action decision.
+            row.state = "approved"
+            row.approved = True
+            row.decided_by = actor.user_id
+            row.decided_at = _now()
         db.add(row)
         try:
             await db.commit()
@@ -466,13 +512,123 @@ async def request_action(
             )
             existing = await db.scalar(_scoped(actor, invocation.invocation_id))
         else:
-            return _status(row)
+            if not auto_run:
+                return _status(row)
+            ran = await _execute_row(db, row.id)
+            if ran is not None:
+                return ran
+            # The drain claimed it first: report whatever the row says now.
+            current = await _current_status(db, row.id)
+            return current if current is not None else _status(row)
     if existing is None:
         # Same invocation id under a different consent: never disclose it.
         raise ActionConflict()
     if existing.argument_hash != digest or not _same_target(existing, actor):
         raise ActionConflict()
     return _status(existing)
+
+
+async def _resolve_target(
+    db: AsyncSession, actor: ActionActor, tool_name: str, arguments: dict[str, Any]
+) -> UUID | None:
+    """The Collection a new action aims at, checked against the grant's live scope.
+
+    A project grant reaches its own Collection only: a selector naming any
+    other is refused, and it cannot create a folder beside it. A workspace
+    grant's selectors must name live Collections of its workspace that the
+    user can still reach; ``create_folder`` aims at the workspace itself
+    (None), ``update_document_metadata`` at a folder of that scope holding the
+    document (the first by name when several do), and ``ingest_arxiv_papers``
+    must name its folder. Out of scope raises ``IntegrationAccessDenied``,
+    opaque, so a foreign Collection reads like a missing one.
+    """
+    if (actor.project_id is None) == (actor.workspace_id is None):
+        raise IntegrationAccessDenied()  # a grant binds exactly one of them
+    selected = {UUID(arguments[key]) for key in SELECTOR_KEYS if key in arguments}
+    target: UUID | None = None
+    if actor.project_id is not None:
+        if tool_name == "create_folder" or selected - {actor.project_id}:
+            raise IntegrationAccessDenied()
+        target = actor.project_id
+    elif tool_name == "create_project_note":
+        # A note lands in the grant's own project and takes no selector.
+        raise ToolActionArgumentError(
+            "workspace connections cannot request this action"
+        )
+    elif tool_name == "move_papers_between_folders":
+        target = UUID(arguments["from_project_id"])
+    elif "project_id" in arguments:
+        target = UUID(arguments["project_id"])
+    elif tool_name == "ingest_arxiv_papers":
+        # A workspace holds many folders: an ingest must say which one.
+        raise ToolActionArgumentError("project_id is required")
+    scope = await _scope_condition(db, actor)
+    if tool_name == "update_document_metadata":
+        folders = await _folders_holding(
+            db, UUID(arguments["document_id"]), actor.organization_id, scope
+        )
+        if not folders:
+            raise IntegrationAccessDenied()
+        return folders[0]
+    wanted = selected | ({target} if target is not None else set())
+    if wanted:
+        reachable = set(
+            (
+                await db.scalars(
+                    select(Collection.id).where(
+                        Collection.id.in_(wanted),
+                        scope,
+                        Collection.is_deleted.is_(False),
+                    )
+                )
+            ).all()
+        )
+        if not wanted <= reachable:
+            raise IntegrationAccessDenied()
+    return target
+
+
+async def _scope_condition(db: AsyncSession, actor: ActionActor) -> ColumnElement[bool]:
+    """The actor's binding as a condition on ``Collection``, after the per-call
+    access re-check ``authorized_scope_filter`` makes."""
+    context = IntegrationContext(
+        user_id=actor.user_id,
+        organization_id=actor.organization_id,
+        project_id=actor.project_id,
+        workspace_id=actor.workspace_id,
+        # Only identity and binding are read; a native actor has no grant.
+        grant_id=actor.grant_id or uuid4(),
+        scopes=actor.scopes,
+    )
+    return await authorized_scope_filter(db, context)
+
+
+async def _folders_holding(
+    db: AsyncSession,
+    document_id: UUID,
+    organization_id: UUID,
+    scope: ColumnElement[bool],
+) -> list[UUID]:
+    """Live Collections within ``scope`` holding the live document, by name.
+
+    Documents are organization scoped: one of another organization is never
+    found, whichever shared workspace it sits in.
+    """
+    found = await db.scalars(
+        select(Collection.id)
+        .join(CollectionDocument, CollectionDocument.collection_id == Collection.id)
+        .join(Document, Document.id == CollectionDocument.document_id)
+        .where(
+            CollectionDocument.document_id == document_id,
+            CollectionDocument.is_deleted.is_(False),
+            Collection.is_deleted.is_(False),
+            Document.organization_id == organization_id,
+            Document.is_deleted.is_(False),
+            scope,
+        )
+        .order_by(Collection.name, Collection.id)
+    )
+    return [UUID(str(value)) for value in found.all()]
 
 
 def _same_target(row: IntegrationToolAction, actor: ActionActor) -> bool:
@@ -632,18 +788,35 @@ def _consent_binding(row: IntegrationToolAction) -> tuple[Any, Any]:
     )
 
 
+def _targets(row: IntegrationToolAction) -> set[UUID]:
+    """Every Collection the stored action touches: its target and each selector."""
+    arguments = row.arguments or {}
+    targets = {
+        UUID(str(arguments[key]))
+        for key in SELECTOR_KEYS
+        if arguments.get(key) is not None
+    }
+    if row.project_id is not None:
+        targets.add(row.project_id)
+    return targets
+
+
 async def _target_reason(
     db: AsyncSession, row: IntegrationToolAction, grant: IntegrationGrant
 ) -> str | None:
-    """A stable reason when a workspace grant no longer reaches the Collection
-    its action aims at, else None. A row that names no workspace, or no
-    Collection, has nothing more to check here."""
-    if row.workspace_id is None or row.project_id is None:
-        return None
-    # Comparing only the binding lets the grant authorise whatever project_id
-    # the row holds, so the target must still be one of the workspace's live
-    # Collections that the requesting user can reach: another workspace of
-    # theirs, or a deleted Collection, is not.
+    """A stable reason when the grant no longer reaches what the action
+    touches, else None.
+
+    A row bound to one project was compared by that binding, so a selector may
+    only name the same Collection. For a workspace-bound row, comparing only
+    the binding would let the grant authorise whatever the row names, so every
+    Collection it touches (a move's destination too) must still be one of the
+    workspace's live Collections that the requesting user can reach; a
+    workspace-level action (``create_folder``) needs the workspace itself.
+    """
+    targets = _targets(row)
+    if row.workspace_id is None:
+        return None if targets <= {row.project_id} else GRANT_DENIED
     context = IntegrationContext(
         user_id=row.user_id,
         organization_id=row.organization_id,
@@ -653,15 +826,21 @@ async def _target_reason(
     try:
         scope = await authorized_scope_filter(db, context)
     except IntegrationAccessDenied:
-        return "grant no longer authorizes this action"
-    reachable = await db.scalar(
-        select(Collection.id).where(
-            Collection.id == row.project_id,
-            scope,
-            Collection.is_deleted.is_(False),
-        )
+        return GRANT_DENIED
+    if not targets:
+        return None
+    reachable = set(
+        (
+            await db.scalars(
+                select(Collection.id).where(
+                    Collection.id.in_(targets),
+                    scope,
+                    Collection.is_deleted.is_(False),
+                )
+            )
+        ).all()
     )
-    return None if reachable is not None else "grant no longer authorizes this action"
+    return None if reachable == targets else GRANT_DENIED
 
 
 async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str | None:
@@ -679,16 +858,18 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
         or grant.user_id != row.user_id
         or grant.organization_id != row.organization_id
         or not _binding_matches(grant.project_id, grant.workspace_id, row)
-        or REQUIRED_SCOPE not in grant.scopes
+        # The same per-action scope request_action checked: library:write
+        # never runs a note, a deletion or an ingest.
+        or not scope_allows(row.tool_name, grant.scopes)
     ):
-        return "grant no longer authorizes this action"
+        return GRANT_DENIED
     if grant.request_id is None:
         # No consent chain: the token itself must still be live.
         if grant.revoked_at is not None or not live(grant.expires_at):
             return "grant revoked or expired"
         return await _target_reason(db, row, grant)
     if row.consent_id is not None and row.consent_id != grant.request_id:
-        return "grant no longer authorizes this action"
+        return GRANT_DENIED
     consent = await db.scalar(
         select(IntegrationGrantRequest)
         .where(
@@ -702,7 +883,7 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
         )
         .execution_options(populate_existing=True)
     )
-    if consent is None or REQUIRED_SCOPE not in consent.scopes:
+    if consent is None or not scope_allows(row.tool_name, consent.scopes):
         return "consent revoked"
     if grant.device_id is not None and consent.device_id != grant.device_id:
         return "consent revoked"
@@ -712,19 +893,271 @@ async def _authority_intact(db: AsyncSession, row: IntegrationToolAction) -> str
 async def _run_effect(
     db: AsyncSession, row: IntegrationToolAction, user: User
 ) -> dict[str, Any]:
-    from src.services.agent.tools_impl import _tool_create_project_note
+    """The effect, in the caller's transaction: ``_finish`` commits it with
+    the receipt, and a rollback discards both.
 
-    if row.project_id is None:
-        # Never str() a missing project: the adapter resolves any non-UUID,
-        # "None" included, as a project NAME.
-        raise ToolActionError("action has no target project")
-    # Project comes from the stored binding; the adapter re-checks edit authority.
-    return await _tool_create_project_note(
-        {**row.arguments, "project_id": str(row.project_id)},
+    Targets come from the stored row. A service that finds nothing to change,
+    or refuses the user, yields a payload with a stable ``error``; anything
+    else raises.
+    """
+    if row.tool_name == "create_project_note":
+        from src.services.agent.tools_impl import _tool_create_project_note
+
+        if row.project_id is None:
+            # Never str() a missing project: the adapter resolves any
+            # non-UUID, "None" included, as a project NAME.
+            raise ToolActionError("action has no target project")
+        # Project comes from the stored binding; the adapter re-checks edit
+        # authority.
+        return await _tool_create_project_note(
+            {**row.arguments, "project_id": str(row.project_id)},
+            db,
+            user,
+            commit=False,
+        )
+    effect = _LIBRARY_EFFECTS.get(row.tool_name)
+    if effect is None:
+        # A detached action (the ingest) never runs inside this transaction.
+        raise ToolActionError("action has no transactional effect")
+    try:
+        return await effect(db, row, user)
+    except PermissionError:
+        return _refused(row, INSUFFICIENT_PERMISSIONS)
+
+
+def _receipt(
+    row: IntegrationToolAction, project_id: Any, **fields: Any
+) -> dict[str, Any]:
+    """What a library action did, in fixed fields, never a service's own text."""
+    return {
+        "ok": True,
+        "tool_name": row.tool_name,
+        "project_id": str(project_id),
+        **fields,
+    }
+
+
+def _refused(row: IntegrationToolAction, reason: str) -> dict[str, Any]:
+    return {"ok": False, "tool_name": row.tool_name, "error": reason}
+
+
+async def _live_members(
+    db: AsyncSession, collection_id: UUID, document_ids: list[str]
+) -> set[str]:
+    """Which of ``document_ids`` are live members of the Collection."""
+    if not document_ids:
+        return set()
+    found = await db.scalars(
+        select(CollectionDocument.document_id).where(
+            CollectionDocument.collection_id == collection_id,
+            CollectionDocument.document_id.in_([UUID(d) for d in document_ids]),
+            CollectionDocument.is_deleted.is_(False),
+        )
+    )
+    return {str(value) for value in found.all()}
+
+
+# The collection services act as the row's user (``row.user_id``, whom
+# _execute_row just verified active in the row's organization) and take
+# ``workspace_id`` to scope their lookup to that parent: a workspace-bound row
+# names its grant's workspace there, a project-bound one None (its binding is
+# the Collection itself).
+async def _save_papers(
+    db: AsyncSession, row: IntegrationToolAction, user: User
+) -> dict[str, Any]:
+    folder = UUID(row.arguments["project_id"])
+    requested = list(row.arguments["document_ids"])
+    saved = await collection_service.add_documents_to_collection(
         db,
+        folder,
+        [UUID(d) for d in requested],
+        row.user_id,
+        workspace_id=row.workspace_id,
+    )
+    if saved is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    # The service skips a document that is missing or not the organization's.
+    held = await _live_members(db, folder, requested)
+    return _receipt(
+        row,
+        folder,
+        document_ids=[d for d in requested if d in held],
+        skipped_document_ids=[d for d in requested if d not in held],
+    )
+
+
+async def _remove_papers(
+    db: AsyncSession, row: IntegrationToolAction, user: User
+) -> dict[str, Any]:
+    folder = UUID(row.arguments["project_id"])
+    requested = list(row.arguments["document_ids"])
+    held = await _live_members(db, folder, requested)
+    removed = await collection_service.remove_documents_from_collection(
+        db,
+        folder,
+        [UUID(d) for d in requested],
+        row.user_id,
+        workspace_id=row.workspace_id,
+    )
+    if removed is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    return _receipt(
+        row,
+        folder,
+        document_ids=[d for d in requested if d in held],
+        skipped_document_ids=[d for d in requested if d not in held],
+    )
+
+
+async def _move_papers(
+    db: AsyncSession, row: IntegrationToolAction, user: User
+) -> dict[str, Any]:
+    """Unlink from the source, then link into the destination, in this one
+    transaction: ``_finish`` commits both halves with the receipt and any
+    failure rolls both back. Only papers that are in the source move."""
+    source = UUID(row.arguments["from_project_id"])
+    destination = UUID(row.arguments["to_project_id"])
+    requested = list(row.arguments["document_ids"])
+    held = await _live_members(db, source, requested)
+    moving = [d for d in requested if d in held]
+    ids = [UUID(d) for d in moving]
+    unlinked = await collection_service.remove_documents_from_collection(
+        db, source, ids, row.user_id, workspace_id=row.workspace_id
+    )
+    if unlinked is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    linked = await collection_service.add_documents_to_collection(
+        db, destination, ids, row.user_id, workspace_id=row.workspace_id
+    )
+    if linked is None or await _live_members(db, destination, moving) != set(moving):
+        # A paper left the source but could not be linked (a deleted
+        # document, say): refusing rolls both halves back.
+        return _refused(row, TARGET_NOT_FOUND)
+    return _receipt(
+        row,
+        source,
+        from_project_id=str(source),
+        to_project_id=str(destination),
+        document_ids=moving,
+        skipped_document_ids=[d for d in requested if d not in held],
+    )
+
+
+async def _create_folder(
+    db: AsyncSession, row: IntegrationToolAction, user: User
+) -> dict[str, Any]:
+    if row.workspace_id is None:
+        # Only a workspace grant may create one; its row names the workspace.
+        raise ToolActionError("action has no target workspace")
+    created = await collection_service.create_collection(
+        db,
+        CollectionCreate(
+            workspace_id=row.workspace_id,
+            name=row.arguments["name"],
+            description=row.arguments.get("description"),
+            color=None,
+            icon=None,
+        ),
+        row.user_id,
+    )
+    if created is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    return _receipt(
+        row,
+        created.id,
+        workspace_id=str(row.workspace_id),
+        name=str(created.name),
+    )
+
+
+async def _rename_folder(
+    db: AsyncSession, row: IntegrationToolAction, user: User
+) -> dict[str, Any]:
+    folder = UUID(row.arguments["project_id"])
+    renamed = await collection_service.update_collection(
+        db,
+        folder,
+        CollectionUpdate(name=row.arguments["name"], color=None, icon=None),
+        row.user_id,
+        workspace_id=row.workspace_id,
+    )
+    if renamed is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    return _receipt(row, folder, name=row.arguments["name"])
+
+
+async def _delete_folder(
+    db: AsyncSession, row: IntegrationToolAction, user: User
+) -> dict[str, Any]:
+    folder = UUID(row.arguments["project_id"])
+    deleted = await collection_service.delete_collection(
+        db, folder, row.user_id, workspace_id=row.workspace_id
+    )
+    if deleted is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    return _receipt(row, folder)
+
+
+async def _update_document_metadata(
+    db: AsyncSession, row: IntegrationToolAction, user: User
+) -> dict[str, Any]:
+    """Edit the document itself; the target is the folder that put it in scope."""
+    if row.project_id is None:
+        raise ToolActionError("action has no target project")
+    document_id = UUID(row.arguments["document_id"])
+    scope = (
+        Collection.workspace_id == row.workspace_id
+        if row.workspace_id is not None
+        else Collection.id == row.project_id
+    )
+    folders = await _folders_holding(db, document_id, row.organization_id, scope)
+    if row.project_id not in folders:
+        # It left the folder the action was aimed at.
+        return _refused(row, TARGET_NOT_FOUND)
+    updated = await file_metadata_service.update_file_metadata(
+        db,
+        document_id,
         user,
+        title=row.arguments.get("title"),
+        tags=row.arguments.get("tags"),
         commit=False,
     )
+    if updated is None:
+        return _refused(row, TARGET_NOT_FOUND)
+    changed = {
+        key: row.arguments[key] for key in ("title", "tags") if key in row.arguments
+    }
+    return _receipt(
+        row,
+        row.project_id,
+        document_ids=[str(document_id)],
+        # Every folder of the scope holding it, the target first by name.
+        project_ids=[str(folder) for folder in folders],
+        **changed,
+    )
+
+
+_LIBRARY_EFFECTS: Mapping[
+    str,
+    Callable[[AsyncSession, IntegrationToolAction, User], Awaitable[dict[str, Any]]],
+] = MappingProxyType(
+    {
+        "save_papers_to_folder": _save_papers,
+        "remove_papers_from_folder": _remove_papers,
+        "move_papers_between_folders": _move_papers,
+        "create_folder": _create_folder,
+        "rename_folder": _rename_folder,
+        "delete_folder": _delete_folder,
+        "update_document_metadata": _update_document_metadata,
+    }
+)
+
+
+def _source_refs(tool_name: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Observed identities only: the note created, or the documents touched."""
+    if tool_name == "create_project_note":
+        return [{"note_id": payload.get("note_id")}]
+    return [{"document_id": d} for d in payload.get("document_ids", [])]
 
 
 async def _finish(
@@ -760,13 +1193,100 @@ async def _finish(
     return True
 
 
+async def _current_status(db: AsyncSession, row_id: UUID) -> ActionStatus | None:
+    row = await db.get(IntegrationToolAction, row_id, populate_existing=True)
+    return _status(row) if row is not None else None
+
+
 async def _fail_after_rollback(
     db: AsyncSession, row_id: UUID, reason: str, result: dict[str, Any] | None = None
 ) -> ActionStatus | None:
     await db.rollback()
     await _finish(db, row_id, state="failed", last_error=reason, result=result)
-    row = await db.get(IntegrationToolAction, row_id, populate_existing=True)
-    return _status(row) if row is not None else None
+    return await _current_status(db, row_id)
+
+
+def _ingest_receipt(
+    row: IntegrationToolAction, payload: dict[str, Any]
+) -> tuple[dict[str, Any], str | None]:
+    """The ingest's outcome in fixed fields, and its stable failure reason.
+
+    Never the tool's messages: they quote exception text and per-paper causes.
+    """
+    status = payload.get("status")
+    if status != _INGEST_COMPLETE and status not in _INGEST_REASONS:
+        status = "ingestion_failed"
+    reason = _INGEST_REASONS.get(str(status))
+    requested = [str(paper_id) for paper_id in row.arguments["paper_ids"]]
+    failed = {
+        str(item.get("paper_id"))
+        for item in payload.get("failed_papers") or []
+        if isinstance(item, dict)
+    }
+    receipt: dict[str, Any] = {
+        "ok": reason is None,
+        "tool_name": row.tool_name,
+        "project_id": str(row.project_id),
+        "paper_ids": requested,
+        "document_ids": [str(d) for d in payload.get("document_ids") or []],
+        "failed_paper_ids": [p for p in requested if p in failed],
+        "ingest_status": status,
+        "atomicity": INGEST_ATOMICITY,
+    }
+    if reason is not None:
+        receipt["error"] = reason
+    return receipt, reason
+
+
+async def _execute_detached(
+    db: AsyncSession, row: IntegrationToolAction, user: User, log: dict[str, str]
+) -> ActionStatus | None:
+    """Run the arXiv ingest outside the action's transaction, then record it.
+
+    Weaker atomicity than every other action, and the receipt says so: the
+    ingest stores and links each paper in transactions of its own (and in
+    object storage) before the receipt is written. The claim ``_execute_row``
+    committed is its idempotency key: one worker ever starts it and nothing
+    re-runs it. Papers that landed stay when the receipt reports a failure, and
+    when a stalled receipt loses to the sweeper (``outcome_unknown``).
+    """
+    from src.services.agent.tools_impl import _tool_ingest_arxiv
+
+    row_id = row.id
+    if row.project_id is None:
+        # Never str() a missing project: the tool resolves names.
+        return await _fail_after_rollback(db, row_id, "effect failed before commit")
+    arguments = {
+        "paper_ids": list(row.arguments["paper_ids"]),
+        "project_id": str(row.project_id),
+    }
+    # End the authority check's read transaction: the ingest runs for minutes
+    # and commits through sessions of its own.
+    await db.commit()
+    try:
+        payload = await _tool_ingest_arxiv(arguments, str(user.id), db, user)
+    except Exception as error:  # noqa: BLE001 - papers may have landed: unknown
+        logger.error("integration ingest raised", extra=log, exc_info=error)
+        await db.rollback()
+        await _finish(db, row_id, state="outcome_unknown", last_error=INGEST_UNKNOWN)
+        return await _current_status(db, row_id)
+    receipt, reason = _ingest_receipt(row, payload)
+    result = ToolResult(
+        content=[receipt],
+        is_error=reason is not None,
+        source_refs=_source_refs(row.tool_name, receipt),
+    )
+    if not await _finish(
+        db,
+        row_id,
+        state="failed" if reason else "succeeded",
+        last_error=reason,
+        result=result.model_dump(mode="json"),
+    ):
+        logger.error(
+            "integration action finished after being marked unknown", extra=log
+        )
+    return await _current_status(db, row_id)
 
 
 async def _execute_row(db: AsyncSession, row_id: UUID) -> ActionStatus | None:
@@ -805,6 +1325,8 @@ async def _execute_row(db: AsyncSession, row_id: UUID) -> ActionStatus | None:
     if reason or user is None:
         logger.warning("integration action denied: %s", reason, extra=invocation)
         return await _fail_after_rollback(db, row_id, reason or "denied")
+    if row.tool_name in DETACHED_ACTIONS:
+        return await _execute_detached(db, row, user, invocation)
 
     try:
         payload = await _run_effect(db, row, user)
@@ -826,7 +1348,7 @@ async def _execute_row(db: AsyncSession, row_id: UUID) -> ActionStatus | None:
     result = ToolResult(
         content=[payload],
         is_error=False,
-        source_refs=[{"note_id": payload.get("note_id")}],
+        source_refs=_source_refs(row.tool_name, payload),
     )
     if not await _finish(
         db,
@@ -838,8 +1360,7 @@ async def _execute_row(db: AsyncSession, row_id: UUID) -> ActionStatus | None:
         logger.error(
             "integration action finished after being marked unknown", extra=invocation
         )
-    row = await db.get(IntegrationToolAction, row_id, populate_existing=True)
-    return _status(row) if row is not None else None
+    return await _current_status(db, row_id)
 
 
 async def execute_action(db: AsyncSession, invocation_id: UUID) -> ActionStatus | None:

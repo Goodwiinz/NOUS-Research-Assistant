@@ -426,8 +426,16 @@ async def _validate_grant(
 
 
 async def resolve_integration_context(
-    db: AsyncSession, token: str, *, required_scope: str
+    db: AsyncSession, token: str, *, required_scope: str | tuple[str, ...]
 ) -> IntegrationContext:
+    """The live grant behind ``token`` as a context, if it holds the scope.
+
+    ``required_scope`` is the scope the route needs, or a tuple of scopes any
+    one of which admits the grant: for a route whose service then checks the
+    scope of each operation itself (the action routes). An empty tuple admits
+    nothing.
+    """
+    accepted = (required_scope,) if isinstance(required_scope, str) else required_scope
     if not token.startswith("nous_ig_") or len(token) != 51:
         raise IntegrationAccessDenied()
     grant = await db.scalar(
@@ -436,7 +444,7 @@ async def resolve_integration_context(
         .execution_options(populate_existing=True)
     )
     grant = await _validate_grant(db, grant)
-    if required_scope not in grant.scopes:
+    if not set(accepted) & set(grant.scopes):
         raise IntegrationAccessDenied()
     return IntegrationContext(
         user_id=grant.user_id,
