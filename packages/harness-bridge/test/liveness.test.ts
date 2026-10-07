@@ -10,6 +10,10 @@ import type { HarnessAdapter, SessionOptions } from "../src/contracts.ts";
 // A backend restart can drop the TCP peer without a close frame. Undici's
 // WebSocket then never fires close/error, and before the watchdog the bridge
 // loop awaited connectBridge forever: alive, no sockets, no polls, no retry.
+// The independent abort deadline turns a removed guard into a bounded failure.
+// Mutation targets: src/connection.ts:242 connectTimer, :273 lastFrameAt reset,
+// and :251 liveness check. Command: pnpm --dir packages/harness-bridge exec node
+// --experimental-sqlite --import tsx --test test/liveness.test.ts
 
 const options: SessionOptions = {
   cwd: "/tmp",
@@ -46,7 +50,7 @@ function args(j: Journal, timing: Record<string, number>) {
     credentials: { accessToken: "jwt", grantToken: "grant" },
     journal: j,
     adapterFor: () => ({}) as unknown as HarnessAdapter,
-    signal: new AbortController().signal,
+    signal: AbortSignal.timeout(2000),
     timing,
   };
 }

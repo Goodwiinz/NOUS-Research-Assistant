@@ -1,9 +1,14 @@
 """Read-only NOUS tool gateway for external harnesses.
 
 Identity (actor, organization, project) comes from the resolved
-``IntegrationContext``; model-supplied arguments never choose it. The
-allowlist is deliberately narrow: the absence of a ``DESTRUCTIVE`` tag is not
-evidence that a registry tool is safe to expose outside the agent graph.
+``IntegrationContext``; model-supplied arguments never choose it. The one
+exception is the ``project_id`` selector of a workspace grant, which picks one
+of the workspace's live projects and is checked against ``authorized_scope``
+on every call. The allowlist is deliberately narrow: the absence of a
+``DESTRUCTIVE`` tag is not evidence that a registry tool is safe to expose
+outside the agent graph. Each tool names the scope a grant must hold to call
+it (``TOOL_SCOPES``): ``tools:read`` for the registry tools, and the scope in
+``LOCAL_TOOLS`` for the tools that have no agent-registry twin.
 """
 
 from __future__ import annotations
@@ -11,12 +16,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Iterable, Sequence, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import ColumnElement, desc, func, select
+from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 from starlette.concurrency import run_in_threadpool
@@ -40,7 +47,11 @@ from src.services.agent.tools_impl import (
 from src.services.artifacts.service import list_project_artifacts
 from src.services.integrations import arxiv_fulltext
 from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
-from src.services.integrations.context import IntegrationAccessDenied
+from src.services.integrations.context import (
+    IntegrationAccessDenied,
+    authorized_scope,
+    authorized_scope_filter,
+)
 from src.services.search.fulltext_search_service import fulltext_search_service
 
 logger = logging.getLogger(__name__)
@@ -60,10 +71,17 @@ READ_TOOL_NAMES: tuple[str, ...] = (
 _ARGS_ONLY_TOOLS = frozenset(
     {"search_arxiv", "search_external_database", "list_external_databases"}
 )
+# Tools that act on no single project. A workspace grant gives them no project
+# selector: there is nothing for it to select. list_library lists the grant's
+# whole scope.
+_PROJECTLESS_TOOLS = _ARGS_ONLY_TOOLS | {"get_arxiv_paper_content", "list_library"}
 IDENTITY_ARGUMENTS = frozenset(
     {"project_id", "user_id", "organization_id", "thread_id", "run_id", "grant_id"}
 )
 MAX_RESULTS = 50
+# Matches the 2**31 - 1 clamp on the registry tools' offset: a larger value
+# would only reach the database as an out-of-range bind.
+MAX_OFFSET = 2**31 - 1
 MAX_DOCUMENT_IDS = 20
 # Every returned artifact row must carry a source ref, and _source_refs keeps
 # at most MAX_RESULTS, so the artifact page can never be larger.
@@ -81,6 +99,7 @@ MAX_SCANNED_DOCUMENTS = 2000
 MAX_RESEARCHER_PAPERS = 100
 MAX_COAUTHORS = 100
 _NAME_CHARS = 200
+MAX_FOLDER_DESCRIPTION_CHARS = 500
 # The advertised schema must match what the gateway enforces; the agent-facing
 # registry descriptions promise wider limits (e.g. list limit 500).
 _SCHEMA_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
@@ -102,6 +121,13 @@ _SCHEMA_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
     "search_external_database": {"max_results": {"maximum": MAX_EXTERNAL_RESULTS}},
 }
 _EXTRA_REQUIRED = {"do_kb_retrieve": ["document_ids"]}
+# A workspace grant spans several projects, so the caller names the one to act
+# on. Project grants never see it: their project is the grant's own.
+_PROJECT_SELECTOR: dict[str, Any] = {
+    "type": "string",
+    "format": "uuid",
+    "description": "Required for workspace grants: which project to act on.",
+}
 
 _UUID_ITEMS = {"type": "string", "format": "uuid"}
 _OFFSET = {"type": "integer", "minimum": 0, "default": 0}
@@ -219,6 +245,32 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         },
         "tools:read",
     ),
+    "list_library": (
+        "List the folders (NOUS projects) this connection may use, with document "
+        "counts. A page holds at most limit folders, fewer when their text is "
+        "long. Pass next_offset as offset to read the next page; it is null on "
+        "the last one.",
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [],
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_RESULTS,
+                    "default": MAX_RESULTS,
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_OFFSET,
+                    "default": 0,
+                },
+            },
+        },
+        "library:read",
+    ),
 }
 TOOL_SCOPES: dict[str, str] = {name: "tools:read" for name in READ_TOOL_NAMES} | {
     name: scope for name, (_d, _s, scope) in LOCAL_TOOLS.items()
@@ -248,7 +300,9 @@ class ToolArgumentError(ValueError):
     """Invocation shape rejected before any adapter runs (HTTP 422)."""
 
 
-def _registry_schema(name: str) -> tuple[str, dict[str, Any], type[BaseModel]]:
+def _registry_schema(
+    name: str, *, workspace_bound: bool = False
+) -> tuple[str, dict[str, Any], type[BaseModel]]:
     if name in _GATEWAY_TOOLS:
         description, model = _GATEWAY_TOOLS[name]
     else:
@@ -273,6 +327,9 @@ def _registry_schema(name: str) -> tuple[str, dict[str, Any], type[BaseModel]]:
         properties[key] = (
             override if "type" in override else {**properties[key], **override}
         )
+    if workspace_bound and name not in _PROJECTLESS_TOOLS:
+        # Optional in the schema: omitting it is a structured error, not a 422.
+        properties["project_id"] = dict(_PROJECT_SELECTOR)
     schema["properties"] = properties
     schema["required"] = [
         key for key in schema.get("required", []) if key in properties
@@ -281,15 +338,41 @@ def _registry_schema(name: str) -> tuple[str, dict[str, Any], type[BaseModel]]:
     return description, schema, model
 
 
-def list_read_tools() -> list[ToolDescriptorDTO]:
-    return [
-        ToolDescriptorDTO(name=name, description=desc_, input_schema=schema)
-        for name in READ_TOOL_NAMES
-        for desc_, schema, _model in (_registry_schema(name),)
-    ] + [
-        ToolDescriptorDTO(name=name, description=desc_, input_schema=schema)
-        for name, (desc_, schema, _scope) in LOCAL_TOOLS.items()
-    ]
+def _local_schema(
+    name: str, *, workspace_bound: bool = False
+) -> tuple[str, dict[str, Any]]:
+    """Description and advertised schema of a LOCAL_TOOLS entry (a private copy)."""
+    description, schema, _scope = LOCAL_TOOLS[name]
+    schema = deepcopy(schema)
+    if workspace_bound and name not in _PROJECTLESS_TOOLS:
+        schema["properties"]["project_id"] = dict(_PROJECT_SELECTOR)
+    return description, schema
+
+
+def list_read_tools(
+    scopes: Iterable[str] | None = None, *, workspace_bound: bool = False
+) -> list[ToolDescriptorDTO]:
+    """The registry tools plus the local ones.
+
+    Given a grant's ``scopes``, only the tools those scopes may call are
+    listed; without them, every tool. A workspace grant also sees the optional
+    project selector on the tools that act on one project.
+    """
+    held = None if scopes is None else frozenset(scopes)
+    catalog: list[ToolDescriptorDTO] = []
+    for name in (*READ_TOOL_NAMES, *LOCAL_TOOLS):
+        if held is not None and TOOL_SCOPES[name] not in held:
+            continue
+        if name in LOCAL_TOOLS:
+            description, schema = _local_schema(name, workspace_bound=workspace_bound)
+        else:
+            description, schema, _model = _registry_schema(
+                name, workspace_bound=workspace_bound
+            )
+        catalog.append(
+            ToolDescriptorDTO(name=name, description=description, input_schema=schema)
+        )
+    return catalog
 
 
 def _check_local_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> None:
@@ -316,32 +399,44 @@ def _check_local_arguments(schema: dict[str, Any], arguments: dict[str, Any]) ->
             raise ToolArgumentError("invalid argument types")
 
 
-def _validate_arguments(invocation: ToolInvocation) -> dict[str, Any]:
+def _validate_arguments(
+    context: IntegrationContext, invocation: ToolInvocation
+) -> dict[str, Any]:
     from pydantic import ValidationError
 
     name = invocation.tool_name
-    if name not in READ_TOOL_NAMES and name not in LOCAL_TOOLS:
+    if name not in TOOL_SCOPES:
         raise ToolArgumentError("tool is not available to integrations")
     arguments = invocation.arguments
+    workspace_bound = context.workspace_id is not None
     if name in LOCAL_TOOLS:
-        _, schema, _scope = LOCAL_TOOLS[name]
+        _, schema = _local_schema(name, workspace_bound=workspace_bound)
         if set(arguments) - set(schema["properties"]):
             raise ToolArgumentError("unknown arguments")
         if set(schema["required"]) - set(arguments):
             raise ToolArgumentError("missing required arguments")
+        # The selector, when advertised, is a plain string here;
+        # _target_project checks it is a UUID inside the grant's scope.
         _check_local_arguments(schema, arguments)
         return arguments
-    _, schema, model = _registry_schema(name)
+    _, schema, model = _registry_schema(name, workspace_bound=workspace_bound)
     # Identity keys were stripped from the advertised schema, so a caller
-    # supplying project_id/user_id/... is rejected here as an unknown argument.
+    # supplying user_id/organization_id/... is rejected here as an unknown
+    # argument, and so is project_id on a project grant. Only a workspace
+    # grant advertises (and so accepts) the project_id selector, and only on
+    # the tools that act on one project.
     allowed = set(schema["properties"])
     if set(arguments) - allowed:
         raise ToolArgumentError("unknown arguments")
     if set(schema["required"]) - set(arguments):
         raise ToolArgumentError("missing required arguments")
     try:
-        # strict: no "false"->bool, float->int or dict->str coercion.
-        model.model_validate(arguments, strict=True)
+        # strict: no "false"->bool, float->int or dict->str coercion. The
+        # selector is not a tool argument; _target_project validates it.
+        model.model_validate(
+            {key: value for key, value in arguments.items() if key != "project_id"},
+            strict=True,
+        )
     except ValidationError as error:
         raise ToolArgumentError("invalid argument types") from error
     return arguments
@@ -354,8 +449,8 @@ def _clamp(value: Any, lo: int, hi: int, default: int) -> int:
         return default
 
 
-def _live_project_documents(context: IntegrationContext) -> Any:
-    """Documents in the grant's project with every ancestor still live.
+def _live_project_documents(project_id: UUID, organization_id: UUID) -> Any:
+    """Documents in one project with every ancestor still live.
 
     Joined in the same statement so a soft-delete landing between the
     ownership check and this fetch cannot return revoked rows.
@@ -366,26 +461,26 @@ def _live_project_documents(context: IntegrationContext) -> Any:
         .join(Collection, Collection.id == CollectionDocument.collection_id)
         .join(Workspace, Workspace.id == Collection.workspace_id)
         .where(
-            Collection.id == context.project_id,
+            Collection.id == project_id,
             Collection.is_deleted == False,  # noqa: E712
             Workspace.is_deleted == False,  # noqa: E712
-            Workspace.organization_id == context.organization_id,
+            Workspace.organization_id == organization_id,
             CollectionDocument.is_deleted == False,  # noqa: E712
-            Document.organization_id == context.organization_id,
+            Document.organization_id == organization_id,
             Document.is_deleted == False,  # noqa: E712
         )
     )
 
 
 async def _search_project_documents(
-    db: AsyncSession, context: IntegrationContext, query: str, limit: int
+    db: AsyncSession, project_id: UUID, organization_id: UUID, query: str, limit: int
 ) -> dict[str, Any]:
-    """Title/filename search joined to the grant's project, never org-wide."""
+    """Title/filename search joined to one project, never org-wide."""
     from src.services.agent._pii_redact import redact_pii
 
     pattern = f"%{_escape_like(query)}%"
     rows = await db.execute(
-        _live_project_documents(context)
+        _live_project_documents(project_id, organization_id)
         .where(Document.title.ilike(pattern) | Document.filename.ilike(pattern))
         .order_by(desc(Document.created_at))
         .limit(limit)
@@ -407,9 +502,9 @@ async def _search_project_documents(
 
 
 async def _project_document_ids(
-    db: AsyncSession, context: IntegrationContext, raw_ids: Any
+    db: AsyncSession, project_id: UUID, organization_id: UUID, raw_ids: Any
 ) -> list[str] | None:
-    """Require 1–20 UUIDs; None when any id is outside the grant's project."""
+    """Require 1–20 UUIDs; None when any id is outside the given project."""
     if not isinstance(raw_ids, list) or not 1 <= len(raw_ids) <= MAX_DOCUMENT_IDS:
         raise ToolArgumentError("document_ids must contain 1-20 UUIDs")
     try:
@@ -417,7 +512,7 @@ async def _project_document_ids(
     except ValueError as error:
         raise ToolArgumentError("document_ids must be UUIDs") from error
     rows = await db.execute(
-        _live_project_documents(context)
+        _live_project_documents(project_id, organization_id)
         .with_only_columns(Document.id)
         .where(Document.id.in_(requested))
     )
@@ -429,13 +524,15 @@ async def _project_document_ids(
 
 
 async def _collection_document_ids(
-    db: AsyncSession, context: IntegrationContext
+    db: AsyncSession, project_id: UUID, organization_id: UUID
 ) -> list[str]:
-    """Every live document in the grant's Collection."""
+    """Every live document in one Collection."""
     # ponytail: unbounded id list -> one bind param per document; add a cap
     # or a join-based filter in the search service if collections grow large.
     rows = await db.execute(
-        _live_project_documents(context).with_only_columns(Document.id)
+        _live_project_documents(project_id, organization_id).with_only_columns(
+            Document.id
+        )
     )
     return [str(value) for value in rows.scalars().all()]
 
@@ -469,7 +566,7 @@ def _page(text: str, offset: int, limit: int) -> tuple[str, int | None]:
 
 
 async def _document_content(
-    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+    db: AsyncSession, project_id: UUID, organization_id: UUID, arguments: dict[str, Any]
 ) -> ToolResult:
     try:
         document_id = UUID(str(arguments["document_id"]))
@@ -479,7 +576,7 @@ async def _document_content(
     # The preview is computed in SQL so summary mode never touches the
     # deferred content_text (an ORM fallback would lazy-load -> MissingGreenlet).
     statement = (
-        _live_project_documents(context)
+        _live_project_documents(project_id, organization_id)
         .where(Document.id == document_id)
         .add_columns(func.substr(Document.content_text, 1, 500))
     )
@@ -525,7 +622,10 @@ _MARK_TAGS = ("<mark>", "</mark>")
 
 
 async def _retrieve_passages(
-    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+    db: AsyncSession,
+    context: IntegrationContext,
+    project_id: UUID,
+    arguments: dict[str, Any],
 ) -> dict[str, Any]:
     from src.models.search_schemas import SearchFilter, SearchQuery, SearchType
     from src.services.agent._pii_redact import redact_pii
@@ -534,12 +634,14 @@ async def _retrieve_passages(
     top_k = _clamp(arguments.get("top_k", 8), 1, MAX_DOCUMENT_IDS, 8)
     if "document_ids" in arguments:
         document_ids = await _project_document_ids(
-            db, context, arguments["document_ids"]
+            db, project_id, context.organization_id, arguments["document_ids"]
         )
         if document_ids is None:
             return _unavailable().content[0]
     else:
-        document_ids = await _collection_document_ids(db, context)
+        document_ids = await _collection_document_ids(
+            db, project_id, context.organization_id
+        )
     empty = {"chunks": [], "total": 0, "query": query}
     if not document_ids:
         return empty
@@ -564,7 +666,9 @@ async def _retrieve_passages(
     # Re-check liveness after the search: an ancestor soft-deleted while the
     # threadpool query ran must not leak a hit. The FTS service filters by
     # ids + org only, so the Collection/Workspace check is ours.
-    allowed = set(document_ids) & set(await _collection_document_ids(db, context))
+    allowed = set(document_ids) & set(
+        await _collection_document_ids(db, project_id, context.organization_id)
+    )
     chunks = []
     for hit in response.results:
         if hit.document_id not in allowed:
@@ -717,13 +821,13 @@ def _published(metadata: dict[str, Any]) -> str | None:
 
 
 async def _scan_authored_papers(
-    db: AsyncSession, context: IntegrationContext
+    db: AsyncSession, project_id: UUID, organization_id: UUID
 ) -> tuple[list[_AuthoredPaper], bool]:
-    """The grant's newest live documents that carry an author list.
+    """One project's newest live documents that carry an author list.
 
     Returns ``(papers, truncated)``. This is the only data source of the
     researcher tools and it is project-scoped by construction:
-    ``_live_project_documents`` joins the grant's project and every ancestor.
+    ``_live_project_documents`` joins the selected project and every ancestor.
     """
     # ponytail: O(documents x authors) in Python over at most
     # MAX_SCANNED_DOCUMENTS (2000) newest documents, in one narrow-column
@@ -732,7 +836,7 @@ async def _scan_authored_papers(
     # author index if projects outgrow that.
     rows = (
         await db.execute(
-            _live_project_documents(context)
+            _live_project_documents(project_id, organization_id)
             .with_only_columns(
                 Document.id,
                 Document.title,
@@ -767,13 +871,13 @@ async def _scan_authored_papers(
 
 
 async def _find_researchers(
-    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+    db: AsyncSession, project_id: UUID, organization_id: UUID, arguments: dict[str, Any]
 ) -> ToolResult:
     needle = _researcher_key(arguments["query"])
     if not needle:
         raise ToolArgumentError("query must not be blank")
     limit = _clamp(arguments.get("limit", 10), 1, MAX_RESEARCHERS, 10)
-    papers, truncated = await _scan_authored_papers(db, context)
+    papers, truncated = await _scan_authored_papers(db, project_id, organization_id)
     found: dict[str, list[Any]] = {}  # researcher_id -> [first-seen name, papers]
     for paper in papers:  # newest first, so the display name is the newest one
         for key, name in paper.authors:
@@ -818,12 +922,12 @@ def _fit_to_result_cap(payload: dict[str, Any]) -> None:
 
 
 async def _get_researcher(
-    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+    db: AsyncSession, project_id: UUID, organization_id: UUID, arguments: dict[str, Any]
 ) -> ToolResult:
     key = _researcher_key(arguments["researcher_id"])
     if not key:
         raise ToolArgumentError("researcher_id must not be blank")
-    scanned, truncated = await _scan_authored_papers(db, context)
+    scanned, truncated = await _scan_authored_papers(db, project_id, organization_id)
     papers = [paper for paper in scanned if any(k == key for k, _ in paper.authors)]
     if not papers:
         # Unknown id and an author who only wrote for another project are the
@@ -911,9 +1015,9 @@ async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _project_artifacts(
-    db: AsyncSession, context: IntegrationContext, limit: int
+    db: AsyncSession, context: IntegrationContext, project_id: UUID, limit: int
 ) -> dict[str, Any]:
-    """Current versions in the grant's project; identity never comes from args."""
+    """Current versions in one project; identity never comes from args."""
     from src.services.agent._pii_redact import redact_pii
 
     try:
@@ -921,7 +1025,7 @@ async def _project_artifacts(
             db,
             user_id=context.user_id,
             organization_id=context.organization_id,
-            project_id=context.project_id,
+            project_id=project_id,
             limit=limit,
         )
     except ArtifactError:
@@ -984,19 +1088,156 @@ def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return refs[:MAX_RESULTS]
 
 
+async def _target_project(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> UUID | None:
+    """The Collection a call acts on.
+
+    Project grants: always the bound Collection (a client project_id was
+    already refused as an unknown argument). Workspace grants: ``project_id``
+    is a *selector* and must be one of the workspace's live Collections as
+    ``authorized_scope`` computes them on this call. Returns None when a
+    workspace grant omits the selector. The selector is a UUID, never a name:
+    the agent helpers resolve any other string as a project NAME.
+    """
+    if context.project_id is not None:
+        return context.project_id
+    allowed = await authorized_scope(db, context)
+    raw = arguments.get("project_id")
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ToolArgumentError("project_id must be a UUID")
+    try:
+        chosen = UUID(raw)
+    except ValueError as error:
+        raise ToolArgumentError("project_id must be a UUID") from error
+    if chosen not in allowed:
+        raise IntegrationAccessDenied()
+    return chosen
+
+
+async def _library_folders(
+    db: AsyncSession,
+    scope: ColumnElement[bool],
+    organization_id: UUID,
+    offset: int,
+    limit: int,
+) -> Sequence[Row[Any]]:
+    """One page of live Collections in ``scope``, with live document counts.
+
+    ``scope`` is a condition (``authorized_scope_filter``), never a list of ids:
+    a workspace can hold more Collections than one statement may bind. The count
+    applies the filters ``list_project_documents`` applies to its ``total``, so
+    the two never disagree. The Workspace join re-checks that ancestor in this
+    statement, because the scope's access check ran in another one.
+    """
+    live_documents = (
+        select(func.count(CollectionDocument.id))
+        .join(Document, Document.id == CollectionDocument.document_id)
+        .where(
+            CollectionDocument.collection_id == Collection.id,
+            CollectionDocument.is_deleted.is_(False),
+            Document.organization_id == organization_id,
+            Document.is_deleted.is_(False),
+        )
+        .correlate(Collection)
+        .scalar_subquery()
+    )
+    rows = await db.execute(
+        select(Collection.id, Collection.name, Collection.description, live_documents)
+        .join(Workspace, Workspace.id == Collection.workspace_id)
+        .where(
+            scope,
+            Collection.is_deleted.is_(False),
+            Workspace.is_deleted.is_(False),
+        )
+        .order_by(Collection.name, Collection.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    return rows.all()
+
+
+async def _list_library(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """The folders (projects) the grant may use, with live document counts.
+
+    A project grant sees its own project, a workspace grant the live projects
+    of its workspace; the scope is resolved afresh on every call.
+    """
+    # The shape was checked by _validate_arguments; this only applies defaults.
+    limit = _clamp(arguments.get("limit", MAX_RESULTS), 1, MAX_RESULTS, MAX_RESULTS)
+    offset = _clamp(arguments.get("offset", 0), 0, MAX_OFFSET, 0)
+    scope = await authorized_scope_filter(db, context)
+    found = await _library_folders(
+        db, scope, context.organization_id, offset, limit + 1
+    )
+    folders = [
+        {
+            "id": str(folder_id),
+            "name": name,
+            "description": (description or "")[:MAX_FOLDER_DESCRIPTION_CHARS],
+            "document_count": int(document_count),
+        }
+        for folder_id, name, description, document_count in found[:limit]
+    ]
+    # Rows are bounded by characters, the cap by UTF-8 bytes: 50 long CJK or
+    # emoji descriptions pass it. End the page at the longest prefix that fits
+    # and let next_offset resume there, rather than failing the whole page.
+    # ponytail: re-serialises per dropped row (at most 49); bisect if limit grows.
+    while (
+        len(folders) > 1
+        and _wire_size(_library_page(folders, offset, len(found))) > MAX_RESULT_BYTES
+    ):
+        folders.pop()
+    return _library_page(folders, offset, len(found))
+
+
+def _library_page(
+    folders: list[dict[str, Any]], offset: int, fetched: int
+) -> dict[str, Any]:
+    """A page of ``folders``; ``fetched`` rows were read, so more follow when
+    fewer were kept."""
+    return {
+        "folders": folders,
+        "offset": offset,
+        "next_offset": offset + len(folders) if len(folders) < fetched else None,
+    }
+
+
 async def invoke_read(
     db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
 ) -> ToolResult:
-    arguments = _validate_arguments(invocation)
+    required_scope = TOOL_SCOPES.get(invocation.tool_name)
+    if required_scope is not None and required_scope not in context.scopes:
+        # The router only demands tools:read; a grant can hold that and still
+        # lack the scope of this tool (list_library needs library:read). An
+        # unknown tool falls through to _validate_arguments, which rejects it.
+        raise IntegrationAccessDenied()
+    arguments = _validate_arguments(context, invocation)
     user = await db.get(User, context.user_id)
     if user is None or user.organization_id != context.organization_id:
         raise IntegrationAccessDenied()
     name = invocation.tool_name
-    if name in _ARGS_ONLY_TOOLS:
+    if name in _PROJECTLESS_TOOLS:
+        # No single project is involved, so neither the selector nor the
+        # per-project ownership check below applies. list_library resolves
+        # authorized_scope_filter itself, which covers every folder it returns.
+        if name == "list_library":
+            return _finish(await _list_library(db, context, arguments))
+        if name == "get_arxiv_paper_content":
+            return await _arxiv_paper_content(arguments)
         return _finish(await _args_only(name, arguments))
-    if name == "get_arxiv_paper_content":
-        return await _arxiv_paper_content(arguments)
-    project_id = str(context.project_id)
+    target = await _target_project(db, context, arguments)
+    if target is None:
+        # Never str() a missing project: the agent helper would treat "None"
+        # as a project name and could resolve one outside the grant.
+        return ToolResult(
+            content=[{"error": "project_id_required"}], is_error=True, source_refs=[]
+        )
+    project_id = str(target)
     # Recheck project ownership and live ancestors on every call.
     if await _verify_project_ownership(project_id, db, user) is None:
         return ToolResult(
@@ -1006,13 +1247,14 @@ async def invoke_read(
         )
 
     if name == "get_document_content":
-        return await _document_content(db, context, arguments)
+        return await _document_content(db, target, context.organization_id, arguments)
     if name == "retrieve_passages":
-        return _finish(await _retrieve_passages(db, context, arguments))
+        return _finish(await _retrieve_passages(db, context, target, arguments))
     if name == "search_documents":
         payload = await _search_project_documents(
             db,
-            context,
+            target,
+            context.organization_id,
             str(arguments["query"]),
             _clamp(arguments.get("max_results", 10), 1, MAX_RESULTS, 10),
         )
@@ -1032,7 +1274,7 @@ async def invoke_read(
         _, kb_schema, _ = _registry_schema(name)
         top_k_default = int(kb_schema["properties"]["top_k"].get("default", 8))
         document_ids = await _project_document_ids(
-            db, context, arguments.get("document_ids")
+            db, target, context.organization_id, arguments.get("document_ids")
         )
         if document_ids is None:
             return _unavailable()
@@ -1059,13 +1301,14 @@ async def invoke_read(
             for chunk in payload.get("chunks") or []
         ]
     elif name == "find_researchers":
-        return await _find_researchers(db, context, arguments)
+        return await _find_researchers(db, target, context.organization_id, arguments)
     elif name == "get_researcher":
-        return await _get_researcher(db, context, arguments)
+        return await _get_researcher(db, target, context.organization_id, arguments)
     elif name == "list_project_artifacts":
         payload = await _project_artifacts(
             db,
             context,
+            target,
             _clamp(
                 arguments.get("limit", MAX_ARTIFACTS), 1, MAX_ARTIFACTS, MAX_ARTIFACTS
             ),
@@ -1086,10 +1329,13 @@ async def invoke_read(
     return _finish(payload)
 
 
+def _wire_size(payload: dict[str, Any]) -> int:
+    """Bytes of a payload as FastAPI emits it (UTF-8, no ASCII escaping)."""
+    return len(json.dumps(payload, default=str, ensure_ascii=False).encode())
+
+
 def _finish(payload: dict[str, Any]) -> ToolResult:
-    # Measure as FastAPI emits it (UTF-8, no ASCII escaping).
-    wire = json.dumps(payload, default=str, ensure_ascii=False).encode()
-    if len(wire) > MAX_RESULT_BYTES:
+    if _wire_size(payload) > MAX_RESULT_BYTES:
         return ToolResult(
             content=[{"error": "result_too_large"}], is_error=True, source_refs=[]
         )

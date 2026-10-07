@@ -42,6 +42,18 @@ _KEY = "cli_revoked_before:{user_id}"
 # cutoff outlives every token it must reject.
 _TTL_SECONDS = settings.CLI_TOKEN_EXPIRE_DAYS * 24 * 3600
 
+# A delayed older request must not undo a newer cutoff. All callers use the
+# same atomic write, including legacy best-effort revocation routes.
+_ADVANCE_CUTOFF = """
+local previous = redis.call('GET', KEYS[1])
+local cutoff = tonumber(ARGV[1])
+if previous then
+    cutoff = math.max(tonumber(previous), cutoff)
+end
+redis.call('SET', KEYS[1], cutoff, 'EX', ARGV[2])
+return 1
+"""
+
 _client: Optional["redis.Redis"] = None
 
 
@@ -75,21 +87,35 @@ def _reset_client() -> None:
     _client = None
 
 
-async def revoke_user_cli_tokens(user_id: str) -> None:
-    """Revoke every CLI token issued to ``user_id`` up to now (best-effort)."""
+class CliTokenRevocationUnavailable(Exception):
+    """The shared store could not confirm a CLI revocation write."""
+
+
+async def revoke_user_cli_tokens(
+    user_id: str, *, require_success: bool = False
+) -> None:
+    """Revoke CLI tokens up to now; optionally require a confirmed shared write."""
     client = await _get_redis()
     if client is None:
         logger.warning("CLI revocation skipped (no Redis) for user %s", user_id)
+        if require_success:
+            raise CliTokenRevocationUnavailable()
         return
     try:
         # Store cutoff = next whole second so a token minted in the SAME second
         # as the revoke (iat is whole-second from create_cli_token) is still
         # caught by the `iat < cutoff` check ("revoke up to now" inclusive).
         cutoff = int(datetime.now(timezone.utc).timestamp()) + 1
-        await client.set(_KEY.format(user_id=user_id), cutoff, ex=_TTL_SECONDS)
-    except Exception as e:  # noqa: BLE001 - never raise into the caller
+        written = await client.eval(
+            _ADVANCE_CUTOFF, 1, _KEY.format(user_id=user_id), cutoff, _TTL_SECONDS
+        )
+        if require_success and written != 1:
+            raise CliTokenRevocationUnavailable()
+    except Exception as e:  # noqa: BLE001 - preserve best-effort callers
         logger.warning("CLI revocation write failed for user %s: %s", user_id, e)
         _reset_client()
+        if require_success:
+            raise CliTokenRevocationUnavailable() from e
 
 
 def _store_unavailable(user_id: str, reason: str) -> bool:

@@ -443,6 +443,9 @@ async def test_cancel_race_requires_terminal_and_projects(
     assert session is not None and not session.workspace_locked
 
 
+# Mutation: delivery.py:488 content=text -> content="".join(content).
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/services/harness/test_delivery.py -k failed_turn_without_output
 async def test_failed_turn_without_output_projects_non_empty_assistant_text(
     db: AsyncSession,
     context: IntegrationContext,
@@ -786,6 +789,9 @@ async def test_lease_renewal_is_limited_to_authorized_run_scope(
     }
 
 
+# Mutation: delivery.py:243 and :597 remove each IntegrationAccessDenied catch.
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/services/harness/test_delivery.py -k poll_skips_session
 async def test_poll_skips_session_that_fails_authorization(
     db: AsyncSession, context: IntegrationContext, command: Any
 ) -> None:

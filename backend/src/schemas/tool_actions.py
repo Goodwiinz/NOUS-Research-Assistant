@@ -24,7 +24,10 @@ class ActionActor(BaseModel):
     model_config = ConfigDict(frozen=True)
     user_id: UUID
     organization_id: UUID
-    project_id: UUID
+    # The grant's binding: a project grant names its Collection, a workspace
+    # grant its workspace. Native requests are project-bound.
+    project_id: UUID | None
+    workspace_id: UUID | None = None
     thread_id: UUID | None = None
     run_id: UUID | None = None
     # None only for trusted native NOUS requests.
@@ -48,8 +51,13 @@ class ActionReview(BaseModel):
     invocation_id: UUID
     state: ActionState
     tool_name: str
-    project_id: UUID
-    project_label: str
+    project_id: UUID | None
+    project_label: str | None
+    # Set when the grant behind the action is bound to a workspace. The review
+    # page shows the workspace whenever there is no project.
+    workspace_id: UUID | None = None
+    workspace_label: str | None = None
+    # Whether the target (project, else workspace) is still live.
     project_available: bool
     title: str
     content: str

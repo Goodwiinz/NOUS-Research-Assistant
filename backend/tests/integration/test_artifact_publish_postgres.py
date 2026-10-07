@@ -13,7 +13,8 @@ Mutation check (``docs/engineering/testing.md``): move the ``db.add(reference)``
 and the outbox ``db.add`` back above the first ``await db.flush()`` in
 ``publish_version`` and this test fails with ``ArtifactConflict``.
 
-Requires ``ORCHESTRATION_TEST_DATABASE_URL``; skipped (NOT RUN) otherwise.
+Requires ``ARTIFACT_PUBLISH_TEST_DATABASE_URL`` (CI) or the existing local
+``ORCHESTRATION_TEST_DATABASE_URL`` fallback; skipped (NOT RUN) otherwise.
 """
 
 from __future__ import annotations
@@ -86,9 +87,11 @@ def _async_dsn(dsn: str) -> str:
 async def test_publish_version_inserts_version_before_its_dependents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL") or ""
+    dsn = os.getenv("ARTIFACT_PUBLISH_TEST_DATABASE_URL") or os.getenv(
+        "ORCHESTRATION_TEST_DATABASE_URL", ""
+    )
     if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+        pytest.skip("Artifact publication PostgreSQL test database is not configured")
     storage = MemoryArtifactStorage()
     monkeypatch.setattr(service, "get_artifact_storage", lambda: storage)
     schema = "artifact_publish_" + uuid.uuid4().hex
