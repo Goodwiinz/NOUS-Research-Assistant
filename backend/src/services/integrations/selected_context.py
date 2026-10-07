@@ -83,7 +83,13 @@ async def _owned_consent(
         )
         .execution_options(populate_existing=True)
     )
-    if consent is None or CONTEXT_SCOPE not in (consent.scopes or []):
+    # A workspace consent has no project to pick memories from. check_scopes
+    # keeps context:read off it; a row that got in another way is refused here.
+    if (
+        consent is None
+        or consent.project_id is None
+        or CONTEXT_SCOPE not in (consent.scopes or [])
+    ):
         raise ContextNotFound()
     return cast(UUID, consent.id), cast(UUID, consent.project_id)
 
@@ -258,25 +264,31 @@ async def read_selected_context(
     db: AsyncSession, context: IntegrationContext
 ) -> ToolResult:
     """Only the selected memories that still belong to the authorized project."""
+    # The project comes from the grant and never from the caller. A workspace
+    # grant has none (and cannot hold context:read), so it reads nothing, and
+    # the answer does not depend on which grant row it names.
+    project_id = context.project_id
+    if project_id is None:
+        return _unavailable("context_unavailable")
     grant = await db.get(IntegrationGrant, context.grant_id)
     if grant is None or grant.request_id is None:
         # Internal grants have no browser consent to select context under.
         return _unavailable("no_context_selection")
     try:
         await authorized_project(
-            db, context.user_id, context.organization_id, context.project_id
+            db, context.user_id, context.organization_id, project_id
         )
     except IntegrationAccessDenied:
         return _unavailable("context_unavailable")
     selection = await _selection(
         db, grant.request_id, context.user_id, context.organization_id
     )
-    if selection is None or selection.project_id != context.project_id:
+    if selection is None or selection.project_id != project_id:
         return ToolResult(content=[{"memories": []}], is_error=False, source_refs=[])
     selected = await _valid_selected(
         db,
         [UUID(i) for i in selection.memory_ids],
-        context.project_id,
+        project_id,
         context.user_id,
         context.organization_id,
     )

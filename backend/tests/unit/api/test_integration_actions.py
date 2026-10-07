@@ -24,7 +24,7 @@ from src.services.agent.tool_actions import (
 from src.services.integrations.context import IntegrationAccessDenied
 
 pytestmark = pytest.mark.unit
-USER, ORG, PROJECT, GRANT, INVOCATION = (uuid4() for _ in range(5))
+USER, ORG, PROJECT, GRANT, INVOCATION, WORKSPACE = (uuid4() for _ in range(6))
 CLI_HEADERS = {
     "Authorization": "Bearer cli-jwt",
     "X-NOUS-Integration-Grant": "opaque-grant",
@@ -155,6 +155,40 @@ def test_request_and_status_bind_the_grant_actor(
     read = client.get(f"/api/v1/integrations/actions/{INVOCATION}", headers=CLI_HEADERS)
     assert read.status_code == 200 and read.json()["state"] == "succeeded"
     assert calls["status"][0][0].grant_id == GRANT
+
+
+def test_workspace_grant_actor_carries_its_workspace_binding(
+    client: TestClient,
+    calls: dict[str, list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def resolve_workspace(_db: Any, token: str, *, required_scope: str) -> Any:
+        if token != "opaque-grant" or required_scope != "tools:write":
+            raise IntegrationAccessDenied()
+        return IntegrationContext(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            grant_id=GRANT,
+        )
+
+    monkeypatch.setattr(
+        "src.api.integrations.auth.resolve_integration_context", resolve_workspace
+    )
+    created = client.post(
+        "/api/v1/integrations/actions", json=BODY, headers=CLI_HEADERS
+    )
+    assert created.status_code == 200
+    actor, _invocation = calls["request"][0]
+    assert (actor.project_id, actor.workspace_id, actor.grant_id) == (
+        None,
+        WORKSPACE,
+        GRANT,
+    )
+    read = client.get(f"/api/v1/integrations/actions/{INVOCATION}", headers=CLI_HEADERS)
+    assert read.status_code == 200
+    assert calls["status"][0][0].workspace_id == WORKSPACE
 
 
 def test_cli_token_cannot_decide_with_or_without_grant(

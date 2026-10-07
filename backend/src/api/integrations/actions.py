@@ -44,6 +44,7 @@ def _actor(context: IntegrationContext) -> ActionActor:
         user_id=context.user_id,
         organization_id=context.organization_id,
         project_id=context.project_id,
+        workspace_id=context.workspace_id,
         thread_id=context.thread_id,
         run_id=context.run_id,
         grant_id=context.grant_id,

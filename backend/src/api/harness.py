@@ -108,7 +108,10 @@ async def connect(websocket: WebSocket) -> None:
             context = await resolve_integration_context(
                 db, token, required_scope="harness:execute"
             )
-            if str(context.user_id) != str(identity.get("sub")):
+            # Harness runs stay bound to one Collection; refuse a workspace grant.
+            if context.project_id is None or str(context.user_id) != str(
+                identity.get("sub")
+            ):
                 raise IntegrationAccessDenied()
         await websocket.accept(
             subprotocol=WebSocketAuthenticator.get_subprotocol_response(websocket)
@@ -124,7 +127,9 @@ async def connect(websocket: WebSocket) -> None:
                 context = await resolve_integration_context(
                     db, token, required_scope="harness:execute"
                 )
-                if str(context.user_id) != str(identity.get("sub")):
+                if context.project_id is None or str(context.user_id) != str(
+                    identity.get("sub")
+                ):
                     raise IntegrationAccessDenied()
                 if (
                     isinstance(value, dict)
