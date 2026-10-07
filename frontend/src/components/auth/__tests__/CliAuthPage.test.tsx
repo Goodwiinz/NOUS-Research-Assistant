@@ -159,6 +159,21 @@ describe('CliAuthPage', () => {
     );
   });
 
+  it('clears the previous code when navigating to another session without a code', async () => {
+    const { rerender } = render(<CliAuthPage />);
+
+    expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
+    mockSearchParams = new URLSearchParams('session_id=session-2');
+    window.history.replaceState(null, '', '/cli-auth?session_id=session-2');
+
+    rerender(<CliAuthPage />);
+
+    expect(
+      await screen.findByLabelText(/verification code from your terminal/i)
+    ).toHaveValue('');
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
+  });
+
   it('clears the stored code once the login is approved', async () => {
     mockSearchParams = new URLSearchParams('session_id=session-1');
     window.sessionStorage.setItem('nous:cli-auth-code:session-1', 'WXYZ-9876');

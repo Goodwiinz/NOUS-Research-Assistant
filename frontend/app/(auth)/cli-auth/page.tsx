@@ -42,7 +42,7 @@ function CliAuthPageContent(): React.JSX.Element {
     }
     // The fragment and sessionStorage only exist in the browser, after mount.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setVerificationCode((previous) => code || previous);
+    setVerificationCode(code);
     setManualEntry(!code);
     if (urlCode) {
       window.history.replaceState(
