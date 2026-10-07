@@ -2,12 +2,12 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterable, Iterator
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import event, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models.artifact import Artifact, ArtifactVersion
@@ -36,8 +36,19 @@ from src.services.integrations.read_tools import (
 )
 
 pytestmark = pytest.mark.unit
-USER, ORG, PROJECT, WORKSPACE, OTHER_PROJECT = (uuid4() for _ in range(5))
+USER, ORG, WORKSPACE = (uuid4() for _ in range(3))
+# Fixed, and in the reverse of the order of their names ("Other" sorts before
+# "Project"), so a page ordered by id instead of by name is a different page.
+# With random ids the ordering tests passed or failed by the luck of the draw.
+PROJECT, OTHER_PROJECT = UUID(int=1), UUID(int=2)
 DOC_IN_PROJECT, DOC_OUTSIDE_PROJECT = uuid4(), uuid4()
+# A second workspace of the same user: reachable by that user, but outside a
+# grant bound to WORKSPACE. One of its projects is named like str(None).
+OTHER_WORKSPACE, FOREIGN_PROJECT, NAMED_NONE_PROJECT = uuid4(), uuid4(), uuid4()
+DOC_FOREIGN, DOC_NAMED_NONE = uuid4(), uuid4()
+# What a grant holds. The gateway checks the scope of each tool on every call.
+TOOLS_READ = frozenset({"tools:read"})
+LIBRARY_READ = frozenset({"tools:read", "library:read"})
 
 
 def _document_row(document_id: UUID, title: str) -> dict[str, Any]:
@@ -94,10 +105,28 @@ async def db() -> AsyncIterator[AsyncSession]:
             )
         )
         await session.execute(
+            insert(Workspace).values(
+                id=OTHER_WORKSPACE,
+                name="Other workspace",
+                owner_id=USER,
+                organization_id=ORG,
+            )
+        )
+        await session.execute(
             insert(Collection).values(
                 [
                     dict(id=PROJECT, name="Project", workspace_id=WORKSPACE),
                     dict(id=OTHER_PROJECT, name="Other", workspace_id=WORKSPACE),
+                    dict(
+                        id=FOREIGN_PROJECT,
+                        name="Foreign",
+                        workspace_id=OTHER_WORKSPACE,
+                    ),
+                    dict(
+                        id=NAMED_NONE_PROJECT,
+                        name="None",
+                        workspace_id=OTHER_WORKSPACE,
+                    ),
                 ]
             )
         )
@@ -106,6 +135,8 @@ async def db() -> AsyncIterator[AsyncSession]:
                 [
                     _document_row(DOC_IN_PROJECT, "retrieval-eval"),
                     _document_row(DOC_OUTSIDE_PROJECT, "retrieval-secret"),
+                    _document_row(DOC_FOREIGN, "retrieval-foreign"),
+                    _document_row(DOC_NAMED_NONE, "retrieval-none"),
                 ]
             )
         )
@@ -114,6 +145,8 @@ async def db() -> AsyncIterator[AsyncSession]:
                 [
                     dict(collection_id=PROJECT, document_id=DOC_IN_PROJECT),
                     dict(collection_id=OTHER_PROJECT, document_id=DOC_OUTSIDE_PROJECT),
+                    dict(collection_id=FOREIGN_PROJECT, document_id=DOC_FOREIGN),
+                    dict(collection_id=NAMED_NONE_PROJECT, document_id=DOC_NAMED_NONE),
                 ]
             )
         )
@@ -125,7 +158,11 @@ async def db() -> AsyncIterator[AsyncSession]:
 @pytest.fixture
 def context() -> IntegrationContext:
     return IntegrationContext(
-        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        grant_id=uuid4(),
+        scopes=TOOLS_READ,
     )
 
 
@@ -139,11 +176,27 @@ def test_catalog_advertises_only_the_read_allowlist_without_identity_args() -> N
     catalog = list_read_tools()
     names = {tool.name for tool in catalog}
     assert names == set(READ_TOOL_NAMES) | set(read_tools.LOCAL_TOOLS)
+    assert "list_library" in names
     assert set(read_tools.TOOL_SCOPES) == names
-    assert set(read_tools.TOOL_SCOPES.values()) == {"tools:read"}
+    # Every tool needs tools:read except the library listing.
+    assert {
+        name: scope
+        for name, scope in read_tools.TOOL_SCOPES.items()
+        if scope != "tools:read"
+    } == {"list_library": "library:read"}
     assert "execute_code" not in names and "forget_memory" not in names
     for tool in catalog:
         assert "project_id" not in tool.input_schema.get("properties", {})
+
+
+def test_selected_context_is_not_a_gateway_read_tool() -> None:
+    # read_selected_context is served by GET /integrations/context and takes its
+    # project from the grant: the memories a user selects are stored per project
+    # consent. Listing it here would give a workspace grant a project_id selector
+    # over memories nobody selected for that project. A workspace grant cannot
+    # hold context:read, so a project grant is the only one that reaches it.
+    assert "read_selected_context" not in {tool.name for tool in list_read_tools()}
+    assert "context:read" not in set(read_tools.TOOL_SCOPES.values())
 
 
 @pytest.mark.parametrize(
@@ -299,16 +352,18 @@ async def test_size_cap_measures_wire_utf8_not_ascii_escapes(
 
 @pytest.mark.parametrize("model", [Collection, Workspace])
 async def test_search_query_itself_rechecks_ancestors(
-    db: AsyncSession, context: IntegrationContext, model: Any
+    db: AsyncSession, model: Any
 ) -> None:
     # Ancestor soft-deleted between invoke_read's ownership check and the
     # fetch: the fetch alone must return nothing.
     await db.execute(update(model).values(is_deleted=True))
     await db.commit()
-    payload = await read_tools._search_project_documents(db, context, "retrieval", 10)
+    payload = await read_tools._search_project_documents(
+        db, PROJECT, ORG, "retrieval", 10
+    )
     assert payload["documents"] == []
     assert (
-        await read_tools._project_document_ids(db, context, [str(DOC_IN_PROJECT)])
+        await read_tools._project_document_ids(db, PROJECT, ORG, [str(DOC_IN_PROJECT)])
         is None
     )
 
@@ -429,7 +484,11 @@ async def test_deleted_ancestor_denies_read(
 
 async def test_foreign_user_in_context_is_denied(db: AsyncSession) -> None:
     context = IntegrationContext(
-        user_id=uuid4(), organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+        user_id=uuid4(),
+        organization_id=ORG,
+        project_id=PROJECT,
+        grant_id=uuid4(),
+        scopes=TOOLS_READ,
     )
     with pytest.raises(IntegrationAccessDenied):
         await invoke_read(db, context, _invocation("list_project_documents"))
@@ -863,7 +922,11 @@ async def test_retrieve_passages_empty_collection_skips_search(
     await db.execute(update(CollectionDocument).values(is_deleted=True))
     await db.commit()
     context = IntegrationContext(
-        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        grant_id=uuid4(),
+        scopes=TOOLS_READ,
     )
     result = await invoke_read(db, context, _invocation("retrieve_passages", query="q"))
     assert result.is_error is False
@@ -900,6 +963,7 @@ async def test_arxiv_paper_content_is_transient_and_paginated(
     monkeypatch.setattr(
         read_tools.arxiv_fulltext, "fetch_text", AsyncMock(return_value="t" * 10)
     )
+    before = set((await db.execute(select(Document.id))).scalars().all())
     result = await invoke_read(
         db,
         context,
@@ -910,11 +974,8 @@ async def test_arxiv_paper_content_is_transient_and_paginated(
     assert result.content[0]["next_offset"] == 4
     assert result.source_refs == [{"arxiv_id": "2401.00001"}]
     # Nothing landed in the documents table.
-    rows = await db.execute(select(Document.id))
-    assert {str(r) for r in rows.scalars().all()} == {
-        str(DOC_IN_PROJECT),
-        str(DOC_OUTSIDE_PROJECT),
-    }
+    after = set((await db.execute(select(Document.id))).scalars().all())
+    assert before and after == before
 
 
 async def test_arxiv_paper_content_errors_are_stable(
@@ -1207,7 +1268,7 @@ async def test_find_researchers_internal_clamp_is_defence_in_depth(
     names = [f"Person {index:02d}" for index in range(30)]
     await _add_doc(db, "Crowd", {"authors": names}, created=_day(1))
     result = await read_tools._find_researchers(
-        db, context, {"query": "person", "limit": 99}
+        db, PROJECT, ORG, {"query": "person", "limit": 99}
     )
     assert len(result.content[0]["researchers"]) == read_tools.MAX_RESEARCHERS == 25
 
@@ -1261,7 +1322,7 @@ async def test_find_researchers_excludes_deleted_documents_and_ancestors(
     await db.execute(update(Collection).values(is_deleted=True))
     await db.commit()
     # invoke_read refuses a dead project first; the scan alone must also be empty.
-    assert await read_tools._scan_authored_papers(db, context) == ([], False)
+    assert await read_tools._scan_authored_papers(db, PROJECT, ORG) == ([], False)
 
 
 async def test_find_researchers_reports_when_the_scan_cap_hides_documents(
@@ -1654,3 +1715,1422 @@ def test_researcher_tools_are_advertised_with_the_coverage_caveat() -> None:
         assert "project_id" not in catalog[name].input_schema["properties"]
     assert catalog["find_researchers"].input_schema["required"] == ["query"]
     assert catalog["get_researcher"].input_schema["required"] == ["researcher_id"]
+
+
+# --- workspace grants: project selector --------------------------------------
+
+PROJECT_TOOLS: list[tuple[str, dict[str, Any]]] = [
+    ("search_documents", {"query": "retrieval"}),
+    ("list_project_documents", {}),
+    ("do_kb_retrieve", {"query": "q", "document_ids": [str(DOC_IN_PROJECT)]}),
+    ("get_current_draft", {}),
+]
+PROJECT_TOOL_IDS = [name for name, _arguments in PROJECT_TOOLS]
+
+
+def _workspace_context(scopes: Iterable[str] = TOOLS_READ) -> IntegrationContext:
+    return IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=None,
+        workspace_id=WORKSPACE,
+        grant_id=uuid4(),
+        scopes=frozenset(scopes),
+    )
+
+
+def _project_context(scopes: Iterable[str] = TOOLS_READ) -> IntegrationContext:
+    return IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        grant_id=uuid4(),
+        scopes=frozenset(scopes),
+    )
+
+
+@pytest.fixture
+def adapters(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+    """Registry adapters as mocks, to prove a refusal never reaches them."""
+    mocks = {
+        name: AsyncMock()
+        for name in (
+            "_tool_list_project_documents",
+            "_tool_do_kb_retrieve",
+            "_tool_get_current_draft",
+        )
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(read_tools, name, mock)
+    return mocks
+
+
+@pytest.mark.parametrize(("tool", "arguments"), PROJECT_TOOLS, ids=PROJECT_TOOL_IDS)
+async def test_workspace_grant_needs_project_selector_for_project_tools(
+    db: AsyncSession,
+    adapters: dict[str, AsyncMock],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    result = await invoke_read(db, _workspace_context(), _invocation(tool, **arguments))
+    assert result.is_error is True
+    assert result.content == [{"error": "project_id_required"}]
+    assert result.source_refs == []
+    for adapter in adapters.values():
+        adapter.assert_not_awaited()
+
+
+async def test_workspace_grant_without_selector_never_resolves_the_word_none(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    # str(None) used to reach the agent helper, which resolves a non-UUID as a
+    # project NAME; a project called "None" in another workspace of the same
+    # user (NAMED_NONE_PROJECT) is reachable that way.
+    result = await invoke_read(
+        db, _workspace_context(), _invocation("list_project_documents")
+    )
+    assert result.content == [{"error": "project_id_required"}]
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+    searched = await invoke_read(
+        db, _workspace_context(), _invocation("search_documents", query="retrieval")
+    )
+    assert searched.content == [{"error": "project_id_required"}]
+
+
+@pytest.mark.parametrize(("tool", "arguments"), PROJECT_TOOLS, ids=PROJECT_TOOL_IDS)
+async def test_workspace_grant_project_selector_outside_workspace_denied(
+    db: AsyncSession,
+    adapters: dict[str, AsyncMock],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    # FOREIGN_PROJECT belongs to this very user, in another workspace: only the
+    # grant's scope, not ownership, can refuse it.
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation(tool, project_id=str(FOREIGN_PROJECT), **arguments),
+        )
+    for adapter in adapters.values():
+        adapter.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("selected", "expected"),
+    [(PROJECT, DOC_IN_PROJECT), (OTHER_PROJECT, DOC_OUTSIDE_PROJECT)],
+    ids=["first-project", "second-project"],
+)
+async def test_workspace_grant_reads_only_the_selected_project(
+    db: AsyncSession, selected: UUID, expected: UUID
+) -> None:
+    context = _workspace_context()
+    listed = await invoke_read(
+        db,
+        context,
+        _invocation("list_project_documents", project_id=str(selected)),
+    )
+    assert listed.is_error is False
+    assert listed.source_refs == [{"document_id": str(expected)}]
+    searched = await invoke_read(
+        db,
+        context,
+        _invocation("search_documents", query="retrieval", project_id=str(selected)),
+    )
+    assert searched.is_error is False
+    assert [doc["id"] for doc in searched.content[0]["documents"]] == [str(expected)]
+
+
+async def test_workspace_grant_reads_the_draft_of_the_selected_project_only(
+    db: AsyncSession,
+) -> None:
+    draft_id = uuid4()
+    await db.execute(
+        insert(GeneratedDraft).values(
+            id=draft_id, project_id=PROJECT, version=1, title="Draft", content="body"
+        )
+    )
+    await db.commit()
+    context = _workspace_context()
+    own = await invoke_read(
+        db, context, _invocation("get_current_draft", project_id=str(PROJECT))
+    )
+    assert own.is_error is False
+    assert own.content[0]["draft"]["id"] == str(draft_id)
+    assert own.source_refs == [{"draft_id": str(draft_id)}]
+    other = await invoke_read(
+        db, context, _invocation("get_current_draft", project_id=str(OTHER_PROJECT))
+    )
+    assert other.content[0]["project_name"] == "Other"
+    assert other.content[0]["draft"] is None
+    assert other.source_refs == []
+
+
+async def test_workspace_retrieval_scopes_document_ids_to_the_selected_project(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retrieval = AsyncMock(return_value={"chunks": [], "total": 0})
+    monkeypatch.setattr(read_tools, "_tool_do_kb_retrieve", retrieval)
+    context = _workspace_context()
+    refused = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "do_kb_retrieve",
+            query="q",
+            document_ids=[str(DOC_OUTSIDE_PROJECT)],
+            project_id=str(PROJECT),
+        ),
+    )
+    # The document is in this workspace, but not in the selected project.
+    assert refused.is_error is True
+    assert refused.content[0]["reason"] == "requested_documents_unavailable"
+    retrieval.assert_not_awaited()
+    allowed = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "do_kb_retrieve",
+            query="q",
+            document_ids=[str(DOC_OUTSIDE_PROJECT)],
+            project_id=str(OTHER_PROJECT),
+        ),
+    )
+    assert allowed.is_error is False
+    assert retrieval.await_args is not None
+    forwarded = retrieval.await_args.args[0]
+    assert forwarded["project_id"] == str(OTHER_PROJECT)
+    assert forwarded["document_ids"] == [str(DOC_OUTSIDE_PROJECT)]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["not-a-uuid", "None", "Project", "", 123, True, ["x"], {"id": 1}],
+    ids=["text", "none-word", "project-name", "empty", "int", "bool", "list", "dict"],
+)
+async def test_workspace_selector_must_be_a_uuid_string_never_a_name(
+    db: AsyncSession, adapters: dict[str, AsyncMock], selector: Any
+) -> None:
+    with pytest.raises(ToolArgumentError, match="project_id must be a UUID"):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation("list_project_documents", project_id=selector),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+async def test_null_selector_is_the_same_as_an_omitted_one(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    result = await invoke_read(
+        db,
+        _workspace_context(),
+        _invocation("list_project_documents", project_id=None),
+    )
+    assert result.content == [{"error": "project_id_required"}]
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["user_id", "organization_id", "thread_id", "run_id", "grant_id", "workspace_id"],
+)
+async def test_workspace_grant_accepts_no_identity_argument_but_the_selector(
+    db: AsyncSession, adapters: dict[str, AsyncMock], key: str
+) -> None:
+    with pytest.raises(ToolArgumentError):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation(
+                "list_project_documents", project_id=str(PROJECT), **{key: str(uuid4())}
+            ),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+async def test_workspace_grant_is_denied_once_its_workspace_is_deleted(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation("list_project_documents", project_id=str(PROJECT)),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+async def test_selector_naming_a_deleted_project_is_denied(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    await db.execute(
+        update(Collection).where(Collection.id == PROJECT).values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation("list_project_documents", project_id=str(PROJECT)),
+        )
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+# Tools that act on no single project: there is nothing for a selector to select.
+PROJECTLESS_TOOLS = {
+    "search_arxiv",
+    "search_external_database",
+    "list_external_databases",
+    "get_arxiv_paper_content",
+}
+
+
+def test_catalog_offers_the_project_selector_only_to_workspace_grants() -> None:
+    for tool in list_read_tools():
+        assert "project_id" not in tool.input_schema["properties"]
+    workspace_catalog = list_read_tools(workspace_bound=True)
+    assert {tool.name for tool in workspace_catalog} == set(READ_TOOL_NAMES) | set(
+        read_tools.LOCAL_TOOLS
+    )
+    selectorless = set()
+    for tool in workspace_catalog:
+        schema = tool.input_schema
+        if "project_id" not in schema["properties"]:
+            selectorless.add(tool.name)
+            continue
+        selector = schema["properties"]["project_id"]
+        assert selector["type"] == "string" and selector["format"] == "uuid"
+        assert "workspace grants" in selector["description"]
+        # Optional in the schema: omitting it is a structured error, not a 422.
+        assert "project_id" not in schema["required"]
+        assert schema["additionalProperties"] is False
+    # list_library lists the grant's whole scope, so it has no target to select.
+    assert selectorless == PROJECTLESS_TOOLS | {"list_library"}
+
+
+def test_catalog_selector_does_not_leak_into_the_shared_local_schemas() -> None:
+    # list_read_tools hands out copies: advertising the selector to one
+    # workspace grant must not change what a project grant sees afterwards.
+    list_read_tools(workspace_bound=True)
+    for name, (_description, schema, _scope) in read_tools.LOCAL_TOOLS.items():
+        assert "project_id" not in schema["properties"], name
+    for tool in list_read_tools():
+        assert "project_id" not in tool.input_schema["properties"]
+
+
+# --- workspace grants: the tools added by Plan 06 and Plan 07 -----------------
+
+# Each acts on one project, so a workspace grant must name it like the others.
+SELECTOR_TOOLS: list[tuple[str, dict[str, Any]]] = [
+    ("list_project_artifacts", {}),
+    ("get_document_content", {"document_id": str(DOC_IN_PROJECT)}),
+    ("retrieve_passages", {"query": "retrieval"}),
+    ("find_researchers", {"query": "a"}),
+    ("get_researcher", {"researcher_id": "a"}),
+]
+SELECTOR_TOOL_IDS = [name for name, _arguments in SELECTOR_TOOLS]
+
+
+@pytest.fixture
+def project_readers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[AsyncMock, _StubFulltext]:
+    """The artifact query and the search service, to prove a refusal precedes them."""
+    artifacts = AsyncMock(return_value=[])
+    search = _StubFulltext([])
+    monkeypatch.setattr(read_tools, "list_project_artifacts", artifacts)
+    monkeypatch.setattr(read_tools, "fulltext_search_service", search)
+    return artifacts, search
+
+
+@pytest.mark.parametrize(("tool", "arguments"), SELECTOR_TOOLS, ids=SELECTOR_TOOL_IDS)
+async def test_workspace_grant_needs_a_selector_for_every_project_tool(
+    db: AsyncSession,
+    project_readers: tuple[AsyncMock, _StubFulltext],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    artifacts, search = project_readers
+    result = await invoke_read(db, _workspace_context(), _invocation(tool, **arguments))
+    assert result.is_error is True
+    assert result.content == [{"error": "project_id_required"}]
+    assert result.source_refs == []
+    artifacts.assert_not_awaited()
+    assert search.calls == []
+
+
+@pytest.mark.parametrize(("tool", "arguments"), SELECTOR_TOOLS, ids=SELECTOR_TOOL_IDS)
+async def test_workspace_grant_selector_outside_workspace_is_denied_for_every_tool(
+    db: AsyncSession,
+    project_readers: tuple[AsyncMock, _StubFulltext],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    artifacts, search = project_readers
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db,
+            _workspace_context(),
+            _invocation(tool, project_id=str(FOREIGN_PROJECT), **arguments),
+        )
+    artifacts.assert_not_awaited()
+    assert search.calls == []
+
+
+@pytest.mark.parametrize(("tool", "arguments"), SELECTOR_TOOLS, ids=SELECTOR_TOOL_IDS)
+async def test_project_grant_still_refuses_the_selector_for_every_tool(
+    db: AsyncSession,
+    context: IntegrationContext,
+    project_readers: tuple[AsyncMock, _StubFulltext],
+    tool: str,
+    arguments: dict[str, Any],
+) -> None:
+    artifacts, search = project_readers
+    with pytest.raises(ToolArgumentError, match="unknown arguments"):
+        await invoke_read(
+            db, context, _invocation(tool, project_id=str(PROJECT), **arguments)
+        )
+    artifacts.assert_not_awaited()
+    assert search.calls == []
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        _invocation("search_arxiv", query="q", project_id=str(PROJECT)),
+        _invocation("search_external_database", query="q", project_id=str(PROJECT)),
+        _invocation("list_external_databases", project_id=str(PROJECT)),
+        _invocation("get_arxiv_paper_content", arxiv_id="2401.00001", project_id="x"),
+    ],
+    ids=sorted(PROJECTLESS_TOOLS, key=lambda name: name),
+)
+async def test_projectless_tools_take_no_selector_from_a_workspace_grant(
+    db: AsyncSession, invocation: ToolInvocation
+) -> None:
+    with pytest.raises(ToolArgumentError, match="unknown arguments"):
+        await invoke_read(db, _workspace_context(), invocation)
+
+
+async def test_projectless_tools_run_for_a_workspace_grant_without_a_selector(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arxiv = AsyncMock(return_value={"papers": [{"id": "2401.00001"}]})
+    monkeypatch.setattr(read_tools, "_tool_search_arxiv", arxiv)
+    ownership = AsyncMock()
+    monkeypatch.setattr(read_tools, "_verify_project_ownership", ownership)
+    result = await invoke_read(
+        db, _workspace_context(), _invocation("search_arxiv", query="llm")
+    )
+    assert result.is_error is False
+    assert result.source_refs == [{"arxiv_id": "2401.00001"}]
+    arxiv.assert_awaited_once()
+    ownership.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("selected", "titles"),
+    [(PROJECT, ["first.md"]), (OTHER_PROJECT, ["second.md"])],
+    ids=["first-project", "second-project"],
+)
+async def test_workspace_grant_lists_only_the_selected_projects_artifacts(
+    db: AsyncSession, selected: UUID, titles: list[str]
+) -> None:
+    await _artifact(db, PROJECT, "first.md", 1)
+    await _artifact(db, OTHER_PROJECT, "second.md", 2)
+    await _artifact(db, FOREIGN_PROJECT, "foreign.md", 3)
+    result = await invoke_read(
+        db,
+        _workspace_context(),
+        _invocation("list_project_artifacts", project_id=str(selected)),
+    )
+    assert result.is_error is False
+    assert [row["title"] for row in result.content[0]["artifacts"]] == titles
+
+
+async def test_workspace_document_content_is_scoped_to_the_selected_project(
+    db: AsyncSession,
+) -> None:
+    context = _workspace_context()
+    # DOC_OUTSIDE_PROJECT is in this workspace, but not in the selected project.
+    refused = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "get_document_content",
+            document_id=str(DOC_OUTSIDE_PROJECT),
+            project_id=str(PROJECT),
+        ),
+    )
+    assert refused.is_error is True
+    assert refused.content[0]["reason"] == "requested_documents_unavailable"
+    allowed = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "get_document_content",
+            document_id=str(DOC_OUTSIDE_PROJECT),
+            project_id=str(OTHER_PROJECT),
+        ),
+    )
+    assert allowed.is_error is False
+    assert allowed.content[0]["document_id"] == str(DOC_OUTSIDE_PROJECT)
+    assert allowed.source_refs == [{"document_id": str(DOC_OUTSIDE_PROJECT)}]
+
+
+async def test_workspace_passages_search_only_the_selected_project(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _StubFulltext([_search_result(DOC_OUTSIDE_PROJECT, "a hit")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    context = _workspace_context()
+    refused = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages",
+            query="q",
+            document_ids=[str(DOC_OUTSIDE_PROJECT)],
+            project_id=str(PROJECT),
+        ),
+    )
+    assert refused.is_error is True
+    assert refused.content[0]["reason"] == "requested_documents_unavailable"
+    assert stub.calls == []
+    result = await invoke_read(
+        db,
+        context,
+        _invocation("retrieve_passages", query="q", project_id=str(OTHER_PROJECT)),
+    )
+    assert result.is_error is False
+    assert [chunk["document_id"] for chunk in result.content[0]["chunks"]] == [
+        str(DOC_OUTSIDE_PROJECT)
+    ]
+    (call,) = stub.calls
+    # Only the selected project's documents were handed to the search service.
+    assert call["search_request"].filters.document_ids == [str(DOC_OUTSIDE_PROJECT)]
+    assert call["organization_id"] == str(ORG)
+
+
+async def test_workspace_researchers_come_from_the_selected_project_only(
+    db: AsyncSession,
+) -> None:
+    await _seed_authors(db)
+    context = _workspace_context()
+
+    async def call(tool: str, selected: UUID, **arguments: Any) -> Any:
+        return await invoke_read(
+            db, context, _invocation(tool, project_id=str(selected), **arguments)
+        )
+
+    # Yann LeCun only co-wrote a paper in OTHER_PROJECT.
+    in_first = await call("find_researchers", PROJECT, query="lecun")
+    in_second = await call("find_researchers", OTHER_PROJECT, query="lecun")
+    assert in_first.content[0]["researchers"] == []
+    assert [r["name"] for r in in_second.content[0]["researchers"]] == ["Yann LeCun"]
+    unknown_here = await call("get_researcher", PROJECT, researcher_id="yann lecun")
+    assert unknown_here.is_error is True
+    assert unknown_here.content == [{"error": "researcher_not_found"}]
+    known_there = await call(
+        "get_researcher", OTHER_PROJECT, researcher_id="yann lecun"
+    )
+    assert known_there.is_error is False
+    assert known_there.content[0]["researcher"]["name"] == "Yann LeCun"
+
+
+# --- workspace grants: every tool, one invariant ------------------------------
+
+# One valid call per tool, without a project_id. A tool added to READ_TOOL_NAMES
+# or LOCAL_TOOLS needs a row here, or test_every_tool_has_a_workspace_grant_case
+# fails: the grant has no project of its own, so every branch of invoke_read
+# must take its project from the selector or answer without one.
+EVERY_TOOL_CALL: dict[str, dict[str, Any]] = {
+    "search_documents": {"query": "retrieval"},
+    "list_project_documents": {},
+    "do_kb_retrieve": {"query": "q", "document_ids": [str(DOC_IN_PROJECT)]},
+    "get_current_draft": {},
+    "list_project_artifacts": {},
+    "search_arxiv": {"query": "llm"},
+    "search_external_database": {"query": "p53"},
+    "list_external_databases": {},
+    "get_document_content": {"document_id": str(DOC_IN_PROJECT)},
+    "retrieve_passages": {"query": "retrieval"},
+    "get_arxiv_paper_content": {"arxiv_id": "2401.00001"},
+    "find_researchers": {"query": "a"},
+    "get_researcher": {"researcher_id": "a"},
+    "list_library": {},
+}
+
+
+def test_every_tool_has_a_workspace_grant_case() -> None:
+    tools = set(READ_TOOL_NAMES) | set(read_tools.LOCAL_TOOLS)
+    assert set(EVERY_TOOL_CALL) == tools
+    # Each one names the scope a grant needs for it.
+    assert set(read_tools.TOOL_SCOPES) == tools
+
+
+@pytest.fixture
+def offline_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tools that reach outside the database, answered locally."""
+    for name, payload in (
+        ("_tool_search_arxiv", {"papers": []}),
+        ("_tool_search_external_database", {"results": []}),
+        ("_tool_list_external_databases", {"connectors": []}),
+    ):
+        monkeypatch.setattr(read_tools, name, AsyncMock(return_value=payload))
+    monkeypatch.setattr(read_tools, "_arxiv_cache", lambda: read_tools._NoCache())
+    monkeypatch.setattr(
+        read_tools.arxiv_fulltext, "fetch_text", AsyncMock(return_value="text")
+    )
+    monkeypatch.setattr(read_tools, "fulltext_search_service", _StubFulltext([]))
+
+
+def _bound_values(parameters: Any) -> Iterable[Any]:
+    if isinstance(parameters, dict):
+        parameters = list(parameters.values())
+    for value in parameters or ():
+        if isinstance(value, (list, tuple, dict)):
+            yield from _bound_values(value)
+        else:
+            yield value
+
+
+@pytest.fixture
+def executed_sql(db: AsyncSession) -> Iterator[list[tuple[str, Any]]]:
+    """Every statement the session sends, with the values it binds."""
+    seen: list[tuple[str, Any]] = []
+
+    def record(
+        _conn: Any, _cursor: Any, statement: str, parameters: Any, *_: Any
+    ) -> None:
+        seen.append((statement, parameters))
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", record)
+    yield seen
+    event.remove(engine, "before_cursor_execute", record)
+
+
+@pytest.mark.usefixtures("offline_tools")
+@pytest.mark.parametrize("tool", sorted(EVERY_TOOL_CALL))
+async def test_every_tool_under_a_workspace_grant_without_a_selector(
+    db: AsyncSession, executed_sql: list[tuple[str, Any]], tool: str
+) -> None:
+    # Either the tool needs a project, and says so, or it answers from the
+    # grant's own scope. Never an exception, and never the word "None": the
+    # agent helpers resolve a non-UUID string as a project NAME, and the
+    # user's other workspace holds a project called exactly that.
+    selector_tools = {
+        listed.name
+        for listed in list_read_tools(workspace_bound=True)
+        if "project_id" in listed.input_schema["properties"]
+    }
+    result = await invoke_read(
+        db,
+        _workspace_context(TOOLS_READ | LIBRARY_READ),
+        _invocation(tool, **EVERY_TOOL_CALL[tool]),
+    )
+    if tool in selector_tools:
+        assert result.is_error is True
+        assert result.content == [{"error": "project_id_required"}]
+        assert result.source_refs == []
+    else:
+        assert result.content != [{"error": "project_id_required"}]
+    if tool == "list_library":
+        assert set(_library_folders(result)) == {str(PROJECT), str(OTHER_PROJECT)}
+    assert executed_sql, "the recorder saw no statement"
+    for statement, parameters in executed_sql:
+        assert "'None'" not in statement
+        assert "None" not in _bound_values(parameters), statement
+    leaked = json.dumps(result.content, default=str)
+    assert str(NAMED_NONE_PROJECT) not in leaked and "retrieval-none" not in leaked
+
+
+# --- list_library: a local tool behind library:read ---------------------------
+
+
+def _library_folders(result: Any) -> dict[str, dict[str, Any]]:
+    return {folder["id"]: folder for folder in result.content[0]["folders"]}
+
+
+async def test_list_library_returns_workspace_collections_with_counts(
+    db: AsyncSession,
+) -> None:
+    result = await invoke_read(
+        db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+    )
+    assert result.is_error is False
+    folders = _library_folders(result)
+    # Both projects of the grant's workspace, never a project of the user's
+    # other workspace.
+    assert set(folders) == {str(PROJECT), str(OTHER_PROJECT)}
+    assert folders[str(PROJECT)]["name"] == "Project"
+    assert folders[str(PROJECT)]["document_count"] == 1
+    assert result.content[0]["next_offset"] is None
+    assert result.source_refs == []
+
+
+async def test_list_library_on_project_grant_lists_only_that_project(
+    db: AsyncSession,
+) -> None:
+    result = await invoke_read(
+        db, _project_context(LIBRARY_READ), _invocation("list_library")
+    )
+    assert result.is_error is False
+    assert [f["id"] for f in result.content[0]["folders"]] == [str(PROJECT)]
+
+
+@pytest.mark.parametrize(
+    "make_context", [_project_context, _workspace_context], ids=["project", "workspace"]
+)
+async def test_list_library_requires_library_read_scope(
+    db: AsyncSession, make_context: Any
+) -> None:
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, make_context(TOOLS_READ), _invocation("list_library"))
+
+
+@pytest.mark.parametrize("tool", sorted(read_tools.TOOL_SCOPES))
+async def test_a_context_without_scopes_may_call_no_tool(
+    db: AsyncSession, tool: str
+) -> None:
+    # Fail closed, and before arguments are looked at: most tools get none of
+    # their required ones here, so an earlier error would be a
+    # ToolArgumentError, not this. Every tool of the table, so a tool added
+    # later cannot skip the check.
+    bare = IntegrationContext(
+        user_id=USER, organization_id=ORG, project_id=PROJECT, grant_id=uuid4()
+    )
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, bare, _invocation(tool))
+
+
+@pytest.mark.parametrize("tool", sorted(set(read_tools.TOOL_SCOPES) - {"list_library"}))
+@pytest.mark.parametrize(
+    "make_context", [_project_context, _workspace_context], ids=["project", "workspace"]
+)
+async def test_library_read_does_not_open_the_tools_read_tools(
+    db: AsyncSession, make_context: Any, tool: str
+) -> None:
+    # The scope is per tool: everything but list_library still needs tools:read.
+    only_library = make_context({"library:read"})
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, only_library, _invocation(tool))
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"limit": "5"}, "invalid argument types"),
+        ({"limit": 5.0}, "invalid argument types"),
+        ({"limit": True}, "invalid argument types"),
+        ({"limit": None}, "invalid argument types"),
+        ({"limit": 0}, "invalid argument types"),
+        ({"limit": 51}, "invalid argument types"),
+        ({"offset": "0"}, "invalid argument types"),
+        ({"offset": -1}, "invalid argument types"),
+        ({"offset": 2**31}, "invalid argument types"),
+        ({"unexpected": 1}, "unknown arguments"),
+        ({"project_id": str(PROJECT)}, "unknown arguments"),
+        ({"workspace_id": str(WORKSPACE)}, "unknown arguments"),
+        ({"user_id": str(USER)}, "unknown arguments"),
+    ],
+    ids=[
+        "string-limit",
+        "float-limit",
+        "bool-limit",
+        "null-limit",
+        "zero-limit",
+        "huge-limit",
+        "string-offset",
+        "negative-offset",
+        "huge-offset",
+        "extra-key",
+        "project-selector",
+        "workspace-identity",
+        "user-identity",
+    ],
+)
+@pytest.mark.parametrize(
+    "make_context", [_project_context, _workspace_context], ids=["project", "workspace"]
+)
+async def test_list_library_arguments_are_strict(
+    db: AsyncSession,
+    make_context: Any,
+    arguments: dict[str, Any],
+    message: str,
+) -> None:
+    # Local tools validate as strictly as the registry ones, and a workspace
+    # grant gets no project selector here: the tool lists the whole scope.
+    with pytest.raises(ToolArgumentError, match=message):
+        await invoke_read(
+            db, make_context(LIBRARY_READ), _invocation("list_library", **arguments)
+        )
+
+
+async def test_list_library_pages_by_name_with_next_offset(db: AsyncSession) -> None:
+    context = _workspace_context(LIBRARY_READ)
+    first = await invoke_read(db, context, _invocation("list_library", limit=1))
+    assert [f["name"] for f in first.content[0]["folders"]] == ["Other"]
+    assert (first.content[0]["offset"], first.content[0]["next_offset"]) == (0, 1)
+    second = await invoke_read(
+        db, context, _invocation("list_library", limit=1, offset=1)
+    )
+    assert [f["name"] for f in second.content[0]["folders"]] == ["Project"]
+    assert second.content[0]["next_offset"] is None
+    past_the_end = await invoke_read(db, context, _invocation("list_library", offset=2))
+    assert past_the_end.is_error is False
+    assert past_the_end.content[0]["folders"] == []
+    assert past_the_end.content[0]["next_offset"] is None
+
+
+async def test_list_library_breaks_name_ties_by_id_across_pages(
+    db: AsyncSession, executed_sql: list[tuple[str, Any]]
+) -> None:
+    # Two folders with one name, inserted in the opposite order of their ids:
+    # the id tie-break puts them in the same order on every query, which paging
+    # by offset needs so that no folder is skipped or listed twice.
+    low, high = UUID(int=3), UUID(int=4)
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(id=high, name="Twin", workspace_id=WORKSPACE),
+                dict(id=low, name="Twin", workspace_id=WORKSPACE),
+            ]
+        )
+    )
+    await db.commit()
+    context = _workspace_context(LIBRARY_READ)
+    seen: list[str] = []
+    next_offset: int | None = 0
+    while next_offset is not None:
+        page = await invoke_read(
+            db, context, _invocation("list_library", limit=1, offset=next_offset)
+        )
+        seen += [folder["id"] for folder in page.content[0]["folders"]]
+        next_offset = page.content[0]["next_offset"]
+    assert seen == [str(OTHER_PROJECT), str(PROJECT), str(low), str(high)]
+    # SQLite hands equal names back in id order whatever the query says, but
+    # PostgreSQL does not: so the clause itself is pinned as well.
+    pages = [sql for sql, _ in executed_sql if "ORDER BY" in sql]
+    assert pages and all(
+        "ORDER BY collections.name, collections.id" in sql for sql in pages
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["\u6587" * 500, "\U0001f600" * 500],
+    ids=["cjk-description", "emoji-name-and-description"],
+)
+async def test_list_library_pages_by_bytes_so_a_full_page_fits_the_result_cap(
+    db: AsyncSession, text: str
+) -> None:
+    # Names and descriptions are free text and Collection.description is
+    # unbounded, while the cap counts UTF-8 bytes: 50 folders with a
+    # 500-character CJK description are ~80 KB. A page that cannot fit must
+    # end earlier and say where to resume, not turn into result_too_large.
+    await db.execute(
+        update(Collection)
+        .where(Collection.workspace_id == WORKSPACE)
+        .values(is_deleted=True)
+    )
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(
+                    id=UUID(int=100 + number),
+                    name=f"{number:02d} {text[:100]}",
+                    description=text,
+                    workspace_id=WORKSPACE,
+                )
+                for number in range(60)
+            ]
+        )
+    )
+    await db.commit()
+    context = _workspace_context(LIBRARY_READ)
+    seen: list[str] = []
+    sizes: list[int] = []
+    pages = 0
+    next_offset: int | None = 0
+    while next_offset is not None:
+        # The first page asks for the default limit: the caller does not have
+        # to know it should have asked for fewer.
+        arguments = {"offset": next_offset} if pages else {}
+        page = await invoke_read(db, context, _invocation("list_library", **arguments))
+        assert page.is_error is False, page.content
+        body = page.content[0]
+        folders = body["folders"]
+        if not pages:
+            assert 1 <= len(folders) < MAX_RESULTS  # shortened, not failed
+        assert (body["offset"], body["next_offset"]) == (
+            next_offset,
+            None if len(seen) + len(folders) == 60 else next_offset + len(folders),
+        )
+        sizes.append(len(json.dumps(body, ensure_ascii=False).encode()))
+        seen += [folder["id"] for folder in folders]
+        next_offset = body["next_offset"]
+        pages += 1
+        assert pages <= 60, "paging made no progress"
+    assert max(sizes) <= read_tools.MAX_RESULT_BYTES
+    assert pages > 1
+    # Every folder once, in name order, whatever the page boundaries were.
+    assert seen == [str(UUID(int=100 + number)) for number in range(60)]
+
+
+async def test_list_library_counts_what_list_project_documents_reports(
+    db: AsyncSession,
+) -> None:
+    # Rows a project's document list never shows must not be counted either:
+    # an unlinked document, a deleted document and another organization's.
+    other_org = uuid4()
+    await db.execute(
+        insert(Organization).values(id=other_org, name="Other", storage_limit_bytes=1)
+    )
+    # (title, changes to the document, changes to its link into PROJECT)
+    extra: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
+        ("live", {}, {}),
+        ("unlinked", {}, {"is_deleted": True}),
+        ("deleted", {"is_deleted": True}, {}),
+        ("foreign", {"organization_id": other_org}, {}),
+    ]
+    for title, document_changes, link_changes in extra:
+        document_id = uuid4()
+        await db.execute(
+            insert(Document).values(
+                **{**_document_row(document_id, title), **document_changes}
+            )
+        )
+        await db.execute(
+            insert(CollectionDocument).values(
+                collection_id=PROJECT, document_id=document_id, **link_changes
+            )
+        )
+    await db.commit()
+    listed = await invoke_read(
+        db,
+        _workspace_context(),
+        _invocation("list_project_documents", project_id=str(PROJECT)),
+    )
+    library = await invoke_read(
+        db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+    )
+    assert listed.content[0]["total"] == 2  # DOC_IN_PROJECT and `live`
+    assert _library_folders(library)[str(PROJECT)]["document_count"] == 2
+
+
+async def test_list_library_skips_deleted_collections_and_bounds_descriptions(
+    db: AsyncSession,
+) -> None:
+    await db.execute(
+        update(Collection)
+        .where(Collection.id == PROJECT)
+        .values(description="d" * 1000)
+    )
+    retired = uuid4()
+    await db.execute(
+        insert(Collection).values(
+            id=retired, name="Retired", workspace_id=WORKSPACE, is_deleted=True
+        )
+    )
+    await db.commit()
+    result = await invoke_read(
+        db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+    )
+    folders = _library_folders(result)
+    assert str(retired) not in folders
+    assert folders[str(PROJECT)]["description"] == "d" * 500
+    assert folders[str(OTHER_PROJECT)]["description"] == ""  # never null
+
+
+async def test_list_library_of_an_empty_workspace_is_an_empty_page(
+    db: AsyncSession,
+) -> None:
+    await db.execute(
+        update(Collection)
+        .where(Collection.workspace_id == WORKSPACE)
+        .values(is_deleted=True)
+    )
+    await db.commit()
+    result = await invoke_read(
+        db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+    )
+    assert result.is_error is False
+    assert result.content[0]["folders"] == []
+    assert result.content[0]["next_offset"] is None
+
+
+async def test_list_library_is_denied_once_its_workspace_is_deleted(
+    db: AsyncSession,
+) -> None:
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+        )
+
+
+async def _add_user(db: AsyncSession) -> UUID:
+    """A live, active user of ORG who owns nothing and belongs to nothing."""
+    user_id = uuid4()
+    await db.execute(
+        text(
+            "INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role, is_active, login_count, created_at, updated_at, is_deleted) VALUES (:id, :org, :email, 'unused', 'Other', 'User', 'USER', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ),
+        {"id": str(user_id), "org": str(ORG), "email": f"{user_id}@example.test"},
+    )
+    await db.commit()
+    return user_id
+
+
+def _library_context_of(user_id: UUID) -> IntegrationContext:
+    return IntegrationContext(
+        user_id=user_id,
+        organization_id=ORG,
+        workspace_id=WORKSPACE,
+        grant_id=uuid4(),
+        scopes=LIBRARY_READ,
+    )
+
+
+async def test_list_library_for_an_unknown_user_is_denied(db: AsyncSession) -> None:
+    # No such user row: refused before the library is looked at. The owner and
+    # member rule is pinned by the next tests, with users that do exist.
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, _library_context_of(uuid4()), _invocation("list_library"))
+
+
+@pytest.mark.parametrize("membership", ["none", "revoked"])
+async def test_list_library_for_a_user_outside_the_workspace_is_denied(
+    db: AsyncSession, membership: str
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # A real, active user of the same organization who neither owns the
+    # workspace nor holds a live membership: only authorized_workspace's
+    # owner-or-member rule stands between them and the folder names.
+    stranger = await _add_user(db)
+    if membership == "revoked":
+        await db.execute(
+            insert(WorkspaceMember).values(
+                workspace_id=WORKSPACE,
+                user_id=stranger,
+                role=WorkspaceRole.VIEWER,
+                is_deleted=True,
+            )
+        )
+        await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(
+            db, _library_context_of(stranger), _invocation("list_library")
+        )
+
+
+async def test_list_library_for_a_live_member_is_allowed(db: AsyncSession) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # The control for the two denials above: membership is the discriminator.
+    member = await _add_user(db)
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=member, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    result = await invoke_read(
+        db, _library_context_of(member), _invocation("list_library")
+    )
+    assert set(_library_folders(result)) == {str(PROJECT), str(OTHER_PROJECT)}
+
+
+@pytest.mark.parametrize(
+    "make_context", [_project_context, _workspace_context], ids=["project", "workspace"]
+)
+async def test_list_library_follows_membership_but_counts_documents_by_organization(
+    db: AsyncSession, make_context: Any
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # The tenancy contract (workspace_access.py, docs/engineering/backend.md,
+    # data-isolation-matrix.md) is two-scoped: workspaces and the folders in
+    # them follow membership, and a member can be invited from any
+    # organization; documents follow the organization. A workspace grant must
+    # not narrow the first to the second (no Workspace.organization_id filter),
+    # and must not widen the second to the first.
+    owning = uuid4()
+    shared_workspace, shared_folder = uuid4(), uuid4()
+    theirs, mine = uuid4(), uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning, name="Owning organization", storage_limit_bytes=1
+        )
+    )
+    await db.execute(
+        insert(Workspace).values(
+            id=shared_workspace, name="Shared", owner_id=uuid4(), organization_id=owning
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            id=shared_folder,
+            name="Shared thesis",
+            description="notes of the owning organization",
+            workspace_id=shared_workspace,
+        )
+    )
+    await db.execute(
+        insert(Document).values(
+            [
+                {**_document_row(theirs, "theirs"), "organization_id": owning},
+                _document_row(mine, "mine"),
+            ]
+        )
+    )
+    await db.execute(
+        insert(CollectionDocument).values(
+            [
+                dict(collection_id=shared_folder, document_id=theirs),
+                dict(collection_id=shared_folder, document_id=mine),
+            ]
+        )
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=shared_workspace, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    scopes = TOOLS_READ | LIBRARY_READ
+    context = (
+        _workspace_context(scopes).model_copy(update={"workspace_id": shared_workspace})
+        if make_context is _workspace_context
+        else _project_context(scopes).model_copy(update={"project_id": shared_folder})
+    )
+
+    library = await invoke_read(db, context, _invocation("list_library"))
+    # The folder is listed: its name and description are workspace metadata.
+    assert library.is_error is False
+    (folder,) = library.content[0]["folders"]
+    assert folder["id"] == str(shared_folder)
+    assert folder["name"] == "Shared thesis"
+    assert folder["description"] == "notes of the owning organization"
+    # Its documents are counted per the grant's organization: the owning
+    # organization's document is neither counted nor named.
+    assert folder["document_count"] == 1
+    assert str(theirs) not in json.dumps(library.content)
+
+    # Everything behind the folder is organization-scoped and stays refused.
+    selector = {"project_id": str(shared_folder)} if context.workspace_id else {}
+    for tool, arguments in (
+        ("list_project_documents", {}),
+        ("search_documents", {"query": "mine"}),
+        ("get_current_draft", {}),
+    ):
+        refused = await invoke_read(
+            db, context, _invocation(tool, **selector, **arguments)
+        )
+        assert refused.is_error is True
+        assert refused.content == [{"error": "Project not found or access denied"}]
+        assert refused.source_refs == []
+
+
+# What ends a project grant's access. list_library resolves the scope again on
+# every call, so each change must turn the next call into a denial.
+LOST_ACCESS: dict[str, Any] = {
+    "collection-deleted": update(Collection)
+    .where(Collection.id == PROJECT)
+    .values(is_deleted=True),
+    "workspace-deleted": update(Workspace).values(is_deleted=True),
+    "owner-changed-without-membership": update(Workspace).values(owner_id=uuid4()),
+    "user-inactive": update(User).values(is_active=False),
+    "organization-inactive": update(Organization).values(is_active=False),
+}
+
+
+@pytest.mark.parametrize("change", sorted(LOST_ACCESS))
+async def test_list_library_of_a_project_grant_is_denied_once_access_is_lost(
+    db: AsyncSession, change: str
+) -> None:
+    context = _project_context(LIBRARY_READ)
+    allowed = await invoke_read(db, context, _invocation("list_library"))
+    assert [f["id"] for f in allowed.content[0]["folders"]] == [str(PROJECT)]
+    await db.execute(LOST_ACCESS[change])
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, context, _invocation("list_library"))
+
+
+async def test_list_library_of_a_project_grant_follows_membership(
+    db: AsyncSession,
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    context = _project_context(LIBRARY_READ)
+    # The owner leaves; a live membership alone keeps the folder listed...
+    await db.execute(update(Workspace).values(owner_id=uuid4()))
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    kept = await invoke_read(db, context, _invocation("list_library"))
+    assert [f["id"] for f in kept.content[0]["folders"]] == [str(PROJECT)]
+    # ...and revoking it must not leave the name and description readable.
+    await db.execute(update(WorkspaceMember).values(is_deleted=True))
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, context, _invocation("list_library"))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "user-inactive",
+        "user-moved-to-another-organization",
+        "grant-organization-inactive",
+        "grant-organization-deleted",
+    ],
+)
+async def test_list_library_is_denied_once_the_user_or_grant_organization_lapses(
+    db: AsyncSession, change: str
+) -> None:
+    from src.models.workspace import WorkspaceRole
+
+    # An invited member of a workspace another live organization owns. The
+    # owner's organization is not the grant's, so the grant organization's own
+    # liveness is a fact of its own: were they one, the owning-organization
+    # clause would refuse first. (invoke_read refuses a user of another
+    # organization itself, so that case is pinned in test_context.py too, at
+    # the level of authorized_workspace.)
+    owning = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=owning, name="Owning organization", storage_limit_bytes=1
+        )
+    )
+    await db.execute(
+        update(Workspace)
+        .where(Workspace.id == WORKSPACE)
+        .values(owner_id=uuid4(), organization_id=owning)
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    context = _workspace_context(LIBRARY_READ)
+    listed = await invoke_read(db, context, _invocation("list_library"))
+    assert set(_library_folders(listed)) == {str(PROJECT), str(OTHER_PROJECT)}
+
+    lapse = {
+        "user-inactive": update(User).values(is_active=False),
+        "user-moved-to-another-organization": update(User).values(
+            organization_id=owning
+        ),
+        "grant-organization-inactive": update(Organization)
+        .where(Organization.id == ORG)
+        .values(is_active=False),
+        "grant-organization-deleted": update(Organization)
+        .where(Organization.id == ORG)
+        .values(is_deleted=True),
+    }[change]
+    await db.execute(lapse)
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, context, _invocation("list_library"))
+
+
+@pytest.mark.parametrize("model", [Collection, Workspace])
+async def test_library_query_itself_rechecks_ancestors(
+    db: AsyncSession, model: Any
+) -> None:
+    # The scope's access check ran in a separate statement; the page query
+    # alone must return nothing once a Collection or its Workspace is
+    # soft-deleted.
+    scope = Collection.workspace_id == WORKSPACE
+    assert len(await read_tools._library_folders(db, scope, ORG, 0, 10)) == 2
+    await db.execute(update(model).values(is_deleted=True))
+    await db.commit()
+    assert await read_tools._library_folders(db, scope, ORG, 0, 10) == []
+
+
+async def test_list_library_binds_no_value_per_collection(
+    db: AsyncSession, executed_sql: list[tuple[str, Any]]
+) -> None:
+    # asyncpg refuses a statement that binds more than 32,767 values, and the
+    # collection routes put no cap on a workspace: one editor can reach that
+    # many folders and make list_library answer 500 for every member. SQLite
+    # would take that many ids, so count what is bound instead. The scope must
+    # reach the query as a condition, and what the query binds must not grow
+    # with the number of Collections in the workspace.
+    async def most_bound() -> int:
+        executed_sql.clear()
+        result = await invoke_read(
+            db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+        )
+        assert result.is_error is False
+        assert executed_sql, "the recorder saw no statement"
+        return max(
+            len(list(_bound_values(parameters))) for _sql, parameters in executed_sql
+        )
+
+    before = await most_bound()
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(id=uuid4(), name=f"Folder {n:03}", workspace_id=WORKSPACE)
+                for n in range(60)
+            ]
+        )
+    )
+    await db.commit()
+    assert await most_bound() == before
+    # The scope still selects the whole workspace, and only it: the first page
+    # of 62 folders by name, none of them from the user's other workspace.
+    grown = await invoke_read(
+        db, _workspace_context(LIBRARY_READ), _invocation("list_library")
+    )
+    assert [f["name"] for f in grown.content[0]["folders"]] == [
+        f"Folder {n:03}" for n in range(MAX_RESULTS)
+    ]
+    assert grown.content[0]["next_offset"] == MAX_RESULTS
+
+
+def test_catalog_offers_a_tool_only_to_grants_holding_its_scope() -> None:
+    def offered(scopes: Iterable[str] | None) -> set[str]:
+        return {tool.name for tool in list_read_tools(scopes)}
+
+    # Everything callable with tools:read: the registry tools and every local
+    # tool but the library listing.
+    tools_read = set(READ_TOOL_NAMES) | set(read_tools.LOCAL_TOOLS) - {"list_library"}
+    assert offered(TOOLS_READ) == tools_read
+    assert offered(LIBRARY_READ) == tools_read | {"list_library"}
+    assert offered({"library:read"}) == {"list_library"}
+    assert offered(frozenset()) == set()
+    assert offered(None) == tools_read | {"list_library"}
+
+
+@pytest.mark.parametrize("workspace_bound", [False, True])
+def test_list_library_advertises_no_project_selector(workspace_bound: bool) -> None:
+    catalog = list_read_tools(LIBRARY_READ, workspace_bound=workspace_bound)
+    tool = next(tool for tool in catalog if tool.name == "list_library")
+    assert tool.description
+    schema = tool.input_schema
+    assert set(schema["properties"]) == {"limit", "offset"}
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == []
+    assert schema["properties"]["limit"]["maximum"] == 50
+
+
+def test_local_tools_are_scoped_and_well_formed() -> None:
+    # Every later local tool must satisfy this, or it fails.
+    for name, (description, schema, scope) in read_tools.LOCAL_TOOLS.items():
+        assert description and read_tools.TOOL_SCOPES[name] == scope
+        assert schema["type"] == "object" and schema["additionalProperties"] is False
+        assert set(schema["required"]) <= set(schema["properties"])
+        # The project selector is added per grant; no identity is ever a
+        # property of the shared table.
+        assert not set(schema["properties"]) & read_tools.IDENTITY_ARGUMENTS
+
+
+WRONGLY_TYPED: dict[str, list[Any]] = {
+    "integer": ["5", 5.0, True, None, [1], {"a": 1}],
+    "string": [5, 5.0, True, None, ["x"], {"a": 1}],
+    "array": ["x", 5, None, {"a": 1}],
+}
+
+
+def test_local_tool_arguments_are_checked_without_coercion() -> None:
+    # The registry tools validate with pydantic strict=True; a local tool must
+    # not be weaker: no "5" -> 5, 5.0 -> 5, True -> 1 or None -> default.
+    for name, (_description, schema, _scope) in read_tools.LOCAL_TOOLS.items():
+        for prop, spec in schema["properties"].items():
+            for bad in WRONGLY_TYPED[spec["type"]]:
+                with pytest.raises(ToolArgumentError, match="invalid argument types"):
+                    read_tools._check_local_arguments(schema, {prop: bad})
+
+
+def _edge_values(spec: dict[str, Any]) -> tuple[list[Any], list[Any]]:
+    """Values on and just past each bound a property's schema declares."""
+    accepted: list[Any] = []
+    rejected: list[Any] = []
+    if spec["type"] == "integer":
+        for bound, step in (("minimum", -1), ("maximum", 1)):
+            if bound in spec:
+                accepted.append(spec[bound])
+                rejected.append(spec[bound] + step)
+    elif spec["type"] == "string":
+        if "enum" in spec:
+            accepted += spec["enum"]
+            rejected.append("not-a-member")
+        for bound, step in (("minLength", -1), ("maxLength", 1)):
+            if bound in spec:
+                accepted.append("x" * spec[bound])
+                rejected.append("x" * (spec[bound] + step))
+    else:  # arrays of strings, in every local schema
+        for bound, step in (("minItems", -1), ("maxItems", 1)):
+            if bound in spec:
+                accepted.append(["x"] * spec[bound])
+                rejected.append(["x"] * (spec[bound] + step))
+    return accepted, rejected
+
+
+def test_local_tool_arguments_are_held_to_every_bound_of_their_schema() -> None:
+    # The advertised schema is the one enforced, so nothing a local tool
+    # declares (a range, a length, an item count, an enum) is advisory. This
+    # is how the tools develop added after list_library (get_document_content,
+    # retrieve_passages, get_arxiv_paper_content, find_researchers,
+    # get_researcher) are validated as strictly as the registry tools'
+    # pydantic models, and a tool added later is held to it with no new test.
+    checked = 0
+    for name, (_description, schema, _scope) in read_tools.LOCAL_TOOLS.items():
+        for prop, spec in schema["properties"].items():
+            accepted, rejected = _edge_values(spec)
+            for value in accepted:
+                read_tools._check_local_arguments(schema, {prop: value})
+            for value in rejected:
+                with pytest.raises(ToolArgumentError, match="invalid argument types"):
+                    read_tools._check_local_arguments(schema, {prop: value})
+            checked += len(accepted) + len(rejected)
+    assert checked >= 20, "the local schemas should declare bounds to check"
+
+
+@pytest.mark.parametrize("name", sorted(read_tools.LOCAL_TOOLS))
+def test_local_tools_refuse_unknown_and_missing_arguments(name: str) -> None:
+    context = _project_context(TOOLS_READ | LIBRARY_READ)
+    with pytest.raises(ToolArgumentError, match="unknown arguments"):
+        read_tools._validate_arguments(context, _invocation(name, unexpected=1))
+    if read_tools.LOCAL_TOOLS[name][1]["required"]:
+        with pytest.raises(ToolArgumentError, match="missing required arguments"):
+            read_tools._validate_arguments(context, _invocation(name))
+
+
+def test_registry_tools_need_tools_read_and_library_tools_need_library_read() -> None:
+    assert {read_tools.TOOL_SCOPES[name] for name in READ_TOOL_NAMES} == {"tools:read"}
+    assert read_tools.TOOL_SCOPES["list_library"] == "library:read"
+
+
+def test_catalog_schemas_are_copies_of_the_local_table() -> None:
+    def advertised() -> dict[str, Any]:
+        catalog = list_read_tools(LIBRARY_READ)
+        return next(
+            tool for tool in catalog if tool.name == "list_library"
+        ).input_schema
+
+    advertised()["properties"]["limit"]["maximum"] = 10**6
+    assert advertised()["properties"]["limit"]["maximum"] == 50
+    assert (
+        read_tools.LOCAL_TOOLS["list_library"][1]["properties"]["limit"]["maximum"]
+        == 50
+    )
