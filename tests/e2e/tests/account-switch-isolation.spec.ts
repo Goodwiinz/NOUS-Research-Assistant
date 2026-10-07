@@ -131,10 +131,10 @@ test.describe("Account switch isolation @smoke @regression", () => {
 
     await helpers.login(TEST_DATA.USERS.ADMIN);
     await page.getByRole("button", { name: "Open agent chat" }).click();
-    let panel = page.locator('[role="dialog"][aria-label="Agent chat panel"]');
-    await panel.getByPlaceholder("Ask the agent...").fill(marker);
-    await panel.getByRole("button", { name: "Send message" }).click();
-    await expect(panel.getByText(answer("A"))).toBeVisible();
+    let agent = page.getByRole("complementary", { name: "Agent chat sidebar" });
+    await agent.getByPlaceholder("Ask the agent...").fill(marker);
+    await agent.getByRole("button", { name: "Send message" }).click();
+    await expect(agent.getByText(answer("A"))).toBeVisible();
     await page.evaluate((value) => {
       (window as Window & { __isolationRuntime?: string }).__isolationRuntime =
         value;
@@ -151,12 +151,12 @@ test.describe("Account switch isolation @smoke @regression", () => {
       ),
     ).toBe(marker);
     await page.getByRole("button", { name: "Open agent chat" }).click();
-    panel = page.locator('[role="dialog"][aria-label="Agent chat panel"]');
-    await expect(panel.getByText(answer("A"))).toHaveCount(0);
-    await panel.getByPlaceholder("Ask the agent...").fill(`B-${marker}`);
-    await panel.getByRole("button", { name: "Send message" }).click();
-    await expect(panel.getByText(answer("B"))).toBeVisible();
-    await expect(panel.getByText(answer("A"))).toHaveCount(0);
+    agent = page.getByRole("complementary", { name: "Agent chat sidebar" });
+    await expect(agent.getByText(answer("A"))).toHaveCount(0);
+    await agent.getByPlaceholder("Ask the agent...").fill(`B-${marker}`);
+    await agent.getByRole("button", { name: "Send message" }).click();
+    await expect(agent.getByText(answer("B"))).toBeVisible();
+    await expect(agent.getByText(answer("A"))).toHaveCount(0);
   });
 
   test("project and search canaries follow the active account", async ({
