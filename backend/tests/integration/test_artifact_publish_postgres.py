@@ -92,6 +92,7 @@ async def test_publish_version_inserts_version_before_its_dependents(
     )
     if not dsn:
         pytest.skip("Artifact publication PostgreSQL test database is not configured")
+        return  # Keep narrowing explicit when CI has no pytest type metadata.
     storage = MemoryArtifactStorage()
     monkeypatch.setattr(service, "get_artifact_storage", lambda: storage)
     schema = "artifact_publish_" + uuid.uuid4().hex
