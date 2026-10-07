@@ -334,6 +334,7 @@ test("connect exchanges CLI-owned grant; workspace sends only opaque IDs and lab
         session_id: "login",
         poll_token: "poll-secret",
         browser_url: "https://nous.test/login",
+        verification_code: "ABCD-1234",
       };
     else if (url.includes("/cli-auth/status/"))
       data = { status: "approved", token: "cli-secret" };
@@ -408,6 +409,7 @@ test("denied browser consent never exchanges or stores credentials", async (t) =
               session_id: "s",
               poll_token: "p",
               browser_url: "https://nous.test",
+              verification_code: "ABCD-1234",
             }
           : { status: "denied" },
       ),
