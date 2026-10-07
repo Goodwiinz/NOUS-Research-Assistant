@@ -1,7 +1,13 @@
-// After a full reload a pending Codex command-approval card must be restored.
-// The cold-load probe replays the run ledger (status accepted first, then
-// approval_required); it used to bail on the first status frame and had no
-// approval callback, so the card never came back.
+// After a full reload a pending Codex command-approval card must be restored
+// AND the run must finish normally once the user approves. The cold-load probe
+// only identifies the durable run (the replay opens with its accepted frame);
+// it then hands the stream to the resume effect, so runStreamTurn owns the
+// approval card, the tokens and terminal reconciliation. A probe that kept the
+// stream would swallow the done frame and leave the transcript stale.
+// Mutation proof: removing useChatStreaming.ts's setResumeNonce call makes the
+// first case fail (one resumeStream call instead of two); restoring it passes.
+// Command: pnpm --dir frontend exec vitest run
+// src/hooks/chat/__tests__/useChatStreaming.harnessReloadApproval.test.tsx
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -86,18 +92,34 @@ describe('useChatStreaming Codex approval probe (cold thread load)', () => {
     });
   });
 
-  it('restores a pending native approval replayed after an accepted status', async () => {
+  it('hands a replayed Codex run to the resume path, which restores the card and reconciles', async () => {
+    const refreshSpy = vi.fn().mockResolvedValue(true);
+    useChatStore.setState({ refreshMessages: refreshSpy });
+    type Callbacks = {
+      onRunId?: (runId: string) => void;
+      onStatus?: (phase: string, detail?: string) => void;
+      onApprovalRequired?: (requestId: string) => void;
+      onDone?: (payload?: { assistant_message_id?: string | null }) => void;
+    };
+    const signals: AbortSignal[] = [];
     resumeStreamMock.mockImplementation(
       async (
         _threadId: string,
         _after: number,
-        cb: {
-          onStatus?: (phase: string, detail?: string) => void;
-          onApprovalRequired?: (requestId: string) => void;
-        }
+        cb: Callbacks,
+        signal: AbortSignal
       ) => {
-        cb.onStatus?.('accepted');
+        signals.push(signal);
+        if (resumeStreamMock.mock.calls.length === 1) {
+          // Probe: accepted frame (with run_id), then the parked approval.
+          cb.onRunId?.('run-1');
+          cb.onStatus?.('accepted');
+          cb.onApprovalRequired?.('req-1');
+          return { status: 'resumed' };
+        }
+        // Resume path: the same replay, then the approved run completes.
         cb.onApprovalRequired?.('req-1');
+        cb.onDone?.({ assistant_message_id: 'assistant-1' });
         return { status: 'resumed' };
       }
     );
@@ -105,9 +127,32 @@ describe('useChatStreaming Codex approval probe (cold thread load)', () => {
     const params = makeParams();
     renderHook(() => useChatStreaming(params), { wrapper });
 
+    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(2));
+    // The probe let go of the stream and seeded the run for the resume path.
+    expect(signals[0].aborted).toBe(true);
+    expect(useAgentActivityStore.getState().runs['thread-A']).toMatchObject({
+      runId: 'run-1',
+    });
+    // The resume call carries the durable run id (Codex reattaches by it).
+    expect(resumeStreamMock.mock.calls[1][4]).toBe('run-1');
+
     await waitFor(() =>
       expect(loadApproval).toHaveBeenCalledWith('req-1', 'thread-A')
     );
-    expect(resumeStreamMock).toHaveBeenCalledTimes(1);
+    expect(loadApproval).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(refreshSpy).toHaveBeenCalledTimes(1));
+    expect(refreshSpy.mock.calls[0][0]).toBe('thread-A');
+    expect(useAgentActivityStore.getState().runs['thread-A']?.state).toBe(
+      'done'
+    );
+  });
+
+  it('does not seed a run when the replay is empty (204)', async () => {
+    resumeStreamMock.mockResolvedValue({ status: 'idle' });
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    renderHook(() => useChatStreaming(makeParams()), { wrapper });
+
+    await waitFor(() => expect(resumeStreamMock).toHaveBeenCalledTimes(1));
+    expect(useAgentActivityStore.getState().runs['thread-A']).toBeUndefined();
   });
 });

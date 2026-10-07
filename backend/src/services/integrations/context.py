@@ -56,23 +56,26 @@ def check_scopes(scopes: Iterable[str]) -> None:
 async def authorized_project(
     db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
 ) -> Row[Any]:
-    member = exists().where(
-        WorkspaceMember.workspace_id == Workspace.id,
-        WorkspaceMember.user_id == user_id,
-        WorkspaceMember.is_deleted.is_(False),
-    )
     row = (
         await db.execute(
             select(Collection.id, Collection.name, Workspace.id.label("workspace_id"))
             .join(Workspace, Collection.workspace_id == Workspace.id)
             .where(
                 Collection.id == project_id,
-                Collection.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                or_(Workspace.owner_id == user_id, member),
-                # Mirrors research_engine.project_access.resolve_project: a
-                # legacy workspace with no organization_id falls back to its
-                # owner's organization, which must be the caller's.
+                # Owner or live member. Keep the Collection predicate inline
+                # for test_project_service_soft_delete's authorization sweep.
+                Collection.is_deleted.is_(False),
+                or_(
+                    Workspace.owner_id == user_id,
+                    exists().where(
+                        WorkspaceMember.workspace_id == Workspace.id,
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.is_deleted.is_(False),
+                    ),
+                ),
+                # Legacy workspaces without organization metadata inherit the
+                # owner's organization, matching research-engine access.
                 or_(
                     exists().where(
                         Organization.id == Workspace.organization_id,
@@ -148,8 +151,15 @@ async def validate_binding(
                 Thread.is_deleted.is_(False),
                 Conversation.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                Workspace.owner_id == user_id,
-                # Same NULL-organization fallback as authorized_project.
+                or_(
+                    Workspace.owner_id == user_id,
+                    exists().where(
+                        WorkspaceMember.workspace_id == Workspace.id,
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.is_deleted.is_(False),
+                    ),
+                ),
+                # Same legacy organization fallback as authorized_project.
                 or_(
                     Workspace.organization_id.is_(None),
                     Workspace.organization_id == organization_id,
@@ -239,8 +249,12 @@ async def mint_integration_grant(
             )
             .execution_options(populate_existing=True)
         )
+        # A chat-bound consent authorizes only its chat; a project-wide
+        # consent (thread_id NULL) authorizes any chat in the project.
         matching_consents = [
-            consent for consent in consents if scopes <= set(consent.scopes)
+            consent
+            for consent in consents
+            if scopes <= set(consent.scopes) and consent.thread_id in (None, thread_id)
         ]
         # A device may have more than one consumed consent lineage. Selecting
         # the first database row is nondeterministic and can mint run authority
@@ -371,6 +385,7 @@ async def create_request(
         organization_id=user.organization_id,
         project_id=data.project_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
     )
     request = IntegrationGrantRequest(
         id=uuid4(),
@@ -378,6 +393,7 @@ async def create_request(
         organization_id=user.organization_id,
         project_id=data.project_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
         scopes=sorted(data.scopes),
         status="pending",
         expires_at=now() + timedelta(minutes=10),
@@ -408,6 +424,7 @@ async def owned_request(
         organization_id=user.organization_id,
         project_id=request.project_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
     )
     return cast(IntegrationGrantRequest, request)
 
@@ -421,6 +438,14 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
     status = request.status
     if status in {"pending", "approved"} and not live(request.expires_at):
         status = "expired"
+    thread_label = None
+    if request.thread_id is not None:
+        title = await db.scalar(
+            select(Thread.title).where(
+                Thread.id == request.thread_id, Thread.is_deleted.is_(False)
+            )
+        )
+        thread_label = title or "Untitled chat"
     return GrantRequestDTO(
         id=request.id,
         status=cast(GrantRequestStatus, status),
@@ -431,6 +456,8 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         scopes=set(request.scopes),
         project_label=project.name,
         device_label=device.label,
+        thread_id=request.thread_id,
+        thread_label=thread_label,
     )
 
 
@@ -482,6 +509,7 @@ async def exchange_request(
         organization_id=user.organization_id,
         project_id=request.project_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
         scopes=request.scopes,
         request_id=request.id,
     )

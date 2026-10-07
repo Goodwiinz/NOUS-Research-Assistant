@@ -157,7 +157,7 @@ Numbering continues the list kept during the session. "Fixed" means fixed in the
 - Six local patches sit between this tree and `47add9891`. See the patch table above for which rows they touch.
 - The e2e thread was created by SQL (fixture note). The UI thread-creation path is not covered.
 - Each row is a single execution. No repeat run or flake rate is claimed.
-- The 16-minute approval in P2-2 ran against local clocks and the local database. It shows that the consent outlives the grant. It does not show the behavior behind a load balancer or a deployed worker.
+- The P2-2 expiry proof is absent: the only approval recorded (`a12293ac-…`) came 78 s after the request, so nothing here shows that the consent outlives the 15-minute grant. The 16-minute case stays NOT RUN until a qualifying run is recorded.
 - Rows 0a, 0b, 0c, G1, G1-flags, P1-2 and RB were not part of this run and stay NOT RUN.
 
 ## Retained rule

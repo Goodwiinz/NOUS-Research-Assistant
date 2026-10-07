@@ -42,6 +42,7 @@ from src.schemas.artifact import (
     ArtifactTooLarge,
     ArtifactUploadDTO,
     ArtifactVersionDTO,
+    ProjectArtifactDTO,
     PublishVersionRequest,
     ReserveArtifactUploadRequest,
     ThreadArtifactDTO,
@@ -380,27 +381,25 @@ async def publish_version(
         run_id=version.run_id,
         thread_id=context.thread_id,
     )
-    db.add(version)
+    # Announcement intent commits with the version; the drain delivers it.
+    outbox = ArtifactLifecycleOutbox(
+        id=uuid4(),
+        organization_id=context.organization_id,
+        artifact_id=artifact.id,
+        version_id=version.id,
+        kind=ARTIFACT_VERSION_CREATED,
+        run_id=version.run_id,
+        thread_id=context.thread_id,
+    )
     upload_pk = upload.id  # rollback expires the row; keep the key as a plain value
     try:
-        # The reference and outbox rows carry FKs to artifact_versions but no
-        # ORM relationship, so the unit of work may INSERT them before the
-        # version. PostgreSQL then rejects the flush, which the IntegrityError
-        # handler below reports as a conflict. Flush the version alone first.
+        # These models declare no relationship(), so the unit of work cannot
+        # order their foreign keys: flush the artifact and version before the
+        # rows that reference the version (PostgreSQL enforces the FKs).
+        db.add(version)
         await db.flush()
         db.add(reference)
-        # Announcement intent commits with the version; the drain delivers it.
-        db.add(
-            ArtifactLifecycleOutbox(
-                id=uuid4(),
-                organization_id=context.organization_id,
-                artifact_id=artifact.id,
-                version_id=version.id,
-                kind=ARTIFACT_VERSION_CREATED,
-                run_id=version.run_id,
-                thread_id=context.thread_id,
-            )
-        )
+        db.add(outbox)
         await db.flush()
         # Claim the reservation conditionally: a sweep that soft-deleted it
         # meanwhile (or a racing finalize) makes this a no-op and we conflict
@@ -556,6 +555,68 @@ async def list_thread_artifacts(
             )
         )
     return items
+
+
+async def list_project_artifacts(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    organization_id: UUID,
+    project_id: UUID,
+    limit: int = 100,
+) -> list[ProjectArtifactDTO]:
+    """Current version of each live artifact in a project, newest first."""
+    try:
+        await authorized_project(db, user_id, organization_id, project_id)
+    except IntegrationAccessDenied as error:
+        raise ArtifactNotFound() from error
+    rows = (
+        await db.execute(
+            select(Artifact, ArtifactVersion, Conversation.id)
+            .join(ArtifactVersion, ArtifactVersion.id == Artifact.current_version_id)
+            .join(Collection, Collection.id == Artifact.project_id)
+            .join(Workspace, Workspace.id == Collection.workspace_id)
+            # Soft-delete does not cascade: only surface the producing chat
+            # while it is live and inside this project's workspace.
+            .outerjoin(
+                Thread,
+                and_(
+                    Thread.id == ArtifactVersion.thread_id,
+                    Thread.is_deleted.is_(False),
+                ),
+            )
+            .outerjoin(
+                Conversation,
+                and_(
+                    Conversation.id == Thread.conversation_id,
+                    Conversation.is_deleted.is_(False),
+                    Conversation.workspace_id == Collection.workspace_id,
+                ),
+            )
+            .where(
+                Artifact.project_id == project_id,
+                Artifact.organization_id == organization_id,
+                Artifact.is_deleted.is_(False),
+                ArtifactVersion.artifact_id == Artifact.id,
+                ArtifactVersion.is_deleted.is_(False),
+                Collection.is_deleted.is_(False),
+                Workspace.is_deleted.is_(False),
+            )
+            .order_by(ArtifactVersion.created_at.desc(), Artifact.id)
+            .limit(limit)
+        )
+    ).all()
+    return [
+        ProjectArtifactDTO(
+            artifact_id=artifact.id,
+            title=version.title,
+            kind=version.mime_type,
+            current_version=_version_dto(version),
+            thread_id=version.thread_id if conversation_id is not None else None,
+            updated_at=_aware(cast(datetime, version.created_at)),
+        )
+        for artifact, version, conversation_id in rows
+    ]
 
 
 async def list_versions(

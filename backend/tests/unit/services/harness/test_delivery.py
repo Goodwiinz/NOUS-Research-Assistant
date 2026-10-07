@@ -840,3 +840,37 @@ async def test_poll_skips_session_that_fails_authorization(
         str(command.runId): command.generation
     }
     assert stale.run_id not in await lease_runs(db, context, DEVICE)
+
+
+async def test_chat_bound_grant_leases_only_runs_in_its_chat(
+    db: AsyncSession, context: IntegrationContext, external_run: Any
+) -> None:
+    """A device connected with --chat runs harness work only in that chat."""
+    from src.models.thread import Thread
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT
+
+    other_chat = uuid4()
+    db.add(
+        Thread(
+            id=other_chat,
+            conversation_id=CONVERSATION,
+            source_project_id=PROJECT,
+            title="other chat",
+            created_by_id=USER,
+        )
+    )
+    await db.commit()
+    assert await dispatch_pending(db) == 1  # the run lives in THREAD
+
+    async def bind(thread_id: Any) -> IntegrationContext:
+        await db.execute(
+            update(IntegrationGrant)
+            .where(IntegrationGrant.id == context.grant_id)
+            .values(thread_id=thread_id)
+        )
+        await db.commit()
+        return context.model_copy(update={"thread_id": thread_id})
+
+    assert await lease_commands(db, await bind(other_chat), DEVICE) == []
+    leased = await lease_commands(db, await bind(THREAD), DEVICE)
+    assert [c.runId for c in leased] == [external_run.id]
