@@ -814,28 +814,15 @@ async def reprocess_file(
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger reprocessing of a file"""
-    stmt = select(Document).where(
-        Document.id == file_id,
-        Document.organization_id == organization.id,
-        Document.is_deleted == False,
+    from src.services.documents.file_service import FileService
+
+    document = await FileService(db).lock_document_for_reprocessing(
+        file_id,
+        organization.id,
+        current_user,
+        not_found_detail="File not found",
+        forbidden_detail="Can only reprocess your own files or require admin role",
     )
-    result = await db.execute(stmt)
-    document = result.scalars().first()
-
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
-        )
-
-    # Check permissions
-    if (
-        document.uploaded_by_user_id != current_user.id
-        and not current_user.has_permission(UserRole.ADMIN)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Can only reprocess your own files or require admin role",
-        )
 
     try:
         # Reset processing status
