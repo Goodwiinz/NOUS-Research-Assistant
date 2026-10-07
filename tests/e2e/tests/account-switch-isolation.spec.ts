@@ -28,7 +28,14 @@ async function signInOnCurrentPage(
   await page.getByTestId("email-input").fill(credentials.email);
   await page.getByTestId("password-input").fill(credentials.password);
   await page.getByTestId("login-button").click();
-  await expect(page.getByTestId("user-menu")).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible({
+    timeout: 20000,
+  });
+}
+
+async function signOutOnCurrentPage(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.waitForURL((url) => url.pathname === "/login");
 }
 
 async function followAppLink(page: Page, path: string): Promise<void> {
@@ -77,7 +84,7 @@ test.describe("Account switch isolation @smoke @regression", () => {
     }, canary);
 
     // --- Same tab: sign out, sign in as B ---
-    await helpers.logout();
+    await signOutOnCurrentPage(page);
     await signInOnCurrentPage(page, TEST_DATA.USERS.REGULAR);
     if (new URL(page.url()).pathname !== "/chat") {
       await followAppLink(page, "/chat");
@@ -130,7 +137,7 @@ test.describe("Account switch isolation @smoke @regression", () => {
         value;
     }, marker);
 
-    await helpers.logout();
+    await signOutOnCurrentPage(page);
     account = "B";
     await signInOnCurrentPage(page, TEST_DATA.USERS.REGULAR);
     expect(
@@ -243,7 +250,7 @@ test.describe("Account switch isolation @smoke @regression", () => {
     await searchComposer.press("Enter");
     await lateStarted;
 
-    await helpers.logout();
+    await signOutOnCurrentPage(page);
     account = "B";
     await signInOnCurrentPage(page, TEST_DATA.USERS.REGULAR);
     await followAppLink(page, "/search");
@@ -254,8 +261,7 @@ test.describe("Account switch isolation @smoke @regression", () => {
     await lateSettled;
     await expect(page.getByText(searchAnswer("A"))).toHaveCount(0);
     await expect(page.getByText(lateAnswer)).toHaveCount(0);
-    await followAppLink(page, "/chat");
-    await followAppLink(page, "/projects");
+    await followAppLink(page, "/research");
     await expect(page.getByText(projectName("B"))).toBeVisible();
     await expect(page.getByText(projectName("A"))).toHaveCount(0);
   });
