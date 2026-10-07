@@ -108,6 +108,16 @@ def _integration_job() -> dict:
     return cast(dict, workflow["jobs"]["integration-tests"])
 
 
+def test_integration_job_enables_real_redis_cli_revocation_regression() -> None:
+    job = _integration_job()
+    step = next(
+        step for step in job["steps"] if step.get("name") == "Run integration tests"
+    )
+    env = step["env"]
+    assert env.get("CLI_REVOCATION_TEST_REDIS_URL") == env["REDIS_URL"]
+    assert "job.services.redis.ports['6379']" in env["REDIS_URL"]
+
+
 def test_integration_job_is_a_sharded_matrix_that_fails_closed() -> None:
     job = _integration_job()
     strategy = job["strategy"]

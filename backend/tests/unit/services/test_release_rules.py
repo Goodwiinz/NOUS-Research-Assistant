@@ -165,6 +165,17 @@ def test_interpretation_exempt_but_must_be_attributed() -> None:
     assert signed.claim_version_id not in gate.claim_version_ids
 
 
+def test_superseded_interpretation_blocks() -> None:
+    """A re-versioned interpretation is no longer the claim of record: passing
+    it mints a release that is derived-stale the moment it exists."""
+    moved = _claim(
+        SENTENCE_B, kind="interpretation", attributed="J. Adjudicator", is_tip=False
+    )
+    gate = rr.check_release(CONTENT, [_supported(SENTENCE_A), moved], {}, set())
+    assert _codes(gate) == ["superseded_claim"]
+    assert gate.blockers[0].claim_version_id == moved.claim_version_id
+
+
 def _review(identity: str, publication: str = "unknown") -> dict:
     return {
         "fully_verified": True,
