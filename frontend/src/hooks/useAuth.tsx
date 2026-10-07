@@ -6,9 +6,14 @@ import React, {
   useContext,
   useCallback,
   useMemo,
+  useSyncExternalStore,
   ReactNode,
 } from 'react';
 import { User, Organization, RegisterRequest, RegisterResult } from '@/types';
+import {
+  getAccountSessionRevision,
+  onAccountSessionReset,
+} from '@/lib/account-session';
 import { useAuthStore } from '@/stores/authStore';
 
 interface AuthContextType {
@@ -48,6 +53,11 @@ interface AuthProviderProps {
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const store = useAuthStore();
+  const accountRevision = useSyncExternalStore(
+    onAccountSessionReset,
+    getAccountSessionRevision,
+    () => 0
+  );
 
   // Initialize auth state on mount
   useEffect(() => {
@@ -100,7 +110,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   return React.createElement(
     AuthContext.Provider,
-    { value: contextValue },
+    // Discard page-local drafts, dialogs and cached results at an account boundary.
+    // A token refresh keeps this key, so unsaved work stays mounted.
+    { value: contextValue, key: accountRevision },
     children
   );
 };

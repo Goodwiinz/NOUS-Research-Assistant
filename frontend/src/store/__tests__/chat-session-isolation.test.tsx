@@ -1,6 +1,6 @@
 /** Actual auth actions, chat stores and widget; only service I/O is mocked. */
 import React from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/authStore';
 import { useAgentChatStore } from '@/store/agentChatStore';
@@ -31,12 +31,10 @@ vi.mock('@/lib/supabase/client', () => ({
 vi.mock('@/services/api-client', () => ({
   api: {
     clearAuth: vi.fn(),
-    get: vi
-      .fn()
-      .mockResolvedValue({
-        user: { id: 'user-B' },
-        organization: { id: 'org-B' },
-      }),
+    get: vi.fn().mockResolvedValue({
+      user: { id: 'user-B' },
+      organization: { id: 'org-B' },
+    }),
   },
 }));
 vi.mock('@/services/workspaceService', () => ({
@@ -50,10 +48,14 @@ vi.mock('@/services/workspaceService', () => ({
   },
 }));
 vi.mock('@/services/agentChatService', () => ({
+  isTerminalJobStatus: vi.fn(),
   agentChatService: {
     listThreads: vi.fn().mockResolvedValue({ threads: [], total: 0 }),
     streamMessage: vi.fn(),
     startDurableRun: vi.fn(),
+    streamConfirm: vi.fn(),
+    confirmAction: vi.fn(),
+    completeDurableConfirmation: vi.fn(),
   },
 }));
 vi.mock('@/hooks/usePageContext', () => ({
@@ -278,4 +280,72 @@ describe('account transition isolation', () => {
     expect(agentChatService.startDurableRun).not.toHaveBeenCalled();
     expect(useAgentChatStore.getState().messages).toEqual([]);
   });
+});
+
+describe('old agent confirmation completion', () => {
+  it.each(['resolve', 'reject'] as const)(
+    '%s cannot restore A confirmation or start a fallback as B',
+    async (outcome) => {
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const response = new Promise<void>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      vi.mocked(agentChatService.streamConfirm).mockReturnValueOnce(response);
+      useAgentChatStore.setState({
+        pendingConfirmations: {
+          'user-A-thread': {
+            threadId: 'user-A-thread',
+            assistantMessageId: 'A-confirm',
+            jobId: 'A-job',
+            origin: 'sse',
+            waitTokenId: 'A-token',
+            tools: [{ name: 'write', args: { private: privateContent } }],
+            message: privateContent,
+          },
+        },
+      });
+      const confirmation = useAgentChatStore
+        .getState()
+        .confirmAction('user-A-thread', true);
+      await waitFor(() =>
+        expect(agentChatService.streamConfirm).toHaveBeenCalled()
+      );
+      await useAuthStore.getState().signOut();
+      await useAuthStore
+        .getState()
+        .signIn('user-b@example.invalid', 'synthetic-password');
+      if (outcome === 'resolve') resolve();
+      else reject(new Error('old stream failed'));
+      await confirmation;
+      expect(useAgentChatStore.getState().pendingConfirmations).toEqual({});
+      expect(useAgentChatStore.getState().messages).toEqual([]);
+      expect(agentChatService.confirmAction).not.toHaveBeenCalled();
+      expect(
+        agentChatService.completeDurableConfirmation
+      ).not.toHaveBeenCalled();
+    }
+  );
+});
+
+it('does not start a durable agent run after A streaming transport rejects in B session', async () => {
+  let reject!: (error: Error) => void;
+  vi.mocked(agentChatService.streamMessage).mockReturnValueOnce(
+    new Promise<void>((_, no) => {
+      reject = no;
+    })
+  );
+  const pending = useAgentChatStore.getState().sendMessage();
+  await waitFor(() =>
+    expect(agentChatService.streamMessage).toHaveBeenCalled()
+  );
+  await useAuthStore.getState().signOut();
+  await useAuthStore
+    .getState()
+    .signIn('user-b@example.invalid', 'synthetic-password');
+  reject(new Error('old SSE rejected'));
+  await pending;
+  expect(agentChatService.startDurableRun).not.toHaveBeenCalled();
+  expect(useAgentChatStore.getState().messages).toEqual([]);
 });
