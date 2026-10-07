@@ -1,0 +1,37 @@
+{
+  "step": "C4-02-draft-status-single",
+  "as": "owner",
+  "at": "2026-09-30T21:06:01.486634+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/drafts/status/9c5db734fc20",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "task_id": "9c5db734fc20",
+    "status": "completed",
+    "progress": 100,
+    "current_step": "Draft completed",
+    "started_at": "2026-09-30T21:05:27.385996",
+    "updated_at": "2026-09-30T21:05:39.985175",
+    "draft_id": "a941ca8e-ef56-4a50-b58e-29324ab03bd3",
+    "duration": 12.594422101974487,
+    "artifact_version": 1,
+    "artifact_hash": "e42fe1b5f11757885962914a28db50effb51f4587050bbeae3ab34c369bb03d6",
+    "error_code": null,
+    "state_source": "database",
+    "estimated_remaining": null,
+    "project_id": "2f7056ed-b0fb-488a-8290-8bf1c8502652",
+    "user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+    "generation_request_hash": "5b32a797ace53ed08e44d11075b7300bda69437e0751bc7ef7c421e03fdc7def",
+    "selection_mode": "explicit",
+    "document_ids": [
+      "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c"
+    ],
+    "draft_title": "Literature Review - retrieval-augmented generation and hallucination"
+  }
+}

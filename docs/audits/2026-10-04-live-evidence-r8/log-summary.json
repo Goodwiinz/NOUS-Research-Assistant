@@ -1,0 +1,50 @@
+{
+  "beat-1": {
+    "beat_ticks_sent": 41,
+    "execution_failures_logged": 0,
+    "exit_code": 0,
+    "log_lines": 65,
+    "tick_received": 0,
+    "tick_succeeded": 0
+  },
+  "beat-2": {
+    "beat_ticks_sent": 37,
+    "execution_failures_logged": 0,
+    "exit_code": 0,
+    "log_lines": 60,
+    "tick_received": 0,
+    "tick_succeeded": 0
+  },
+  "redis": {
+    "beat_ticks_sent": 0,
+    "execution_failures_logged": 0,
+    "exit_code": 0,
+    "log_lines": 11,
+    "tick_received": 0,
+    "tick_succeeded": 0
+  },
+  "worker-1-outage": {
+    "beat_ticks_sent": 0,
+    "execution_failures_logged": 0,
+    "exit_code": 0,
+    "log_lines": 83,
+    "tick_received": 3,
+    "tick_succeeded": 3
+  },
+  "worker-2-normal": {
+    "beat_ticks_sent": 0,
+    "execution_failures_logged": 0,
+    "exit_code": -9,
+    "log_lines": 108,
+    "tick_received": 15,
+    "tick_succeeded": 14
+  },
+  "worker-3-after-crash": {
+    "beat_ticks_sent": 0,
+    "execution_failures_logged": 0,
+    "exit_code": 0,
+    "log_lines": 233,
+    "tick_received": 60,
+    "tick_succeeded": 60
+  }
+}

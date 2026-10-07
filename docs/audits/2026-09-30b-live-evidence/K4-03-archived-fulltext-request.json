@@ -1,0 +1,24 @@
+{
+  "step": "K4-03-archived-fulltext-request",
+  "as": "owner",
+  "at": "2026-09-30T21:12:08.410770+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/f40af11e-87a0-49a6-a715-714ef2298799/fulltext/requests",
+    "body": {
+      "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Project is not writable",
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}

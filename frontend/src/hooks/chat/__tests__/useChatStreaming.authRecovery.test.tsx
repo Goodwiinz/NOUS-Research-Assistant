@@ -400,6 +400,85 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     });
   });
 
+  it.each(['send', 'confirmation'] as const)(
+    'discards late %s callbacks after account invalidation',
+    async (mode) => {
+      const pending = deferred<void>();
+      let callbacks!: StreamCallbacks;
+      let signal!: AbortSignal;
+      const captureStream = (
+        _request: unknown,
+        handlers: StreamCallbacks,
+        abortSignal: AbortSignal
+      ): Promise<void> => {
+        callbacks = handlers;
+        signal = abortSignal;
+        return pending.promise;
+      };
+      streamMessageMock.mockImplementation(captureStream);
+      streamConfirmMock.mockImplementation(captureStream);
+      if (mode === 'confirmation') {
+        resumeStreamMock.mockImplementation(
+          async (threadId: string, _seq: number, handlers: StreamCallbacks) => {
+            handlers.onConfirmation?.(threadId, {
+              tool_name: 'create_project_note',
+              tool_args: { title: 'Private note' },
+            });
+            return { status: 'resumed' };
+          }
+        );
+      }
+      const setMessages = vi.fn();
+      const { useChatStreaming } =
+        await import('@/hooks/chat/useChatStreaming');
+      const { result } = renderHook(
+        () => useChatStreaming(makeParams(setMessages)),
+        { wrapper }
+      );
+      if (mode === 'confirmation')
+        await waitFor(() =>
+          expect(result.current.pendingConfirmation).not.toBeNull()
+        );
+      let submitted!: Promise<void>;
+      await act(async () => {
+        submitted =
+          mode === 'send'
+            ? result.current.handleSubmit('Private prompt')
+            : result.current.handleConfirmation(true);
+        await Promise.resolve();
+      });
+      expect(signal).toBeDefined();
+      act(() => useAuthStore.getState().invalidateRejectedSession(USER_A.id));
+      expect(signal.aborted).toBe(true);
+      setMessages.mockClear();
+      await act(async () => {
+        callbacks.onToken?.('Private late answer');
+        callbacks.onToolStart?.(
+          'search_documents',
+          { query: 'Private late query' },
+          'private-tool'
+        );
+        expect(useChatStore.getState().streamingSteps).toEqual([]);
+        callbacks.onConfirmation?.(THREAD_ID, {
+          tool_name: 'create_project_note',
+          tool_args: { title: 'Private late note' },
+        });
+        callbacks.onDone?.({ assistant_message_id: 'private-answer' });
+        pending.resolve();
+        await submitted;
+      });
+      expect(result.current.pendingConfirmation).toBeNull();
+      expect(setMessages).not.toHaveBeenCalled();
+      expect(useChatStore.getState()).toMatchObject({
+        messages: {},
+        streamingContent: '',
+        isStreaming: false,
+        currentThreadId: null,
+      });
+      expect(useAgentActivityStore.getState().runs).toEqual({});
+    }
+  );
+
   it('survives a real SIGNED_OUT route unmount and restores without resending', async () => {
     const order: string[] = [];
     let stateAtNavigation: Record<string, unknown> | null = null;
@@ -436,6 +515,11 @@ describe('useChatStreaming exhausted-auth recovery', () => {
           } as Response;
         }
         return new Promise<Response>((_resolve, reject) => {
+          if (init?.signal?.aborted) {
+            order.push('abort');
+            reject(new DOMException('aborted', 'AbortError'));
+            return;
+          }
           init?.signal?.addEventListener(
             'abort',
             () => {
@@ -472,9 +556,9 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       'armed',
       'retry-marked',
       'auth-cleared',
+      'abort',
       'ready',
       'unmount',
-      'abort',
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(refreshSessionMock).toHaveBeenCalledTimes(1);
@@ -501,6 +585,8 @@ describe('useChatStreaming exhausted-auth recovery', () => {
 
     act(() => {
       useAuthStore.setState({ user: USER_A, isAuthenticated: true });
+      // The returning route resolves its thread again after auth cleared it.
+      useChatStore.setState({ currentThreadId: THREAD_ID });
     });
     const restored = renderHook(() => useChatStreaming(makeParams()), {
       wrapper,
@@ -546,6 +632,11 @@ describe('useChatStreaming exhausted-auth recovery', () => {
             return { ok: false, status: 401 } as Response;
           }
           return new Promise<Response>((_resolve, reject) => {
+            if (init?.signal?.aborted) {
+              retryWasAborted = true;
+              reject(new DOMException('aborted', 'AbortError'));
+              return;
+            }
             init?.signal?.addEventListener(
               'abort',
               () => {
@@ -594,9 +685,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
           }),
         })
       );
-      expect(useAgentActivityStore.getState().runs[THREAD_ID]?.state).toBe(
-        'error'
-      );
+      expect(useAgentActivityStore.getState().runs[THREAD_ID]).toBeUndefined();
 
       resumeStreamMock.mockImplementation(
         async (
@@ -613,6 +702,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       );
       act(() => {
         useAuthStore.setState({ user: USER_A, isAuthenticated: true });
+        useChatStore.setState({ currentThreadId: THREAD_ID });
       });
       const restored = renderHook(() => useChatStreaming(makeParams()), {
         wrapper,
@@ -1088,7 +1178,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       await Promise.resolve();
     });
 
-    expect(storedRecovery()?.state).toBe('armed');
+    expect(storedRecovery()).toBeNull();
     expect(replaceMock).not.toHaveBeenCalled();
     expect(actualServiceErrorMock).not.toHaveBeenCalled();
 
@@ -1262,7 +1352,8 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     streamMessageMock.mockImplementation(
       (_request: unknown, _callbacks: StreamCallbacks, signal: AbortSignal) =>
         new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => resolve(), { once: true });
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
         })
     );
     const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
@@ -1529,7 +1620,8 @@ describe('useChatStreaming exhausted-auth recovery', () => {
         callbacks.onAuthRefreshSuccess?.();
         authListener?.('SIGNED_OUT', null);
         return new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => resolve(), { once: true });
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
         });
       }
     );

@@ -1,0 +1,108 @@
+{
+  "step": "M1-04-list-fulltext",
+  "as": "owner",
+  "at": "2026-09-30T21:16:27.349078+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/fulltext",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": [
+    {
+      "request_id": "8f03b28f-a714-4269-a907-234f8dabfaf8",
+      "report_id": "5d6149b8-5d7c-402a-9b80-353bf84d9154",
+      "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+      "requested_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "requested_at": "2026-09-30T21:10:38.084889Z",
+      "state": "retrieved",
+      "head_attempt_id": "2c46a676-6901-471d-a86d-60ca49e145f8",
+      "attempts": [
+        {
+          "id": "2c46a676-6901-471d-a86d-60ca49e145f8",
+          "outcome": "retrieved",
+          "reason": null,
+          "attempted_on": "2026-09-30",
+          "actor_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+          "document_id": "23ade6c7-10f1-4c95-9e4a-4bccff6ece2c",
+          "document_content_hash": "78ae5bb1f37b0919869b93c4e7c7f73803b52a85773e806b36fca34a9e822981",
+          "document_available": true,
+          "previous_attempt_id": null,
+          "created_at": "2026-09-30T21:11:06.977060Z"
+        }
+      ]
+    },
+    {
+      "request_id": "cdd09024-31e8-49e7-afca-f1305029187f",
+      "report_id": "ec92bcc8-1be9-4c60-aed9-084f0da3b65f",
+      "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+      "requested_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "requested_at": "2026-09-30T21:10:38.322177Z",
+      "state": "unavailable",
+      "head_attempt_id": "136fc61a-3e66-4b01-8f26-79de2867f2e1",
+      "attempts": [
+        {
+          "id": "136fc61a-3e66-4b01-8f26-79de2867f2e1",
+          "outcome": "unavailable",
+          "reason": "Publisher paywall; ILL request declined",
+          "attempted_on": "2026-09-30",
+          "actor_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+          "document_id": null,
+          "document_content_hash": null,
+          "document_available": false,
+          "previous_attempt_id": null,
+          "created_at": "2026-09-30T21:11:06.690465Z"
+        }
+      ]
+    },
+    {
+      "request_id": "a7832d2f-7d22-41eb-8d23-8024ffbf4c74",
+      "report_id": "a80f493a-45ed-46be-9d39-1bca35dddb07",
+      "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+      "requested_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "requested_at": "2026-09-30T21:10:38.650042Z",
+      "state": "retrieved",
+      "head_attempt_id": "fdf9b156-8ad7-4b46-a475-681876fa3dba",
+      "attempts": [
+        {
+          "id": "fdf9b156-8ad7-4b46-a475-681876fa3dba",
+          "outcome": "retrieved",
+          "reason": null,
+          "attempted_on": "2026-09-30",
+          "actor_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+          "document_id": "0b861512-9a44-46d6-aa58-56ed0142adb0",
+          "document_content_hash": "d88bc1e593e756765646dbcd69a28902320442f4b17d2b4f3df85f2736db8dd9",
+          "document_available": true,
+          "previous_attempt_id": null,
+          "created_at": "2026-09-30T21:11:07.976836Z"
+        }
+      ]
+    },
+    {
+      "request_id": "1449a08c-25a2-44de-99ce-ba403345a9ad",
+      "report_id": "4b755e8c-aec5-451e-b57c-39a679ffcf03",
+      "protocol_version_id": "94d8590a-34d7-4bce-bed8-b2810b9cc2c2",
+      "requested_by_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "requested_at": "2026-09-30T21:10:39.634128Z",
+      "state": "unavailable",
+      "head_attempt_id": "bbc7dd63-1aa6-433e-b08b-bf5fea245485",
+      "attempts": [
+        {
+          "id": "bbc7dd63-1aa6-433e-b08b-bf5fea245485",
+          "outcome": "unavailable",
+          "reason": "eval: not retrievable",
+          "attempted_on": "2026-09-30",
+          "actor_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+          "document_id": null,
+          "document_content_hash": null,
+          "document_available": false,
+          "previous_attempt_id": null,
+          "created_at": "2026-09-30T21:12:07.333339Z"
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@ also search arXiv, download/parse PDFs or call the entity-extraction LLM were
 still unmetered, so the aggregate budget could be bypassed by switching path.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -18,9 +19,11 @@ from fastapi.testclient import TestClient
 from src.api.arxiv import (
     arxiv_bulk_router,
     arxiv_change_router,
+    arxiv_extraction,
     arxiv_extraction_router,
     arxiv_kg_router,
     arxiv_llm_bulk_router,
+    arxiv_local,
     arxiv_local_router,
     arxiv_router,
 )
@@ -150,3 +153,84 @@ async def test_admission_passes_org_key(monkeypatch: pytest.MonkeyPatch) -> None
     user = cast(User, SimpleNamespace(id=uuid4(), organization_id=uuid4()))
     assert await require_expensive_work_admission(user) is user
     assert seen == [(user.id, user.organization_id)]
+
+
+def test_bulk_extraction_processes_papers_with_one_admission() -> None:
+    """Internal extraction must reuse the outer request's admission."""
+    app = FastAPI()
+    app.include_router(arxiv_extraction_router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=uuid4(), organization_id=uuid4(), organization=None
+    )
+    admit = AsyncMock(return_value=True)
+    service = AsyncMock()
+    service.__aenter__.return_value = service
+    service.search_papers.return_value = [{"id": "2401.00001", "abstract": ""}]
+    options = {
+        "extract_entities": False,
+        "extract_topics": False,
+        "extract_citations": False,
+        "extract_keyphrases": False,
+        "extract_summaries": False,
+        "update_knowledge_graph": False,
+    }
+    with (
+        patch.object(expensive_work_admission, "admit_expensive_work", admit),
+        patch.object(arxiv_extraction, "ArXivIngestionService", return_value=service),
+    ):
+        response = TestClient(app).post(
+            "/bulk-extract", json={"extraction_options": options}
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["papers_processed"] == 1
+    admit.assert_awaited_once()
+
+
+def test_local_batch_processes_papers_with_one_admission(tmp_path: Path) -> None:
+    """Exercise the real nested extractor instead of mocking the broken call."""
+    (tmp_path / "2401.00001.pdf").write_bytes(b"local fixture")
+    app = FastAPI()
+    app.include_router(arxiv_local_router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=uuid4(), organization_id=uuid4(), organization=None
+    )
+    admit = AsyncMock(return_value=True)
+    options = {
+        "extract_entities": False,
+        "extract_topics": False,
+        "extract_keyphrases": False,
+        "extract_summaries": False,
+        "process_full_content": False,
+        "update_knowledge_graph": False,
+    }
+    with (
+        patch.object(expensive_work_admission, "admit_expensive_work", admit),
+        patch.object(arxiv_local, "ARXIV_DATA_PATH", tmp_path),
+    ):
+        response = TestClient(app).post(
+            "/process-batch", json={"extraction_options": options}
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["processed"] == 1
+    admit.assert_awaited_once()
+
+
+@pytest.mark.parametrize("path", ["/bulk-extract", "/process-batch"])
+def test_denied_batch_starts_no_search_or_local_extraction(path: str) -> None:
+    app = FastAPI()
+    app.include_router(arxiv_extraction_router)
+    app.include_router(arxiv_local_router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=uuid4(), organization_id=uuid4(), organization=None
+    )
+    admit = AsyncMock(return_value=False)
+    with (
+        patch.object(expensive_work_admission, "admit_expensive_work", admit),
+        patch.object(arxiv_extraction, "ArXivIngestionService") as service,
+        patch.object(arxiv_local, "ARXIV_DATA_PATH") as data_path,
+    ):
+        response = TestClient(app).post(path, json={})
+    assert response.status_code == 429
+    admit.assert_awaited_once()
+    service.assert_not_called()
+    data_path.glob.assert_not_called()

@@ -47,6 +47,10 @@ def _parse_retry_after(value: Optional[str]) -> Optional[float]:
     return min(seconds, _MAX_RETRY_AFTER_SECONDS)
 
 
+# Upper bound on followed pages when listing a KB's data sources.
+_MAX_LIST_PAGES = 100
+
+
 class DOKnowledgeBaseError(RuntimeError):
     """Raised on non-retryable DO KB API failures."""
 
@@ -233,6 +237,29 @@ class DOKnowledgeBaseClient:
         ds_data = payload.get("knowledge_base_data_source", payload)
         return DataSource.model_validate(ds_data)
 
+    async def _data_source_pages(self, kb_uuid: str):
+        """Yield each page of the KB's data sources, following DO's
+        ``links.pages.next`` on the same API host. Raises on a foreign next URL
+        or past the page cap, never silently truncating."""
+        url = f"{self._api_base}/v2/gen-ai/knowledge_bases/{kb_uuid}/data_sources"
+        for _ in range(_MAX_LIST_PAGES):
+            payload = await self._request("GET", url)
+            raw = (
+                payload.get("knowledge_base_data_sources")
+                or payload.get("data_sources")
+                or []
+            )
+            yield [s for s in raw if isinstance(s, dict)]
+            links = payload.get("links")
+            pages = links.get("pages") if isinstance(links, dict) else None
+            next_url = pages.get("next") if isinstance(pages, dict) else None
+            if not isinstance(next_url, str) or not next_url:
+                return
+            if not next_url.startswith(f"{self._api_base}/"):
+                raise DOKnowledgeBaseError("Unexpected data-source page URL")
+            url = next_url
+        raise DOKnowledgeBaseError("Data-source listing exceeded the page limit")
+
     async def list_data_sources(self, *, kb_uuid: str) -> list[dict[str, Any]]:
         """Return the KB's existing data sources as raw dicts.
 
@@ -240,16 +267,25 @@ class DOKnowledgeBaseClient:
         unverified, so callers should match fields with .get() and fall back to
         adding when nothing matches. Returns [] on an unexpected shape.
         """
-        payload = await self._request(
-            "GET",
-            f"{self._api_base}/v2/gen-ai/knowledge_bases/{kb_uuid}/data_sources",
-        )
-        raw = (
-            payload.get("knowledge_base_data_sources")
-            or payload.get("data_sources")
-            or []
-        )
-        return [s for s in raw if isinstance(s, dict)]
+        # Deleted-document cleanup treats this list as complete: any page
+        # failure raises instead of returning a partial list.
+        return [s async for page in self._data_source_pages(kb_uuid) for s in page]
+
+    async def find_data_source(self, *, kb_uuid: str, item_path: str) -> Optional[str]:
+        """Return the uuid of the first data source at ``item_path``.
+
+        Stops at the first match, so a failure on a later page cannot discard a
+        match already found (ingest dedup would then add a duplicate).
+        """
+        async for page in self._data_source_pages(kb_uuid):
+            for source in page:
+                spaces = source.get("spaces_data_source") or source.get("spaces") or {}
+                if not isinstance(spaces, dict):
+                    continue
+                path = spaces.get("item_path") or spaces.get("key")
+                if path == item_path and source.get("uuid"):
+                    return str(source["uuid"])
+        return None
 
     async def delete_data_source(self, *, kb_uuid: str, ds_uuid: str) -> None:
         """Delete a data source from the KB.

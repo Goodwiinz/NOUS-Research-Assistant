@@ -8,11 +8,13 @@ synchronous Celery task and must:
 - return the data-source uuid on success,
 - never raise on a KB outage (ingestion must not fail),
 - return None cleanly when DO KB is disabled,
-- bridge the sync-loaded ORM object via awaited ``merge()``.
+- sync a freshly loaded, org-scoped copy of the row, never ``merge()`` the
+  caller's stale snapshot (that wrote stale columns back; GOO-358).
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,15 +26,25 @@ class _FakeAsyncSession:
     """Stand-in for an AsyncSessionLocal session."""
 
     def __init__(self) -> None:
-        self.merged = None
+        self.current = None
+        self.got = None
         self.commits = 0
 
-    async def merge(self, document):
-        self.merged = document
-        return document
+    async def get(self, model, ident):
+        self.got = (model, ident)
+        return self.current
+
+    async def merge(self, document):  # pragma: no cover - must not be used
+        raise AssertionError("must not merge the caller's stale snapshot")
 
     async def commit(self):
         self.commits += 1
+
+    async def rollback(self):
+        pass
+
+    async def execute(self, statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: self.current)
 
 
 class _FakeAsyncCtx:
@@ -54,16 +66,32 @@ def fake_session():
 @pytest.fixture
 def patched_async_session(fake_session):
     # Local import inside the helper resolves AsyncSessionLocal from core.database.
-    with patch(
-        "src.core.database.AsyncSessionLocal",
-        return_value=_FakeAsyncCtx(fake_session),
+    with (
+        patch(
+            "src.core.database.AsyncSessionLocal",
+            return_value=_FakeAsyncCtx(fake_session),
+        ),
+        patch(
+            "src.services.do_kb.provisioner.ensure_kb_for_org",
+            new=AsyncMock(return_value="kb-owned"),
+        ),
+        patch("src.tasks.processing_tasks.settings.DO_KB_ENABLED", True),
     ):
         yield fake_session
 
 
 @pytest.mark.unit
 def test_returns_data_source_uuid_on_success(patched_async_session):
-    doc = MagicMock(id="doc-1")
+    doc = MagicMock(id="doc-1", organization_id="org-1")
+    current = SimpleNamespace(
+        id="doc-1",
+        organization_id="org-1",
+        is_deleted=False,
+        document_metadata={},
+        do_kb_indexed_at=None,
+        do_kb_index_status=None,
+    )
+    patched_async_session.current = current
     with patch(
         "src.services.do_kb.sync_document_to_kb",
         new=AsyncMock(return_value="ds-1"),
@@ -71,19 +99,41 @@ def test_returns_data_source_uuid_on_success(patched_async_session):
         result = _sync_document_to_kb_blocking(doc)
 
     assert result == "ds-1"
-    # Bridged the sync-loaded doc through merge(), then synced the merged object.
-    assert patched_async_session.merged is doc
-    assert patched_async_session.commits == 1
-    sync_mock.assert_awaited_once()
+    # Synced the freshly loaded row, not the caller's snapshot.
+    from src.models.document import Document
+
+    assert patched_async_session.got == (Document, "doc-1")
+    assert sync_mock.await_args.args[1] is current
+    assert patched_async_session.commits == 3
+    assert current.do_kb_data_source_uuid == "ds-1"
+    assert not current.document_metadata.get("pending_satellite_writes")
+
+
+@pytest.mark.unit
+def test_foreign_or_missing_row_is_not_synced(patched_async_session):
+    doc = MagicMock(id="doc-1", organization_id="org-1")
+    patched_async_session.current = MagicMock(id="doc-1", organization_id="org-2")
+    with patch(
+        "src.services.do_kb.sync_document_to_kb",
+        new=AsyncMock(return_value="ds-1"),
+    ) as sync_mock:
+        assert _sync_document_to_kb_blocking(doc) is None
+        patched_async_session.current = None
+        assert _sync_document_to_kb_blocking(doc) is None
+    sync_mock.assert_not_awaited()
 
 
 @pytest.mark.unit
 def test_returns_none_when_kb_disabled(patched_async_session):
     # sync_document_to_kb returns None when DO_KB_ENABLED is false.
     doc = MagicMock(id="doc-1")
-    with patch(
-        "src.services.do_kb.sync_document_to_kb",
-        new=AsyncMock(return_value=None),
+    patched_async_session.current = doc
+    with (
+        patch(
+            "src.services.do_kb.sync_document_to_kb",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("src.tasks.processing_tasks.settings.DO_KB_ENABLED", False),
     ):
         result = _sync_document_to_kb_blocking(doc)
 
@@ -93,7 +143,10 @@ def test_returns_none_when_kb_disabled(patched_async_session):
 @pytest.mark.unit
 def test_failure_is_isolated_returns_none(patched_async_session, caplog):
     # A KB outage must not propagate out of the ingestion task.
-    doc = MagicMock(id="doc-1")
+    doc = SimpleNamespace(
+        id="doc-1", organization_id="org-1", is_deleted=False, document_metadata={}
+    )
+    patched_async_session.current = doc
     with patch(
         "src.services.do_kb.sync_document_to_kb",
         new=AsyncMock(side_effect=RuntimeError("KB down")),
@@ -101,4 +154,4 @@ def test_failure_is_isolated_returns_none(patched_async_session, caplog):
         result = _sync_document_to_kb_blocking(doc)
 
     assert result is None
-    assert any("DO KB sync failed" in r.message for r in caplog.records)
+    assert any("DO KB" in r.message and "failed" in r.message for r in caplog.records)

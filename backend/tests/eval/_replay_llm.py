@@ -4,7 +4,7 @@
 construction seams during a golden eval run, so cases execute with **no
 credentials** and **no model nondeterminism**. It is seeded per
 ``GoldenCase`` from a committed cassette (see
-``docs/b2-llm-replay-design.md`` for the full design).
+``docs/testing/b2-llm-replay-design.md`` for the full design).
 
 Phase 1 lands the machinery only — it is inert unless ``AGENT_GOLDEN_REPLAY``
 is set, and cassette files arrive in Phase 2. The model is intentionally a
@@ -19,6 +19,7 @@ prompt hash — so prompt-whitespace edits don't invalidate a cassette, but a
 topology change that asks for an un-recorded structured output fails LOUDLY
 (``CassetteExhausted``), never silently falling back to a live model.
 """
+
 from __future__ import annotations
 
 import json
