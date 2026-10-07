@@ -207,11 +207,29 @@ class UserBehaviorService:
             db.close()
 
     async def analyze_user_behavior(
-        self, user_id: str, days_back: int = 30, use_cache: bool = True
+        self,
+        user_id: str,
+        days_back: int = 30,
+        use_cache: bool = True,
+        *,
+        organization_id: Optional[str],
     ) -> UserBehaviorMetrics:
-        """Analyze user behavior patterns"""
+        """Analyze a user's behavior patterns within ONE organization.
 
-        cache_key = f"{user_id}_{days_back}"
+        ``organization_id`` (the caller's own org) is keyword-only and required:
+        sessions are filtered by it so a client-supplied ``user_id`` can never
+        surface another tenant's search history (including a user's sessions
+        from an org they have since left). The cache is keyed by
+        (org, user_id, days_back) -- mirroring ``analyze_session`` -- so a cached
+        result is never served across tenants. A null org has no sessions
+        (``search_sessions.organization_id`` is NOT NULL), so it short-circuits
+        to empty metrics.
+        """
+
+        if not organization_id:
+            return self._create_empty_behavior_metrics(user_id)
+
+        cache_key = f"{organization_id}_{user_id}_{days_back}"
         if use_cache and cache_key in self.behavior_cache:
             return self.behavior_cache[cache_key]
 
@@ -220,11 +238,12 @@ class UserBehaviorService:
         try:
             cutoff_date = datetime.utcnow() - timedelta(days=days_back)
 
-            # Get user's search sessions
+            # Get user's search sessions (scoped to the caller's organization)
             sessions = (
                 db.query(SearchSession)
                 .filter(
                     SearchSession.user_id == uuid.UUID(user_id),
+                    SearchSession.organization_id == uuid.UUID(str(organization_id)),
                     SearchSession.start_time >= cutoff_date,
                 )
                 .all()
@@ -923,8 +942,10 @@ class UserBehaviorService:
         }
 
         if user_id:
-            # Individual user report
-            user_metrics = await self.analyze_user_behavior(user_id, days_back)
+            # Individual user report -- scoped to the requesting org (GOO-407)
+            user_metrics = await self.analyze_user_behavior(
+                user_id, days_back, organization_id=organization_id
+            )
             report["user_metrics"] = {
                 "user_id": user_metrics.user_id,
                 "behavior_pattern": user_metrics.behavior_pattern.value,

@@ -12084,6 +12084,34 @@ export interface components {
             priority: string | null;
         };
         /**
+         * BehaviorReportRequest
+         * @description Body for POST /api/v1/analytics/behavior/reports/generate.
+         *
+         *     ``user_id`` (optional) adds a per-user section to the org report; the route
+         *     rejects it unless the target user belongs to the caller's organization.
+         *     Unknown keys are ignored (pydantic default) for backward compatibility with
+         *     the previous untyped ``Dict[str, Any]`` body.
+         */
+        BehaviorReportRequest: {
+            /**
+             * Days Back
+             * @description Days of history to analyze
+             * @default 30
+             */
+            days_back: number;
+            /**
+             * Report Type
+             * @description Label echoed back in the report
+             * @default organization
+             */
+            report_type: string;
+            /**
+             * User Id
+             * @description Target user (must be in the caller's organization)
+             */
+            user_id?: string | null;
+        };
+        /**
          * BenchmarkRequest
          * @description Request for search quality benchmark
          */
@@ -25539,9 +25567,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["BehaviorReportRequest"];
             };
         };
         responses: {
