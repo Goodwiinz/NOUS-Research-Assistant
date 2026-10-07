@@ -121,7 +121,7 @@ test.describe("Account switch isolation @smoke @regression", () => {
 
     await helpers.login(TEST_DATA.USERS.ADMIN);
     await page.getByRole("button", { name: "Open agent chat" }).click();
-    let panel = page.getByRole("dialog", { name: "Agent chat panel" });
+    let panel = page.locator('[role="dialog"][aria-label="Agent chat panel"]');
     await panel.getByPlaceholder("Ask the agent...").fill(marker);
     await panel.getByRole("button", { name: "Send message" }).click();
     await expect(panel.getByText(answer("A"))).toBeVisible();
@@ -141,7 +141,7 @@ test.describe("Account switch isolation @smoke @regression", () => {
       ),
     ).toBe(marker);
     await page.getByRole("button", { name: "Open agent chat" }).click();
-    panel = page.getByRole("dialog", { name: "Agent chat panel" });
+    panel = page.locator('[role="dialog"][aria-label="Agent chat panel"]');
     await expect(panel.getByText(answer("A"))).toHaveCount(0);
     await panel.getByPlaceholder("Ask the agent...").fill(`B-${marker}`);
     await panel.getByRole("button", { name: "Send message" }).click();
