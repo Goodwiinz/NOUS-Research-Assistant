@@ -193,7 +193,7 @@ async def test_stale_supabase_claim_cannot_roll_email_back(
     user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """JWT A must not overwrite the provider's current address B."""
-    user.email = "intermediate@example.com"
+    setattr(user, "email", "intermediate@example.com")
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: "current@example.com",
@@ -218,8 +218,8 @@ async def test_disproved_stale_claim_does_not_repeat_provider_lookup(
     """A provider-disproved claim is cached by subject and claim, briefly."""
     import uuid
 
-    user.id = uuid.uuid4()
-    user.email = "current@example.com"
+    setattr(user, "id", uuid.uuid4())
+    setattr(user, "email", "current@example.com")
     lookups = 0
 
     def current_email(_user_id: str) -> str:
@@ -248,7 +248,7 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
     """A provider-confirmed local collision is retried only after backoff."""
     import uuid
 
-    user.id = uuid.uuid4()
+    setattr(user, "id", uuid.uuid4())
     restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
     result = MagicMock()
     result.scalars.return_value.first.return_value = restored_user
@@ -267,6 +267,7 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
     service = AuthService(db)
 
     current_user = await service.sync_user_email_from_provider(user, VICTIM_EMAIL)
+    assert current_user is not None
     second_user = await service.sync_user_email_from_provider(
         current_user, VICTIM_EMAIL
     )
