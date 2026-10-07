@@ -31,6 +31,9 @@ async function signInOnCurrentPage(
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible({
     timeout: 20000,
   });
+  await expect(page.getByRole("link", { name: "Account" })).toContainText(
+    credentials.email.split("@")[0].slice(0, 2).toUpperCase(),
+  );
 }
 
 async function signOutOnCurrentPage(page: Page): Promise<void> {
