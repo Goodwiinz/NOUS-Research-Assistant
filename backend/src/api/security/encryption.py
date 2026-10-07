@@ -17,11 +17,10 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, validator
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.core.database import get_db_sync
-from src.core.dependencies import is_active_user
+from src.core.dependencies import is_active_user, is_platform_operator
 from src.core.encryption import EncryptionError, EncryptionKeyType
 
 # audit I12: the analytics RBAC decorators module (deleted) expected an
@@ -179,6 +178,34 @@ class EncryptionValidationResponse(BaseModel):
     errors: List[str]
 
 
+# Tenant binding (GOO-406 E2)
+
+
+def _bind_caller_org(requested_org_id: Optional[UUID], current_user: User) -> UUID:
+    """Return the caller's own organization id.
+
+    A different ``requested_org_id`` is refused with 403: per-org
+    ``system_admin`` and the legacy ``users.role == "admin"`` are tenant
+    roles and never authorize another tenant's data.
+    """
+    own_org_id = current_user.organization_id
+    if requested_org_id is not None and str(requested_org_id) != str(own_org_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized for another organization",
+        )
+    return own_org_id
+
+
+def _require_platform_operator(current_user: User, action: str) -> None:
+    """403 unless the caller is on the PLATFORM_OPERATOR_USER_IDS allowlist."""
+    if not is_platform_operator(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Platform operator access required to {action}",
+        )
+
+
 # API Endpoints
 
 
@@ -253,19 +280,12 @@ async def encrypt_organization_profile(
     try:
         encryption_service = EncryptionService(db)
 
-        # Check if user has permission to encrypt the target organization's profile
-        if (
-            current_user.organization_id != request.organization_id
-            and current_user.role.value not in ["admin"]
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Not authorized to encrypt this organization's profile",
-            )
+        # GOO-406 E2: only the caller's own organization profile is writable.
+        organization_id = _bind_caller_org(request.organization_id, current_user)
 
         # Encrypt the profile
         encrypted_profile = encryption_service.encrypt_organization_profile(
-            organization_id=request.organization_id,
+            organization_id=organization_id,
             profile_data=request.profile_data,
             performed_by=current_user.id,
         )
@@ -331,15 +351,8 @@ async def decrypt_data(
             )
 
         elif request.resource_type == "organization_profile":
-            # Check if user can access this organization's data
-            if (
-                current_user.organization_id != request.resource_id
-                and current_user.role.value != "admin"
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Not authorized to decrypt this organization's data",
-                )
+            # GOO-406 E2: only the caller's own organization.
+            _bind_caller_org(request.resource_id, current_user)
 
             # Implementation for organization profile decryption would go here
             decrypted_data = {
@@ -388,18 +401,21 @@ async def rotate_encryption_key(
     try:
         encryption_service = EncryptionService(db)
 
-        # Admin only for organization-scoped rotation
-        if request.organization_id and current_user.role.value != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can perform organization-scoped key rotation",
-            )
+        # GOO-406 E2: the DATA/FILE keys are process-global and
+        # rotate_encryption_keys re-encrypts every tenant's rows regardless of
+        # organization_id, so a real rotation is a platform action. A tenant
+        # system_admin may only dry-run, scoped to its own organization.
+        organization_id: Optional[UUID] = request.organization_id
+        if not is_platform_operator(current_user):
+            if not request.dry_run:
+                _require_platform_operator(current_user, "rotate encryption keys")
+            organization_id = _bind_caller_org(organization_id, current_user)
 
         # Perform key rotation
         rotation_results = encryption_service.rotate_encryption_keys(
             key_type=request.key_type,
             performed_by=current_user.id,
-            organization_id=request.organization_id,
+            organization_id=organization_id,
             dry_run=request.dry_run,
         )
 
@@ -433,16 +449,10 @@ async def get_encryption_status(
     try:
         encryption_service = EncryptionService(db)
 
-        # Admin only for organization-scoped status
-        if organization_id and current_user.role.value != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can view organization-scoped encryption status",
-            )
-
-        # If not admin, limit to user's own organization
-        if current_user.role.value != "admin":
-            organization_id = current_user.organization_id
+        # GOO-406 E2: tenants see only their own organization; the global
+        # view (organization_id omitted) is reserved for platform operators.
+        if not is_platform_operator(current_user):
+            organization_id = _bind_caller_org(organization_id, current_user)
 
         status = encryption_service.get_encryption_status(organization_id)
 
@@ -471,12 +481,8 @@ async def validate_encryption_integrity(
     try:
         encryption_service = EncryptionService(db)
 
-        # Admin only for system-wide validation
-        if current_user.role.value not in ["admin"]:
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can validate encryption integrity",
-            )
+        # GOO-406 E2: validation samples every tenant's encrypted rows.
+        _require_platform_operator(current_user, "validate encryption integrity")
 
         validation_results = encryption_service.validate_encryption_integrity(
             sample_size
@@ -518,13 +524,11 @@ async def get_encryption_audit_logs(
         if resource_type:
             query = query.filter(EncryptionAuditLog.resource_type == resource_type)
 
-        # Non-admin users can only see logs for their own organization
-        if current_user.role.value != "admin":
+        # GOO-406 E2: tenant callers see only their own organization's rows;
+        # the legacy users.role "admin" is per-org and no longer unscopes this.
+        if not is_platform_operator(current_user):
             query = query.filter(
-                or_(
-                    EncryptionAuditLog.performed_by == current_user.id,
-                    EncryptionAuditLog.organization_id == current_user.organization_id,
-                )
+                EncryptionAuditLog.organization_id == current_user.organization_id
             )
 
         # Apply pagination and ordering
