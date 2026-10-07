@@ -177,11 +177,12 @@ describe('useChatStreaming stream resume on mount', () => {
     const [threadId, afterSeq, callbacks] = resumeStreamMock.mock.calls[0];
     expect(threadId).toBe('thread-A');
     expect(afterSeq).toBe(0);
-    // Confirmation handler plus live-run detectors: any token/tool/status/plan
+    // Confirmation/run discovery plus live-run detectors: any token/tool/status/plan
     // frame means a live run owns the thread, and the probe aborts rather than
     // consuming that run's frames (round-3 L7).
     expect(Object.keys(callbacks as object)).toEqual([
       'onConfirmation',
+      'onRunId',
       'onToken',
       'onToolStart',
       'onStatus',
