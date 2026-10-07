@@ -31,10 +31,12 @@ export async function pollForApproval(
   poll_token: string,
   { fetchFn = fetch, intervalMs }: PollOptions = {}
 ): Promise<ApprovalResult> {
-  const url = `${BACKEND_URL}/cli-auth/status/${encodeURIComponent(session_id)}?poll_token=${encodeURIComponent(poll_token)}`;
+  const url = `${BACKEND_URL}/cli-auth/status/${encodeURIComponent(session_id)}`;
 
   while (true) {
-    const res = await fetchFn(url);
+    const res = await fetchFn(url, {
+      headers: { 'X-CLI-Poll-Token': poll_token },
+    });
     if (!res.ok) throw new Error(`Poll failed: ${res.status}`);
     const data = await res.json();
 

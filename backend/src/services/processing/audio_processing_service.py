@@ -169,6 +169,8 @@ class AudioProcessingService:
                 result = subprocess.run(
                     [
                         "ffprobe",
+                        "-protocol_whitelist",
+                        "file,pipe",
                         "-v",
                         "error",
                         "-show_entries",

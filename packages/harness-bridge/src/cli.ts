@@ -64,18 +64,23 @@ async function request(
   path: string,
   token?: string,
   body?: object,
+  headers: Record<string, string> = {},
 ): Promise<Record<string, any>> {
   const response = await fetchFn(base + path, {
     method: body ? "POST" : "GET",
     redirect: "error",
     headers: {
+      ...headers,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) throw new Error(`NOUS request failed (${response.status})`);
+  if (!response.ok)
+    throw new Error(
+      `NOUS request failed (${response.status}) ${path.split("?")[0]}`,
+    );
   let data: unknown;
   try {
     data = await response.json();
@@ -243,7 +248,10 @@ export async function connect(
       request(
         fetchFn,
         base,
-        `/cli-auth/status/${encodeURIComponent(login.session_id)}?poll_token=${encodeURIComponent(login.poll_token)}`,
+        `/cli-auth/status/${encodeURIComponent(login.session_id)}`,
+        undefined,
+        undefined,
+        { "X-CLI-Poll-Token": login.poll_token },
       ),
     options,
   );
@@ -506,7 +514,13 @@ export async function runBridge(
     return adapter;
   };
   const url = new URL(apiBase(state.apiUrl) + "/harness/connect");
-  url.protocol = "wss:";
+  // Same loopback-only exception as the MCP facade: plain ws for a local dev
+  // backend, wss everywhere else.
+  url.protocol =
+    url.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+      ? "ws:"
+      : "wss:";
   // The socket re-checks the grant on every frame; keep it renewed before the
   // 15-minute expiry. A renewal revokes the old token, so the open socket is
   // closed on its next frame and the loop below reconnects with the new one.
@@ -604,6 +618,10 @@ export function sessionOptionsFor(
   if (state.workspaceId !== undefined) throw new Error(WORKSPACE_MCP_ONLY);
   const workspace = state.workspaces.find((w) => w.id === workspaceId);
   if (!workspace) throw new Error("unregistered local workspace");
+  // Local operator choice: the pinned Codex CLI may reject the user's global
+  // default model under their login (e.g. a ChatGPT account), so allow pinning
+  // one for bridge sessions without touching ~/.codex/config.toml.
+  const model = process.env.NOUS_HARNESS_CODEX_MODEL?.trim();
   return {
     cwd: workspace.root,
     workspaceId,
@@ -614,6 +632,7 @@ export function sessionOptionsFor(
       networkAccess: false,
       writableRoots: [workspace.root],
     },
+    ...(model ? { model } : {}),
     ...(state.scopes?.includes("tools:read")
       ? {
           mcpConfig: buildManagedMcpConfig(

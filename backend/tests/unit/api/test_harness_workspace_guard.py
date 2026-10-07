@@ -93,3 +93,35 @@ async def test_connect_rechecks_the_binding_on_every_frame(
     socket.close.assert_awaited_once_with(
         code=4403, reason="Bridge authorization denied"
     )
+
+
+# Mutation: src/api/harness.py:108 remove the local-environment predicate.
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/api/test_harness_workspace_guard.py -k plain_ws_exception
+@pytest.mark.parametrize(
+    "environment",
+    ["development", "local", "production", "dev", "staging", "testing", "unknown"],
+)
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "203.0.113.8", None])
+async def test_plain_ws_exception_is_loopback_only(
+    transport: Any, monkeypatch: pytest.MonkeyPatch, host: str | None, environment: str
+) -> None:
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", environment)
+    resolve = AsyncMock(return_value=_context(workspace=True))
+    monkeypatch.setattr(transport, "resolve_integration_context", resolve)
+    socket = _socket()
+    socket.url.scheme = "ws"
+    socket.client = SimpleNamespace(host=host) if host else None
+    await transport.connect(socket)
+    # Loopback reaches grant validation, which still refuses workspace grants.
+    assert resolve.await_count == (
+        1
+        if host in {"127.0.0.1", "::1"} and environment in {"development", "local"}
+        else 0
+    )
+    socket.accept.assert_not_awaited()
+    socket.close.assert_awaited_once_with(
+        code=4403, reason="Bridge authorization denied"
+    )
