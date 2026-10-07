@@ -58,6 +58,9 @@ describe('getSafeAuthRedirect', () => {
 describe('getSafeAuthRedirect — normalization bypasses (GOO-402)', () => {
   const origin = 'http://localhost:3000';
 
+  // Causal guard: frontend/src/utils/authRedirect.ts:30. Removing only that
+  // post-normalization check makes 13 cases below fail; restoring it passes.
+  // Run: pnpm --dir frontend exec vitest run src/utils/__tests__/authRedirect.test.ts
   // Each payload is a same-origin URL whose normalized pathname collapses to
   // `//host` (or `///host`), which callers would resolve as protocol-relative.
   it.each([
