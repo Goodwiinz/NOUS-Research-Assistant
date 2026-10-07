@@ -58,7 +58,8 @@ vi.mock('@/stores/authStore', () => ({
   useAuthStore: () => ({ isAuthenticated: true }),
 }));
 
-vi.mock('@/store/chat-store', () => ({
+vi.mock('@/store/chat-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/chat-store')>()),
   useChatStore: chatStoreMocks.useStore,
 }));
 
