@@ -288,6 +288,35 @@ def _publication(
     }
 
 
+def _report_publication(
+    dois: Sequence[str],
+    notices: Mapping[str, Sequence[Mapping[str, Any]]],
+    failed: set[str],
+) -> dict[str, Any]:
+    checks = [_publication(doi, notices, failed) for doi in sorted(set(dois))]
+    if not checks:
+        return _publication(None, notices, failed)
+    if len(checks) == 1:
+        return checks[0]
+    # Any positive notice is evidence, even when another DOI could not be
+    # checked. Conversely, unchanged requires every DOI check to complete.
+    incomplete = next((c for c in checks if c["check"] == "failed"), None)
+    if incomplete is None:
+        incomplete = next((c for c in checks if c["check"] != "performed"), None)
+    result = {
+        "check": incomplete["check"] if incomplete else "performed",
+        "source": "crossref",
+        "checks": checks,
+        "notices": [notice for c in checks for notice in c.get("notices", [])],
+        "other_updates": [
+            notice for c in checks for notice in c.get("other_updates", [])
+        ],
+    }
+    if incomplete and "reason" in incomplete:
+        result["reason"] = incomplete["reason"]
+    return result
+
+
 def _missing_reason(
     identifiers: Mapping[str, Any], coverage: Mapping[str, Any]
 ) -> tuple[str, dict[str, Any]]:
@@ -360,12 +389,21 @@ def classify(
         survivor = resolved.setdefault(
             target, {**dict(baseline.get(target) or entry), "merged_from": []}
         )
+        survivor["identifiers"] = {
+            kind: sorted(
+                set((survivor.get("identifiers") or {}).get(kind) or [])
+                | set((entry.get("identifiers") or {}).get(kind) or [])
+            )
+            for kind in set(survivor.get("identifiers") or {})
+            | set(entry.get("identifiers") or {})
+        }
         survivor["merged_from"].append(report_id)
     for report_id in sorted(set(resolved) | set(current)):
         before, after = resolved.get(report_id), current.get(report_id)
         identifiers = dict((after or before or {}).get("identifiers") or {})
-        dois = identifiers.get("doi") or [None]
-        publication = _publication(dois[0], notices, notice_check_failed)
+        publication = _report_publication(
+            identifiers.get("doi") or [], notices, notice_check_failed
+        )
         item: dict[str, Any] = {"report_id": report_id, "publication": publication}
         evidence: dict[str, Any] = {}
         if before is not None and before["merged_from"]:
