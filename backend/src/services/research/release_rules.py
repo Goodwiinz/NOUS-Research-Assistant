@@ -28,6 +28,7 @@ BLOCKER_CODES = (
     "superseded_assessment",
     "stale_evidence",
     "unattributed_interpretation",
+    "superseded_claim",
     "identity_mismatch",
     "retracted_source",
 )
@@ -52,6 +53,7 @@ _DETAIL = {
     "superseded_assessment": "The claim was re-versioned; its assessment is closed",
     "stale_evidence": "Cited evidence was withdrawn, superseded or changed",
     "unattributed_interpretation": "An interpretation needs a named author",
+    "superseded_claim": "The claim was re-versioned since; re-bind it to this draft",
     "identity_mismatch": "The source identifier resolves to another work",
     "retracted_source": "The source is recorded as retracted",
 }
@@ -258,9 +260,14 @@ def check_release(
     for claim in claims:
         if claim.kind == "interpretation":
             interpretations.append(claim.claim_version_id)
-            code_or_none = (
-                None if claim.attributed_to else "unattributed_interpretation"
-            )
+            # A re-versioned interpretation is no longer the claim of record;
+            # a release built on it would be derived-stale on creation.
+            if not claim.is_tip:
+                code_or_none: str | None = "superseded_claim"
+            elif not claim.attributed_to:
+                code_or_none = "unattributed_interpretation"
+            else:
+                code_or_none = None
             if claim.attributed_to:
                 labels.append((claim.end, f"Interpretation — {claim.attributed_to}"))
         else:
