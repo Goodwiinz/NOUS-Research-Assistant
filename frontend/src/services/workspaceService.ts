@@ -428,7 +428,8 @@ export const workspaceService = {
   async getOrCreateDefaultWorkspace(): Promise<ApiWorkspace> {
     if (_defaultWorkspaceInFlight) return _defaultWorkspaceInFlight;
     const inFlight = this._resolveDefaultWorkspace().finally(() => {
-      if (_defaultWorkspaceInFlight === inFlight) _defaultWorkspaceInFlight = null;
+      if (_defaultWorkspaceInFlight === inFlight)
+        _defaultWorkspaceInFlight = null;
     });
     _defaultWorkspaceInFlight = inFlight;
     return inFlight;

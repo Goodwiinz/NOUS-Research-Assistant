@@ -1,5 +1,7 @@
 'use client';
 
+import { useChatSessionGuard } from './useChatSessionGuard';
+
 import { useInvalidateThreadArtifacts } from '@/hooks/chat/useThreadArtifacts';
 import { extractConfirmationPreview } from '@nous/chat-runtime/message';
 
@@ -461,6 +463,7 @@ export interface UseChatStreamingReturn {
 export function useChatStreaming(
   params: UseChatStreamingParams
 ): UseChatStreamingReturn {
+  const ownsRenderedSession = useChatSessionGuard();
   const {
     messages,
     displayedMessages,
@@ -603,6 +606,9 @@ export function useChatStreaming(
   const confirmationProbedRef = useRef<Set<string>>(new Set());
   const lastActivatedThreadRef = useRef<string | null>(null);
   const probeAbortRef = useRef<AbortController | null>(null);
+  // Bumped when the cold-load probe seeds a run, so the resume effect (which
+  // does not subscribe to the activity store) re-evaluates and takes over.
+  const [resumeNonce, setResumeNonce] = useState(0);
   const hadPendingApprovalRef = useRef(false);
 
   // ---- Store bindings ----
@@ -613,6 +619,12 @@ export function useChatStreaming(
   const streamingThreadId = useChatStore((state) => state.streamingThreadId);
   const activeThreadId = useChatStore((state) => state.currentThreadId);
   const harnessConnection = useHarnessConnection(activeThreadId);
+  // The cold-load probe outlives the render that started it; it must act on
+  // the current (post-auth) connection, not the one captured at probe start.
+  const harnessConnectionRef = useRef(harnessConnection);
+  useEffect(() => {
+    harnessConnectionRef.current = harnessConnection;
+  }, [harnessConnection]);
   const authIsAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const authenticatedUserId = useAuthStore((state) => state.user?.id ?? null);
   const draftWorkspaceId =
@@ -810,12 +822,14 @@ export function useChatStreaming(
 
   const requestDurableStop = useCallback(
     (threadId: string, runId: string): Promise<void> => {
+      const isCurrentSession = captureChatSession();
       const existing = durableStopByRunRef.current[runId];
       if (existing) return existing;
 
       const request: Promise<void> = agentChatService
         .cancelActiveRun(threadId, runId)
         .then(() => {
+          if (!isCurrentSession()) return;
           // A delayed ACK from an older run must never stop a newer run that
           // has taken ownership of this thread in the meantime.
           const current = useAgentActivityStore.getState().runs[threadId];
@@ -824,6 +838,7 @@ export function useChatStreaming(
           }
         })
         .catch((error) => {
+          if (!isCurrentSession()) return;
           console.error('[Chat] Failed to cancel active agent run:', error);
           toast.error('Could not stop this response. Please try again.');
         })
@@ -959,7 +974,20 @@ export function useChatStreaming(
     () =>
       onChatSessionReset(() => {
         const recoveryAttempt = authRecoveryAttemptRef.current;
-        if (recoveryAttempt && !recoveryAttempt.authRefreshStarted) {
+        if (recoveryAttempt?.authRefreshStarted) {
+          // The account boundary can unmount this hook before its auth effect
+          // runs. Complete the tab-scoped handoff after auth teardown settles,
+          // even if this instance has gone away. A replacement login owns the
+          // new session and must never inherit or navigate for this attempt.
+          queueMicrotask(() => {
+            const auth = useAuthStore.getState();
+            if (!auth.isAuthenticated && !auth.isLoading) {
+              beginAuthRecovery(recoveryAttempt);
+            } else {
+              finishAuthRecoveryAttempt(recoveryAttempt);
+            }
+          });
+        } else if (recoveryAttempt) {
           finishAuthRecoveryAttempt(recoveryAttempt);
         }
         streamOwnerRef.current += 1;
@@ -991,7 +1019,12 @@ export function useChatStreaming(
         setMessages([]);
         setConversations([]);
       }),
-    [setMessages, setConversations, finishAuthRecoveryAttempt]
+    [
+      setMessages,
+      setConversations,
+      finishAuthRecoveryAttempt,
+      beginAuthRecovery,
+    ]
   );
 
   // Capture a stable timestamp when streaming begins
@@ -1668,6 +1701,7 @@ export function useChatStreaming(
                   ? 'connection-lost'
                   : 'stream-error'
           );
+          if (!isCurrentSession()) return;
           setIsLoading(false);
           return;
         }
@@ -1713,6 +1747,7 @@ export function useChatStreaming(
           } else {
             await reconcileUser('empty-response');
           }
+          if (!isCurrentSession()) return;
           setIsLoading(false);
           if (isStoppedByUser()) stopTargetRef.current = null;
           activeRunThreadRef.current = null;
@@ -1952,6 +1987,7 @@ export function useChatStreaming(
     ) => {
       // This identity must be captured before the stream's token refresh can
       // synchronously emit SIGNED_OUT and clear the auth store.
+      if (!ownsRenderedSession()) return;
       const ownerUserId = useAuthStore.getState().user?.id;
       const isCurrentSession = captureChatSession();
       if (submitLockRef.current) {
@@ -2314,6 +2350,7 @@ export function useChatStreaming(
       }
     },
     [
+      ownsRenderedSession,
       input,
       isLoading,
       storeIsStreaming,
@@ -2339,6 +2376,7 @@ export function useChatStreaming(
   );
 
   const handleStop = useCallback(() => {
+    if (!ownsRenderedSession()) return;
     // Stop during a confirmation continuation has no main-stream active ref;
     // use the pending gate's workspace thread while the confirm lock owns the
     // producer. The parked (legacy) confirmation path stays no-body below.
@@ -2394,12 +2432,15 @@ export function useChatStreaming(
     // cancel. Close its durable run explicitly; if confirmation execution has
     // already started, aborting that live stream owns terminal cleanup.
     if (pendingConfirmation && !confirmLockRef.current) {
+      const isCurrentSession = captureChatSession();
       void agentChatService
         .cancelPendingConfirmation(pendingConfirmation.threadId)
-        .then(() =>
-          setPendingConfirmation(null, pendingConfirmation.workspaceThreadId)
-        )
+        .then(() => {
+          if (isCurrentSession())
+            setPendingConfirmation(null, pendingConfirmation.workspaceThreadId);
+        })
         .catch((error) => {
+          if (!isCurrentSession()) return;
           // Stop is locally authoritative: the user's intent stands even when
           // the durable cancel loses a race (409 once the graph resumed). The
           // per-turn stop target can't leak into later turns, so there is
@@ -2423,6 +2464,7 @@ export function useChatStreaming(
       storeStopStreaming();
     }
   }, [
+    ownsRenderedSession,
     pendingConfirmation,
     setPendingConfirmation,
     requestDurableStop,
@@ -2477,6 +2519,7 @@ export function useChatStreaming(
         const gapAwareCallbacks: AgentStreamCallbacks = {
           ...streamCallbacks,
           onReplayGap: (firstSeq, expectedSeq) => {
+            if (signal.aborted) return;
             console.warn(
               `[Chat] Resume replay gap: buffer starts at ${firstSeq}, expected ${expectedSeq}`
             );
@@ -2519,6 +2562,7 @@ export function useChatStreaming(
               ? latestRun.runId
               : latestRun.streamId
           );
+          if (signal.aborted) return;
           if (res.status === 'idle') {
             if (harnessConnection.executionProvider === 'codex') {
               // A missing active pointer is not proof that the external run
@@ -2551,6 +2595,7 @@ export function useChatStreaming(
     runStreamTurn,
     storeIsStreaming,
     harnessConnection,
+    resumeNonce,
   ]);
 
   // ---- Re-deliver a parked HITL confirmation on a cold thread load ----
@@ -2620,6 +2665,23 @@ export function useChatStreaming(
             });
             probeAbort.abort();
           },
+          // A Codex replay opens with its durable run_id (accepted frame),
+          // before any approval_required. That run is parked, not lost: hand
+          // it to the resume effect, whose runStreamTurn owns the approval
+          // card, the tokens and terminal reconciliation. The probe must not
+          // keep consuming the stream, or the completed turn is never
+          // reconciled.
+          onRunId: (runId) => {
+            if (probeAbort.signal.aborted) return;
+            if (harnessConnectionRef.current.executionProvider !== 'codex') {
+              return;
+            }
+            probeAbort.abort();
+            const activity = useAgentActivityStore.getState();
+            activity.startRun(threadId, 'Local Codex', 'resumed after reload');
+            activity.setRunId(threadId, runId);
+            setResumeNonce((n) => n + 1);
+          },
           onToken: abandonProbe,
           onToolStart: abandonProbe,
           onStatus: abandonProbe,
@@ -2646,6 +2708,7 @@ export function useChatStreaming(
   const handleConfirmation = useCallback(
     async (confirmed: boolean) => {
       const isCurrentSession = captureChatSession();
+      if (!ownsRenderedSession()) return;
       const ownerUserId = useAuthStore.getState().user?.id;
       if (!pendingConfirmation) return;
       // CX1 belt: block a synchronous double-click before it can fire a
@@ -3362,6 +3425,7 @@ export function useChatStreaming(
       }
     },
     [
+      ownsRenderedSession,
       flushPendingSeq,
       beginAuthRecovery,
       finishAuthRecoveryAttempt,

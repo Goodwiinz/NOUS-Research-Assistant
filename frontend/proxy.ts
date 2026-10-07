@@ -31,9 +31,15 @@ function buildCsp(nonce: string): string {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
-    "connect-src 'self' https: wss:",
+    // Dev: the browser calls the backend directly (getPublicApiOrigin falls
+    // back to http://localhost:8000), which https:/wss: alone would block.
+    `connect-src 'self' https: wss:${
+      process.env.NODE_ENV === 'development'
+        ? ' http://localhost:8000 ws://localhost:8000 http://127.0.0.1:8000 ws://127.0.0.1:8000'
+        : ''
+    }`,
     "worker-src 'self' blob:",
-    'upgrade-insecure-requests',
+    ...(process.env.NODE_ENV === 'development' ? [] : ['upgrade-insecure-requests']),
   ].join('; ');
 }
 

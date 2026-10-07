@@ -1,6 +1,6 @@
 # NOUS MCP alphaXiv Parity Implementation Plan (Plan 07)
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (or superpowers:subagent-driven-development) to implement this plan task-by-task. Owner's model policy for this plan (2026-10-05): **Sonnet at maximum effort ("ultra") for implementation subagents**; Fable only for planning/review. Supersedes the Opus default for this work. One slice = one PR, cut from `origin/develop` in its own worktree (`git worktree add .worktrees/<name> -b <branch> origin/develop`). Use the main checkout's `backend/.venv` (`/Users/goodwiinz/development/RAG_system/backend/.venv/bin/python`); worktrees have no venv. Push, merge, flag flips and live proof wait for the owner's word.
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (or superpowers:subagent-driven-development) to implement this plan task-by-task. Owner's model policy for this plan (2026-10-05): **Sonnet at maximum effort ("ultra") for implementation subagents**; Fable only for planning/review. Supersedes the Opus default for this work. One slice = one PR, cut from `origin/develop` in its own worktree (`git worktree add .worktrees/<name> -b <branch> origin/develop`). Python interpreter: `PY=${PY:-$(git rev-parse --show-toplevel)/backend/.venv/bin/python}` from the main checkout, or whatever `PY` the executor exports; worktrees have no venv of their own. Nothing below hard-codes a machine path. Push, merge, flag flips and live proof wait for the owner's word.
 
 **Goal:** Give the harness-bridge MCP server the job coverage of alphaXiv's MCP (find, read and query papers; look up researchers; curate a library) over NOUS data, under NOUS's grant and consent model.
 
@@ -14,7 +14,7 @@
 
 ## Conventions used by every task
 
-- Backend tests: `cd backend && ../../backend/.venv/bin/python -m pytest -q <path> -k <name>` from the worktree (or set `PY=/Users/goodwiinz/development/RAG_system/backend/.venv/bin/python`). Marker `unit` is registered; use `pytestmark = pytest.mark.unit`.
+- Backend tests: `cd backend && $PY -m pytest -q <path> -k <name>` from the worktree, with `PY` resolved as in the header. Marker `unit` is registered; use `pytestmark = pytest.mark.unit`.
 - Lint before each commit: `$PY -m ruff check backend/src backend/tests` and `$PY -m black --check <changed files>`; `$PY -m isort --check <changed files>`.
 - Bridge: `pnpm --filter @nous/harness-bridge type-check && pnpm --filter @nous/harness-bridge test`.
 - Any Pydantic schema change → `$PY scripts/ci/generate_openapi.py` then `pnpm --dir frontend generate:api-types`; commit both outputs in the same PR (the bridge imports `frontend/src/types/generated/api.d.ts`).
@@ -114,7 +114,7 @@ In `integration_grant.py`, for **both** `IntegrationGrantRequest` and `Integrati
     )
 ```
 
-(`from sqlalchemy import CheckConstraint`; use the real table name in each constraint name.) Same two column changes on `IntegrationToolAction` in `tool_action.py`, constraint name `ck_integration_tool_actions_one_binding`.
+(`from sqlalchemy import CheckConstraint`; use the real table name in each constraint name.) On `IntegrationToolAction` in `tool_action.py` the two columns mean different things — `project_id` is the **target** Collection of the action, `workspace_id` is the grant **binding** — and a workspace-grant action targeting a Collection sets **both**. So the actions table gets an OR constraint, not XOR: `CheckConstraint("project_id IS NOT NULL OR workspace_id IS NOT NULL", name="ck_integration_tool_actions_some_binding")`. (Codex review on #1881, plan L1013.)
 
 Migration `hb03_workspace_grants.py` (set `down_revision` to the output of `cd backend && $PY -m alembic heads`; must be a single head):
 
@@ -133,7 +133,7 @@ down_revision = "<current head>"
 branch_labels = None
 depends_on = None
 
-TABLES = ("integration_grant_requests", "integration_grants", "integration_tool_actions")
+TABLES = ("integration_grant_requests", "integration_grants", "integration_tool_actions")  # upgrade order; downgrade reverses it
 
 
 def upgrade() -> None:
@@ -148,16 +148,23 @@ def upgrade() -> None:
             ),
         )
         op.alter_column(table, "project_id", nullable=True)
-        op.create_check_constraint(
-            f"ck_{table}_one_binding", table, "(project_id IS NULL) <> (workspace_id IS NULL)"
-        )
+        if table == "integration_tool_actions":
+            op.create_check_constraint(
+                f"ck_{table}_some_binding", table, "project_id IS NOT NULL OR workspace_id IS NOT NULL"
+            )
+        else:
+            op.create_check_constraint(
+                f"ck_{table}_one_binding", table, "(project_id IS NULL) <> (workspace_id IS NULL)"
+            )
         op.create_index(f"ix_{table}_workspace_id", table, ["workspace_id"])
 
 
 def downgrade() -> None:
-    for table in TABLES:
+    # Children first: actions and grants hold FKs (request_id) into requests.
+    for table in reversed(TABLES):
         op.drop_index(f"ix_{table}_workspace_id", table_name=table)
-        op.drop_constraint(f"ck_{table}_one_binding", table, type_="check")
+        name = "some_binding" if table == "integration_tool_actions" else "one_binding"
+        op.drop_constraint(f"ck_{table}_{name}", table, type_="check")
         op.execute(f"DELETE FROM {table} WHERE project_id IS NULL")
         op.alter_column(table, "project_id", nullable=False)
         op.drop_column(table, "workspace_id")
@@ -310,6 +317,8 @@ Thread through the binding:
 - `exchange_request`: pass `request.workspace_id` to `_new_grant`.
 - `_validate_grant`: pass both to `validate_binding`; the consent lookup compares `project_id` **and** `workspace_id`.
 - `resolve_integration_context`: `project_id=grant.project_id, workspace_id=grant.workspace_id`.
+- `check_scopes`: scope implications so a grant can never carry a library scope without the gateway scope the `/tools` router requires: `library:read` ⇒ `tools:read`; `library:write` ⇒ `library:read` and `tools:write`. Raise `IntegrationAccessDenied` otherwise. Test both. (Codex #1881 L454: the `/integrations/tools` dependency stays `tools:read`.)
+- Workspace grants are MCP-only: `create_request`/`mint_integration_grant` reject `harness:execute` and `artifacts:publish` when `workspace_id` is set (`IntegrationAccessDenied`). Test it. (Codex #1881 L493.)
 
 **Step 4:** Tests → PASS. Run the whole `backend/tests/unit/services/integrations` + `backend/tests/unit/api/test_integration_*` → PASS.
 
@@ -376,7 +385,7 @@ async def _target_project(
 - `_live_project_documents(context)` → `_live_project_documents(project_id, organization_id)`; update callers.
 - `invoke_read`: replace `project_id = str(context.project_id)` with `target = await _target_project(...)`; if `None` for a project-scoped tool return `ToolResult(content=[{"error": "project_id_required"}], is_error=True, source_refs=[])`. `_verify_project_ownership(str(target), db, user)` stays.
 - `list_read_tools()`: when advertising, add an optional `project_id` property with description "Required for workspace grants: which project to act on." Keep `additionalProperties: False`.
-- `tool_actions.py`: `IntegrationToolAction.project_id` may be None for future folder actions, but in this slice every action still has a project; add `workspace_id` to `ActionActor` and persist it on the row; `_same_target` compares both; `_authority_intact` compares `grant.workspace_id` too; `get_action_for_review` uses an outer join on Collection and tolerates `None` label (`project_label: str | None`).
+- `tool_actions.py`: `IntegrationToolAction.project_id` may be None for future folder actions, but in this slice every action still has a project; add `workspace_id` to `ActionActor` and persist it on the row; `_same_target` compares both; `_authority_intact` compares `grant.workspace_id` too; `get_action_for_review` outer-joins `Collection` on `project_id` **and** joins `Workspace` on `IntegrationToolAction.workspace_id` (falling back to `Collection.workspace_id`), so `ActionReview` gains `workspace_id: UUID | None` and `workspace_label: str | None` next to a now-optional `project_label`; the review page renders the workspace row whenever `project_label` is null. Test: a workspace-level row yields a workspace label. (Codex #1881 L380.)
 - Routers: `_actor` passes `workspace_id=context.workspace_id`. `artifacts.py` / `harness.py`: `if context.project_id is None: raise HTTPException(403, "Integration access denied")`.
 
 **Step 4:** Tests → PASS; full `backend/tests/unit/services/integrations`, `backend/tests/unit/services/agent/test_tool_actions.py`, `backend/tests/unit/api/test_integration_*`, `backend/tests/unit/architecture` → PASS. Regenerate OpenAPI + api types (schemas changed). `pnpm --filter @nous/harness-bridge type-check` → PASS (the `ActionStatus` type is unchanged; `GrantRequestDTO` fields widened).
@@ -418,17 +427,28 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
     # name: (description, input_schema, required scope)
     "list_library": (
         "List the folders (NOUS projects) this connection may use, with document counts.",
-        {"type": "object", "properties": {}, "additionalProperties": False, "required": []},
+        {"type": "object", "additionalProperties": False, "required": [],
+         "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 50},
+                        "offset": {"type": "integer", "minimum": 0, "default": 0}}},
         "library:read",
     ),
 }
+# Strict argument models for local tools; the registry path already validates
+# through pydantic, local tools must not be weaker. (Codex #1881 L431.)
+class _ListLibraryArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    limit: int = Field(default=50, ge=1, le=50)
+    offset: int = Field(default=0, ge=0)
+
+
+LOCAL_TOOL_MODELS: dict[str, type[BaseModel]] = {"list_library": _ListLibraryArgs}
 TOOL_SCOPES: dict[str, str] = {name: "tools:read" for name in READ_TOOL_NAMES} | {
     name: scope for name, (_d, _s, scope) in LOCAL_TOOLS.items()
 }
 ```
 
 - `list_read_tools(scopes: Iterable[str] | None = None)` → registry tools plus `LOCAL_TOOLS`, filtered to the grant's scopes when given.
-- `_validate_arguments`: local tools validate against their own schema (plain key check; no pydantic model).
+- `_validate_arguments`: local tools validate with `LOCAL_TOOL_MODELS[name].model_validate(arguments, strict=True)`; `ValidationError` → `ToolArgumentError("invalid argument types")`, unknown keys → `"unknown arguments"` (same 422 contract as registry tools). Every later local tool (Slices 2–4) adds its own strict model here.
 - Branch in `invoke_read`:
 
 ```python
@@ -442,11 +462,15 @@ TOOL_SCOPES: dict[str, str] = {name: "tools:read" for name in READ_TOOL_NAMES} |
                 CollectionDocument.is_deleted.is_(False)))
             .where(Collection.id.in_(allowed), Collection.is_deleted.is_(False))
             .group_by(Collection.id, Collection.name, Collection.description)
-            .order_by(Collection.name)
+            .order_by(Collection.name, Collection.id)
+            .offset(offset)
+            .limit(limit + 1)
         )
+        found = rows.all()
         payload = {"folders": [
-            {"id": str(i), "name": n, "description": d, "document_count": int(c)}
-            for i, n, d, c in rows.all()]}
+            {"id": str(i), "name": n, "description": (d or "")[:500], "document_count": int(c)}
+            for i, n, d, c in found[:limit]],
+            "offset": offset, "next_offset": offset + limit if len(found) > limit else None}
 ```
 
 `list_library` skips the per-project `_verify_project_ownership` block (it has no single target); restructure `invoke_read` so that block runs only for project-scoped tools.
@@ -500,7 +524,7 @@ test("--library requires --tools and --write", () => {
   ];
 ```
 
-Consent body: `{ ...(options.projectId ? { project_id } : { workspace_id }), device_id, scopes }`. Persist `workspaceId` in `LocalState`. `mcpSession`: `...(state.scopes?.includes("library:write") ? { library: true } : {})`; `McpSession.library?: boolean`. Argv in `mcp/config.ts`: `...(session.library ? ["--library"] : [])` (used in Slice 3). README: document `--workspace`, `--library`.
+`--workspace` is MCP-only: throw `"--workspace cannot be combined with --publish"`, and build the scope list **without** `harness:execute` when `workspaceId` is set (harness runs and artifact publication stay project-bound; the backend refuses them anyway, Task 1.3). `mcpSession`/`sessionOptionsFor`: when `state.workspaceId` is set, never offer `outputRoot` and make the managed-session path throw `"workspace connections are MCP-only; reconnect with --project to run harness sessions"`. Tests for both. Consent body: `{ ...(options.projectId ? { project_id } : { workspace_id }), device_id, scopes }`. Persist `workspaceId` in `LocalState`. `mcpSession`: `...(state.scopes?.includes("library:write") ? { library: true } : {})`; `McpSession.library?: boolean`. Argv in `mcp/config.ts`: `...(session.library ? ["--library"] : [])` (used in Slice 3). README: document `--workspace`, `--library`.
 
 **Step 4:** type-check + tests → PASS. **Step 5:** Commit `feat(harness-bridge): connect --workspace and --library`.
 
@@ -794,6 +818,14 @@ Failing test: fake the service function via `monkeypatch`, assert it is called w
 # Slice 3 — Library writes with auto-run
 
 Branch: `feat/plan07-s3-library-actions`. Depends on S1.
+
+> **Review amendments (Codex on PR #1881, 2026-10-05) — apply these when executing S3; they supersede the task text below where they conflict:**
+> 1. Scope per action, not per route. `request_action` checks `REQUIRED_SCOPE_FOR[tool_name]` ∈ `actor.scopes` (`tools:write` for `create_project_note`, `delete_folder`, `ingest_arxiv_papers`; `library:write` for the auto-run set) and `_authority_intact` re-checks the **same per-action scope** on the live grant. Tests: a `library:write`-only grant cannot request or execute `delete_folder` / `ingest_arxiv_papers`; a `tools:write`-only grant gets `awaiting_approval` for library actions. (L945)
+> 2. Selector vs identity. Split `IDENTITY_KEYS` (actor identity: `user_id`, `organization_id`, `thread_id`, `run_id`, `grant_id`) from `SELECTOR_KEYS` (`project_id`, `from_project_id`, `to_project_id`): `_only` rejects identity keys, validators parse selectors, `_resolve_target` validates them against `authorized_scope`. Project grants still reject any selector that is not the bound project. (L877)
+> 3. Targets without a project selector. `update_document_metadata` resolves its target Collection through **live `CollectionDocument` membership** of `document_id` within `authorized_scope` (ambiguous across several in-scope Collections → use the first by name, record all in the receipt). `ingest_arxiv_papers` under a workspace grant **requires** a `project_id` selector (add to its validator; project grants ignore/forbid it). (L1001, L912)
+> 4. Non-committing effects only. `_tool_ingest_arxiv` opens its own sessions and writes object storage, so it cannot run inside `_run_effect`'s single transaction: keep `ingest_arxiv_papers` on the approval path **and** execute it through the existing Celery drain with its own idempotency key, recording the receipt after the fact (same pattern as today's approved notes if they already run via the worker; otherwise mark the row `executing` and let the worker `_finish`). Document the weaker atomicity in the receipt. (L1035)
+> 5. `PUT /files/{id}` has no service; the router commits inline. Extract `services/documents/file_metadata_service.update_file_metadata(db, file_id, user, *, title, tags, commit=True)` in S3, point the router at it (behaviour unchanged, architecture tests green), then call it with `commit=False` from `_run_effect`. (L1033)
+> 6. `IntegrationToolAction` rows for workspace actions set both `project_id` (target) and `workspace_id` (binding); `create_folder` sets only `workspace_id`. Matches the OR constraint from Task 1.2. (L1013)
 
 ### Task 3.1: Action registry with per-action validators and effect modes
 
@@ -1137,7 +1169,7 @@ Task sketch: `LOCAL_TOOLS["discover_papers"] {query, sources?: ["corpus","arxiv"
 1. GitOps PR: `NOUS_MCP_ENABLED: "true"` in `infrastructure/helm/knowledge-graph-analytics/values-aws.yaml` `backend.env`.
 2. `nous-harness connect --workspace <id> --tools --write --library`, approve in browser (check labels + workspace row).
 3. From Claude Code: `list_library` → `search_arxiv` → `get_arxiv_paper_content` (two pages) → `ingest_arxiv_papers` (approve) → `get_document_content` → `retrieve_passages` → `save_papers_to_folder` (no approval) → `move_papers_between_folders` → `find_researchers` → `get_researcher` → `delete_folder` (approval).
-4. Each step: paste the `ToolResult` and the `agent_runs`/`integration_tool_actions` rows. Anything not executed stays `NOT RUN`.
+4. Each step: record only ids, states, result sizes, `sha256` of the `ToolResult` body and a one-line redacted assertion ("folder X now has N docs"). Never paste raw `ToolResult` bodies, prompts, document excerpts or whole `agent_runs` / `integration_tool_actions` rows into tracked docs (Codex #1881 L1140). Anything not executed stays `NOT RUN`.
 
 ## Plan index amendment
 

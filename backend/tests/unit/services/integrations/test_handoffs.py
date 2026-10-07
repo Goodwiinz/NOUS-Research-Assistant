@@ -247,6 +247,25 @@ async def test_unbound_grant_cannot_save(db: AsyncSession) -> None:
     assert await _count(db) == 0
 
 
+async def test_workspace_grant_cannot_read_or_save(db: AsyncSession) -> None:
+    # A handoff belongs to one chat of one project. A workspace-bound context
+    # has no project even if it somehow carried a thread, so both operations
+    # are refused rather than answering "no handoff" or reaching the database.
+    workspace_ctx = IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        workspace_id=WORKSPACE,
+        thread_id=THREAD,
+        grant_id=uuid4(),
+        consent_id=uuid4(),
+    )
+    with pytest.raises(IntegrationAccessDenied):
+        await read_latest(db, workspace_ctx)
+    with pytest.raises(IntegrationAccessDenied):
+        await save(db, workspace_ctx, _payload())
+    assert await _count(db) == 0
+
+
 async def test_thread_moved_out_of_project_cannot_save(db: AsyncSession) -> None:
     await db.execute(
         update(Thread).where(Thread.id == THREAD).values(source_project_id=None)

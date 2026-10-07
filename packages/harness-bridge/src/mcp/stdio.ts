@@ -49,7 +49,9 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
       local.push(unavailablePublishTool(session.outputRoot, reason));
     }
   }
-  if (session.actions) {
+  // --actions (tools:write, either binding) or --library (library:write)
+  // offers the action tools; NOUS checks each action's own scope.
+  if (session.actions || session.library) {
     // Requests only: approval stays a browser action the model cannot take.
     const actions = new ActionHttpClient(session.apiOrigin, credentials, keeper.fetch);
     local.push(requestActionTool(actions), actionStatusTool(actions));

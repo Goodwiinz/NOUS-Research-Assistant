@@ -65,6 +65,8 @@ export function setActiveAbortController(
 let chatSession = new AbortController();
 const sessionResetListeners = new Set<() => void>();
 
+export const getChatSessionSignal = (): AbortSignal => chatSession.signal;
+
 export function captureChatSession(): () => boolean {
   const signal = chatSession.signal;
   return () => !signal.aborted;

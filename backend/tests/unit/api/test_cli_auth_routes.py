@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+import json
+import logging
+from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -30,6 +35,12 @@ def test_cli_auth_start_returns_session_and_browser_url(client: TestClient) -> N
     assert body["session_id"]
     assert body["verification_code"]
     assert "/cli-auth?" in body["browser_url"]
+    # Regression (audit I22): the verification code must ride in the fragment,
+    # which browsers never send to servers, proxies or Referer.
+    parts = urlsplit(body["browser_url"])
+    assert parse_qs(parts.query) == {"session_id": [body["session_id"]]}
+    assert body["verification_code"] not in parts.query
+    assert parse_qs(parts.fragment) == {"code": [body["verification_code"]]}
     assert body["poll_token"]
     assert body["poll_interval_seconds"] == 2
 
@@ -66,10 +77,69 @@ def test_cli_auth_status_returns_pending_session(client: TestClient) -> None:
 
     response = client.get(
         f"/api/v1/cli-auth/status/{started['session_id']}",
-        params={"poll_token": started["poll_token"]},
+        headers={"X-CLI-Poll-Token": started["poll_token"]},
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
     body = response.json()
     assert body["status"] == "pending"
     assert body["session_id"] == started["session_id"]
+
+
+def test_cli_auth_status_rejects_missing_or_wrong_poll_token(
+    client: TestClient,
+) -> None:
+    started = client.post("/api/v1/cli-auth/start").json()
+    url = f"/api/v1/cli-auth/status/{started['session_id']}"
+
+    for rejected in (
+        client.get(url),
+        client.get(url, headers={"X-CLI-Poll-Token": "wrong"}),
+    ):
+        assert rejected.status_code == 404
+        assert rejected.headers["cache-control"] == "no-store"
+
+
+def test_cli_auth_status_legacy_query_token_warns_without_logging_secret(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    started = client.post("/api/v1/cli-auth/start").json()
+
+    with caplog.at_level(logging.WARNING, logger="src.api.auth.cli_auth"):
+        response = client.get(
+            f"/api/v1/cli-auth/status/{started['session_id']}",
+            params={"poll_token": started["poll_token"]},
+        )
+
+    assert response.status_code == 200
+    assert "query string" in caplog.text
+    assert started["poll_token"] not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cli_poll_token_is_redacted_from_audit_request_details() -> None:
+    from src.middleware.audit import AuditMiddleware
+
+    middleware = AuditMiddleware(FastAPI(), audit_service=MagicMock())
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/api/v1/cli-auth/status/session-1",
+            "query_string": b"",
+            "headers": [
+                (b"x-cli-poll-token", b"audit-poll-secret"),
+                (b"x-request-id", b"request-1"),
+            ],
+            "server": ("testserver", 443),
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+    details = await middleware._extract_request_info(request)
+
+    assert details["headers"]["x-cli-poll-token"] == "[REDACTED]"
+    assert details["headers"]["x-request-id"] == "request-1"
+    assert "audit-poll-secret" not in json.dumps(details)

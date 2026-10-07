@@ -40,6 +40,7 @@ const CODE_LABEL: Record<string, string> = {
   superseded_assessment: 'Superseded assessment',
   stale_evidence: 'Stale evidence',
   unattributed_interpretation: 'Unattributed interpretation',
+  superseded_claim: 'Superseded claim',
   identity_mismatch: 'Identifier mismatch',
   retracted_source: 'Retracted source',
 };
