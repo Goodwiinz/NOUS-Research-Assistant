@@ -18,6 +18,7 @@ from src.models.user import User
 from src.schemas.quality_metrics import (
     AnalyticsExportRequest,
     AnalyticsExportResponse,
+    BehaviorReportRequest,
     ContentUsageAnalytics,
     UserBehaviorAnalytics,
 )
@@ -140,7 +141,13 @@ async def get_my_behavior_analytics(
     """Get behavior analytics for the current user"""
     try:
         metrics = await user_behavior_service.analyze_user_behavior(
-            user_id=str(current_user.id), days_back=days_back
+            user_id=str(current_user.id),
+            days_back=days_back,
+            organization_id=(
+                str(current_user.organization_id)
+                if current_user.organization_id
+                else None
+            ),
         )
 
         return UserBehaviorAnalytics(
@@ -194,7 +201,9 @@ async def get_user_behavior_analytics(
             raise HTTPException(status_code=403, detail="Insufficient permissions")
 
         metrics = await user_behavior_service.analyze_user_behavior(
-            user_id=user_id, days_back=days_back
+            user_id=user_id,
+            days_back=days_back,
+            organization_id=str(current_user.organization_id),
         )
 
         return UserBehaviorAnalytics(
@@ -419,7 +428,10 @@ async def get_organization_user_behavior(
         for user in users:
             try:
                 metrics = await user_behavior_service.analyze_user_behavior(
-                    user_id=str(user.id), days_back=90, use_cache=True
+                    user_id=str(user.id),
+                    days_back=90,
+                    use_cache=True,
+                    organization_id=str(current_user.organization_id),
                 )
 
                 if metrics.session_count > 0:  # Only include active users
@@ -551,9 +563,10 @@ async def get_content_usage_analytics(
 
 @router.post("/reports/generate")
 async def generate_behavior_report(
-    report_request: Dict[str, Any],
+    report_request: BehaviorReportRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_sync),
 ):
     """Generate comprehensive behavior analytics report"""
     try:
@@ -563,18 +576,35 @@ async def generate_behavior_report(
         if current_user.role not in [UserRole.ADMIN]:
             raise HTTPException(status_code=403, detail="Insufficient permissions")
 
-        report_type = report_request.get("report_type", "organization")
-        days_back = report_request.get("days_back", 30)
-        user_id = report_request.get("user_id")
+        user_id: Optional[str] = None
+        if report_request.user_id is not None:
+            # Tenant scope (mirrors get_user_behavior_analytics): UserRole.ADMIN
+            # is per-organization, so the body-supplied target user MUST belong
+            # to the caller's org. Reject a null-org caller (None == None) and a
+            # missing target with the same 403 so this is not an existence oracle.
+            from src.models.user import User as UserModel
+
+            target_user = (
+                db.query(UserModel)
+                .filter(UserModel.id == report_request.user_id)
+                .first()
+            )
+            if (
+                not current_user.organization_id
+                or not target_user
+                or target_user.organization_id != current_user.organization_id
+            ):
+                raise HTTPException(status_code=403, detail="Insufficient permissions")
+            user_id = str(report_request.user_id)
 
         # Generate report
         report = await user_behavior_service.generate_behavior_report(
             user_id=user_id,
             organization_id=str(current_user.organization_id),
-            days_back=days_back,
+            days_back=report_request.days_back,
         )
 
-        report["report_type"] = report_type
+        report["report_type"] = report_request.report_type
         report["requested_by"] = str(current_user.id)
 
         return report
