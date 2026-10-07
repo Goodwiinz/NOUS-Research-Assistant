@@ -26,8 +26,10 @@ import {
   standaloneInstallCommand,
 } from "../src/mcp/config.ts";
 import {
+  addWorkspace,
   connect,
   mcpInstallCommand,
+  runBridge,
   sessionOptionsFor,
   type LocalState,
 } from "../src/cli.ts";
@@ -53,6 +55,28 @@ const readResult = {
   is_error: false,
   source_refs: [{ kind: "document", id: "doc-1" }],
 };
+const PROJECT = "11111111-1111-4111-8111-111111111111";
+const WORKSPACE = "88888888-8888-4888-8888-888888888888";
+const CHAT = "99999999-9999-4999-8999-999999999999";
+const DEVICE = "22222222-2222-4222-8222-222222222222";
+
+/** Answers the CLI login, device, consent and exchange calls and records each request. */
+function consentFetch(calls: { url: string; body: any }[]): typeof fetch {
+  return (async (input: any, init: any) => {
+    const url = String(input);
+    calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
+    let data: object;
+    if (url.endsWith("/cli-auth/start"))
+      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l" };
+    else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
+    else if (url.endsWith("/integrations/devices")) data = { id: DEVICE };
+    else if (url.endsWith("/grant-requests"))
+      data = { id: "33333333-3333-4333-8333-333333333333", approval_url: "https://nous.test/a" };
+    else if (url.endsWith("/exchange")) data = { token: "grant-secret" };
+    else data = { status: "approved" };
+    return new Response(JSON.stringify(data), { status: 200 });
+  }) as typeof fetch;
+}
 
 /** Records every request the backend receives, including headers and bodies. */
 async function recordingBackend(status = 200, readBody: unknown = readResult) {
@@ -344,6 +368,498 @@ test("managed sessions get the MCP server only with tools:read, with an absolute
     assert.ok(isAbsolute(args[args.indexOf("--import") + 1]!));
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("connect --workspace --library requests a workspace binding and the library scopes, never harness:execute", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-"));
+  const calls: { url: string; body: any }[] = [];
+  const messages: string[] = [];
+  try {
+    await connect({
+      stateDir: dir,
+      fetchFn: consentFetch(calls),
+      announce: (message) => messages.push(message),
+      apiUrl: "https://nous.test/api/v1",
+      workspaceId: WORKSPACE,
+      label: "dev",
+      tools: true,
+      write: true,
+      library: true,
+    });
+    const consent = calls.find((c) => c.url.endsWith("/grant-requests"))!;
+    // Harness runs stay project-bound; the backend refuses harness:execute for a workspace grant.
+    assert.deepEqual(consent.body, {
+      workspace_id: WORKSPACE,
+      device_id: DEVICE,
+      scopes: ["tools:read", "tools:write", "library:read", "library:write"],
+    });
+    // There is no project to register local folders against.
+    assert.equal(calls.some((c) => c.url.endsWith("/workspaces")), false);
+    const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
+    assert.equal(state.workspaceId, WORKSPACE);
+    assert.equal("projectId" in state, false);
+    assert.deepEqual(state.scopes, ["tools:read", "tools:write", "library:read", "library:write"]);
+    assert.deepEqual(state.workspaces, []);
+    assert.equal(messages.some((m) => m.includes("device and workspace")), true);
+    assert.equal(messages.at(-1), `Connected to workspace ${WORKSPACE}.`);
+    // The standalone MCP command knows the grant can write the library and is bound to no folder.
+    // It offers no request_action: NOUS refuses every request a workspace grant makes.
+    const install = await mcpInstallCommand(dir);
+    assert.equal(install.includes("'--actions'"), false);
+    assert.equal(install.includes("'--library'"), true);
+    assert.equal(install.includes("'--root'"), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("connect --project --library keeps harness:execute and puts the library scopes last", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-project-library-"));
+  const calls: { url: string; body: any }[] = [];
+  try {
+    await connect({
+      stateDir: dir,
+      fetchFn: consentFetch(calls),
+      announce: () => {},
+      apiUrl: "https://nous.test/api/v1",
+      projectId: PROJECT,
+      label: "dev",
+      tools: true,
+      write: true,
+      library: true,
+    });
+    const consent = calls.find((c) => c.url.endsWith("/grant-requests"))!;
+    assert.deepEqual(consent.body, {
+      project_id: PROJECT,
+      device_id: DEVICE,
+      scopes: ["harness:execute", "tools:read", "tools:write", "library:read", "library:write"],
+    });
+    const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
+    assert.equal(state.projectId, PROJECT);
+    assert.equal("workspaceId" in state, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("connect refuses contradictory binding and scope flags before any request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-flags-"));
+  const calls: { url: string; body: any }[] = [];
+  const base = {
+    stateDir: dir,
+    fetchFn: consentFetch(calls),
+    announce: () => {},
+    apiUrl: "https://nous.test/api/v1",
+    label: "dev",
+  };
+  const project = { ...base, projectId: PROJECT };
+  const workspace = { ...base, workspaceId: WORKSPACE };
+  try {
+    for (const bound of [project, workspace]) {
+      await assert.rejects(connect({ ...bound, tools: false, library: true }), /--library requires --tools/);
+      await assert.rejects(
+        connect({ ...bound, tools: true, write: false, library: true }),
+        /--library requires --write/,
+      );
+    }
+    await assert.rejects(
+      connect({ ...workspace, tools: true, publish: true }),
+      /--workspace cannot be combined with --publish/,
+    );
+    // Without tools:read a workspace grant could do nothing, and NOUS refuses an empty scope set.
+    await assert.rejects(connect({ ...workspace }), /--workspace requires --tools/);
+    await assert.rejects(connect({ ...base, tools: true }), /--project or --workspace \(not both\) required/);
+    await assert.rejects(
+      connect({ ...base, projectId: PROJECT, workspaceId: WORKSPACE, tools: true }),
+      /--project or --workspace \(not both\) required/,
+    );
+    await assert.rejects(
+      connect({ ...workspace, workspaceId: "not-a-uuid", tools: true }),
+      /workspace UUID and device label required/,
+    );
+    await assert.rejects(
+      connect({ ...project, projectId: "not-a-uuid", tools: true }),
+      /project UUID and device label required/,
+    );
+    // A chat belongs to one project, so it cannot bind a workspace grant.
+    await assert.rejects(connect({ ...workspace, tools: true, threadId: CHAT }), /--chat requires --project/);
+    // A handoff lives in one chat of one project; a workspace grant has neither.
+    await assert.rejects(
+      connect({ ...workspace, tools: true, handoff: true }),
+      /--workspace cannot be combined with --handoff/,
+    );
+    assert.equal(calls.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--context is a project capability: connect --workspace refuses it before any request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-context-flags-"));
+  const calls: { url: string; body: any }[] = [];
+  const base = {
+    stateDir: dir,
+    fetchFn: consentFetch(calls),
+    announce: () => {},
+    apiUrl: "https://nous.test/api/v1",
+    label: "dev",
+  };
+  try {
+    // The memories a user selects belong to one project's consent, and NOUS
+    // refuses context:read for a workspace grant, so asking for it could only
+    // fail after the browser consent.
+    for (const extra of [{}, { write: true, library: true }]) {
+      await assert.rejects(
+        connect({ ...base, workspaceId: WORKSPACE, tools: true, ...extra, context: true }),
+        /--workspace cannot be combined with --context/,
+      );
+    }
+    assert.equal(calls.length, 0);
+    // A project connection still requests it, after the scopes it implies.
+    await connect({ ...base, projectId: PROJECT, tools: true, context: true });
+    const consent = calls.find((c) => c.url.endsWith("/grant-requests"))!;
+    assert.deepEqual(consent.body, {
+      project_id: PROJECT,
+      device_id: DEVICE,
+      scopes: ["harness:execute", "tools:read", "context:read"],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the Status paragraph of harness-bridge.md never calls a scope connect requests unexposed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-status-doc-"));
+  const calls: { url: string; body: any }[] = [];
+  try {
+    // Every flag on, so the one consent request carries every scope connect can ask for.
+    await connect({
+      stateDir: dir,
+      fetchFn: consentFetch(calls),
+      announce: () => {},
+      apiUrl: "https://nous.test/api/v1",
+      label: "dev",
+      projectId: PROJECT,
+      threadId: CHAT,
+      tools: true,
+      publish: true,
+      write: true,
+      library: true,
+      handoff: true,
+      context: true,
+    });
+    const requestable: string[] = calls.find((c) => c.url.endsWith("/grant-requests"))!.body.scopes;
+    assert.ok(requestable.includes("context:read"), "no flag reaches context:read any more: revisit the Status paragraph");
+
+    const doc = readFileSync(fileURLToPath(new URL("../../../docs/engineering/harness-bridge.md", import.meta.url)), "utf8");
+    const status = doc.split("\n").find((line) => line.startsWith("**Status:**"));
+    assert.ok(status, "harness-bridge.md has no Status paragraph");
+    const unexposed = status
+      .split(/[.;]\s/)
+      .filter((clause) => /\bnot exposed\b/.test(clause))
+      .flatMap((clause) => [...clause.matchAll(/`([a-z]+:[a-z]+)`/g)].map((match) => match[1]));
+    assert.deepEqual(
+      unexposed.filter((scope) => requestable.includes(scope)),
+      [],
+      "the Status paragraph calls a scope that nous-harness connect requests 'not exposed'",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a workspace connection never launches the MCP child with --context", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-context-"));
+  const install = async (scopes: string[], binding: Record<string, string>) => {
+    await new CredentialStore(stateDir).writeLocal("connection", {
+      apiUrl: "https://nous.example/api/v1",
+      deviceId: randomUUID(),
+      credentialHandle: randomUUID(),
+      scopes,
+      workspaces: [],
+      ...binding,
+    });
+    return mcpInstallCommand(stateDir, { announce: () => {} });
+  };
+  try {
+    // context:read is what offers read_selected_context. NOUS refuses it for a
+    // workspace grant, so even a stored connection that claims the scope must
+    // not offer the model a tool that can only fail.
+    const workspace = await install(["tools:read", "context:read"], { workspaceId: WORKSPACE });
+    assert.equal(workspace.includes("'--context'"), false);
+    // A project connection keeps it.
+    const project = await install(["harness:execute", "tools:read", "context:read"], { projectId: PROJECT });
+    assert.equal(project.includes("'--context'"), true);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("--handoff and --library each reach the MCP child argv on their own scope", () => {
+  const folder = { id: randomUUID(), root: "/tmp", label: "w", projectId: randomUUID() };
+  const state: LocalState = {
+    apiUrl: "https://nous.example/api/v1",
+    deviceId: randomUUID(),
+    projectId: folder.projectId,
+    threadId: CHAT,
+    credentialHandle: randomUUID(),
+    scopes: ["harness:execute", "tools:read"],
+    workspaces: [folder],
+  };
+  const flags = (...scopes: string[]) => {
+    const args = sessionOptionsFor("/tmp/state", { ...state, scopes: ["harness:execute", "tools:read", ...scopes] }, folder.id)
+      .mcpConfig?.nous?.args ?? [];
+    return { handoff: args.includes("--handoff"), library: args.includes("--library") };
+  };
+  assert.deepEqual(flags(), { handoff: false, library: false });
+  assert.deepEqual(flags("handoff:read", "handoff:write"), { handoff: true, library: false });
+  assert.deepEqual(flags("tools:write", "library:read", "library:write"), { handoff: false, library: true });
+  assert.deepEqual(
+    flags("tools:write", "handoff:read", "handoff:write", "library:read", "library:write"),
+    { handoff: true, library: true },
+  );
+});
+
+test("the nous-harness CLI parses --workspace and --library into the consent request", async () => {
+  const requests: { path: string; body: any }[] = [];
+  const server = createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => (raw += chunk));
+    request.on("end", () => {
+      const path = request.url ?? "";
+      requests.push({ path, body: raw ? JSON.parse(raw) : undefined });
+      let data: object = { status: "approved" };
+      if (path.endsWith("/cli-auth/start"))
+        data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l" };
+      else if (path.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
+      else if (path.endsWith("/integrations/devices")) data = { id: DEVICE };
+      else if (path.endsWith("/grant-requests"))
+        data = { id: "33333333-3333-4333-8333-333333333333", approval_url: "https://nous.test/a" };
+      else if (path.endsWith("/exchange")) data = { token: "grant-secret" };
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(data));
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("no port");
+  const api = `http://127.0.0.1:${address.port}/api/v1`;
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-cli-"));
+  const cwd = mkdtempSync(join(tmpdir(), "nous-mcp-cli-cwd-"));
+  const cli = async (...args: string[]) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", fileURLToPath(import.meta.resolve("tsx")), cliPath, ...args, "--api", api, "--store", dir],
+      { cwd, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.stdout.resume();
+    const [code] = (await once(child, "exit")) as [number | null];
+    return { code, stderr };
+  };
+  try {
+    const both = await cli("connect", "--project", PROJECT, "--workspace", WORKSPACE, "--label", "dev", "--tools");
+    assert.equal(both.code, 1);
+    assert.match(both.stderr, /--project or --workspace \(not both\) required/);
+    assert.equal(requests.length, 0);
+
+    const withContext = await cli("connect", "--workspace", WORKSPACE, "--label", "dev", "--tools", "--context");
+    assert.equal(withContext.code, 1);
+    assert.match(withContext.stderr, /--workspace cannot be combined with --context/);
+    assert.equal(requests.length, 0);
+
+    const ok = await cli("connect", "--workspace", WORKSPACE, "--label", "dev", "--tools", "--write", "--library");
+    assert.equal(ok.code, 0, ok.stderr);
+    const consent = requests.find((r) => r.path.endsWith("/grant-requests"))!;
+    assert.deepEqual(consent.body, {
+      workspace_id: WORKSPACE,
+      device_id: DEVICE,
+      scopes: ["tools:read", "tools:write", "library:read", "library:write"],
+    });
+    const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
+    assert.equal(state.workspaceId, WORKSPACE);
+    assert.equal("projectId" in state, false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("reconnecting to a workspace does not re-register folders against a missing project", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-carry-"));
+  const keep = mkdtempSync(join(tmpdir(), "nous-keep-"));
+  const calls: { url: string; body: any }[] = [];
+  const messages: string[] = [];
+  try {
+    await new CredentialStore(dir).writeLocal("connection", {
+      apiUrl: "https://nous.test/api/v1",
+      deviceId: "44444444-4444-4444-8444-444444444444",
+      projectId: PROJECT,
+      credentialHandle: "55555555-5555-4555-8555-555555555555",
+      scopes: ["harness:execute", "tools:read"],
+      workspaces: [{ id: "66666666-6666-4666-8666-666666666666", root: keep, label: "Kept", projectId: PROJECT }],
+    } satisfies LocalState);
+    await connect({
+      stateDir: dir,
+      fetchFn: consentFetch(calls),
+      announce: (message) => messages.push(message),
+      apiUrl: "https://nous.test/api/v1",
+      workspaceId: WORKSPACE,
+      label: "dev",
+      tools: true,
+    });
+    assert.equal(calls.some((c) => c.url.endsWith("/workspaces")), false);
+    const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
+    assert.deepEqual(state.workspaces, []);
+    assert.equal(state.workspaceId, WORKSPACE);
+    assert.equal("projectId" in state, false);
+    // The old folders are dropped loudly, never silently.
+    assert.equal(messages.some((m) => /not carried over.*MCP-only.*--project/.test(m)), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(keep, { recursive: true, force: true });
+  }
+});
+
+test("workspace connections are MCP-only: no managed sessions, folders, bridge run or output root", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-state-"));
+  const folder = { id: randomUUID(), root: stateDir, label: "w", projectId: randomUUID() };
+  const state: LocalState = {
+    apiUrl: "https://nous.example/api/v1",
+    deviceId: randomUUID(),
+    workspaceId: WORKSPACE,
+    credentialHandle: randomUUID(),
+    scopes: ["tools:read"],
+    workspaces: [folder],
+  };
+  try {
+    assert.throws(
+      () => sessionOptionsFor(stateDir, state, folder.id),
+      /workspace connections are MCP-only; reconnect with --project to run harness sessions/,
+    );
+    // Even a hand-edited state that claims artifacts:publish and a folder gets no output root.
+    const forged = { ...state, scopes: ["tools:read", "artifacts:publish"] };
+    await new CredentialStore(stateDir).writeLocal("connection", forged);
+    const command = await mcpInstallCommand(stateDir, { announce: () => {} });
+    assert.equal(command.includes("'--root'"), false);
+    // Neither folder registration nor the bridge loop can start from a workspace connection.
+    await assert.rejects(
+      addWorkspace({ stateDir, root: stateDir }),
+      /workspace connections are MCP-only; reconnect with --project to register local folders/,
+    );
+    // Bounded, so a missing guard fails the assertion instead of looping forever.
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), 2000);
+    try {
+      await assert.rejects(
+        runBridge(stateDir, stop.signal),
+        /workspace connections are MCP-only; reconnect with --project to run harness sessions/,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("a workspace connection never launches the MCP child with --actions", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-actions-"));
+  const install = async (scopes: string[], binding: Record<string, string>) => {
+    await new CredentialStore(stateDir).writeLocal("connection", {
+      apiUrl: "https://nous.example/api/v1",
+      deviceId: randomUUID(),
+      credentialHandle: randomUUID(),
+      scopes,
+      workspaces: [],
+      ...binding,
+    });
+    return mcpInstallCommand(stateDir, { announce: () => {} });
+  };
+  try {
+    // tools:write is what offers request_action, but a workspace grant has no
+    // project to create a note in and NOUS answers 422 to every request it
+    // makes, so the model must not be offered a tool that can never succeed.
+    // Library actions get their own target in Plan 07 slice 3, switched on by --library.
+    const writer = await install(["tools:read", "tools:write"], { workspaceId: WORKSPACE });
+    assert.equal(writer.includes("'--actions'"), false);
+    assert.equal(writer.includes("'--library'"), false);
+    const library = await install(
+      ["tools:read", "tools:write", "library:read", "library:write"],
+      { workspaceId: WORKSPACE },
+    );
+    assert.equal(library.includes("'--actions'"), false);
+    assert.equal(library.includes("'--library'"), true);
+    // A project connection keeps the note request.
+    const project = await install(["harness:execute", "tools:read", "tools:write"], { projectId: PROJECT });
+    assert.equal(project.includes("'--actions'"), true);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("library:write adds --library to the MCP child argv, and the CLI accepts it", async () => {
+  const backend = await recordingBackend();
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-mcp-library-"));
+  const codexHome = mkdtempSync(join(tmpdir(), "nous-codex-home-"));
+  const folder = { id: randomUUID(), root: stateDir, label: "w", projectId: randomUUID() };
+  const state: LocalState = {
+    apiUrl: "https://nous.example/api/v1",
+    deviceId: randomUUID(),
+    projectId: folder.projectId,
+    credentialHandle: randomUUID(),
+    scopes: ["harness:execute", "tools:read", "tools:write"],
+    workspaces: [folder],
+  };
+  const args = (s: LocalState) => sessionOptionsFor(stateDir, s, folder.id).mcpConfig?.nous?.args ?? [];
+  try {
+    // tools:write alone is not library access.
+    assert.equal(args(state).includes("--actions"), true);
+    assert.equal(args(state).includes("--library"), false);
+    state.scopes = [...state.scopes!, "library:read", "library:write"];
+    assert.equal(args(state).includes("--library"), true);
+    // Without the write scope the flag is never emitted, whatever else is granted.
+    state.scopes = ["harness:execute", "tools:read", "library:read"];
+    assert.equal(args(state).includes("--library"), false);
+
+    const credentialHandle = await new CredentialStore(stateDir).save({
+      accessToken: "cli-jwt-secret",
+      grantToken: "nous_ig_" + "g".repeat(43),
+    });
+    const session: McpSession = {
+      apiOrigin: backend.origin,
+      credentialHandle,
+      stateDir,
+      actions: true,
+      library: true,
+    };
+    const config = buildManagedMcpConfig(session);
+    assert.equal(config.nous.args.includes("--library"), true);
+    assert.equal(standaloneInstallCommand(session).includes("'--library'"), true);
+    const { library: _library, ...withoutLibrary } = session;
+    assert.equal(buildManagedMcpConfig(withoutLibrary).nous.args.includes("--library"), false);
+    assert.equal(standaloneInstallCommand(withoutLibrary).includes("--library"), false);
+    // The argv we emit must start a working server: the CLI parses its options strictly.
+    const run = await runEntry(
+      config.nous.command,
+      config.nous.args,
+      { tool_name: "search_documents", arguments: { query: "graph" }, invocation_id: randomUUID() },
+      { ...process.env, HOME: codexHome, CODEX_HOME: codexHome },
+      codexHome,
+    );
+    assert.deepEqual(run.tools.map((t) => t.name).sort(), [
+      "get_action_status",
+      "request_action",
+      "search_documents",
+    ]);
+  } finally {
+    await backend.close();
+    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
   }
 });
 

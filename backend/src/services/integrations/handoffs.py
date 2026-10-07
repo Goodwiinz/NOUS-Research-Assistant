@@ -43,6 +43,13 @@ def _bound_thread(context: IntegrationContext) -> UUID:
     return context.thread_id
 
 
+def _bound_project(context: IntegrationContext) -> UUID:
+    """A handoff belongs to one project; a workspace grant has none."""
+    if context.project_id is None:
+        raise IntegrationAccessDenied()
+    return context.project_id
+
+
 def _dto(row: IntegrationHandoff) -> HandoffDTO:
     # Hosted mypy 1.7 has no pydantic plugin: model_validate is Any there.
     return cast(HandoffDTO, HandoffDTO.model_validate(row))
@@ -174,7 +181,7 @@ async def _conflict(
         db,
         organization_id=context.organization_id,
         thread_id=thread_id,
-        project_id=context.project_id,
+        project_id=_bound_project(context),
     )
     return HandoffConflict(_dto(latest) if latest is not None else None)
 
@@ -187,7 +194,7 @@ async def read_latest(
         db,
         organization_id=context.organization_id,
         thread_id=thread_id,
-        project_id=context.project_id,
+        project_id=_bound_project(context),
     )
     return _dto(row) if row is not None else None
 
@@ -212,12 +219,13 @@ async def save(
     db: AsyncSession, context: IntegrationContext, payload: HandoffCreate
 ) -> HandoffDTO:
     thread_id = _bound_thread(context)
+    project_id = _bound_project(context)
     # The thread must still belong to the grant's project, owner and org.
     await validate_binding(
         db,
         user_id=context.user_id,
         organization_id=context.organization_id,
-        project_id=context.project_id,
+        project_id=project_id,
         thread_id=thread_id,
     )
     replay = await _replayed(db, context, thread_id, payload.handoff_id)
@@ -229,7 +237,7 @@ async def save(
         db,
         organization_id=context.organization_id,
         thread_id=thread_id,
-        project_id=context.project_id,
+        project_id=project_id,
     )
     if payload.expected_parent_version != (latest.version if latest else None):
         raise await _conflict(db, context, thread_id)
@@ -237,7 +245,7 @@ async def save(
     row = IntegrationHandoff(
         id=uuid4(),
         organization_id=context.organization_id,
-        project_id=context.project_id,
+        project_id=project_id,
         thread_id=thread_id,
         handoff_id=payload.handoff_id,
         grant_id=context.grant_id,
