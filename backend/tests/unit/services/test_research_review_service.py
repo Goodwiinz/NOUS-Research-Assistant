@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
 from importlib import import_module
 from types import ModuleType
@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -39,6 +40,33 @@ def _review_module() -> ModuleType:
 
 def _schemas() -> ModuleType:
     return import_module("src.schemas.research_engine")
+
+
+_AUTHORITIES: dict[UUID, Any] = {}
+
+
+@pytest.fixture(autouse=True)
+def _canonical_review_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Stand in for project_access; these tests cover review semantics only.
+
+    Real REVIEW authorization (membership, REVIEWER role, lifecycle, lock
+    scope) is proven in
+    tests/integration/test_research_run_review_export_access_postgres.py.
+    """
+    module = _review_module()
+    _AUTHORITIES.clear()
+
+    async def authorize(self: Any, run_id: UUID, reviewer_id: UUID) -> Any:
+        authority = _AUTHORITIES.get(run_id)
+        if authority is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return authority
+
+    monkeypatch.setattr(module.ResearchReviewService, "_authorize_review", authorize)
+    yield
+    _AUTHORITIES.clear()
 
 
 def _usage() -> dict[str, object]:
@@ -276,6 +304,9 @@ async def _seed_gate(
     )
     db.add_all([project, blueprint, run, step])
     await db.commit()
+    _AUTHORITIES[cast(UUID, run.id)] = _review_module()._ReviewAuthority(
+        owner_id=owner_id, organization_id=organization_id
+    )
     return owner_id, organization_id, run, step
 
 
@@ -321,8 +352,6 @@ async def test_submit_review_records_exact_set_approval_without_mutating_output(
     response = await service.submit_review(
         run_id=run.id,
         step_index=step.step_index,
-        owner_id=owner_id,
-        organization_id=organization_id,
         reviewer_id=owner_id,
         request=_request(
             kind=kind,
@@ -361,8 +390,6 @@ async def test_review_submission_records_wait_and_extraction_outcomes(
     await service.submit_review(
         run_id=run.id,
         step_index=step.step_index,
-        owner_id=owner_id,
-        organization_id=organization_id,
         reviewer_id=owner_id,
         request=_request(
             kind="extraction",
@@ -435,8 +462,6 @@ async def test_submit_review_rejects_duplicate_omitted_or_injected_items(
         await service_module.ResearchReviewService(db).submit_review(
             run_id=run.id,
             step_index=step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind=kind,
@@ -480,8 +505,6 @@ async def test_unresolved_items_block_approval(
         await service_module.ResearchReviewService(db).submit_review(
             run_id=run.id,
             step_index=step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind=kind,
@@ -542,42 +565,99 @@ def test_public_schema_forbids_extra_fields_and_bounds_note() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pending_review_is_owner_scoped_and_same_org_does_not_grant_access(
+async def test_pending_review_loads_only_live_runs_without_owner_predicate(
     db: AsyncSession,
 ) -> None:
-    owner_id, organization_id, run, step = await _seed_gate(db)
-    same_org_other_owner = uuid4()
+    _owner_id, _organization_id, run, _step = await _seed_gate(db)
     service_module = _review_module()
     service = service_module.ResearchReviewService(db)
 
-    pending = await service.get_pending_review(run_id=run.id, owner_id=owner_id)
+    pending = await service.get_pending_review(run_id=run.id)
     assert pending.pending is True
     assert pending.descriptor.output_hash == canonical_stage_output_hash(
         _screen_output()
     )
     assert pending.stage_output == _screen_output()
 
-    for inaccessible_id in (run.id, uuid4()):
-        with pytest.raises(service_module.ResearchReviewError) as error:
-            await service.get_pending_review(
-                run_id=inaccessible_id, owner_id=same_org_other_owner
-            )
-        assert error.value.status_code == 404
+    with pytest.raises(service_module.ResearchReviewError) as missing:
+        await service.get_pending_review(run_id=uuid4())
+    assert missing.value.status_code == 404
 
-    with pytest.raises(service_module.ResearchReviewError) as error:
-        await service.submit_review(
-            run_id=run.id,
-            step_index=step.step_index,
-            owner_id=same_org_other_owner,
-            organization_id=organization_id,
-            reviewer_id=same_org_other_owner,
+    blueprint = await db.get(ResearchBlueprint, run.blueprint_id)
+    assert blueprint is not None
+    project = await db.get(ResearchProject, blueprint.project_id)
+    assert project is not None
+    project.is_deleted = True
+    await db.commit()
+    with pytest.raises(service_module.ResearchReviewError) as deleted:
+        await service.get_pending_review(run_id=run.id)
+    assert deleted.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_submit_review_authorizes_inside_write_transaction_and_writes_nothing(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _owner_id, _organization_id, run, step = await _seed_gate(db)
+    # The failed write transaction rolls back and expires ``run``.
+    run_id = cast(UUID, run.id)
+    step_index = cast(int, step.step_index)
+    service_module = _review_module()
+    seen: list[tuple[UUID, UUID, bool]] = []
+
+    async def deny(self: Any, run_id: UUID, reviewer_id: UUID) -> Any:
+        seen.append((run_id, reviewer_id, self.session.in_transaction()))
+        raise HTTPException(status_code=403, detail="reviewer role required")
+
+    monkeypatch.setattr(service_module.ResearchReviewService, "_authorize_review", deny)
+    outsider = uuid4()
+
+    with pytest.raises(HTTPException) as denied:
+        await service_module.ResearchReviewService(db).submit_review(
+            run_id=run_id,
+            step_index=step_index,
+            reviewer_id=outsider,
             request=_request(
                 kind="screening",
                 output_hash=canonical_stage_output_hash(_screen_output()),
                 payload=_screen_payload(),
             ),
         )
-    assert error.value.status_code == 404
+
+    assert denied.value.status_code == 403
+    assert seen == [(run_id, outsider, True)]
+    assert await db.scalar(select(func.count()).select_from(ResearchStageReview)) == 0
+    await db.refresh(run)
+    assert run.reproducibility_manifest["pending_review"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_submit_review_stamps_canonical_owner_and_organization(
+    db: AsyncSession,
+) -> None:
+    creator_id, organization_id, run, step = await _seed_gate(db)
+    reviewer_id = uuid4()
+
+    response = (
+        await _review_module()
+        .ResearchReviewService(db)
+        .submit_review(
+            run_id=run.id,
+            step_index=step.step_index,
+            reviewer_id=reviewer_id,
+            request=_request(
+                kind="screening",
+                output_hash=canonical_stage_output_hash(_screen_output()),
+                payload=_screen_payload(),
+            ),
+        )
+    )
+
+    row = await db.get(ResearchStageReview, response.id)
+    assert row is not None
+    assert row.reviewer_id == reviewer_id
+    assert row.owner_id == creator_id
+    assert row.organization_id == organization_id
 
 
 @pytest.mark.asyncio
@@ -592,8 +672,6 @@ async def test_stale_hash_returns_only_current_content_free_descriptor(
         await service_module.ResearchReviewService(db, observer=observer).submit_review(
             run_id=run.id,
             step_index=step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind="screening", output_hash="f" * 64, payload=_screen_payload()
@@ -648,8 +726,6 @@ async def test_submit_review_requires_exact_kind_stage_index_and_contract_bindin
         await service_module.ResearchReviewService(db).submit_review(
             run_id=run.id,
             step_index=route_step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind="screening",
@@ -682,8 +758,6 @@ async def test_identical_canonical_replay_returns_original_and_different_replay_
     first = await service.submit_review(
         run_id=run.id,
         step_index=step.step_index,
-        owner_id=owner_id,
-        organization_id=organization_id,
         reviewer_id=owner_id,
         request=_request(
             kind="screening",
@@ -695,8 +769,6 @@ async def test_identical_canonical_replay_returns_original_and_different_replay_
     replay = await service.submit_review(
         run_id=run.id,
         step_index=step.step_index,
-        owner_id=owner_id,
-        organization_id=organization_id,
         reviewer_id=owner_id,
         request=_request(
             kind="screening",
@@ -716,8 +788,6 @@ async def test_identical_canonical_replay_returns_original_and_different_replay_
         await service.submit_review(
             run_id=run.id,
             step_index=step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind="screening",
@@ -747,8 +817,6 @@ async def test_integrity_error_race_reloads_and_replays_the_original_row(
         .submit_review(
             run_id=run.id,
             step_index=step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=request,
         )
@@ -761,8 +829,6 @@ async def test_integrity_error_race_reloads_and_replays_the_original_row(
     replay = await racing_service.submit_review(
         run_id=run.id,
         step_index=step.step_index,
-        owner_id=owner_id,
-        organization_id=organization_id,
         reviewer_id=owner_id,
         request=request,
     )
@@ -790,8 +856,6 @@ async def test_decline_is_durable_and_keeps_run_paused(
         .submit_review(
             run_id=run.id,
             step_index=step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind="screening",
@@ -851,8 +915,6 @@ async def test_extraction_decline_accepts_an_all_unresolved_exact_set(
         .submit_review(
             run_id=run.id,
             step_index=step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=request,
         )
@@ -896,7 +958,6 @@ async def test_pending_large_output_projects_every_ordered_identity_within_bound
         .ResearchReviewService(db)
         .get_pending_review(
             run_id=run.id,
-            owner_id=owner_id,
         )
     )
 
@@ -960,7 +1021,6 @@ async def test_pending_projection_covers_200_near_worst_case_identities(
         .ResearchReviewService(db)
         .get_pending_review(
             run_id=run.id,
-            owner_id=owner_id,
         )
     )
 
@@ -1013,8 +1073,6 @@ async def test_final_approval_rejects_unverified_or_unbound_export(
         await service_module.ResearchReviewService(db).submit_review(
             run_id=run.id,
             step_index=export_step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind="final",
@@ -1053,8 +1111,6 @@ async def test_final_approval_accepts_exact_verified_export_bindings(
         .submit_review(
             run_id=run.id,
             step_index=export_step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind="final",
@@ -1138,8 +1194,6 @@ async def test_final_approval_rejects_export_without_canonical_markdown_bytes(
         await service_module.ResearchReviewService(db).submit_review(
             run_id=run.id,
             step_index=export_step.step_index,
-            owner_id=owner_id,
-            organization_id=organization_id,
             reviewer_id=owner_id,
             request=_request(
                 kind="final",
@@ -1164,8 +1218,6 @@ async def test_apply_approved_overlays_is_deterministic_and_preserves_stage_outp
     await service.submit_review(
         run_id=run.id,
         step_index=step.step_index,
-        owner_id=owner_id,
-        organization_id=organization_id,
         reviewer_id=owner_id,
         request=_request(
             kind="extraction",
@@ -1175,12 +1227,8 @@ async def test_apply_approved_overlays_is_deterministic_and_preserves_stage_outp
     )
     context = {"extractions": copy.deepcopy(output["extractions"]), "other": "kept"}
 
-    first = await service.apply_approved_overlays(
-        run_id=run.id, owner_id=owner_id, context=context
-    )
-    second = await service.apply_approved_overlays(
-        run_id=run.id, owner_id=owner_id, context=context
-    )
+    first = await service.apply_approved_overlays(run_id=run.id, context=context)
+    second = await service.apply_approved_overlays(run_id=run.id, context=context)
 
     await db.refresh(step)
     original_extractions = cast(list[dict[str, object]], output["extractions"])

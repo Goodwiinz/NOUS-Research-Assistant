@@ -1,4 +1,4 @@
-"""Owner-scoped API for exact-hash research stage reviews."""
+"""Project-access-scoped API for exact-hash research stage reviews."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from src.schemas.research_engine import (
     StageReviewRequest,
     StageReviewResponse,
 )
+from src.services.research_engine.project_access import ResearchAction, require_run
 from src.services.research_engine.review_service import (
     ResearchReviewError,
     ResearchReviewService,
@@ -54,13 +55,11 @@ async def get_pending_review(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PendingReviewResponse | JSONResponse:
-    """Return the current owned review gate and its bounded persisted output."""
+    """Return the current review gate for a run the caller can view."""
 
+    await require_run(db, run_id, cast(UUID, current_user.id), ResearchAction.VIEW)
     try:
-        return await ResearchReviewService(db).get_pending_review(
-            run_id=run_id,
-            owner_id=cast(UUID, current_user.id),
-        )
+        return await ResearchReviewService(db).get_pending_review(run_id=run_id)
     except ResearchReviewError as error:
         return _error_response(error)
 
@@ -76,16 +75,17 @@ async def submit_review(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StageReviewResponse | JSONResponse:
-    """Append one review bound to the current persisted stage envelope."""
+    """Append one review bound to the current persisted stage envelope.
 
+    Requires current project membership and the REVIEWER role.
+    """
+
+    # REVIEW is authorized inside the service's write transaction so the
+    # Workspace/Collection access locks are held until the review commits.
     try:
         return await ResearchReviewService(db).submit_review(
             run_id=run_id,
             step_index=step_index,
-            owner_id=cast(UUID, current_user.id),
-            organization_id=cast(
-                UUID | None, getattr(current_user, "organization_id", None)
-            ),
             reviewer_id=cast(UUID, current_user.id),
             request=request,
         )

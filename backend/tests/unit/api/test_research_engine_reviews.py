@@ -1,4 +1,4 @@
-"""Transport contract for owner-scoped research stage reviews."""
+"""Transport contract for project-access-scoped research stage reviews."""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.services.research_engine.project_access import ResearchAction
 
 ReviewClient = tuple[TestClient, SimpleNamespace, AsyncMock]
 
@@ -28,6 +29,14 @@ def _reviews_module() -> Any:
 
 def _service_module() -> Any:
     return import_module("src.services.research_engine.review_service")
+
+
+@pytest.fixture(autouse=True)
+def review_access(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Stand in for require_run; ACL semantics are proven in the PG suite."""
+    access = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    monkeypatch.setattr(_reviews_module(), "require_run", access)
+    return access
 
 
 @pytest.fixture
@@ -98,8 +107,9 @@ def _review_response(
     }
 
 
-def test_pending_review_route_returns_bounded_owned_stage_output(
+def test_pending_review_route_authorizes_view_then_returns_stage_output(
     review_client: ReviewClient,
+    review_access: AsyncMock,
 ) -> None:
     client, user, db = review_client
     run_id = uuid4()
@@ -140,15 +150,36 @@ def test_pending_review_route_returns_bounded_owned_stage_output(
 
     assert response.status_code == 200
     assert response.json()["stage_output"] == stage_output
-    get_pending.assert_awaited_once_with(run_id=run_id, owner_id=user.id)
-    assert get_pending.await_args is not None
-    assert get_pending.await_args.kwargs["owner_id"] != user.organization_id
-    assert db is not None
+    review_access.assert_awaited_once_with(db, run_id, user.id, ResearchAction.VIEW)
+    get_pending.assert_awaited_once_with(run_id=run_id)
 
 
-def test_submit_review_route_passes_authenticated_owner_and_audit_organization(
+def test_pending_review_route_denies_before_service_when_access_fails(
     review_client: ReviewClient,
+    review_access: AsyncMock,
 ) -> None:
+    client, _user, _db = review_client
+    review_access.side_effect = HTTPException(
+        status_code=404, detail="Project not found"
+    )
+    get_pending = AsyncMock()
+
+    with patch.object(
+        _reviews_module().ResearchReviewService,
+        "get_pending_review",
+        get_pending,
+    ):
+        response = client.get(f"/api/v1/research-engine/runs/{uuid4()}/reviews/pending")
+
+    assert response.status_code == 404
+    get_pending.assert_not_awaited()
+
+
+def test_submit_review_route_delegates_review_authorization_to_service(
+    review_client: ReviewClient,
+    review_access: AsyncMock,
+) -> None:
+    """REVIEW must be checked inside the service's write transaction."""
     client, user, _db = review_client
     run_id = uuid4()
     accepted = _review_response(run_id)
@@ -184,12 +215,46 @@ def test_submit_review_route_passes_authenticated_owner_and_audit_organization(
     awaited = submit.await_args
     assert awaited is not None
     kwargs = awaited.kwargs
+    assert set(kwargs) == {"run_id", "step_index", "reviewer_id", "request"}
     assert kwargs["run_id"] == run_id
     assert kwargs["step_index"] == 1
-    assert kwargs["owner_id"] == user.id
     assert kwargs["reviewer_id"] == user.id
-    assert kwargs["organization_id"] == user.organization_id
     assert kwargs["request"].review_kind.value == "screening"
+    review_access.assert_not_awaited()
+
+
+def test_submit_review_route_surfaces_reviewer_role_denial(
+    review_client: ReviewClient,
+) -> None:
+    client, _user, _db = review_client
+    submit = AsyncMock(
+        side_effect=HTTPException(status_code=403, detail="reviewer role required")
+    )
+
+    with patch.object(
+        _reviews_module().ResearchReviewService,
+        "submit_review",
+        submit,
+    ):
+        response = client.post(
+            f"/api/v1/research-engine/runs/{uuid4()}/reviews/1",
+            json={
+                "review_kind": "screening",
+                "output_hash": "a" * 64,
+                "decision": "approve",
+                "decision_payload": {
+                    "items": [
+                        {
+                            "source_id": "source-a",
+                            "part_id": "p0001",
+                            "decision": "include",
+                        }
+                    ]
+                },
+            },
+        )
+
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize("path_kind", ["pending", "submit"])

@@ -58,7 +58,7 @@ class ExportArtifact:
 
 
 class ResearchExportError(RuntimeError):
-    """Stable, content-free error returned by the owned export route."""
+    """Stable, content-free error returned by the run export route."""
 
     def __init__(self, *, status_code: int, code: str, message: str) -> None:
         super().__init__(message)
@@ -79,11 +79,14 @@ class ExportService:
     async def export(
         self,
         run_id: UUID,
-        owner_id: UUID,
         format: ExportFormat | str,
         db: AsyncSession,
     ) -> ExportArtifact:
-        """Return an owner-scoped, deterministic artifact for a terminal run."""
+        """Return a deterministic artifact for a terminal run.
+
+        Authorization is the caller's job (``require_run(..., VIEW)`` in the
+        route); this query only enforces liveness of the run's ancestry.
+        """
         export_format = ExportFormat(format)
         statement = (
             select(ResearchRun)
@@ -98,7 +101,9 @@ class ExportService:
             )
             .where(
                 cast(Any, ResearchRun.id) == run_id,
-                cast(Any, ResearchProject.owner_id) == owner_id,
+                cast(Any, ResearchRun.is_deleted).is_(False),
+                cast(Any, ResearchBlueprint.is_deleted).is_(False),
+                cast(Any, ResearchProject.is_deleted).is_(False),
             )
             .options(
                 selectinload(ResearchRun.blueprint),

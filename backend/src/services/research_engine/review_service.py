@@ -43,6 +43,10 @@ from src.services.research_engine.observability import (
     research_observability,
     safely_observe,
 )
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    require_run_context,
+)
 
 
 class ResearchReviewError(ValueError):
@@ -74,6 +78,21 @@ class _CanonicalDecision:
     note: str | None
 
 
+@dataclass(frozen=True)
+class _ReviewAuthority:
+    """Canonical project identity that authorized one review write."""
+
+    owner_id: UUID
+    organization_id: UUID | None
+
+
+@dataclass
+class _ReviewScope:
+    """Per-call holder so failure telemetry keeps the authorized organization."""
+
+    organization_id: UUID | None = None
+
+
 _STAGE_FOR_KIND: dict[str, str] = {
     ReviewKind.SCREENING.value: "screen",
     ReviewKind.EXTRACTION.value: "extract",
@@ -95,10 +114,9 @@ class ResearchReviewService:
         self.observer = observer or research_observability
         self.now = now
 
-    async def get_pending_review(
-        self, *, run_id: UUID, owner_id: UUID
-    ) -> PendingReviewResponse:
-        run = await self._load_owned_run(run_id, owner_id, lock=False)
+    async def get_pending_review(self, *, run_id: UUID) -> PendingReviewResponse:
+        """Return the pending gate; the route has already required VIEW."""
+        run = await self._load_run(run_id, lock=False)
         pending = self._pending_mapping(run)
         if pending is None:
             return PendingReviewResponse(pending=False)
@@ -204,31 +222,31 @@ class ResearchReviewService:
         *,
         run_id: UUID,
         step_index: int,
-        owner_id: UUID,
-        organization_id: UUID | None,
         reviewer_id: UUID,
         request: StageReviewRequest,
     ) -> StageReviewResponse:
         # Authentication and other read dependencies can leave SQLAlchemy's
         # implicit transaction open on the request-scoped session. End that
         # read transaction before entering the review's owned write boundary.
+        # REVIEW authorization runs inside that boundary (_submit_transaction),
+        # so this rollback never releases an access lock.
         if self.session.in_transaction():
             await self.session.rollback()
         canonical = self._canonical_decision(request)
+        scope = _ReviewScope()
         try:
             response, wait_seconds = await self._submit_transaction(
                 run_id=run_id,
                 step_index=step_index,
-                owner_id=owner_id,
-                organization_id=organization_id,
                 reviewer_id=reviewer_id,
                 request=request,
                 canonical=canonical,
+                scope=scope,
             )
             if not response.replay:
                 self._record_review_observability(
                     run_id=run_id,
-                    organization_id=organization_id,
+                    organization_id=scope.organization_id,
                     request=request,
                     wait_seconds=wait_seconds,
                 )
@@ -238,7 +256,7 @@ class ResearchReviewService:
                 self.observer,
                 "record_review",
                 run_id=run_id,
-                organization_id=organization_id,
+                organization_id=scope.organization_id,
                 review_kind=request.review_kind.value,
                 outcome=(
                     "stale"
@@ -252,22 +270,26 @@ class ResearchReviewService:
         except IntegrityError:
             # A concurrent winner may have committed the unique gate while this
             # transaction waited. Reload its immutable row after clearing the
-            # failed transaction and compare the canonical decision.
+            # failed transaction and compare the canonical decision. The failed
+            # transaction's access locks are gone, so authorize again first.
             await self.session.rollback()
-            existing = await self._load_review(
-                run_id=run_id,
-                step_index=step_index,
-                output_hash=request.output_hash,
-                review_kind=request.review_kind.value,
-                lock=False,
-            )
+            async with self.session.begin():
+                authority = await self._authorize_review(run_id, reviewer_id)
+                scope.organization_id = authority.organization_id
+                existing = await self._load_review(
+                    run_id=run_id,
+                    step_index=step_index,
+                    output_hash=request.output_hash,
+                    review_kind=request.review_kind.value,
+                    lock=False,
+                )
             if existing is None:
                 raise
             response = self._resolve_existing(existing, canonical)
             if not response.replay:
                 self._record_review_observability(
                     run_id=run_id,
-                    organization_id=organization_id,
+                    organization_id=scope.organization_id,
                     request=request,
                     wait_seconds=0.0,
                 )
@@ -278,17 +300,21 @@ class ResearchReviewService:
         *,
         run_id: UUID,
         step_index: int,
-        owner_id: UUID,
-        organization_id: UUID | None,
         reviewer_id: UUID,
         request: StageReviewRequest,
         canonical: _CanonicalDecision,
+        scope: _ReviewScope,
     ) -> tuple[StageReviewResponse, float]:
         async with self.session.begin():
+            # Lock order matches resolve_project: Workspace SHARE -> Collection
+            # UPDATE -> run/step/review rows. Holding the access locks until this
+            # transaction commits makes a concurrent membership or role
+            # revocation wait for the review instead of racing it.
+            authority = await self._authorize_review(run_id, reviewer_id)
+            scope.organization_id = authority.organization_id
             shared_lock = request.decision == ReviewDecision.DECLINE
-            run = await self._load_owned_run(
+            run = await self._load_run(
                 run_id,
-                owner_id,
                 lock=True,
                 shared=shared_lock,
             )
@@ -343,8 +369,8 @@ class ResearchReviewService:
                 )
 
             review = ResearchStageReview(
-                owner_id=owner_id,
-                organization_id=organization_id,
+                owner_id=authority.owner_id,
+                organization_id=authority.organization_id,
                 run_id=persisted_run_id,
                 step_index=cast(int, step.step_index),
                 stage_type=step.step_type,
@@ -442,12 +468,14 @@ class ResearchReviewService:
         self,
         *,
         run_id: UUID,
-        owner_id: UUID,
         context: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Return deterministic downstream projections without rewriting outputs."""
+        """Return deterministic downstream projections without rewriting outputs.
 
-        run = await self._load_owned_run(run_id, owner_id, lock=False)
+        The caller (``stream_run``) has already required EDIT on the run.
+        """
+
+        run = await self._load_run(run_id, lock=False)
         reviews_result = await self.session.execute(
             select(ResearchStageReview)
             .where(
@@ -542,14 +570,34 @@ class ResearchReviewService:
         }
         return {**unsigned, "attestation_hash": canonical_json_sha256(unsigned)}
 
-    async def _load_owned_run(
+    async def _authorize_review(
+        self, run_id: UUID, reviewer_id: UUID
+    ) -> _ReviewAuthority:
+        """Enforce canonical REVIEW access inside the caller's open transaction.
+
+        Raises ``HTTPException`` exactly like the other run routes: 404 when the
+        run or project is not visible (deleted, not a member, other org), 403
+        when the REVIEWER role is missing, 409 when archived or unmapped.
+        """
+        _run, context = await require_run_context(
+            self.session, run_id, reviewer_id, ResearchAction.REVIEW
+        )
+        engine = context.engine
+        if engine is None:  # require_engine=True upstream; keep the type honest
+            raise self._run_not_found()
+        return _ReviewAuthority(
+            owner_id=cast(UUID, engine.owner_id),
+            organization_id=context.organization_id,
+        )
+
+    async def _load_run(
         self,
         run_id: UUID,
-        owner_id: UUID,
         *,
         lock: bool,
         shared: bool = False,
     ) -> ResearchRun:
+        """Load a live run by id. Callers authorize through project_access first."""
         statement = (
             select(ResearchRun)
             .join(
@@ -563,20 +611,32 @@ class ResearchReviewService:
             )
             .where(
                 cast(Any, ResearchRun.id) == run_id,
-                cast(Any, ResearchProject.owner_id) == owner_id,
+                cast(Any, ResearchRun.is_deleted).is_(False),
+                cast(Any, ResearchBlueprint.is_deleted).is_(False),
+                cast(Any, ResearchProject.is_deleted).is_(False),
             )
         )
         if lock:
-            statement = statement.with_for_update(read=shared)
+            # _authorize_review already loaded this run (unlocked) in the same
+            # session; refresh it from the locked row so a review committed
+            # while we waited on the access locks is not hidden by the
+            # identity map.
+            statement = statement.with_for_update(read=shared).execution_options(
+                populate_existing=True
+            )
         result = await self.session.execute(statement)
         run = result.scalars().first()
         if run is None:
-            raise ResearchReviewError(
-                status_code=404,
-                code="review_not_found",
-                message="Run not found",
-            )
+            raise self._run_not_found()
         return cast(ResearchRun, run)
+
+    @staticmethod
+    def _run_not_found() -> ResearchReviewError:
+        return ResearchReviewError(
+            status_code=404,
+            code="review_not_found",
+            message="Run not found",
+        )
 
     async def _load_step(
         self,

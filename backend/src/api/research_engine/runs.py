@@ -542,14 +542,10 @@ async def export_run(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Download an owner-scoped artifact for a completed research run."""
+    """Download the artifact for a completed research run the caller can view."""
+    await _get_owned_run(run_id, current_user.id, db, ResearchAction.VIEW)
     try:
-        artifact = await ExportService().export(
-            run_id,
-            UUID(str(current_user.id)),
-            format.value,
-            db,
-        )
+        artifact = await ExportService().export(run_id, format.value, db)
     except ResearchExportError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -665,7 +661,6 @@ async def stream_run(
         try:
             prior_outputs = await ResearchReviewService(db).apply_approved_overlays(
                 run_id=run_id,
-                owner_id=current_user.id,
                 context=prior_outputs,
             )
         except ValueError:

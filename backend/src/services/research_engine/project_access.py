@@ -429,9 +429,15 @@ async def require_blueprint(
     return blueprint
 
 
-async def require_run(
+async def require_run_context(
     db: AsyncSession, run_id: UUID, user_id: UUID, action: ResearchAction
-) -> ResearchRun:
+) -> tuple[ResearchRun, ProjectContext]:
+    """Resolve a live run plus the canonical project context that authorized it.
+
+    For mutating actions the Workspace SHARE / Collection UPDATE locks taken by
+    ``resolve_project`` belong to the caller's open transaction; call this
+    inside the transaction that performs the write.
+    """
     row = (
         await db.execute(
             select(ResearchRun, ResearchBlueprint.project_id)
@@ -447,7 +453,14 @@ async def require_run(
         raise HTTPException(status_code=404, detail="Run not found")
     run = cast(ResearchRun, row[0])
     engine_id = cast(UUID, row[1])
-    await resolve_engine_project_context(db, engine_id, user_id, action)
+    context = await resolve_engine_project_context(db, engine_id, user_id, action)
+    return run, context
+
+
+async def require_run(
+    db: AsyncSession, run_id: UUID, user_id: UUID, action: ResearchAction
+) -> ResearchRun:
+    run, _context = await require_run_context(db, run_id, user_id, action)
     return run
 
 
