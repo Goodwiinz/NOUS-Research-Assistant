@@ -310,7 +310,7 @@ export function CliAuthApproval({
             )}
           >
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            Cancel
+            Back to sign-in
           </Link>
         </div>
       </section>
