@@ -6,6 +6,8 @@
  * Drafts, Chat, Matrix, and Pipeline
  */
 
+import { captureAccountSession } from '@/lib/account-session';
+
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -1086,6 +1088,7 @@ export default function ProjectDetailPage() {
                       loading={draftsLoading}
                       documentCount={projectDocuments.length}
                       onGenerate={async (config) => {
+                        const isCurrentAccount = captureAccountSession();
                         setDraftsLoading(true);
                         try {
                           const result = await projectService.generateDraft(
@@ -1097,6 +1100,7 @@ export default function ProjectDetailPage() {
                               includeAbstract: config.includeAbstract,
                             }
                           );
+                          if (!isCurrentAccount()) return;
                           setGenerationTaskId(result.task_id);
                           // Poll until terminal. Transient poll failures are
                           // retried with backoff (bounded) instead of killing
@@ -1106,12 +1110,14 @@ export default function ProjectDetailPage() {
                           const POLL_RETRY_LIMIT = 5;
                           let pollFailures = 0;
                           const pollStatus = async () => {
+                            if (!isCurrentAccount()) return;
                             try {
                               const status =
                                 await projectService.getGenerationStatus(
                                   projectId,
                                   result.task_id
                                 );
+                              if (!isCurrentAccount()) return;
                               pollFailures = 0;
                               setGenerationStatus(status);
                               if (
@@ -1128,6 +1134,7 @@ export default function ProjectDetailPage() {
                                 );
                               }
                             } catch {
+                              if (!isCurrentAccount()) return;
                               pollFailures += 1;
                               if (pollFailures >= POLL_RETRY_LIMIT) {
                                 setGenerationStatus({
@@ -1150,6 +1157,7 @@ export default function ProjectDetailPage() {
                           };
                           void pollStatus();
                         } catch (err) {
+                          if (!isCurrentAccount()) return;
                           console.error('Generation failed:', err);
                           toast.error(
                             err instanceof Error
@@ -1157,7 +1165,7 @@ export default function ProjectDetailPage() {
                               : 'Failed to start draft generation'
                           );
                         } finally {
-                          setDraftsLoading(false);
+                          if (isCurrentAccount()) setDraftsLoading(false);
                         }
                       }}
                     />

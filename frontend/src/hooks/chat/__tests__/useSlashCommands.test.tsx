@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useChatStore } from '@/store/chat-store';
 import type { ChatConversation } from '@/hooks/chat/chatTypes';
 import {
   useSlashCommands,
@@ -258,4 +259,46 @@ describe('useSlashCommands', () => {
     expect(shouldSend).toBe(false);
     expect(setInput).toHaveBeenCalledWith('');
   });
+});
+
+it('clears private slash-command results in a new chat on account reset', () => {
+  const { result } = setup({
+    activeThreadId: null,
+    conversations: [makeConversation({ title: 'A private title' })],
+  });
+  act(() => {
+    result.current.handleSlashCommand('threads');
+  });
+  expect(JSON.stringify(result.current.commandOutputs)).toContain(
+    'A private title'
+  );
+  act(() => {
+    useChatStore.getState().reset();
+  });
+  expect(result.current.commandOutputs).toEqual([]);
+});
+
+it('does not re-list memories after old account deletion settles', async () => {
+  let finish!: () => void;
+  deleteMemoryMock.mockReturnValueOnce(
+    new Promise<void>((resolve) => {
+      finish = resolve;
+    })
+  );
+  const { result } = setup();
+  act(() => {
+    result.current.handleCommandItemAction({
+      type: 'delete-memory',
+      id: 'A-memory',
+      projectId: 'A-project',
+    });
+  });
+  act(() => {
+    useChatStore.getState().reset();
+  });
+  await act(async () => {
+    finish();
+  });
+  expect(result.current.commandOutputs).toEqual([]);
+  expect(listMemoriesMock).not.toHaveBeenCalled();
 });

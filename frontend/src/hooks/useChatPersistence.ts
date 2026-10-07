@@ -7,11 +7,12 @@
 
 import toast from 'react-hot-toast';
 import { useShallow } from 'zustand/react/shallow';
-import { useChatStore } from '@/store/chat-store';
+import { useChatSessionGuard } from '@/hooks/chat/useChatSessionGuard';
 import {
-  captureChatSession,
+  useChatStore,
   onChatSessionReset,
-} from '@/store/chat/requestCoordinator';
+  captureChatSession,
+} from '@/store/chat-store';
 import { useAuthStore } from '@/stores/authStore';
 import { workspaceService } from '@/services/workspaceService';
 import {
@@ -295,9 +296,11 @@ function resetChatPersistenceInitGuard(): void {
   _initCompleted = false;
 }
 
+// The account can end while every chat consumer is unmounted.
 onChatSessionReset(resetChatPersistenceInitGuard);
 
 export function useChatPersistence(): UseChatPersistenceReturn {
+  const isCurrentSession = useChatSessionGuard();
   const { isAuthenticated, user } = useAuthStore();
   const userId = user?.id ?? null;
 
@@ -307,6 +310,14 @@ export function useChatPersistence(): UseChatPersistenceReturn {
     started: false,
     completed: false,
   });
+
+  useEffect(
+    () =>
+      onChatSessionReset(() => {
+        initializationRef.current = { started: false, completed: false };
+      }),
+    []
+  );
 
   // Store state — scoped subscription. Reading the whole store here re-rendered
   // every consumer on each rAF-batched streaming write (streamingContent/Steps/
@@ -416,7 +427,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
   // Initialize workspace and conversation
   const initialize = useCallback(
     async (options?: { throwOnError?: boolean }) => {
-      if (!isAuthenticated) {
+      if (!isCurrentSession() || !isAuthenticated) {
         debugLog(
           '[useChatPersistence] Not authenticated, skipping initialization'
         );
@@ -435,7 +446,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
       if (!_initInFlight) {
         initializationRef.current.started = true;
 
-        _initInFlight = (async () => {
+        const request = (async () => {
           // Keep the selection that existed when this shared initialization run
           // began. A sidebar click can select a different thread while the
           // conversation page is pending; that newer choice must survive the
@@ -452,9 +463,11 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           for (let attempt = 0; attempt < MAX_REINIT_RETRIES; attempt += 1) {
             try {
               await initializeDefaultWorkspace();
+              if (!isCurrentSession()) return;
               initialized = true;
               break;
             } catch (error) {
+              if (!isCurrentSession()) return;
               initializationError = error;
             }
           }
@@ -513,7 +526,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
               await workspaceService.getOrCreateDefaultConversation(
                 state.currentWorkspaceId
               );
-            assertCurrentSession();
+            if (!isCurrentSession()) return;
             if (!newConv) {
               // Surface this as a real failure instead of silently locking in
               // `_initCompleted = false` with no retry path for other waiters.
@@ -552,7 +565,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
               threadSelectionAtInitializationStart;
 
           await setCurrentConversation(conversationId);
-          assertCurrentSession();
+          if (!isCurrentSession()) return;
 
           debugLog(
             '[useChatPersistence] Loaded threads for conversation:',
@@ -626,17 +639,15 @@ export function useChatPersistence(): UseChatPersistenceReturn {
         // same resolution; on failure we clear `_initInFlight` so a fresh mount
         // can retry, but only after the failure has propagated to every
         // current awaiter.
-        const run = _initInFlight;
-        _initInFlight
+        _initInFlight = request;
+        request
           .then(() => {
-            if (_initInFlight !== run) return;
+            if (!isCurrentSession() || _initInFlight !== request) return;
             _initCompleted = true;
             debugLog('[useChatPersistence] Initialization complete');
           })
           .catch((error) => {
-            // A run superseded by an account transition reports to nobody:
-            // its failure belongs to the ended session.
-            if (_initInFlight !== run) return;
+            if (!isCurrentSession() || _initInFlight !== request) return;
             console.error('[useChatPersistence] Initialization failed:', error);
             const message =
               error instanceof Error
@@ -645,7 +656,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
             toast.error(message);
           })
           .finally(() => {
-            if (_initInFlight === run && !_initCompleted) {
+            if (_initInFlight === request && !_initCompleted) {
               _initInFlight = null;
             }
           });
@@ -658,6 +669,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
       initializationRef.current.started = true;
       try {
         await _initInFlight;
+        if (!isCurrentSession()) return;
         if (_initCompleted) {
           initializationRef.current.completed = true;
         } else {
@@ -666,12 +678,14 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           initializationRef.current.started = false;
         }
       } catch (error) {
+        if (!isCurrentSession()) return;
         initializationRef.current.started = false;
         if (options?.throwOnError) throw error;
       }
     },
     [
       isAuthenticated,
+      isCurrentSession,
       initializeDefaultWorkspace,
       setCurrentConversation,
       setCurrentThread,
