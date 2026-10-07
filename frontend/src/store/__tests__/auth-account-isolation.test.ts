@@ -254,7 +254,7 @@ describe('private account lifetime', () => {
 
     auth.listener!('SIGNED_OUT', null);
     pending.resolve({ data: { session: session('A') }, error: null });
-    expect(await login).toBe('AbortError');
+    expect(await login).toBe('SignInSupersededError');
     expect(useAuthStore.getState().user).toBeNull();
     expect(useAuthStore.getState().isLoading).toBe(false);
   });
@@ -372,7 +372,7 @@ describe('private account lifetime', () => {
     await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
     await useAuthStore.getState().signOut();
     pending.resolve(profile('A'));
-    await expect(login).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(login).rejects.toMatchObject({ name: 'SignInSupersededError' });
     expect(useAuthStore.getState().user).toBeNull();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
   });

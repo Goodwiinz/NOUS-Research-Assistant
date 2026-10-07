@@ -8,7 +8,11 @@
 import toast from 'react-hot-toast';
 import { useShallow } from 'zustand/react/shallow';
 import { useChatSessionGuard } from '@/hooks/chat/useChatSessionGuard';
-import { useChatStore, onChatSessionReset } from '@/store/chat-store';
+import {
+  useChatStore,
+  onChatSessionReset,
+  captureChatSession,
+} from '@/store/chat-store';
 import { useAuthStore } from '@/stores/authStore';
 import { workspaceService } from '@/services/workspaceService';
 import {
@@ -269,10 +273,25 @@ function mapThreadToUIConversation(
 //   the "create promise" branch.
 // - On failure, `_initInFlight` is cleared so a *future* fresh mount can
 //   retry — but the current awaiters all observe the same rejection first.
+// - The guard belongs to one account's chat session. Every account
+//   transition resets the chat store, which ends that session; the listener
+//   below drops the guard with it so the next account cannot take the
+//   completed fast path over an empty store, and a superseded run can no
+//   longer settle the guard.
 let _initInFlight: Promise<void> | null = null;
 let _initCompleted = false;
 
-function resetChatPersistenceInitGuard() {
+// Thrown inside a run whose chat session ended (account transition) so it
+// stops before acting on the next account's store. Never surfaced: the run is
+// no longer `_initInFlight` by then, so the terminal handlers ignore it.
+class ChatInitSupersededError extends Error {
+  constructor() {
+    super('Chat initialization superseded by an account transition');
+    this.name = 'ChatInitSupersededError';
+  }
+}
+
+function resetChatPersistenceInitGuard(): void {
   _initInFlight = null;
   _initCompleted = false;
 }
@@ -282,7 +301,8 @@ onChatSessionReset(resetChatPersistenceInitGuard);
 
 export function useChatPersistence(): UseChatPersistenceReturn {
   const isCurrentSession = useChatSessionGuard();
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const userId = user?.id ?? null;
 
   // Per-instance ref is still useful for noting whether *this* consumer has
   // already awaited the shared init (avoids re-subscribing in StrictMode).
@@ -414,7 +434,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
         return;
       }
 
-      // Fast path: another consumer already finished init.
+      // Fast path: another consumer already finished init for this account.
       if (_initCompleted) {
         initializationRef.current = { started: true, completed: true };
         return;
@@ -431,6 +451,10 @@ export function useChatPersistence(): UseChatPersistenceReturn {
           // began. A sidebar click can select a different thread while the
           // conversation page is pending; that newer choice must survive the
           // downstream reset performed by setCurrentConversation.
+          const isCurrentSession = captureChatSession();
+          const assertCurrentSession = (): void => {
+            if (!isCurrentSession()) throw new ChatInitSupersededError();
+          };
           const threadSelectionAtInitializationStart =
             useChatStore.getState().currentThreadId;
           debugLog('[useChatPersistence] Starting initialization...');
@@ -447,6 +471,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
               initializationError = error;
             }
           }
+          assertCurrentSession();
 
           if (!initialized) {
             throw (
@@ -822,12 +847,14 @@ export function useChatPersistence(): UseChatPersistenceReturn {
   // Reset initialization state when user logs out. Both the per-instance ref
   // AND the module-level shared guards must clear so a subsequent login
   // re-runs initialization instead of short-circuiting on a stale completion.
+  // An account switch (A -> B without sign-out) keeps isAuthenticated true, so
+  // the per-instance ref is keyed to the user id as well.
   useEffect(() => {
+    initializationRef.current = { started: false, completed: false };
     if (!isAuthenticated) {
-      initializationRef.current = { started: false, completed: false };
       resetChatPersistenceInitGuard();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, userId]);
 
   // Auto-initialize on mount - use ref guard instead of initialize in deps to prevent loops
   useEffect(() => {
@@ -838,7 +865,7 @@ export function useChatPersistence(): UseChatPersistenceReturn {
     ) {
       initialize();
     }
-  }, [isAuthenticated, initialize]);
+  }, [isAuthenticated, userId, initialize]);
 
   return {
     isInitialized,

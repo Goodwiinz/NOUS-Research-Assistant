@@ -181,7 +181,8 @@ export function useChatSession(): UseChatSessionReturn {
   const unavailableInitialUrlThreadRef = useRef<string | null>(null);
 
   // ---- Auth ----
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const userId = user?.id ?? null;
 
   // ---- Store bindings ----
   const activeThreadId = useChatStore((state) => state.currentThreadId);
@@ -890,6 +891,7 @@ export function useChatSession(): UseChatSessionReturn {
     initializeChatPersistence,
     isCurrentSession,
     isAuthenticated,
+    userId,
     loadThreadsFromDb,
     setCurrentThread,
   ]);
@@ -943,6 +945,26 @@ export function useChatSession(): UseChatSessionReturn {
       parked.delete(oldest);
     }
   };
+  // An account switch (A -> B without sign-out) keeps isAuthenticated true and
+  // this page mounted. Drop every piece of the previous account's local state:
+  // workspace, sidebar list and pagination, transcript overlay, parked
+  // overlays and URL bookkeeping. The init effect above refetches for B.
+  const sessionUserIdRef = useRef(userId);
+  useEffect(() => {
+    if (sessionUserIdRef.current === userId) return;
+    sessionUserIdRef.current = userId;
+    isHydratedRef.current = false;
+    parkedMessagesRef.current.clear();
+    localMessagesThreadIdRef.current = null;
+    firstPageThreadsRef.current = [];
+    threadsPageRef.current = 1;
+    unavailableInitialUrlThreadRef.current = null;
+    setWorkspace(null);
+    setConversations([]);
+    setMessages([]);
+    setHasMoreThreads(false);
+  }, [userId]);
+
   useEffect(() => {
     const outgoingThreadId = localMessagesThreadIdRef.current;
 

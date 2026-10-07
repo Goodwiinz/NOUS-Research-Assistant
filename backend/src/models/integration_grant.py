@@ -24,6 +24,9 @@ class IntegrationGrantRequest(BaseModel):
     device_id: Mapped[UUID] = mapped_column(
         GUID(), ForeignKey("bridge_devices.id"), nullable=False
     )
+    thread_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("threads.id"), index=True
+    )
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     expires_at: Mapped[datetime] = mapped_column(

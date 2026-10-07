@@ -105,6 +105,16 @@ let sessionUserId: string | null = null;
 // explicit callers) onto a single /auth/me round-trip.
 let profileFetchInFlight: Promise<void> | null = null;
 
+/** A later account transition superseded this password login. */
+export class SignInSupersededError extends Error {
+  constructor() {
+    super(
+      'This sign-in was interrupted by another sign-in or sign-out. Please try again.'
+    );
+    this.name = 'SignInSupersededError';
+  }
+}
+
 function clearUserScopedClientState(): void {
   // Revoke async ownership before resetting any observable state. Abort alone
   // is insufficient: an already queued callback or decoded body can still run.
@@ -235,8 +245,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
           password,
         });
 
-      if (activeSignIn !== attempt)
-        throw new DOMException('Authentication superseded', 'AbortError');
+      if (activeSignIn !== attempt) throw new SignInSupersededError();
       if (supabaseError) {
         throw new Error(
           supabaseAuthErrorMessage(
@@ -253,7 +262,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         // An SDK identity event may have fired during signInWithPassword.
         // Its own event is fine; another account's event supersedes this login.
         if (revision !== authRevision && sessionUserId !== loginUserId)
-          throw new DOMException('Authentication superseded', 'AbortError');
+          throw new SignInSupersededError();
         if (loginUserId) observeIdentity(loginUserId);
         revision = authRevision;
         const accessToken = data.session.access_token;
@@ -262,7 +271,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         });
 
         if (activeSignIn !== attempt || revision !== authRevision)
-          throw new DOMException('Authentication superseded', 'AbortError');
+          throw new SignInSupersededError();
         observeIdentity(profileData.user.id);
         set({
           user: profileData.user,
@@ -275,10 +284,10 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         set({ isLoading: false });
       }
     } catch (error) {
-      if (activeSignIn !== attempt || revision !== authRevision)
-        throw new DOMException('Authentication superseded', 'AbortError');
       const authError =
         error instanceof Error ? error : new Error('Login failed');
+      if (activeSignIn !== attempt || revision !== authRevision)
+        throw authError;
       set({
         error: authError.message,
         isLoading: false,

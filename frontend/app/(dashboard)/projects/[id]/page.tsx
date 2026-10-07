@@ -30,6 +30,7 @@ import {
 import { ProjectHeader } from '@/components/research/ProjectHeader';
 import { DocumentList } from '@/components/research/DocumentList';
 import { ProjectKnowledgeTree } from '@/components/research/ProjectKnowledgeTree';
+import { ProjectArtifactsTab } from '@/components/research/ProjectArtifactsTab';
 import { ProjectSkillsTab } from '@/components/research/ProjectSkillsTab';
 import { ProjectWorkflow } from '@/components/research-engine/ProjectWorkflow';
 import { DraftGenerator } from '@/components/research/DraftGenerator';
@@ -83,6 +84,7 @@ type TabType =
   | 'pipeline'
   | 'workflow'
   | 'knowledge'
+  | 'files'
   | 'skills';
 
 const PROJECT_TABS: ReadonlySet<string> = new Set([
@@ -95,6 +97,7 @@ const PROJECT_TABS: ReadonlySet<string> = new Set([
   'pipeline',
   'workflow',
   'knowledge',
+  'files',
   'skills',
 ]);
 
@@ -725,6 +728,7 @@ export default function ProjectDetailPage() {
     { id: 'pipeline', label: 'Pipeline', icon: GitBranch },
     { id: 'workflow', label: 'Workflow', icon: Workflow },
     { id: 'knowledge', label: 'Knowledge', icon: Network },
+    { id: 'files', label: 'Files', icon: FileText },
   ];
 
   if (skillsCatalog.isSuccess) {
@@ -1366,6 +1370,8 @@ export default function ProjectDetailPage() {
         {activeTab === 'knowledge' && (
           <ProjectKnowledgeTree projectId={projectId} />
         )}
+
+        {activeTab === 'files' && <ProjectArtifactsTab projectId={projectId} />}
 
         {activeTab === 'skills' && <ProjectSkillsTab projectId={projectId} />}
       </div>

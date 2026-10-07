@@ -3,17 +3,19 @@
 import json
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from unittest.mock import Mock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.core.config import settings
+from src.core.dependencies import get_current_user
 
 
 @pytest.fixture
 def client(
-    test_app: FastAPI, test_auth_headers: dict[str, str]
+    test_app: FastAPI, test_auth_headers: dict[str, str], mock_user: Mock
 ) -> Iterator[TestClient]:
     """Use the assembled application while suppressing external startup work."""
 
@@ -21,6 +23,9 @@ def client(
     async def _no_lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
 
+    # This suite owns response projection; I28's isolated router matrix exercises
+    # the real bearer/current-user dependency, including inactive users.
+    test_app.dependency_overrides[get_current_user] = lambda: mock_user
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
@@ -28,6 +33,7 @@ def client(
             yield test_client
     finally:
         test_app.router.lifespan_context = original_lifespan
+        test_app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_capabilities_returns_only_safe_canonical_registry_fields(

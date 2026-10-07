@@ -58,6 +58,7 @@ import { Conversation as DBConversation } from '@/types/workspace';
 import type {
   CitationCreate,
   DbToolExecution,
+  MessageAttachment,
   Workspace,
 } from '@/types/workspace';
 import type { PlanStep } from '@/types/agent-chat';
@@ -433,7 +434,11 @@ export interface UseChatStreamingReturn {
     supersedesClientMessageId?: string,
     /** Documents the composer uploaded for this turn, sent as
      * `attachment_ids` so the server links them to the persisted user row. */
-    attachmentIds?: string[]
+    attachmentIds?: string[],
+    /** Edit/regenerate: the replaced turn's attachment metadata, rendered on
+     * the optimistic replacement until the canonical row arrives. Never sent;
+     * the server only receives `attachmentIds`. */
+    attachments?: MessageAttachment[]
   ) => Promise<void>;
   handleStop: () => void;
   pendingConfirmation: PendingConfirmation | null;
@@ -1968,7 +1973,8 @@ export function useChatStreaming(
       contentOverride?: string,
       historyOverride?: ChatPageMessage[],
       supersedesClientMessageId?: string,
-      attachmentIds?: string[]
+      attachmentIds?: string[],
+      attachments?: MessageAttachment[]
     ) => {
       // This identity must be captured before the stream's token refresh can
       // synchronously emit SIGNED_OUT and clear the auth store.
@@ -2071,6 +2077,7 @@ export function useChatStreaming(
           ...(supersedesClientMessageId
             ? { replacesClientMessageId: supersedesClientMessageId }
             : {}),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
         };
 
         // CX2: build the turn from the RECONCILED view (local ∪ store) — the
