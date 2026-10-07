@@ -184,11 +184,18 @@ class EncryptionValidationResponse(BaseModel):
 def _bind_caller_org(requested_org_id: Optional[UUID], current_user: User) -> UUID:
     """Return the caller's own organization id.
 
-    A different ``requested_org_id`` is refused with 403: per-org
-    ``system_admin`` and the legacy ``users.role == "admin"`` are tenant
-    roles and never authorize another tenant's data.
+    A caller without an organization, or a different ``requested_org_id``,
+    is refused with 403: per-org ``system_admin`` and the legacy
+    ``users.role == "admin"`` are tenant roles and never authorize another
+    tenant's data (or a global view).
     """
     own_org_id = current_user.organization_id
+    if own_org_id is None:
+        # Never fall through to an unscoped (global) view.
+        raise HTTPException(
+            status_code=403,
+            detail="Organization context required",
+        )
     if requested_org_id is not None and str(requested_org_id) != str(own_org_id):
         raise HTTPException(
             status_code=403,

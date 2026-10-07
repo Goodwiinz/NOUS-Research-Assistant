@@ -245,6 +245,10 @@ class RBACService:
             logger.info(f"Created role {name} for organization {organization_id}")
             return role
 
+        except PermissionDeniedException:
+            # GOO-406: an expected delegation denial (403), not a server error.
+            self.db.rollback()
+            raise
         except Exception as e:
             self.db.rollback()
             logger.error(f"Failed to create role {name}: {e}")
@@ -413,6 +417,10 @@ class RBACService:
             )
             return assignment
 
+        except PermissionDeniedException:
+            # GOO-406: an expected delegation denial (403), not a server error.
+            self.db.rollback()
+            raise
         except Exception as e:
             self.db.rollback()
             logger.error(f"Failed to assign role {role_id} to user {user_id}: {e}")
@@ -461,6 +469,10 @@ class RBACService:
 
             return False
 
+        except PermissionDeniedException:
+            # GOO-406: an expected delegation denial (403), not a server error.
+            self.db.rollback()
+            raise
         except Exception as e:
             self.db.rollback()
             logger.error(f"Failed to revoke role {role_id} from user {user_id}: {e}")

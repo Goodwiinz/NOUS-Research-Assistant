@@ -192,6 +192,68 @@ class TestRoleDelegationBound:
         db.add.assert_not_called()
 
 
+def _custom(role: SimpleNamespace) -> SimpleNamespace:
+    """Non-system copy of ``role`` so update_role reaches the delegation check."""
+    return SimpleNamespace(**{**vars(role), "is_system": False})
+
+
+@pytest.mark.unit
+class TestUpdateRoleDelegationBound:
+    def test_admin_cannot_raise_role_priority_above_own(
+        self, client_for: ClientFor
+    ) -> None:
+        editor = _custom(EDITOR_ROLE)
+        db = _fake_db(editor)
+        resp = client_for(ADMIN_ID, db).put(
+            f"{API}/roles/{editor.id}", json={"priority": 900}
+        )
+        assert resp.status_code == 403
+        db.commit.assert_not_called()
+        assert editor.priority == 600
+
+    def test_admin_cannot_edit_higher_role(self, client_for: ClientFor) -> None:
+        sup = _custom(SUPER_ROLE)
+        db = _fake_db(sup)
+        resp = client_for(ADMIN_ID, db).put(
+            f"{API}/roles/{sup.id}", json={"display_name": "xx"}
+        )
+        assert resp.status_code == 403
+        db.commit.assert_not_called()
+        assert not hasattr(sup, "display_name")
+
+
+@pytest.mark.unit
+class TestServiceDenialIsNotLoggedAsError:
+    """A delegation denial is an expected 403, not a server error."""
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda svc: svc.create_role(ORG, "r", "R", created_by=None),
+            lambda svc: svc.assign_role_to_user(TARGET_ID, SUPER_ROLE.id, ORG),
+            lambda svc: svc.revoke_role_from_user(SUPER_ID, SUPER_ROLE.id, ORG),
+        ],
+        ids=["create", "assign", "revoke"],
+    )
+    def test_denial_rolls_back_without_error_log(
+        self, call: Callable[[RBACService], Any]
+    ) -> None:
+        from src.exceptions.analytics_exceptions import PermissionDeniedException
+
+        assignment = MagicMock(is_active=True)
+        assignment.role = SUPER_ROLE
+        db = _fake_db(SUPER_ROLE, existing_assignment=assignment)
+        svc = RBACService(db)
+        with (
+            patch("src.services.security.rbac_service.logger") as log,
+            pytest.raises(PermissionDeniedException),
+        ):
+            call(svc)
+        log.error.assert_not_called()
+        db.rollback.assert_called_once()
+        db.commit.assert_not_called()
+
+
 @pytest.mark.unit
 class TestAssertCallerCanDelegate:
     def _svc(self, perms: set[str], roles: list[Any]) -> RBACService:

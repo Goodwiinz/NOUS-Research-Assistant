@@ -103,13 +103,16 @@ def client_with_db() -> Iterator[ClientWithDb]:
     for p in patches:
         p.start()
 
-    def make(db: Optional[MagicMock] = None) -> TestClient:
+    def make(
+        db: Optional[MagicMock] = None,
+        user: Callable[[], MagicMock] = _org_admin,
+    ) -> TestClient:
         app = FastAPI()
         app.include_router(encryption_router, prefix="/api/v1/security")
         app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
         session = db if db is not None else MagicMock()
         app.dependency_overrides[get_db_sync] = lambda: session
-        app.dependency_overrides[is_active_user] = _org_admin
+        app.dependency_overrides[is_active_user] = user
         return TestClient(app)
 
     yield make
@@ -212,6 +215,35 @@ class TestStatusScope:
             )
         assert resp.status_code == 403
         svc_cls.return_value.get_encryption_status.assert_not_called()
+
+
+def _orgless_admin() -> MagicMock:
+    """Non-operator caller with no organization context."""
+    user = _org_admin()
+    user.organization_id = None
+    return user
+
+
+@pytest.mark.unit
+class TestMissingOrgContext:
+    def test_orgless_status_is_403_not_global(
+        self, client_with_db: ClientWithDb, operator_allowlist: SetOperator
+    ) -> None:
+        with patch("src.api.security.encryption.EncryptionService") as svc_cls:
+            resp = client_with_db(user=_orgless_admin).get(f"{API}/status")
+        assert resp.status_code == 403
+        assert "Organization context required" in resp.text
+        svc_cls.return_value.get_encryption_status.assert_not_called()
+
+    def test_orgless_dry_run_rotation_is_403(
+        self, client_with_db: ClientWithDb, operator_allowlist: SetOperator
+    ) -> None:
+        with patch("src.api.security.encryption.EncryptionService") as svc_cls:
+            resp = client_with_db(user=_orgless_admin).post(
+                f"{API}/keys/rotate", json={"key_type": "data", "dry_run": True}
+            )
+        assert resp.status_code == 403
+        svc_cls.return_value.rotate_encryption_keys.assert_not_called()
 
 
 def _log_row() -> SimpleNamespace:
