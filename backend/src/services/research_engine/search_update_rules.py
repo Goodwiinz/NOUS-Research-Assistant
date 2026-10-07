@@ -389,6 +389,14 @@ def classify(
         survivor = resolved.setdefault(
             target, {**dict(baseline.get(target) or entry), "merged_from": []}
         )
+        survivor["identifiers"] = {
+            kind: sorted(
+                set((survivor.get("identifiers") or {}).get(kind) or [])
+                | set((entry.get("identifiers") or {}).get(kind) or [])
+            )
+            for kind in set(survivor.get("identifiers") or {})
+            | set(entry.get("identifiers") or {})
+        }
         survivor["merged_from"].append(report_id)
     for report_id in sorted(set(resolved) | set(current)):
         before, after = resolved.get(report_id), current.get(report_id)

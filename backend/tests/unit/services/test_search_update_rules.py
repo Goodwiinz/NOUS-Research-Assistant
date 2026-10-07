@@ -9,6 +9,7 @@ work that was not returned fails ``-k disappeared``.
 
 import hashlib
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -260,6 +261,44 @@ def test_merges_follow_survivor_and_unresolved_is_unknown() -> None:
         "unchanged": 1,
         "unknown": 1,
     }
+
+
+@pytest.mark.parametrize("survivor_in_baseline", [False, True])
+def test_missing_merged_survivor_preserves_all_identifier_evidence(
+    survivor_in_baseline: bool,
+) -> None:
+    baseline = {
+        "a-old": _entry(doi="10.1/first", pmid="111"),
+        "z-old": _entry(doi="10.1/retracted"),
+    }
+    if survivor_in_baseline:
+        baseline["survivor"] = _entry(doi="10.1/survivor")
+    original = deepcopy(baseline)
+    notice = {"notice_doi": "10.1/retracted.notice", "type": "retraction"}
+    notices = {"10.1/first": [], "10.1/retracted": [notice], "10.1/survivor": []}
+    merges = {"a-old": "survivor", "z-old": "survivor"}
+    coverage = _coverage(crossref=("ok", "exhausted"), pubmed=("failed", "failed"))
+
+    (item,) = rules.classify(baseline, {}, coverage, notices, set(), merges=merges)[
+        "items"
+    ]
+
+    assert item["report_id"] == "survivor"
+    assert item["class"] == "corrected_retracted"
+    assert item["evidence"]["notices"] == [notice]
+    assert item["evidence"]["merged_from"] == ["a-old", "z-old"]
+    assert {check["doi"] for check in item["publication"]["checks"]} == {
+        "10.1/first",
+        "10.1/retracted",
+        *(["10.1/survivor"] if survivor_in_baseline else []),
+    }
+    # A merged PMID also keeps PubMed in the missing-work coverage evidence.
+    (missing,) = rules.classify(
+        baseline, {}, coverage, {doi: [] for doi in notices}, set(), merges=merges
+    )["items"]
+    assert missing["reason"] == "provider_failed"
+    assert "pubmed" in missing["evidence"]["providers"]
+    assert baseline == original
 
 
 def test_snapshot_from_package_takes_live_reports_and_latest_record() -> None:
