@@ -14,7 +14,12 @@ function fakeNous(calls: { url: string; body: any }[]): typeof fetch {
     calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
     let data: object;
     if (url.endsWith("/cli-auth/start"))
-      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l" };
+      data = {
+        session_id: "s",
+        poll_token: "p",
+        browser_url: "https://nous.test/l",
+        verification_code: "ABCD-1234",
+      };
     else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli" };
     else if (url.endsWith("/integrations/devices"))
       data = { id: "22222222-2222-4222-8222-222222222222" };
@@ -44,6 +49,8 @@ test("connect --chat binds the consent request and local state to one chat", asy
   };
   try {
     await connect({ ...base, threadId: CHAT });
+    // GOO-403: the link no longer carries the code, so the bridge must print it.
+    assert.ok(messages.some((m) => m.includes("ABCD-1234")));
     const bound = calls.filter((c) => c.url.endsWith("/grant-requests")).at(-1)!;
     assert.equal(bound.body.thread_id, CHAT);
     const state = () => JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));

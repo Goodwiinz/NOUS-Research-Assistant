@@ -13,9 +13,7 @@ const mockedAuth = {
   isLoading: false,
 };
 
-let mockSearchParams = new URLSearchParams(
-  'session_id=session-1&code=ABCD-1234'
-);
+let mockSearchParams = new URLSearchParams('session_id=session-1');
 
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => mockedAuth,
@@ -44,35 +42,81 @@ vi.mock('next/link', () => ({
   ),
 }));
 
+const PENDING = {
+  session_id: 'session-1',
+  status: 'pending',
+  started_at: '2026-10-07T08:00:00Z',
+  expires_at: '2026-10-07T08:05:00Z',
+  requester_ip: '203.0.113.7',
+  requester_user_agent: 'nous-cli/1.4.0 (darwin; arm64)',
+};
+
+function codeInput(): HTMLInputElement {
+  return screen.getByLabelText(/code from your terminal/i) as HTMLInputElement;
+}
+
 describe('CliAuthPage', () => {
   beforeEach(() => {
     mockPush.mockReset();
     vi.restoreAllMocks();
     mockedAuth.isAuthenticated = true;
     mockedAuth.isLoading = false;
-    mockSearchParams = new URLSearchParams(
-      'session_id=session-1&code=ABCD-1234'
-    );
+    mockSearchParams = new URLSearchParams('session_id=session-1');
     window.sessionStorage.clear();
     window.history.replaceState(null, '', '/');
   });
 
-  it('shows approve action for authenticated browser session', async () => {
+  it('shows the requester and a warning, and never pre-fills a code from the link', async () => {
+    mockSearchParams = new URLSearchParams(
+      'session_id=session-1&code=ABCD-1234'
+    );
+    window.history.replaceState(
+      null,
+      '',
+      '/cli-auth?session_id=session-1&code=ABCD-1234#code=WXYZ-9876'
+    );
+    window.sessionStorage.setItem('nous:cli-auth-code:session-1', 'QRST-5555');
+    const getSpy = vi.spyOn(api, 'get').mockResolvedValue(PENDING as never);
+
     render(<CliAuthPage />);
 
+    expect(await screen.findByText('203.0.113.7')).toBeInTheDocument();
     expect(
-      await screen.findByRole('button', { name: /approve/i })
+      screen.getByText('nous-cli/1.4.0 (darwin; arm64)')
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /only approve if you started this from your own terminal/i
+      )
+    ).toBeInTheDocument();
+    expect(getSpy).toHaveBeenCalledWith('/cli-auth/session/session-1');
+    expect(codeInput().value).toBe('');
+    expect(screen.queryByText(/ABCD-1234|WXYZ-9876|QRST-5555/)).toBeNull();
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
+    expect(window.location.href).not.toMatch(/ABCD|WXYZ/);
+    expect(
+      window.sessionStorage.getItem('nous:cli-auth-code:session-1')
+    ).toBeNull();
   });
 
-  it('approves the CLI login and shows the connected state', async () => {
+  it('enables Approve only after eight characters and submits the normalized code', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue(PENDING as never);
     const postSpy = vi
       .spyOn(api, 'post')
       .mockResolvedValue({ status: 'approved' } as never);
 
     render(<CliAuthPage />);
+    await screen.findByText('203.0.113.7');
+    const approve = screen.getByRole('button', { name: /approve/i });
 
-    fireEvent.click(await screen.findByRole('button', { name: /approve/i }));
+    fireEvent.change(codeInput(), { target: { value: 'abcd-123' } });
+    expect(approve).toBeDisabled();
+
+    fireEvent.change(codeInput(), { target: { value: ' abcd-1234 ' } });
+    expect(codeInput().value).toBe('ABCD-1234');
+    expect(approve).toBeEnabled();
+
+    fireEvent.click(approve);
 
     await waitFor(() =>
       expect(postSpy).toHaveBeenCalledWith('/cli-auth/approve', {
@@ -87,38 +131,55 @@ describe('CliAuthPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('reads the code from the URL fragment and strips it from the address bar', async () => {
-    mockSearchParams = new URLSearchParams('session_id=session-1');
-    window.history.replaceState(
-      null,
-      '',
-      '/cli-auth?session_id=session-1#code=WXYZ-9876'
+  it('shows the server error when the typed code does not match', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue(PENDING as never);
+    vi.spyOn(api, 'post').mockRejectedValue(
+      new Error(
+        'Verification code does not match the one shown in your terminal'
+      )
     );
-    const postSpy = vi
-      .spyOn(api, 'post')
-      .mockResolvedValue({ status: 'approved' } as never);
+
+    render(<CliAuthPage />);
+    await screen.findByText('203.0.113.7');
+    fireEvent.change(codeInput(), { target: { value: 'ZZZZ9999' } });
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /does not match/i
+    );
+  });
+
+  it('keeps Approve disabled when the request details cannot be loaded', async () => {
+    vi.spyOn(api, 'get').mockRejectedValue(new Error('Not Found'));
 
     render(<CliAuthPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /approve/i }));
-
-    await waitFor(() =>
-      expect(postSpy).toHaveBeenCalledWith('/cli-auth/approve', {
-        session_id: 'session-1',
-        verification_code: 'WXYZ-9876',
-      })
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /not found or has expired/i
     );
-    expect(window.location.href).not.toContain('WXYZ-9876');
+    fireEvent.change(codeInput(), { target: { value: 'ABCD1234' } });
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
   });
 
-  it('keeps the code out of the login redirect URL', async () => {
+  it('keeps Approve disabled for a request that is no longer pending', async () => {
+    vi.spyOn(api, 'get').mockResolvedValue({
+      ...PENDING,
+      status: 'expired',
+    } as never);
+
+    render(<CliAuthPage />);
+
+    expect(await screen.findByText(/no longer waiting/i)).toBeInTheDocument();
+    fireEvent.change(codeInput(), { target: { value: 'ABCD1234' } });
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
+  });
+
+  it('redirects to login without any code in the next URL', async () => {
     mockedAuth.isAuthenticated = false;
-    mockSearchParams = new URLSearchParams('session_id=session-1');
-    window.history.replaceState(
-      null,
-      '',
-      '/cli-auth?session_id=session-1#code=WXYZ-9876'
+    mockSearchParams = new URLSearchParams(
+      'session_id=session-1&code=ABCD-1234'
     );
+    const getSpy = vi.spyOn(api, 'get');
 
     render(<CliAuthPage />);
 
@@ -127,50 +188,7 @@ describe('CliAuthPage', () => {
         `/login?next=${encodeURIComponent('/cli-auth?session_id=session-1')}`
       )
     );
-    expect(mockPush.mock.calls.flat().join(' ')).not.toContain('WXYZ-9876');
-    expect(window.sessionStorage.getItem('nous:cli-auth-code:session-1')).toBe(
-      'WXYZ-9876'
-    );
-  });
-
-  it('lets the user type the terminal code when the link carries none', async () => {
-    mockSearchParams = new URLSearchParams('session_id=session-1');
-    const postSpy = vi
-      .spyOn(api, 'post')
-      .mockResolvedValue({ status: 'approved' } as never);
-
-    render(<CliAuthPage />);
-
-    const approve = await screen.findByRole('button', { name: /approve/i });
-    expect(approve).toBeDisabled();
-
-    fireEvent.change(
-      screen.getByLabelText(/verification code from your terminal/i),
-      { target: { value: ' abcd-1234 ' } }
-    );
-    expect(approve).toBeEnabled();
-    fireEvent.click(approve);
-
-    await waitFor(() =>
-      expect(postSpy).toHaveBeenCalledWith('/cli-auth/approve', {
-        session_id: 'session-1',
-        verification_code: 'ABCD-1234',
-      })
-    );
-  });
-
-  it('clears the stored code once the login is approved', async () => {
-    mockSearchParams = new URLSearchParams('session_id=session-1');
-    window.sessionStorage.setItem('nous:cli-auth-code:session-1', 'WXYZ-9876');
-    vi.spyOn(api, 'post').mockResolvedValue({ status: 'approved' } as never);
-
-    render(<CliAuthPage />);
-
-    fireEvent.click(await screen.findByRole('button', { name: /approve/i }));
-
-    await screen.findByText(/cli connected/i);
-    expect(window.sessionStorage.getItem('nous:cli-auth-code:session-1')).toBe(
-      null
-    );
+    expect(mockPush.mock.calls.flat().join(' ')).not.toContain('ABCD');
+    expect(getSpy).not.toHaveBeenCalled();
   });
 });

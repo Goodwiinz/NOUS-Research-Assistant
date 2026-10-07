@@ -3517,6 +3517,63 @@
         "title": "CLIAuthApproveRequest",
         "type": "object"
       },
+      "CLIAuthSessionInfo": {
+        "description": "What the approving browser may see about a pending CLI sign-in.\n\nNever carries the verification code or poll token. The user must read the\ncode from their own terminal (RFC 8628 §5.4 remote-phishing defence).",
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "requester_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requester Ip"
+          },
+          "requester_user_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requester User Agent"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "status",
+          "started_at",
+          "expires_at"
+        ],
+        "title": "CLIAuthSessionInfo",
+        "type": "object"
+      },
       "CandidateCreate": {
         "description": "Package one exact saved draft version (bound by its content hash).",
         "properties": {
@@ -39148,6 +39205,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Verification code does not match"
+          },
+          "403": {
+            "description": "A browser session is required to approve"
+          },
+          "404": {
+            "description": "CLI auth session not found or no longer pending"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -39165,6 +39231,54 @@
           }
         ],
         "summary": "Approve Cli Auth",
+        "tags": [
+          "cli-auth"
+        ]
+      }
+    },
+    "/api/v1/cli-auth/session/{session_id}": {
+      "get": {
+        "description": "Requester details for the approval page. Never returns the code.",
+        "operationId": "get_cli_auth_session_info_api_v1_cli_auth_session__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CLIAuthSessionInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Cli Auth Session Info",
         "tags": [
           "cli-auth"
         ]

@@ -204,7 +204,18 @@ export async function connect(
     typeof login.browser_url !== "string"
   )
     throw new Error("invalid CLI login response");
-  announce(`Authorize CLI login in your browser: ${login.browser_url}`);
+  // GOO-403: the link no longer carries the code; print it so the user can
+  // type it on the approval page.
+  const code =
+    typeof login.verification_code === "string" &&
+    /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(login.verification_code)
+      ? login.verification_code
+      : null;
+  announce(
+    code
+      ? `Authorize CLI login in your browser: ${login.browser_url}\nType this code on that page: ${code}`
+      : `Authorize CLI login in your browser: ${login.browser_url}`,
+  );
   const auth = await poll(
     () =>
       request(

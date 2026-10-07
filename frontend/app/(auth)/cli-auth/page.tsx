@@ -3,55 +3,69 @@
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
 import { api } from '@/services/api-client';
-import { ArrowLeft, CheckCircle2, ShieldCheck } from 'lucide-react';
+import type { components } from '@/types/generated/api';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  ShieldCheck,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import React, { useEffect, useState } from 'react';
+
+type CliAuthSessionInfo = components['schemas']['CLIAuthSessionInfo'];
+
+const CODE_LENGTH = 8;
+
+/** Uppercase, drop separators and cap at the code length. */
+function normalizeCode(raw: string): string {
+  return raw
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, CODE_LENGTH);
+}
+
+/** Show `ABCD1234` as `ABCD-1234`, the way the terminal prints it. */
+function formatCode(chars: string): string {
+  return chars.length > 4 ? `${chars.slice(0, 4)}-${chars.slice(4)}` : chars;
+}
+
+function formatStartedAt(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+}
 
 function CliAuthPageContent(): React.JSX.Element {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session_id') ?? '';
-  // Older backends put the code in the query string; current ones use the fragment.
-  const legacyQueryCode = searchParams.get('code') ?? '';
-  const [verificationCode, setVerificationCode] = useState('');
-  // No code in the link or storage (e.g. storage blocked across the login
-  // redirect): the user types the code the terminal printed.
-  const [manualEntry, setManualEntry] = useState(false);
+  const linkCarriesCode = searchParams.has('code');
+  const [codeChars, setCodeChars] = useState('');
+  const [details, setDetails] = useState<CliAuthSessionInfo | null>(null);
+  const [detailsError, setDetailsError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState('');
 
-  // Keep the code out of every URL a server sees: it is carried across the
-  // login redirect in sessionStorage and stripped from the address bar.
+  // GOO-403 (RFC 8628 §5.4): a code carried by the link is never used. It may
+  // come from an older backend or from a link someone else sent. Scrub it from
+  // the address bar and drop any copy an older version of this page stored.
   useEffect(() => {
-    const storageKey = `nous:cli-auth-code:${sessionId}`;
-    const urlCode =
-      new URLSearchParams(window.location.hash.slice(1)).get('code') ||
-      legacyQueryCode;
-    let code = urlCode;
-    try {
-      if (urlCode) {
-        sessionStorage.setItem(storageKey, urlCode);
-      } else {
-        code = sessionStorage.getItem(storageKey) ?? '';
-      }
-    } catch {
-      // Storage unavailable: the code only survives this page view.
-    }
-    // The fragment and sessionStorage only exist in the browser, after mount.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setVerificationCode((previous) => code || previous);
-    setManualEntry(!code);
-    if (urlCode) {
+    if (window.location.hash || linkCarriesCode) {
       window.history.replaceState(
         null,
         '',
         `/cli-auth?session_id=${encodeURIComponent(sessionId)}`
       );
     }
-  }, [sessionId, legacyQueryCode]);
+    try {
+      sessionStorage.removeItem(`nous:cli-auth-code:${sessionId}`);
+    } catch {
+      // Storage unavailable: nothing was stored.
+    }
+  }, [sessionId, linkCarriesCode]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -60,8 +74,42 @@ function CliAuthPageContent(): React.JSX.Element {
     }
   }, [isAuthenticated, isLoading, router, sessionId]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !sessionId) {
+      return;
+    }
+    let cancelled = false;
+    api
+      .get<CliAuthSessionInfo>(
+        `/cli-auth/session/${encodeURIComponent(sessionId)}`
+      )
+      .then((info) => {
+        if (!cancelled) {
+          setDetails(info);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetailsError(
+            'This sign-in request was not found or has expired. Run the login command in your terminal again.'
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, sessionId]);
+
+  const isPending = details?.status === 'pending';
+  const canApprove =
+    Boolean(sessionId) &&
+    isPending &&
+    codeChars.length === CODE_LENGTH &&
+    !isSubmitting &&
+    !isConnected;
+
   const handleApprove = async (): Promise<void> => {
-    if (!sessionId || !verificationCode || isSubmitting) {
+    if (!canApprove) {
       return;
     }
 
@@ -71,14 +119,9 @@ function CliAuthPageContent(): React.JSX.Element {
     try {
       await api.post('/cli-auth/approve', {
         session_id: sessionId,
-        verification_code: verificationCode,
+        verification_code: formatCode(codeChars),
       });
       setIsConnected(true);
-      try {
-        sessionStorage.removeItem(`nous:cli-auth-code:${sessionId}`);
-      } catch {
-        // Storage unavailable: nothing was stored.
-      }
     } catch (approveError) {
       setError(
         approveError instanceof Error
@@ -108,47 +151,89 @@ function CliAuthPageContent(): React.JSX.Element {
         </div>
 
         <p
-          className="mb-7 max-w-lg text-[0.95rem] leading-7 text-muted-foreground"
+          className="mb-5 max-w-lg text-[0.95rem] leading-7 text-muted-foreground"
           style={{ fontFamily: 'var(--nous-font-body)' }}
         >
           Approving this request lets the NOUS command line sign in as you and
-          act on your current organization. Check the code below matches the one
-          shown in your terminal.
+          act on your current organization for up to 30 days. Type the code
+          shown in your terminal to continue.
         </p>
 
-        <dl className="mb-7 space-y-4 rounded-xl border border-border bg-background/60 p-5">
+        <div
+          className="mb-6 flex items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/10 p-4"
+          id="cli-auth-warning"
+        >
+          <AlertTriangle
+            className="mt-0.5 h-5 w-5 shrink-0 text-destructive"
+            aria-hidden="true"
+          />
+          <p className="text-sm leading-6 text-foreground">
+            Only approve if you started this from your own terminal just now. If
+            someone sent you this link or told you a code, cancel.
+          </p>
+        </div>
+
+        <dl className="mb-6 space-y-4 rounded-xl border border-border bg-background/60 p-5">
           <div>
             <dt className="text-sm font-medium text-muted-foreground">
-              Session ID
+              Requested from
             </dt>
             <dd className="mt-1.5 break-all font-mono text-sm text-foreground">
-              {sessionId || 'No session ID provided'}
+              {details?.requester_ip ??
+                (details ? 'Unknown' : detailsError ? '—' : 'Loading…')}
             </dd>
           </div>
           <div>
             <dt className="text-sm font-medium text-muted-foreground">
-              Verification code
+              Device
             </dt>
-            <dd className="mt-1.5 font-mono text-lg tracking-[0.3em] text-primary">
-              {manualEntry ? (
-                <input
-                  type="text"
-                  aria-label="Verification code from your terminal"
-                  placeholder="Code from your terminal"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={verificationCode}
-                  onChange={(event) =>
-                    setVerificationCode(event.target.value.trim().toUpperCase())
-                  }
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-base tracking-widest text-foreground"
-                />
-              ) : (
-                verificationCode
-              )}
+            <dd className="mt-1.5 break-all font-mono text-sm text-foreground">
+              {details?.requester_user_agent ??
+                (details ? 'Unknown' : detailsError ? '—' : 'Loading…')}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-sm font-medium text-muted-foreground">
+              Started
+            </dt>
+            <dd className="mt-1.5 text-sm text-foreground">
+              {details
+                ? formatStartedAt(details.started_at)
+                : detailsError
+                  ? '—'
+                  : 'Loading…'}
             </dd>
           </div>
         </dl>
+
+        <label
+          htmlFor="cli-auth-code"
+          className="mb-2 block text-sm font-medium text-muted-foreground"
+        >
+          Code from your terminal
+        </label>
+        <input
+          id="cli-auth-code"
+          type="text"
+          inputMode="text"
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          maxLength={CODE_LENGTH + 1}
+          placeholder="XXXX-XXXX"
+          aria-describedby="cli-auth-warning"
+          value={formatCode(codeChars)}
+          onChange={(event) => setCodeChars(normalizeCode(event.target.value))}
+          disabled={isConnected}
+          className="mb-6 w-full rounded-lg border border-border bg-background px-3 py-2.5 font-mono text-lg tracking-[0.3em] text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        />
+
+        {details && !isPending && !isConnected ? (
+          <p className="mb-6 text-sm text-muted-foreground">
+            This sign-in request is no longer waiting for approval (
+            {details.status}). Run the login command in your terminal again.
+          </p>
+        ) : null}
 
         {isConnected ? (
           <div
@@ -171,12 +256,12 @@ function CliAuthPageContent(): React.JSX.Element {
           </div>
         ) : null}
 
-        {error ? (
+        {error || detailsError ? (
           <div
             role="alert"
             className="mb-6 rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
           >
-            {error}
+            {error || detailsError}
           </div>
         ) : null}
 
@@ -185,9 +270,7 @@ function CliAuthPageContent(): React.JSX.Element {
             type="button"
             aria-label="Approve CLI login"
             onClick={handleApprove}
-            disabled={
-              !sessionId || !verificationCode || isSubmitting || isConnected
-            }
+            disabled={!canApprove}
             className={cn(
               'inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl',
               'bg-primary px-5 text-sm font-semibold text-primary-foreground',
