@@ -839,6 +839,58 @@ async def test_integrity_error_race_reloads_and_replays_the_original_row(
 
 
 @pytest.mark.asyncio
+async def test_integrity_error_replay_reauthorizes_and_denial_leaks_nothing(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The replay branch must re-check REVIEW before returning a winner's row."""
+    output = _screen_output()
+    owner_id, _organization_id, run, step = await _seed_gate(db, output=output)
+    run_id = cast(UUID, run.id)
+    step_index = cast(int, step.step_index)
+    request = _request(
+        kind="screening",
+        output_hash=canonical_stage_output_hash(output),
+        payload=_screen_payload(),
+        note="same decision",
+    )
+    service_module = _review_module()
+    # A winner's row exists, so an unauthorized replay would otherwise leak it.
+    await service_module.ResearchReviewService(db).submit_review(
+        run_id=run_id,
+        step_index=step_index,
+        reviewer_id=owner_id,
+        request=request,
+    )
+    revoked_reviewer = uuid4()
+    calls: list[tuple[UUID, UUID, bool]] = []
+
+    async def deny(self: Any, rid: UUID, reviewer_id: UUID) -> Any:
+        calls.append((rid, reviewer_id, self.session.in_transaction()))
+        raise HTTPException(status_code=403, detail="reviewer role required")
+
+    monkeypatch.setattr(service_module.ResearchReviewService, "_authorize_review", deny)
+    racing_service = service_module.ResearchReviewService(db)
+    racing_service._submit_transaction = AsyncMock(  # type: ignore[method-assign]
+        side_effect=IntegrityError("insert", {}, Exception("unique race"))
+    )
+    load_review = AsyncMock(wraps=racing_service._load_review)
+    racing_service._load_review = load_review  # type: ignore[method-assign]
+
+    with pytest.raises(HTTPException) as denied:
+        await racing_service.submit_review(
+            run_id=run_id,
+            step_index=step_index,
+            reviewer_id=revoked_reviewer,
+            request=request,
+        )
+
+    assert denied.value.status_code == 403
+    assert calls == [(run_id, revoked_reviewer, True)]
+    load_review.assert_not_awaited()
+    assert await db.scalar(select(func.count()).select_from(ResearchStageReview)) == 1
+
+
+@pytest.mark.asyncio
 async def test_decline_is_durable_and_keeps_run_paused(
     db: AsyncSession,
 ) -> None:
