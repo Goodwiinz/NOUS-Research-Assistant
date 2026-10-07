@@ -64,11 +64,13 @@ async function request(
   path: string,
   token?: string,
   body?: object,
+  headers: Record<string, string> = {},
 ): Promise<Record<string, any>> {
   const response = await fetchFn(base + path, {
     method: body ? "POST" : "GET",
     redirect: "error",
     headers: {
+      ...headers,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
@@ -243,7 +245,10 @@ export async function connect(
       request(
         fetchFn,
         base,
-        `/cli-auth/status/${encodeURIComponent(login.session_id)}?poll_token=${encodeURIComponent(login.poll_token)}`,
+        `/cli-auth/status/${encodeURIComponent(login.session_id)}`,
+        undefined,
+        undefined,
+        { "X-CLI-Poll-Token": login.poll_token },
       ),
     options,
   );

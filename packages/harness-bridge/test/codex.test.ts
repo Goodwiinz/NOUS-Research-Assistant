@@ -352,6 +352,9 @@ test("connect exchanges CLI-owned grant; workspace sends only opaque IDs and lab
     project_id: project,
   });
   assert.equal(registration.headers.Authorization, "Bearer cli-secret");
+  const statusPoll = calls.find((c) => c.url.includes("/cli-auth/status/"))!;
+  assert.ok(!statusPoll.url.includes("poll-secret"));
+  assert.equal(statusPoll.headers["X-CLI-Poll-Token"], "poll-secret");
   assert.equal(calls.filter((c) => c.url.endsWith("/workspaces")).length, 1);
   assert.ok(!JSON.stringify(calls.map((c) => c.body)).includes(dir));
   assert.ok(!announcements.join("").includes("secret"));
