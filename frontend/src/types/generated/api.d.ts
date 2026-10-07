@@ -11102,6 +11102,10 @@ export interface components {
          * @description What the interactive owner sees before deciding: the exact stored target.
          */
         ActionReview: {
+            /** Arguments */
+            arguments: {
+                [key: string]: unknown;
+            };
             /** Content */
             content: string;
             /** Decided At */
@@ -11115,13 +11119,10 @@ export interface components {
             last_error?: string | null;
             /** Project Available */
             project_available: boolean;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /**
              * Requested At
              * Format: date-time
@@ -11133,12 +11134,18 @@ export interface components {
              * @enum {string}
              */
             state: "awaiting_approval" | "approved" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+            /** Summary */
+            summary: string;
             /** Tags */
             tags: string[];
             /** Title */
             title: string;
             /** Tool Name */
             tool_name: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Workspace Label */
+            workspace_label?: string | null;
         };
         /** ActionStatus */
         ActionStatus: {
@@ -16536,15 +16543,14 @@ export interface components {
              * Format: uuid
              */
             device_id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id?: string | null;
             /** Scopes */
             scopes: string[];
             /** Thread Id */
             thread_id?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
@@ -16567,13 +16573,10 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /** Scopes */
             scopes: string[];
             /**
@@ -16585,6 +16588,10 @@ export interface components {
             thread_id?: string | null;
             /** Thread Label */
             thread_label?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Workspace Label */
+            workspace_label?: string | null;
         };
         /**
          * GraphAnalytics
@@ -28923,10 +28930,13 @@ export interface operations {
     };
     get_cli_auth_status_api_v1_cli_auth_status__session_id__get: {
         parameters: {
-            query: {
-                poll_token: string;
+            query?: {
+                /** @description Deprecated: send the X-CLI-Poll-Token header instead. */
+                poll_token?: string | null;
             };
-            header?: never;
+            header?: {
+                "X-CLI-Poll-Token"?: string | null;
+            };
             path: {
                 session_id: string;
             };

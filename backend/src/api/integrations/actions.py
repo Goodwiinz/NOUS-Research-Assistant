@@ -1,8 +1,9 @@
 """Durable action transport; the action service owns the guard and commits.
 
-Requests and status reads use the CLI JWT + `tools:write` grant. The decision
-route is browser-only: a verified CLI token is refused even without a grant
-header, so a harness can never self-attest the user's choice.
+Requests and status reads use the CLI JWT + a grant holding `tools:write` or
+`library:write`; the service then checks the scope each action needs. The
+decision route is browser-only: a verified CLI token is refused even without a
+grant header, so a harness can never self-attest the user's choice.
 """
 
 from uuid import UUID
@@ -11,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.integrations.auth import (
-    require_integration_context,
+    require_integration_context_any,
     require_interactive_user,
 )
 from src.core.config import settings
@@ -34,9 +35,11 @@ from src.services.agent.tool_actions import (
     get_action_status,
     request_action,
 )
+from src.services.integrations.context import IntegrationAccessDenied
 
 router = APIRouter(prefix="/actions", tags=["integrations"])
-_WRITE = Depends(require_integration_context("tools:write"))
+# Either write scope admits the caller; request_action checks each action's own.
+_WRITE = Depends(require_integration_context_any(("tools:write", "library:write")))
 
 
 def _actor(context: IntegrationContext) -> ActionActor:
@@ -44,10 +47,12 @@ def _actor(context: IntegrationContext) -> ActionActor:
         user_id=context.user_id,
         organization_id=context.organization_id,
         project_id=context.project_id,
+        workspace_id=context.workspace_id,
         thread_id=context.thread_id,
         run_id=context.run_id,
         grant_id=context.grant_id,
         consent_id=context.consent_id,
+        scopes=context.scopes,
     )
 
 
@@ -64,6 +69,9 @@ async def create_action(
         return await request_action(db, _actor(context), invocation)
     except ToolActionArgumentError as error:
         raise HTTPException(422, str(error)) from error
+    except IntegrationAccessDenied as error:
+        # The action's scope, or its target, is out of the grant's reach.
+        raise HTTPException(403, "Integration access denied") from error
     except ActionConflict as error:
         raise HTTPException(
             409, "Action request conflicts with an existing one"

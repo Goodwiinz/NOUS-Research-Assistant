@@ -24,7 +24,7 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.integrations.context import IntegrationAccessDenied
 
 pytestmark = pytest.mark.unit
-USER, ORG, PROJECT, GRANT, UPLOAD, VERSION = (uuid4() for _ in range(6))
+USER, ORG, PROJECT, GRANT, UPLOAD, VERSION, WORKSPACE = (uuid4() for _ in range(7))
 HEADERS = {
     "Authorization": "Bearer cli-jwt",
     "X-NOUS-Integration-Grant": "opaque-grant",
@@ -166,6 +166,51 @@ def test_publication_round_trip_uses_context_not_payload(client: TestClient) -> 
         PROJECT,
     )
     assert CALLS[1][1] == (UPLOAD, b"report\n")
+
+
+def test_workspace_grant_is_refused_by_every_publication_route(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def resolve_workspace(
+        _db: Any, token: str, *, required_scope: str
+    ) -> IntegrationContext:
+        if token != "opaque-grant" or required_scope != "artifacts:publish":
+            raise IntegrationAccessDenied()
+        return IntegrationContext(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            grant_id=GRANT,
+        )
+
+    monkeypatch.setattr(
+        "src.api.integrations.auth.resolve_integration_context", resolve_workspace
+    )
+    responses = [
+        client.post("/api/v1/artifacts/uploads", json=_reserve_body(), headers=HEADERS),
+        client.put(
+            f"/api/v1/artifacts/uploads/{UPLOAD}/content",
+            content=b"report\n",
+            headers={**HEADERS, "Content-Type": "application/octet-stream"},
+        ),
+        client.post(
+            "/api/v1/artifacts/versions",
+            json={
+                "publication_id": str(uuid4()),
+                "upload_id": str(UPLOAD),
+                "title": "report.md",
+                "provenance": {"producer": "harness"},
+            },
+            headers=HEADERS,
+        ),
+    ]
+    assert [response.status_code for response in responses] == [403, 403, 403]
+    assert {response.json()["detail"] for response in responses} == {
+        "Integration access denied"
+    }
+    # Artifacts stay bound to one Collection: no service ran.
+    assert CALLS == []
 
 
 def test_identity_fields_in_payload_are_rejected(client: TestClient) -> None:

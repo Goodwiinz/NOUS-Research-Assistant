@@ -16,7 +16,9 @@ def test_build_stream_headers_includes_auth_no_org() -> None:
     assert "X-Organization-ID" not in headers
 
 
-def test_agent_api_client_default_timeout_is_streaming_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agent_api_client_default_timeout_is_streaming_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from src.cli.agent_api_client import AgentAPIClient
 
     captured: dict[str, object] = {}
@@ -60,9 +62,9 @@ async def test_stream_message_yields_parsed_events_from_sse() -> None:
             200,
             headers={"content-type": "text/event-stream"},
             content=(
-                b'event: trace\n'
+                b"event: trace\n"
                 b'data: {"thread_id":"thread-1","cli_session_id":"cli-1","langsmith_run_id":"run-1","langsmith_url":"u1"}\n\n'
-                b'event: token\n'
+                b"event: token\n"
                 b'data: {"content":"Hello"}\n\n'
             ),
         )
@@ -100,7 +102,9 @@ async def test_stream_message_yields_parsed_events_from_sse() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_confirm_yields_parsed_events_and_sends_confirmation_payload() -> None:
+async def test_stream_confirm_yields_parsed_events_and_sends_confirmation_payload() -> (
+    None
+):
     from src.cli.agent_api_client import AgentAPIClient
 
     captured: dict[str, object] = {}
@@ -113,10 +117,7 @@ async def test_stream_confirm_yields_parsed_events_and_sends_confirmation_payloa
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            content=(
-                b'event: token\n'
-                b'data: {"content":"Done"}\n\n'
-            ),
+            content=(b"event: token\n" b'data: {"content":"Done"}\n\n'),
         )
 
     client = AgentAPIClient(
@@ -170,3 +171,29 @@ async def test_stream_message_raises_friendly_auth_error_for_403() -> None:
 
     assert exc_info.value.status_code == 403
     assert "run /login" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_get_cli_auth_status_sends_poll_token_in_header_not_url() -> None:
+    from src.cli.agent_api_client import AgentAPIClient
+
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "pending"})
+
+    client = AgentAPIClient(
+        base_url="https://example.test",
+        http_client=httpx.AsyncClient(
+            base_url="https://example.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    await client.get_cli_auth_status("sess-1", "poll-secret")
+    await client.aclose()
+
+    assert "poll-secret" not in str(captured["url"])
+    assert captured["headers"]["x-cli-poll-token"] == "poll-secret"  # type: ignore[index]

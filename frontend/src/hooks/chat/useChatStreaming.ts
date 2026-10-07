@@ -606,6 +606,9 @@ export function useChatStreaming(
   const confirmationProbedRef = useRef<Set<string>>(new Set());
   const lastActivatedThreadRef = useRef<string | null>(null);
   const probeAbortRef = useRef<AbortController | null>(null);
+  // Bumped when the cold-load probe seeds a run, so the resume effect (which
+  // does not subscribe to the activity store) re-evaluates and takes over.
+  const [resumeNonce, setResumeNonce] = useState(0);
   const hadPendingApprovalRef = useRef(false);
 
   // ---- Store bindings ----
@@ -616,6 +619,12 @@ export function useChatStreaming(
   const streamingThreadId = useChatStore((state) => state.streamingThreadId);
   const activeThreadId = useChatStore((state) => state.currentThreadId);
   const harnessConnection = useHarnessConnection(activeThreadId);
+  // The cold-load probe outlives the render that started it; it must act on
+  // the current (post-auth) connection, not the one captured at probe start.
+  const harnessConnectionRef = useRef(harnessConnection);
+  useEffect(() => {
+    harnessConnectionRef.current = harnessConnection;
+  }, [harnessConnection]);
   const authIsAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const authenticatedUserId = useAuthStore((state) => state.user?.id ?? null);
   const draftWorkspaceId =
@@ -2586,6 +2595,7 @@ export function useChatStreaming(
     runStreamTurn,
     storeIsStreaming,
     harnessConnection,
+    resumeNonce,
   ]);
 
   // ---- Re-deliver a parked HITL confirmation on a cold thread load ----
@@ -2654,6 +2664,23 @@ export function useChatStreaming(
               runId,
             });
             probeAbort.abort();
+          },
+          // A Codex replay opens with its durable run_id (accepted frame),
+          // before any approval_required. That run is parked, not lost: hand
+          // it to the resume effect, whose runStreamTurn owns the approval
+          // card, the tokens and terminal reconciliation. The probe must not
+          // keep consuming the stream, or the completed turn is never
+          // reconciled.
+          onRunId: (runId) => {
+            if (probeAbort.signal.aborted) return;
+            if (harnessConnectionRef.current.executionProvider !== 'codex') {
+              return;
+            }
+            probeAbort.abort();
+            const activity = useAgentActivityStore.getState();
+            activity.startRun(threadId, 'Local Codex', 'resumed after reload');
+            activity.setRunId(threadId, runId);
+            setResumeNonce((n) => n + 1);
           },
           onToken: abandonProbe,
           onToolStart: abandonProbe,
