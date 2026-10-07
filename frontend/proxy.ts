@@ -39,7 +39,7 @@ function buildCsp(nonce: string): string {
         : ''
     }`,
     "worker-src 'self' blob:",
-    'upgrade-insecure-requests',
+    ...(process.env.NODE_ENV === 'development' ? [] : ['upgrade-insecure-requests']),
   ].join('; ');
 }
 

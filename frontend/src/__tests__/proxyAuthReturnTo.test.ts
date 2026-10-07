@@ -60,10 +60,14 @@ describe('proxy CSP connect-src', () => {
     expect(directive).toContain('ws://localhost:8000');
     expect(directive).toContain('http://127.0.0.1:8000');
     expect(directive).toContain('ws://127.0.0.1:8000');
+    const response = await proxy(new NextRequest('http://localhost:3000/chat'));
+    expect(response.headers.get('content-security-policy')).not.toContain('upgrade-insecure-requests');
   });
 
   it('keeps production connect-src free of plain-http origins', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     expect(await connectSrc()).toBe("connect-src 'self' https: wss:");
+    const response = await proxy(new NextRequest('https://nous.example/chat'));
+    expect(response.headers.get('content-security-policy')).toContain('upgrade-insecure-requests');
   });
 });

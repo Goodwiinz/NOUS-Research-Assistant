@@ -967,3 +967,28 @@ test("unconfirmed app-server exit fails closed when termination signals cannot b
   await pending;
   assert.doesNotThrow(() => process.kill(child.pid!, 0));
 });
+
+
+// Mutation: src/cli.ts request() must not interpolate the HTTP response body.
+// Command: pnpm --dir packages/harness-bridge exec node --experimental-sqlite
+// --import tsx --test --test-name-pattern="request errors" test/codex.test.ts
+for (const body of ["<html>echoed-credential</html>", '{"detail":"echoed-credential"}'])
+  test("request errors omit arbitrary backend bodies: " + body, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "nous-error-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    await assert.rejects(
+      connect({
+        stateDir: dir,
+        apiUrl: "https://nous.test/api/v1",
+        projectId: "11111111-1111-4111-8111-111111111111",
+        label: "Laptop",
+        fetchFn: (async () => new Response(body, { status: 500 })) as typeof fetch,
+        announce: () => {},
+      }),
+      (error: Error) => {
+        assert.match(error.message, /NOUS request failed \(500\).*cli-auth\/start/);
+        assert.ok(!error.message.includes("echoed-credential"));
+        return true;
+      },
+    );
+  });

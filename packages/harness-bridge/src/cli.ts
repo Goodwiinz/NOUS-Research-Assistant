@@ -79,7 +79,7 @@ async function request(
   });
   if (!response.ok)
     throw new Error(
-      `NOUS request failed (${response.status}) ${path.split("?")[0]}: ${(await response.text().catch(() => "")).slice(0, 300)}`,
+      `NOUS request failed (${response.status}) ${path.split("?")[0]}`,
     );
   let data: unknown;
   try {

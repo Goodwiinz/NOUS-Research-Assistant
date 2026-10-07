@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Response } from "@playwright/test";
@@ -67,91 +68,96 @@ test("live Codex run survives chat reload and approval without duplicate transcr
   // $TMPDIR and /tmp are excluded from the sandbox too, but the home
   // directory is the plainest out-of-root target on every platform.
   const fixtureFile = join(homedir(), `.nous-harness-e2e-${marker.slice(-12)}.txt`);
-  const command = `printf '%s' '${marker}' > '${fixtureFile}'`;
-  const runIds = new Set<string>();
-  const streamReads: Promise<void>[] = [];
-  page.on("response", (response) => {
-    streamReads.push(collectRunIds(response, runIds));
-  });
+  try {
+    const command = `printf '%s' '${marker}' > '${fixtureFile}'`;
+    const runIds = new Set<string>();
+    const streamReads: Promise<void>[] = [];
+    page.on("response", (response) => {
+      streamReads.push(collectRunIds(response, runIds));
+    });
 
-  await page.goto("/login");
-  await page.getByTestId("email-input").fill(email);
-  await page.getByTestId("password-input").fill(password);
-  await page.getByTestId("login-button").click();
-  await page.waitForURL(/\/dashboard(?:\/|$)/, { timeout: 15_000 });
-  await page.goto(`/chat?thread=${encodeURIComponent(threadId)}`);
+    await page.goto("/login");
+    await page.getByTestId("email-input").fill(email);
+    await page.getByTestId("password-input").fill(password);
+    await page.getByTestId("login-button").click();
+    await page.waitForURL(/\/dashboard(?:\/|$)/, { timeout: 15_000 });
+    await page.goto(`/chat?thread=${encodeURIComponent(threadId)}`);
 
-  const provider = page.getByRole("combobox", { name: "Execution provider" });
-  await expect(provider).toBeVisible();
-  await provider.selectOption("codex");
-  await page
-    .getByRole("combobox", { name: "Paired computer" })
-    .selectOption(deviceId!);
-  await page
-    .getByRole("combobox", { name: "Project workspace" })
-    .selectOption(workspaceId);
+    const provider = page.getByRole("combobox", { name: "Execution provider" });
+    await expect(provider).toBeVisible();
+    await provider.selectOption("codex");
+    await page
+      .getByRole("combobox", { name: "Paired computer" })
+      .selectOption(deviceId!);
+    await page
+      .getByRole("combobox", { name: "Project workspace" })
+      .selectOption(workspaceId);
 
-  const composer = page.getByPlaceholder(
-    "Ask anything, or paste a passage to discuss…",
-  );
-  await expect(composer).toBeEnabled();
-  await composer.fill(
-    `Execute this exact shell command: ${command}. It intentionally writes outside the workspace root, so if the sandbox blocks it, request approval to run it unsandboxed rather than changing it. If it succeeds, reply with this exact marker: ${marker}. Do not use another command.`,
-  );
-  await page.getByRole("button", { name: /^Send/ }).click();
+    const composer = page.getByPlaceholder(
+      "Ask anything, or paste a passage to discuss…",
+    );
+    await expect(composer).toBeEnabled();
+    await composer.fill(
+      `Execute this exact shell command: ${command}. It intentionally writes outside the workspace root, so if the sandbox blocks it, request approval to run it unsandboxed rather than changing it. If it succeeds, reply with this exact marker: ${marker}. Do not use another command.`,
+    );
+    await page.getByRole("button", { name: /^Send/ }).click();
 
-  const permission = page.getByRole("alertdialog", {
-    name: "Codex permission request",
-  });
-  await expect(permission).toBeVisible({ timeout: 120_000 });
-  await expect(permission).toContainText(command);
+    const permission = page.getByRole("alertdialog", {
+      name: "Codex permission request",
+    });
+    await expect(permission).toBeVisible({ timeout: 120_000 });
+    await expect(permission).toContainText(command);
 
-  // A refresh drops only browser observation. The exact challenge must be
-  // replayed from the durable run before the user approves it once.
-  await page.reload();
-  await expect(
-    page.getByRole("alertdialog", { name: "Codex permission request" }),
-  ).toBeVisible({ timeout: 60_000 });
-  const replayedPermission = page.getByRole("alertdialog", {
-    name: "Codex permission request",
-  });
-  await expect(replayedPermission).toContainText(command);
+    // A refresh drops only browser observation. The exact challenge must be
+    // replayed from the durable run before the user approves it once.
+    await page.reload();
+    await expect(
+      page.getByRole("alertdialog", { name: "Codex permission request" }),
+    ).toBeVisible({ timeout: 60_000 });
+    const replayedPermission = page.getByRole("alertdialog", {
+      name: "Codex permission request",
+    });
+    await expect(replayedPermission).toContainText(command);
 
-  const decisionResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      /\/harness\/requests\/[^/]+\/decision$/.test(
-        new URL(response.url()).pathname,
-      ),
-  );
-  await replayedPermission.getByRole("button", { name: "Allow once" }).click();
-  const decision = await decisionResponse;
-  expect(decision.ok()).toBe(true);
-  expect(decision.request().postDataJSON()).toMatchObject({
-    kind: "decision",
-    allow: true,
-  });
+    const decisionResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        /\/harness\/requests\/[^/]+\/decision$/.test(
+          new URL(response.url()).pathname,
+        ),
+    );
+    await replayedPermission.getByRole("button", { name: "Allow once" }).click();
+    const decision = await decisionResponse;
+    expect(decision.ok()).toBe(true);
+    expect(decision.request().postDataJSON()).toMatchObject({
+      kind: "decision",
+      allow: true,
+    });
 
-  const assistantMarker = page
-    .locator('[data-role="assistant"]')
-    .filter({ hasText: marker });
-  await expect(assistantMarker).toHaveCount(1, { timeout: 120_000 });
-  await page.reload();
-  await expect(
-    page.locator('[data-role="assistant"]').filter({ hasText: marker }),
-  ).toHaveCount(1, { timeout: 60_000 });
-  await expect(
-    page.locator('[data-role="user"]').filter({ hasText: marker }),
-  ).toHaveCount(1);
-  await Promise.allSettled(streamReads);
+    const assistantMarker = page
+      .locator('[data-role="assistant"]')
+      .filter({ hasText: marker });
+    await expect(assistantMarker).toHaveCount(1, { timeout: 120_000 });
+    await page.reload();
+    await expect(
+      page.locator('[data-role="assistant"]').filter({ hasText: marker }),
+    ).toHaveCount(1, { timeout: 60_000 });
+    await expect(
+      page.locator('[data-role="user"]').filter({ hasText: marker }),
+    ).toHaveCount(1);
+    await Promise.allSettled(streamReads);
 
-  const runId = [...runIds][0];
-  expect(
-    runId,
-    "the accepted durable run_id must be present in persisted SSE",
-  ).toBeTruthy();
-  testInfo.annotations.push({
-    type: "live-harness-acceptance",
-    description: `outcome=completed thread_id=${threadId} run_id=${runId} device_id=${deviceId} workspace_id=${workspaceId}`,
-  });
+    const runId = [...runIds][0];
+    expect(
+      runId,
+      "the accepted durable run_id must be present in persisted SSE",
+    ).toBeTruthy();
+    testInfo.annotations.push({
+      type: "live-harness-acceptance",
+      description: `outcome=completed thread_id=${threadId} run_id=${runId} device_id=${deviceId} workspace_id=${workspaceId}`,
+    });
+  } finally {
+    // This opt-in local-device scenario owns only its unique marker file.
+    await rm(fixtureFile, { force: true });
+  }
 });
