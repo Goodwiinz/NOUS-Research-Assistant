@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Workspace } from '@/types/workspace';
 describe('workspaceService default workspace cache', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -10,12 +11,10 @@ describe('workspaceService default workspace cache', () => {
   });
 
   it('revalidates a cached workspace before returning it', async () => {
-    let workspaceService: typeof import('@/services/workspaceService').workspaceService;
-
     vi.resetModules();
-    ({ workspaceService } = await vi.importActual<
+    const { workspaceService } = await vi.importActual<
       typeof import('@/services/workspaceService')
-    >('@/services/workspaceService'));
+    >('@/services/workspaceService');
 
     const cachedWorkspace = {
       id: 'ws-1',
@@ -38,7 +37,7 @@ describe('workspaceService default workspace cache', () => {
 
     const getWorkspaceSpy = vi
       .spyOn(workspaceService, 'getWorkspace')
-      .mockResolvedValue(freshWorkspace as any);
+      .mockResolvedValue(freshWorkspace as Workspace);
     const listWorkspacesSpy = vi
       .spyOn(workspaceService, 'listWorkspaces')
       .mockResolvedValue([]);
@@ -51,12 +50,10 @@ describe('workspaceService default workspace cache', () => {
   });
 
   it('drops a deleted cached workspace and falls back to the server list', async () => {
-    let workspaceService: typeof import('@/services/workspaceService').workspaceService;
-
     vi.resetModules();
-    ({ workspaceService } = await vi.importActual<
+    const { workspaceService } = await vi.importActual<
       typeof import('@/services/workspaceService')
-    >('@/services/workspaceService'));
+    >('@/services/workspaceService');
 
     localStorage.setItem(
       'default-workspace-object',
@@ -84,7 +81,7 @@ describe('workspaceService default workspace cache', () => {
 
     const listWorkspacesSpy = vi
       .spyOn(workspaceService, 'listWorkspaces')
-      .mockResolvedValue([liveWorkspace as any]);
+      .mockResolvedValue([liveWorkspace as Workspace]);
 
     const result = await workspaceService.getOrCreateDefaultWorkspace();
 
@@ -93,6 +90,30 @@ describe('workspaceService default workspace cache', () => {
     expect(localStorage.getItem('default-workspace-object')).toContain(
       'live-ws'
     );
+  });
+
+  it('cannot restore the old account’s cache after it was cleared', async () => {
+    const { workspaceService, clearWorkspaceServiceCache } =
+      await import('@/services/workspaceService');
+    let finish!: (value: Workspace[]) => void;
+    vi.spyOn(workspaceService, 'listWorkspaces').mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const create = vi.spyOn(workspaceService, 'createWorkspace');
+    const pending = workspaceService.getOrCreateDefaultWorkspace();
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    clearWorkspaceServiceCache();
+    finish([
+      { id: 'private-workspace', name: 'Private workspace' } as Workspace,
+    ]);
+    await rejected;
+    expect(localStorage.getItem('default-workspace-object')).toBeNull();
+    expect(localStorage.getItem('default-workspace-id')).toBeNull();
+    expect(create).not.toHaveBeenCalled();
   });
 });
 

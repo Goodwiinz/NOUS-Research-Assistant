@@ -1314,8 +1314,11 @@ def kg_merge_entities_job(self, job_id: str):
                     # read/DETACH DELETE any entity by id across tenants, and a
                     # re-pointed edge created without organization_id lands
                     # org-less, regressing edge-level tenancy.
+                    # strict: an outage reading the edge set must fail the group,
+                    # not read as "no edges" — delete_entity below DETACH DELETEs
+                    # the duplicate together with all of its edges.
                     relationships = knowledge_graph_service.get_relationships(
-                        duplicate_id, organization_id=job_org_id
+                        duplicate_id, organization_id=job_org_id, strict=True
                     )
                     for rel in relationships:
                         create_request = CreateRelationshipRequest(
@@ -1344,17 +1347,11 @@ def kg_merge_entities_job(self, job_id: str):
                             source_document_id=rel.source_document_id,
                             organization_id=job_org_id,
                         )
-                        try:
-                            knowledge_graph_service.create_relationship(create_request)
-                        except Exception as rel_error:
-                            # Duplicate-relationship inserts are expected while
-                            # re-pointing edges onto the primary; log at debug so
-                            # a genuine create failure isn't fully invisible.
-                            logger.debug(
-                                "Skipped relationship insert during entity merge: %s",
-                                rel_error,
-                                exc_info=True,
-                            )
+                        # create_relationship MERGEs, so a duplicate edge is not
+                        # an error. Any raise is a genuine failure to re-point:
+                        # let it fail the group (outer except) so the duplicate
+                        # below is kept instead of DETACH DELETEd with that edge.
+                        knowledge_graph_service.create_relationship(create_request)
 
                     # delete_entity swallows Neo4j errors and returns False (and
                     # also returns False when the node is already gone). The

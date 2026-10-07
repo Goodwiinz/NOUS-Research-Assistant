@@ -19,6 +19,8 @@ export type McpSession = {
   stateDir: string;
   // Absolute registered output root; enables artifacts_publish when present.
   outputRoot?: string;
+  // Grant carries context:read; enables read_selected_context.
+  context?: boolean;
   // Grant carries tools:write; enables request_action / get_action_status.
   actions?: boolean;
   // Grant carries handoff:read/handoff:write; enables get/save_nous_handoff.

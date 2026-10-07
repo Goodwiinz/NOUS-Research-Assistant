@@ -1627,6 +1627,7 @@ async def get_thread_messages(
             select(ChatMessage)
             .where(
                 ChatMessage.thread_id == thread_id,
+                ChatMessage.is_deleted == False,
                 # Edit-and-resend tombstones: a superseded turn (and everything
                 # after it) must never render, or a reload shows the answer to a
                 # question the user replaced.
@@ -1650,6 +1651,7 @@ async def get_thread_messages(
         # full-thread total instead of the filtered one).
         filters = [
             ChatMessage.thread_id == thread_id,
+            ChatMessage.is_deleted == False,
             ChatMessage.superseded_by_message_id.is_(None),
         ]
         if before is not None:
