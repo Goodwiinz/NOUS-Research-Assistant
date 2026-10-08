@@ -439,7 +439,7 @@ test("a run refused while connected gets its watchdog from the next lease frame"
       }
       if (polls === 8) return done.abort(); // six lease frames after the refusal
       const lease = { deviceId: r1.deviceId, expiresAt: later(), runs: {} };
-      queueMicrotask(() =>
+      setImmediate(() =>
         this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ commands: [], lease }) })),
       );
     }
@@ -527,7 +527,7 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
       if (!JSON.parse(raw).poll) return;
       if ((polls += 1) === 6) return done.abort(); // five redeliveries
       const lease = { deviceId: r1.deviceId, expiresAt: later(), runs: { [r1.runId]: r1.generation } };
-      queueMicrotask(() =>
+      setImmediate(() =>
         this.dispatchEvent(
           new MessageEvent("message", { data: JSON.stringify({ commands: [stop, approve], lease }) }),
         ),
@@ -609,7 +609,9 @@ for (const [when, finished] of [
         queueMicrotask(() => this.dispatchEvent(new Event("open")));
       }
       reply(value: unknown) {
-        queueMicrotask(() =>
+        // A separate macrotask per message, as a real WebSocket delivers them:
+        // a microtask loop would starve the test timeout if replies never end.
+        setImmediate(() =>
           this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) })),
         );
       }
@@ -732,7 +734,9 @@ for (const [frame, malformed, error] of [
         queueMicrotask(() => this.dispatchEvent(new Event("open")));
       }
       reply(value: unknown) {
-        queueMicrotask(() =>
+        // A separate macrotask per message, as a real WebSocket delivers them:
+        // a microtask loop would starve the test timeout if replies never end.
+        setImmediate(() =>
           this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) })),
         );
       }
