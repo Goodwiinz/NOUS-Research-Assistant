@@ -7,10 +7,10 @@ from the diff, with visual evidence a reviewer can inspect.
 Rollout status: the feature map, the flow charts and
 `scripts/ci/check_feature_map.py` are live and blocking. The runner flags
 under [Running](#running) (`--features`, `--changed-from`, `--evidence-dir`,
-`--evidence-record`), `scripts/verify/boot_local.sh`, checkpoint screenshots
-and the `nous-loop.md` step 7b stop gate are planned in
-[the implementation plan](../plans/2026-10-08-nous-verify.md) and are not
-available until those changes land; until then every feature stays `planned`.
+`--evidence-record`), `scripts/verify/boot_local.sh`, video/trace capture and
+checkpoint screenshots are available, and every v1 feature is `covered`. The
+`nous-loop.md` step 7b stop gate is still planned in
+[the implementation plan](../plans/2026-10-08-nous-verify.md).
 
 ## Vocabulary
 

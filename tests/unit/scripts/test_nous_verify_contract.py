@@ -44,3 +44,30 @@ def test_feature_map_and_flows_exist_for_v1_features() -> None:
         "project-creation-via-chat",
     ):
         assert (FLOWS / f"{feature}.md").is_file(), feature
+
+
+def test_qa_runner_node_tests_are_wired_into_hosted_and_local_gates() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "test-pipeline.yml").read_text(
+        encoding="utf-8"
+    )
+    local_ci = (REPO_ROOT / "scripts" / "ci" / "run_local_ci.sh").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "node --test ../tests/unit/scripts/nous-qa.test.mjs "
+        "../tests/unit/scripts/nous-verify.test.mjs" in workflow
+    )
+    assert (
+        "node --test tests/unit/scripts/nous-qa.test.mjs "
+        'tests/unit/scripts/nous-verify.test.mjs; check $? "nous-qa node tests"'
+        in local_ci
+    )
+
+
+def test_qa_readme_documents_verification_flags() -> None:
+    readme = (REPO_ROOT / "tests" / "e2e" / "qa" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Verification selection and evidence" in readme
+    for flag in ("--features", "--changed-from", "--evidence-dir", "--evidence-record"):
+        assert flag in readme
