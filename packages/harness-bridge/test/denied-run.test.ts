@@ -52,30 +52,43 @@ function start(deviceId: string, expiresAt = later()): BridgeCommand {
   };
 }
 
-/** Codex double: turns start, and history reports the turn as still running. */
+/** Codex double: turns start, and history reports the turn as still running.
+ * Like src/adapters/codex.ts, an instance interrupts only a turn it started or
+ * read back with inspectTurn, so a fresh one (after a restart) knows none. */
 function codex(name: string) {
+  const known = new Set<string>();
   const value = {
-    interrupts: 0,
+    interrupts: 0, // interrupts Codex accepted
+    unknownInterrupts: 0, // interrupts refused: "unknown active turn"
     async startSession() {
       return { id: `s-${name}` };
     },
     async resumeSession(id: string) {
       return { id };
     },
-    async startTurn() {
+    async startTurn(sessionId: string) {
+      known.add(`${sessionId}/t-${name}`);
       return { id: `t-${name}` };
     },
-    async interruptTurn() {
+    async interruptTurn(sessionId: string, turnId: string) {
+      if (!known.has(`${sessionId}/${turnId}`)) {
+        value.unknownInterrupts += 1;
+        throw new Error("unknown active turn");
+      }
       value.interrupts += 1;
     },
     async respondToRequest() {},
     async inspectTurn(sessionId: string) {
+      known.add(`${sessionId}/t-${name}`);
       return { state: "running", sessionId, turnId: `t-${name}` };
     },
     async closeSession() {},
     async *events() {},
   };
-  return value as unknown as HarnessAdapter & { interrupts: number };
+  return value as unknown as HarnessAdapter & {
+    interrupts: number;
+    unknownInterrupts: number;
+  };
 }
 
 const refusal = (c: BridgeCommand, sourceSeq = 1): Rejection => ({
@@ -276,25 +289,62 @@ test("the watchdog does not interrupt a refused run whose folder was released", 
   }
 });
 
-test("a refused run asks Codex nothing on reconnect, and its turn is still interrupted once the lease lapses", async () => {
+// After a restart the in-process watchdog timer is gone and adapterFor builds a
+// fresh Codex adapter, which interrupts only a turn it started or read back.
+// Reconcile reads the refused run's turn back once, reports nothing, and arms
+// the watchdog; later passes neither read it again nor re-arm.
+// Mutations in src/journal.ts reconcile(): drop the inspectTurn call and the
+// interrupt is refused (0 !== 1); drop the armed/claimed early return and the
+// second pass reads the turn again (2 !== 1).
+test("after a restart a refused run's turn is read back once and interrupted once its lease lapses", async () => {
   const f = fixture();
   const r1 = start(randomUUID(), later(150));
-  const a1 = codex("r1");
   let j = new Journal(f.path, () => options);
   try {
-    await j.execute(r1, a1);
+    await j.execute(r1, codex("r1"));
     j.reject(refusal(r1));
-    j.close(); // a restart drops the in-process watchdog timer
+    j.close(); // a restart drops the in-process watchdog timer and the adapter
     j = new Journal(f.path, () => options);
-    // Codex may no longer know the thread. connection.ts reconciles every locked
-    // run on each socket open, so that error would fail every connection.
+    const a1 = codex("r1");
+    const inspect = a1.inspectTurn;
+    let inspected = 0;
+    a1.inspectTurn = (sessionId, commandId) => {
+      inspected += 1;
+      return inspect(sessionId, commandId);
+    };
+    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    await j.reconcile(r1.commandId, a1);
+    await j.reconcile(r1.commandId, a1); // the next pass, e.g. the next socket open
+    assert.equal(a1.interrupts, 1);
+    assert.equal(inspected, 1);
+    assert.deepEqual(j.pending(), []);
+    assert.equal(j.state(r1.commandId), "denied");
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});
+
+// connection.ts reconciles every locked run on each socket open, so a thread
+// Codex no longer knows must not fail the reconnect. Mutation: let the
+// inspectTurn error escape reconcile() and it rejects.
+test("a refused run whose thread Codex no longer knows does not fail the reconnect", async () => {
+  const f = fixture();
+  const r1 = start(randomUUID(), later(150));
+  let j = new Journal(f.path, () => options);
+  try {
+    await j.execute(r1, codex("r1"));
+    j.reject(refusal(r1));
+    j.close();
+    j = new Journal(f.path, () => options);
+    const a1 = codex("r1");
     a1.inspectTurn = async () => {
       throw new Error("Codex no longer knows this thread");
     };
     await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
     await j.reconcile(r1.commandId, a1);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(a1.interrupts, 1);
+    // The watchdog still fires; Codex has no such turn to stop.
+    assert.equal(a1.unknownInterrupts, 1);
     assert.deepEqual(j.pending(), []);
     assert.equal(j.state(r1.commandId), "denied");
   } finally {
@@ -306,21 +356,19 @@ test("a refused run asks Codex nothing on reconnect, and its turn is still inter
 // runBridge (src/cli.ts) runs reconcileLocal before every connection attempt so
 // the expiry watchdog works while the network is down. After a restart it must
 // re-arm a refused run's watchdog too, not only a 'recovering' run's.
-// Mutation: reconcile only 'recovering' runs in reconcileLocal() and the turn
-// is not interrupted (0 !== 1).
-test("offline after a restart, the local pass re-arms a refused run's watchdog without asking Codex", async () => {
+// Mutations: reconcile only 'recovering' runs in reconcileLocal(), or drop the
+// inspectTurn call in src/journal.ts reconcile(), and the turn is not
+// interrupted (0 !== 1).
+test("offline after a restart, the local pass re-arms a refused run's watchdog", async () => {
   const f = fixture();
   const r1 = start(randomUUID(), later(150));
-  const a1 = codex("r1");
   let j = new Journal(f.path, () => options);
   try {
-    await j.execute(r1, a1);
+    await j.execute(r1, codex("r1"));
     j.reject(refusal(r1));
-    j.close(); // a restart drops the in-process watchdog timer
+    j.close(); // a restart drops the in-process watchdog timer and the adapter
     j = new Journal(f.path, () => options);
-    a1.inspectTurn = async () => {
-      throw new Error("Codex no longer knows this thread");
-    };
+    const a1 = codex("r1");
     await reconcileLocal(j, () => a1);
     await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
     assert.equal(a1.interrupts, 1);
@@ -340,18 +388,20 @@ function withSocket(t: { after: (fn: () => void) => void }, Socket: unknown) {
 }
 
 // On socket open connection.ts reconciles every locked run, but a turn Codex
-// cannot vouch for (history "unknown") is only quarantined there, with no
-// watchdog. If NOUS refuses that run later on the same socket, each lease frame
-// must arm its watchdog from the journal alone, as it reconciles a
-// 'recovering' run. Mutation: reconcile only 'recovering' runs per lease frame
-// in src/connection.ts and the turn is not interrupted (0 !== 1).
+// cannot vouch for yet (history "unknown") is only quarantined there, with no
+// watchdog. If NOUS refuses that run later on the same socket, a lease frame
+// must arm its watchdog, as it reconciles a 'recovering' run, and only once.
+// Mutations: reconcile only 'recovering' runs per lease frame in
+// src/connection.ts and the turn is not interrupted (0 !== 1); drop the
+// armed/claimed early return in src/journal.ts reconcile() and every later
+// frame reads the turn again.
 test("a run refused while connected gets its watchdog from the next lease frame", async (t) => {
   const { connectBridge } = await import("../src/connection.ts");
   const f = fixture();
   const r1 = start(randomUUID(), later(150));
-  const a1 = codex("r1");
   let j = new Journal(f.path, () => options);
   let polls = 0;
+  let refused = false;
   let inspected = 0;
   let inspectedBeforeReject = -1;
   class Socket extends EventTarget {
@@ -366,7 +416,7 @@ test("a run refused while connected gets its watchdog from the next lease frame"
       // Stands in for a reject frame (Task D5) after the first lease frame.
       if ((polls += 1) === 2) {
         inspectedBeforeReject = inspected;
-        j.reject(refusal(r1));
+        refused = j.reject(refusal(r1));
       }
       const lease = { deviceId: r1.deviceId, expiresAt: later(), runs: {} };
       queueMicrotask(() =>
@@ -376,18 +426,22 @@ test("a run refused while connected gets its watchdog from the next lease frame"
     close() {
       if (this.readyState !== 3) {
         this.readyState = 3;
-        this.dispatchEvent(new Event("close"));
+        // Asynchronous, as a real WebSocket: the bridge's own error surfaces.
+        queueMicrotask(() => this.dispatchEvent(new Event("close")));
       }
     }
   }
   withSocket(t, Socket);
   try {
-    await j.execute(r1, a1);
+    await j.execute(r1, codex("r1"));
     j.close(); // a restart drops the watchdog timer; r1 reopens 'recovering'
     j = new Journal(f.path, () => options);
-    a1.inspectTurn = async (sessionId: string) => {
+    const a1 = codex("r1");
+    const inspect = a1.inspectTurn;
+    a1.inspectTurn = async (sessionId, commandId) => {
       inspected += 1;
-      return { state: "unknown", sessionId, turnId: "t-r1" };
+      if (!refused) return { state: "unknown", sessionId, turnId: null };
+      return inspect(sessionId, commandId);
     };
     await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
     await connectBridge({
@@ -399,11 +453,94 @@ test("a run refused while connected gets its watchdog from the next lease frame"
       signal: AbortSignal.timeout(200),
       timing: { pollMs: 10, livenessMs: 1000 },
     });
-    assert.ok(polls > 2);
+    assert.ok(polls > 3);
     assert.equal(j.state(r1.commandId), "denied");
     assert.equal(a1.interrupts, 1);
     assert.ok(inspectedBeforeReject > 0);
-    assert.equal(inspected, inspectedBeforeReject);
+    assert.equal(inspected, inspectedBeforeReject + 1);
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});
+
+// Renewal gap: NOUS can keep leasing a run the bridge refused, and the bridge
+// lets the run's local lease lapse (renewLease skips it), so the watchdog has
+// blocked it. NOUS redelivers the user's Stop and any approval on every poll.
+// An interrupt only stops work, so it needs no lease; an approval for a refused
+// run is dropped. Neither may close the socket ("lease expired" / "approval
+// blocked during recovery" used to, on every redelivery).
+// Mutations in src/journal.ts executeCommand(): drop the refused-run lease
+// exemption, or the respond drop, and connectBridge rejects.
+test("NOUS still leasing a refused run: its Stop is delivered, its approval dropped, and the socket stays open", async (t) => {
+  const { connectBridge } = await import("../src/connection.ts");
+  const f = fixture();
+  const r1 = start(randomUUID(), later(150));
+  const a1 = codex("r1");
+  let responded = 0;
+  a1.respondToRequest = async () => {
+    responded += 1;
+  };
+  const stop: BridgeCommand = {
+    ...r1,
+    commandId: randomUUID(),
+    expiresAt: later(),
+    body: { kind: "interrupt", sessionId: "s-r1", turnId: "t-r1" },
+  };
+  const approve: BridgeCommand = {
+    ...r1,
+    commandId: randomUUID(),
+    expiresAt: later(),
+    body: { kind: "respond", requestId: 7, approvalRecordId: randomUUID(), response: { kind: "decision", allow: true } },
+  };
+  const j = new Journal(f.path, () => options);
+  let polls = 0;
+  class Socket extends EventTarget {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+    send(raw: string) {
+      if (!JSON.parse(raw).poll) return;
+      polls += 1;
+      const lease = { deviceId: r1.deviceId, expiresAt: later(), runs: { [r1.runId]: r1.generation } };
+      queueMicrotask(() =>
+        this.dispatchEvent(
+          new MessageEvent("message", { data: JSON.stringify({ commands: [stop, approve], lease }) }),
+        ),
+      );
+    }
+    close() {
+      if (this.readyState !== 3) {
+        this.readyState = 3;
+        // Asynchronous, as a real WebSocket: the bridge's own error surfaces.
+        queueMicrotask(() => this.dispatchEvent(new Event("close")));
+      }
+    }
+  }
+  withSocket(t, Socket);
+  try {
+    await j.execute(r1, a1);
+    assert.equal(j.reject(refusal(r1)), true);
+    await new Promise((resolve) => setTimeout(resolve, 250)); // the watchdog blocks the lapsed lease
+    assert.equal(a1.interrupts, 1);
+    await connectBridge({
+      url: "wss://example.test/api/v1/harness/connect",
+      deviceId: r1.deviceId,
+      credentials: { accessToken: "jwt", grantToken: "grant" },
+      journal: j,
+      adapterFor: () => a1,
+      signal: AbortSignal.timeout(150),
+      timing: { pollMs: 10, livenessMs: 1000 },
+    });
+    assert.ok(polls > 2);
+    assert.equal(j.state(stop.commandId), "delivered");
+    assert.equal(a1.interrupts, 2); // once, despite every redelivery
+    assert.equal(j.state(approve.commandId), "missing");
+    assert.equal(responded, 0);
+    assert.equal(j.state(r1.commandId), "denied");
   } finally {
     j.close();
     f.cleanup();

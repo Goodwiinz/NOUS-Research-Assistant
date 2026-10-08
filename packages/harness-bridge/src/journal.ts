@@ -306,9 +306,16 @@ export class Journal {
     const lease = this.db
       .prepare("SELECT expires,blocked FROM leases WHERE run_id=?")
       .get(command.runId) as { expires: string; blocked: number } | undefined;
+    // NOUS can keep leasing a run the bridge refused (see reject), whose own
+    // lease is left to lapse. An interrupt of it only stops work, and an
+    // approval for it is dropped below, so neither needs a live lease.
+    const refused =
+      command.body.kind !== "start" &&
+      this.owner(command)?.state === "denied";
     if (
-      Date.parse(expiresAt) <= Date.now() ||
-      (lease && (lease.blocked || Date.parse(lease.expires) <= Date.now()))
+      !refused &&
+      (Date.parse(expiresAt) <= Date.now() ||
+        (lease && (lease.blocked || Date.parse(lease.expires) <= Date.now())))
     )
       throw new Error("lease expired; verified renewal required");
     const b = command.body;
@@ -331,6 +338,8 @@ export class Journal {
           (owner.session !== b.sessionId || owner.turn !== b.turnId)
         )
           throw new Error("interrupt target mismatch");
+        // A refused run is final: its approvals are dropped, not forwarded.
+        if (b.kind === "respond" && owner.state === "denied") return false;
         if (b.kind === "respond" && owner.state !== "running")
           throw new Error("approval blocked during recovery");
       }
@@ -701,24 +710,33 @@ export class Journal {
   async reconcile(id: string, adapter: HarnessAdapter): Promise<void> {
     const row = this.row(id);
     if (!row || terminal(row.state) || row.state === "terminal_pending") return;
+    const c: BridgeCommand = JSON.parse(row.command);
     if (row.state === "denied") {
-      // NOUS refused this run: ask Codex nothing (a vanished thread would fail
-      // every reconnect) and report nothing, but keep the expiry watchdog armed
-      // so the native turn is still interrupted once its lease lapses.
-      if (row.session && row.turn)
-        void this.watchLease(
-          (JSON.parse(row.command) as BridgeCommand).expiresAt,
-          adapter,
-          row.session,
-          row.turn,
-        ).catch(() => this.quarantine(id));
+      // NOUS refused this run: report nothing, but keep the expiry watchdog
+      // armed so the native turn is still interrupted once its lease lapses.
+      // Once per turn: skip it while a watchdog waits or after one claimed.
+      if (
+        !row.session ||
+        !row.turn ||
+        this.timers.has(`${row.session}/${row.turn}`) ||
+        this.db
+          .prepare("SELECT 1 FROM interrupts WHERE session=? AND turn=?")
+          .get(row.session, row.turn)
+      )
+        return;
+      // A fresh adapter (after a restart) interrupts only a turn it started or
+      // read back, so read it back. A thread Codex no longer knows must not
+      // fail the reconnect; the run stays refused either way.
+      await adapter.inspectTurn(row.session, id).catch(() => undefined);
+      void this.watchLease(c.expiresAt, adapter, row.session, row.turn).catch(
+        () => this.quarantine(id),
+      );
       return;
     }
     if (!row.session) {
       this.quarantine(id);
       return;
     }
-    const c: BridgeCommand = JSON.parse(row.command);
     const history = await adapter.inspectTurn(row.session, id);
     if (
       history.sessionId !== row.session ||
