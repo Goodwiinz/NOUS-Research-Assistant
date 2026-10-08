@@ -621,3 +621,12 @@ test('HITL deny passes only when no project appears and the transcript records t
   })(silent.session.page.getByRole);
   await assert.rejects(scenario.run(silent.session, silent.evidence), /no assistant row with Action cancelled by user/);
 });
+
+test('a project that appears after the approval wait fails is still registered for cleanup', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.project-creation-via-chat');
+  // The dialog never shows (wait times out) but the agent created the project anyway.
+  const late = fakeJourney({ projects: () => [{ id: '22222222-2222-4222-8222-222222222222', name: 'NOUS QA t1 project approve' }] });
+  await assert.rejects(scenario.run(late.session, late.evidence), /dialog not visible/);
+  assert.deepEqual(late.state.registered.at(-1), ['project', '22222222-2222-4222-8222-222222222222']);
+  assert.equal(late.state.registered.filter(([kind]) => kind === 'project').length, 1);
+});

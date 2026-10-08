@@ -279,6 +279,12 @@ async function driveProjectCreation(session, evidence, decision) {
     const items = Array.isArray(response.data?.projects) ? response.data.projects : [];
     return items.find((item) => item?.name === projectName) ?? null;
   };
+  let registeredProjectId = null;
+  const registerProject = (project) => {
+    if (registeredProjectId || !UUID.test(String(project.id))) return;
+    session.registerFixture('project', String(project.id), { name: projectName });
+    registeredProjectId = String(project.id);
+  };
   try {
     await session.goto(threadUrl(fixture.threadId));
     evidence.consumeModelTurn();
@@ -299,9 +305,19 @@ async function driveProjectCreation(session, evidence, decision) {
         if (!match) await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
-    if (match && UUID.test(String(match.id))) session.registerFixture('project', String(match.id), { name: projectName });
+    if (match) registerProject(match);
     return { fixture, page, projectName, match };
   } finally {
+    // A failed or timed-out wait can still leave an agent-created project
+    // behind; look once more so cleanup owns it.
+    if (!registeredProjectId) {
+      try {
+        const late = await findProject();
+        if (late) registerProject(late);
+      } catch {
+        // The original failure is the result; a lookup error must not mask it.
+      }
+    }
     await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
   }
 }
