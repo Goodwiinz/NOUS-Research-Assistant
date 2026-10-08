@@ -19,6 +19,7 @@ database to the same rules.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import Column, ForeignKey, Integer, MetaData, Table
 
 import src.models  # noqa: F401  register every table on Base.metadata
 from src.models.base import Base
@@ -30,14 +31,15 @@ PURGED = frozenset({"threads", "chat_messages"})
 RULES = frozenset({"CASCADE", "SET NULL"})
 
 
-def _walk() -> tuple[set[str], list[str]]:
-    """Tables a thread delete reaches, and every FK into them with no rule."""
+def _walk(metadata: MetaData = Base.metadata) -> tuple[set[str], list[str]]:
+    """Tables a thread delete reaches, and every FK into them with no rule
+    PostgreSQL can carry out."""
     reached = set(PURGED)
     unruled: set[str] = set()
     grew = True
     while grew:
         grew = False
-        for table in Base.metadata.tables.values():
+        for table in metadata.tables.values():
             for fk in table.foreign_keys:
                 if fk.column.table.name not in reached:
                     continue
@@ -45,6 +47,13 @@ def _walk() -> tuple[set[str], list[str]]:
                 if rule not in RULES:
                     unruled.add(
                         f"{table.name}.{fk.parent.name} -> {fk.target_fullname}"
+                    )
+                elif rule == "SET NULL" and not fk.parent.nullable:
+                    # PostgreSQL refuses the delete with a not-null violation,
+                    # which wedges the purge just as NO ACTION does.
+                    unruled.add(
+                        f"{table.name}.{fk.parent.name} -> {fk.target_fullname}"
+                        " (SET NULL on NOT NULL)"
                     )
                 elif rule == "CASCADE" and table.name not in reached:
                     reached.add(table.name)
@@ -66,3 +75,25 @@ def test_the_walk_follows_cascades_into_the_consent_tables() -> None:
         "integration_grant_requests",
         "integration_context_selections",
     } <= reached
+
+
+def test_the_walk_rejects_set_null_on_a_not_null_column() -> None:
+    # Guards the guard: a non-Optional Mapped[...] column is NOT NULL, so
+    # ondelete="SET NULL" on it passes a rule-name check and still wedges the
+    # purge. A nullable SET NULL column is fine and must not be reported.
+    metadata = MetaData()
+    Table("threads", metadata, Column("id", Integer, primary_key=True))
+    Table("chat_messages", metadata, Column("id", Integer, primary_key=True))
+    Table(
+        "notes",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column(
+            "thread_id",
+            ForeignKey("threads.id", ondelete="SET NULL"),
+            nullable=False,
+        ),
+        Column("message_id", ForeignKey("chat_messages.id", ondelete="SET NULL")),
+    )
+    _, unruled = _walk(metadata)
+    assert unruled == ["notes.thread_id -> threads.id (SET NULL on NOT NULL)"]

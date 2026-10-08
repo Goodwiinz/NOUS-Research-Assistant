@@ -306,15 +306,17 @@ def _bind_everything(
         )
     )
     db.flush()
-    db.add(
-        IntegrationContextSelection(
-            organization_id=owner.org,
-            user_id=owner.user,
-            project_id=owner.project,
-            consent_id=ids.consent,
-            memory_ids=[],
+    # Each consent's memory selection; only the chat-bound one goes with it.
+    for selected_consent in (ids.consent, ids.project_consent):
+        db.add(
+            IntegrationContextSelection(
+                organization_id=owner.org,
+                user_id=owner.user,
+                project_id=owner.project,
+                consent_id=selected_consent,
+                memory_ids=[],
+            )
         )
-    )
     db.add(
         IntegrationHandoff(
             organization_id=owner.org,
@@ -433,12 +435,14 @@ def test_purge_deletes_a_chat_that_harness_and_artifact_rows_reference(
         assert _count(db, ChatMessage) == 0
         # CASCADE: rows that mean nothing without the chat.
         assert _count(db, IntegrationHandoff) == 0
-        assert _count(db, IntegrationContextSelection) == 0
         assert db.get(IntegrationGrantRequest, ids.consent) is None
         # The chat-bound consent is deleted, never left with a NULL chat, which
-        # mint_integration_grant reads as a project-wide consent.
+        # mint_integration_grant reads as a project-wide consent. The cascade
+        # stops there: the project-wide consent keeps its memory selection.
         consents = db.scalars(select(IntegrationGrantRequest)).all()
         assert [(c.id, c.thread_id) for c in consents] == [(ids.project_consent, None)]
+        selected = db.scalars(select(IntegrationContextSelection.consent_id)).all()
+        assert selected == [ids.project_consent]
         # SET NULL: the grant keeps its revocation evidence and drops both links.
         grant = db.get(IntegrationGrant, ids.grant)
         assert grant is not None and grant.revoked_at is not None
