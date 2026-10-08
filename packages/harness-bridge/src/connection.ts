@@ -343,8 +343,8 @@ export async function connectBridge(options: {
           }
           for (const c of journal.activeCommands()) {
             const state = journal.state(c.commandId);
-            // A refused run makes no Codex call; reconcile only re-arms its
-            // watchdog.
+            // A refused run is not recovered: reconcile only reads its turn
+            // back and re-arms its watchdog (Journal.reconcile).
             if (state === "recovering" || state === "denied")
               await journal.reconcile(
                 c.commandId,
