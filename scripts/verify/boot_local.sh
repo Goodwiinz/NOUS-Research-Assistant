@@ -36,14 +36,6 @@ resolve_python() {
   echo "$ROOT/backend/.venv/bin/python"
 }
 
-wait_for() { # url seconds
-  local url="$1" deadline=$(( $(date +%s) + $2 ))
-  until curl -fsS --max-time 5 "$url" >/dev/null 2>&1; do
-    if [ "$(date +%s)" -ge "$deadline" ]; then echo "boot_local: timeout waiting for $url" >&2; return 1; fi
-    sleep 2
-  done
-}
-
 port_in_use() { # port
   curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$1/" >/dev/null 2>&1
 }
@@ -55,6 +47,15 @@ alive_or_fail() { # name
     echo "boot_local: $1 died during startup; see $BOOT_DIR/$1.log" >&2
     return 1
   fi
+}
+
+wait_for() { # url seconds service-name
+  local url="$1" deadline=$(( $(date +%s) + $2 ))
+  until curl -fsS --max-time 5 "$url" >/dev/null 2>&1; do
+    alive_or_fail "$3" || return 1  # fail fast instead of waiting out the timeout
+    if [ "$(date +%s)" -ge "$deadline" ]; then echo "boot_local: timeout waiting for $url" >&2; return 1; fi
+    sleep 2
+  done
 }
 
 stop() {
@@ -97,9 +98,9 @@ start() {
     >"$BOOT_DIR/frontend.log" 2>&1 &
   echo $! >"$BOOT_DIR/frontend.pid"
   set +m
-  wait_for "http://127.0.0.1:$BACKEND_PORT/health" "$TIMEOUT" || { stop; echo "boot_local: see $BOOT_DIR/backend.log" >&2; exit 1; }
-  wait_for "http://127.0.0.1:$BACKEND_PORT/health/readiness" "$TIMEOUT" || { stop; echo "boot_local: see $BOOT_DIR/backend.log" >&2; exit 1; }
-  wait_for "http://127.0.0.1:$FRONTEND_PORT/login" "$TIMEOUT" || { stop; echo "boot_local: see $BOOT_DIR/frontend.log" >&2; exit 1; }
+  wait_for "http://127.0.0.1:$BACKEND_PORT/health" "$TIMEOUT" backend || { stop; echo "boot_local: see $BOOT_DIR/backend.log" >&2; exit 1; }
+  wait_for "http://127.0.0.1:$BACKEND_PORT/health/readiness" "$TIMEOUT" backend || { stop; echo "boot_local: see $BOOT_DIR/backend.log" >&2; exit 1; }
+  wait_for "http://127.0.0.1:$FRONTEND_PORT/login" "$TIMEOUT" frontend || { stop; echo "boot_local: see $BOOT_DIR/frontend.log" >&2; exit 1; }
   alive_or_fail backend || { stop; exit 1; }
   alive_or_fail frontend || { stop; exit 1; }
   echo "backend http://127.0.0.1:$BACKEND_PORT  frontend http://127.0.0.1:$FRONTEND_PORT  logs $BOOT_DIR"
