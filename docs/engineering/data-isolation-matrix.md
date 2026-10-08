@@ -2,7 +2,8 @@
 
 The expected allow/deny behavior between accounts, and the test that enforces
 each row. Introduced for GOO-347 (matrix + fixtures), GOO-352 (documents,
-citations, search) and GOO-353 (chat reads, export revocation). Source of
+citations, search), GOO-353 (chat reads, export revocation) and GOO-400
+(project bibliography fallback, PDF export). Source of
 the policy: `backend/src/services/threads/workspace_access.py` (module
 docstring) and [backend.md](backend.md).
 
@@ -33,6 +34,14 @@ through `MultiTenancyMiddleware` and the real `get_current_user`; only
 | B | org-b | Owns `b-doc` (private), `b-pub-doc` (`is_public`), their citations, private workspace `b`, public workspace `b-pub`. |
 | C | org-b | B's colleague: same organization, not a member of workspace `b` until a test invites them. |
 
+CI5 adds project `b-proj`, a Collection in workspace `b` (fixture
+`bib_project` in `test_document_isolation.py`). It links `c-proj-doc` (org-b,
+uploaded by C, no citation), `a-proj-doc` (org-a, `is_public`, citation
+`a-proj-cit`) and soft-deleted `c-gone-doc` (org-b, uploaded by C, citation
+`c-gone-cit`). Every linked document and citation carries DOI and arXiv
+canaries. No link is a same-org document uploaded by someone else, so the rows
+hold under both the uploader-or-public citation rule and an org-shared one.
+
 ## Matrix
 
 Status: **pass** = enforced and passing; **xfail GOO-n** = confirmed leak,
@@ -55,7 +64,7 @@ test is `xfail(strict=True, raises=AssertionError)` and will fail loudly
 | CI2 | A → `b-pub-cit` (foreign `is_public`) | detail, list + `total`, export | 404 / absent / `total == 1` | pass (GOO-349) |
 | CI3 | A → `a-old-org-cit` (A uploaded it in org-b) | detail, list + `total`, export | 404 / absent | pass (GOO-349) |
 | CI4 | C → `b-cit` (same org, private) | citation reads | Today: denied (uploader-or-public rule, stricter than D2). GOO-349 decides the intended rule. | not covered |
-| CI5 | any | project bibliography fallback (`citations.py` export by `project_id`) | org-guarded | not covered (GOO-349) |
+| CI5 | C (invited member of `b`) → `b-proj`; A (org-a, also invited); C after B removes them | `POST /api/v1/citations/export` with `project_id` (document-metadata fallback), bibtex/ieee/apa/mla | C: only `c-proj-doc`, one BibTeX entry, no title, quote, DOI or arXiv id of `a-proj-doc`/`c-gone-doc` or their citations; with only those two links left, 404. A and removed C: 404, no canary | pass (GOO-400) |
 | S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | not covered: PostgreSQL full-text only (SQLite cannot run them); GOO-351 owns the fail-closed service guard |
 
 ### Chat and exports (`test_chat_isolation.py`)
@@ -78,13 +87,19 @@ workspace list, and the owner-only `GET /api/v1/agent/threads/{id}/messages`.
 | X1 | A (other org) → B's thread | single, stream and batch export in markdown/json/html: 404 or absent from the ZIP | pass |
 | X2 | B → own thread after its conversation is soft-deleted | export 404 | pass |
 | X3 | A, removed member who created a thread in `b` | single + stream export (md/json/html), preview, batch ZIP + non-ZIP: no B-only message, 404 | pass (GOO-348) |
-| X4 | any | PDF export | not covered: needs a PDF renderer in CI |
+| X4 | B → own thread; A (other org); A as member-creator before and after removal; B after soft-deleting workspace / conversation / thread | single + stream PDF export: B, and A before removal, get `%PDF-` bytes whose text holds the message; every denial is 404 with no PDF bytes and no canary | pass (GOO-400) |
 | X5 | B → own thread | export returns content (positive control) | pass |
 
 Note: thread export is creator-based, so a current member who did not create
 a thread cannot export it, and neither can a reader of a public workspace.
 That is stricter than reads. Since GOO-348 the creator must also still have
 current workspace access, so a creator removed from the workspace cannot export.
+
+X4 renders real PDFs, so it needs WeasyPrint's native pango libraries. The
+Integration Tests job installs them (`libpango-1.0-0 libpangoft2-1.0-0
+libharfbuzz-subset0 fonts-dejavu-core`, as `backend/docker/Dockerfile.prod`
+does) and sets `PDF_EXPORT_TEST_REQUIRE_RENDERER=1`, so a missing renderer
+fails X4 there. Anywhere else X4 skips and names the reason.
 
 ### Browser account switching (GOO-354)
 
@@ -104,4 +119,8 @@ pytest backend/tests/integration/two_account -c backend/pytest.ini -m integratio
 
 # See the current leaks behind the xfail rows
 pytest backend/tests/integration/two_account -c backend/pytest.ini --runxfail
+
+# X4 locally on macOS with Homebrew pango (without the library path it skips)
+DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib PDF_EXPORT_TEST_REQUIRE_RENDERER=1 \
+  pytest backend/tests/integration/two_account -c backend/pytest.ini -m integration -k pdf
 ```
