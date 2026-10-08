@@ -1442,43 +1442,82 @@ async def test_disabled_flag_keeps_existing_run_readable_and_exportable(
     """Rollback: the kill switch refuses new Daily work but keeps its history.
 
     With ``DAILY_RESEARCH_BRIEF_ENABLED=false`` a persisted Daily blueprint
-    cannot start another run, while its completed run stays readable and
-    downloadable in every format for recovery and audit (GOO-336).
+    cannot start another run, while its completed run, step history and review
+    state stay readable and its artifact downloadable in every format for
+    recovery and audit (GOO-336).
+
+    CI enrolls this test through ``DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL``.
+    The lifecycle tests in this module read only
+    ``ORCHESTRATION_TEST_DATABASE_URL`` and stay unenrolled.
     """
 
-    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    dsn = os.getenv("DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL") or os.getenv(
+        "ORCHESTRATION_TEST_DATABASE_URL"
+    )
     if not dsn:
-        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+        pytest.skip("Daily Brief rollback PostgreSQL test database is not configured")
     assert dsn is not None
-    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", False)
+    flag = "src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED"
+    monkeypatch.setattr(flag, False)
+    step_output: dict[str, Any] = {
+        "query": "persisted Daily Brief history",
+        "sources": [],
+    }
 
     async with _scenario_database(dsn, status="completed") as scenario:
+        step_id = uuid.uuid4()
         async with scenario.factory() as db:
             seeded = await db.get(ResearchRun, scenario.run_id)
             assert seeded is not None
             blueprint_id = seeded.blueprint_id
+            db.add(
+                ResearchStep(
+                    id=step_id,
+                    run_id=scenario.run_id,
+                    step_index=0,
+                    step_type="search",
+                    mode="deterministic",
+                    output=step_output,
+                    outputs_hash=canonical_stage_output_hash(step_output),
+                )
+            )
+            await db.commit()
+        app = _app_with_scenario_database(scenario)
+        app.include_router(steps_router)
         run_path = f"/research-engine/runs/{scenario.run_id}"
+        start_path = f"/research-engine/blueprints/{blueprint_id}/runs"
+        start_body = {"protocol_version_id": str(uuid.uuid4())}
         async with AsyncClient(
-            transport=ASGITransport(app=_app_with_scenario_database(scenario)),
+            transport=ASGITransport(app=app),
             base_url="http://rollback",
         ) as client:
             detail = await client.get(run_path)
             manifest = await client.get(f"{run_path}/manifest")
+            steps = await client.get(f"{run_path}/steps")
+            pending = await client.get(f"{run_path}/reviews/pending")
             exports = {
                 export_format: await client.get(
                     f"{run_path}/export", params={"format": export_format}
                 )
                 for export_format in ("markdown", "json", "csv")
             }
-            started = await client.post(
-                f"/research-engine/blueprints/{blueprint_id}/runs",
-                json={"protocol_version_id": str(uuid.uuid4())},
-            )
+            started = await client.post(start_path, json=start_body)
+            # Positive control: with the flag on, the same caller and request
+            # pass the EDIT access check and reach scope validation. The 404
+            # above therefore comes from the kill switch, not from access.
+            monkeypatch.setattr(flag, True)
+            control = await client.post(start_path, json=start_body)
 
         assert detail.status_code == 200, detail.text
         assert detail.json()["status"] == "completed"
         assert manifest.status_code == 200, manifest.text
         assert manifest.json()["run_status"] == "completed"
+        assert steps.status_code == 200, steps.text
+        assert [
+            (step["id"], step["step_type"], step["output"]) for step in steps.json()
+        ] == [(str(step_id), "search", step_output)]
+        assert pending.status_code == 200, pending.text
+        assert pending.json()["pending"] is False
         for export_format, suffix in (
             ("markdown", "md"),
             ("json", "json"),
@@ -1490,9 +1529,16 @@ async def test_disabled_flag_keeps_existing_run_readable_and_exportable(
                 "attachment; "
                 f'filename="daily-research-brief-{scenario.run_id}.{suffix}"'
             )
-        assert json.loads(exports["json"].content)["final_status"] == "unverified"
+        exported = json.loads(exports["json"].content)
+        assert exported["run"] == {"id": str(scenario.run_id)}
+        assert exported["final_status"] == "unverified"
 
         assert started.status_code == 404, started.text
+        assert started.json()["detail"] == "Blueprint not found"
+        assert control.status_code == 422, control.text
+        assert control.json()["detail"] == (
+            "Daily Brief scope confirmation is required"
+        )
         async with scenario.factory() as db:
             run_count = await db.scalar(
                 select(func.count())

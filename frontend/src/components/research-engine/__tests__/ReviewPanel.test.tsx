@@ -395,15 +395,20 @@ describe('ReviewPanel', () => {
       />
     );
 
-    expect(screen.getByText('# Verified brief')).toBeInTheDocument();
-    const coverage = screen
-      .getByText('Claim coverage and checks')
-      .closest('details');
+    expect(screen.getByText('# Verified brief')).toBeVisible();
+    const summary = screen.getByText('Claim coverage and checks');
+    const coverage = summary.closest('details');
     expect(coverage).not.toBeNull();
     const checks = within(coverage as HTMLElement);
-    expect(checks.getByText(/"claim_id": "c0001"/)).toBeInTheDocument();
-    expect(checks.getByText(/"status": "supported"/)).toBeInTheDocument();
-    expect(checks.getByText(/"e0001"/)).toBeInTheDocument();
+    const claimChecks = checks.getByText(/"claim_id": "c0001"/);
+    // Collapsed by default: the reviewer sees the disclosure and opens it.
+    expect(summary).toBeVisible();
+    expect(claimChecks).not.toBeVisible();
+    fireEvent.click(summary);
+    expect(coverage).toHaveAttribute('open');
+    expect(claimChecks).toBeVisible();
+    expect(checks.getByText(/"status": "supported"/)).toBeVisible();
+    expect(checks.getByText(/"e0001"/)).toBeVisible();
     expect(
       screen.getByRole('button', { name: /approve final review/i })
     ).toBeEnabled();
