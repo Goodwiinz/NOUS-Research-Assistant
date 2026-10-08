@@ -46,9 +46,10 @@ helper. `get_db_sync` and `database.SessionLocal` also point at that schema.
 
 Status: **pass** = enforced and passing; **xfail GOO-n** = confirmed leak,
 test is `xfail(strict=True, raises=AssertionError)` and will fail loudly
-(XPASS) once the fix lands, at which point remove the marker; **not covered**
-= no automated check yet. A strict xfail for something other than a confirmed
-reachable leak (a broken route, a latent service gap) says so in its row.
+(XPASS) once the fix lands, at which point remove the marker; **pending CI**
+= the check exists and passed locally, but the CI step that produces the
+evidence has not yet passed on the PR head (flip it to pass, citing that run,
+once it has); **not covered** = no automated check yet.
 
 ### Documents, files, citations, search (`test_document_isolation.py`)
 
@@ -66,38 +67,55 @@ reachable leak (a broken route, a latent service gap) says so in its row.
 | CI3 | A → `a-old-org-cit` (A uploaded it in org-b) | detail, list + `total`, export | 404 / absent | pass (GOO-349) |
 | CI4 | C → `b-cit` (same org, private) | citation reads | Today: denied (uploader-or-public rule, stricter than D2). GOO-349 decides the intended rule. | not covered |
 | CI5 | any | project bibliography fallback (`citations.py` export by `project_id`) | org-guarded | not covered (GOO-349) |
-| S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | pass on PostgreSQL (GOO-399): see rows S2a–S2k below |
+| S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | pending CI (GOO-399): rows S2a–S2m below passed locally on PostgreSQL 14; they flip to pass when the Integration Tests step "Run two-account PostgreSQL search isolation tests" passes on the PR head |
 
 ### Search on PostgreSQL (`test_search_isolation_postgres.py`)
 
-Document search, its suggestions and the search analytics log are
+Document search, its suggestions, reindex and the search analytics log are
 organization-scoped. Thread and message search follow workspace membership
 (owner, member or `is_public`), so A and C both see `b-pub` by design. Each
 leak check looks for the canary, its 8-hex tag (which survives suggestion
 normalization and `ts_headline` highlighting) and the row id. Only external
 services are stubbed, never an access predicate: the Neo4j entity search
-returns nothing and records the scope it was given, and Cohere reranking is
-off.
+returns the entities a test sets (none by default) whatever its scope, and
+records the scope it was given; Cohere reranking is off.
 
 | Row | Caller → target | Surface | Expected | Status |
 | --- | --- | --- | --- | --- |
-| S2a | A → org-b documents (incl. `a-old-org-doc`) | `POST /api/v1/search/` (fulltext, hybrid, semantic), `POST /api/v1/search/hybrid`, incl. one-result pages past the end and the title suggestions in the response | only `a-doc`, `a-doc-2`; `total_results == 2`; no org-b title, snippet, id or suggestion | pass |
-| S2a+ | C → org-b | S2a routes | all three org-b documents, `total_results == 3` (positive control) | pass |
-| S2b | A | `POST /api/v1/search/` fulltext and hybrid with filters `document_ids` (org-b ids), `organization_id` (org-b), `is_public`, `uploaded_by_user_id` | filters narrow A's own documents only | pass |
-| S2c | A | `POST /api/v1/search/` `knowledge_graph` | Neo4j scope is A's organization and A's document ids | pass |
-| S2d | A; C | `GET /api/v1/search/suggestions` (incl. B's exact title) | A: no org-b title; C: gets it (positive control) | pass |
-| S2e | A; C | `GET /api/v1/search/analytics` after B searches | A: no B query, `total_searches == 0`; C: sees it | pass |
-| S2f | C → `b-doc` after soft delete | S2a routes + suggestions | absent; `total_results == 2` | pass |
-| S2g | A (other org), C (same org, nonmember) → workspace `b` | `POST`/`GET /api/v2/search/threads` and `/messages`, `GET /combined`; one-result pages; filters `workspace_id`, `conversation_id`, `thread_id`, author `user_id` | no `b` title, snippet or id; totals count only own rows + `b-pub` | pass |
-| S2g+ | B owner; C invited, then membership soft-deleted | S2g routes | finds `b`; C loses it after removal | pass |
-| S2h | B after soft-deleting thread, conversation or workspace `b` | S2g routes | absent, even for the owner | pass |
-| S2i | A, C → workspace `b` | `GET /api/v2/search/suggestions` | no `b` thread title | partial: the route answers 500 on PostgreSQL for every caller (`SELECT DISTINCT t.title ... ORDER BY t.last_message_at`), so only the error body is checked and the positive control is `xfail(strict=True)`. Broken route, not a leak; needs a follow-up fix |
-| S2j | D (no organization) | every route above | 401 from the tenancy gate before any search | pass |
-| S2k | service layer, organization `None`, `""`, `"None"` or non-UUID | full-text search, its suggestions, hybrid search | nothing returned (GOO-351) | pass; latent gap `xfail(strict=True)`: with `None` the hybrid knowledge-graph arm still calls Neo4j with an empty entity scope (cross-tenant). Unreachable through these routes (the gate 401s org-less callers and routes pass `str(organization_id)`); the agent's legacy hybrid fallback (`_nodes_rag._legacy_hybrid_search_fallback`) passes `None` when its organization id is empty |
+| S2a | A → org-b documents (incl. `a-old-org-doc`) | `POST /api/v1/search/` (fulltext, hybrid, semantic), `POST /api/v1/search/hybrid`, incl. one-result pages past the end and the title suggestions in the response | only `a-doc`, `a-doc-2`; `total_results == 2`; no org-b title, snippet, id or suggestion | pending CI |
+| S2a+ | C → org-b | S2a routes | all three org-b documents, `total_results == 3` (positive control) | pending CI |
+| S2b | A | `POST /api/v1/search/` fulltext and hybrid with filters `document_ids` (org-b ids), `organization_id` (org-b), `is_public`, `uploaded_by_user_id` | filters narrow A's own documents only | pending CI |
+| S2c | A | `POST /api/v1/search/` `knowledge_graph` | Neo4j scope is A's organization and A's document ids | pending CI |
+| S2d | A; C after `b-doc` is soft-deleted | hybrid routes of S2a, with the graph stub returning an entity whose source is `b-doc` (a stale organization stamp) | a graph hit only corroborates a document the full-text arm returned: `b-doc` and the entity name never reach a result, total or suggestion | pending CI |
+| S2e | A; C | `GET /api/v1/search/suggestions` (incl. B's exact title) | A: no org-b title; C: gets it (positive control) | pending CI |
+| S2f | A; C | `GET /api/v1/search/analytics` after B searches | A: no B query, `total_searches == 0`; C: sees it | pending CI |
+| S2g | A → org-b documents; C → `b-doc` | `POST /api/v1/search/documents/{id}/reindex` | A: 404, no title; C: 200 with the title (positive control) | pending CI |
+| S2h | C → `b-doc` after soft delete | S2a routes, suggestions, reindex | absent / 404; `total_results == 2` | pending CI |
+| S2i | A (other org), C (same org, nonmember) → workspace `b` | `POST`/`GET /api/v2/search/threads` and `/messages`, `GET /combined`; one-result pages; filters `workspace_id`, `conversation_id`, `thread_id`, author `user_id` | no `b` title, snippet or id; totals count only own rows + `b-pub` | pending CI |
+| S2i+ | B owner; C invited, then membership soft-deleted | S2i routes | finds `b`; C loses it after removal | pending CI |
+| S2j | B after soft-deleting thread, conversation or workspace `b` | S2i routes | absent, even for the owner | pending CI |
+| S2k | A, C → workspace `b`; B; C invited, then removed | `GET /api/v2/search/suggestions` (incl. B's exact title and `workspace_id` = `b`) | A, C: only titles they can read; B and invited C: `b`'s title; removed C: none | pending CI |
+| S2l | D (no organization) | every route above | 401 from the tenancy gate before any search | pending CI |
+| S2m | service layer, organization `None`, `""`, `"None"` or non-UUID | full-text search, hybrid search (incl. its graph arm), title suggestions | nothing returned; search runs no SQL (GOO-351); the graph arm never queries Neo4j without an organization; suggestions run no SQL for `None` or `""` and rely on the `uuid` column for the rest | pending CI |
 
-Not covered here: `POST /api/v1/search/authenticated/hybrid` (API-key auth;
-the route rejects keys without an organization) and the Neo4j entity scope
-itself, which needs a graph database.
+GOO-399 also fixed three defects this suite found. None was a cross-organization
+leak reachable through these routes:
+
+- `GET /api/v2/search/suggestions` answered 500 on PostgreSQL for every
+  caller: `SELECT DISTINCT t.title ... ORDER BY t.last_message_at` is invalid
+  there (row S2k).
+- With no organization, the hybrid graph arm called Neo4j with an empty
+  entity scope, which spans every tenant. The search routes cannot reach this
+  because the tenancy gate rejects org-less callers, but the agent's legacy
+  hybrid fallback passed `None` (row S2m).
+- Hybrid `suggestions` were built from raw graph entity names, including
+  entities whose document fusion had dropped (row S2d).
+
+Not covered here: the other `/api/v1/search` routes (`/indexes`,
+`/indexes/rebuild`, `/health`, the API-key `/authenticated/*` routes, and the
+placeholders that return no data), `GET /api/v2/search/health`,
+`/api/v1/search-quality/*`, `/api/v1/knowledge-graph/*`, and the Neo4j entity
+scope itself, which needs a graph database.
 
 ### Chat and exports (`test_chat_isolation.py`)
 

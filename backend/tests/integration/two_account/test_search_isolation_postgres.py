@@ -5,45 +5,70 @@ the full-text paths, so these tests use the ``pg_*`` fixtures from
 ``conftest.py`` and skip unless ``TWO_ACCOUNT_PG_TEST_DATABASE_URL`` names a
 disposable database (CI sets it and rejects a skipped run).
 
-Routes, all mounted by ``src.main``:
+Routes covered (the ones GOO-399 lists plus the org-scoped analytics log and
+reindex), all mounted by ``src.main``:
 
 - Organization-scoped documents: ``POST /api/v1/search/`` (fulltext, hybrid,
   semantic, knowledge_graph), ``POST /api/v1/search/hybrid``,
-  ``GET /api/v1/search/suggestions`` and the org query log
-  ``GET /api/v1/search/analytics``.
+  ``GET /api/v1/search/suggestions``, ``GET /api/v1/search/analytics`` and
+  ``POST /api/v1/search/documents/{id}/reindex``.
 - Membership-scoped chat (owner, member or ``is_public`` workspace):
   ``POST|GET /api/v2/search/threads``, ``POST|GET /api/v2/search/messages``,
   ``GET /api/v2/search/combined`` and ``GET /api/v2/search/suggestions``.
 
+Not covered: the other ``/api/v1/search`` routes (``/indexes``,
+``/indexes/rebuild``, ``/health``, the API-key ``/authenticated/*`` routes and
+the data-free placeholders), ``GET /api/v2/search/health``,
+``/api/v1/search-quality/*``, ``/api/v1/knowledge-graph/*`` and the Neo4j
+entity scope itself.
+
 Every request uses a real token through ``MultiTenancyMiddleware`` and the
 real ``get_current_user``. Only external services are stubbed, never an
-access predicate: the Neo4j entity search returns nothing and records the
-scope it was given, and Cohere reranking is off.
+access predicate: the Neo4j entity search returns ``graph_entities`` (none
+unless a test adds some) and records the scope it was given, and Cohere
+reranking is off.
 
 A leak check looks for each canary, its 8-hex tag (which survives the
 lower-cased, punctuation-stripped suggestion form and ``ts_headline``
 highlighting) and the row id.
 
 Mutation-verified (2026-10-08, PostgreSQL 14): each guard below was disabled,
-the named tests failed naming the leaked canaries, and ``git diff backend/src``
-was empty after restoring it. Focused command:
-``TWO_ACCOUNT_PG_TEST_DATABASE_URL=... pytest <this file> -c backend/pytest.ini -k <name>``.
+the focused command failed naming the leak, and ``git diff -- backend/src``
+was empty after restoring it. Run each as
+``TWO_ACCOUNT_PG_TEST_DATABASE_URL=... pytest
+backend/tests/integration/two_account/test_search_isolation_postgres.py
+-c backend/pytest.ini -m integration -k "<expr>"``. Paths are under
+``backend/src``.
 
-- ``fulltext_search_service._build_search_query``
-  ``AND d.organization_id = :organization_id``:
-  ``test_document_search_excludes_foreign_org``, ``..._pages_never_cross_org``.
-- ``_build_count_query`` organization predicate: the fulltext case of
-  ``test_document_search_excludes_foreign_org`` (total 5, expected 2).
-- ``_get_search_suggestions`` organization predicate: ``-k suggestions``.
-- ``_build_search_query`` ``d.is_deleted = false``:
-  ``test_soft_deleted_document_is_absent``.
-- ``thread_message_search_service._WORKSPACE_ACCESS_PREDICATE``:
-  ``-k "chat_search or message_author"``.
+- ``services/search/fulltext_search_service.py:303`` organization predicate
+  of the result query: ``-k "document_search_excludes_foreign_org or
+  pages_never_cross_org"``.
+- ``fulltext_search_service.py:358`` organization predicate of the count
+  query: ``-k document_search_excludes_foreign_org`` (fulltext total 5, not 2).
+- ``fulltext_search_service.py:581`` organization predicate of title
+  suggestions: ``-k suggestions``.
+- ``fulltext_search_service.py:570`` missing-organization guard of title
+  suggestions: ``-k fail_closed``.
+- ``fulltext_search_service.py:284`` ``d.is_deleted = false``:
+  ``-k soft_deleted_document``.
+- ``services/threads/thread_message_search_service.py:36``
+  ``_WORKSPACE_ACCESS_PREDICATE``: ``-k "chat_search or message_author"``.
+- ``api/threads/thread_search.py:416`` membership predicate of thread-title
+  suggestions: ``-k thread_suggestions``.
+- ``services/search/hybrid_search_service.py:645`` missing-organization guard
+  of the graph arm: ``-k fail_closed``.
+- ``hybrid_search_service.py:807`` fusion drops graph-only hits:
+  ``-k graph_hits``.
+- ``hybrid_search_service.py:1269`` graph hits never feed suggestions:
+  ``-k "graph_hits or fail_closed"``.
+- ``api/search/search.py:593`` organization predicate of reindex:
+  ``-k reindex``.
 """
 
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional
 
 import pytest
@@ -109,13 +134,35 @@ def _doc_ids(*docs: str) -> set:
     return {str(sid(d)) for d in docs}
 
 
+@pytest.fixture
+def graph_entities() -> List[SimpleNamespace]:
+    """What the stubbed Neo4j search returns: nothing unless a test adds
+    entities (see ``_entity``)."""
+    return []
+
+
+def _entity(key: str, document: str) -> SimpleNamespace:
+    """A Neo4j entity, shaped as ``search_entities`` returns it, that names
+    ``document`` as its source."""
+    return SimpleNamespace(
+        id=str(sid(key)),
+        name=canary(key),
+        context=canary(f"{key}-context"),
+        confidence_score=0.9,
+        source_document_id=str(sid(document)),
+    )
+
+
 @pytest.fixture(autouse=True)
-def graph_calls(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
+def graph_calls(
+    monkeypatch: pytest.MonkeyPatch, graph_entities: List[SimpleNamespace]
+) -> List[Dict[str, Any]]:
     """Stub the external services the search pipeline can reach.
 
-    Neo4j: ``search_entities`` returns no entities and records the scope it
-    received. Cohere: reranking is disabled. Neither stub touches the
-    PostgreSQL organization or membership predicates under test.
+    Neo4j: ``search_entities`` returns ``graph_entities`` whatever its scope,
+    and records the scope it received. Cohere: reranking is disabled. Neither
+    stub touches the PostgreSQL organization or membership predicates under
+    test.
     """
     from src.services.knowledge_graph.knowledge_graph_service import (
         knowledge_graph_service,
@@ -137,7 +184,7 @@ def graph_calls(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
                 "source_document_ids": source_document_ids,
             }
         )
-        return []
+        return list(graph_entities)
 
     monkeypatch.setattr(knowledge_graph_service, "search_entities", search_entities)
     monkeypatch.setattr(cohere_rerank_service, "_enabled", False)
@@ -286,6 +333,49 @@ async def test_knowledge_graph_search_scopes_neo4j_to_caller_org(
         assert set(call["source_document_ids"]) == _doc_ids(*A_DOCS)
 
 
+HYBRID_SEARCHES = [s for s in DOC_SEARCHES if s[1] == "hybrid"]
+
+
+async def test_graph_hits_never_surface_foreign_or_deleted_documents(
+    pg_clients: Clients,
+    pg_db: AsyncSession,
+    graph_entities: List[SimpleNamespace],
+    graph_calls: List[Dict[str, Any]],
+) -> None:
+    """Nothing re-checks a graph row against PostgreSQL, so the stub plays a
+    Neo4j that ignores its scope: it hands A an entity taken from org-b's
+    ``b-doc`` (a stale organization stamp) next to one from A's ``a-doc``.
+    Fusion only lets a graph hit corroborate a document the org-scoped
+    full-text arm already returned, so A still gets exactly its own
+    documents, and neither the foreign entity nor ``b-doc`` reaches a
+    result, total or suggestion. After ``b-doc`` is soft-deleted the same
+    holds for its colleague C."""
+    graph_entities += [_entity("b-entity", "b-doc"), _entity("a-entity", "a-doc")]
+    for route, search_type, query in HYBRID_SEARCHES:
+        r = await _search(pg_clients("A"), route, search_type, query, limit=20)
+        assert r.status_code == 200, r.text
+        assert graph_calls, "the hybrid knowledge-graph arm did not run"
+        assert_no_documents(r.content, *ORG_B_DOCS)
+        leaked = _leaked(r.content, ["b-entity", "b-entity-context"], ["b-entity"])
+        assert not leaked, f"leaked graph entity: {leaked}"
+        body = r.json()
+        assert _ids(body["results"], "document_id") == _doc_ids(*A_DOCS)
+        assert body["total_results"] == 2
+    await soft_delete(pg_db, Document, "b-doc")
+    graph_entities[:] = [_entity("b-entity", "b-doc")]
+    for route, search_type, query in HYBRID_SEARCHES:
+        r = await _search(pg_clients("C"), route, search_type, query, limit=20)
+        assert r.status_code == 200, r.text
+        assert_no_documents(r.content, "b-doc")
+        leaked = _leaked(r.content, ["b-entity", "b-entity-context"], ["b-entity"])
+        assert not leaked, f"leaked graph entity: {leaked}"
+        body = r.json()
+        assert _ids(body["results"], "document_id") == _doc_ids(
+            "b-pub-doc", "a-old-org-doc"
+        )
+        assert body["total_results"] == 2
+
+
 async def test_vector_search_type_is_rejected(pg_clients: Clients) -> None:
     r = await _search(pg_clients("A"), "/api/v1/search/", "vector", QUERY)
     assert r.status_code == 400
@@ -340,6 +430,22 @@ async def test_search_analytics_keep_queries_inside_org(pg_clients: Clients) -> 
     assert c.json()["total_searches"] == 1
 
 
+def _reindex(document: str) -> str:
+    return f"/api/v1/search/documents/{sid(document)}/reindex"
+
+
+async def test_reindex_document_is_org_scoped(pg_clients: Clients) -> None:
+    """The reindex route echoes the document title: A gets a bare 404 for
+    every org-b document; C (org-b) reindexes ``b-doc`` (positive control)."""
+    for doc in ORG_B_DOCS:
+        r = await pg_clients("A").post(_reindex(doc))
+        assert r.status_code == 404, (doc, r.text)
+        assert_no_documents(r.content, *ORG_B_DOCS)
+    r = await pg_clients("C").post(_reindex("b-doc"))
+    assert r.status_code == 200, r.text
+    assert r.json()["title"] == canary("b-doc-title")
+
+
 # --- soft-deleted documents ------------------------------------------------
 
 
@@ -347,7 +453,7 @@ async def test_soft_deleted_document_is_absent(
     pg_clients: Clients, pg_db: AsyncSession
 ) -> None:
     """After B's private document is soft-deleted, its colleague C no longer
-    finds it in any result, total or suggestion."""
+    finds it in any result, total or suggestion, and cannot reindex it."""
     await soft_delete(pg_db, Document, "b-doc")
     c = pg_clients("C")
     for route, search_type, query in DOC_SEARCHES:
@@ -363,6 +469,9 @@ async def test_soft_deleted_document_is_absent(
         r = await c.get("/api/v1/search/suggestions", params={"q": q, "limit": 20})
         assert r.status_code == 200, r.text
         assert_no_documents(r.content, "b-doc")
+    r = await c.post(_reindex("b-doc"))
+    assert r.status_code == 404, r.text
+    assert_no_documents(r.content, "b-doc")
 
 
 # --- v2 thread and message search: membership-scoped -----------------------
@@ -520,35 +629,46 @@ async def test_chat_search_drops_soft_deleted_ancestors(
 async def test_thread_suggestions_exclude_private_workspace(
     pg_clients: Clients, who: str
 ) -> None:
-    """No caller outside workspace ``b`` gets its thread title. The route
-    currently answers 500 on PostgreSQL (see the xfail control below), so
-    this only proves the error body leaks nothing until that is fixed."""
-    for q in (QUERY, canary("b-thread")):
-        r = await pg_clients(who).get(
-            "/api/v2/search/suggestions", params={"query": q, "limit": 10}
-        )
-        assert r.status_code in (200, 500), r.text
-        assert_no_chat(r.content, *HIDDEN_CHAINS[who])
+    """A (other org) and C (same org, not a member) get the thread titles
+    they can read, never workspace ``b``'s: not for the shared query, not
+    for B's exact title and not with a ``workspace_id`` filter naming ``b``."""
+    client = pg_clients(who)
+    r = await client.get("/api/v2/search/suggestions", params={"query": QUERY})
+    assert r.status_code == 200, r.text
+    assert_no_chat(r.content, *HIDDEN_CHAINS[who])
+    assert set(r.json()["suggestions"]) == {
+        canary(f"{c}-thread") for c in VISIBLE_CHAINS[who]
+    }
+    for params in (
+        {"query": canary("b-thread")},
+        {"query": QUERY, "workspace_id": str(sid("b-ws"))},
+    ):
+        r = await client.get("/api/v2/search/suggestions", params=params)
+        assert r.status_code == 200, (params, r.text)
+        # The body echoes the caller's own ``query``; check the answer.
+        assert r.json()["suggestions"] == [], params
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "GOO-399 finding, not a leak: GET /api/v2/search/suggestions runs "
-        "SELECT DISTINCT t.title ... ORDER BY t.last_message_at, which "
-        "PostgreSQL rejects, so the route answers 500 for every caller"
-    ),
-)
-async def test_thread_suggestions_positive_control(pg_clients: Clients) -> None:
-    r = await pg_clients("B").get(
-        "/api/v2/search/suggestions", params={"query": QUERY, "limit": 10}
-    )
+async def test_thread_suggestions_positive_control(
+    pg_clients: Clients, pg_db: AsyncSession
+) -> None:
+    """B gets its private thread title; C gets it once invited and loses it
+    when the membership is removed."""
+    r = await pg_clients("B").get("/api/v2/search/suggestions", params={"query": QUERY})
     assert r.status_code == 200, r.text
     assert set(r.json()["suggestions"]) == {
         canary("b-thread"),
         canary("b-pub-thread"),
     }
+    b_title = {"query": canary("b-thread")}
+    await add_member(pg_db, "b", "C")
+    r = await pg_clients("C").get("/api/v2/search/suggestions", params=b_title)
+    assert r.status_code == 200, r.text
+    assert r.json()["suggestions"] == [canary("b-thread")]
+    await soft_delete(pg_db, WorkspaceMember, "member-b-C")
+    r = await pg_clients("C").get("/api/v2/search/suggestions", params=b_title)
+    assert r.status_code == 200, r.text
+    assert r.json()["suggestions"] == []
 
 
 # --- missing organization: fail closed -------------------------------------
@@ -564,6 +684,7 @@ ALL_SEARCH_REQUESTS = [
     ("post", "/api/v1/search/hybrid", {"json": {"query": QUERY}}),
     ("get", "/api/v1/search/suggestions", {"params": {"q": QUERY}}),
     ("get", "/api/v1/search/analytics", {}),
+    ("post", _reindex("b-pub-doc"), {}),
     ("post", "/api/v2/search/threads", {"json": {"query": QUERY}}),
     ("get", "/api/v2/search/threads", {"params": {"query": QUERY}}),
     ("post", "/api/v2/search/messages", {"json": {"query": QUERY}}),
@@ -588,16 +709,35 @@ async def test_missing_organization_caller_is_rejected(
 
 @pytest.mark.parametrize("organization_id", [None, "", "None", "not-a-uuid"])
 async def test_document_search_services_fail_closed_without_organization(
-    pg_seed: None, pg_engines: PgEngines, organization_id: Optional[str]
+    pg_seed: None,
+    pg_engines: PgEngines,
+    graph_entities: List[SimpleNamespace],
+    graph_calls: List[Dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    organization_id: Optional[str],
 ) -> None:
-    """Below the HTTP gate, the full-text builder, its suggestions and the
-    hybrid full-text arm return nothing without a valid organization scope
-    (GOO-351), against real seeded rows."""
+    """Below the HTTP gate, full-text and hybrid search return nothing and
+    run no SQL without a valid organization scope (GOO-351). The hybrid
+    graph arm never queries Neo4j without an organization (an empty scope
+    spans every tenant), so the stub's org-b entity cannot surface.
+
+    Title suggestions run no SQL for a missing organization (their guard);
+    for ``"None"`` or a non-UUID they rely on the ``uuid`` column rejecting
+    the value, which the service turns into no suggestions."""
     from src.services.search.fulltext_search_service import fulltext_search_service
     from src.services.search.hybrid_search_service import hybrid_search_service
 
+    graph_entities.append(_entity("b-entity", "b-doc"))
     user_id = str(sid("user-d"))
     with Session(pg_engines.sync) as db:
+        executed: List[str] = []
+        execute = db.execute
+
+        def spy(statement: Any, *args: Any, **kwargs: Any) -> Any:
+            executed.append(str(statement))
+            return execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db, "execute", spy)
         responses = [
             fulltext_search_service.search(
                 search_request=_query(QUERY, SearchType.FULLTEXT),
@@ -606,7 +746,7 @@ async def test_document_search_services_fail_closed_without_organization(
                 db=db,
             ),
             hybrid_search_service.search(
-                search_request=_query(QUERY, SearchType.HYBRID),
+                search_request=_query(f"who {QUERY}", SearchType.HYBRID),
                 user_id=user_id,
                 organization_id=organization_id,
                 db=db,
@@ -616,39 +756,13 @@ async def test_document_search_services_fail_closed_without_organization(
             assert response.results == [], response.search_type
             assert response.total_results == 0, response.search_type
             assert_no_documents(response.model_dump_json(), *EVERY_DOCUMENT)
+            leaked = _leaked(response.model_dump_json(), ["b-entity"], ["b-entity"])
+            assert not leaked, f"leaked graph entity: {leaked}"
+        assert executed == [], "search ran SQL without an organization scope"
+        assert all(call["organization_id"] for call in graph_calls), graph_calls
         assert (
             fulltext_search_service._get_search_suggestions(QUERY, db, organization_id)
             == []
         )
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "GOO-399 latent finding: HybridSearchService forwards a missing "
-        "organization_id to the Neo4j arm, whose scope predicate is then "
-        "empty (cross-tenant). Unreachable through the S2 routes: the "
-        "tenancy gate rejects org-less callers with 401 and the routes pass "
-        "str(organization_id). The agent's _legacy_hybrid_search_fallback "
-        "passes None when its organization id is empty."
-    ),
-)
-async def test_hybrid_search_without_organization_never_queries_graph_unscoped(
-    pg_seed: None, pg_engines: PgEngines, graph_calls: List[Dict[str, Any]]
-) -> None:
-    from src.services.search.hybrid_search_service import hybrid_search_service
-
-    with Session(pg_engines.sync) as db:
-        hybrid_search_service.search(
-            search_request=_query(f"who {QUERY}", SearchType.HYBRID),
-            user_id=str(sid("user-d")),
-            organization_id=None,
-            db=db,
-        )
-    unscoped = [
-        call
-        for call in graph_calls
-        if call["organization_id"] is None and call["source_document_ids"] is None
-    ]
-    assert not unscoped, f"unscoped knowledge-graph queries: {len(unscoped)}"
+        if not organization_id:
+            assert executed == [], "suggestions ran SQL without an organization"
