@@ -181,7 +181,7 @@ test("a refused run's unsent events are dropped and nothing more is journaled fo
 //   socket;
 // - none is journaled (mid-run): the bridge keeps the folder, as in D-2. The
 //   lease watchdog interrupts the turn, and the folder stays reserved until
-//   disconnect, connect and workspace add.
+//   Revoke and connect, or disconnect, connect and workspace add.
 // Mutations in src/journal.ts reject(): delete the lock release, and "after its
 // local terminal observation" fails on workspaceLocked (true !== false);
 // release the lock unconditionally, and "mid-run" fails on workspaceLocked
@@ -668,8 +668,8 @@ for (const [when, finished] of [
       // printed one notice for the run.
       assert.ok(received.includes(`${r1.runId}#2`));
       const notice = finished
-        ? `NOUS refused run ${r1.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder, but if NOUS still reports the folder busy, run disconnect, connect and workspace add again (which also stops the device's other runs).`
-        : `NOUS refused run ${r1.runId}: its output is no longer uploaded, and its folder stays reserved until you run disconnect, connect and workspace add again (which also stops the device's other runs).`;
+        ? `NOUS refused run ${r1.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder. If NOUS still reports the folder busy, revoke this device's access at /integrations/devices and connect again, or run disconnect, connect and workspace add (either also stops the device's other runs).`
+        : `NOUS refused run ${r1.runId}: its output is no longer uploaded, and its folder stays reserved until you revoke this device's access at /integrations/devices and connect again, or run disconnect, connect and workspace add (either also stops the device's other runs).`;
       assert.deepEqual(logged.mock.calls.map((c) => c.arguments), [[notice]]);
       // Grant renewal forces a reconnect at least every 15 minutes: nothing of r1
       // is sent again and no new "running" observation is journaled for it.
