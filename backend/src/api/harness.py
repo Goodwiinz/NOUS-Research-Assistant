@@ -189,12 +189,23 @@ async def connect(websocket: WebSocket) -> None:
                         # The grant passed this frame's check, so the denial is
                         # about this run: its chat was deleted or linked to
                         # another project, its folder binding was removed, or it
-                        # belongs to a superseded consent. Refuse the event and
-                        # keep serving the device's other runs; a close starved
-                        # them, because the bridge re-sends its oldest event first
-                        # on every reconnect (BR-1). A renewal can revoke this
-                        # socket's token mid-frame, so re-check the grant first:
-                        # losing it still closes the socket with 4403.
+                        # belongs to a superseded consent. The same exception
+                        # also refuses a malformed or mismatched frame: an
+                        # unknown run or commandId, a missing approval record,
+                        # and, for a producer event or observation, a commandId
+                        # of another run or generation, a deviceId, workspaceId
+                        # or generation mismatch, or a ProducerEvent under a
+                        # non-start command. So "run_access_denied" does not
+                        # only mean access was lost. Authorization runs before
+                        # the receipt lookup, so a replay of an event NOUS
+                        # already stored can be refused too: a reject does not
+                        # mean NOUS stored nothing for that run.
+                        # Refuse the event and keep serving the device's other
+                        # runs; a close starved them, because the bridge re-sends
+                        # its oldest event first on every reconnect (BR-1). A
+                        # renewal can revoke this socket's token mid-frame, so
+                        # re-check the grant first: losing it still closes the
+                        # socket with 4403.
                         await _grant_context(db, token, identity)
                         await websocket.send_json(
                             {
