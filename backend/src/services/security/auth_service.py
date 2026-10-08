@@ -19,10 +19,11 @@ from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Depends
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from src.core.database import get_db
 from src.models.user import User, UserRole
@@ -30,6 +31,7 @@ from src.models.user import User, UserRole
 logger = __import__("logging").getLogger(__name__)
 
 _STALE_EMAIL_CLAIM_TTL_SECONDS = 60
+_PROVIDER_EMAIL_VALIDATION_TTL_SECONDS = 60
 _PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS = 5
 _STALE_EMAIL_CLAIM_CACHE_LIMIT = 2048
 _STALE_EMAIL_CLAIM_HASH_KEY = secrets.token_bytes(32)
@@ -97,7 +99,30 @@ class _EmailReconciliationBackoff:
 
 
 _email_reconciliation_backoff = _EmailReconciliationBackoff()
-_email_lock_failure_backoff = _EmailReconciliationBackoff()
+_verified_provider_email_cache = _EmailReconciliationBackoff()
+
+
+class _RedisLockFailureBackoff:
+    """Short process-wide circuit for an unavailable Redis lock service."""
+
+    def __init__(self) -> None:
+        self._failed_until = 0.0
+        self._lock = threading.Lock()
+
+    def contains(self) -> bool:
+        with self._lock:
+            return self._failed_until > time.monotonic()
+
+    def remember(self, ttl_seconds: float) -> None:
+        with self._lock:
+            self._failed_until = max(self._failed_until, time.monotonic() + ttl_seconds)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._failed_until = 0.0
+
+
+_email_lock_failure_backoff = _RedisLockFailureBackoff()
 
 
 class _SharedEmailLease:
@@ -451,21 +476,28 @@ class AuthService:
         # transaction before waiting for a same-subject request or calling
         # Supabase, so neither wait holds a scarce pool connection.
         await self.db.rollback()
-        if _email_lock_failure_backoff.contains(subject_id, claimed_email):
+        if _email_lock_failure_backoff.contains():
             return await self._get_active_user(subject_id)
         async with _email_reconciliation_locks.hold(subject_id) as lease:
             if lease is None:
-                _email_lock_failure_backoff.remember(
-                    subject_id,
-                    claimed_email,
-                    ttl_seconds=_EMAIL_LOCK_FAILURE_TTL_SECONDS,
-                )
+                _email_lock_failure_backoff.remember(_EMAIL_LOCK_FAILURE_TTL_SECONDS)
                 return await self._get_active_user(subject_id)
             current_user = await self._get_active_user(subject_id)
             if current_user is None:
                 return None
+            if (
+                current_user.email.lower() == claimed_email
+                and _verified_provider_email_cache.contains(subject_id, claimed_email)
+            ):
+                return current_user
             if _email_reconciliation_backoff.contains(subject_id, claimed_email):
                 return current_user
+
+            # The CAS below must match exactly the row state observed before
+            # the provider round trip. A fresh post-request read alone cannot
+            # prove this request's older provider result is still current.
+            observed_email = current_user.email
+            observed_updated_at = current_user.updated_at
 
             # The row read above opened another transaction. Release it before
             # the provider round trip, then load the subject again afterward.
@@ -498,7 +530,14 @@ class AuthService:
                 _email_reconciliation_backoff.remember(subject_id, claimed_email)
 
             current_user = await self._get_active_user(subject_id)
-            if current_user is None or current_user.email.lower() == provider_email:
+            if current_user is None:
+                return None
+            if current_user.email.lower() == provider_email:
+                _verified_provider_email_cache.remember(
+                    subject_id,
+                    provider_email,
+                    ttl_seconds=_PROVIDER_EMAIL_VALIDATION_TTL_SECONDS,
+                )
                 return current_user
             if not await lease.still_owned():
                 logger.warning(
@@ -507,8 +546,29 @@ class AuthService:
                 )
                 return current_user
 
-            current_user.email = provider_email
+            updated_at = datetime.utcnow()
+            email_write = (
+                update(User)
+                .where(
+                    User.id == subject_id,
+                    User.is_active == True,
+                    User.is_deleted == False,
+                    User.email == observed_email,
+                    User.updated_at == observed_updated_at,
+                )
+                .values(email=provider_email, updated_at=updated_at)
+                .execution_options(synchronize_session=False)
+            )
             try:
+                write_result = await self.db.execute(email_write)
+                if write_result.rowcount != 1:
+                    # Another worker changed the row while this provider
+                    # request was in flight. The compare-and-swap prevents a
+                    # former Redis lease owner from committing its stale read.
+                    await self.db.rollback()
+                    return await self._get_active_user(subject_id)
+                set_committed_value(current_user, "email", provider_email)
+                set_committed_value(current_user, "updated_at", updated_at)
                 await self.db.commit()
             except IntegrityError:
                 _email_reconciliation_backoff.remember(subject_id, provider_email)
@@ -518,6 +578,12 @@ class AuthService:
                     "Current provider email sync for user %s conflicts with another "
                     "account; operator reconciliation required",
                     subject_id,
+                )
+            else:
+                _verified_provider_email_cache.remember(
+                    subject_id,
+                    provider_email,
+                    ttl_seconds=_PROVIDER_EMAIL_VALIDATION_TTL_SECONDS,
                 )
             return current_user
 
