@@ -48,6 +48,8 @@ REQUIRED_KEYS = (
     "owns",
 )
 STATUSES = {"planned", "covered"}
+FEATURE_ID = re.compile(r"^[a-z0-9-]+$")
+STRING_LIST_KEYS = ("states", "pass_criteria", "scenarios", "owns")
 SCENARIO_ID = re.compile(
     r"^\s*\{?\s*id:\s*['\"]([a-z]+\.[a-z0-9-]+)['\"]", re.MULTILINE
 )
@@ -71,6 +73,10 @@ def owns(path: str, globs: Iterable[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in globs)
 
 
+def _is_string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
 def check_schema(data: dict[str, Any]) -> list[str]:
     problems: list[str] = []
     if data.get("version") != 1:
@@ -88,6 +94,13 @@ def check_schema(data: dict[str, Any]) -> list[str]:
         for key in REQUIRED_KEYS:
             if key not in feature:
                 problems.append(f"{fid}: missing key {key}")
+        if not FEATURE_ID.match(str(feature.get("id", ""))):
+            problems.append(f"{fid}: id must match ^[a-z0-9-]+$")
+        for key in STRING_LIST_KEYS:
+            if key in feature and not _is_string_list(feature[key]):
+                problems.append(f"{fid}: {key} must be a list of strings")
+        if "surfaces" in feature and not isinstance(feature["surfaces"], dict):
+            problems.append(f"{fid}: surfaces must be a mapping")
         if feature.get("status") not in STATUSES:
             problems.append(f"{fid}: status must be one of {sorted(STATUSES)}")
         if fid in seen:
@@ -97,8 +110,8 @@ def check_schema(data: dict[str, Any]) -> list[str]:
     if not isinstance(ignore, dict):
         return problems + ["ignore must be a mapping with pages and routers lists"]
     for key in ("pages", "routers"):
-        if not isinstance(ignore.get(key), list):
-            problems.append(f"ignore.{key} must be a list")
+        if not _is_string_list(ignore.get(key)):
+            problems.append(f"ignore.{key} must be a list of strings")
     return problems
 
 
@@ -186,7 +199,13 @@ class BaseRefError(RuntimeError):
 
 
 def base_ignore(root: Path, base: str) -> dict[str, list[str]] | None:
-    """Return the ignore lists at merge-base(base, HEAD), or None if absent."""
+    """Return the ignore lists at merge-base(base, HEAD), or None if absent.
+
+    Absence (the change that first introduces the map) is the only skip; any
+    other git failure raises BaseRefError so the check fails closed.
+    """
+    if not base or base.startswith("-"):
+        raise BaseRefError(f"refusing option-like or empty --base {base!r}")
     merge_base = subprocess.run(
         ["git", "-C", str(root), "merge-base", base, "HEAD"],
         capture_output=True,
@@ -194,19 +213,21 @@ def base_ignore(root: Path, base: str) -> dict[str, list[str]] | None:
     )
     if merge_base.returncode != 0:
         raise BaseRefError(f"cannot resolve merge-base({base}, HEAD)")
+    blob = f"{merge_base.stdout.strip()}:{FEATURE_MAP.as_posix()}"
+    exists = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", blob],
+        capture_output=True,
+        text=True,
+    )
+    if exists.returncode != 0:
+        return None
     shown = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "show",
-            f"{merge_base.stdout.strip()}:{FEATURE_MAP.as_posix()}",
-        ],
+        ["git", "-C", str(root), "show", blob],
         capture_output=True,
         text=True,
     )
     if shown.returncode != 0:
-        return None
+        raise BaseRefError(f"cannot read {blob}: {shown.stderr.strip()}")
     data = yaml.safe_load(shown.stdout) or {}
     ignore = data.get("ignore") if isinstance(data, dict) else None
     if not isinstance(ignore, dict):
@@ -238,6 +259,9 @@ def discover_routers(root: Path) -> set[str]:
 
 
 def run(root: Path, base: str | None = None) -> list[str]:
+    for required in (FEATURE_MAP, SCENARIOS):
+        if not (root / required).is_file():
+            return [f"missing {required.as_posix()}"]
     data = yaml.safe_load((root / FEATURE_MAP).read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         return [f"{FEATURE_MAP} must be a YAML mapping"]

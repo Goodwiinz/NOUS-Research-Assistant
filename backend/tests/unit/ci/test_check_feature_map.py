@@ -296,3 +296,81 @@ def test_main_fails_when_head_grows_the_ignore_list_against_base(
     _git(tmp_path, "commit", "-q", "-m", "grow ignore")
     assert cfm.main(["--root", str(tmp_path)]) == 0
     assert cfm.main(["--root", str(tmp_path), "--base", "main"]) == 1
+
+
+def _schema(feature: dict[str, Any]) -> list[str]:
+    return cfm.check_schema(
+        {
+            "version": 1,
+            "features": [feature],
+            "ignore": {"pages": [], "routers": []},
+        }
+    )
+
+
+def test_schema_requires_list_of_string_fields_and_mapping_surfaces() -> None:
+    assert _schema(_feature()) == []
+    for key in ("scenarios", "owns", "states", "pass_criteria"):
+        assert f"login: {key} must be a list of strings" in _schema(
+            _feature(**{key: "smoke.login-availability"})
+        ), key
+        assert f"login: {key} must be a list of strings" in _schema(
+            _feature(**{key: [1]})
+        ), key
+    assert "login: surfaces must be a mapping" in _schema(_feature(surfaces=["/x"]))
+
+
+def test_schema_rejects_feature_ids_that_are_not_safe_file_stems() -> None:
+    for bad in ("../etc", "Login", "a/b", "", "a.b"):
+        assert any(
+            p.endswith("id must match ^[a-z0-9-]+$") for p in _schema(_feature(id=bad))
+        ), bad
+
+
+def test_schema_requires_ignore_entries_to_be_strings() -> None:
+    problems = cfm.check_schema(
+        {
+            "version": 1,
+            "features": [_feature()],
+            "ignore": {"pages": [1], "routers": []},
+        }
+    )
+    assert "ignore.pages must be a list of strings" in problems
+
+
+def test_base_starting_with_a_dash_is_rejected_before_git_runs(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("git must not run for an option-like base")
+
+    monkeypatch.setattr(cfm.subprocess, "run", boom)
+    try:
+        cfm.base_ignore(tmp_path, "--output=/tmp/x")
+    except cfm.BaseRefError as exc:
+        assert "--output=/tmp/x" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected BaseRefError")
+
+
+def test_unreadable_map_at_base_fails_closed(tmp_path: Path, monkeypatch: Any) -> None:
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "show" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: boom")
+        return subprocess.CompletedProcess(cmd, 0, "abc123\n", "")
+
+    monkeypatch.setattr(cfm.subprocess, "run", fake_run)
+    try:
+        cfm.base_ignore(tmp_path, "main")
+    except cfm.BaseRefError as exc:
+        assert "cannot read" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected BaseRefError")
+
+
+def test_missing_map_or_scenarios_is_a_problem_not_a_traceback(
+    tmp_path: Path,
+) -> None:
+    assert cfm.run(tmp_path) == ["missing docs/engineering/feature-map.yaml"]
+    _write(tmp_path, "docs/engineering/feature-map.yaml", _mini_map([]))
+    assert cfm.run(tmp_path) == ["missing tests/e2e/qa/scenarios.mjs"]

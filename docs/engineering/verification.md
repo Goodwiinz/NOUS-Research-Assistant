@@ -84,8 +84,8 @@ in `docs/testing/evidence/README.md`.
 
 ## Stop gate
 
-`docs/engineering/nous-loop.md` step 7b requires a local `PASS` for every
-mapped feature the diff touches before an outcome of `merged`; `BLOCKED` or
-`NOT RUN` ends the tick as `ready-for-human`. Step 8 reruns the same
-features against the deployed lane after deployment and files a regression
-on failure.
+(planned) `docs/engineering/nous-loop.md` step 7b will require a local `PASS`
+for every mapped feature the diff touches before an outcome of `merged`;
+`BLOCKED` or `NOT RUN` will end the tick as `ready-for-human`. Step 8 will
+rerun the same features against the deployed lane after deployment and file
+a regression on failure. Neither step exists in `nous-loop.md` yet.
