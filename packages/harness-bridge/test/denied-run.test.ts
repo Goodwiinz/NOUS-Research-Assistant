@@ -546,3 +546,116 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
     f.cleanup();
   }
 });
+
+// The reject frame itself (backend/src/api/harness.py sends it per refused
+// event, in place of the ack). Before it, connection.ts read it as an invalid
+// lease frame, closed the socket and reconnected into the same refused run.
+// The notice names the folder as journal.reject() left it: reserved mid-run
+// (D-2), free once the run's terminal observation was journaled (D-2'). The
+// run's other in-flight events are refused too; they log nothing more.
+// Mutations in src/connection.ts: remove the reject branch and connectBridge
+// rejects with "invalid lease response"; always print the reserved notice and
+// "after its local terminal observation" fails; log whatever journal.reject()
+// returns and both variants log more than once.
+for (const [when, finished] of [
+  ["mid-run", false],
+  ["after its local terminal observation", true],
+] as const)
+  test(`a reject frame keeps the socket: the device's other runs drain and the refused run is never re-sent (${when})`, async (t) => {
+    const { connectBridge } = await import("../src/connection.ts");
+    const logged = t.mock.method(console, "error", () => {});
+    const f = fixture();
+    const device = randomUUID();
+    const r1 = start(device);
+    const r2 = start(device);
+    const adapters: Record<string, HarnessAdapter> = {
+      [r1.runId]: codex("r1"),
+      [r2.runId]: codex("r2"),
+    };
+    const j = new Journal(f.path, () => options);
+    const received: string[] = [];
+    let stop = new AbortController();
+    let canonical = 1;
+    class Socket extends EventTarget {
+      static OPEN = 1;
+      readyState = 1;
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+      reply(value: unknown) {
+        queueMicrotask(() =>
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) })),
+        );
+      }
+      send(raw: string) {
+        const value = JSON.parse(raw);
+        if (value.poll) {
+          this.reply({ commands: [], lease: { deviceId: device, expiresAt: later(), runs: { [r2.runId]: 1 } } });
+          return;
+        }
+        received.push(`${value.runId}#${value.sourceSeq}`);
+        const receipt = { runId: value.runId, sourceId: value.sourceId, sourceSeq: value.sourceSeq, generation: value.generation };
+        // backend/src/api/harness.py: r1's chat is gone, the device grant is fine.
+        if (value.runId === r1.runId) {
+          this.reply({ reject: { ...receipt, code: "run_access_denied" } });
+          return;
+        }
+        this.reply({ ack: { ...receipt, canonicalSeq: (canonical += 1) } });
+        if (value.body.kind === "observation" && value.body.state === "completed")
+          setTimeout(() => stop.abort(), 20);
+      }
+      close() {
+        if (this.readyState !== 3) {
+          this.readyState = 3;
+          // Asynchronous, as a real WebSocket: the bridge's own error surfaces.
+          queueMicrotask(() => this.dispatchEvent(new Event("close")));
+        }
+      }
+    }
+    withSocket(t, Socket);
+    const connect = () =>
+      connectBridge({
+        url: "wss://example.test/api/v1/harness/connect",
+        deviceId: device,
+        credentials: { accessToken: "jwt", grantToken: "grant" },
+        journal: j,
+        adapterFor: (_workspaceId, runId) => adapters[runId]!,
+        signal: stop.signal,
+        timing: { pollMs: 10, livenessMs: 1000 },
+      });
+    try {
+      await j.execute(r1, adapters[r1.runId]!);
+      j.recordNative(r1.commandId, { kind: "delta", sessionId: "s-r1", turnId: "t-r1", text: "after its chat was deleted" });
+      if (finished)
+        j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" });
+      await j.execute(r2, adapters[r2.runId]!);
+      j.recordNative(r2.commandId, { kind: "delta", sessionId: "s-r2", turnId: "t-r2", text: "answer" });
+      j.recordNative(r2.commandId, { kind: "terminal", status: "completed", sessionId: "s-r2", turnId: "t-r2" });
+      await connect();
+      assert.equal(j.state(r2.commandId), "completed");
+      assert.equal(j.workspaceLocked(r2.workspaceId), false);
+      assert.equal(j.state(r1.commandId), "denied");
+      assert.equal(j.workspaceLocked(r1.workspaceId), !finished);
+      assert.deepEqual(j.pending(), []);
+      // r1#2 was in flight with r1#1: NOUS refused it too, and the bridge
+      // printed one notice for the run.
+      assert.ok(received.includes(`${r1.runId}#2`));
+      const notice = finished
+        ? `NOUS refused run ${r1.runId}: its output is no longer uploaded. The run had already finished on this device, so its folder is free.`
+        : `NOUS refused run ${r1.runId}: its output is no longer uploaded, and its folder stays reserved until you disconnect, connect and register it again.`;
+      assert.deepEqual(logged.mock.calls.map((c) => c.arguments), [[notice]]);
+      // Grant renewal forces a reconnect at least every 15 minutes: nothing of r1
+      // is sent again and no new "running" observation is journaled for it.
+      const before = received.length;
+      stop = new AbortController();
+      setTimeout(() => stop.abort(), 60);
+      await connect();
+      assert.deepEqual(received.slice(before), []);
+      assert.deepEqual(j.pending(), []);
+      assert.equal(logged.mock.callCount(), 1);
+    } finally {
+      j.close();
+      f.cleanup();
+    }
+  });
