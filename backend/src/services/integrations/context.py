@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import ColumnElement, and_, exists, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from src.core.cli_token_revocation import revoke_user_cli_tokens
 from src.models.agent_run import AgentRun
@@ -81,6 +82,54 @@ def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> Non
         raise IntegrationAccessDenied()
 
 
+def _legacy_workspace_in_org(organization_id: UUID) -> ColumnElement[bool]:
+    """A workspace without organization metadata belongs to its owner's.
+
+    ``workspaces.organization_id`` is nullable and legacy rows carry NULL.
+    Research-engine access (``project_access.py``) coalesces such a row to its
+    owner's organization; every integration check must agree with it. The
+    owner is aliased so an enclosing query that joins ``users`` cannot
+    correlate this subquery onto its own row.
+    """
+    owner = aliased(User)
+    return and_(
+        Workspace.organization_id.is_(None),
+        exists().where(
+            owner.id == Workspace.owner_id,
+            owner.organization_id == organization_id,
+        ),
+    )
+
+
+def workspace_in_org(organization_id: UUID) -> ColumnElement[bool]:
+    """``Workspace`` belongs to ``organization_id``, legacy NULL rows included.
+
+    The one organization predicate for integration queries that join
+    ``Workspace``. Never compare ``Workspace.organization_id`` directly
+    (rule c of test_integration_boundaries.py): 2c3d56d82 taught two checks
+    the legacy rule and missed three (WG-2).
+    """
+    return or_(
+        Workspace.organization_id == organization_id,
+        _legacy_workspace_in_org(organization_id),
+    )
+
+
+def _workspace_organization_admits(organization_id: UUID) -> ColumnElement[bool]:
+    """The organization rule of ``authorized_project`` and
+    ``authorized_workspace``: a live owning organization (an explicit member
+    from another organization keeps access), or a legacy workspace whose
+    owner is in the caller's organization."""
+    return or_(
+        exists().where(
+            Organization.id == Workspace.organization_id,
+            Organization.is_deleted.is_(False),
+            Organization.is_active.is_(True),
+        ),
+        _legacy_workspace_in_org(organization_id),
+    )
+
+
 async def authorized_project(
     db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
 ) -> Row[Any]:
@@ -104,20 +153,7 @@ async def authorized_project(
                 ),
                 # Legacy workspaces without organization metadata inherit the
                 # owner's organization, matching research-engine access.
-                or_(
-                    exists().where(
-                        Organization.id == Workspace.organization_id,
-                        Organization.is_deleted.is_(False),
-                        Organization.is_active.is_(True),
-                    ),
-                    and_(
-                        Workspace.organization_id.is_(None),
-                        exists().where(
-                            User.id == Workspace.owner_id,
-                            User.organization_id == organization_id,
-                        ),
-                    ),
-                ),
+                _workspace_organization_admits(organization_id),
                 exists().where(
                     User.id == user_id,
                     User.organization_id == organization_id,
@@ -154,11 +190,7 @@ async def authorized_workspace(
                 Workspace.id == workspace_id,
                 Workspace.is_deleted.is_(False),
                 or_(Workspace.owner_id == user_id, member),
-                exists().where(
-                    Organization.id == Workspace.organization_id,
-                    Organization.is_deleted.is_(False),
-                    Organization.is_active.is_(True),
-                ),
+                _workspace_organization_admits(organization_id),
                 exists().where(
                     User.id == user_id,
                     User.organization_id == organization_id,
@@ -272,11 +304,9 @@ async def validate_binding(
                         WorkspaceMember.is_deleted.is_(False),
                     ),
                 ),
-                # Same legacy organization fallback as authorized_project.
-                or_(
-                    Workspace.organization_id.is_(None),
-                    Workspace.organization_id == organization_id,
-                ),
+                # The chat's workspace is in the grant's organization, by the
+                # same legacy rule as authorized_project (DECISION B-1).
+                workspace_in_org(organization_id),
                 Thread.source_project_id == project_id,
             )
         )

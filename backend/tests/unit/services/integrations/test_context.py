@@ -438,7 +438,8 @@ async def test_public_project_denied_but_explicit_cross_org_member_allowed(
         await resolve_integration_context(db, issued.token, required_scope="tools:read")
 
 
-# Mutation: context.py:105 and :276 remove each NULL-organization fallback.
+# Mutation: drop _legacy_workspace_in_org from _workspace_organization_admits
+# (project access) or from workspace_in_org (validate_binding's chat check).
 # Command: pytest -c backend/pytest.ini --no-cov -q
 # backend/tests/unit/services/integrations/test_context.py -k legacy_workspace
 async def test_legacy_workspace_without_organization_follows_web_semantics(
@@ -491,6 +492,62 @@ async def test_workspace_with_different_missing_organization_still_denied(
                 project_id=PROJECT, device_id=device.id, scopes={"tools:read"}
             ),
         )
+
+
+# WG-2a: authorized_workspace follows the same legacy rule as
+# authorized_project. Mutation: drop _legacy_workspace_in_org from
+# _workspace_organization_admits (context.py) and the first create_request
+# below raises IntegrationAccessDenied.
+async def test_legacy_workspace_grant_follows_web_semantics(
+    db: AsyncSession, owner: Any, library: None
+) -> None:
+    from src.models.workspace import WorkspaceRole
+    from src.schemas.integration_context import DeviceCreate, GrantRequestCreate
+    from src.services.integrations.context import (
+        authorized_scope,
+        create_request,
+        register_device,
+    )
+
+    await db.execute(update(Workspace).values(organization_id=None))
+    await db.commit()
+    device = await register_device(db, owner, DeviceCreate(label="Laptop"))
+    request = GrantRequestCreate(
+        workspace_id=WORKSPACE, device_id=device.id, scopes=LIBRARY_READ
+    )
+    created = await create_request(db, owner, request)
+    assert (created.workspace_id, created.workspace_label) == (
+        WORKSPACE,
+        "Project workspace",
+    )
+    token = await _mint(db, workspace_id=WORKSPACE, scopes=LIBRARY_READ)
+    ctx = await resolve_integration_context(db, token, required_scope="library:read")
+    assert await authorized_scope(db, ctx) == {PROJECT, P2}
+    # A NULL organization is the owner's: hand the workspace to an owner in
+    # another organization and our member holds nothing in it any more.
+    stranger, other_org = uuid4(), uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=other_org, name="Other", storage_limit_bytes=1000000
+        )
+    )
+    await db.execute(
+        text(
+            "INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role, is_active, login_count, created_at, updated_at, is_deleted) VALUES (:id, :org, 'stranger@example.test', 'unused', 'Other', 'Owner', 'USER', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ),
+        {"id": str(stranger), "org": str(other_org)},
+    )
+    await db.execute(update(Workspace).values(owner_id=stranger))
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await create_request(db, owner, request)
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_integration_context(db, token, required_scope="library:read")
 
 
 async def test_workspace_listing_rechecks_permissions_and_foreign_devices(
