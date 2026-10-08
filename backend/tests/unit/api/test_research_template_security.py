@@ -400,22 +400,34 @@ def test_persisted_template_steps_do_not_follow_later_loader_mutation(
 # and the PostgreSQL ACL proof lives in
 # tests/integration/test_research_run_review_export_access_postgres.py.
 #
-# Mutation checks (GOO-335), each run with the focused command
+# Mutation checks (GOO-335, run 2026-10-08). Each guard was disabled in
+# source, the focused command below was run, and the file was restored with
+# ``git checkout -- <file>`` (``git diff`` empty afterwards):
 #   pytest -q backend/tests/unit/api/test_research_template_security.py -k funnel
-# and restored with ``git checkout -- <file>``:
-#   M1 project_access.resolve_project ``if workspace_role is None`` removed ->
-#      public-workspace foreign-owner cases return 201/200 instead of 404.
-#   M2 workspace_access.get_collection ``user_can_access_workspace`` check
-#      removed -> private foreign-owner cases still 404 (M1 backstops it), so
-#      the private cases alone do not pin get_collection; M1 + M2 together
-#      turn them green-to-red.
-#   M3 resolve_project lifecycle ``lifecycle[0].is_deleted`` checks removed ->
-#      the during-request soft-delete case returns 409 "Project is not
-#      writable" (existence leak) instead of 404.
-#   M4 resolve_project ``if collection is None`` removed -> soft-deleted
-#      project cases raise instead of returning 404.
-#   M5 start_run / resume_run / create_blueprint action changed from EDIT to
-#      VIEW -> the action-matrix test fails on the recorded action.
+#   M1 project_access.resolve_project ``if workspace_role is None`` -> red:
+#      denies_foreign_owner[review-public] (403) and [export-public] (200).
+#      EDIT routes stay 404 because the EDIT role check backstops them.
+#   M2 workspace_access.get_collection ``user_can_access_workspace`` removed ->
+#      green alone (M1 backstops it); M1 + M2 together -> red on
+#      denies_foreign_owner[review|export-private|public].
+#   M3 resolve_project ``lifecycle[0].is_deleted or lifecycle[1].is_deleted``
+#      removed -> red: hides_soft_deleted_project[*-racing] return 409
+#      "Project is not writable" (existence leak) instead of 404.
+#   M4 resolve_project ``if collection is None`` removed -> red: every
+#      private foreign-owner and soft-deleted case raises AttributeError.
+#   M5 ResearchAction.EDIT -> VIEW at blueprints.create_blueprint,
+#      runs.start_run (require_blueprint) or runs.resume_run (_get_owned_run)
+#      -> red: authorizes_owner_with_route_action, denies_foreign_owner,
+#      hides_mutations_from_viewer_member and cross_org cases for that route.
+#   M6 resolve_project ``if user_org != organization_id`` disabled -> red:
+#      hides_project_from_cross_org_member[*] (all six routes).
+#   M7 resolve_project EDIT workspace-role check disabled -> red:
+#      hides_mutations_from_viewer_member[create|start|resume] (201/200).
+#   M8 resolve_project ``_DECISION_ROLE`` check disabled -> red:
+#      review_requires_reviewer_role.
+#   M9 ReviewService._authorize_review ``ResearchAction.REVIEW`` -> VIEW -> red:
+#      authorizes_review_with_review_action, review_requires_reviewer_role and
+#      the review cases of the foreign-owner and cross-org tests.
 
 from src.models.collection import Collection  # noqa: E402
 from src.models.research_blueprint import ResearchBlueprint  # noqa: E402
