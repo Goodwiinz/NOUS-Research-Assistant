@@ -361,9 +361,12 @@ test("mcp install binds a root only when unambiguous or explicit", async () => {
     assert.ok(command.includes(`'--root' '${ws.dir}'`));
     assert.match(announced.at(-1) ?? "", new RegExp(ws.dir));
     const two = { ...one, id: randomUUID(), root: ws.outside };
+    // A refused install prints nothing, so no hint points at a command never shown.
+    const shown = announced.length;
     await assert.rejects(install({ ...base, workspaces: [one, two] }), /pass --root/);
-    assert.ok((await install({ ...base, workspaces: [one, two] }, ws.outside)).includes(`'--root' '${ws.outside}'`));
     await assert.rejects(install({ ...base, workspaces: [one, two] }, "/nope"), /registered workspace root/);
+    assert.equal(announced.length, shown, announced.slice(shown).join("\n"));
+    assert.ok((await install({ ...base, workspaces: [one, two] }, ws.outside)).includes(`'--root' '${ws.outside}'`));
     // Without the publish scope no root is ever bound.
     assert.equal((await install({ ...base, scopes: ["harness:execute", "tools:read"], workspaces: [one] })).includes("--root"), false);
   } finally {

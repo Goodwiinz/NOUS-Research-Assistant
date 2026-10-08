@@ -693,18 +693,14 @@ export async function mcpInstallCommand(
   const state = value as LocalState;
   if (!state.scopes?.includes("tools:read"))
     throw new Error("reconnect with --tools to authorize NOUS tools");
-  // RT-2: this package never edits ~/.codex/config.toml, so say what to add.
-  // Announced before any publish line: artifacts.test.ts reads the last one.
-  (options.announce ?? console.error)(
-    `After you run the command below, add tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC} under [mcp_servers.nous] in ~/.codex/config.toml: Codex stops waiting for an MCP tool after 60 s by default, and NOUS's arXiv tools can take up to 125 s.`,
-  );
   // Publication binds one registered root, chosen explicitly when ambiguous.
+  const publish = state.scopes.includes("artifacts:publish");
   let root: string | undefined;
-  if (!state.scopes.includes("artifacts:publish") && options.root !== undefined)
+  if (!publish && options.root !== undefined)
     throw new Error(
       "--root requires artifacts:publish; reconnect with nous-harness connect --tools --publish",
     );
-  if (state.scopes.includes("artifacts:publish")) {
+  if (publish) {
     const roots = state.workspaces.map((w) => w.root);
     if (options.root !== undefined) {
       // Registered roots are stored realpath'd (e.g. /tmp -> /private/tmp).
@@ -717,12 +713,20 @@ export async function mcpInstallCommand(
       throw new Error(
         `several workspaces are registered; pass --root with one of: ${roots.join(", ")}`,
       );
-    (options.announce ?? console.error)(
+  }
+  const announce = options.announce ?? console.error;
+  // RT-2: this package never edits ~/.codex/config.toml, so say what to add,
+  // once the command is certain. The publish line stays last: artifacts.test.ts
+  // reads it.
+  announce(
+    `After you run the command below, add tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC} under [mcp_servers.nous] in ~/.codex/config.toml: Codex stops waiting for an MCP tool after 60 s by default, and NOUS's arXiv tools can take up to 125 s.`,
+  );
+  if (publish)
+    announce(
       root
         ? `artifacts_publish will publish from ${root}`
         : "no workspace registered; artifacts_publish will not be offered",
     );
-  }
   return standaloneInstallCommand(mcpSession(stateDir, state, root));
 }
 /** Offline summary of the local binding, grant expiry and handoff queue. */
