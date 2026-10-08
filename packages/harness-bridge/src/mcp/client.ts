@@ -42,16 +42,16 @@ export class ReauthenticationRequired extends Error {
 }
 /** Stable tool-level errors (403/422/503); never retried. */
 export class ToolRequestRejected extends Error {}
-/** NOUS runs search_arxiv and get_arxiv_paper_content under its slow-tool budget
- * (120 s, 125 s outer guard: backend read_tools.py); every other read keeps a
- * short bound so a hung call does not block Codex for minutes. */
+/** NOUS bounds search_arxiv at 120 s and get_arxiv_paper_content at 125 s (a
+ * 120 s budget plus a 5 s outer guard; backend read_tools.py); every other read
+ * keeps a short bound so a hung call does not block Codex for minutes. */
 export const READ_TIMEOUT_MS = 30_000;
 export const SLOW_READ_TIMEOUT_MS = 135_000;
 const SLOW_READ_TOOLS = new Set(["search_arxiv", "get_arxiv_paper_content"]);
 /** Codex's own per-call MCP limit (60 s by default) must outlast the client. */
 export const MCP_TOOL_TIMEOUT_SEC = 150;
 /** The stable tool error NOUS itself returns when a tool's budget runs out. */
-const UPSTREAM_TIMEOUT = {
+const UPSTREAM_TIMEOUT: ToolResult = {
   content: [{ error: "upstream_timeout" }],
   is_error: true,
   source_refs: [],
@@ -180,7 +180,7 @@ export class CapabilityClient {
       // The same stable tool error NOUS returns when its own budget runs out,
       // so the model gets a result it can act on, not a JSON-RPC failure.
       if (error instanceof RequestTimedOut)
-        return structuredClone(UPSTREAM_TIMEOUT) as ToolResult;
+        return structuredClone(UPSTREAM_TIMEOUT);
       throw error;
     }
     if (
@@ -231,7 +231,10 @@ export class CapabilityClient {
     try {
       return await response.json();
     } catch (error) {
-      if (timedOut(error)) throw new RequestTimedOut(`NOUS request to ${url} timed out`);
+      if (timedOut(error)) {
+        console.error(`NOUS request to ${url} timed out after ${timeoutMs / 1000} s`);
+        throw new RequestTimedOut(`NOUS request to ${url} timed out`);
+      }
       throw new Error("invalid NOUS response");
     }
   }
