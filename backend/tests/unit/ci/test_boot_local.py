@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import signal
+import socket
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -64,3 +68,66 @@ def test_boot_local_refuses_ports_that_already_answer() -> None:
     assert "already answering" in text
     assert "port_in_use" in text
     assert "died" in text
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_boot_local_stop_signals_the_group_even_when_the_leader_is_gone(
+    tmp_path: Path,
+) -> None:
+    # A leader (like pnpm) can exit while its child server keeps running in
+    # the same process group; stop must still reach the child.
+    leader = subprocess.Popen(
+        ["bash", "-c", "sleep 60 & echo $!; wait"],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert leader.stdout is not None
+    child = int(leader.stdout.readline().strip())
+    try:
+        os.kill(leader.pid, signal.SIGKILL)
+        leader.wait(timeout=5)
+        assert _alive(child)
+        (tmp_path / "frontend.pid").write_text(f"{leader.pid}\n", encoding="utf-8")
+        env = {
+            **os.environ,
+            "NOUS_VERIFY_BOOT_DIR": str(tmp_path),
+            "NOUS_VERIFY_BACKEND_PORT": str(_free_port()),
+            "NOUS_VERIFY_FRONTEND_PORT": str(_free_port()),
+        }
+        result = subprocess.run(
+            ["bash", str(SCRIPT), "stop"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            cwd=REPO_ROOT,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        deadline = time.monotonic() + 5
+        while _alive(child) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(child)
+        assert not (tmp_path / "frontend.pid").exists()
+    finally:
+        if _alive(child):
+            os.kill(child, signal.SIGKILL)
+
+
+def test_boot_local_stop_waits_for_the_ports_to_free() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "wait_port_free" in text

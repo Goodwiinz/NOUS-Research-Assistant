@@ -58,6 +58,14 @@ wait_for() { # url seconds service-name
   done
 }
 
+wait_port_free() { # port seconds
+  local deadline=$(( $(date +%s) + $2 ))
+  while port_in_use "$1"; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then echo "boot_local: 127.0.0.1:$1 still answering after stop" >&2; return 1; fi
+    sleep 1
+  done
+}
+
 stop() {
   local rc=0 name file pid
   for name in frontend backend; do
@@ -65,12 +73,14 @@ stop() {
     [ -f "$file" ] || continue
     pid="$(cat "$file")"
     case "$pid" in ''|*[!0-9]*) echo "boot_local: ignoring malformed $file" >&2; rm -f "$file"; rc=1; continue ;; esac
-    if kill -0 "$pid" 2>/dev/null; then
-      # Each service runs in its own process group (set -m in start), so the
-      # group signal also reaches children such as the Next.js server.
-      kill -TERM -- "-$pid" 2>/dev/null || kill "$pid" || rc=1
-    fi
+    # Each service runs in its own process group (set -m in start). Signal
+    # the group even when the leader (e.g. pnpm) already exited, because
+    # children such as the Next.js server can outlive it. No group left is
+    # not an error.
+    kill -TERM -- "-$pid" 2>/dev/null || true
+    if kill -0 "$pid" 2>/dev/null; then kill "$pid" || rc=1; fi
     rm -f "$file"
+    if [ "$name" = backend ]; then wait_port_free "$BACKEND_PORT" 15 || rc=1; else wait_port_free "$FRONTEND_PORT" 15 || rc=1; fi
   done
   return $rc
 }
