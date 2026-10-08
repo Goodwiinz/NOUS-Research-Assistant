@@ -210,8 +210,12 @@ test("a workspace reuse names the scopes it keeps but not workspace add (it has 
     const workspace = { ...noProject, workspaceId: WORKSPACE, tools: true };
     await connect({ ...workspace, write: true });
     await connect(workspace);
-    assert.match(t.messages.at(-1)!, /It keeps scopes this command did not request: tools:write\. To drop them /);
-    assert.doesNotMatch(t.messages.at(-1)!, /workspace add/);
+    // A workspace connection runs nothing on the device; dropping scopes cuts its tools.
+    assert.match(
+      t.messages.at(-1)!,
+      /It keeps scopes this command did not request: tools:write\. To drop them \(which also cuts this device's NOUS tools until it reconnects\), revoke this device's access at \/integrations\/devices, or run nous-harness disconnect, then connect again\.$/,
+    );
+    assert.doesNotMatch(t.messages.at(-1)!, /workspace add|stops the device's runs/);
   } finally {
     t.cleanup();
   }

@@ -236,8 +236,13 @@ export async function connect(
     announce(
       `Reusing binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.` +
         (retained.length
-          ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also stops the device's runs), revoke this device's access at /integrations/devices, or run nous-harness disconnect, then connect again` +
-            // Only a project connection has registered folders to lose.
+          ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also ${
+              // Only a project connection runs Codex on the device and has
+              // registered folders to lose; a workspace one only serves tools.
+              projectId !== undefined
+                ? "stops the device's runs"
+                : "cuts this device's NOUS tools until it reconnects"
+            }), revoke this device's access at /integrations/devices, or run nous-harness disconnect, then connect again` +
             (projectId !== undefined
               ? "; after disconnect, register its folders again with nous-harness workspace add."
               : ".")
