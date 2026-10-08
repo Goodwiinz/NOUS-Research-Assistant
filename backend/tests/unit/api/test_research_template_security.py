@@ -6,7 +6,7 @@ import copy
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -457,6 +457,8 @@ class _FunnelScope:
     run: Any
     roles: dict[uuid.UUID, list[ResearchProjectRole]]
     stale_collection_read: bool = False
+    # Per-user organization overrides; anyone absent shares the workspace org.
+    user_orgs: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
 
 
 class _Result:
@@ -532,7 +534,8 @@ class _AccessSession:
         if shape == ((Collection, "Collection"), (Workspace, "Workspace")):
             return _Result(first=(scope.collection, scope.workspace))
         if shape == ((User, "organization_id"),):
-            return _Result(scalar=scope.organization_id)
+            (user_id,) = self._bound_uuids(statement)
+            return _Result(scalar=scope.user_orgs.get(user_id, scope.organization_id))
         if shape == ((ResearchProjectRoleAssignment, "role"),):
             roles = [
                 role
@@ -906,3 +909,49 @@ def test_daily_brief_funnel_hides_soft_deleted_project(
     response = _call_route(funnel_api, route)
 
     _assert_hidden(funnel_api, response)
+
+
+def _add_member(api: FunnelAPI, role: WorkspaceRole) -> None:
+    api.scope.workspace.members.append(
+        SimpleNamespace(user_id=api.scope.stranger.id, role=role, is_deleted=False)
+    )
+    api.actor["current"] = api.scope.stranger
+
+
+@pytest.mark.parametrize("route", ("create", "start", "resume"))
+def test_daily_brief_funnel_hides_mutations_from_viewer_member(
+    funnel_api: FunnelAPI, route: str
+) -> None:
+    # A VIEWER can read the project but EDIT routes must not reveal it.
+    _add_member(funnel_api, WorkspaceRole.VIEWER)
+
+    response = _call_route(funnel_api, route)
+
+    _assert_hidden(funnel_api, response)
+    assert funnel_api.actions == [ResearchAction.EDIT]
+
+
+def test_daily_brief_funnel_lets_viewer_member_export(funnel_api: FunnelAPI) -> None:
+    _add_member(funnel_api, WorkspaceRole.VIEWER)
+
+    response = _call_route(funnel_api, "export")
+
+    assert response.status_code == 200, response.text
+    assert funnel_api.actions == [ResearchAction.VIEW]
+
+
+@pytest.mark.parametrize("route", _DAILY_BRIEF_ROUTES)
+def test_daily_brief_funnel_hides_project_from_cross_org_member(
+    funnel_api: FunnelAPI, route: str
+) -> None:
+    # Membership alone is not enough: the caller's organization must match.
+    _add_member(funnel_api, WorkspaceRole.EDITOR)
+    funnel_api.scope.roles = {
+        funnel_api.scope.stranger.id: [ResearchProjectRole.REVIEWER]
+    }
+    funnel_api.scope.user_orgs[funnel_api.scope.stranger.id] = uuid.uuid4()
+
+    response = _call_route(funnel_api, route)
+
+    _assert_hidden(funnel_api, response)
+    assert funnel_api.actions == [_ROUTE_ACTIONS.get(route, ResearchAction.EDIT)]
