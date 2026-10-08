@@ -1436,6 +1436,72 @@ async def test_failed_verification_requires_hash_bound_override() -> None:
             assert "continued after a failed quality check" in exported["markdown"]
 
 
+async def test_disabled_flag_keeps_existing_run_readable_and_exportable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback: the kill switch refuses new Daily work but keeps its history.
+
+    With ``DAILY_RESEARCH_BRIEF_ENABLED=false`` a persisted Daily blueprint
+    cannot start another run, while its completed run stays readable and
+    downloadable in every format for recovery and audit (GOO-336).
+    """
+
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
+    monkeypatch.setattr("src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED", False)
+
+    async with _scenario_database(dsn, status="completed") as scenario:
+        async with scenario.factory() as db:
+            seeded = await db.get(ResearchRun, scenario.run_id)
+            assert seeded is not None
+            blueprint_id = seeded.blueprint_id
+        run_path = f"/research-engine/runs/{scenario.run_id}"
+        async with AsyncClient(
+            transport=ASGITransport(app=_app_with_scenario_database(scenario)),
+            base_url="http://rollback",
+        ) as client:
+            detail = await client.get(run_path)
+            manifest = await client.get(f"{run_path}/manifest")
+            exports = {
+                export_format: await client.get(
+                    f"{run_path}/export", params={"format": export_format}
+                )
+                for export_format in ("markdown", "json", "csv")
+            }
+            started = await client.post(
+                f"/research-engine/blueprints/{blueprint_id}/runs",
+                json={"protocol_version_id": str(uuid.uuid4())},
+            )
+
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["status"] == "completed"
+        assert manifest.status_code == 200, manifest.text
+        assert manifest.json()["run_status"] == "completed"
+        for export_format, suffix in (
+            ("markdown", "md"),
+            ("json", "json"),
+            ("csv", "csv"),
+        ):
+            response = exports[export_format]
+            assert response.status_code == 200, (export_format, response.text)
+            assert response.headers["content-disposition"] == (
+                "attachment; "
+                f'filename="daily-research-brief-{scenario.run_id}.{suffix}"'
+            )
+        assert json.loads(exports["json"].content)["final_status"] == "unverified"
+
+        assert started.status_code == 404, started.text
+        async with scenario.factory() as db:
+            run_count = await db.scalar(
+                select(func.count())
+                .select_from(ResearchRun)
+                .where(ResearchRun.blueprint_id == blueprint_id)
+            )
+        assert run_count == 1
+
+
 # The Playwright fixture below intentionally lives beside the PostgreSQL
 # certification harness.  It mounts the production routers and replaces only
 # the two external seams (scholarly providers and the configured LLM) plus the

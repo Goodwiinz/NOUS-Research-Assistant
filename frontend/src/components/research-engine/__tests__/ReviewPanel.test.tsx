@@ -356,4 +356,56 @@ describe('ReviewPanel', () => {
       ).not.toBeInTheDocument();
     }
   );
+
+  it('shows claim coverage beside the persisted brief at the final decision', () => {
+    const review: PendingReviewResponse = {
+      pending: true,
+      descriptor: {
+        run_id: RUN_ID,
+        step_index: 5,
+        stage_type: 'export',
+        review_kind: 'final',
+        contract_version: 1,
+        output_hash: 'c'.repeat(64),
+        status: 'pending',
+      },
+      stage_output: {
+        exported: {
+          final_status: 'verified',
+          verification: {
+            claims: [
+              {
+                claim_id: 'c0001',
+                status: 'supported',
+                evidence_ids: ['e0001'],
+              },
+            ],
+          },
+        },
+        markdown: '# Verified brief',
+      },
+    };
+
+    render(
+      <ReviewPanel
+        runId={RUN_ID}
+        review={review}
+        sourceRecords={[]}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('# Verified brief')).toBeInTheDocument();
+    const coverage = screen
+      .getByText('Claim coverage and checks')
+      .closest('details');
+    expect(coverage).not.toBeNull();
+    const checks = within(coverage as HTMLElement);
+    expect(checks.getByText(/"claim_id": "c0001"/)).toBeInTheDocument();
+    expect(checks.getByText(/"status": "supported"/)).toBeInTheDocument();
+    expect(checks.getByText(/"e0001"/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /approve final review/i })
+    ).toBeEnabled();
+  });
 });
