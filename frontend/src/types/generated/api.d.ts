@@ -4109,7 +4109,7 @@ export interface paths {
         put?: never;
         /**
          * Post Disconnect Device
-         * @description Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound. Other devices' integration grants remain active. Returns 503 without committing device revocation if the shared CLI cutoff fails.
+         * @description Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound, so every other connected device fails its next request until `nous-harness connect` runs on it again; that registers a new device and consent and leaves the old ones listed until revoked. Revoking the old consent ends its access; the old device stays listed with no access, because disconnecting it would end every CLI sign-in again. To remove one device's access without ending every sign-in, revoke its consents with POST /api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 without committing device revocation if the shared CLI cutoff fails.
          */
         post: operations["post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post"];
         delete?: never;
@@ -13966,12 +13966,14 @@ export interface components {
             /** Approved At */
             approved_at?: string | null;
             /**
-             * Project Id
-             * Format: uuid
+             * Kind
+             * @enum {string}
              */
-            project_id: string;
+            kind: "project" | "workspace";
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /**
              * Request Id
              * Format: uuid
@@ -13981,6 +13983,14 @@ export interface components {
             scopes: string[];
             /** Status */
             status: string;
+            /** Thread Id */
+            thread_id: string | null;
+            /** Thread Label */
+            thread_label: string | null;
+            /** Workspace Id */
+            workspace_id: string | null;
+            /** Workspace Label */
+            workspace_label: string | null;
         };
         /**
          * ConnectorCapabilityResponse

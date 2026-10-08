@@ -7205,14 +7205,36 @@
             ],
             "title": "Approved At"
           },
-          "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
+          "kind": {
+            "enum": [
+              "project",
+              "workspace"
+            ],
+            "title": "Kind",
             "type": "string"
           },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
           "project_label": {
-            "title": "Project Label",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Label"
           },
           "request_id": {
             "format": "uuid",
@@ -7229,12 +7251,63 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "thread_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Label"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "workspace_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Label"
           }
         },
         "required": [
           "request_id",
+          "kind",
           "project_id",
           "project_label",
+          "workspace_id",
+          "workspace_label",
+          "thread_id",
+          "thread_label",
           "scopes",
           "status"
         ],
@@ -43694,7 +43767,7 @@
     },
     "/api/v1/integrations/devices/{device_id}/revoke": {
       "post": {
-        "description": "Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound. Other devices' integration grants remain active. Returns 503 without committing device revocation if the shared CLI cutoff fails.",
+        "description": "Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound, so every other connected device fails its next request until `nous-harness connect` runs on it again; that registers a new device and consent and leaves the old ones listed until revoked. Revoking the old consent ends its access; the old device stays listed with no access, because disconnecting it would end every CLI sign-in again. To remove one device's access without ending every sign-in, revoke its consents with POST /api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 without committing device revocation if the shared CLI cutoff fails.",
         "operationId": "post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post",
         "parameters": [
           {
