@@ -33,6 +33,8 @@ _STALE_EMAIL_CLAIM_TTL_SECONDS = 60
 _PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS = 5
 _STALE_EMAIL_CLAIM_CACHE_LIMIT = 2048
 _STALE_EMAIL_CLAIM_HASH_KEY = secrets.token_bytes(32)
+_EMAIL_LOCK_TTL_SECONDS = 120
+_EMAIL_LOCK_WAIT_SECONDS = 15
 
 
 class _EmailReconciliationBackoff:
@@ -85,8 +87,65 @@ class _EmailReconciliationBackoff:
 _email_reconciliation_backoff = _EmailReconciliationBackoff()
 
 
+@asynccontextmanager
+async def _hold_shared_email_lock(user_id: str) -> AsyncIterator[bool]:
+    """Take a Redis lease so different workers serialize the same subject."""
+    from src.core.cli_token_revocation import get_redis_client, reset_redis_client
+
+    client = await get_redis_client()
+    if client is None:
+        yield False
+        return
+
+    key = f"auth:email-reconciliation:{hashlib.sha256(user_id.encode()).hexdigest()}"
+    token = secrets.token_urlsafe(24)
+    deadline = time.monotonic() + _EMAIL_LOCK_WAIT_SECONDS
+    acquired = False
+    try:
+        while time.monotonic() < deadline:
+            acquired = bool(
+                await client.set(key, token, nx=True, ex=_EMAIL_LOCK_TTL_SECONDS)
+            )
+            if acquired:
+                break
+            await asyncio.sleep(0.05)
+    except Exception as exc:  # noqa: BLE001 - fail closed on lock-store errors
+        reset_redis_client()
+        logger.warning(
+            "Email reconciliation lock unavailable for user %s (%s)",
+            user_id,
+            type(exc).__name__,
+        )
+        yield False
+        return
+
+    if not acquired:
+        logger.warning("Email reconciliation lock timed out for user %s", user_id)
+        yield False
+        return
+
+    try:
+        yield True
+    finally:
+        try:
+            await client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                key,
+                token,
+            )
+        except Exception as exc:  # noqa: BLE001 - the lease expires if release fails
+            reset_redis_client()
+            logger.warning(
+                "Email reconciliation lock release failed for user %s (%s)",
+                user_id,
+                type(exc).__name__,
+            )
+
+
 class _KeyedEmailReconciliationLocks:
-    """Serialize email reconciliation by subject within this process."""
+    """Coalesce same-process work and serialize each subject across workers."""
 
     def __init__(self) -> None:
         self._entries: dict[str, tuple[asyncio.Lock, int]] = {}
@@ -101,7 +160,8 @@ class _KeyedEmailReconciliationLocks:
             self._entries[key] = (lock, users + 1)
         try:
             async with lock:
-                yield
+                async with _hold_shared_email_lock(key) as acquired:
+                    yield acquired
         finally:
             with self._guard:
                 lock, users = self._entries[key]
@@ -314,7 +374,9 @@ class AuthService:
         # transaction before waiting for a same-subject request or calling
         # Supabase, so neither wait holds a scarce pool connection.
         await self.db.rollback()
-        async with _email_reconciliation_locks.hold(subject_id):
+        async with _email_reconciliation_locks.hold(subject_id) as lock_acquired:
+            if not lock_acquired:
+                return await self._get_active_user(subject_id)
             current_user = await self._get_active_user(subject_id)
             if current_user is None:
                 return None
@@ -358,8 +420,6 @@ class AuthService:
                     "account; operator reconciliation required",
                     subject_id,
                 )
-            else:
-                _email_reconciliation_backoff.remember(subject_id, provider_email)
             return current_user
 
     async def _get_active_user(self, subject_id: str) -> Optional[User]:
