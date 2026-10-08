@@ -86,7 +86,8 @@ features:
       - "backend/src/services/agent/tools.py"
 ignore:
   # Shrink-only. Remove a path when a feature claims it; the checker fails on
-  # entries that no longer exist or that a feature also claims.
+  # entries that no longer exist, that a feature also claims, or (with --base)
+  # that are new relative to the map at the merge base.
   pages:
     - "frontend/app/(auth)/cli-auth/page.tsx"
     - "frontend/app/(auth)/forgot-password/page.tsx"

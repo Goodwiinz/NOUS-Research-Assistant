@@ -48,7 +48,8 @@ One entry per feature: `id`, `status` (`planned` or `covered`), `surfaces`
 `scripts/ci/check_feature_map.py` fails when a mapped scenario id does not
 exist, a `covered` feature's flow checkpoint has no `checkpoint('<name>')`
 call, a page or router is neither claimed nor ignored, or an ignore entry is
-stale or also claimed. It runs in the hosted Lightweight Checks job and in
+stale, also claimed, or new relative to the map at merge-base(`--base`,
+HEAD). It runs with `--base` in the hosted Lightweight Checks job and in
 `scripts/ci/run_local_ci.sh`.
 
 ## Flow charts

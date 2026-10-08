@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -107,7 +108,7 @@ def test_glob_matches_with_fnmatch_semantics() -> None:
     assert not cfm.owns("frontend/app/page.tsx", ["frontend/app/(auth)/login/**"])
 
 
-def test_unclaimed_page_or_router_must_be_ignored_and_ignores_only_shrink() -> None:
+def test_unclaimed_page_or_router_must_be_ignored_and_ignores_stay_current() -> None:
     features = [_feature()]
     pages = {"frontend/app/(auth)/login/page.tsx", "frontend/app/page.tsx"}
     routers = {"backend/src/api/agent/execute.py"}
@@ -174,7 +175,69 @@ def test_feature_map_check_is_wired_into_hosted_and_local_gates() -> None:
     ]
     assert "python3 scripts/ci/check_feature_map.py" in lightweight
     assert "backend/tests/unit/ci/test_check_feature_map.py" in lightweight
+    assert 'python3 scripts/ci/check_feature_map.py --base "$BASE"' in lightweight
+    assert "fetch-depth: 0" in lightweight
     assert 'step "Feature map (blocking)"' in local_ci
-    assert '"$PY" scripts/ci/check_feature_map.py; check $? "check_feature_map"' in (
-        local_ci
+    assert (
+        '"$PY" scripts/ci/check_feature_map.py --base "$BASE"; '
+        'check $? "check_feature_map"'
+    ) in local_ci
+
+
+def test_ignore_lists_only_shrink_against_the_base_map() -> None:
+    base = {"pages": ["frontend/app/a/page.tsx"], "routers": ["backend/src/api/r.py"]}
+    head = {
+        "pages": ["frontend/app/a/page.tsx", "frontend/app/b/page.tsx"],
+        "routers": [],
+    }
+    assert cfm.check_ignore_growth(head, base) == [
+        "new ignore entry frontend/app/b/page.tsx (claim it in a feature instead)"
+    ]
+    assert cfm.check_ignore_growth(base, base) == []
+    assert cfm.check_ignore_growth({"pages": [], "routers": []}, base) == []
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_base_ignore_is_read_from_merge_base_and_absent_map_skips(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "README").write_text("x\n", encoding="utf-8")
+    _git(tmp_path, "add", "README")
+    _git(tmp_path, "commit", "-q", "-m", "init")
+    assert cfm.base_ignore(tmp_path, "main") is None
+
+    target = tmp_path / "docs" / "engineering" / "feature-map.yaml"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "version: 1\nignore:\n  pages: [frontend/app/a/page.tsx]\n  routers: []\n",
+        encoding="utf-8",
     )
+    _git(tmp_path, "add", "docs")
+    _git(tmp_path, "commit", "-q", "-m", "map")
+    _git(tmp_path, "checkout", "-q", "-b", "feature")
+    target.write_text(
+        "version: 1\nignore:\n  pages: []\n  routers: []\n", encoding="utf-8"
+    )
+    _git(tmp_path, "commit", "-qam", "shrink")
+    assert cfm.base_ignore(tmp_path, "main") == {
+        "pages": ["frontend/app/a/page.tsx"],
+        "routers": [],
+    }
+
+
+def test_unresolvable_base_is_a_problem_not_a_skip(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    try:
+        cfm.base_ignore(tmp_path, "no-such-ref")
+    except cfm.BaseRefError as exc:
+        assert "no-such-ref" in str(exc)
+    else:  # pragma: no cover - the assertion below documents the contract
+        raise AssertionError("expected BaseRefError")

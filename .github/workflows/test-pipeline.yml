@@ -76,6 +76,10 @@ jobs:
     needs: ci-plan
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history: the feature-map shrink-only check reads the map at
+          # merge-base(base, HEAD), which a shallow clone cannot resolve.
+          fetch-depth: 0
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -84,7 +88,22 @@ jobs:
       - name: Directory docs lint
         run: python3 scripts/docs/check_dir_docs.py
       - name: Feature map (nous-verify upkeep)
-        run: python3 scripts/ci/check_feature_map.py
+        env:
+          # Live base BRANCH, not the creation-time-frozen base.sha — same
+          # resolution as the frontend quality ratchet.
+          PR_BASE_REF: ${{ github.base_ref || '' }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before || '' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'develop' }}
+        run: |
+          ZEROS="0000000000000000000000000000000000000000"
+          if [ -n "$PR_BASE_REF" ]; then
+            BASE="origin/${PR_BASE_REF}"
+          elif [ -n "$GITHUB_EVENT_BEFORE" ] && [ "$GITHUB_EVENT_BEFORE" != "$ZEROS" ]; then
+            BASE="$GITHUB_EVENT_BEFORE"
+          else
+            BASE="origin/${DEFAULT_BRANCH}"
+          fi
+          python3 scripts/ci/check_feature_map.py --base "$BASE"
       - name: Script and NOUS instruction contracts
         run: |
           python3 -m pytest tests/unit/scripts/ \
