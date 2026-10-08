@@ -161,9 +161,13 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         "tools:read",
     ),
     "retrieve_passages": (
-        "Full-text passage retrieval over the granted project's documents "
-        "(PostgreSQL ranking; works without a semantic knowledge base). "
-        "Omit document_ids to search the whole project.",
+        "Full-text search over the granted project's documents (PostgreSQL "
+        "ranking; works without a semantic knowledge base). Returns the "
+        "best-matching documents, at most top_k, each with one short excerpt "
+        "(up to three matching sentences), not every matching passage. A "
+        "document matches only when it contains every query word, so pass a "
+        "few key terms rather than a question. Omit document_ids to search "
+        "the whole project.",
         {
             "type": "object",
             "properties": {

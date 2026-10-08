@@ -623,6 +623,17 @@ def test_catalog_lists_plan07_tools_without_identity_args() -> None:
     assert by_name["get_document_content"]["required"] == ["document_id"]
 
 
+def test_retrieve_passages_says_it_is_document_level() -> None:
+    # RT-6: one excerpt per document and every word required, so a model
+    # neither expects every passage nor sends a whole question.
+    description = {tool.name: tool.description for tool in list_read_tools()}[
+        "retrieve_passages"
+    ]
+    assert "best-matching documents, at most top_k" in description
+    assert "one short excerpt" in description
+    assert "every query word" in description
+
+
 async def test_search_arxiv_is_dispatched_with_clamped_results(
     db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -857,24 +868,39 @@ async def test_rejected_connector_filters_are_an_argument_error(
     ]
 
 
-async def test_connector_and_domain_names_match_case_insensitively(
-    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    search = AsyncMock(return_value={"results": []})
-    monkeypatch.setattr(read_tools, "_tool_search_external_database", search)
-    await invoke_read(
-        db,
-        context,
-        _invocation(
+@pytest.mark.parametrize(
+    ("tool", "upstream", "arguments", "expected"),
+    [
+        (
             "search_external_database",
-            query="p53",
-            connector="PubMed",
-            domain=" Biomedical ",
+            "_tool_search_external_database",
+            {"query": "p53", "connector": "PubMed", "domain": " Biomedical "},
+            {"connector": "pubmed", "domain": "biomedical"},
         ),
-    )
-    assert search.await_args is not None
-    assert search.await_args.args[0]["connector"] == "pubmed"
-    assert search.await_args.args[0]["domain"] == "biomedical"
+        (
+            "list_external_databases",
+            "_tool_list_external_databases",
+            {"domain": "Biomedical"},
+            {"domain": "biomedical"},
+        ),
+    ],
+    ids=["search", "list"],
+)
+async def test_connector_and_domain_names_match_case_insensitively(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    upstream: str,
+    arguments: dict[str, Any],
+    expected: dict[str, str],
+) -> None:
+    registry = AsyncMock(return_value={"results": []})
+    monkeypatch.setattr(read_tools, upstream, registry)
+    await invoke_read(db, context, _invocation(tool, **arguments))
+    assert registry.await_args is not None
+    sent = registry.await_args.args[0]
+    assert {key: sent[key] for key in expected} == expected
 
 
 async def _set_content(db: AsyncSession, document_id: UUID, text_: str) -> None:

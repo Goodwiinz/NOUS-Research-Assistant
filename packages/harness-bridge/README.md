@@ -48,12 +48,12 @@ Tools are the backend's read allowlist. All are under the `tools:read` scope exc
 | `search_documents` | granted project | title/filename search, ≤ 50 results |
 | `list_project_documents` | granted project | paginated listing |
 | `do_kb_retrieve` | granted project | semantic chunks; needs `document_ids` and a provisioned KB |
-| `retrieve_passages` | granted project | PostgreSQL full-text passages; `document_ids` optional, `top_k` ≤ 20; works without a KB |
+| `retrieve_passages` | granted project | PostgreSQL full-text search: the best `top_k` (≤ 20) documents, one excerpt each, every query word must match; `document_ids` optional; works without a KB |
 | `get_document_content` | granted project | summary or full text, `offset`/`limit` ≤ 48,000 chars, follow `next_offset` |
 | `get_current_draft` | granted project | latest generated draft |
 | `search_arxiv` | arXiv (external) | ≤ 20 results advertised, 120 s budget |
-| `search_external_database`, `list_external_databases` | connector registry (external) | ≤ 20 results |
-| `get_arxiv_paper_content` | arXiv (external) | transient full text by id, paginated (Redis cache: 24 h fresh, up to 7 d stale fallback); persists nothing — use `ingest_arxiv_papers` to add a paper to NOUS |
+| `search_external_database`, `list_external_databases` | connector registry (external) | ≤ `max_results` (≤ 20) results in total, taken in turn from each source in registry order (rows grouped by `source`, so a multi-service connector such as `bioservices` can take several slots per round), `truncated: true` when rows were cut; names match case-insensitively; a bad connector, domain or filter returns `invalid_arguments` with the valid names or an `error_category` |
+| `get_arxiv_paper_content` | arXiv (external) | transient full text by id, paginated (Redis cache: 24 h fresh, up to 7 d stale fallback; after a failed refetch the stale text is served and a refetch is retried at most every 5 min); persists nothing — use `ingest_arxiv_papers` to add a paper to NOUS |
 | `find_researchers` | granted project | authors by name from the author lists of papers ingested into this project (arXiv metadata); case-insensitive substring, `limit` ≤ 25; no affiliations or career history |
 | `get_researcher` | granted project | one researcher's papers in this project (≤ 100, newest first) and co-authors (≤ 100); `researcher_not_found` when no project document lists them |
 | `list_library` | the grant's whole scope | the folders (NOUS projects) the connection may use, with document counts, one page at a time; needs `library:read` |
