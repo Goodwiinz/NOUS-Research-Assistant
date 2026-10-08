@@ -108,10 +108,10 @@ export function ConnectedDevices(): ReactElement {
                   revokes its access and ends all existing CLI sign-ins for your
                   account, so every other connected device also stops working
                   until you run nous-harness connect on it again. Each reconnect
-                  adds a new device here. To end an old device&apos;s access,
-                  use Revoke on its access rather than Disconnect: the old
-                  device then stays listed with no access, because disconnecting
-                  it would end every CLI sign-in again.
+                  adds a new device here. Revoke the old device&apos;s access
+                  rather than disconnecting the old device, which would end
+                  every CLI sign-in again; the old device then stays listed with
+                  no access.
                 </p>
                 <button
                   type="button"

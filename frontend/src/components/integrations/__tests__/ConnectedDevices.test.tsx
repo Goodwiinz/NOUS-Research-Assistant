@@ -104,6 +104,12 @@ describe('ConnectedDevices', () => {
     expect(
       screen.queryByText(/keep their integration project access/)
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /rather than disconnecting the old device, which would end every CLI sign-in again/
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/disconnect the old/i)).not.toBeInTheDocument();
     await user.click(
       screen.getByRole('button', { name: 'Disconnect and end CLI sign-ins' })
     );
