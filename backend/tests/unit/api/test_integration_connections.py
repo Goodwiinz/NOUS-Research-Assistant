@@ -171,3 +171,13 @@ def test_cli_cutoff_failure_is_a_safe_retryable_503(
     )
     assert response.status_code == 503
     assert response.json() == {"detail": "Disconnect unavailable. Please retry."}
+
+
+def test_disconnect_description_says_other_devices_must_reconnect(
+    app: FastAPI,
+) -> None:
+    """DV-2: the CLI cutoff is account-wide, so no other device keeps working."""
+    path = "/api/v1/integrations/devices/{device_id}/revoke"
+    description = app.openapi()["paths"][path]["post"]["description"]
+    assert "remain active" not in description
+    assert "nous-harness connect" in description
