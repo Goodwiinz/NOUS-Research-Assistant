@@ -14,11 +14,11 @@ it serializes writers, so the unique-violation window never opens.
 
 GOO-405 mutation evidence (run from ``backend/``):
 
-* Guard at ``src/core/user_provisioning.py:210``: the user-race refetch.
+* Guard at ``src/core/user_provisioning.py:234``: the user-race refetch.
   Replacing its assignment with ``user = None`` made
   ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_race_refetches_concurrently_created_user``
   fail because the returned user was ``None`` instead of the concurrent row.
-* Guard at ``src/core/user_provisioning.py:211``: warn only when the ID
+* Guard at ``src/core/user_provisioning.py:235``: warn only when the ID
   refetch finds no subject row. Replacing the condition with ``if False`` made
   ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_email_conflict_warns_with_user_id_and_never_resolves_by_email``
   fail because the required warning was absent. Replacing it with ``if True``
@@ -39,7 +39,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from src.core.security import TokenData, _extract_supabase_token_data
-from src.core.user_provisioning import ensure_user_and_org
+from src.core.user_provisioning import SupabaseEmailLookupError, ensure_user_and_org
 from src.models.organization import Organization
 from src.models.user import User, UserRole
 
@@ -161,6 +161,25 @@ async def test_first_login_fails_closed_when_provider_email_is_unavailable(monke
     result = await ensure_user_and_org(db, _token(email="stale@example.com"))
 
     assert result is None
+    db.add.assert_not_called()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_first_login_provider_outage_is_not_an_unconfirmed_identity(monkeypatch):
+    db = _session(execute_results=[None], flush_side_effects=[])
+
+    def provider_outage(_user_id: str) -> None:
+        raise SupabaseEmailLookupError("provider unavailable")
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", provider_outage
+    )
+
+    with pytest.raises(SupabaseEmailLookupError):
+        await ensure_user_and_org(db, _token(email="stale@example.com"))
+
     db.add.assert_not_called()
     db.rollback.assert_awaited_once()
 

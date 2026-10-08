@@ -35,6 +35,18 @@ _STALE_EMAIL_CLAIM_CACHE_LIMIT = 2048
 _STALE_EMAIL_CLAIM_HASH_KEY = secrets.token_bytes(32)
 _EMAIL_LOCK_TTL_SECONDS = 120
 _EMAIL_LOCK_WAIT_SECONDS = 15
+_EMAIL_LOCK_FAILURE_TTL_SECONDS = 5
+_RENEW_EMAIL_LOCK_SCRIPT = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
+)
+_CHECK_EMAIL_LOCK_SCRIPT = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return 1 else return 0 end"
+)
+_RELEASE_EMAIL_LOCK_SCRIPT = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
 
 
 class _EmailReconciliationBackoff:
@@ -85,16 +97,85 @@ class _EmailReconciliationBackoff:
 
 
 _email_reconciliation_backoff = _EmailReconciliationBackoff()
+_email_lock_failure_backoff = _EmailReconciliationBackoff()
+
+
+class _SharedEmailLease:
+    """Renew a shared lock and detect lease loss before writing the row."""
+
+    def __init__(self, client, key: str, token: str) -> None:
+        self._client = client
+        self._key = key
+        self._token = token
+        self._lost = False
+        self._renewal_task = asyncio.create_task(self._renew())
+
+    def __bool__(self) -> bool:
+        return not self._lost
+
+    async def _renew(self) -> None:
+        interval = max(0.1, _EMAIL_LOCK_TTL_SECONDS / 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await self._client.eval(
+                    _RENEW_EMAIL_LOCK_SCRIPT,
+                    1,
+                    self._key,
+                    self._token,
+                    _EMAIL_LOCK_TTL_SECONDS,
+                )
+            except Exception as exc:  # noqa: BLE001 - the lease is no longer trusted
+                from src.core.cli_token_revocation import reset_redis_client
+
+                reset_redis_client()
+                logger.warning(
+                    "Email reconciliation lease renewal failed (%s)",
+                    type(exc).__name__,
+                )
+                self._lost = True
+                return
+            if not renewed:
+                self._lost = True
+                return
+
+    async def still_owned(self) -> bool:
+        if self._lost:
+            return False
+        try:
+            owned = await self._client.eval(
+                _CHECK_EMAIL_LOCK_SCRIPT, 1, self._key, self._token
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed before the write
+            from src.core.cli_token_revocation import reset_redis_client
+
+            reset_redis_client()
+            logger.warning(
+                "Email reconciliation lease check failed (%s)", type(exc).__name__
+            )
+            self._lost = True
+            return False
+        self._lost = not bool(owned)
+        return not self._lost
+
+    async def close(self) -> None:
+        self._renewal_task.cancel()
+        try:
+            await self._renewal_task
+        except asyncio.CancelledError:
+            pass
 
 
 @asynccontextmanager
-async def _hold_shared_email_lock(user_id: str) -> AsyncIterator[bool]:
+async def _hold_shared_email_lock(
+    user_id: str,
+) -> AsyncIterator[Optional[_SharedEmailLease]]:
     """Take a Redis lease so different workers serialize the same subject."""
     from src.core.cli_token_revocation import get_redis_client, reset_redis_client
 
     client = await get_redis_client()
     if client is None:
-        yield False
+        yield None
         return
 
     key = f"auth:email-reconciliation:{hashlib.sha256(user_id.encode()).hexdigest()}"
@@ -116,25 +197,21 @@ async def _hold_shared_email_lock(user_id: str) -> AsyncIterator[bool]:
             user_id,
             type(exc).__name__,
         )
-        yield False
+        yield None
         return
 
     if not acquired:
         logger.warning("Email reconciliation lock timed out for user %s", user_id)
-        yield False
+        yield None
         return
 
+    lease = _SharedEmailLease(client, key, token)
     try:
-        yield True
+        yield lease
     finally:
+        await lease.close()
         try:
-            await client.eval(
-                "if redis.call('get', KEYS[1]) == ARGV[1] then "
-                "return redis.call('del', KEYS[1]) else return 0 end",
-                1,
-                key,
-                token,
-            )
+            await client.eval(_RELEASE_EMAIL_LOCK_SCRIPT, 1, key, token)
         except Exception as exc:  # noqa: BLE001 - the lease expires if release fails
             reset_redis_client()
             logger.warning(
@@ -152,7 +229,7 @@ class _KeyedEmailReconciliationLocks:
         self._guard = threading.Lock()
 
     @asynccontextmanager
-    async def hold(self, user_id: str) -> AsyncIterator[None]:
+    async def hold(self, user_id: str) -> AsyncIterator[Optional[_SharedEmailLease]]:
         key = user_id
         with self._guard:
             entry = self._entries.get(key)
@@ -366,7 +443,7 @@ class AuthService:
         another row by email if the unique constraint detects a collision.
         """
         claimed_email = token_email.strip().lower()
-        if not claimed_email or user.email.lower() == claimed_email:
+        if not claimed_email:
             return user
 
         subject_id = str(user.id)
@@ -374,14 +451,19 @@ class AuthService:
         # transaction before waiting for a same-subject request or calling
         # Supabase, so neither wait holds a scarce pool connection.
         await self.db.rollback()
-        async with _email_reconciliation_locks.hold(subject_id) as lock_acquired:
-            if not lock_acquired:
+        if _email_lock_failure_backoff.contains(subject_id, claimed_email):
+            return await self._get_active_user(subject_id)
+        async with _email_reconciliation_locks.hold(subject_id) as lease:
+            if lease is None:
+                _email_lock_failure_backoff.remember(
+                    subject_id,
+                    claimed_email,
+                    ttl_seconds=_EMAIL_LOCK_FAILURE_TTL_SECONDS,
+                )
                 return await self._get_active_user(subject_id)
             current_user = await self._get_active_user(subject_id)
             if current_user is None:
                 return None
-            if current_user.email.lower() == claimed_email:
-                return current_user
             if _email_reconciliation_backoff.contains(subject_id, claimed_email):
                 return current_user
 
@@ -389,11 +471,22 @@ class AuthService:
             # the provider round trip, then load the subject again afterward.
             await self.db.rollback()
 
-            from src.core.user_provisioning import get_verified_supabase_email
-
-            provider_email = await asyncio.to_thread(
-                get_verified_supabase_email, subject_id
+            from src.core.user_provisioning import (
+                SupabaseEmailLookupError,
+                get_verified_supabase_email,
             )
+
+            try:
+                provider_email = await asyncio.to_thread(
+                    get_verified_supabase_email, subject_id
+                )
+            except SupabaseEmailLookupError:
+                _email_reconciliation_backoff.remember(
+                    subject_id,
+                    claimed_email,
+                    ttl_seconds=_PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS,
+                )
+                return await self._get_active_user(subject_id)
             if not provider_email:
                 _email_reconciliation_backoff.remember(
                     subject_id,
@@ -406,6 +499,12 @@ class AuthService:
 
             current_user = await self._get_active_user(subject_id)
             if current_user is None or current_user.email.lower() == provider_email:
+                return current_user
+            if not await lease.still_owned():
+                logger.warning(
+                    "Email reconciliation lease lost for user %s; skipping write",
+                    subject_id,
+                )
                 return current_user
 
             current_user.email = provider_email
