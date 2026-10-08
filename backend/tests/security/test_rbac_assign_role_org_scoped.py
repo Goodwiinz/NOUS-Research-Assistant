@@ -17,6 +17,14 @@ from src.models.user import User
 from src.services.security.rbac_service import RBACService
 
 
+@pytest.fixture(autouse=True)
+def _delegation_check_passes():
+    """These tests pin org scoping and audit emission; the GOO-406 delegation
+    bound is covered in test_rbac_delegation_bound.py."""
+    with patch.object(RBACService, "assert_caller_can_delegate"):
+        yield
+
+
 class _FakeQuery:
     """Minimal stand-in for a SQLAlchemy Query that ignores filters and
     returns a preset ``first()`` result."""
@@ -108,9 +116,7 @@ def test_assign_emits_security_audit_event():
     db = _make_db(role=role, user_in_org=(1,), existing_assignment=None)
     svc = RBACService(db)
 
-    with patch(
-        "src.services.security.audit_service.AuditService"
-    ) as audit_cls:
+    with patch("src.services.security.audit_service.AuditService") as audit_cls:
         svc.assign_role_to_user(
             user_id="user-1", role_id="role-1", organization_id="org-1"
         )
