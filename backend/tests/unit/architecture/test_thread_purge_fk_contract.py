@@ -1,0 +1,68 @@
+"""Every foreign key a thread hard-delete reaches says what happens to its row.
+
+``purge_soft_deleted_threads`` (src/tasks/retention_tasks.py) deletes a
+chat's ``chat_messages`` and then the thread with bulk DELETEs: no ORM cascade
+runs, so the database's ON DELETE rule is all that clears a referencing row. A
+foreign key with no rule (NO ACTION) into any table that delete reaches makes
+PostgreSQL refuse it. Seven thread FKs added 09-28..10-05 plus
+``artifact_references.message_id`` did exactly that and stopped the purge for
+every organization (audit HO-2, 2026-10-08).
+
+Start from the two tables the purge deletes, follow every CASCADE to the
+tables it deletes from in turn, and require CASCADE or SET NULL on every FK
+into any of them. A new table that names a chat fails here until it picks
+one. This reads the model metadata; the rp01 migration and
+tests/integration/test_retention_thread_purge_postgres.py hold the live
+database to the same rules.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+import src.models  # noqa: F401  register every table on Base.metadata
+from src.models.base import Base
+
+pytestmark = pytest.mark.unit
+
+# What purge_soft_deleted_threads deletes itself.
+PURGED = frozenset({"threads", "chat_messages"})
+RULES = frozenset({"CASCADE", "SET NULL"})
+
+
+def _walk() -> tuple[set[str], list[str]]:
+    """Tables a thread delete reaches, and every FK into them with no rule."""
+    reached = set(PURGED)
+    unruled: set[str] = set()
+    grew = True
+    while grew:
+        grew = False
+        for table in Base.metadata.tables.values():
+            for fk in table.foreign_keys:
+                if fk.column.table.name not in reached:
+                    continue
+                rule = (fk.ondelete or "NO ACTION").upper()
+                if rule not in RULES:
+                    unruled.add(
+                        f"{table.name}.{fk.parent.name} -> {fk.target_fullname}"
+                    )
+                elif rule == "CASCADE" and table.name not in reached:
+                    reached.add(table.name)
+                    grew = True
+    return reached, sorted(unruled)
+
+
+def test_every_fk_a_thread_delete_reaches_has_an_on_delete_rule() -> None:
+    _, unruled = _walk()
+    assert unruled == []
+
+
+def test_the_walk_follows_cascades_into_the_consent_tables() -> None:
+    # Guards the guard: a walk that stopped at threads would never check the
+    # FKs into the consent a chat-bound grant request cascades to.
+    reached, _ = _walk()
+    assert {
+        "integration_handoffs",
+        "integration_grant_requests",
+        "integration_context_selections",
+    } <= reached
