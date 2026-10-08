@@ -189,6 +189,11 @@ fencing rules; do not adopt another active owner's claim. Use the per-PR merge
 protocol in step 8. Resuming a prior tick consumes this invocation: after
 closing it or handing it off, stop rather than proceeding to step 2.
 
+Reconciliation includes the post-deploy rerun from step 8 for every loop PR
+that is merged-but-unverified: when its deployed backend SHA is live on the
+dev lane, rerun its step 7b features there and record the result; while the
+deploy has not landed, record that the rerun is pending.
+
 When the user requests reconciliation of an existing group, record the exact
 authorized loop-owned PRs, their tick/claim ownership, permitted mutations, and
 dependency order before making changes. Process parents before children, one
@@ -288,14 +293,16 @@ selection; an exit of `2` with "No mapped feature changed" records
 scripts/verify/boot_local.sh start
 pnpm qa:nous --changed-from origin/develop --allow-writes \
   --base-url http://127.0.0.1:3000 --api-url http://127.0.0.1:8000/api/v1 \
-  --evidence-record docs/testing/evidence/verify-<feature>-<YYYYMMDD>
+  --evidence-record docs/testing/evidence/verify-<first-feature>-<YYYYMMDD>
 scripts/verify/boot_local.sh stop
 ```
 
-Credentials come only from `NOUS_QA_EMAIL` and `NOUS_QA_PASSWORD` (or
-`--storage-state`). Open every checkpoint screenshot under
-`.verify-artifacts/<run-id>/checkpoints/` and confirm the feature's pass
-criteria visually; assertions alone are not a `PASS`, and a screenshot that
+One run writes one evidence record: name it
+`verify-<first-feature>-<YYYYMMDD>` after the first selected feature; its
+README heading lists every selected feature. Credentials come only from
+`NOUS_QA_EMAIL` and `NOUS_QA_PASSWORD` (or `--storage-state`). Open every
+checkpoint screenshot under `.verify-artifacts/<run-id>/checkpoints/` and
+confirm the feature's pass criteria visually; assertions alone are not a `PASS`, and a screenshot that
 contradicts a criterion is `FAILED`. Commit the evidence README with the fix
 and add it to `docs/testing/evidence/README.md`; never attach, commit, or
 upload a `trace*.zip`, which carries session secrets.
@@ -323,9 +330,11 @@ gates, repeat independent review whenever the diff changes, and repeat security
 review when applicable. Re-publish the reviewed commit and re-check hosted
 evidence.
 
-After a merged change that touched a mapped feature is deployed to the dev
-lane, rerun the step 7b features against `https://goodwiinz.tech` and
-`https://dev-api.goodwiinz.tech/api/v1` with
+A merged change that touched a mapped feature stays merged-but-unverified
+until the dev lane runs it. The tick that merged it reruns the step 7b
+features once the GitOps deploy has landed, if that happens within the tick;
+otherwise step 1 of the next tick performs the rerun. Run it against
+`https://goodwiinz.tech` and `https://dev-api.goodwiinz.tech/api/v1` with
 `--expected-backend-sha <deployed sha>` (and `--deployment-evidence` when the
 server exposes no identity). A `FAILED` rerun files a regression with the
 evidence README attached instead of closing the tick as clean; a `BLOCKED`
