@@ -260,6 +260,9 @@ async function sendFromComposer(page, content) {
 }
 
 const DENY_SETTLE_MS = 10_000;
+// Emitted by the main graph when the user denies a destructive tool call
+// (backend/src/services/agent/_nodes_tools.py).
+const HITL_DENIED_TEXT = 'Action cancelled by user';
 
 /**
  * Drive `create_project` (a destructive tool) through the web approval
@@ -618,6 +621,7 @@ const scenarios = [
     async run(session, evidence) {
       const { match } = await driveProjectCreation(session, evidence, 'deny');
       assertThat(match === null, 'Denied project creation still created a project');
+      await assertAssistantContains(session.page, HITL_DENIED_TEXT, 'Denied run', session.config.timeoutMs);
       await evidence.checkpoint('hitl.denied');
       return { assertion: 'HITL Deny left no project behind', evidence: [{ created: false }] };
     },

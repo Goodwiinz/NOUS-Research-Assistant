@@ -439,3 +439,131 @@ test('--list with --features lists only the selected scenarios (dry run)', async
     console.log = original;
   }
 });
+
+test('--changed-from fails closed (exit 2) when git cannot diff the ref', async () => {
+  const original = console.error;
+  const lines = [];
+  console.error = (line) => lines.push(String(line));
+  try {
+    const code = await main(['--list', '--changed-from', 'no-such-ref-for-nous-verify'], {});
+    assert.equal(code, 2);
+    assert.match(lines.join('\n'), /git diff failed for --changed-from no-such-ref-for-nous-verify/);
+  } finally {
+    console.error = original;
+  }
+});
+
+test('--features with an explicit non-all --suite is a configuration error', async () => {
+  await withMap(async (mapPath) => {
+    await assert.rejects(
+      parseArgs(['--suite', 'smoke', '--features', 'login'], { NOUS_QA_FEATURE_MAP: mapPath }),
+      /--features\/--changed-from select across suites/,
+    );
+    const config = await parseArgs(['--suite', 'all', '--features', 'login'], { NOUS_QA_FEATURE_MAP: mapPath });
+    assert.equal(config.suite, 'all');
+  });
+});
+
+// Minimal fake browser + API for the model journeys. Transcript rows are
+// { role, text }; locator('[data-role=...]').filter({ hasText }) only matches
+// rows of the listed roles, so role filtering is actually exercised.
+function fakeJourney({ onSend = () => {}, projects = () => [], messages = () => [] } = {}) {
+  const state = { transcript: [], dialogVisible: false, registered: [], decision: null };
+  const roleLocator = (selector) => {
+    const roles = [...selector.matchAll(/data-role="([a-z]+)"/g)].map((match) => match[1]);
+    return {
+      filter: ({ hasText }) => {
+        const matches = () => state.transcript.filter((row) => roles.includes(row.role) && row.text.includes(hasText));
+        return {
+          first: () => ({ waitFor: async () => { if (matches().length === 0) throw new Error(`no ${roles.join('/')} row with ${hasText}`); } }),
+          count: async () => matches().length,
+        };
+      },
+    };
+  };
+  let draft = '';
+  const page = {
+    url: () => 'http://127.0.0.1:3000/chat',
+    evaluate: async () => ({}),
+    reload: async () => {},
+    locator: roleLocator,
+    getByRole: (role, options = {}) => {
+      if (role === 'textbox') return { fill: async (value) => { draft = value; } };
+      if (role === 'button' && options.name === 'Send message') {
+        return { click: async () => { state.transcript.push({ role: 'user', text: draft }); onSend(state, draft); } };
+      }
+      if (role === 'alertdialog') {
+        return {
+          waitFor: async ({ state: wanted }) => {
+            if ((wanted === 'visible') !== state.dialogVisible) throw new Error(`dialog not ${wanted}`);
+          },
+          getByRole: (_role, { name }) => ({
+            click: async () => {
+              state.decision = name;
+              state.dialogVisible = false;
+              if (name === 'Deny') state.transcript.push({ role: 'assistant', text: "Action cancelled by user. Let me know if you'd like to proceed differently." });
+            },
+          }),
+        };
+      }
+      throw new Error(`unexpected getByRole ${role}`);
+    },
+  };
+  let nextId = 1;
+  const id = () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
+  const session = {
+    config: { timeoutMs: 50 },
+    page,
+    login: async () => page,
+    goto: async () => {},
+    registerFixture: (kind, fixtureId) => state.registered.push([kind, fixtureId]),
+    request: async (path, options = {}) => {
+      if (options.method === 'POST') return { status: 201, data: { id: id() } };
+      if (path.startsWith('/api/v1/projects')) return { status: 200, data: { projects: projects(state) } };
+      if (path.includes('/messages')) return { status: 200, data: { messages: messages(state) } };
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const evidence = { fixturePrefix: 'NOUS QA t1', consumeModelTurn: () => 1, checkpoint: async () => {} };
+  return { state, session, evidence };
+}
+
+test('chat send only accepts the token from an assistant row, not the echoed prompt', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.chat-send-stream-reload');
+  // The user prompt contains KestrelAck42; no assistant ever answers.
+  const silent = fakeJourney({ messages: (state) => state.transcript.map((row) => ({ role: row.role, content: row.text })) });
+  await assert.rejects(scenario.run(silent.session, silent.evidence), /no assistant row with KestrelAck42/);
+
+  const answered = fakeJourney({
+    onSend: (state) => state.transcript.push({ role: 'assistant', text: 'KestrelAck42' }),
+    messages: (state) => state.transcript.map((row) => ({ role: row.role, content: row.text })),
+  });
+  const result = await scenario.run(answered.session, answered.evidence);
+  assert.match(result.assertion, /streamed an answer/);
+});
+
+test('HITL deny fails when the project exists anyway and registers it for cleanup', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.hitl-deny');
+  const leaked = fakeJourney({
+    onSend: (state) => { state.dialogVisible = true; },
+    projects: () => [{ id: '11111111-1111-4111-8111-111111111111', name: 'NOUS QA t1 project deny' }],
+  });
+  await assert.rejects(scenario.run(leaked.session, leaked.evidence), /Denied project creation still created a project/);
+  assert.equal(leaked.state.decision, 'Deny');
+  assert.deepEqual(leaked.state.registered.at(-1), ['project', '11111111-1111-4111-8111-111111111111']);
+});
+
+test('HITL deny passes only when no project appears and the transcript records the cancellation', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.hitl-deny');
+  const clean = fakeJourney({ onSend: (state) => { state.dialogVisible = true; } });
+  const result = await scenario.run(clean.session, clean.evidence);
+  assert.match(result.assertion, /left no project behind/);
+
+  const silent = fakeJourney({ onSend: (state) => { state.dialogVisible = true; } });
+  silent.session.page.getByRole = ((original) => (role, options) => {
+    const locator = original(role, options);
+    if (role !== 'alertdialog') return locator;
+    return { ...locator, getByRole: () => ({ click: async () => { silent.state.dialogVisible = false; } }) };
+  })(silent.session.page.getByRole);
+  await assert.rejects(scenario.run(silent.session, silent.evidence), /no assistant row with Action cancelled by user/);
+});

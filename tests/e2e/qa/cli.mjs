@@ -191,7 +191,7 @@ function usage() {
     '  --deployment-evidence FILE     validated operator-observed deployment JSON',
     '  --timeout-ms N                 per-scenario timeout (1..300000)',
     '  --max-turns N                  model turn bound (1..50, default 12)',
-    '  --features ID[,ID]             select scenarios for feature-map ids (repeatable; suite becomes all)',
+    '  --features ID[,ID]             select scenarios for feature-map ids (repeatable; runs as --suite all)',
     '  --changed-from REF             select features whose owned paths changed since REF (exit 2 if none)',
     '  --evidence-dir DIR             checkpoint PNG/video/trace directory (default .verify-artifacts/<run-id>)',
     '  --evidence-record DIR          also write the committed evidence README to DIR',
@@ -215,6 +215,7 @@ export async function parseArgs(argv = [], env = process.env, dependencies = {})
   const selectedIds = [];
   let help = false;
   const featureIds = [];
+  let explicitSuite = null;
   let changedFrom = null;
   let evidenceDir = env.NOUS_QA_EVIDENCE_DIR ?? null;
   let evidenceRecordDir = null;
@@ -227,7 +228,7 @@ export async function parseArgs(argv = [], env = process.env, dependencies = {})
     if (arg === '--help' || arg === '-h') { help = true; continue; }
     if (arg === '--base-url') { baseUrl = valueAfter(argv, index++, arg); continue; }
     if (arg === '--api-url') { apiUrl = valueAfter(argv, index++, arg); continue; }
-    if (arg === '--suite') { suite = valueAfter(argv, index++, arg); continue; }
+    if (arg === '--suite') { suite = valueAfter(argv, index++, arg); explicitSuite = suite; continue; }
     if (arg === '--scenario' || arg === '--select') { selectedIds.push(valueAfter(argv, index++, arg)); continue; }
     if (arg === '--output-dir') { outputDir = valueAfter(argv, index++, arg); continue; }
     if (arg === '--storage-state') { storageState = valueAfter(argv, index++, arg); continue; }
@@ -246,6 +247,9 @@ export async function parseArgs(argv = [], env = process.env, dependencies = {})
   }
   let features = [];
   if (featureIds.length || changedFrom !== null) {
+    if (explicitSuite !== null && explicitSuite !== 'all') {
+      throw new CLIConfigError('--features/--changed-from select across suites; drop --suite or use --suite all');
+    }
     if (changedFrom !== null && !GIT_REF.test(changedFrom)) throw new CLIConfigError('--changed-from must be a git ref');
     const mapPath = resolve(env.NOUS_QA_FEATURE_MAP ?? join(TOOL_REPO_ROOT, 'docs/engineering/feature-map.yaml'));
     let map;
