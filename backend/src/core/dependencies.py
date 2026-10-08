@@ -105,6 +105,19 @@ def require_admin(current_user: User = Depends(require_role(UserRole.ADMIN))) ->
     return current_user
 
 
+def is_platform_operator(user: User) -> bool:
+    """Return True only for an allowlisted platform-operator user UUID.
+
+    Pure predicate behind ``require_platform_operator`` for routes that must
+    branch (tenant-scoped vs platform-wide) instead of hard-failing.
+    """
+    try:
+        user_id = UUID(str(user.id))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return user_id in settings.platform_operator_user_ids
+
+
 def require_platform_operator(
     current_user: User = Depends(get_current_user),
 ) -> User:
@@ -114,12 +127,7 @@ def require_platform_operator(
     or malformed ``PLATFORM_OPERATOR_USER_IDS`` value produces an empty parsed
     allowlist and therefore denies every caller.
     """
-    try:
-        user_id = UUID(str(current_user.id))
-    except (AttributeError, TypeError, ValueError):
-        user_id = None
-
-    if user_id is None or user_id not in settings.platform_operator_user_ids:
+    if not is_platform_operator(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Platform operator access required",
