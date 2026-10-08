@@ -97,6 +97,7 @@ describe('consumeSse error frame category', () => {
       'invalid_request',
       'conflict',
       'internal',
+      'device_bound_to_another_chat',
     ]) {
       const [, category] = await errorFromFrame(
         `event: error\ndata: {"error":"x","category":"${known}"}\n\n`

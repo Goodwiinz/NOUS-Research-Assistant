@@ -53,6 +53,7 @@ import type {
   ActivityStep,
   ChatPageMessage,
 } from '@/components/chat/shared/cloudMessageView';
+import { BOUND_TO_ANOTHER_CHAT_MESSAGE } from '@/hooks/chat/useHarnessConnection';
 import { completeStreamingMarkdown } from '@/lib/markdown-utils';
 import { cn } from '@/lib/utils';
 import { useChatStore } from '@/store/chat-store';
@@ -676,6 +677,7 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
     'The saved response state is unavailable. Please retry.',
   internal: 'The response could not be completed. Please retry.',
   cancelled: 'The response was stopped.',
+  device_bound_to_another_chat: BOUND_TO_ANOTHER_CHAT_MESSAGE,
 };
 const DEFAULT_ERROR_HELP =
   'The response could not be completed. Please try again.';
@@ -684,6 +686,12 @@ const DEFAULT_ERROR_HELP =
  * Categories where an identical retry cannot succeed: the request itself is
  * rejected, or another confirmation already holds the claim. Offering Retry
  * there is a button that is guaranteed to fail — worse than no button.
+ *
+ * `device_bound_to_another_chat` stays retryable: Retry re-sends with the
+ * computer selected in the composer at that moment, so it works once the user
+ * picks a computer that can run in this chat. A computer connected to this
+ * chat since (`nous-harness connect --chat` registers a new device) appears
+ * in the picker after its list refreshes, which opening the picker does.
  */
 const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
   'invalid_request',

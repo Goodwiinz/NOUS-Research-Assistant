@@ -142,6 +142,18 @@ describe('AuiMessage error category', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('names a computer bound to another chat and keeps Retry', () => {
+    // Retry re-sends with the composer's CURRENT computer, so it succeeds
+    // once the user picks another one or connects this one to the chat.
+    renderErrorMessage('device_bound_to_another_chat');
+    expect(
+      screen.getByText(
+        'This computer is bound to another chat — connect it to this chat or pick another computer.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+  });
+
   it('keeps a late generated file reachable under a failed, id-less latest row', async () => {
     useChatStore.setState({ currentThreadId: 't1' });
     vi.mocked(artifactService.listThreadArtifacts).mockResolvedValueOnce([
