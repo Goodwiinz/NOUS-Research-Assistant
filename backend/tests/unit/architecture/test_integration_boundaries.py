@@ -18,7 +18,10 @@ nothing scanned ``api/integrations/*``, ``api/artifacts.py`` or
       the legacy-organization rule in ``services/integrations/context.py``
       (``workspace_in_org`` / ``workspace_organization_id``): a legacy
       workspace carries NULL and belongs to its owner's organization, and
-      2c3d56d82 taught that to two checks and missed three (WG-2).
+      2c3d56d82 taught that to two checks and missed three (WG-2). Matches
+      are by name (``Workspace``, ``workspace``, ``.workspace``), so a
+      renamed alias (an ``aliased(Workspace)`` bound to another name, or a
+      tuple row) is not covered.
 
 Skipped: "every route has a Depends(...)". ``get_db`` alone would satisfy it,
 so it proves nothing about identity, and the harness websocket authenticates
@@ -91,10 +94,11 @@ ORG_RULE_HELPERS = frozenset(
         "workspace_organization_id",
     }
 )
+# rglob, so a future subpackage is swept rather than silently skipped.
 ORG_SWEPT_FILES = sorted(
     [
-        *(SRC_DIR / "services" / "integrations").glob("*.py"),
-        *(API_DIR / "integrations").glob("*.py"),
+        *(SRC_DIR / "services" / "integrations").rglob("*.py"),
+        *(API_DIR / "integrations").rglob("*.py"),
         API_DIR / "threads" / "workspace_routes" / "threads.py",
     ]
 )
@@ -242,6 +246,11 @@ def test_workspace_org_is_read_only_through_the_legacy_rule(path: Path) -> None:
         ),
         (
             "services/integrations/handoffs.py",
+            "def f(workspace):\n    return workspace.organization_id\n",
+            ["services/integrations/handoffs.py:2 in f"],
+        ),
+        (
+            "services/integrations/handoffs.py",
             "def workspace_in_org(org):\n    return Workspace.organization_id == org\n",
             ["services/integrations/handoffs.py:2 in workspace_in_org"],
         ),
@@ -249,6 +258,12 @@ def test_workspace_org_is_read_only_through_the_legacy_rule(path: Path) -> None:
             "services/integrations/context.py",
             "def workspace_in_org(org):\n    return Workspace.organization_id == org\n",
             [],
+        ),
+        (
+            "services/integrations/context.py",
+            "def authorized_workspace(org):\n"
+            "    return Workspace.organization_id == org\n",
+            ["services/integrations/context.py:2 in authorized_workspace"],
         ),
         (
             "services/integrations/handoffs.py",
@@ -259,8 +274,10 @@ def test_workspace_org_is_read_only_through_the_legacy_rule(path: Path) -> None:
     ids=[
         "model-column",
         "loaded-row",
+        "workspace-variable",
         "helper-name-elsewhere",
         "the-rule-itself",
+        "context-non-helper",
         "another-model",
     ],
 )
