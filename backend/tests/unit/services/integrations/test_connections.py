@@ -446,3 +446,13 @@ async def test_a_consent_whose_chat_is_gone_stays_listed_without_a_label(
     await db.commit()
     listed = (await _consents(db, LAPTOP))[CONSENT_A]
     assert (listed.thread_id, listed.thread_label) == (CHAT, None)
+
+
+async def test_an_untitled_bound_chat_is_labelled_untitled_chat(
+    db: AsyncSession, chat_bound: None
+) -> None:
+    # Thread.title is nullable; the label falls back like the approval page.
+    await db.execute(update(Thread).where(Thread.id == CHAT).values(title=None))
+    await db.commit()
+    listed = (await _consents(db, LAPTOP))[CONSENT_A]
+    assert (listed.thread_id, listed.thread_label) == (CHAT, "Untitled chat")
