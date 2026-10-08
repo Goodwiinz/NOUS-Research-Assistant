@@ -120,7 +120,9 @@ def test_nous_loop_post_deploy_rerun_has_an_owner() -> None:
     assert "files a regression" in step8
     assert "step 1" in step8
     step1 = " ".join(
-        _section(loop, "### 1. Reconcile prior work", "### 2. Pick one candidate").split()
+        _section(
+            loop, "### 1. Reconcile prior work", "### 2. Pick one candidate"
+        ).split()
     )
     assert "post-deploy rerun" in step1
     assert "merged-but-unverified" in step1
