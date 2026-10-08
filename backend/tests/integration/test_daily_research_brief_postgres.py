@@ -1474,17 +1474,11 @@ async def test_disabled_flag_keeps_existing_run_readable_and_exportable(
     cannot start another run, while its completed run, step history and review
     state stay readable and its artifact downloadable in every format for
     recovery and audit (GOO-336).
-
-    CI enrolls this test through ``DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL``.
-    The lifecycle tests in this module read only
-    ``ORCHESTRATION_TEST_DATABASE_URL`` and stay unenrolled.
     """
 
-    dsn = os.getenv("DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL") or os.getenv(
-        "ORCHESTRATION_TEST_DATABASE_URL"
-    )
+    dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
-        pytest.skip("Daily Brief rollback PostgreSQL test database is not configured")
+        pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
     assert dsn is not None
     flag = "src.core.config.settings.DAILY_RESEARCH_BRIEF_ENABLED"
     monkeypatch.setattr(flag, False)

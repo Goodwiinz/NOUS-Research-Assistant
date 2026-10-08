@@ -120,14 +120,22 @@ def test_integration_job_enables_real_redis_cli_revocation_regression() -> None:
     assert "job.services.redis.ports['6379']" in env["REDIS_URL"]
 
 
-def test_integration_job_enrolls_daily_brief_rollback_regression() -> None:
+def test_integration_job_enrolls_orchestration_postgres_suites() -> None:
+    """Suites gated on the shared orchestration variables run in CI.
+
+    The Daily Research Brief lifecycle and the other PostgreSQL/Redis
+    orchestration suites skip without these, which hid their regressions.
+    """
     job = _integration_job()
     step = next(
         step for step in job["steps"] if step.get("name") == "Run integration tests"
     )
     env = step["env"]
-    assert env.get("DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL") == env["DATABASE_URL"]
+    assert env.get("ORCHESTRATION_TEST_DATABASE_URL") == env["DATABASE_URL"]
     assert "job.services.postgres.ports['5432']" in env["DATABASE_URL"]
+    assert "job.services.redis.ports['6379']" in env.get(
+        "ORCHESTRATION_TEST_REDIS_URL", ""
+    )
 
 
 @pytest.mark.parametrize(
