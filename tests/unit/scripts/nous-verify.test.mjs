@@ -13,6 +13,7 @@ import {
 } from '../../../tests/e2e/qa/feature-map.mjs';
 import { CLIConfigError, main, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { QASession } from '../../../tests/e2e/qa/session.mjs';
+import { runCampaign } from '../../../tests/e2e/qa/runner.mjs';
 
 const MAP = `
 version: 1
@@ -239,4 +240,53 @@ test('checkpoint rejects invalid names and a missing page', async () => {
   await assert.rejects(session.checkpoint('x', 'Bad Name'), /Checkpoint name/);
   await assert.rejects(session.checkpoint('x', '../escape'), /Checkpoint name/);
   await assert.rejects(session.checkpoint('smoke.login-availability', 'login.form'), /no open page/);
+});
+
+function fakeRunnerSession(taken) {
+  return {
+    observations: [],
+    artifacts: { videos: ['/tmp/ev/video/a.webm'], trace: 'trace.zip', checkpoints: taken },
+    checkpoint: async (scenarioId, name) => {
+      const item = { kind: 'checkpoint', name, file: `${scenarioId}--${name}.png` };
+      taken.push(item);
+      return item;
+    },
+    cleanup: async () => ({ status: 'complete', retained: [], errors: [] }),
+    close: async () => {},
+  };
+}
+
+test('runner passes evidence.checkpoint to scenarios and lists checkpoints on the case', async () => {
+  const taken = [];
+  const registry = [{ id: 'smoke.x', title: 'x', suite: 'smoke', prerequisites: [], async run(_s, evidence) { await evidence.checkpoint('x.one'); return { assertion: 'ok' }; } }];
+  const report = await runCampaign(
+    { baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:3000/api/v1', evidenceDir: '/tmp/ev' },
+    { sessionFactory: async () => fakeRunnerSession(taken), registry },
+  );
+  assert.equal(report.cases[0].status, 'PASS');
+  assert.deepEqual(report.cases[0].checkpoints, [{ kind: 'checkpoint', name: 'x.one', file: 'smoke.x--x.one.png' }]);
+  assert.equal(report.run.evidenceDir, '/tmp/ev');
+  assert.deepEqual(report.run.artifacts, { videos: ['/tmp/ev/video/a.webm'], trace: 'trace.zip', checkpointCount: 1 });
+});
+
+test('a failing scenario keeps the checkpoints it took', async () => {
+  const taken = [];
+  const registry = [{ id: 'smoke.y', title: 'y', suite: 'smoke', prerequisites: [], async run(_s, evidence) { await evidence.checkpoint('y.one'); throw new Error('boom'); } }];
+  const report = await runCampaign(
+    { baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:3000/api/v1' },
+    { sessionFactory: async () => fakeRunnerSession(taken), registry },
+  );
+  assert.equal(report.cases[0].status, 'FAIL');
+  assert.deepEqual(report.cases[0].checkpoints.map((item) => item.name), ['y.one']);
+  assert.equal(report.run.evidenceDir, null);
+});
+
+test('a checkpoint on a session that cannot screenshot fails the scenario', async () => {
+  const registry = [{ id: 'smoke.z', title: 'z', suite: 'smoke', prerequisites: [], async run(_s, evidence) { await evidence.checkpoint('z.one'); return {}; } }];
+  const report = await runCampaign(
+    { baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:3000/api/v1' },
+    { sessionFactory: async () => ({ observations: [], cleanup: async () => ({ status: 'complete', retained: [], errors: [] }) }), registry },
+  );
+  assert.equal(report.cases[0].status, 'FAIL');
+  assert.match(report.cases[0].reason, /cannot take screenshots/);
 });
