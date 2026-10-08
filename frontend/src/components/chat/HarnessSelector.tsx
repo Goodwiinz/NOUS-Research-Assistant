@@ -229,6 +229,10 @@ export function HarnessSelector({
             aria-label="Paired computer"
             value={controller.deviceId ?? ''}
             disabled={disabled}
+            // Opening the picker refetches the list, so a computer connected
+            // since (a new device id) shows up without reloading the page.
+            onMouseDown={controller.refreshDevices}
+            onFocus={controller.refreshDevices}
             onChange={(event) => selectDevice(event.target.value || null)}
             className="h-8 max-w-36 rounded-md border border-(--nous-border-1) bg-(--nous-bg-1) px-2 text-xs text-(--nous-fg-1) focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
           >

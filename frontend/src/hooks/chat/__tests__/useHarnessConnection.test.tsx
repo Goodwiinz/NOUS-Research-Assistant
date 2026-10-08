@@ -397,6 +397,9 @@ describe('useHarnessConnection', () => {
       view.result.current.selectWorkspace('workspace-a');
     });
     await waitFor(() => expect(view.result.current.workspaces).toHaveLength(1));
+    // An older backend sends no bound_thread_ids: that never blocks.
+    expect(view.result.current.isBoundToAnotherChat('device-a')).toBe(false);
+    expect(view.canSend()).toBe(true);
     render(
       <QueryClientProvider client={view.client}>
         <HarnessSelector controller={view.result.current} />
@@ -487,6 +490,31 @@ describe('useHarnessConnection', () => {
       screen.getByRole('option', { name: 'My laptop (bound to another chat)' })
     ).toBeDisabled();
     expect(screen.getByRole('option', { name: 'Chat laptop' })).toBeEnabled();
+  });
+
+  it('refreshes the computer list when the computer picker is opened', async () => {
+    listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
+    const view = renderConnectedHarness('thread-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    // `nous-harness connect --chat` registers a NEW device id, which the
+    // cached list would not show until it went stale and remounted.
+    listDevices.mockResolvedValue([
+      { id: 'device-a', label: 'My laptop' },
+      { id: 'device-b', label: 'My laptop', bound_thread_ids: ['thread-a'] },
+    ]);
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole('combobox', { name: 'Paired computer' }));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(2));
+    // One click (mousedown, then focus) is one refetch, not two.
+    expect(listDevices).toHaveBeenCalledTimes(2);
   });
 
   it('treats a new chat as another chat for a chat-bound computer', async () => {

@@ -73,8 +73,13 @@ function isTerminal(type: string): boolean {
   return type === 'done' || type === 'error' || type === 'confirmation';
 }
 
-const BOUND_TO_ANOTHER_CHAT =
+/** Shown in the composer and in the chat bubble for the server's
+ * `device_bound_to_another_chat` error category. */
+export const BOUND_TO_ANOTHER_CHAT_MESSAGE =
   'This computer is bound to another chat — connect it to this chat or pick another computer.';
+
+/** Query key prefix of the paired-computer list; the user id follows. */
+const DEVICES_QUERY_KEY = ['harness', 'devices'] as const;
 
 /**
  * A computer whose every run consent is bound to other chats (Plan 06 slice 2)
@@ -108,6 +113,9 @@ export interface HarnessConnectionController extends HarnessSelection {
   selectWorkspace(workspaceId: string | null): void;
   /** True when this computer can only run Codex in other chats. */
   isBoundToAnotherChat(deviceId: string): boolean;
+  /** Refetch the paired computers, e.g. when the picker opens: each
+   * `nous-harness connect` registers a new device id. */
+  refreshDevices(): void;
   receive(
     event: { type: string; runId?: string; detail?: string },
     targetThreadId?: string | null
@@ -187,7 +195,7 @@ export function useHarnessConnection(
   );
 
   const devicesQuery = useQuery({
-    queryKey: ['harness', 'devices', userId],
+    queryKey: [...DEVICES_QUERY_KEY, userId],
     queryFn: () => harnessService.listDevices(),
     enabled: Boolean(userId && selection.executionProvider === 'codex'),
     staleTime: 30_000,
@@ -219,6 +227,15 @@ export function useHarnessConnection(
       void queryClient.invalidateQueries({ queryKey: ['harness', 'requests'] });
     },
   });
+
+  const refreshDevices = useCallback(() => {
+    // cancelRefetch: false joins a fetch already in flight, so the mousedown
+    // and focus of one click fetch once.
+    void queryClient.invalidateQueries(
+      { queryKey: [...DEVICES_QUERY_KEY, userId] },
+      { cancelRefetch: false }
+    );
+  }, [queryClient, userId]);
 
   const updateSelection = useCallback(
     (next: Partial<HarnessSelection>) =>
@@ -324,7 +341,7 @@ export function useHarnessConnection(
           : !selection.deviceId || !selectedDevice
             ? 'Choose a paired computer.'
             : boundToAnotherChat(selectedDevice, threadId)
-              ? BOUND_TO_ANOTHER_CHAT
+              ? BOUND_TO_ANOTHER_CHAT_MESSAGE
               : !workspacesQuery.data?.length
                 ? 'Bind a project workspace to this computer.'
                 : !selection.workspaceId || !workspaceExists
@@ -368,6 +385,7 @@ export function useHarnessConnection(
         const device = devicesQuery.data?.find((item) => item.id === deviceId);
         return device !== undefined && boundToAnotherChat(device, threadId);
       },
+      refreshDevices,
       receive,
       markConnectionLost,
       loadApproval,
@@ -384,6 +402,7 @@ export function useHarnessConnection(
       markConnectionLost,
       pendingRequests,
       receive,
+      refreshDevices,
       runId,
       selection,
       statusLabel,
