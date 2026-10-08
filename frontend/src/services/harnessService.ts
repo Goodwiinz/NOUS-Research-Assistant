@@ -3,7 +3,7 @@
 import { api } from '@/services/api-client';
 import type { components } from '@/types/generated/api';
 
-export type HarnessDevice = components['schemas']['DeviceDTO'];
+export type HarnessDevice = components['schemas']['DeviceListItemDTO'];
 export type HarnessWorkspace = components['schemas']['WorkspaceBindingDTO'];
 export type NativeDecision = components['schemas']['NativeDecision'];
 export type NativeRequestView = components['schemas']['NativeRequestDTO'];

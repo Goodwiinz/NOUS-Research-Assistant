@@ -365,6 +365,9 @@ class AgentErrorCategory(StrEnum):
     CONFLICT = "conflict"
     #: Anything else — an unclassified server-side fault.
     INTERNAL = "internal"
+    #: The chosen computer may run Codex only in another chat (Plan 06 slice
+    #: 2); connect it to this chat or pick another computer.
+    DEVICE_BOUND_TO_ANOTHER_CHAT = "device_bound_to_another_chat"
 
 
 # Terminal frames: after one of these the live stream ends and the resumable

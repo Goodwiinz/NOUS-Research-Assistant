@@ -108,6 +108,16 @@ class DeviceDTO(DeviceCreate):
     id: UUID
 
 
+class DeviceListItemDTO(DeviceDTO):
+    """A paired computer as the chat composer lists it."""
+
+    # Chats this computer can run Codex in when every live run consent
+    # (harness:execute) it holds is bound to a chat (Plan 06 slice 2). Empty
+    # when one of them is project-wide, or when it holds none: the composer
+    # then does not restrict it. The mint stays the authority.
+    bound_thread_ids: list[UUID]
+
+
 class WorkspaceBindingCreate(DeviceCreate):
     workspace_id: UUID
     project_id: UUID
