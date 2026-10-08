@@ -11,9 +11,10 @@ every organization (audit HO-2, 2026-10-08).
 Start from the two tables the purge deletes, follow every CASCADE to the
 tables it deletes from in turn, and require CASCADE or SET NULL on every FK
 into any of them. A new table that names a chat fails here until it picks
-one. This reads the model metadata; the rp01 migration and
+one. This reads the model metadata only; the rp01 migration and
 tests/integration/test_retention_thread_purge_postgres.py hold the live
-database to the same rules.
+database to these rules for rp01's 11 FKs. A new FK's migration is not
+checked (see docs/engineering/gotchas.md).
 """
 
 from __future__ import annotations
