@@ -102,6 +102,8 @@ export type Ack = {
   generation: number;
   canonicalSeq: number;
 };
+/** NOUS refused this run's events while the device grant stayed valid. */
+export type Rejection = Omit<Ack, "canonicalSeq"> & { code: "run_access_denied" };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const obj = (v: unknown): v is Record<string, any> =>
   typeof v === "object" && v !== null && !Array.isArray(v);

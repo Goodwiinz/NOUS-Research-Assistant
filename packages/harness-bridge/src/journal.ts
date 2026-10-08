@@ -18,6 +18,7 @@ import {
   type Ack,
   type BridgeCommand,
   type BridgeEvent,
+  type Rejection,
 } from "./connection.ts";
 import { nativeRequestBody } from "./approvals.ts";
 
@@ -188,7 +189,7 @@ export class Journal {
     if (this.closed) return;
     this.db
       .prepare(
-        "UPDATE commands SET state='recovering' WHERE id=? AND state NOT IN ('completed','failed','interrupted','terminal_pending','delivered')",
+        "UPDATE commands SET state='recovering' WHERE id=? AND state NOT IN ('completed','failed','interrupted','terminal_pending','delivered','denied')",
       )
       .run(id);
   }
@@ -453,10 +454,12 @@ export class Journal {
     id: string,
     body: BridgeEvent["body"],
     eventCommandId?: string,
-  ): BridgeEvent {
+  ): BridgeEvent | undefined {
     return this.tx(() => {
       const row = this.row(id);
       if (!row) throw new Error("unknown command");
+      // NOUS refused this run (see reject): nothing more of it is uploaded.
+      if (row.state === "denied") return undefined;
       const command: BridgeCommand = JSON.parse(row.command);
       const { expiresAt, body: ignored, ...identity } = command;
       const event: BridgeEvent = {
@@ -486,7 +489,12 @@ export class Journal {
   ): void {
     this.tx(() => {
       const row = this.row(id)!;
-      if (row.state === "terminal_pending" || terminal(row.state)) return;
+      if (
+        row.state === "terminal_pending" ||
+        row.state === "denied" ||
+        terminal(row.state)
+      )
+        return;
       this.append(id, { kind: "observation", state, sessionId, turnId });
       this.db
         .prepare("UPDATE commands SET session=?,turn=?,state=? WHERE id=?")
@@ -504,6 +512,7 @@ export class Journal {
         );
     });
   }
+  // events.acked: 0 unsent, 1 acknowledged by NOUS, 2 refused by NOUS (reject).
   pending(limit = 64): BridgeEvent[] {
     return (
       this.db
@@ -550,6 +559,50 @@ export class Journal {
           .run(event.body.state, row.id);
         this.db.prepare("DELETE FROM locks WHERE command=?").run(row.id);
       }
+    });
+  }
+  /** NOUS refused this run's events while the device grant stayed valid: its
+   * chat was deleted or linked to another project, its folder binding was
+   * removed, or its consent was superseded. Final for the upload only: drop
+   * every unsent event of the run and journal no more (append and observe skip
+   * a 'denied' command). A refusal is not evidence that the native turn
+   * stopped, so mid-run the workspace lock stays, as NOUS keeps its own, and
+   * the lease watchdog still interrupts the turn. Once the run's terminal
+   * observation is journaled, Codex has stopped writing and the lock is
+   * released: NOUS authorizes an event before its receipt lookup, so the
+   * refused event can be the replay of one it stored, after which it may have
+   * finalized the run and released its own lock. Returns whether the run was
+   * newly refused. */
+  reject(rejection: Rejection): boolean {
+    return this.tx(() => {
+      const row =
+        typeof rejection.sourceId === "string"
+          ? this.row(rejection.sourceId)
+          : undefined;
+      if (!row) throw new Error("unknown rejection");
+      const c: BridgeCommand = JSON.parse(row.command);
+      if (
+        rejection.code !== "run_access_denied" ||
+        c.runId !== rejection.runId ||
+        c.generation !== rejection.generation ||
+        !Number.isSafeInteger(rejection.sourceSeq) ||
+        rejection.sourceSeq < 1 ||
+        rejection.sourceSeq > row.seq
+      )
+        throw new Error("rejection identity mismatch");
+      this.db
+        .prepare("UPDATE events SET acked=2 WHERE command=? AND acked=0")
+        .run(row.id);
+      if (row.state === "denied") return false;
+      this.db
+        .prepare("UPDATE commands SET state='denied' WHERE id=?")
+        .run(row.id);
+      // 'terminal_pending': the terminal observation is journaled, not yet
+      // acknowledged (observe() sets both in one transaction). An acknowledged
+      // terminal state needs no release here: that ack released the lock.
+      if (row.state === "terminal_pending")
+        this.db.prepare("DELETE FROM locks WHERE command=?").run(row.id);
+      return true;
     });
   }
   private delta(id: string, text: string): void {
