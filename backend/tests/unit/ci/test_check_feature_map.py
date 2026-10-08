@@ -241,3 +241,58 @@ def test_unresolvable_base_is_a_problem_not_a_skip(tmp_path: Path) -> None:
         assert "no-such-ref" in str(exc)
     else:  # pragma: no cover - the assertion below documents the contract
         raise AssertionError("expected BaseRefError")
+
+
+def _write(root: Path, rel: str, text: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _mini_map(ignored_pages: list[str]) -> str:
+    pages = "".join(f'    - "{p}"\n' for p in ignored_pages)
+    return (
+        "version: 1\n"
+        "features:\n"
+        "  - id: login\n"
+        "    status: planned\n"
+        "    surfaces: {web: [/login], api: [], cli: []}\n"
+        "    states: [done]\n"
+        "    pass_criteria: [renders]\n"
+        "    scenarios: [smoke.login-availability]\n"
+        '    owns: ["frontend/app/login/**"]\n'
+        "ignore:\n"
+        "  pages:\n" + pages + "  routers: []\n"
+    )
+
+
+def test_main_fails_when_head_grows_the_ignore_list_against_base(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "t")
+    _write(tmp_path, "tests/e2e/qa/scenarios.mjs", SCENARIOS_SRC)
+    _write(tmp_path, "docs/engineering/flows/login.md", FLOW_LOGIN)
+    _write(tmp_path, "frontend/app/login/page.tsx", "export {}\n")
+    _write(tmp_path, "frontend/app/a/page.tsx", "export {}\n")
+    _write(
+        tmp_path,
+        "docs/engineering/feature-map.yaml",
+        _mini_map(["frontend/app/a/page.tsx"]),
+    )
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base map")
+    assert cfm.main(["--root", str(tmp_path), "--base", "main"]) == 0
+
+    _git(tmp_path, "checkout", "-q", "-b", "feature")
+    _write(tmp_path, "frontend/app/b/page.tsx", "export {}\n")
+    _write(
+        tmp_path,
+        "docs/engineering/feature-map.yaml",
+        _mini_map(["frontend/app/a/page.tsx", "frontend/app/b/page.tsx"]),
+    )
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "grow ignore")
+    assert cfm.main(["--root", str(tmp_path)]) == 0
+    assert cfm.main(["--root", str(tmp_path), "--base", "main"]) == 1
