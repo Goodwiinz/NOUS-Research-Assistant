@@ -42,6 +42,13 @@ project bibliography (`GET /api/v1/projects/{id}/bibliography`) to the
 caller's organization like the other project reads (rows CI4, CI6 and
 PD1-PD4).
 
+Evidence revision: rows CI4, CI6 and PD1-PD4 were marked pass from local runs
+of `backend/tests/integration/two_account` on branch commit `5d958e51d`
+(base `develop` `9c90ed8d3`). They were re-run green after `develop`
+(including GOO-400's CI5/X4 rows) was merged in at `235725cc1`: the
+two-account and citation suites gave 164 passed. The producer of record is
+the PR's Integration Tests job on its final head.
+
 Making documents private to their uploader would be a separate product
 change, not a fix. It would need the read boundary changed on the documents
 list and detail routes (`GET /api/v1/documents` and its `/{id}` reads:
