@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import logging
 import sys
 import time
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
@@ -124,6 +125,11 @@ def _text_result(text: str = "some text"):
     r.png = None
     r.text = text
     return r
+
+
+def _execution_error(name: str) -> Any:
+    """Fake ``e2b_code_interpreter.ExecutionError`` (name, value, traceback)."""
+    return SimpleNamespace(name=name, value="", traceback="")
 
 
 class _KernelBox:
@@ -320,6 +326,11 @@ class TestSandboxManagerExecute:
         assert result.error is not None
 
     async def test_timeout_returns_exit_code_124(self, monkeypatch):
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        # Every call times out, so the post-timeout probe retries until its
+        # window ends; keep that window short.
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 0.2)
         fake_sb = AsyncMock()
         fake_sb.run_code = AsyncMock(side_effect=asyncio.TimeoutError())
 
@@ -523,13 +534,16 @@ class TestSandboxExecutionBounds:
         monkeypatch.setattr(
             module, "E2BTimeoutException", ProviderTimeout, raising=False
         )
+        # Every post-timeout probe also times out: the kernel never recovered.
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 0.2)
         sandbox = AsyncMock()
-        sandbox.run_code.side_effect = [
-            _make_e2b_execution(),
-            ProviderTimeout("private timeout detail"),
-            # The post-timeout probe also times out: the kernel never recovered.
-            ProviderTimeout("kernel still busy"),
-        ]
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            if "pip" in code:
+                return _make_e2b_execution()
+            raise ProviderTimeout("private timeout detail")
+
+        sandbox.run_code.side_effect = run
         manager, _ = self._manager(monkeypatch, sandbox)
         result = await manager.execute("timed-out", "while True: pass")
         assert result.exit_code == 124
@@ -561,8 +575,10 @@ class TestSandboxExecutionBounds:
         await manager.cleanup_all()
 
     async def test_replacement_box_does_not_replenish_budget(self, monkeypatch):
+        from src.services.sandbox import e2b_sandbox_manager as module
         from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
 
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 0.2)
         sandbox = AsyncMock()
 
         async def run(code, **kwargs):
@@ -643,6 +659,7 @@ class TestSandboxExecutionBounds:
             )
             assert timed_out.error == "timeout"
             assert "still available" in timed_out.stderr
+            assert "partly run" in timed_out.stderr
             follow_up = await manager.execute("kept", "print(len(df))")
             assert follow_up.error is None, follow_up.error
             assert follow_up.stdout == "3\n"
@@ -697,7 +714,7 @@ class TestSandboxExecutionBounds:
         async def run(code: str, **kwargs: Any) -> Any:
             if "pip" in code:
                 return _make_e2b_execution()
-            if code == module._KERNEL_PROBE_CODE:
+            if code == module._KERNEL_PROBE_CODES["python"]:
                 probing.set()
             await asyncio.Event().wait()
 
@@ -716,6 +733,125 @@ class TestSandboxExecutionBounds:
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            await manager.cleanup_all()
+
+    @pytest.mark.parametrize("first_probe", ["hangs", "sdk_timeout", "aborted"])
+    async def test_probe_retries_until_interrupted_kernel_answers(
+        self, monkeypatch: pytest.MonkeyPatch, first_probe: str
+    ) -> None:
+        """A probe sent before the interrupt lands can hang, hit the SDK's
+        timeout, or come back aborted (ipykernel ``stop_on_error``). A later
+        probe in the same window answers, so the box is kept.
+
+        Mutation: make ``_kernel_answers`` give up after one attempt; every
+        case then fails on the "still available" assertion.
+        """
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        class ProviderTimeout(Exception):
+            pass
+
+        monkeypatch.setattr(
+            module, "E2BTimeoutException", ProviderTimeout, raising=False
+        )
+        monkeypatch.setattr(module, "_PROBE_ATTEMPT_SECONDS", 0.2)
+        probes: list[str] = []
+        sandbox = AsyncMock()
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            if "pip" in code:
+                return _make_e2b_execution()
+            if code == "while True: pass":
+                await asyncio.Event().wait()
+            probes.append(code)
+            if len(probes) > 1:
+                return _make_e2b_execution(stdout="")
+            if first_probe == "hangs":
+                await asyncio.Event().wait()
+            if first_probe == "sdk_timeout":
+                raise ProviderTimeout("probe timed out")
+            return _make_e2b_execution(error=_execution_error("ExecutionAborted"))
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        try:
+            result = await asyncio.wait_for(
+                manager.execute("retry", "while True: pass", timeout=1), timeout=5
+            )
+            assert result.error == "timeout"
+            assert "still available" in result.stderr
+            assert len(probes) == 2
+            sandbox.kill.assert_not_awaited()
+            assert manager._sandboxes["retry"] is sandbox
+        finally:
+            await manager.cleanup_all()
+
+    async def test_probe_error_resets_box_without_retrying(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A probe that fails with a real error (not an abort) means the kernel
+        is broken: reset at once, log why, and do not spend the window."""
+        sandbox = AsyncMock()
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            if "pip" in code:
+                return _make_e2b_execution()
+            if code == "while True: pass":
+                await asyncio.Event().wait()
+            return _make_e2b_execution(error=_execution_error("RuntimeError"))
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        caplog.set_level(logging.INFO, logger="src.services.sandbox")
+        try:
+            result = await manager.execute("broken", "while True: pass", timeout=1)
+            assert result.error == "timeout"
+            assert "reset" in result.stderr
+            sandbox.kill.assert_awaited_once()
+            assert "broken" not in manager._sandboxes
+            assert sandbox.run_code.await_count == 3  # install, cell, one probe
+            records = [(r.levelno, r.getMessage()) for r in caplog.records]
+            assert any(
+                level == logging.WARNING and "RuntimeError" in message
+                for level, message in records
+            ), records
+            assert any(
+                level == logging.INFO and "resetting" in message
+                for level, message in records
+            ), records
+        finally:
+            await manager.cleanup_all()
+
+    @pytest.mark.parametrize(
+        "language,probe_code",
+        [("python", "1"), ("bash", "true"), ("sh", "true"), ("r", "1")],
+    )
+    async def test_probe_uses_a_no_op_in_the_cell_language(
+        self, monkeypatch: pytest.MonkeyPatch, language: str, probe_code: str
+    ) -> None:
+        """``language`` comes from the model: a bash cell's kernel must be
+        probed with a shell no-op, not Python. Unknown languages fall back to
+        the Python probe."""
+        sandbox = AsyncMock()
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            if "pip" in code:
+                return _make_e2b_execution()
+            if code == "sleep 600":
+                await asyncio.Event().wait()
+            return _make_e2b_execution(stdout="")
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        try:
+            result = await manager.execute(
+                "lang", "sleep 600", language=language, timeout=1
+            )
+            assert "still available" in result.stderr
+            probe = sandbox.run_code.await_args
+            assert probe.args[0] == probe_code
+            assert probe.kwargs["language"] == language
+        finally:
             await manager.cleanup_all()
 
     async def test_failed_executions_still_consume_budget(self, monkeypatch):

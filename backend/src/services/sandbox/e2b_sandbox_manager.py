@@ -89,7 +89,13 @@ AGENT_CELL_TIMEOUT_SECONDS = 90
 # interrupts the kernel (e2b-dev/code-interpreter#237), which keeps variables.
 # A kernel that still cannot run a no-op within this window is unhealthy.
 POST_TIMEOUT_PROBE_SECONDS = 10
-_KERNEL_PROBE_CODE = "1"
+# A probe queued before the interrupt lands can hang, or come back aborted
+# (ipykernel ``stop_on_error``), so the window is spent in short attempts.
+_PROBE_ATTEMPT_SECONDS = 2.5
+_PROBE_RETRY_PAUSE_SECONDS = 0.25
+_PROBE_ABORTED_ERROR = "ExecutionAborted"
+# ``language`` comes from the model; an unknown one gets the Python no-op.
+_KERNEL_PROBE_CODES = {"python": "1", "bash": "true", "sh": "true"}
 
 
 # GOO-312: one-shot isolated execution for the research ``analyze`` step.
@@ -277,14 +283,21 @@ class SandboxManager:
             kept = sandbox is not None and await self._kernel_answers(
                 thread_id, sandbox, language
             )
+            if sandbox is not None:
+                logger.info(
+                    "Execution timed out for thread %s; %s sandbox",
+                    thread_id,
+                    "keeping" if kept else "resetting",
+                )
             if sandbox is not None and not kept:
                 await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return ExecutionResult(
                 stdout="",
                 stderr=(
-                    f"Execution timed out after {timeout}s and was interrupted. "
-                    "Variables from earlier cells are still available."
+                    f"Execution timed out after {timeout}s and was interrupted, "
+                    "so the cell may have partly run. Variables from earlier "
+                    "cells are still available."
                     if kept
                     else f"Execution timed out after {timeout}s. The sandbox was "
                     "reset, so earlier variables are gone."
@@ -481,26 +494,56 @@ class SandboxManager:
     async def _kernel_answers(
         self, thread_id: str, sandbox: Any, language: str
     ) -> bool:
-        """Whether the kernel runs a no-op after our timeout (IN-2).
+        """Whether the kernel runs a no-op within POST_TIMEOUT_PROBE_SECONDS
+        after our timeout (IN-2).
 
-        Not charged to the execution budget. A run cancelled while probing
-        still kills the box, as every cancellation does (#1864).
+        Attempts that hang, hit the SDK's timeout or come back aborted are
+        retried until the window ends; any other failure is final. Not charged
+        to the execution budget. A run cancelled while probing still kills the
+        box, as every cancellation does (#1864).
         """
+        code = _KERNEL_PROBE_CODES.get(
+            str(language).strip().lower(), _KERNEL_PROBE_CODES["python"]
+        )
         try:
-            probe = await asyncio.wait_for(
-                sandbox.run_code(
-                    _KERNEL_PROBE_CODE,
-                    language=language,
-                    timeout=POST_TIMEOUT_PROBE_SECONDS,
-                ),
-                timeout=POST_TIMEOUT_PROBE_SECONDS,
-            )
+            async with asyncio.timeout(POST_TIMEOUT_PROBE_SECONDS):
+                while True:
+                    try:
+                        probe = await asyncio.wait_for(
+                            sandbox.run_code(
+                                code, language=language, timeout=_PROBE_ATTEMPT_SECONDS
+                            ),
+                            timeout=_PROBE_ATTEMPT_SECONDS,
+                        )
+                    except (asyncio.TimeoutError, E2BTimeoutException):
+                        probe = None  # the interrupt may not have landed yet
+                    if probe is not None:
+                        if not probe.error:
+                            return True
+                        name = getattr(probe.error, "name", None)
+                        if name != _PROBE_ABORTED_ERROR:
+                            logger.warning(
+                                "Kernel probe failed for thread %s: %s",
+                                thread_id,
+                                name or type(probe.error).__name__,
+                            )
+                            return False
+                    await asyncio.sleep(_PROBE_RETRY_PAUSE_SECONDS)
         except asyncio.CancelledError:
             await self._discard_sandbox(thread_id, sandbox)
             raise
-        except Exception:
+        except TimeoutError:
+            logger.warning(
+                "Kernel probe for thread %s got no answer within %ss",
+                thread_id,
+                POST_TIMEOUT_PROBE_SECONDS,
+            )
             return False
-        return not probe.error
+        except Exception as exc:
+            logger.warning(
+                "Kernel probe failed for thread %s: %s", thread_id, type(exc).__name__
+            )
+            return False
 
     async def cleanup(self, thread_id: str) -> None:
         """Kill and remove sandbox for a thread."""
