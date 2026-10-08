@@ -16,17 +16,20 @@ asyncio_mode=AUTO, so plain ``async def`` tests run natively.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.unit
 
 from src.api.quality import user_behavior as ub
 from src.models.user import UserRole
+from src.schemas.quality_metrics import BehaviorReportRequest
 
 
 def _db_returning_target(org_id):
@@ -201,4 +204,156 @@ async def test_session_analysis_passes_caller_org(monkeypatch):
         id="a", role=SimpleNamespace(value="user"), organization_id="org-A"
     )
     await ub.get_session_analysis(session_id="s", current_user=caller)
+    assert svc.await_args.kwargs["organization_id"] == "org-A"
+
+
+# ---- generate_behavior_report: body user_id bound to the caller's org (GOO-407)
+# Causal guard: backend/src/api/quality/user_behavior.py:592-597.
+# Removing only the report tenant guard fails all three foreign/missing/null
+# report tests; exact restoration passes. Run the two modules below together:
+# python -m pytest -c backend/pytest.ini --no-cov -q backend/tests/unit/api/test_user_behavior_org_scope.py backend/tests/unit/services/test_user_behavior_service_org_scope.py
+
+_TARGET = uuid.UUID("11111111-1111-1111-1111-111111111111")
+
+
+def _report_caller(
+    role: UserRole = UserRole.ADMIN, org: object = "org-A"
+) -> SimpleNamespace:
+    return SimpleNamespace(id="caller", role=role, organization_id=org)
+
+
+async def test_report_cross_org_user_forbidden_and_service_not_called(
+    monkeypatch,
+) -> None:
+    svc = AsyncMock()
+    monkeypatch.setattr(ub.user_behavior_service, "generate_behavior_report", svc)
+    with pytest.raises(HTTPException) as ei:
+        await ub.generate_behavior_report(
+            report_request=BehaviorReportRequest(user_id=_TARGET, days_back=365),
+            background_tasks=BackgroundTasks(),
+            current_user=_report_caller(),
+            db=_db_returning_target("org-B"),
+        )
+    assert ei.value.status_code == 403
+    svc.assert_not_awaited()
+
+
+async def test_report_missing_target_user_forbidden(monkeypatch) -> None:
+    svc = AsyncMock()
+    monkeypatch.setattr(ub.user_behavior_service, "generate_behavior_report", svc)
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+    with pytest.raises(HTTPException) as ei:
+        await ub.generate_behavior_report(
+            report_request=BehaviorReportRequest(user_id=_TARGET),
+            background_tasks=BackgroundTasks(),
+            current_user=_report_caller(),
+            db=db,
+        )
+    assert ei.value.status_code == 403
+    svc.assert_not_awaited()
+
+
+async def test_report_null_org_caller_forbidden(monkeypatch) -> None:
+    # None == None must not let a null-org admin read another null-org user.
+    svc = AsyncMock()
+    monkeypatch.setattr(ub.user_behavior_service, "generate_behavior_report", svc)
+    with pytest.raises(HTTPException) as ei:
+        await ub.generate_behavior_report(
+            report_request=BehaviorReportRequest(user_id=_TARGET),
+            background_tasks=BackgroundTasks(),
+            current_user=_report_caller(org=None),
+            db=_db_returning_target(None),
+        )
+    assert ei.value.status_code == 403
+    svc.assert_not_awaited()
+
+
+async def test_report_same_org_user_allowed(monkeypatch) -> None:
+    svc = AsyncMock(return_value={"user_metrics": {"user_id": str(_TARGET)}})
+    monkeypatch.setattr(ub.user_behavior_service, "generate_behavior_report", svc)
+    result = await ub.generate_behavior_report(
+        report_request=BehaviorReportRequest(
+            user_id=_TARGET, days_back=7, report_type="user"
+        ),
+        background_tasks=BackgroundTasks(),
+        current_user=_report_caller(),
+        db=_db_returning_target("org-A"),
+    )
+    assert result["report_type"] == "user"
+    assert result["requested_by"] == "caller"
+    kwargs = svc.await_args.kwargs
+    assert kwargs == {
+        "user_id": str(_TARGET),
+        "organization_id": "org-A",
+        "days_back": 7,
+    }
+
+
+async def test_report_org_only_skips_user_lookup(monkeypatch) -> None:
+    # Org-level report (no user_id) is unchanged: no target lookup, caller's org.
+    svc = AsyncMock(return_value={})
+    monkeypatch.setattr(ub.user_behavior_service, "generate_behavior_report", svc)
+    db = MagicMock()
+    result = await ub.generate_behavior_report(
+        report_request=BehaviorReportRequest(),
+        background_tasks=BackgroundTasks(),
+        current_user=_report_caller(),
+        db=db,
+    )
+    db.query.assert_not_called()
+    assert result["report_type"] == "organization"
+    assert svc.await_args.kwargs == {
+        "user_id": None,
+        "organization_id": "org-A",
+        "days_back": 30,
+    }
+
+
+async def test_report_non_admin_forbidden_unchanged(monkeypatch) -> None:
+    svc = AsyncMock()
+    monkeypatch.setattr(ub.user_behavior_service, "generate_behavior_report", svc)
+    db = MagicMock()
+    with pytest.raises(HTTPException) as ei:
+        await ub.generate_behavior_report(
+            report_request=BehaviorReportRequest(user_id=_TARGET),
+            background_tasks=BackgroundTasks(),
+            current_user=_report_caller(role=UserRole.USER),
+            db=db,
+        )
+    assert ei.value.status_code == 403
+    db.query.assert_not_called()
+    svc.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"user_id": "not-a-uuid"},
+        {"days_back": 0},
+        {"days_back": 366},
+        {"days_back": "x"},
+    ],
+)
+def test_report_request_model_rejects_bad_input(body: dict) -> None:
+    with pytest.raises(ValidationError):
+        BehaviorReportRequest(**body)
+
+
+def test_report_request_model_defaults_and_ignores_extra_keys() -> None:
+    req = BehaviorReportRequest(**{"unexpected": 1})
+    assert req.user_id is None
+    assert req.days_back == 30
+    assert req.report_type == "organization"
+    assert not hasattr(req, "unexpected")
+
+
+async def test_user_behavior_route_passes_caller_org_to_service(monkeypatch) -> None:
+    # Sibling GET route must now pass organization_id through (keyword-only arg).
+    svc = AsyncMock(return_value=_metrics())
+    monkeypatch.setattr(ub.user_behavior_service, "analyze_user_behavior", svc)
+    caller = SimpleNamespace(id="a", role=UserRole.ADMIN, organization_id="org-A")
+    await ub.get_user_behavior_analytics(
+        user_id="t", days_back=30, current_user=caller, db=_db_returning_target("org-A")
+    )
     assert svc.await_args.kwargs["organization_id"] == "org-A"

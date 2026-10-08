@@ -61,22 +61,6 @@ class _TwoPartyBarrier:
         await asyncio.wait_for(self._ready.wait(), timeout=3)
 
 
-class _FlushBarrierSession:
-    """Synchronize two real sessions immediately before their review inserts."""
-
-    def __init__(self, session: AsyncSession, barrier: _TwoPartyBarrier) -> None:
-        self._session = session
-        self._barrier = barrier
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._session, name)
-
-    async def flush(self, objects: Any = None) -> None:
-        if any(isinstance(row, ResearchStageReview) for row in self._session.new):
-            await self._barrier.wait()
-        await self._session.flush(objects)
-
-
 def _async_dsn(dsn: str) -> str:
     if dsn.startswith("postgresql+asyncpg://"):
         return dsn
@@ -146,6 +130,7 @@ async def _postgres_review_schema(dsn: str) -> AsyncIterator[_ReviewDatabase]:
                 connection,
                 owner_id=owner_id,
                 organization_id=organization_id,
+                reviewer_ids=(owner_id,),
             )
         async with factory() as session:
             session.add_all(
@@ -254,13 +239,14 @@ async def _race_reviews(
     barrier = _TwoPartyBarrier()
 
     async def submit(request: StageReviewRequest) -> StageReviewResponse:
-        async with database.factory() as raw_session:
-            session = cast(AsyncSession, _FlushBarrierSession(raw_session, barrier))
+        async with database.factory() as session:
+            # Both sessions are open before either authorizes; REVIEW then
+            # serializes them on the Collection lock, and the loser observes
+            # the winner's committed row (replay or stable conflict).
+            await barrier.wait()
             return await ResearchReviewService(session).submit_review(
                 run_id=database.run_id,
                 step_index=database.step_index,
-                owner_id=database.owner_id,
-                organization_id=database.organization_id,
                 reviewer_id=database.owner_id,
                 request=request,
             )

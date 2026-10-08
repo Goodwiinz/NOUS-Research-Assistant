@@ -90,8 +90,13 @@ async def seed_canonical_project_scope(
     additional_organization_ids: tuple[UUID, ...] = (),
     workspace_id: UUID | None = None,
     collection_id: UUID | None = None,
+    reviewer_ids: tuple[UUID, ...] = (),
 ) -> CanonicalProjectScope:
-    """Seed an owner workspace and Collection plus any fixture principals."""
+    """Seed an owner workspace and Collection plus fixture principals.
+
+    Also seeds REVIEWER assignments for ``reviewer_ids`` (reviewers must be
+    the owner or a member).
+    """
     workspace_id = workspace_id or uuid4()
     collection_id = collection_id or uuid4()
     organization_ids = dict.fromkeys((organization_id, *additional_organization_ids))
@@ -137,6 +142,24 @@ async def seed_canonical_project_scope(
                )"""),
         {"id": collection_id, "workspace_id": workspace_id},
     )
+    for reviewer_id in reviewer_ids:
+        # Role literal stays inline: asyncpg binds a varchar, which PostgreSQL
+        # will not implicitly cast to the researchprojectrole enum.
+        await executor.execute(
+            text("""INSERT INTO research_project_role_assignments (
+                       id, created_at, updated_at, is_deleted, deleted_at,
+                       collection_id, user_id, role, assigned_by_id
+                   ) VALUES (
+                       :id, now(), now(), false, NULL,
+                       :collection_id, :user_id, 'reviewer', :assigned_by_id
+                   )"""),
+            {
+                "id": uuid4(),
+                "collection_id": collection_id,
+                "user_id": reviewer_id,
+                "assigned_by_id": owner_id,
+            },
+        )
     return CanonicalProjectScope(workspace_id, collection_id)
 
 
