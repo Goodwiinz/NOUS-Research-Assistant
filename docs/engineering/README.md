@@ -43,7 +43,8 @@ file it as a proposal instead.
 - **[verification.md](verification.md)** — user-level verification gate:
   feature map, flow checkpoints, QA-runner evidence, and the `nous-loop.md`
   step 7b stop gate. Enforced by `scripts/ci/check_feature_map.py` and
-  `tests/unit/scripts/test_nous_verify_contract.py`.
+  `tests/unit/scripts/test_nous_verify_contract.py`. Per-feature flow charts
+  live in [flows/README.md](flows/README.md).
 
 Future internal workspace packages must be declared with the pnpm
 `workspace:` protocol (`"pkg": "workspace:*"`) so installs can never fall
