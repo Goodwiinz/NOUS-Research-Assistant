@@ -171,6 +171,14 @@ function readDeploymentEvidence(path, _baseUrl, apiUrl) {
   };
 }
 
+// Values of these flags are local paths; the command is written into reports
+// and the committed evidence README, so they are replaced with [path].
+const PATH_FLAGS = new Set(['--output-dir', '--storage-state', '--deployment-evidence', '--evidence-dir', '--evidence-record']);
+
+function displayArgv(argv) {
+  return argv.map((arg, index) => (index > 0 && PATH_FLAGS.has(argv[index - 1]) ? '[path]' : arg));
+}
+
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -283,7 +291,7 @@ export async function parseArgs(argv = [], env = process.env, dependencies = {})
   const deploymentEvidence = deploymentEvidencePath ? readDeploymentEvidence(deploymentEvidencePath, baseUrl, apiUrl) : null;
   const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`;
   const reportDir = resolve(outputDir ?? `.nous-qa-reports/${runId}`);
-  const command = redactText(['pnpm', 'qa:nous', ...argv].map(shellQuote).join(' '), secrets);
+  const command = redactText(['pnpm', 'qa:nous', ...displayArgv(argv)].map(shellQuote).join(' '), secrets);
   return {
     listOnly,
     help,

@@ -630,3 +630,37 @@ test('a project that appears after the approval wait fails is still registered f
   assert.deepEqual(late.state.registered.at(-1), ['project', '22222222-2222-4222-8222-222222222222']);
   assert.equal(late.state.registered.filter(([kind]) => kind === 'project').length, 1);
 });
+
+test('the recorded command replaces path-valued flag values with [path]', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nous-verify-cmd-'));
+  try {
+    const state = join(dir, 'state.json');
+    await writeFile(state, '{}', 'utf8');
+    const config = await parseArgs([
+      '--evidence-dir', '/Users/someone/private/ev',
+      '--evidence-record', '/Users/someone/repo/docs/testing/evidence/verify-x',
+      '--output-dir', '/Users/someone/reports',
+      '--storage-state', state,
+      '--timeout-ms', '1000',
+    ], {});
+    assert.doesNotMatch(config.command, /someone|state\.json/);
+    assert.equal((config.command.match(/\[path\]/g) ?? []).length, 4);
+    assert.match(config.command, /'--timeout-ms' '1000'/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('evidence README shows the evidence dir relative to the repo root, not the cwd', async () => {
+  const repoRoot = join(import.meta.dirname, '../../..');
+  const original = process.cwd();
+  process.chdir(tmpdir());
+  try {
+    const text = renderEvidenceReadme({ ...REPORT, run: { ...REPORT.run, evidenceDir: join(repoRoot, '.verify-artifacts', 'r1') } });
+    assert.match(text, /Binaries \(not committed\): `\.verify-artifacts\/r1`/);
+    const outside = renderEvidenceReadme({ ...REPORT, run: { ...REPORT.run, evidenceDir: '/Users/someone/elsewhere/r1' } });
+    assert.doesNotMatch(outside, /someone/);
+  } finally {
+    process.chdir(original);
+  }
+});

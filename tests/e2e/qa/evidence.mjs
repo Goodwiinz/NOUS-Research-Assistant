@@ -2,7 +2,10 @@
 // "Evidence record"). Input is the already-redacted campaign report; binaries
 // stay in the gitignored evidence directory and are listed by name only.
 import { mkdir, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 const STATUS_LABEL = { PASS: 'PASS', FAIL: 'FAILED', BLOCKED: 'BLOCKED (NOT RUN)', SKIPPED: 'SKIPPED (NOT RUN)' };
 
@@ -22,10 +25,10 @@ function code(value) {
   return `\`${String(value ?? 'unknown').replace(/`/g, "'").replace(/\r?\n/g, ' ')}\``;
 }
 
-/** Repo-relative when the directory is under the working tree; never a home path otherwise. */
+/** Repo-relative when the directory is under the repository; never a home path otherwise. */
 function displayDir(dir) {
   if (!dir) return 'none';
-  const rel = relative(process.cwd(), dir);
+  const rel = relative(REPO_ROOT, dir);
   if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return rel;
   return `<outside the worktree>/${basename(dir)}`;
 }
