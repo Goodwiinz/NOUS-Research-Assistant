@@ -868,6 +868,26 @@ async def test_rejected_connector_filters_are_an_argument_error(
     ]
 
 
+async def test_unlisted_error_category_is_an_upstream_error(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only the two filter categories are caller mistakes; any other category
+    # is an outage and leaves the gateway without its message or category.
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(
+            return_value={"error": "boom", "error_category": "connector_crashed"}
+        ),
+    )
+    result = await invoke_read(
+        db, context, _invocation("search_external_database", query="p53")
+    )
+    assert result.is_error is True
+    assert result.content == [{"error": "upstream_unavailable"}]
+    assert result.source_refs == []
+
+
 @pytest.mark.parametrize(
     ("tool", "upstream", "arguments", "expected"),
     [
