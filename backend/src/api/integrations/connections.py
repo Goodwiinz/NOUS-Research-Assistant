@@ -50,7 +50,14 @@ async def post_revoke_consent(
     description=(
         "Disconnect this device and revoke its integration grants. Also ends all "
         "existing CLI sign-ins for this account because CLI tokens are not device "
-        "bound. Other devices' integration grants remain active. Returns 503 "
+        "bound, so every other connected device fails its next request until "
+        "`nous-harness connect` runs on it again; that registers a new device "
+        "and consent and leaves the old ones listed until revoked. Revoke the "
+        "old consent rather than disconnecting the old device, which would end "
+        "every CLI sign-in again; the old device then stays listed with no "
+        "access. To remove one device's access without ending every sign-in, "
+        "revoke its consents with POST "
+        "/api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 "
         "without committing device revocation if the shared CLI cutoff fails."
     ),
     responses={503: {"description": "Revocation unavailable; retry disconnect"}},

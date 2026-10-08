@@ -123,10 +123,25 @@ def _user(name: str, org: Optional[str]) -> User:
     )
 
 
-def _document(key: str, owner: str, org: str, tmp: Path, *, public: bool) -> Document:
+def _document(
+    key: str,
+    owner: str,
+    org: str,
+    tmp: Path,
+    *,
+    public: bool,
+    identifiers: bool = False,
+    deleted: bool = False,
+) -> Document:
+    """``identifiers`` adds DOI/arXiv canaries to the bibliographic metadata."""
     body = canary(f"{key}-content")
     path = tmp / f"{key}.txt"
     path.write_text(body)
+    metadata = (
+        {"doi": canary(f"{key}-doi"), "arxiv_id": canary(f"{key}-arxiv")}
+        if identifiers
+        else None
+    )
     return Document(
         id=sid(key),
         title=canary(f"{key}-title"),
@@ -138,18 +153,22 @@ def _document(key: str, owner: str, org: str, tmp: Path, *, public: bool) -> Doc
         storage_backend="local",
         processing_status=ProcessingStatus.COMPLETED,
         content_text=body,
+        document_metadata=metadata,
         is_public=public,
+        is_deleted=deleted,
         uploaded_by_user_id=sid(f"user-{owner}"),
         organization_id=sid(f"org-{org}"),
     )
 
 
-def _citation(key: str, document_key: str) -> Citation:
+def _citation(key: str, document_key: str, *, identifiers: bool = False) -> Citation:
     return Citation(
         id=sid(key),
         document_id=sid(document_key),
         document_title=canary(f"{key}-title"),
         snippet=canary(f"{key}-quote"),
+        doi=canary(f"{key}-doi") if identifiers else None,
+        arxiv_id=canary(f"{key}-arxiv") if identifiers else None,
         metadata_source="manual",
     )
 

@@ -7,12 +7,15 @@ same-organization colleague C is a nonmember until invited.
 ``xfail(strict=True)`` rows are confirmed leaks owned by the named fix issue.
 """
 
+import functools
 import io
+import os
 import zipfile
 from typing import Any
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
+from pypdf import PdfReader
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models import ChatMessage, Conversation, MessageRole, Thread, Workspace
@@ -151,10 +154,8 @@ async def test_deleted_ancestor_blocks_owner_export(
 AFTER = "b-after-removal-msg"
 
 
-@pytest.fixture
-async def removed_member(clients: Clients, test_db: AsyncSession) -> AsyncClient:
-    """A joins B's private workspace, starts a thread, is removed, then B
-    appends a B-only message to that thread."""
+async def join_and_start_thread(clients: Clients, test_db: AsyncSession) -> AsyncClient:
+    """A joins B's private workspace and starts a thread there."""
     await add_member(test_db, "b", "A")
     test_db.add(
         Thread(
@@ -180,7 +181,11 @@ async def removed_member(clients: Clients, test_db: AsyncSession) -> AsyncClient
     a = clients("A")
     before = await a.get(f"/api/v2/threads/{sid('a-in-b-thread')}/messages")
     assert canary("a-in-b-msg") in before.text  # member access really existed
+    return a
 
+
+async def remove_a_and_append(clients: Clients, test_db: AsyncSession) -> None:
+    """B removes A, then appends a B-only message to A's thread."""
     r = await clients("B").delete(
         f"/api/v2/workspaces/{sid('b-ws')}/members/{sid('user-a')}"
     )
@@ -196,6 +201,14 @@ async def removed_member(clients: Clients, test_db: AsyncSession) -> AsyncClient
         )
     )
     await test_db.commit()
+
+
+@pytest.fixture
+async def removed_member(clients: Clients, test_db: AsyncSession) -> AsyncClient:
+    """A joins B's private workspace, starts a thread, is removed, then B
+    appends a B-only message to that thread."""
+    a = await join_and_start_thread(clients, test_db)
+    await remove_a_and_append(clients, test_db)
     return a
 
 
@@ -216,7 +229,7 @@ async def test_creator_can_export_own_thread(clients: Clients) -> None:
     assert canary("b-msg") in r.text
 
 
-EXPORT_FORMATS = ["markdown", "json", "html"]  # pdf needs a renderer: NOT RUN
+EXPORT_FORMATS = ["markdown", "json", "html"]  # pdf: X4 section below
 
 
 @pytest.mark.parametrize("fmt", EXPORT_FORMATS)
@@ -291,3 +304,124 @@ async def test_stranger_export_is_denied(clients: Clients, fmt: str) -> None:
     for r in responses[:2]:
         assert_no_canary(r.content, *B_PRIVATE_CHAT_KEYS)
     assert_no_canary(body, *B_PRIVATE_CHAT_KEYS)
+
+
+# --- X4: PDF single-thread export (GOO-400) -------------------------------
+#
+# Needs WeasyPrint and its native pango libraries. The Integration Tests CI
+# job installs both and sets PDF_EXPORT_TEST_REQUIRE_RENDERER=1, so there a
+# missing renderer FAILS these tests instead of skipping them. Anywhere else
+# they skip with the probe's reason (macOS with Homebrew pango also needs
+# DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib). PDF text streams are
+# compressed, so content is read back through pypdf, never from raw bytes.
+#
+# Mutation checks, in ``ExportService._load_thread``
+# (backend/src/services/research/export_service.py): dropping the GOO-348
+# ``user_can_access_workspace`` re-check fails the member-removal case, and
+# dropping the conversation/workspace ``is_deleted`` re-check fails the
+# Conversation soft-delete case.
+
+REQUIRE_PDF_RENDERER = "PDF_EXPORT_TEST_REQUIRE_RENDERER"
+
+
+@functools.lru_cache(maxsize=1)
+def pdf_renderer_problem() -> str | None:
+    try:
+        from weasyprint import HTML
+
+        probe = HTML(string="<p>probe</p>").write_pdf()
+    except Exception as exc:  # ImportError, or OSError when pango is missing
+        return f"WeasyPrint cannot render a PDF here ({type(exc).__name__})"
+    if not isinstance(probe, bytes) or not probe.startswith(b"%PDF-"):
+        return "WeasyPrint returned no PDF signature"
+    return None
+
+
+def require_pdf_renderer() -> None:
+    problem = pdf_renderer_problem()
+    if problem is None:
+        return
+    if os.getenv(REQUIRE_PDF_RENDERER) == "1":
+        pytest.fail(f"{problem}, but {REQUIRE_PDF_RENDERER}=1 requires it")
+    pytest.skip(
+        f"X4 PDF export not run: {problem}. Needs weasyprint==70.0 plus pango "
+        f"(CI: libpango-1.0-0 libpangoft2-1.0-0); {REQUIRE_PDF_RENDERER}=1 "
+        "turns this skip into a failure"
+    )
+
+
+async def export_pdf(
+    client: AsyncClient, thread_key: str, *, stream: bool = False
+) -> Response:
+    route = f"/api/v1/export/thread/{sid(thread_key)}" + ("/stream" if stream else "")
+    return await client.post(route, params={"format": "pdf"})
+
+
+def assert_pdf_with(r: Response, *keys: str) -> None:
+    assert r.status_code == 200, r.status_code
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert r.content.startswith(b"%PDF-")
+    pages = PdfReader(io.BytesIO(r.content)).pages
+    text = "".join(page.extract_text() or "" for page in pages)
+    missing = [k for k in keys if canary(k) not in text]
+    assert not missing, f"missing from the PDF text: {missing}"
+
+
+def assert_no_pdf(r: Response, *keys: str) -> None:
+    assert r.status_code == 404, r.status_code
+    assert not r.content.startswith(b"%PDF")
+    assert_no_canary(r.content, *keys)
+
+
+SINGLE_AND_STREAM = pytest.mark.parametrize(
+    "stream", [False, True], ids=["single", "stream"]
+)
+
+
+@SINGLE_AND_STREAM
+async def test_pdf_export_owner_gets_pdf(clients: Clients, stream: bool) -> None:
+    """Positive control: real PDF bytes that hold the owner's message."""
+    require_pdf_renderer()
+    r = await export_pdf(clients("B"), "b-thread", stream=stream)
+    assert_pdf_with(r, "b-msg")
+
+
+@SINGLE_AND_STREAM
+async def test_pdf_export_stranger_is_denied(clients: Clients, stream: bool) -> None:
+    require_pdf_renderer()
+    r = await export_pdf(clients("A"), "b-thread", stream=stream)
+    assert_no_pdf(r, *B_PRIVATE_CHAT_KEYS)
+
+
+async def test_pdf_export_revoked_by_member_removal(
+    clients: Clients, test_db: AsyncSession
+) -> None:
+    """A creates a thread in ``b`` as a member and can export it as a PDF.
+    After B removes A, neither export route returns a PDF."""
+    require_pdf_renderer()
+    a = await join_and_start_thread(clients, test_db)
+    assert_pdf_with(await export_pdf(a, "a-in-b-thread"), "a-in-b-msg")
+
+    await remove_a_and_append(clients, test_db)
+    for stream in (False, True):
+        r = await export_pdf(a, "a-in-b-thread", stream=stream)
+        assert_no_pdf(r, AFTER, "a-in-b-msg")
+
+
+@pytest.mark.parametrize(
+    "model,key",
+    [(Workspace, "b-ws"), (Conversation, "b-conv"), (Thread, "b-thread")],
+)
+async def test_pdf_export_revoked_by_soft_delete(
+    clients: Clients, test_db: AsyncSession, model: Any, key: str
+) -> None:
+    """The owner's PDF export stops once an ancestor (or the thread) is
+    soft-deleted, although no delete cascades to the thread row."""
+    require_pdf_renderer()
+    b = clients("B")
+    assert_pdf_with(await export_pdf(b, "b-thread"), "b-msg")
+
+    await soft_delete(test_db, model, key)
+    for stream in (False, True):
+        r = await export_pdf(b, "b-thread", stream=stream)
+        assert_no_pdf(r, *B_PRIVATE_CHAT_KEYS)

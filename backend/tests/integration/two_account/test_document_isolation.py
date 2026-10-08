@@ -7,15 +7,20 @@ named fix issue — they flip to XPASS (and fail) once the fix lands, at which
 point delete the marker.
 """
 
+import re
+from pathlib import Path
 from typing import Any, Callable
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import Document
+from src.models import Collection, CollectionDocument, Document
 from tests.integration.two_account.conftest import (
     Clients,
+    _citation,
+    _document,
+    add_member,
     assert_no_canary,
     canary,
     sid,
@@ -181,3 +186,140 @@ async def test_citation_export_excludes_foreign_private(clients: Clients) -> Non
         json={"citation_ids": [str(sid("b-cit"))], "format": "bibtex"},
     )
     assert_no_canary(r.content, "b-cit-title", "b-cit-quote")
+
+
+# --- CI5: project bibliography fallback (GOO-400) ---------------------------
+#
+# Project ``b-proj`` lives in B's private workspace ``b`` (org-b). C is the
+# authorized member. Its document links:
+#
+#   c-proj-doc  org-b, uploaded by C, no citation  -> the only readable row
+#   a-proj-doc  org-a (foreign), ``is_public``, citation ``a-proj-cit``
+#   c-gone-doc  org-b, uploaded by C, soft-deleted, citation ``c-gone-cit``
+#
+# Neither linked citation is readable by C, so the export takes the
+# metadata fallback (``Document`` rows, not ``Citation`` rows). Every linked
+# document and citation carries DOI/arXiv canaries. Nothing here is "same
+# org, uploaded by someone else": GOO-410 changes that rule, and these cases
+# must hold under the uploader-or-public rule and the org-shared rule alike.
+#
+# Mutation check: dropping ``Document.organization_id ==
+# current_user.organization_id`` from the fallback query in
+# ``export_bibliography`` (backend/src/api/research/citations.py) fails the
+# four member cases (a-proj-doc leaks) and the stale-only case (200, not 404).
+
+PROJECT_DOCS = ("c-proj-doc", "a-proj-doc", "c-gone-doc")
+HIDDEN_KEYS = tuple(
+    f"{row}-{field}"
+    for row, fields in (
+        ("a-proj-doc", ("title", "content", "doi", "arxiv")),
+        ("c-gone-doc", ("title", "content", "doi", "arxiv")),
+        ("a-proj-cit", ("title", "quote", "doi", "arxiv")),
+        ("c-gone-cit", ("title", "quote", "doi", "arxiv")),
+    )
+    for field in fields
+)
+PROJECT_KEYS = HIDDEN_KEYS + tuple(
+    f"c-proj-doc-{field}" for field in ("title", "content", "doi", "arxiv")
+)
+
+
+@pytest.fixture
+async def bib_project(test_db: AsyncSession, seed: None, tmp_path: Path) -> None:
+    """Seed ``b-proj`` with the three links above and invite C into ``b``."""
+    docs = [
+        _document("c-proj-doc", "c", "b", tmp_path, public=False, identifiers=True),
+        _document("a-proj-doc", "a", "a", tmp_path, public=True, identifiers=True),
+        _document(
+            "c-gone-doc",
+            "c",
+            "b",
+            tmp_path,
+            public=False,
+            identifiers=True,
+            deleted=True,
+        ),
+    ]
+    citations = [
+        _citation("a-proj-cit", "a-proj-doc", identifiers=True),
+        _citation("c-gone-cit", "c-gone-doc", identifiers=True),
+    ]
+    project = Collection(
+        id=sid("b-proj"), name=canary("b-proj"), workspace_id=sid("b-ws")
+    )
+    links = [
+        CollectionDocument(
+            id=sid(f"b-proj-{doc}"),
+            collection_id=sid("b-proj"),
+            document_id=sid(doc),
+        )
+        for doc in PROJECT_DOCS
+    ]
+    for rows in (docs, citations, [project], links):
+        test_db.add_all(rows)  # parent before child: SQLite enforces nothing
+        await test_db.commit()
+    await add_member(test_db, "b", "C")
+
+
+async def export_project_bibliography(client: AsyncClient, fmt: str) -> Response:
+    return await client.post(
+        "/api/v1/citations/export",
+        json={"project_id": str(sid("b-proj")), "format": fmt},
+    )
+
+
+def bibtex_entry_count(text: str) -> int:
+    return len(re.findall(r"^@\w+\{", text, flags=re.MULTILINE))
+
+
+@pytest.mark.parametrize("fmt", ["bibtex", "ieee", "apa", "mla"])
+async def test_project_bibliography_member_gets_only_readable_documents(
+    clients: Clients, bib_project: None, fmt: str
+) -> None:
+    """C gets c-proj-doc and nothing from the foreign or deleted links."""
+    r = await export_project_bibliography(clients("C"), fmt)
+    assert r.status_code == 200, r.text
+    assert canary("c-proj-doc-title") in r.text  # positive control
+    # The DOI only exists in document metadata: the fallback really ran.
+    assert canary("c-proj-doc-doi") in r.text
+    assert_no_canary(r.content, *HIDDEN_KEYS)
+    if fmt == "bibtex":
+        assert bibtex_entry_count(r.text) == 1
+
+
+async def test_project_bibliography_with_only_unreadable_links_is_404(
+    clients: Clients, bib_project: None, test_db: AsyncSession
+) -> None:
+    """With the readable row gone, C gets 404: no empty or counted entries."""
+    await soft_delete(test_db, Document, "c-proj-doc")
+    r = await export_project_bibliography(clients("C"), "bibtex")
+    assert r.status_code == 404
+    assert_no_canary(r.content, *PROJECT_KEYS)
+
+
+async def test_project_bibliography_foreign_org_member_is_404(
+    clients: Clients, bib_project: None, test_db: AsyncSession
+) -> None:
+    """A holds a live membership row in org-b's workspace, but project
+    artifacts also require the workspace organization."""
+    await add_member(test_db, "b", "A")
+    r = await export_project_bibliography(clients("A"), "bibtex")
+    assert r.status_code == 404
+    assert_no_canary(r.content, *PROJECT_KEYS, "b-proj")
+
+
+async def test_project_bibliography_removed_member_is_404(
+    clients: Clients, bib_project: None
+) -> None:
+    c = clients("C")
+    before = await export_project_bibliography(c, "bibtex")
+    assert canary("c-proj-doc-title") in before.text  # access really existed
+
+    r = await clients("B").delete(
+        f"/api/v2/workspaces/{sid('b-ws')}/members/{sid('user-c')}"
+    )
+    assert r.status_code in (200, 204), r.text
+
+    after = await export_project_bibliography(c, "bibtex")
+    assert after.status_code == 404
+    assert_no_canary(after.content, *PROJECT_KEYS, "b-proj")

@@ -120,6 +120,16 @@ def test_integration_job_enables_real_redis_cli_revocation_regression() -> None:
     assert "job.services.redis.ports['6379']" in env["REDIS_URL"]
 
 
+def test_integration_job_enrolls_daily_brief_rollback_regression() -> None:
+    job = _integration_job()
+    step = next(
+        step for step in job["steps"] if step.get("name") == "Run integration tests"
+    )
+    env = step["env"]
+    assert env.get("DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL") == env["DATABASE_URL"]
+    assert "job.services.postgres.ports['5432']" in env["DATABASE_URL"]
+
+
 @pytest.mark.parametrize(
     ("case_xml", "pytest_exit", "accepted"),
     [
