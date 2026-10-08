@@ -1116,10 +1116,39 @@ async def test_partial_provider_failure_deduplicates_and_persists_metadata_only(
         output = result.output
         coverage = output["coverage"]
         assert coverage["partial"] is True
-        assert coverage["providers"]["pubmed"] == {
+        # GOO-298 receipts keep the failed provider's outcome and its literal
+        # request. Execution, attempt and page IDs and timestamps vary per run.
+        pubmed = coverage["providers"]["pubmed"]
+        assert {
+            key: pubmed[key]
+            for key in (
+                "provider",
+                "status",
+                "completion",
+                "error_type",
+                "requested_limit",
+                "returned_count",
+                "imported_count",
+                "imported_source_ids",
+            )
+        } == {
+            "provider": "pubmed",
             "status": "failed",
+            "completion": "failed",
             "error_type": "TimeoutError",
+            "requested_limit": 50,
+            "returned_count": 0,
+            "imported_count": 0,
+            "imported_source_ids": [],
         }
+        [failed_page] = pubmed["pages"]
+        assert failed_page["page_status"] == "failed"
+        assert failed_page["request"]["params"] == {
+            "query": "controlled treatment",
+            "max_results": 50,
+        }
+        assert failed_page["response"]["error_type"] == "TimeoutError"
+        assert failed_page["imported_source_ids"] == []
         assert coverage["deduplication"] == {"before": 3, "after": 2}
         assert sorted(
             record["evidence_level"] for record in output["source_records"]

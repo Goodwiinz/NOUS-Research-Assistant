@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from src.models.base import Base
 from src.models.collection import Collection
+from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.research_protocol import (
     ResearchProtocol,
@@ -19,6 +20,13 @@ from src.models.research_protocol import (
     ResearchQuestion,
     ResearchQuestionVersion,
 )
+from src.models.research_report import (
+    ResearchReport,
+    ResearchReportIdentifier,
+    ResearchReportObservation,
+    ResearchStudy,
+)
+from src.models.research_source import ResearchSource
 from src.models.workspace import Workspace, WorkspaceMember
 from src.services.research_engine.protocol_service import (
     canonical_hash,
@@ -52,7 +60,12 @@ _PROTOCOL_SNAPSHOT = {
 async def create_research_engine_tables(
     connection: Any, *engine_models: type[Any]
 ) -> None:
-    """Create canonical access, protocol, and requested engine tables in order."""
+    """Create canonical access, protocol, and requested engine tables in order.
+
+    The project decision ledger is always created. With ``ResearchSource`` the
+    report-identity tables come too, because completing a search step observes
+    each persisted source as a project report in the same transaction (GOO-299).
+    """
     await connection.exec_driver_sql(
         'CREATE TABLE "organizations" (id UUID PRIMARY KEY)'
     )
@@ -70,8 +83,17 @@ async def create_research_engine_tables(
         ResearchQuestionVersion,
         ResearchProtocol,
         ResearchProtocolVersion,
+        ResearchDecisionStream,
+        ResearchDecisionEvent,
         *engine_models,
     )
+    if ResearchSource in engine_models:
+        models += (
+            ResearchStudy,
+            ResearchReport,
+            ResearchReportIdentifier,
+            ResearchReportObservation,
+        )
     tables = list(dict.fromkeys(cast(Any, model).__table__ for model in models))
     await connection.run_sync(
         lambda sync_connection: Base.metadata.create_all(
