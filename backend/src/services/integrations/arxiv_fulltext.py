@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 TTL_S = 24 * 3600  # entry is fresh this long; after that a refetch is tried
 STALE_TTL_S = 7 * 24 * 3600  # entry survives this long as a fallback
+# After a failed refresh the stale text is served without another attempt for
+# this long, so a hanging arXiv costs one refetch per window, not one per call.
+RETRY_AFTER_S = 300
 # Keeps one page under the 64 KiB gateway cap after JSON escaping.
 MAX_PAGE_CHARS = 48_000
 _ARXIV_ID = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+(\.[A-Z]{2})?/\d{7}(v\d+)?)$")
@@ -160,27 +163,49 @@ async def fetch_text(arxiv_id: str) -> str:
             return await _extract_in_subprocess(str(pdf_path))
 
 
-async def _cached(redis: Any, key: str) -> tuple[str | None, float]:
-    """(text, fetched_at); an unreachable cache is a miss."""
+async def _cached(redis: Any, key: str) -> tuple[str | None, float, float]:
+    """(text, fetched_at, retry_after); an unreachable cache is a miss."""
     try:
         raw = await redis.get(key)
     except Exception:
         logger.warning("arxiv fulltext cache read failed", exc_info=True)
-        return None, 0.0
+        return None, 0.0, 0.0
     if raw:
         try:
             entry = json.loads(raw)
-            return str(entry["text"]), float(entry["fetched_at"])
+            return (
+                str(entry["text"]),
+                float(entry["fetched_at"]),
+                float(entry.get("retry_after", 0.0)),
+            )
         except (ValueError, KeyError, TypeError):
             # Legacy plain-string value or garbage: treat as a miss.
             logger.debug("arxiv fulltext cache entry unreadable: %s", key)
-    return None, 0.0
+    return None, 0.0, 0.0
 
 
-async def _store(redis: Any, key: str, text: str) -> None:
+async def _store(
+    redis: Any,
+    key: str,
+    text: str,
+    *,
+    fetched_at: float | None = None,
+    retry_after: float = 0.0,
+) -> None:
+    """Cache ``text``. An entry lives STALE_TTL_S from its real fetch, however
+    often a failed refresh re-stores it."""
+    now = time.time()
+    fetched = now if fetched_at is None else fetched_at
+    ttl = int(STALE_TTL_S - (now - fetched))
+    if ttl <= 0:
+        return
     try:
         await redis.set(
-            key, json.dumps({"text": text, "fetched_at": time.time()}), ex=STALE_TTL_S
+            key,
+            json.dumps(
+                {"text": text, "fetched_at": fetched, "retry_after": retry_after}
+            ),
+            ex=ttl,
         )
     except Exception:
         logger.warning("arxiv fulltext cache write failed", exc_info=True)
@@ -202,8 +227,9 @@ async def get_page(
     limit = max(1, min(int(limit), MAX_PAGE_CHARS))
     offset = max(0, int(offset))
     key = _key(arxiv_id)
-    text, fetched_at = await _cached(redis, key)
-    if text is None or time.time() - fetched_at > TTL_S:
+    text, fetched_at, retry_after = await _cached(redis, key)
+    now = time.time()
+    if text is None or (now - fetched_at > TTL_S and now >= retry_after):
         try:
             text = await asyncio.wait_for((fetch or fetch_text)(arxiv_id), budget)
         except Exception:
@@ -211,6 +237,16 @@ async def get_page(
                 raise
             logger.warning(
                 "arxiv fulltext refetch failed; serving stale", exc_info=True
+            )
+            # Serve it again without another attempt for RETRY_AFTER_S: a
+            # hanging arXiv would otherwise cost every call the whole budget
+            # (audit RT-2). Its 7-day life still counts from the real fetch.
+            await _store(
+                redis,
+                key,
+                text,
+                fetched_at=fetched_at,
+                retry_after=time.time() + RETRY_AFTER_S,
             )
         else:
             if text:  # never cache an empty extraction; the next call retries

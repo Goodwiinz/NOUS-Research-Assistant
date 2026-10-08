@@ -35,6 +35,11 @@ class FakeRedis:
         entry["fetched_at"] = time.time() - seconds
         self.store[key] = json.dumps(entry)
 
+    def end_retry_window(self, key: str) -> None:
+        entry = json.loads(self.store[key])
+        entry["retry_after"] = 0
+        self.store[key] = json.dumps(entry)
+
 
 class DownRedis:
     async def get(self, key: str) -> str | None:
@@ -100,6 +105,7 @@ async def test_stale_entry_is_refreshed_or_served_when_refetch_fails() -> None:
         "2401.00001", offset=0, limit=10, redis=redis, fetch=failing
     )
     assert failing.calls == 1 and page["text"] == "old"
+    redis.end_retry_window(key)  # once the retry window ends, a call refreshes
     fresh = CountingFetch("new")
     page = await arxiv_fulltext.get_page(
         "2401.00001", offset=0, limit=10, redis=redis, fetch=fresh
@@ -111,6 +117,34 @@ async def test_stale_entry_is_refreshed_or_served_when_refetch_fails() -> None:
         "2401.00001", offset=0, limit=10, redis=redis, fetch=again
     )
     assert again.calls == 0
+
+
+async def test_failed_refresh_serves_stale_text_without_refetching_for_a_while() -> (
+    None
+):
+    redis = FakeRedis()
+    key = "arxiv:fulltext:2401.00001"
+    await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=redis, fetch=CountingFetch("old")
+    )
+    redis.age(key, arxiv_fulltext.TTL_S + 60)
+    failing = CountingFetch("", fail=True)
+    page = await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=redis, fetch=failing
+    )
+    assert failing.calls == 1 and page["text"] == "old"
+    # Within RETRY_AFTER_S the stale text comes back at once: a hanging arXiv
+    # must not cost every call the whole refetch budget (RT-2).
+    again = CountingFetch("", fail=True)
+    page = await arxiv_fulltext.get_page(
+        "2401.00001", offset=0, limit=10, redis=redis, fetch=again
+    )
+    assert again.calls == 0 and page["text"] == "old"
+    # Still counted from the real fetch: re-storing never extends the 7 days.
+    assert json.loads(redis.store[key])["fetched_at"] < (
+        time.time() - arxiv_fulltext.TTL_S
+    )
+    assert redis.ttls[key] <= arxiv_fulltext.STALE_TTL_S - arxiv_fulltext.TTL_S
 
 
 async def test_limit_is_clamped_to_one_page() -> None:
