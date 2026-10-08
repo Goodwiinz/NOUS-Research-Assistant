@@ -1,0 +1,81 @@
+"""FTS snippets keep numbers and abbreviations whole (audit RT-1).
+
+retrieve_passages hands these snippets to a model as quoted evidence, so a
+sentence split on every "." turned "95.3% ... 91.2%" into "3% ... 91". The
+strings are the verifier's (findings/verify-V5-readtools-library.md).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from src.models.search_schemas import SearchQuery, SearchSortOrder, SearchType
+from src.services.search.fulltext_search_service import FullTextSearchService
+
+pytestmark = pytest.mark.unit
+
+
+def _passage(highlighted_content: str, highlighted_title: str = "") -> str:
+    """The text read_tools._retrieve_passages builds from the snippets."""
+    request = SearchQuery(
+        query="q",
+        search_type=SearchType.FULLTEXT,
+        sort_order=SearchSortOrder.RELEVANCE,
+        filters=None,
+    )
+    snippets = FullTextSearchService()._extract_snippets(
+        highlighted_content, highlighted_title, request
+    )
+    text = " ".join(snippet.text for snippet in snippets)
+    for tag in ("<mark>", "</mark>"):
+        text = text.replace(tag, "")
+    return text
+
+
+@pytest.mark.parametrize(
+    ("headline", "expected"),
+    [
+        (
+            "Our model reaches 95.3% top-1 <mark>accuracy</mark> on "
+            "<mark>ImageNet</mark>, up from 91.2% (Fig. 3).",
+            "Our model reaches 95.3% top-1 accuracy on ImageNet, up from "
+            "91.2% (Fig. 3).",
+        ),
+        (
+            "On <mark>ImageNet</mark> the error drops to 4.7% versus 8.8% for "
+            "the baseline.",
+            "On ImageNet the error drops to 4.7% versus 8.8% for the baseline.",
+        ),
+        (
+            "As shown by Smith et al. the <mark>dropout</mark> rate of 0.5 is "
+            "optimal (p < 0.001).",
+            "As shown by Smith et al. the dropout rate of 0.5 is optimal "
+            "(p < 0.001).",
+        ),
+        (
+            "As shown by Smith et al. The <mark>dropout</mark> rate is optimal.",
+            "As shown by Smith et al. The dropout rate is optimal.",
+        ),
+    ],
+    ids=["decimals-and-fig", "decimals", "et-al-lowercase", "et-al-capital"],
+)
+def test_snippets_keep_numbers_and_abbreviations_whole(
+    headline: str, expected: str
+) -> None:
+    assert _passage(headline) == expected
+
+
+def test_e_g_and_a_version_number_survive_after_the_title() -> None:
+    passage = _passage(
+        "We use e.g. <mark>BERT</mark> and v2.1 of the tokenizer.",
+        "<mark>BERT</mark> study",
+    )
+    assert passage == "BERT study We use e.g. BERT and v2.1 of the tokenizer."
+
+
+def test_only_the_sentences_with_a_highlight_are_kept() -> None:
+    passage = _passage(
+        "Intro sentence without a hit. The <mark>dropout</mark> rate is 0.5 "
+        "here. Unrelated closing sentence."
+    )
+    assert passage == "The dropout rate is 0.5 here."

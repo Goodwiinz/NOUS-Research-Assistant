@@ -48,6 +48,44 @@ def _require_org_scope(organization_id: Any) -> str:
         ) from None
 
 
+# A sentence ends at ".", "!" or "?" followed by whitespace and a capital
+# letter (possibly highlighted), so "95.3%", "v2.1" and "(Fig. 3)" never end
+# one. retrieve_passages quotes these sentences to a model (audit RT-1).
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=(?:<mark>)?[A-Z])")
+# A capitalised word after one of these does not start a new sentence.
+_ABBREVIATIONS = frozenset(
+    {
+        "al.",
+        "approx.",
+        "cf.",
+        "dr.",
+        "e.g.",
+        "eq.",
+        "eqs.",
+        "fig.",
+        "figs.",
+        "i.e.",
+        "no.",
+        "ref.",
+        "refs.",
+        "sec.",
+        "vs.",
+    }
+)
+
+
+def _sentences(text: str) -> List[str]:
+    """Split ``text`` into sentences without cutting numbers or abbreviations."""
+    sentences: List[str] = []
+    for piece in _SENTENCE_END.split(text):
+        last_word = (sentences[-1].split() or [""])[-1].lower() if sentences else ""
+        if last_word in _ABBREVIATIONS:
+            sentences[-1] = f"{sentences[-1]} {piece}"
+        else:
+            sentences.append(piece)
+    return sentences
+
+
 class FullTextSearchService:
     """Service for PostgreSQL full-text search functionality"""
 
@@ -533,8 +571,9 @@ class FullTextSearchService:
 
         # Extract content snippets
         if highlighted_content and self.highlight_pre_tag in highlighted_content:
-            # Split content into sentences around highlighted terms
-            sentences = re.split(r"[.!?]+", highlighted_content)
+            # Whole sentences around highlighted terms: a split on every "."
+            # cut "95.3%" to "3%" and "et al." mid-sentence (RT-1).
+            sentences = _sentences(highlighted_content)
 
             for sentence in sentences:
                 sentence = sentence.strip()
