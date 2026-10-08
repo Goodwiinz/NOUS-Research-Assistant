@@ -854,6 +854,53 @@ class TestSandboxExecutionBounds:
         finally:
             await manager.cleanup_all()
 
+    async def test_probe_loop_stops_on_its_own_deadline(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Python 3.11's ``wait_for`` can swallow the window's cancellation when
+        an attempt finishes in the same loop iteration. The window's timer is
+        disabled here to model that: the loop must still stop on its own
+        deadline, and no attempt may be given time past it.
+
+        Mutation: drop the deadline check and the loop spins until the guard
+        below times out; drop the ``min(..., left)`` clamp and the first
+        attempt outlives the window.
+        """
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        window = 0.3
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", window)
+        monkeypatch.setattr(module, "_PROBE_RETRY_PAUSE_SECONDS", 0.02)
+        monkeypatch.setattr(asyncio, "timeout", lambda _delay: contextlib.nullcontext())
+        loop = asyncio.get_running_loop()
+        attempts: list[tuple[float, float]] = []
+        sandbox = AsyncMock()
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            attempts.append((loop.time(), kwargs["timeout"]))
+            raise asyncio.TimeoutError()  # every attempt times out at once
+
+        sandbox.run_code.side_effect = run
+        manager = module.SandboxManager()
+        caplog.set_level(logging.WARNING, logger="src.services.sandbox")
+        start = loop.time()
+        answered = await asyncio.wait_for(
+            manager._kernel_answers("deadline", sandbox, "python"), timeout=3
+        )
+        elapsed = loop.time() - start
+
+        assert answered is False
+        assert window <= elapsed < window + 1
+        assert len(attempts) > 1
+        # The first attempt starts in the same step that sets the deadline.
+        first_start = attempts[0][0]
+        assert all(
+            started + limit <= first_start + window + 0.01
+            for started, limit in attempts
+        ), attempts
+        assert any("no answer" in r.getMessage() for r in caplog.records)
+        sandbox.kill.assert_not_awaited()
+
     async def test_failed_executions_still_consume_budget(self, monkeypatch):
         from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
 

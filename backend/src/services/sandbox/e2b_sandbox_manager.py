@@ -79,10 +79,15 @@ MAX_EXECUTION_TIMEOUT = 300  # 5 minutes
 MAX_EXECUTIONS_PER_RUN = 5
 
 # IN-2: the agent runs execute_code in its SLOW tool tier
-# (_nodes_tools._SLOW_TOOL_TIMEOUT_SECONDS = 120). One tool call's sandbox work
-# (optional package install + the cell, each followed by at most one probe)
-# shares this budget, so our own limit always fires before the agent's outer
-# wait_for cancels the call. Cancellation kills the box and its variables.
+# (_nodes_tools._SLOW_TOOL_TIMEOUT_SECONDS = 120). One tool call's optional
+# package install and its cell share this budget, each followed by at most
+# one probe, so the sandbox's own limit normally fires before the agent's
+# outer wait_for, whose cancellation kills the box and its variables.
+# Getting the box is outside the budget: a thread's first call creates it and
+# installs DEFAULT_PACKAGES (up to MAX_EXECUTION_TIMEOUT), and any call can
+# wait on the creation lock while another thread does that. After such a wait
+# the outer limit can still cancel the call, killing the box if a cell is
+# running (a first call's new box holds no earlier variables).
 AGENT_CELL_TIMEOUT_SECONDS = 90
 
 # After our limit closes the /execute stream, the code-interpreter server
@@ -505,15 +510,19 @@ class SandboxManager:
         code = _KERNEL_PROBE_CODES.get(
             str(language).strip().lower(), _KERNEL_PROBE_CODES["python"]
         )
+        loop = asyncio.get_running_loop()
+        # Python 3.11's wait_for can swallow the window's cancellation when an
+        # attempt finishes in the same loop iteration, so the loop also stops
+        # on its own deadline and never gives an attempt time past it.
+        deadline = loop.time() + POST_TIMEOUT_PROBE_SECONDS
         try:
             async with asyncio.timeout(POST_TIMEOUT_PROBE_SECONDS):
-                while True:
+                while (left := deadline - loop.time()) > 0:
+                    attempt = min(_PROBE_ATTEMPT_SECONDS, left)
                     try:
                         probe = await asyncio.wait_for(
-                            sandbox.run_code(
-                                code, language=language, timeout=_PROBE_ATTEMPT_SECONDS
-                            ),
-                            timeout=_PROBE_ATTEMPT_SECONDS,
+                            sandbox.run_code(code, language=language, timeout=attempt),
+                            timeout=attempt,
                         )
                     except (asyncio.TimeoutError, E2BTimeoutException):
                         probe = None  # the interrupt may not have landed yet
@@ -533,17 +542,18 @@ class SandboxManager:
             await self._discard_sandbox(thread_id, sandbox)
             raise
         except TimeoutError:
-            logger.warning(
-                "Kernel probe for thread %s got no answer within %ss",
-                thread_id,
-                POST_TIMEOUT_PROBE_SECONDS,
-            )
-            return False
+            pass  # the window's timer fired first; logged below
         except Exception as exc:
             logger.warning(
                 "Kernel probe failed for thread %s: %s", thread_id, type(exc).__name__
             )
             return False
+        logger.warning(
+            "Kernel probe for thread %s got no answer within %ss",
+            thread_id,
+            POST_TIMEOUT_PROBE_SECONDS,
+        )
+        return False
 
     async def cleanup(self, thread_id: str) -> None:
         """Kill and remove sandbox for a thread."""
