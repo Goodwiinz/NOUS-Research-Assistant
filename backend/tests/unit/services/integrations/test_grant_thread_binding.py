@@ -365,12 +365,20 @@ async def test_device_list_names_the_only_chats_a_computer_runs_in(
     db: AsyncSession,
 ) -> None:
     devices: dict[str, UUID] = {}
-    for label in ("Chat", "Project", "Tools", "Revoked"):
+    for label in ("Chat", "Project", "Mixed", "Tools", "Revoked"):
         devices[label] = (
             await register_device(db, OWNER, DeviceCreate(label=label))
         ).id
-    await _consent(db, devices["Chat"], THREAD, RUN)
+    # Two chats, consented out of order and one of them twice: each listed once,
+    # in a stable order.
+    chats = sorted((THREAD, UNTITLED_THREAD), key=str)
+    for chat in (chats[1], chats[0], chats[1]):
+        await _consent(db, devices["Chat"], chat, RUN)
     await _consent(db, devices["Project"], None, RUN)
+    # One project-wide run consent lifts the restriction its chat-bound sibling
+    # would impose: the mint accepts it in any chat of the project.
+    await _consent(db, devices["Mixed"], THREAD, RUN)
+    await _consent(db, devices["Mixed"], None, RUN)
     await _consent(db, devices["Tools"], THREAD, SCOPES)  # no harness:execute
     revoked = await _consent(db, devices["Revoked"], THREAD, RUN)
     await db.execute(
@@ -380,4 +388,10 @@ async def test_device_list_names_the_only_chats_a_computer_runs_in(
     )
     await db.commit()
     listed = {d.label: d.bound_thread_ids for d in await list_devices(db, OWNER)}
-    assert listed == {"Chat": [THREAD], "Project": [], "Tools": [], "Revoked": []}
+    assert listed == {
+        "Chat": chats,
+        "Project": [],
+        "Mixed": [],
+        "Tools": [],
+        "Revoked": [],
+    }
