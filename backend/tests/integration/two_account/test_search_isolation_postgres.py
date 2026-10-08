@@ -675,7 +675,10 @@ async def test_thread_suggestions_positive_control(
 
 
 def _query(text: str, search_type: SearchType) -> SearchQuery:
-    return SearchQuery.model_validate({"query": text, "search_type": search_type})
+    query: SearchQuery = SearchQuery.model_validate(
+        {"query": text, "search_type": search_type}
+    )
+    return query
 
 
 ALL_SEARCH_REQUESTS = [
