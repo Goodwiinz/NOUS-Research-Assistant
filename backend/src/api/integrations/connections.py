@@ -52,10 +52,13 @@ async def post_revoke_consent(
         "existing CLI sign-ins for this account because CLI tokens are not device "
         "bound, so every other connected device fails its next request until "
         "`nous-harness connect` runs on it again; that registers a new device "
-        "and consent and leaves the old ones listed until revoked. To remove "
-        "one device's access without ending every sign-in, revoke its consents "
-        "with POST /grant-requests/{request_id}/revoke. Returns 503 without "
-        "committing device revocation if the shared CLI cutoff fails."
+        "and consent and leaves the old ones listed until revoked. Revoking the "
+        "old consent ends its access; the old device stays listed with no "
+        "access, because disconnecting it would end every CLI sign-in again. "
+        "To remove one device's access without ending every sign-in, revoke "
+        "its consents with POST "
+        "/api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 "
+        "without committing device revocation if the shared CLI cutoff fails."
     ),
     responses={503: {"description": "Revocation unavailable; retry disconnect"}},
 )

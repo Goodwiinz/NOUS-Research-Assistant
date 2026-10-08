@@ -181,3 +181,4 @@ def test_disconnect_description_says_other_devices_must_reconnect(
     description = app.openapi()["paths"][path]["post"]["description"]
     assert "remain active" not in description
     assert "nous-harness connect" in description
+    assert "/api/v1/integrations/grant-requests/{request_id}/revoke" in description
