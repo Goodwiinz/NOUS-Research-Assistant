@@ -331,7 +331,7 @@ class SandboxManager:
             )
 
     async def install_packages(
-        self, thread_id: str, packages: List[str]
+        self, thread_id: str, packages: List[str], timeout: int = MAX_EXECUTION_TIMEOUT
     ) -> ExecutionResult:
         """Install additional packages in the thread's sandbox."""
         safe_packages = [
@@ -353,7 +353,7 @@ class SandboxManager:
             f"print(result.stdout); "
             f"print(result.stderr) if result.stderr else None"
         )
-        return await self.execute(thread_id, install_code)
+        return await self.execute(thread_id, install_code, timeout=timeout)
 
     async def run_isolated(
         self, spec: IsolatedSpec, restore: Optional[RestoreSpec] = None

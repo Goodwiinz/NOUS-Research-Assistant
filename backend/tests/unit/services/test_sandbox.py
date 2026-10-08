@@ -1288,7 +1288,10 @@ class TestToolExecuteCode:
         assert "error" in result
 
     async def test_packages_installed_before_execution(self):
-        from src.services.sandbox.e2b_sandbox_manager import ExecutionResult
+        from src.services.sandbox.e2b_sandbox_manager import (
+            AGENT_CELL_TIMEOUT_SECONDS,
+            ExecutionResult,
+        )
 
         tools_impl = _import_tools_impl()
         ok = ExecutionResult(stdout="", stderr="", exit_code=0, execution_time_ms=5)
@@ -1311,7 +1314,12 @@ class TestToolExecuteCode:
                 current_user=_mock_user(),
             )
 
-        mock_mgr.install_packages.assert_awaited_once_with("t-pkg", ["rdkit"])
+        mock_mgr.install_packages.assert_awaited_once_with(
+            "t-pkg", ["rdkit"], timeout=AGENT_CELL_TIMEOUT_SECONDS
+        )
+        # IN-2: package install and the cell share one budget per tool call.
+        cell_timeout = mock_mgr.execute.await_args.kwargs["timeout"]
+        assert 1 <= cell_timeout <= AGENT_CELL_TIMEOUT_SECONDS
         assert result["status"] == "success"
 
     async def test_package_install_warning_does_not_abort(self):

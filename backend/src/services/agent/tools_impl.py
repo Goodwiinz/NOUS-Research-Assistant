@@ -5109,16 +5109,27 @@ async def _tool_execute_code(
     if not thread_id:
         return {"error": "Code execution requires a conversation thread."}
 
-    from src.services.sandbox.e2b_sandbox_manager import get_sandbox_manager
+    from src.services.sandbox.e2b_sandbox_manager import (
+        AGENT_CELL_TIMEOUT_SECONDS,
+        get_sandbox_manager,
+    )
 
     manager = get_sandbox_manager()
 
     if not manager.is_available:
         return {"error": "Code execution is not available. E2B_API_KEY not configured."}
 
+    # IN-2: package install and the cell share one budget below the agent's
+    # SLOW tool limit, so the sandbox interrupts an over-long cell itself and
+    # keeps the session instead of the outer limit cancelling the call.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + AGENT_CELL_TIMEOUT_SECONDS
+
     # Install extra packages if requested
     if packages:
-        install_result = await manager.install_packages(thread_id, packages)
+        install_result = await manager.install_packages(
+            thread_id, packages, timeout=AGENT_CELL_TIMEOUT_SECONDS
+        )
         if install_result.error:
             logger.warning(f"Package install warning: {install_result.stderr}")
 
@@ -5126,6 +5137,7 @@ async def _tool_execute_code(
         thread_id=thread_id,
         code=code,
         language=language,
+        timeout=max(1, int(deadline - loop.time())),
     )
 
     response: Dict[str, Any] = {

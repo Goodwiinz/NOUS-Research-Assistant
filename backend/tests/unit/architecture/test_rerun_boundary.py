@@ -28,7 +28,7 @@ THREAD_CACHE = {"get_or_create_sandbox", "install_packages", "cleanup", "cleanup
 # sha256 of ast.dump(_tool_execute_code) on Python 3.11 (CI's version). A
 # deliberate change to the conversation tool updates this in its own PR.
 EXECUTE_CODE_AST_SHA256 = (
-    "d0885e64d108349f7bd81e5009c4b8efa7d26c0c37ac1b67888cbd551c6f766e"
+    "085ee6c93a369d638c32ccfb386f833e18d10991c093f6313db5d0c6c902aeb2"
 )
 
 
