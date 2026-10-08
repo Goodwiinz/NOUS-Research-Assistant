@@ -313,8 +313,8 @@ def test_active_thread_writer_is_a_conflict() -> None:
 
 
 BOUND_MESSAGE = (
-    "This device is bound to another chat — connect it to this chat or pick "
-    "another device."
+    "This computer is bound to another chat — connect it to this chat or pick "
+    "another computer."
 )
 
 

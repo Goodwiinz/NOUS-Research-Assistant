@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from secrets import token_urlsafe
-from typing import Any, Iterable, cast
+from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import ColumnElement, and_, exists, or_, select, update
@@ -46,9 +46,9 @@ class DeviceBoundToAnotherChat(IntegrationAccessDenied):
     owner: validate_binding has already checked the device is theirs.
     """
 
-    client_message = (
-        "This device is bound to another chat — connect it to this chat or "
-        "pick another device."
+    client_message: ClassVar[str] = (
+        "This computer is bound to another chat — connect it to this chat or "
+        "pick another computer."
     )
 
 

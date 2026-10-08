@@ -677,7 +677,7 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
   internal: 'The response could not be completed. Please retry.',
   cancelled: 'The response was stopped.',
   device_bound_to_another_chat:
-    'This device is bound to another chat — connect it to this chat or pick another device.',
+    'This computer is bound to another chat — connect it to this chat or pick another computer.',
 };
 const DEFAULT_ERROR_HELP =
   'The response could not be completed. Please try again.';
@@ -686,12 +686,15 @@ const DEFAULT_ERROR_HELP =
  * Categories where an identical retry cannot succeed: the request itself is
  * rejected, or another confirmation already holds the claim. Offering Retry
  * there is a button that is guaranteed to fail — worse than no button.
+ *
+ * `device_bound_to_another_chat` stays retryable: Retry re-sends with the
+ * composer's current computer, so it succeeds once the user picks another
+ * one or connects this one to the chat.
  */
 const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
   'invalid_request',
   'conflict',
   'permission_denied',
-  'device_bound_to_another_chat',
 ]);
 
 export function AuiAssistantMessage({

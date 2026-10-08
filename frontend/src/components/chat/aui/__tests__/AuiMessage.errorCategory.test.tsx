@@ -142,16 +142,16 @@ describe('AuiMessage error category', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('names a device bound to another chat without offering a doomed Retry', () => {
+  it('names a computer bound to another chat and keeps Retry', () => {
+    // Retry re-sends with the composer's CURRENT computer, so it succeeds
+    // once the user picks another one or connects this one to the chat.
     renderErrorMessage('device_bound_to_another_chat');
     expect(
       screen.getByText(
-        'This device is bound to another chat — connect it to this chat or pick another device.'
+        'This computer is bound to another chat — connect it to this chat or pick another computer.'
       )
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /retry/i })
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 
   it('keeps a late generated file reachable under a failed, id-less latest row', async () => {
