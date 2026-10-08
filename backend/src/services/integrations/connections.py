@@ -19,12 +19,14 @@ from src.core.cli_token_revocation import (
 )
 from src.models.bridge_device import BridgeDevice
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
+from src.models.thread import Thread
 from src.models.user import User
 from src.schemas.integration_connections import ConnectedDevice, ConnectionConsent
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     authorized_project,
     authorized_workspace,
+    validate_binding,
 )
 
 
@@ -67,6 +69,31 @@ async def _binding_label(
         except IntegrationAccessDenied:
             cache[key] = None
     return cache[key]
+
+
+async def _thread_label(
+    db: AsyncSession,
+    user_id: UUID,
+    organization_id: UUID,
+    consent: IntegrationGrantRequest,
+) -> str | None:
+    """The bound chat's title while the binding still holds, by the same
+    check a grant mint runs (validate_binding). None once the chat is
+    deleted, linked to another project or out of reach: the consent can no
+    longer mint, but stays listed so it can be revoked."""
+    try:
+        await validate_binding(
+            db,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=consent.project_id,
+            thread_id=consent.thread_id,
+        )
+    except IntegrationAccessDenied:
+        return None
+    title = await db.scalar(select(Thread.title).where(Thread.id == consent.thread_id))
+    # Same fallback as the approval page (context.request_dto).
+    return str(title or "Untitled chat")
 
 
 async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice]:
@@ -114,6 +141,11 @@ async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice
         )
         if label is None:
             continue
+        thread_label = (
+            await _thread_label(db, user_id, organization_id, consent)
+            if consent.thread_id is not None
+            else None
+        )
         by_device[consent.device_id].append(
             ConnectionConsent(
                 request_id=consent.id,
@@ -122,6 +154,8 @@ async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice
                 project_label=None if workspace_bound else label,
                 workspace_id=consent.workspace_id,
                 workspace_label=label if workspace_bound else None,
+                thread_id=consent.thread_id,
+                thread_label=thread_label,
                 scopes=sorted(consent.scopes or []),
                 status=str(consent.status),
                 approved_at=consent.approved_at,

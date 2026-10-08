@@ -16,6 +16,10 @@ class ConnectionConsent(BaseModel):
     project_label: str | None
     workspace_id: UUID | None
     workspace_label: str | None
+    # A chat-bound consent (Plan 06 slice 2) mints only from that chat. The
+    # label is null once the chat is deleted or no longer in the project.
+    thread_id: UUID | None
+    thread_label: str | None
     scopes: list[str]
     status: str
     approved_at: datetime | None = None

@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from src.core import cli_token_revocation as ctr
 from src.models.bridge_device import BridgeDevice
 from src.models.collection import Collection
+from src.models.conversation import Conversation
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
+from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_connections import ConnectionConsent
@@ -38,6 +40,7 @@ SOON = datetime.now(timezone.utc) + timedelta(hours=1)
 TOKENS = {name: "nous_ig_" + name.ljust(43, "x") for name in ("a", "a2", "b", "d", "w")}
 # A consumed Plan 07 workspace consent on the desktop (`workspace_consent`).
 CONSENT_WORKSPACE = uuid4()
+CONVERSATION, CHAT = uuid4(), uuid4()
 LIBRARY = ["library:read", "tools:read"]
 
 
@@ -126,6 +129,8 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         Workspace,
         WorkspaceMember,
         Collection,
+        Conversation,
+        Thread,
         BridgeDevice,
         IntegrationGrantRequest,
         IntegrationGrant,
@@ -169,6 +174,31 @@ async def workspace_consent(db: AsyncSession) -> None:
             expires_at=SOON,
             consented_at=datetime.now(timezone.utc),
         )
+    )
+    await db.commit()
+
+
+@pytest.fixture
+async def chat_bound(db: AsyncSession) -> None:
+    """CONSENT_A is bound to CHAT, a chat of PROJECT (Plan 06 slice 2)."""
+    await db.execute(
+        insert(Conversation).values(
+            id=CONVERSATION, workspace_id=WORKSPACE, title="C", created_by_id=USER
+        )
+    )
+    await db.execute(
+        insert(Thread).values(
+            id=CHAT,
+            conversation_id=CONVERSATION,
+            created_by_id=USER,
+            source_project_id=PROJECT,
+            title="Literature review",
+        )
+    )
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == CONSENT_A)
+        .values(thread_id=CHAT)
     )
     await db.commit()
 
@@ -389,3 +419,30 @@ async def test_a_workspace_consent_is_hidden_once_its_workspace_is_gone(
     )
     await db.commit()
     assert await _consents(db, DESKTOP) == {}
+
+
+# AD-3: a chat-bound device works only from its chat; say which one.
+async def test_a_chat_bound_consent_names_its_chat(
+    db: AsyncSession, chat_bound: None
+) -> None:
+    consents = await _consents(db, LAPTOP)
+    bound, unbound = consents[CONSENT_A], consents[CONSENT_B]
+    assert (bound.thread_id, bound.thread_label) == (CHAT, "Literature review")
+    assert (unbound.thread_id, unbound.thread_label) == (None, None)
+
+
+@pytest.mark.parametrize("change", ["deleted", "moved"])
+async def test_a_consent_whose_chat_is_gone_stays_listed_without_a_label(
+    db: AsyncSession, chat_bound: None, change: str
+) -> None:
+    # It can no longer mint (validate_binding refuses the chat) but stays
+    # listed, so the owner can still revoke it (DECISION C-1).
+    values: dict[str, Any] = (
+        {"is_deleted": True}
+        if change == "deleted"
+        else {"source_project_id": OTHER_PROJECT}
+    )
+    await db.execute(update(Thread).where(Thread.id == CHAT).values(**values))
+    await db.commit()
+    listed = (await _consents(db, LAPTOP))[CONSENT_A]
+    assert (listed.thread_id, listed.thread_label) == (CHAT, None)
