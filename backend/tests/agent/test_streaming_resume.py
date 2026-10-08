@@ -1046,6 +1046,31 @@ def test_streamless_resume_still_attaches_to_an_active_codex_run(
     assert cursors == [0]
 
 
+def test_streamless_resume_fallback_still_replays_a_live_codex_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard's true branch: when the active-run lookup misses but the
+    latest Codex run is still non-terminal, the fallback hands it to replay.
+    Mutation: make the `not JobStatus(...).is_terminal` clause always false;
+    this test then gets 204 instead of 200."""
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod, "get_active_run_for_thread", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod,
+        "get_latest_run_for_thread",
+        AsyncMock(return_value=_codex_run("running")),
+    )
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 200
+    assert "event: status" in resp.text
+    assert cursors == [0]
+
+
 def test_named_stream_still_replays_a_just_finished_codex_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
