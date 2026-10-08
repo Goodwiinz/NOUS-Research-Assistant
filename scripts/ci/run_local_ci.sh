@@ -87,6 +87,9 @@ ruff check backend/src; check $? "ruff backend/src"
 step "Directory docs lint (blocking)"
 "$PY" scripts/docs/check_dir_docs.py; check $? "check_dir_docs"
 
+step "Feature map (blocking)"
+"$PY" scripts/ci/check_feature_map.py; check $? "check_feature_map"
+
 step "Changed-file quality ratchet (blocking) — base=$BASE"
 if ! MERGE_BASE="$(git merge-base "$BASE" HEAD 2>/dev/null)"; then
   MERGE_BASE=""

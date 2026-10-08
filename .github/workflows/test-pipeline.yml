@@ -83,6 +83,8 @@ jobs:
         run: pip install pytest pytest-cov PyYAML
       - name: Directory docs lint
         run: python3 scripts/docs/check_dir_docs.py
+      - name: Feature map (nous-verify upkeep)
+        run: python3 scripts/ci/check_feature_map.py
       - name: Script and NOUS instruction contracts
         run: |
           python3 -m pytest tests/unit/scripts/ \
@@ -92,6 +94,7 @@ jobs:
           python3 -m pytest backend/tests/unit/ci/test_ci_scope.py \
             backend/tests/unit/ci/test_release_gate.py \
             backend/tests/unit/ci/test_release_workflow.py \
+            backend/tests/unit/ci/test_check_feature_map.py \
             --noconftest -c /dev/null -q -p no:cacheprovider --no-cov
 
   # ==========================================================================

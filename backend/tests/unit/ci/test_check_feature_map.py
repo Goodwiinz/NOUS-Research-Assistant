@@ -160,3 +160,21 @@ def test_router_discovery_only_counts_python_files_with_apirouter(
     (api / "x" / "README.md").write_text("APIRouter(\n", encoding="utf-8")
     (api / "x" / "plain.py").write_text("x = 1\n", encoding="utf-8")
     assert cfm.discover_routers(tmp_path) == {"backend/src/api/x/r.py"}
+
+
+def test_feature_map_check_is_wired_into_hosted_and_local_gates() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "test-pipeline.yml").read_text(
+        encoding="utf-8"
+    )
+    local_ci = (REPO_ROOT / "scripts" / "ci" / "run_local_ci.sh").read_text(
+        encoding="utf-8"
+    )
+    lightweight = workflow[
+        workflow.index("  lightweight-checks:") : workflow.index("  lint-backend:")
+    ]
+    assert "python3 scripts/ci/check_feature_map.py" in lightweight
+    assert "backend/tests/unit/ci/test_check_feature_map.py" in lightweight
+    assert 'step "Feature map (blocking)"' in local_ci
+    assert '"$PY" scripts/ci/check_feature_map.py; check $? "check_feature_map"' in (
+        local_ci
+    )
