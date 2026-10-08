@@ -18,6 +18,7 @@ from src.models.integration_grant import IntegrationGrant, IntegrationGrantReque
 from src.models.organization import Organization
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
+from src.schemas.integration_connections import ConnectionConsent
 from src.services.integrations.connections import (
     ConnectionNotFound,
     disconnect_device,
@@ -34,7 +35,10 @@ USER, OTHER_USER, ORG, WORKSPACE, PROJECT, OTHER_PROJECT = (uuid4() for _ in ran
 LAPTOP, DESKTOP = uuid4(), uuid4()
 CONSENT_A, CONSENT_B, CONSENT_DESKTOP, CONSENT_DENIED = (uuid4() for _ in range(4))
 SOON = datetime.now(timezone.utc) + timedelta(hours=1)
-TOKENS = {name: "nous_ig_" + name.ljust(43, "x") for name in ("a", "a2", "b", "d")}
+TOKENS = {name: "nous_ig_" + name.ljust(43, "x") for name in ("a", "a2", "b", "d", "w")}
+# A consumed Plan 07 workspace consent on the desktop (`workspace_consent`).
+CONSENT_WORKSPACE = uuid4()
+LIBRARY = ["library:read", "tools:read"]
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +137,46 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         await _seed(session)
         yield session
     await engine.dispose()
+
+
+@pytest.fixture
+async def workspace_consent(db: AsyncSession) -> None:
+    """CONSENT_WORKSPACE: every live project of WORKSPACE, with its grant."""
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=CONSENT_WORKSPACE,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            device_id=DESKTOP,
+            scopes=LIBRARY,
+            status="consumed",
+            expires_at=SOON,
+        )
+    )
+    await db.execute(
+        insert(IntegrationGrant).values(
+            id=uuid4(),
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            device_id=DESKTOP,
+            request_id=CONSENT_WORKSPACE,
+            scopes=LIBRARY,
+            token_hash=sha256(TOKENS["w"].encode()).hexdigest(),
+            expires_at=SOON,
+            consented_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+
+
+async def _consents(db: AsyncSession, device_id: UUID) -> dict[UUID, ConnectionConsent]:
+    devices = await list_connections(db, await _user(db))
+    device = next(d for d in devices if d.device_id == device_id)
+    return {c.request_id: c for c in device.consents}
 
 
 async def _user(db: AsyncSession, user_id: UUID = USER) -> User:
@@ -306,3 +350,41 @@ async def test_failed_cli_revocation_rolls_back_device_and_grants(
     assert device is not None and device.revoked_at is None
     assert consent is not None and consent.consent_revoked_at is None
     assert all([await _works(db, t) for t in ("a", "a2", "b", "d")])
+
+
+# DV-1: a workspace consent (Plan 07) was labelled through authorized_project
+# with project_id None and silently dropped.
+async def test_lists_a_workspace_consent_with_its_workspace(
+    db: AsyncSession, workspace_consent: None
+) -> None:
+    consents = await _consents(db, DESKTOP)
+    assert set(consents) == {CONSENT_DESKTOP, CONSENT_WORKSPACE}
+    listed = consents[CONSENT_WORKSPACE]
+    assert listed.kind == "workspace"
+    assert (listed.workspace_id, listed.workspace_label) == (WORKSPACE, "Workspace")
+    assert (listed.project_id, listed.project_label) == (None, None)
+    assert listed.scopes == LIBRARY
+    project = consents[CONSENT_DESKTOP]
+    assert project.kind == "project"
+    assert (project.project_label, project.workspace_id) == ("Thesis", None)
+
+
+async def test_revoking_a_workspace_consent_stops_only_it(
+    db: AsyncSession, workspace_consent: None
+) -> None:
+    assert CONSENT_WORKSPACE in await _consents(db, DESKTOP)
+    assert await _works(db, "w") and await _works(db, "d")
+    await revoke_consent(db, await _user(db), CONSENT_WORKSPACE)
+    assert not await _works(db, "w")
+    assert await _works(db, "d")
+    assert set(await _consents(db, DESKTOP)) == {CONSENT_DESKTOP}
+
+
+async def test_a_workspace_consent_is_hidden_once_its_workspace_is_gone(
+    db: AsyncSession, workspace_consent: None
+) -> None:
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+    )
+    await db.commit()
+    assert await _consents(db, DESKTOP) == {}
