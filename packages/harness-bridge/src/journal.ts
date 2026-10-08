@@ -176,6 +176,12 @@ export class Journal {
   workspaceLocked(id: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM locks WHERE workspace=?").get(id);
   }
+  /** Whether this command still holds its workspace's local lock. */
+  holdsLock(commandId: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM locks WHERE command=?")
+      .get(commandId);
+  }
   activeCommands(): BridgeCommand[] {
     return (
       this.db
@@ -809,11 +815,7 @@ export class Journal {
       return;
     // reject() released a refused run's lock only after its terminal
     // observation was journaled: Codex has stopped, nothing to interrupt.
-    if (
-      owner?.state === "denied" &&
-      !this.db.prepare("SELECT 1 FROM locks WHERE command=?").get(owner.id)
-    )
-      return;
+    if (owner?.state === "denied" && !this.holdsLock(owner.id)) return;
     const command = owner
       ? (JSON.parse(owner.command) as BridgeCommand)
       : undefined;

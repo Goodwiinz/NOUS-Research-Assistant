@@ -294,18 +294,16 @@ export async function connectBridge(options: {
             // journal.reject() checks the run id against its own command, so
             // the id logged is never raw server text. It returns false for a
             // run already refused or finished: one notice per run.
-            if (journal.reject(value.reject)) {
-              // reject() releases the folder only once the run's terminal
-              // observation is journaled; mid-run the run keeps its lock.
-              const reserved = journal
-                .activeCommands()
-                .some((c) => c.commandId === value.reject.sourceId);
+            if (journal.reject(value.reject))
+              // reject() releases the bridge's lock only once the run's
+              // terminal observation is journaled; mid-run the run keeps it.
+              // NOUS keeps its own lock unless the refused event was the
+              // replay of one it had stored.
               console.error(
-                reserved
+                journal.holdsLock(value.reject.sourceId)
                   ? `NOUS refused run ${value.reject.runId}: its output is no longer uploaded, and its folder stays reserved until you disconnect, connect and register it again.`
-                  : `NOUS refused run ${value.reject.runId}: its output is no longer uploaded. The run had already finished on this device, so its folder is free.`,
+                  : `NOUS refused run ${value.reject.runId}: its output is no longer uploaded; the run had already finished on this device, so the bridge released its folder, but if NOUS still reports the folder busy, disconnect, connect and register it again.`,
               );
-            }
             sent.delete(`${value.reject.sourceId}/${value.reject.sourceSeq}`);
             sendPending();
             return;

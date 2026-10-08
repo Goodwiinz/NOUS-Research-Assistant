@@ -52,6 +52,12 @@ function start(deviceId: string, expiresAt = later()): BridgeCommand {
   };
 }
 
+// Connection tests stop after a number of polls, not a fixed time, so a slow
+// run still serves every frame its assertions count on; the timeout only ends
+// a connection that stalls, whose assertions then fail.
+const until = (stop: AbortController) =>
+  AbortSignal.any([stop.signal, AbortSignal.timeout(5000)]);
+
 /** Codex double: turns start, and history reports the turn as still running.
  * Like src/adapters/codex.ts, an instance interrupts only a turn it started or
  * read back with inspectTurn, so a fresh one (after a restart) knows none. */
@@ -551,8 +557,10 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
 // event, in place of the ack). Before it, connection.ts read it as an invalid
 // lease frame, closed the socket and reconnected into the same refused run.
 // The notice names the folder as journal.reject() left it: reserved mid-run
-// (D-2), free once the run's terminal observation was journaled (D-2'). The
-// run's other in-flight events are refused too; they log nothing more.
+// (D-2), released by the bridge once the run's terminal observation was
+// journaled (D-2'); NOUS normally keeps its own lock, so that notice says what
+// to do if NOUS still reports the folder busy. The run's other in-flight
+// events are refused too; they log nothing more.
 // Mutations in src/connection.ts: remove the reject branch and connectBridge
 // rejects with "invalid lease response"; always print the reserved notice and
 // "after its local terminal observation" fails; log whatever journal.reject()
@@ -576,6 +584,8 @@ for (const [when, finished] of [
     const received: string[] = [];
     let stop = new AbortController();
     let canonical = 1;
+    let polls = 0;
+    let stopAtPoll = 0; // 0: stop on r2's completion instead
     class Socket extends EventTarget {
       static OPEN = 1;
       readyState = 1;
@@ -591,6 +601,7 @@ for (const [when, finished] of [
       send(raw: string) {
         const value = JSON.parse(raw);
         if (value.poll) {
+          if ((polls += 1) === stopAtPoll) return stop.abort();
           this.reply({ commands: [], lease: { deviceId: device, expiresAt: later(), runs: { [r2.runId]: 1 } } });
           return;
         }
@@ -621,7 +632,7 @@ for (const [when, finished] of [
         credentials: { accessToken: "jwt", grantToken: "grant" },
         journal: j,
         adapterFor: (_workspaceId, runId) => adapters[runId]!,
-        signal: stop.signal,
+        signal: until(stop),
         timing: { pollMs: 10, livenessMs: 1000 },
       });
     try {
@@ -642,18 +653,123 @@ for (const [when, finished] of [
       // printed one notice for the run.
       assert.ok(received.includes(`${r1.runId}#2`));
       const notice = finished
-        ? `NOUS refused run ${r1.runId}: its output is no longer uploaded. The run had already finished on this device, so its folder is free.`
+        ? `NOUS refused run ${r1.runId}: its output is no longer uploaded; the run had already finished on this device, so the bridge released its folder, but if NOUS still reports the folder busy, disconnect, connect and register it again.`
         : `NOUS refused run ${r1.runId}: its output is no longer uploaded, and its folder stays reserved until you disconnect, connect and register it again.`;
       assert.deepEqual(logged.mock.calls.map((c) => c.arguments), [[notice]]);
       // Grant renewal forces a reconnect at least every 15 minutes: nothing of r1
       // is sent again and no new "running" observation is journaled for it.
+      // Stop at the reconnect's third poll, not after a fixed time, so even a
+      // slow run has passed its open and two lease frames, each of which sends
+      // whatever is pending.
       const before = received.length;
       stop = new AbortController();
-      setTimeout(() => stop.abort(), 60);
+      stopAtPoll = polls + 3;
       await connect();
+      assert.equal(polls, stopAtPoll);
       assert.deepEqual(received.slice(before), []);
       assert.deepEqual(j.pending(), []);
       assert.equal(logged.mock.callCount(), 1);
+    } finally {
+      j.close();
+      f.cleanup();
+    }
+  });
+
+// A reject frame that does not match the journal's own command is refused like
+// a malformed ack: connectBridge fails, which closes the socket, and runBridge
+// (src/cli.ts) reconnects. Nothing was dropped, so the next connection sends
+// the same events again. r1's terminal observation is journaled, so a
+// well-formed reject would refuse the run, release its folder (D-2') and print
+// a notice; a malformed one does none of that.
+// Mutation: drop the code check in src/journal.ts reject() and "a reject
+// without its code" connects without error (Missing expected rejection).
+type Receipt = Record<string, unknown>;
+for (const [frame, malformed, error] of [
+  ["an ack without its canonicalSeq", (receipt: Receipt) => ({ ack: receipt }), /acknowledgement identity mismatch/],
+  ["a reject without its code", (receipt: Receipt) => ({ reject: receipt }), /rejection identity mismatch/],
+  [
+    "a reject whose sourceSeq is a string",
+    (receipt: Receipt) => ({ reject: { ...receipt, sourceSeq: String(receipt.sourceSeq), code: "run_access_denied" } }),
+    /rejection identity mismatch/,
+  ],
+  [
+    "a reject without its sourceId",
+    ({ sourceId: _, ...receipt }: Receipt) => ({ reject: { ...receipt, code: "run_access_denied" } }),
+    /unknown rejection/,
+  ],
+] as const)
+  test(`${frame} closes the socket, and the reconnect sends the events again`, async (t) => {
+    const { connectBridge } = await import("../src/connection.ts");
+    const logged = t.mock.method(console, "error", () => {});
+    const f = fixture();
+    const r1 = start(randomUUID());
+    const j = new Journal(f.path, () => options);
+    const stop = new AbortController();
+    const sockets: { sent: string[]; closed: boolean }[] = [];
+    let polls = 0;
+    class Socket extends EventTarget {
+      static OPEN = 1;
+      readyState = 1;
+      seen = { sent: [] as string[], closed: false };
+      constructor() {
+        super();
+        sockets.push(this.seen);
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+      reply(value: unknown) {
+        queueMicrotask(() =>
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) })),
+        );
+      }
+      send(raw: string) {
+        const value = JSON.parse(raw);
+        if (value.poll) {
+          // Ends a connection that wrongly survives the malformed frame.
+          if ((polls += 1) === 5) return stop.abort();
+          this.reply({ commands: [], lease: { deviceId: r1.deviceId, expiresAt: later(), runs: {} } });
+          return;
+        }
+        this.seen.sent.push(`${value.runId}#${value.sourceSeq}`);
+        this.reply(
+          malformed({ runId: value.runId, sourceId: value.sourceId, sourceSeq: value.sourceSeq, generation: value.generation }),
+        );
+      }
+      close() {
+        if (this.readyState !== 3) {
+          this.readyState = 3;
+          this.seen.closed = true;
+          // Asynchronous, as a real WebSocket: the bridge's own error surfaces.
+          queueMicrotask(() => this.dispatchEvent(new Event("close")));
+        }
+      }
+    }
+    withSocket(t, Socket);
+    try {
+      await j.execute(r1, codex("r1")); // r1#1 observation:running
+      j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" }); // r1#2
+      for (const attempt of ["first connection", "reconnect"])
+        await assert.rejects(
+          connectBridge({
+            url: "wss://example.test/api/v1/harness/connect",
+            deviceId: r1.deviceId,
+            credentials: { accessToken: "jwt", grantToken: "grant" },
+            journal: j,
+            adapterFor: () => codex("r1"),
+            signal: until(stop),
+            timing: { pollMs: 10, livenessMs: 1000 },
+          }),
+          error,
+          attempt,
+        );
+      const both = [`${r1.runId}#1`, `${r1.runId}#2`];
+      assert.deepEqual(sockets, [
+        { sent: both, closed: true },
+        { sent: both, closed: true },
+      ]);
+      assert.deepEqual(queued(j), both);
+      assert.equal(j.state(r1.commandId), "terminal_pending");
+      assert.equal(j.workspaceLocked(r1.workspaceId), true);
+      assert.equal(logged.mock.callCount(), 0);
     } finally {
       j.close();
       f.cleanup();
