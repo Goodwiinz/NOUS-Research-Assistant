@@ -902,8 +902,8 @@ def _serve_harness_socket(
 # BR-1. Mutation: backend/src/api/harness.py event branch — remove the
 # `except IntegrationAccessDenied:` around the ingest calls; this test then fails
 # with "one denied run closed the whole device socket".
-# Command: cd backend && /Users/goodwiinz/development/RAG_system/backend/.venv/bin/python
-#   -m pytest tests/unit/services/harness/test_delivery.py -k "denied_run or grant_lost" -xvs
+# Command: cd backend && python -m pytest tests/unit/services/harness/test_delivery.py
+#   -k "denied_run or grant_lost" -xvs
 async def test_socket_rejects_a_denied_run_event_and_keeps_serving_the_device(
     db: AsyncSession,
     context: IntegrationContext,
