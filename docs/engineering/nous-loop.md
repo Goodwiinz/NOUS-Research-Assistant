@@ -301,10 +301,10 @@ and add it to `docs/testing/evidence/README.md`; never attach, commit, or
 upload a `trace*.zip`, which carries session secrets.
 
 The tick cannot be `merged` without a local `PASS` for every touched mapped
-feature. A result of `BLOCKED` or `NOT RUN` ends the tick as `ready-for-human`,
-naming the missing credential, target, or service. When local boot is
-impossible, a Vercel preview with the dev API is an acceptable target only if
-the report names it as such.
+feature. For a touched mapped feature, a result of `BLOCKED` or `NOT RUN` ends
+the tick as `ready-for-human`, naming the missing credential, target, or
+service. A run against any other target, such as a preview deployment, is
+reported under that target's name and is not a local `PASS`.
 
 ### 8. Publish, recheck, and close
 
