@@ -760,6 +760,40 @@ async def test_external_search_caps_results_in_total_across_connectors(
     assert len(result.source_refs) == max_results
 
 
+async def test_external_search_cap_round_robins_uneven_connectors(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Connectors return 1, 6 and 2 rows, plus one row with no source: a
+    # connector that runs out drops out of later rounds instead of failing.
+    rows = (
+        [_external_row("a", 0)]
+        + [_external_row("b", i) for i in range(6)]
+        + [_external_row("c", i) for i in range(2)]
+        + [{**_external_row("none", 0), "source": None}]
+    )
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(return_value={"total_results": len(rows), "results": rows}),
+    )
+    result = await invoke_read(
+        db, context, _invocation("search_external_database", query="q", max_results=7)
+    )
+    assert result.is_error is False
+    payload = result.content[0]
+    assert [row["id"] for row in payload["results"]] == [
+        "a-0",
+        "b-0",
+        "c-0",
+        "none-0",
+        "b-1",
+        "c-1",
+        "b-2",
+    ]
+    assert payload["truncated"] is True
+    assert payload["total_results"] == 10
+
+
 async def _set_content(db: AsyncSession, document_id: UUID, text_: str) -> None:
     await db.execute(
         update(Document)

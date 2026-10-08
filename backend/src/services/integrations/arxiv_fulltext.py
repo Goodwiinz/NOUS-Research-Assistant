@@ -241,8 +241,9 @@ async def get_page(
             # Serve it again without another attempt for RETRY_AFTER_S: a
             # hanging arXiv would otherwise cost every call the whole budget
             # (audit RT-2). Its 7-day life still counts from the real fetch.
-            # A concurrent caller may have refreshed it meanwhile; never put
-            # the old text back over theirs.
+            # A concurrent caller may have refreshed it meanwhile; skip the
+            # re-store if so. The re-read and the write are two awaits, so
+            # this only narrows the window in which their text is overwritten.
             _, latest_fetched_at, _ = await _cached(redis, key)
             if latest_fetched_at <= fetched_at:
                 await _store(
