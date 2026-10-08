@@ -299,13 +299,14 @@ def test_main_fails_when_head_grows_the_ignore_list_against_base(
 
 
 def _schema(feature: dict[str, Any]) -> list[str]:
-    return cfm.check_schema(
+    problems: list[str] = cfm.check_schema(
         {
             "version": 1,
             "features": [feature],
             "ignore": {"pages": [], "routers": []},
         }
     )
+    return problems
 
 
 def test_schema_requires_list_of_string_fields_and_mapping_surfaces() -> None:
