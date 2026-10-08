@@ -18,14 +18,18 @@ Requires ``RETENTION_PURGE_TEST_DATABASE_URL`` (CI) or the local
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
-from typing import Any, Iterator, cast
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from typing import Any, Callable, Iterator, cast
 from unittest.mock import patch
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import Engine, create_engine, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -54,6 +58,8 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.tasks import retention_tasks
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
+
+VERSIONS = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 
 NOW = datetime.now(timezone.utc)
 
@@ -501,3 +507,38 @@ def test_purge_skips_a_chat_postgres_refuses_and_commits_the_rest(
         assert db.get(Thread, blocked) is not None
         # Rolled back to the savepoint: the refused chat keeps its message.
         assert _count(db, ChatMessage, ChatMessage.thread_id == blocked) == 1
+
+
+def _migration() -> ModuleType:
+    path = VERSIONS / "rp01_thread_fk_ondelete.py"
+    spec = importlib.util.spec_from_file_location("rp01_thread_fk_ondelete", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run(engine: Engine, module: ModuleType, direction: str) -> None:
+    with engine.begin() as connection:
+        setattr(module, "op", Operations(MigrationContext.configure(connection)))
+        cast(Callable[[], None], getattr(module, direction))()
+
+
+def test_migration_round_trip_sets_and_restores_the_rules(engine: Engine) -> None:
+    module = _migration()
+    # create_all named every FK <table>_<column>_fkey; the downgrade must find
+    # them by column, and the upgrade must find its own fk_<table>_<column>.
+    _run(engine, module, "downgrade")
+    assert _rules(engine) == {key: ["a"] for key in EXPECTED_RULES}
+
+    with sessionmaker(engine)() as db:
+        owner = _seed_owner(db)
+        bound = _seed_thread(db, owner, age_days=40)
+        _bind_everything(db, owner, bound)
+        db.commit()
+    # NO ACTION again: exactly the wedge HO-2 describes, now one chat at a time.
+    assert _purge(engine)["skipped"] == 1
+
+    _run(engine, module, "upgrade")
+    assert _rules(engine) == {key: [rule] for key, rule in EXPECTED_RULES.items()}
+    assert _purge(engine)["threads"] == 1
