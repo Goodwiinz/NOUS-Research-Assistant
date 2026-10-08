@@ -188,8 +188,10 @@ async def connect(websocket: WebSocket) -> None:
                     except IntegrationAccessDenied:
                         # The grant passed this frame's check, so the denial is
                         # about this run: its chat was deleted or linked to
-                        # another project, its folder binding was removed, or it
-                        # belongs to a superseded consent. The same exception
+                        # another project, its folder binding was removed, it
+                        # belongs to a superseded consent, or, for a new native
+                        # request, the session's recorded grant was renewed and
+                        # has not yet been re-leased. The same exception
                         # also refuses a malformed or mismatched frame: an
                         # unknown run or commandId, a missing approval record,
                         # and, for a producer event or observation, a commandId
@@ -200,6 +202,7 @@ async def connect(websocket: WebSocket) -> None:
                         # the receipt lookup, so a replay of an event NOUS
                         # already stored can be refused too: a reject does not
                         # mean NOUS stored nothing for that run.
+                        #
                         # Refuse the event and keep serving the device's other
                         # runs; a close starved them, because the bridge re-sends
                         # its oldest event first on every reconnect (BR-1). A

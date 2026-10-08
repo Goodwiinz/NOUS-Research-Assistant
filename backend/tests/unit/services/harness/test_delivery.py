@@ -1011,11 +1011,8 @@ async def test_socket_still_closes_when_grant_lost_mid_frame(
 ) -> None:
     # Connect and the frame check pass; a renewal then revokes this token, so the
     # ingest's own grant check denies and the re-check must see the revocation.
-    harness = _serve_harness_socket(
-        monkeypatch,
-        db,
-        AsyncMock(side_effect=[context, context, IntegrationAccessDenied()]),
-    )
+    resolve = AsyncMock(side_effect=[context, context, IntegrationAccessDenied()])
+    harness = _serve_harness_socket(monkeypatch, db, resolve)
     monkeypatch.setattr(
         harness, "ingest_bridge_event", AsyncMock(side_effect=IntegrationAccessDenied())
     )
@@ -1024,6 +1021,8 @@ async def test_socket_still_closes_when_grant_lost_mid_frame(
 
     assert socket.sent == [], "a revoked grant was answered with a per-run reject"
     assert socket.closed == [{"code": 4403, "reason": "Bridge authorization denied"}]
+    # Connect, the frame check and the post-denial re-check: three resolves.
+    assert resolve.await_count == 3
 
 
 @pytest.mark.parametrize(
@@ -1060,6 +1059,7 @@ async def test_socket_rejects_a_denied_run_native_frame_and_keeps_serving_the_de
     harness = _serve_harness_socket(monkeypatch, db, AsyncMock(return_value=context))
     denied = AsyncMock(side_effect=IntegrationAccessDenied())
     monkeypatch.setattr(harness, ingest, denied)
+    # The mock denies only the native ingest; frame 2 just proves the socket serves on.
     socket = _bridge_socket(
         [event(command, body=body).model_dump_json(), event(command).model_dump_json()]
     )
