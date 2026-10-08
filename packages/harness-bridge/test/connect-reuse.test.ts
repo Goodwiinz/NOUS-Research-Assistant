@@ -203,6 +203,20 @@ test("status reports the binding offline, and says not connected without state",
   }
 });
 
+test("a workspace reuse names the scopes it keeps but not workspace add (it has no folders)", async () => {
+  const t = setup();
+  try {
+    const { projectId: _project, ...noProject } = t.base;
+    const workspace = { ...noProject, workspaceId: WORKSPACE, tools: true };
+    await connect({ ...workspace, write: true });
+    await connect(workspace);
+    assert.match(t.messages.at(-1)!, /It keeps scopes this command did not request: tools:write\. To drop them /);
+    assert.doesNotMatch(t.messages.at(-1)!, /workspace add/);
+  } finally {
+    t.cleanup();
+  }
+});
+
 test("a workspace binding is reused like a project one, and the two never reuse each other", async () => {
   const t = setup();
   try {
