@@ -999,6 +999,96 @@ async def test_socket_rejects_a_denied_run_event_and_keeps_serving_the_device(
     assert session is not None and session.workspace_locked is True
 
 
+# Mutation: backend/src/api/harness.py — delete the `await _grant_context(db,
+# token, identity)` re-check inside the event branch's `except
+# IntegrationAccessDenied:`; this test then fails with "a revoked grant was
+# answered with a per-run reject". Command: see the BR-1 test above.
+async def test_socket_still_closes_when_grant_lost_mid_frame(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Connect and the frame check pass; a renewal then revokes this token, so the
+    # ingest's own grant check denies and the re-check must see the revocation.
+    harness = _serve_harness_socket(
+        monkeypatch,
+        db,
+        AsyncMock(side_effect=[context, context, IntegrationAccessDenied()]),
+    )
+    monkeypatch.setattr(
+        harness, "ingest_bridge_event", AsyncMock(side_effect=IntegrationAccessDenied())
+    )
+    socket = _bridge_socket([event(command).model_dump_json()])
+    await harness.connect(socket)
+
+    assert socket.sent == [], "a revoked grant was answered with a per-run reject"
+    assert socket.closed == [{"code": 4403, "reason": "Bridge authorization denied"}]
+
+
+@pytest.mark.parametrize(
+    ("ingest", "body"),
+    [
+        (
+            "ingest_native_request",
+            {
+                "kind": "request",
+                "sessionId": "native-session",
+                "turnId": "native-turn",
+                "itemId": "item-1",
+                "requestId": 7,
+                "method": "item/commandExecution/requestApproval",
+                "params": {},
+            },
+        ),
+        (
+            "ingest_native_response_ack",
+            {"kind": "command_ack", "approvalRecordId": str(uuid4())},
+        ),
+    ],
+    ids=["native_request", "response_ack"],
+)
+async def test_socket_rejects_a_denied_run_native_frame_and_keeps_serving_the_device(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    ingest: str,
+    body: dict[str, Any],
+) -> None:
+    """The native-request and response-ack branches share the BR-1 reject."""
+    harness = _serve_harness_socket(monkeypatch, db, AsyncMock(return_value=context))
+    denied = AsyncMock(side_effect=IntegrationAccessDenied())
+    monkeypatch.setattr(harness, ingest, denied)
+    socket = _bridge_socket(
+        [event(command, body=body).model_dump_json(), event(command).model_dump_json()]
+    )
+    await harness.connect(socket)
+
+    denied.assert_awaited_once()
+    assert socket.closed == [], "one denied native frame closed the device socket"
+    assert socket.sent == [
+        {
+            "reject": {
+                "runId": str(command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": command.generation,
+                "code": "run_access_denied",
+            }
+        },
+        {
+            "ack": {
+                "runId": str(command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": command.generation,
+                "canonicalSeq": 2,
+            }
+        },
+    ]
+
+
 async def test_chat_bound_grant_leases_only_runs_in_its_chat(
     db: AsyncSession, context: IntegrationContext, external_run: Any
 ) -> None:
