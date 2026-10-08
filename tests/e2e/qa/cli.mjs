@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+import { featuresForChangedPaths, loadFeatureMap, scenariosForFeatures } from './feature-map.mjs';
 import { redactText, writeReports } from './report.mjs';
 import { exitCodeForReport, runCampaign } from './runner.mjs';
 import { listScenarios } from './scenarios.mjs';
@@ -67,6 +68,29 @@ export function observeSourceIdentity(env = process.env) {
     dirty,
     provenance,
   };
+}
+
+const GIT_REF = /^[A-Za-z0-9_][A-Za-z0-9_./~^-]{0,127}$/;
+
+/**
+ * Paths changed on this branch since `ref` (merge-base diff) plus untracked
+ * files. A git failure is a configuration error: an empty list would be
+ * misreported as "no mapped feature changed".
+ */
+function defaultChangedPaths(ref) {
+  const run = (args) => {
+    const result = spawnSync('git', args, {
+      cwd: TOOL_REPO_ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 15_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) throw new CLIConfigError(`git ${args[0]} failed for --changed-from ${ref}`);
+    return result.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  };
+  const paths = [...run(['diff', '--name-only', `${ref}...HEAD`]), ...run(['ls-files', '--others', '--exclude-standard'])];
+  return [...new Set(paths)];
 }
 
 function diagnosticMessage(error, env = process.env) {
@@ -166,11 +190,15 @@ function usage() {
     '  --deployment-evidence FILE     validated operator-observed deployment JSON',
     '  --timeout-ms N                 per-scenario timeout (1..300000)',
     '  --max-turns N                  model turn bound (1..50, default 12)',
+    '  --features ID[,ID]             select scenarios for feature-map ids (repeatable; suite becomes all)',
+    '  --changed-from REF             select features whose owned paths changed since REF (exit 2 if none)',
+    '  --evidence-dir DIR             checkpoint PNG/video/trace directory (default .verify-artifacts/<run-id>)',
+    '  --evidence-record DIR          also write the committed evidence README to DIR',
     '  --help                         show this help',
   ].join('\n');
 }
 
-export function parseArgs(argv = [], env = process.env) {
+export async function parseArgs(argv = [], env = process.env, dependencies = {}) {
   if (!Array.isArray(argv)) throw new CLIConfigError('argv must be an array');
   let listOnly = false;
   let baseUrl = env.NOUS_QA_BASE_URL ?? 'http://127.0.0.1:3000';
@@ -185,6 +213,10 @@ export function parseArgs(argv = [], env = process.env) {
   let maxTurns = 12;
   const selectedIds = [];
   let help = false;
+  const featureIds = [];
+  let changedFrom = null;
+  let evidenceDir = env.NOUS_QA_EVIDENCE_DIR ?? null;
+  let evidenceRecordDir = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -202,7 +234,34 @@ export function parseArgs(argv = [], env = process.env) {
     if (arg === '--deployment-evidence') { deploymentEvidencePath = valueAfter(argv, index++, arg); continue; }
     if (arg === '--timeout-ms') { timeoutMs = integer(valueAfter(argv, index++, arg), arg, 1, 300_000); continue; }
     if (arg === '--max-turns') { maxTurns = integer(valueAfter(argv, index++, arg), arg, 1, 50); continue; }
+    if (arg === '--features') {
+      featureIds.push(...valueAfter(argv, index++, arg).split(',').map((value) => value.trim()).filter(Boolean));
+      continue;
+    }
+    if (arg === '--changed-from') { changedFrom = valueAfter(argv, index++, arg); continue; }
+    if (arg === '--evidence-dir') { evidenceDir = valueAfter(argv, index++, arg); continue; }
+    if (arg === '--evidence-record') { evidenceRecordDir = valueAfter(argv, index++, arg); continue; }
     throw new CLIConfigError(`Unknown argument: ${arg}`);
+  }
+  let features = [];
+  if (featureIds.length || changedFrom !== null) {
+    if (changedFrom !== null && !GIT_REF.test(changedFrom)) throw new CLIConfigError('--changed-from must be a git ref');
+    const mapPath = resolve(env.NOUS_QA_FEATURE_MAP ?? join(TOOL_REPO_ROOT, 'docs/engineering/feature-map.yaml'));
+    let map;
+    try { map = await loadFeatureMap(mapPath); } catch (error) { throw new CLIConfigError(`Cannot read feature map: ${error?.message ?? error}`); }
+    features = [...new Set(featureIds)];
+    if (changedFrom !== null) {
+      const changed = await (dependencies.changedPaths ?? defaultChangedPaths)(changedFrom);
+      for (const id of featuresForChangedPaths(map, changed)) if (!features.includes(id)) features.push(id);
+      if (features.length === 0) throw new CLIConfigError(`No mapped feature changed since ${changedFrom}`);
+    }
+    let ids;
+    try { ids = scenariosForFeatures(map, features); } catch (error) { throw new CLIConfigError(error.message); }
+    // The runner rejects ids outside the chosen suite; feature selection
+    // spans suites, so it always runs as `all`.
+    suite = 'all';
+    for (const id of ids) if (!selectedIds.includes(id)) selectedIds.push(id);
+    if (selectedIds.length === 0) throw new CLIConfigError('Selected features map no scenario yet');
   }
   if (!SUITES.has(suite)) throw new CLIConfigError(`Unknown suite: ${suite}`);
   baseUrl = validateTargetUrl(baseUrl, '--base-url');
@@ -240,13 +299,16 @@ export function parseArgs(argv = [], env = process.env) {
     runId,
     command,
     sourceIdentity: observeSourceIdentity(env),
+    features,
+    evidenceDir: resolve(evidenceDir ?? `.verify-artifacts/${runId}`),
+    evidenceRecordDir: evidenceRecordDir ? resolve(evidenceRecordDir) : null,
   };
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env, dependencies = {}) {
   let config;
   try {
-    config = parseArgs(argv, env);
+    config = await parseArgs(argv, env, dependencies);
   } catch (error) {
     console.error(`nous-qa: ${diagnosticMessage(error, env)}`);
     return 2;
