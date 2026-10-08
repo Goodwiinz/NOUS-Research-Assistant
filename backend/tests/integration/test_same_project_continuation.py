@@ -39,6 +39,10 @@ after each:
   declare no ``relationship()``, so the unit of work inserted
   ``artifact_lifecycle_outbox`` before ``artifact_versions`` and PostgreSQL
   refused the foreign key. SQLite unit tests do not enforce it.
+* restoring ``Workspace.organization_id == organization_id`` in
+  ``services/integrations/handoffs.py::_live_chain`` (the code before WG-2c)
+  makes ``[legacy-null-org]`` FAIL at step 3's card GET (``404 == 200``)
+  while ``[org]`` passes (2026-10-08, local PostgreSQL 14.23).
 """
 
 from __future__ import annotations
