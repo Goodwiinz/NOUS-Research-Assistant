@@ -236,7 +236,7 @@ export async function connect(
     announce(
       `Reusing binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.` +
         (retained.length
-          ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also stops the device's other runs), run nous-harness disconnect or revoke its access at /integrations/devices, then connect again.`
+          ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also stops the device's runs), revoke this device's access at /integrations/devices, or run nous-harness disconnect, then connect again; after disconnect, register its folders again with nous-harness workspace add.`
           : ""),
     );
     return { deviceId: previous.deviceId, credentialHandle: previous.credentialHandle };

@@ -82,7 +82,7 @@ test("same binding with a live grant reuses it without login or consent", async 
     assert.deepEqual(await connect({ ...t.base, threadId: CHAT, tools: true }), first);
     assert.match(
       t.messages.at(-1)!,
-      /It keeps scopes this command did not request: handoff:read, handoff:write\. To drop them \(which also stops the device's other runs\), run nous-harness disconnect or revoke its access at \/integrations\/devices, then connect again\.$/,
+      /It keeps scopes this command did not request: handoff:read, handoff:write\. To drop them \(which also stops the device's runs\), revoke this device's access at \/integrations\/devices, or run nous-harness disconnect, then connect again; after disconnect, register its folders again with nous-harness workspace add\.$/,
     );
     assert.ok(!t.messages.join("\n").includes("secret"));
   } finally {
