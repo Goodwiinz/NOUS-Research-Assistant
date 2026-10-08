@@ -714,6 +714,9 @@ export async function mcpInstallCommand(
         `several workspaces are registered; pass --root with one of: ${roots.join(", ")}`,
       );
   }
+  // Build first: a bad stored API URL or state path throws here, before any
+  // hint points at a command that is never shown.
+  const command = standaloneInstallCommand(mcpSession(stateDir, state, root));
   const announce = options.announce ?? console.error;
   // RT-2: this package never edits ~/.codex/config.toml, so say what to add,
   // once the command is certain. The publish line stays last: artifacts.test.ts
@@ -727,7 +730,7 @@ export async function mcpInstallCommand(
         ? `artifacts_publish will publish from ${root}`
         : "no workspace registered; artifacts_publish will not be offered",
     );
-  return standaloneInstallCommand(mcpSession(stateDir, state, root));
+  return command;
 }
 /** Offline summary of the local binding, grant expiry and handoff queue. */
 export async function status(options: {

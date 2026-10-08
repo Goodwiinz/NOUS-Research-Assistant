@@ -41,7 +41,7 @@ pnpm --filter @nous/harness-bridge start connect --api https://nous.example/api/
 pnpm --filter @nous/harness-bridge start mcp install
 ```
 
-`mcp install` also prints, on stderr, a `tool_timeout_sec = 150` line to add under `[mcp_servers.nous]` in `~/.codex/config.toml`, again after each `codex mcp add nous` (which rewrites that table); managed sessions set it themselves. Without it Codex stops waiting after 60 s, and the arXiv tools may take up to 125 s. The bridge waits 135 s for `search_arxiv` and `get_arxiv_paper_content` (above NOUS's own 120 s and 125 s limits) and 30 s for every other read tool, and reports a timeout as the tool error `upstream_timeout`.
+`mcp install` also prints, on stderr, a `tool_timeout_sec = 150` line to add under `[mcp_servers.nous]` in `~/.codex/config.toml`; managed sessions set it themselves. Add it again after every `codex mcp add nous`, which rewrites that table. Without it Codex stops waiting after 60 s, and the arXiv tools may take up to 125 s. The bridge waits 135 s for `search_arxiv` and `get_arxiv_paper_content` (above NOUS's own limits of 120 s and 125 s respectively) and 30 s for every other read tool, and reports a timeout as the tool error `upstream_timeout`.
 
 Tools are the backend's read allowlist. All are under the `tools:read` scope except `list_library`, which needs `library:read` (see [Workspace connections and library scopes](#workspace-connections-and-library-scopes)):
 

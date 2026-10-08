@@ -365,6 +365,8 @@ test("mcp install binds a root only when unambiguous or explicit", async () => {
     const shown = announced.length;
     await assert.rejects(install({ ...base, workspaces: [one, two] }), /pass --root/);
     await assert.rejects(install({ ...base, workspaces: [one, two] }, "/nope"), /registered workspace root/);
+    // A stored API URL the MCP child would refuse fails before any hint too.
+    await assert.rejects(install({ ...base, apiUrl: "http://nous.example/api/v1" }), /requires HTTPS/);
     assert.equal(announced.length, shown, announced.slice(shown).join("\n"));
     assert.ok((await install({ ...base, workspaces: [one, two] }, ws.outside)).includes(`'--root' '${ws.outside}'`));
     // Without the publish scope no root is ever bound.
@@ -594,6 +596,7 @@ test("mcp install prints one stdout line, announces the root on stderr, and acce
     assert.equal(stdout.trim().split("\n").length, 1);
     assert.ok(stdout.includes(`'--root' '${ws.dir}'`), stdout);
     assert.match(stderr, /will publish from/);
+    assert.match(stderr, /tool_timeout_sec = 150/);
     // --root without the publish scope is refused rather than ignored.
     await store.writeLocal("connection", { apiUrl: "https://nous.example/api/v1", deviceId: randomUUID(), projectId: randomUUID(), credentialHandle: randomUUID(), scopes: ["harness:execute", "tools:read"], workspaces: [] } satisfies LocalState);
     await assert.rejects(mcpInstallCommand(stateDir, { root: ws.dir, announce: () => {} }), /--root requires artifacts:publish/);
