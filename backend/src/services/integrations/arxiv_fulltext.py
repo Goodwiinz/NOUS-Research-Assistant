@@ -241,13 +241,17 @@ async def get_page(
             # Serve it again without another attempt for RETRY_AFTER_S: a
             # hanging arXiv would otherwise cost every call the whole budget
             # (audit RT-2). Its 7-day life still counts from the real fetch.
-            await _store(
-                redis,
-                key,
-                text,
-                fetched_at=fetched_at,
-                retry_after=time.time() + RETRY_AFTER_S,
-            )
+            # A concurrent caller may have refreshed it meanwhile; never put
+            # the old text back over theirs.
+            _, latest_fetched_at, _ = await _cached(redis, key)
+            if latest_fetched_at <= fetched_at:
+                await _store(
+                    redis,
+                    key,
+                    text,
+                    fetched_at=fetched_at,
+                    retry_after=time.time() + RETRY_AFTER_S,
+                )
         else:
             if text:  # never cache an empty extraction; the next call retries
                 await _store(redis, key, text)
