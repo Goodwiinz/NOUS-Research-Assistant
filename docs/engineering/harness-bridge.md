@@ -96,6 +96,20 @@ Command requests support one-time allow/deny. File-change requests stay deny-onl
 
 The local journal records native command intent before sending it. If acceptance or an interrupt is ambiguous, the bridge does not replay that action and retains the workspace lock while it reconciles exact Codex history. An unmatched or unverifiable native action remains quarantined; restarting the bridge with the same state allows reconciliation to continue. Do not remove the journal, clear the lock manually, or treat a WebSocket close/interrupt receipt as proof that Codex stopped.
 
+**A run NOUS refuses.** The socket re-checks the device grant on every frame. It checks each event against its own run's authority: the run's chat, that chat's project link, the folder binding, the user's access, and the consent the run was started under.
+
+When the grant is valid but that run's authority is gone (for example, its chat was deleted or linked to another project, or its folder registration was removed), NOUS writes nothing for that event and answers it with `{"reject": {"runId", "sourceId", "sourceSeq", "generation", "code": "run_access_denied"}}` instead of closing the socket. It sends the same reply for an event it cannot match to its run, such as an unknown run or command, or a device, folder or generation mismatch, so the code does not always mean that access was lost. NOUS re-checks the grant before it replies. A token revoked mid-frame, by a renewal or a disconnect, therefore still closes the socket with 4403, like any other grant-level failure.
+
+The bridge marks the run `denied` in its journal and prints one notice for it. It drops the run's unsent events, journals nothing more for it, and keeps uploading the device's other runs. Closing the socket instead stalled the whole device: the bridge re-sends its oldest unacknowledged event first on every reconnect, and each reconnect journaled the refused run again. A refusal is final for that run, even if its access later returns.
+
+A reject does not prove that NOUS stored nothing for the run. NOUS authorizes an event before it looks up the event's receipt, so it also refuses the replay of an event it had already stored. Unless NOUS had already stored the run's terminal observation, it keeps the run's status and its workspace lock, and a new run in that folder fails with "A response already owns this local workspace." If it had, its reconcile pass may still finalize the run and unlock the folder on the server.
+
+On the bridge, the outcome depends on whether the run finished on this computer, and the notice says which case applies. If the run's terminal observation is already journaled but not yet acknowledged, Codex has stopped writing, so the bridge releases its local lock. Otherwise the reject is not terminal evidence: the bridge keeps its local lock and stops renewing the run's lease, even while NOUS still offers one, so the lease watchdog interrupts the native turn once the lease lapses, also after a restart. While either lock remains, the folder stays reserved on that computer. To free it, run `disconnect`, `connect` and `workspace add` again, which registers the folder under a new ID: `connect` with the same options reuses the stored binding, and `workspace add` alone returns the folder's existing ID.
+
+A bridge older than this change treats the reject frame as invalid and reconnects, so one refused run still stalls it: update the bridge together with the backend.
+
+`backend/tests/unit/services/harness/test_delivery.py` (`-k "denied_run or grant_lost"`) and `packages/harness-bridge/test/denied-run.test.ts` cover this. Live acceptance is **NOT RUN**.
+
 For an uncertain interrupt that still cannot reconcile, stop the bridge and run:
 
 ```sh

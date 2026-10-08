@@ -126,6 +126,8 @@ pnpm --filter @nous/harness-bridge start handoff discard HANDOFF_ID
 
 Browser disconnect stops observation, not Codex execution. Reopening the same project chat attaches to the persisted run stream. If local command acceptance or interruption is ambiguous, the bridge journals the uncertainty, does not replay the native action, and keeps the affected workspace quarantined until reconciliation provides terminal evidence. Restart the bridge with the same local state directory and let reconciliation run; do not delete or edit `journal.sqlite` to unlock a workspace.
 
+If NOUS refuses one run's events while this device's grant is still valid (its chat was deleted or linked to another project, or its folder registration was removed), the bridge prints a notice, stops uploading that run and keeps serving the device's other runs. If the run had already finished on this computer, the bridge releases its folder; if NOUS still reports the folder busy, run `disconnect`, `connect` and `workspace add` again. Otherwise the folder stays reserved on this computer until you run those three commands, which register it under a new ID, and the bridge still interrupts the run's Codex turn once its lease lapses. Expired or revoked access still disconnects the bridge. See `docs/engineering/harness-bridge.md`, "A run NOUS refuses".
+
 For an uncertain interrupt that cannot be reconciled, stop the bridge and inspect the recorded command IDs:
 
 ```sh
