@@ -301,8 +301,8 @@ export async function connectBridge(options: {
               // replay of one it had stored.
               console.error(
                 journal.holdsLock(value.reject.sourceId)
-                  ? `NOUS refused run ${value.reject.runId}: its output is no longer uploaded, and its folder stays reserved until you run disconnect, connect and workspace add again (this also stops this device's other runs).`
-                  : `NOUS refused run ${value.reject.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder, but if NOUS still reports the folder busy, run disconnect, connect and workspace add again (this also stops this device's other runs).`,
+                  ? `NOUS refused run ${value.reject.runId}: its output is no longer uploaded, and its folder stays reserved until you run disconnect, connect and workspace add again (which also stops the device's other runs).`
+                  : `NOUS refused run ${value.reject.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder, but if NOUS still reports the folder busy, run disconnect, connect and workspace add again (which also stops the device's other runs).`,
               );
             sent.delete(`${value.reject.sourceId}/${value.reject.sourceSeq}`);
             sendPending();

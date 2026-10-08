@@ -668,8 +668,8 @@ for (const [when, finished] of [
       // printed one notice for the run.
       assert.ok(received.includes(`${r1.runId}#2`));
       const notice = finished
-        ? `NOUS refused run ${r1.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder, but if NOUS still reports the folder busy, run disconnect, connect and workspace add again (this also stops this device's other runs).`
-        : `NOUS refused run ${r1.runId}: its output is no longer uploaded, and its folder stays reserved until you run disconnect, connect and workspace add again (this also stops this device's other runs).`;
+        ? `NOUS refused run ${r1.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder, but if NOUS still reports the folder busy, run disconnect, connect and workspace add again (which also stops the device's other runs).`
+        : `NOUS refused run ${r1.runId}: its output is no longer uploaded, and its folder stays reserved until you run disconnect, connect and workspace add again (which also stops the device's other runs).`;
       assert.deepEqual(logged.mock.calls.map((c) => c.arguments), [[notice]]);
       // Grant renewal forces a reconnect at least every 15 minutes: nothing of r1
       // is sent again and no new "running" observation is journaled for it.
