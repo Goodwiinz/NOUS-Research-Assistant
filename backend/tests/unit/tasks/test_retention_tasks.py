@@ -357,8 +357,10 @@ def test_soft_deleted_apply_aborts_on_a_lost_connection(
         session_factory, is_deleted=True, updated_at=old + timedelta(days=10)
     )
     delete_checkpoints = retention_tasks._delete_checkpoint_rows
+    attempted: list[str] = []
 
     def drop_connection(db, thread_id: str) -> int:
+        attempted.append(thread_id)
         if thread_id == lost:
             raise OperationalError(
                 "DELETE FROM checkpoints",
@@ -377,8 +379,11 @@ def test_soft_deleted_apply_aborts_on_a_lost_connection(
             _retention_settings(apply=True),
         )
 
+    # The run stopped at ``lost``: ``later`` (newer, so next in the batch) was
+    # never attempted, not merely rolled back with the run.
+    assert attempted == [lost]
     assert _thread_exists(session_factory, lost)
-    assert _thread_exists(session_factory, later)  # never attempted
+    assert _thread_exists(session_factory, later)
 
 
 # ---------------------------------------------------------------------------

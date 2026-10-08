@@ -24,6 +24,12 @@ A live FK's name depends on how its table was made (a revision's explicit
 name, PostgreSQL's ``<table>_<column>_fkey``, or r6h3's ``create_all`` of the
 model), so each one is found by its column and recreated as
 ``fk_<table>_<column>``.
+
+Lock footprint: the upgrade holds ACCESS EXCLUSIVE on ``threads``,
+``chat_messages`` and ``integration_grant_requests`` (and on each referencing
+table) until the whole upgrade commits, with no ``lock_timeout`` (decision
+D-A3), so a stuck Argo migration Job means a long-running transaction holding
+those tables.
 """
 
 from typing import Literal
