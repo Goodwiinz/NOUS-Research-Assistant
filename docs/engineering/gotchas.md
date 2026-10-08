@@ -28,6 +28,7 @@ These are hard-won invariants — verify against code before assuming one has ch
 - Project (Collection) ownership = `Workspace.owner_id` — Collection has **no** `owner_id` (join Workspace).
 - Agent tools + the RAG node must verify project ownership (`_verify_project_ownership` / `_user_owns_project`) before using a client-supplied `project_id`; an unscoped 409/suggestion/filter leaks other tenants' titles/ids.
 - `require_admin` is a per-user role, not a tenant boundary.
+- A NULL `workspaces.organization_id` (legacy rows) means the workspace belongs to its owner's organization, as [`project_access.py`](../../backend/src/services/research_engine/project_access.py) coalesces it. Integration code must compare a workspace's organization only through `workspace_in_org` / `workspace_organization_id` in [`services/integrations/context.py`](../../backend/src/services/integrations/context.py), never `Workspace.organization_id ==` directly (WG-2). Rule (c) in [`test_integration_boundaries.py`](../../backend/tests/unit/architecture/test_integration_boundaries.py) enforces this for the integration layer only (`services/integrations/`, `api/integrations/` and `api/threads/workspace_routes/threads.py`); other modules are not swept.
 
 ## Search
 

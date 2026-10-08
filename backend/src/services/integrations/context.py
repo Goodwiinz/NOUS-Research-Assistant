@@ -104,8 +104,9 @@ def _legacy_workspace_in_org(organization_id: UUID) -> ColumnElement[bool]:
 def workspace_in_org(organization_id: UUID | None) -> ColumnElement[bool]:
     """``Workspace`` belongs to ``organization_id``, legacy NULL rows included.
 
-    The one organization predicate for integration queries that join
-    ``Workspace``. Never compare ``Workspace.organization_id`` directly
+    The organization predicate for integration data queries that join
+    ``Workspace`` (grant checks use ``_workspace_organization_admits``).
+    Never compare ``Workspace.organization_id`` directly
     (rule c of test_integration_boundaries.py): 2c3d56d82 taught two checks
     the legacy rule and missed three (WG-2). A missing organization admits
     nothing: ``== None`` would compile to ``IS NULL`` and match every legacy row.
@@ -330,7 +331,9 @@ async def validate_binding(
                     ),
                 ),
                 # The chat's workspace is in the grant's organization, by the
-                # same legacy rule as authorized_project (DECISION B-1).
+                # same legacy rule as authorized_project: a legacy NULL-org
+                # workspace whose owner is in another organization is refused
+                # here, matching web access.
                 workspace_in_org(organization_id),
                 Thread.source_project_id == project_id,
             )
