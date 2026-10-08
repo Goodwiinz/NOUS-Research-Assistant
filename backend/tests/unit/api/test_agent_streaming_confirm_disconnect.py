@@ -13,14 +13,39 @@ Removing its ownership release at :4244 fails both '-k "finished and confirmatio
 cases; removing the release at :4453 fails both '-k "finished and done"' cases.
 The latter mutations cancel a parked run / mark a completed answer stopped.
 Restore the source byte-for-byte, then run this whole file to verify all guards.
+
+PR #1841 commit-boundary mutation verification (2026-10-08), from backend/:
+    python -m pytest tests/unit/api/test_agent_streaming_confirm_disconnect.py \
+        -q --no-cov -o log_cli=false --tb=short --color=no -k '<selector>'
+
+Each mutation below was applied independently and observed to fail with the
+listed selector; streaming.py was restored byte-for-byte after every run:
+
+* :4264, relinquish ownership in the parking exception handler:
+  ``failed_parking_retains`` -> 1 failure (orphaned RUNNING owner).
+* :3766, await claim_confirmation_run directly without the protected task:
+  ``claim_commit_cancellation`` -> 2 failures (committed claim left RUNNING).
+* :4261, await park_confirmation_run directly:
+  ``terminal_commit_cancellation and confirmation`` -> 2 failures (park cancelled).
+* :4490, await complete_confirmation_run directly:
+  ``terminal_commit_cancellation and done`` -> 2 failures (answer marked stopped).
+* :1682, omit propagation of the captured cancellation after the result:
+  ``claim_commit_cancellation and task`` -> 2 failures (request kept running).
+* :1668, omit the child-error handoff to cleanup_task.result():
+  ``failed_park_during and task`` -> 1 failure (parking error lost cancellation).
+
+The barriers model a durable database write whose result has not returned yet.
+Both repeated Task.cancel() and AnyIO request-scope cancellation are covered.
+These are isolated transition tests, not live PostgreSQL concurrency evidence.
 """
 
 import asyncio
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from anyio import CancelScope
 
 from tests.utils.agent_thread_access import editable_thread_getter
 
@@ -467,6 +492,183 @@ async def test_finished_confirm_close_preserves_committed_disposition(
     ctx.finalize.assert_awaited_once()
     assert all(not call.kwargs.get("stopped") for call in ctx.persist.await_args_list)
     ctx.db.close.assert_awaited_once()
+
+
+def _nested_confirmation(ctx):
+    nested = SimpleNamespace(
+        values=ctx.snapshot.values,
+        tasks=(
+            SimpleNamespace(
+                interrupts=(SimpleNamespace(value={"message": "Next action?"}),)
+            ),
+        ),
+    )
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, nested]
+
+
+async def _cancel_while_commit_returns(ctx, committed, release, cancellation):
+    """Cancel after the write, before its result reaches the stream producer."""
+    frames = []
+    scope = CancelScope()
+
+    async def consume():
+        with scope:
+            async for frame in ctx.stream:
+                frames.append(frame)
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(committed.wait(), timeout=2)
+        if cancellation == "scope":
+            scope.cancel()
+        else:
+            task.cancel("client disconnected during commit")
+        # Let cancellation reach the suspended await before releasing the ACK.
+        await asyncio.sleep(0)
+        if cancellation == "task":
+            task.cancel("repeated disconnect cancellation")
+            await asyncio.sleep(0)
+        release.set()
+        if cancellation == "task":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        else:
+            await asyncio.wait_for(task, timeout=2)
+            assert scope.cancelled_caught
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    return frames
+
+
+@pytest.mark.asyncio
+async def test_failed_parking_retains_cleanup_ownership(confirm_lifecycle):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    _nested_confirmation(ctx)
+    original_finalize = ctx.finalize.side_effect
+
+    async def fail_parking(*args, **kwargs):
+        if kwargs["status"] == JobStatus.AWAITING_CONFIRMATION:
+            raise RuntimeError("parking transaction failed before commit")
+        return await original_finalize(*args, **kwargs)
+
+    ctx.finalize.side_effect = fail_parking
+    async for frame in ctx.stream:
+        if "event: confirmation" in frame:
+            break
+    else:
+        pytest.fail("missing nested confirmation")
+    await ctx.stream.aclose()
+
+    assert ctx.run.status == JobStatus.CANCELLED, "failed parking orphaned the owner"
+    assert ctx.graph.aclosed
+    ctx.persist.assert_awaited_once()
+    assert ctx.persist.await_args.kwargs["stopped"] is True
+    assert ctx.finalize.await_count == 2
+    ctx.db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+async def test_failed_park_during_cancellation_cancels_owner(
+    confirm_lifecycle, cancellation
+):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    _nested_confirmation(ctx)
+    waiting = asyncio.Event()
+    release = asyncio.Event()
+    original_finalize = ctx.finalize.side_effect
+
+    async def fail_parking(*args, **kwargs):
+        if kwargs["status"] == JobStatus.AWAITING_CONFIRMATION:
+            waiting.set()
+            await release.wait()
+            raise RuntimeError("parking transaction failed before commit")
+        return await original_finalize(*args, **kwargs)
+
+    ctx.finalize.side_effect = fail_parking
+    frames = await _cancel_while_commit_returns(ctx, waiting, release, cancellation)
+
+    assert ctx.run.status == JobStatus.CANCELLED, "failed parking orphaned the owner"
+    ctx.persist.assert_awaited_once()
+    assert ctx.persist.await_args.kwargs["stopped"] is True
+    assert ctx.finalize.await_count == 2
+    assert not any("event: confirmation" in frame for frame in frames)
+    ctx.db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+@pytest.mark.parametrize("claim_won", [True, False])
+async def test_claim_commit_cancellation_resolves_ownership(
+    confirm_lifecycle, cancellation, claim_won
+):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    committed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def claim(*args, **kwargs):
+        # The winner's write is durable, but the caller has not received it.
+        ctx.run.status = JobStatus.RUNNING
+        committed.set()
+        await release.wait()
+        return claim_won
+
+    ctx.claim.side_effect = claim
+    frames = await _cancel_while_commit_returns(ctx, committed, release, cancellation)
+
+    expected = JobStatus.CANCELLED if claim_won else JobStatus.RUNNING
+    assert ctx.run.status == expected, "claim commit outcome was lost on cancellation"
+    assert ctx.finalize.await_count == int(claim_won)
+    ctx.graph.astream_events.assert_not_called()
+    ctx.persist.assert_not_awaited()
+    ctx.db.close.assert_awaited_once()
+    assert not frames, "cancelled claim resumed the graph or emitted a response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+@pytest.mark.parametrize("terminal", ["done", "confirmation"])
+async def test_terminal_commit_cancellation_preserves_disposition(
+    confirm_lifecycle, cancellation, terminal
+):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    expected = (
+        JobStatus.COMPLETED if terminal == "done" else JobStatus.AWAITING_CONFIRMATION
+    )
+    if terminal == "confirmation":
+        _nested_confirmation(ctx)
+    committed = asyncio.Event()
+    release = asyncio.Event()
+    original_finalize = ctx.finalize.side_effect
+
+    async def finalize(*args, **kwargs):
+        result = await original_finalize(*args, **kwargs)
+        if kwargs["status"] == expected:
+            committed.set()
+            await release.wait()
+        return result
+
+    ctx.finalize.side_effect = finalize
+    frames = await _cancel_while_commit_returns(ctx, committed, release, cancellation)
+
+    assert ctx.run.status == expected, "disconnect overwrote the committed disposition"
+    ctx.mark_stopped.assert_not_awaited()
+    ctx.finalize.assert_awaited_once()
+    assert all(not call.kwargs.get("stopped") for call in ctx.persist.await_args_list)
+    ctx.db.close.assert_awaited_once()
+    assert not any(f"event: {terminal}" in frame for frame in frames)
 
 
 @pytest.mark.asyncio
