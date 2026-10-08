@@ -55,6 +55,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy import table as sa_table
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from src.core.config import get_settings
 from src.core.database import SessionLocal
@@ -202,6 +203,7 @@ def purge_soft_deleted_threads(organization_id: Optional[str] = None) -> dict:
         candidates = q.order_by(Thread.updated_at.asc()).limit(batch_size).all()
 
         threads_removed = 0
+        threads_skipped = 0
         messages_removed = 0
         checkpoints_removed = 0
 
@@ -230,16 +232,32 @@ def purge_soft_deleted_threads(organization_id: Optional[str] = None) -> dict:
 
             # APPLY: messages first (explicit, not relying on DB cascade —
             # sqlite does not enforce FK cascade by default), then checkpoint
-            # rows, then the thread row.
-            messages_removed += (
-                db.query(ChatMessage)
-                .filter(ChatMessage.thread_id == thread.id)
-                .delete(synchronize_session=False)
-            )
-            checkpoints_removed += _delete_checkpoint_rows(db, tid)
-            db.query(Thread).filter(Thread.id == thread.id).delete(
-                synchronize_session=False
-            )
+            # rows, then the thread row. Each thread in its own SAVEPOINT: a
+            # row the database still refuses to delete rolls back that thread
+            # alone, never the batch (one blocked thread used to stop every
+            # org's purge on every run, audit HO-2).
+            try:
+                with db.begin_nested():
+                    messages = (
+                        db.query(ChatMessage)
+                        .filter(ChatMessage.thread_id == thread.id)
+                        .delete(synchronize_session=False)
+                    )
+                    checkpoints = _delete_checkpoint_rows(db, tid)
+                    db.query(Thread).filter(Thread.id == thread.id).delete(
+                        synchronize_session=False
+                    )
+            except DBAPIError:
+                threads_skipped += 1
+                logger.exception(
+                    "purge_soft_deleted_threads: skipped thread %s (org=%s); "
+                    "the database refused its delete",
+                    tid,
+                    org_id,
+                )
+                continue
+            messages_removed += messages
+            checkpoints_removed += checkpoints
             threads_removed += 1
             logger.info(
                 "purge_soft_deleted_threads: deleted thread %s (org=%s)", tid, org_id
@@ -251,6 +269,7 @@ def purge_soft_deleted_threads(organization_id: Optional[str] = None) -> dict:
         result = {
             "mode": "apply" if apply else "dry-run",
             "threads": threads_removed,
+            "skipped": threads_skipped,
             "messages": messages_removed,
             "checkpoints": checkpoints_removed,
             "batch_capped": len(candidates) >= batch_size,

@@ -26,6 +26,7 @@ from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy import table as sa_table
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 import src.models  # noqa: F401 — load full mapper registry (relationships)
@@ -281,6 +282,53 @@ def test_soft_deleted_org_scoping(session_factory):
     assert result["threads"] == 1
     assert not _thread_exists(session_factory, scoped)  # in-scope org deleted
     assert _thread_exists(session_factory, keep)  # other org untouched
+
+
+def test_soft_deleted_apply_skips_a_thread_the_database_refuses(
+    session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One thread whose delete fails is rolled back alone and skipped; the
+    rest of the batch still commits (audit HO-2: one blocked thread used to
+    roll back every org's purge on every run).
+
+    Mutation check (docs/engineering/testing.md): in
+    purge_soft_deleted_threads replace ``with db.begin_nested():`` by
+    ``if True:`` and this fails on ``_message_count(..., blocked) == 2``
+    (0: the refused thread's messages were committed deleted); remove the
+    ``try``/``except DBAPIError`` as well and it fails with IntegrityError.
+    """
+    old = NOW - timedelta(days=60)
+    oldest, _ = _seed_thread(session_factory, is_deleted=True, updated_at=old)
+    blocked, _ = _seed_thread(
+        session_factory, is_deleted=True, updated_at=old + timedelta(days=10)
+    )
+    newest, _ = _seed_thread(
+        session_factory, is_deleted=True, updated_at=old + timedelta(days=20)
+    )
+    delete_checkpoints = retention_tasks._delete_checkpoint_rows
+
+    def refuse_blocked(db, thread_id: str) -> int:
+        # Runs after the thread's messages are deleted, so only a savepoint
+        # can bring them back.
+        if thread_id == blocked:
+            raise IntegrityError("DELETE FROM threads", {}, Exception("referenced"))
+        return delete_checkpoints(db, thread_id)
+
+    monkeypatch.setattr(retention_tasks, "_delete_checkpoint_rows", refuse_blocked)
+
+    result = _run(
+        retention_tasks.purge_soft_deleted_threads,
+        session_factory,
+        _retention_settings(apply=True),
+    )
+
+    assert (result["threads"], result["skipped"]) == (2, 1)
+    assert (result["messages"], result["checkpoints"]) == (4, 8)
+    assert not _thread_exists(session_factory, oldest)
+    assert not _thread_exists(session_factory, newest)
+    assert _thread_exists(session_factory, blocked)
+    assert _message_count(session_factory, blocked) == 2
+    assert _checkpoint_count(session_factory, blocked) == 4
 
 
 # ---------------------------------------------------------------------------

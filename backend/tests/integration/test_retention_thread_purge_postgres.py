@@ -461,3 +461,43 @@ def test_purge_deletes_a_chat_that_harness_and_artifact_rows_reference(
 
 def test_models_declare_the_rules_the_migration_sets(engine: Engine) -> None:
     assert _rules(engine) == {key: [rule] for key, rule in EXPECTED_RULES.items()}
+
+
+def test_purge_skips_a_chat_postgres_refuses_and_commits_the_rest(
+    engine: Engine,
+) -> None:
+    """A row the rules do not cover (a future table, a manual FK) costs only
+    its own chat: the savepoint rolls that chat back and the batch commits.
+
+    Mutation check: replace ``with db.begin_nested():`` by ``if True:`` in
+    purge_soft_deleted_threads and this fails with
+    ``assert (1, 2, 1) == (2, 1, 2)``: the refused DELETE aborts the
+    transaction, the next chat's DELETE is refused too, and the closing commit
+    rolls everything back. Remove the try/except as well and the task raises
+    ``ForeignKeyViolation``.
+    """
+    factory = sessionmaker(engine)
+    with factory() as db:
+        owner = _seed_owner(db)
+        oldest = _seed_thread(db, owner, age_days=60)
+        blocked = _seed_thread(db, owner, age_days=50)
+        newest = _seed_thread(db, owner, age_days=40)
+        db.execute(
+            text(
+                "CREATE TABLE purge_blocker (thread_id uuid NOT NULL "
+                "REFERENCES threads (id))"
+            )
+        )
+        db.execute(
+            text("INSERT INTO purge_blocker VALUES (:thread)"), {"thread": blocked}
+        )
+        db.commit()
+
+    result = _purge(engine)
+
+    assert (result["threads"], result["skipped"], result["messages"]) == (2, 1, 2)
+    with factory() as db:
+        assert db.get(Thread, oldest) is None and db.get(Thread, newest) is None
+        assert db.get(Thread, blocked) is not None
+        # Rolled back to the savepoint: the refused chat keeps its message.
+        assert _count(db, ChatMessage, ChatMessage.thread_id == blocked) == 1
