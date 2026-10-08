@@ -1,5 +1,6 @@
 """Regression tests for research project and citation API bugs."""
 
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -7,10 +8,27 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 
 from src.api.research import citations as citations_api
 from src.api.research import drafts as drafts_api
 from src.api.research import projects as projects_api
+
+
+def _where_sql(statement: object) -> str:
+    """The WHERE clause only, compiled with literal values and no dashes.
+
+    ``select(Document)`` lists every column (``documents.organization_id``,
+    ``documents.is_deleted``) in its SELECT clause, so a substring match on
+    the whole statement passes whether or not the predicate exists."""
+    sql = str(
+        statement.compile(  # type: ignore[attr-defined]
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    parts = re.split(r"\sWHERE\s", sql, maxsplit=1)
+    assert len(parts) == 2, sql
+    return parts[1].replace("-", "")
 
 
 def _result(*, scalar=None, scalars=None, rows=None):
@@ -333,13 +351,15 @@ async def test_add_document_to_project_accepts_colleague_private_document() -> N
 
 
 @pytest.mark.asyncio
-async def test_add_document_to_project_scopes_document_lookup_to_org():
+async def test_add_document_to_project_scopes_document_lookup_to_org() -> None:
+    """GOO-410 removed the uploader-or-public check, so this org + not-deleted
+    lookup is the whole document guard; assert it in the WHERE clause."""
     current_user = _make_user()
     project_id = uuid4()
-    statements = []
+    statements: list = []
 
-    async def capture_execute(statement):
-        statements.append(str(statement).lower())
+    async def capture_execute(statement: object) -> object:
+        statements.append(statement)
         return _result(scalar=None)
 
     db = AsyncMock()
@@ -359,8 +379,12 @@ async def test_add_document_to_project_scopes_document_lookup_to_org():
             )
 
     assert exc_info.value.status_code == 404
-    assert "documents.organization_id" in statements[0]
-    assert "documents.is_deleted" in statements[0]
+    assert len(statements) == 1  # nothing ran after the failed lookup
+    where = _where_sql(statements[0])
+    assert f"documents.organization_id = '{current_user.organization_id.hex}'" in where
+    assert "documents.is_deleted = false" in where
+    assert "is_public" not in where
+    assert "uploaded_by_user_id" not in where
 
 
 @pytest.mark.asyncio
@@ -371,7 +395,7 @@ async def test_project_bibliography_scopes_citations_and_fallback_to_org() -> No
     boundary, like list_project_documents and the citations export."""
     current_user = _make_user()
     project = _make_project()
-    statements = []
+    statements: list = []
     results = iter(
         [
             _result(rows=[(uuid4(),)]),  # project document ids
@@ -381,7 +405,7 @@ async def test_project_bibliography_scopes_citations_and_fallback_to_org() -> No
     )
 
     async def capture_execute(statement: object) -> object:
-        statements.append(str(statement).lower())
+        statements.append(statement)
         return next(results)
 
     db = AsyncMock()
@@ -398,10 +422,12 @@ async def test_project_bibliography_scopes_citations_and_fallback_to_org() -> No
         )
 
     assert response["citation_count"] == 0
-    citation_sql, fallback_sql = statements[1], statements[2]
-    for sql in (citation_sql, fallback_sql):
-        assert "documents.organization_id" in sql
-        assert "documents.is_deleted" in sql
+    assert len(statements) == 3
+    org = current_user.organization_id.hex
+    for statement in statements[1:]:  # citation read, then the fallback
+        where = _where_sql(statement)
+        assert f"documents.organization_id = '{org}'" in where
+        assert re.search(r"documents\.is_deleted (=|IS) false", where)
 
 
 @pytest.mark.asyncio

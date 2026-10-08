@@ -248,3 +248,44 @@ async def test_extract_and_lookup_use_the_shared_document_boundary(
         assert "documents.is_deleted IS false" in where
     assert "is_public" not in where
     assert "uploaded_by_user_id" not in where
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("org", [ORG, None])
+async def test_citation_graph_document_anchor_uses_the_shared_boundary(
+    org: Optional[UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /citations/graph?document_id= checks the anchor with the same org +
+    not-deleted clause as the reads; a miss is 404 before the graph service
+    runs, so a foreign or deleted document id is indistinguishable from an
+    unknown one."""
+    from src.services.research import citation_graph_service
+
+    factory = AsyncMock(side_effect=AssertionError("graph service reached"))
+    monkeypatch.setattr(citation_graph_service, "get_citation_graph_service", factory)
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=result)
+
+    with pytest.raises(HTTPException) as exc:
+        await cit.get_citation_graph(
+            project_id=None,
+            document_id=uuid4(),
+            depth=2,
+            include_external=True,
+            current_user=_user(org=org),
+            db=db,
+        )
+
+    assert exc.value.status_code == 404
+    factory.assert_not_awaited()
+    call = db.execute.await_args
+    assert call is not None
+    where = _sql(call.args[0]).split("WHERE", 1)[1]
+    if org is None:
+        assert "organization_id" not in where
+        assert "false" in where
+    else:
+        assert f"documents.organization_id = '{ORG.hex}'" in where.replace("-", "")
+        assert "documents.is_deleted IS false" in where

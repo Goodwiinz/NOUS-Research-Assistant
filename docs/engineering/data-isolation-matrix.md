@@ -38,7 +38,8 @@ adding a document to a project and from the unused `can_access_document`
 dependency (`backend/src/core/dependencies.py`), deleted the never-firing
 private checks in `backend/src/api/documents/documents.py`, and scoped the
 project bibliography (`GET /api/v1/projects/{id}/bibliography`) to the
-caller's organization like the other project reads.
+caller's organization like the other project reads (rows CI4, CI6 and
+PD1-PD4).
 
 Making documents private to their uploader would be a separate product
 change, not a fix. It would need the read boundary changed on the documents
@@ -91,6 +92,22 @@ test is `xfail(strict=True, raises=AssertionError)` and will fail loudly
 | CI5 | any | project bibliography fallback (`citations.py` export by `project_id`) | org-guarded | not covered (GOO-349) |
 | CI6 | B, C → `b-cit` after `b-doc` is soft-deleted | detail, list + `total`, export | 404 / absent, `total == 2` / export 404 | pass (GOO-398) |
 | S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | not covered: PostgreSQL full-text only (SQLite cannot run them); GOO-351 owns the fail-closed service guard |
+
+### Project documents and bibliography (`test_project_document_isolation.py`)
+
+The file seeds `a-project` in workspace `a` and `b-project` in workspace `b`.
+Workspace membership may cross organizations, so a project can hold a
+foreign-org document: an org-a editor of `b` can link an org-a document
+through `POST /api/v2/collections/{id}/documents`, which accepts any
+document of the caller's own organization.
+
+| Row | Caller → target | Surface | Expected | Status |
+| --- | --- | --- | --- | --- |
+| PD1 | A → `b-doc`, `b-pub-doc`, `a-old-org-doc` | `POST /api/v1/projects/{a-project}/documents` | 404, no title/content, no link row | pass (GOO-410) |
+| PD1+ | C (editor of `b`) → `b-doc` (same org, private) | `POST /api/v1/projects/{b-project}/documents` | 201, linked (organization-shared, like D2) | pass (GOO-410) |
+| PD2 | B, C → `b-doc` after soft delete | same route on `b-project` | 404, no link row | pass (GOO-410) |
+| PD3 | B → `b-project` holding `b-doc` and A's org-a `a-doc` (linked by A as an editor of `b`) | `GET /api/v1/projects/{id}/bibliography`, citation rows | `b-cit` only, `citation_count == 1`, no `a-cit`/`a-doc` text; A gets 404 | pass (GOO-410) |
+| PD4 | B → same project with `b-cit` soft-deleted, then with `b-doc` soft-deleted | same route, document-metadata fallback | `b-doc` metadata only, then nothing; never `a-doc` | pass (GOO-410) |
 
 ### Chat and exports (`test_chat_isolation.py`)
 
