@@ -86,7 +86,12 @@ MAX_EXECUTIONS_PER_RUN = 5
 # a box is outside the budget: creation installs DEFAULT_PACKAGES (up to
 # MAX_EXECUTION_TIMEOUT) and may queue behind other threads' creations, so the
 # outer limit can still cancel that call. The box it kills is new and holds no
-# earlier variables; a cached box is returned without taking the lock.
+# earlier variables; a cached box is returned without taking the lock. Also
+# outside the budget: killing a box after a failed probe (up to 60 s) and the
+# durable-operation bookkeeping around the call. Neither loses variables: the
+# kill runs after the box has left the cache, and the bookkeeping runs before
+# the cell starts or after it ends, when an outer cancellation leaves the box
+# alone.
 AGENT_CELL_TIMEOUT_SECONDS = 90
 
 # After our limit closes the /execute stream, the code-interpreter server

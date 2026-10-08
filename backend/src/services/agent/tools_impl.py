@@ -5138,7 +5138,9 @@ async def _tool_execute_code(
             # the box was kept or reset.
             stderr = (
                 f"Installing packages used this call's {AGENT_CELL_TIMEOUT_SECONDS}s "
-                "budget, so the code was not run."
+                "budget, so the code was not run. Install the packages in a "
+                'separate call (for example with code="pass"), then run the code '
+                "without packages."
             )
             if install_result.stderr:
                 stderr += f" Package install: {install_result.stderr}"

@@ -1498,6 +1498,10 @@ class TestToolExecuteCode:
         assert result["error"] == "package_install_timeout"
         assert result["exit_code"] == 124
         assert "was not run" in result["stderr"]
+        assert (
+            'Install the packages in a separate call (for example with code="pass"), '
+            "then run the code without packages." in result["stderr"]
+        )
         assert reset in result["stderr"]
 
     async def test_install_that_spends_the_budget_skips_the_cell(
@@ -1523,6 +1527,7 @@ class TestToolExecuteCode:
         mgr.execute.assert_not_awaited()
         assert result["error"] == "package_install_timeout"
         assert "was not run" in result["stderr"]
+        assert "separate call" in result["stderr"]
 
     async def test_image_outputs_included_in_response(self):
         from src.services.sandbox.e2b_sandbox_manager import ExecutionResult
