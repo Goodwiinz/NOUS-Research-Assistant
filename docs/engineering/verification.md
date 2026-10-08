@@ -8,7 +8,10 @@ Rollout status: the feature map, the flow charts and
 `scripts/ci/check_feature_map.py` are live and blocking. The runner flags
 under [Running](#running) (`--features`, `--changed-from`, `--evidence-dir`,
 `--evidence-record`), `scripts/verify/boot_local.sh`, video/trace capture and
-checkpoint screenshots are available, and every v1 feature is `covered`. The
+checkpoint screenshots are available, and every v1 feature is `covered`.
+`covered` means the mapped scenarios and their `checkpoint()` calls exist; it
+is not a live `PASS`. The v1 live runs are `NOT RUN` until a run against a
+target with QA credentials produces an evidence record. The
 `nous-loop.md` step 7b stop gate is still planned in
 [the implementation plan](../plans/2026-10-08-nous-verify.md).
 
@@ -38,7 +41,8 @@ case, or an exit code of `2` from `pnpm qa:nous` is `BLOCKED` or `NOT RUN`.
 
 ## Feature map
 
-One entry per feature: `id`, `status` (`planned` or `covered`), `surfaces`
+One entry per feature: `id`, `status` (`planned` or `covered`; `covered`
+only says scenarios and checkpoint calls exist, never that they passed), `surfaces`
 (`web` routes, `api` endpoints, `cli` commands), `states`, `pass_criteria`,
 `scenarios` (ids from `tests/e2e/qa/scenarios.mjs`), `owns` (path globs,
 `fnmatch` semantics: `*` also crosses `/`). `ignore.pages` and
