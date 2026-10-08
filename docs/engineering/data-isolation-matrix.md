@@ -107,7 +107,8 @@ leak reachable through these routes:
 - With no organization, the hybrid graph arm called Neo4j with an empty
   entity scope, which spans every tenant. The search routes cannot reach this
   because the tenancy gate rejects org-less callers, but the agent's legacy
-  hybrid fallback passed `None` (row S2m).
+  hybrid fallback (`_nodes_rag._legacy_hybrid_search_fallback`) passes `None`
+  when its organization id is empty (row S2m).
 - Hybrid `suggestions` were built from raw graph entity names, including
   entities whose document fusion had dropped (row S2d).
 
