@@ -981,6 +981,32 @@ async def _get_researcher(
     )
 
 
+def _cap_external_results(payload: dict[str, Any], cap: int) -> dict[str, Any]:
+    """At most ``cap`` results in total, taken round-robin across connectors.
+
+    The registry tool applies max_results to each connector it searches, so a
+    search of every keyless connector returned up to 8x the cap and the whole
+    call failed as result_too_large (audit RT-4). total_results keeps the
+    number found.
+    """
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) <= cap:
+        return payload
+    by_source: dict[str, list[Any]] = {}
+    for row in results:
+        source = str(row.get("source")) if isinstance(row, dict) else ""
+        by_source.setdefault(source, []).append(row)
+    kept: list[Any] = []
+    depth = 0
+    while len(kept) < cap:
+        layer = [rows[depth] for rows in by_source.values() if depth < len(rows)]
+        if not layer:
+            break
+        kept.extend(layer[: cap - len(kept)])
+        depth += 1
+    return {**payload, "results": kept, "truncated": True}
+
+
 async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Dispatch a tool that takes no identity; upstream detail never leaves.
 
@@ -1011,6 +1037,8 @@ async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if payload.get("error") or payload.get("is_error"):
         logger.warning("%s returned an error payload: %s", name, payload.get("error"))
         return {"error": "upstream_unavailable"}
+    if name == "search_external_database":
+        return _cap_external_results(payload, args["max_results"])
     return payload
 
 

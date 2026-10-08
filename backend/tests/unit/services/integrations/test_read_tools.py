@@ -706,6 +706,60 @@ async def test_external_tool_crash_never_leaks_exception_text(
     assert "sk-secret" not in json.dumps(result.content)
 
 
+def _external_row(source: str, index: int) -> dict[str, Any]:
+    # About the size of a real connector row (verifier V5 measured ~723 B).
+    return {
+        "id": f"{source}-{index}",
+        "title": "t" * 120,
+        "source": source,
+        "url": f"https://example.test/{source}/{index}",
+        "content": "c" * 300,
+        "authors": [f"Author {n}" for n in range(5)],
+        "published_date": "2026-01-01",
+        "document_type": "article",
+    }
+
+
+@pytest.mark.parametrize("max_results", [20, 5])
+async def test_external_search_caps_results_in_total_across_connectors(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    max_results: int,
+) -> None:
+    # No connector or domain: the registry tool searches every keyless
+    # connector (8) and applies max_results to each one (RT-4).
+    sources = [f"connector{n}" for n in range(8)]
+    rows = [_external_row(s, i) for s in sources for i in range(max_results)]
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(
+            return_value={
+                "query": "insulin",
+                "total_results": len(rows),
+                "results": rows,
+                "connectors_searched": sources,
+            }
+        ),
+    )
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "search_external_database", query="insulin", max_results=max_results
+        ),
+    )
+    assert result.is_error is False
+    payload = result.content[0]
+    assert len(payload["results"]) == max_results
+    assert payload["truncated"] is True
+    assert payload["total_results"] == 8 * max_results  # what was found
+    # Round-robin: every connector is represented while the cap allows.
+    assert {row["source"] for row in payload["results"]} == set(sources[:max_results])
+    assert len(result.source_refs) == max_results
+
+
 async def _set_content(db: AsyncSession, document_id: UUID, text_: str) -> None:
     await db.execute(
         update(Document)
