@@ -70,6 +70,7 @@ from src.services.agent.state import (
     THREAD_PERSISTENCE_EPHEMERAL,
 )
 from src.services.agent.trace_metadata import TraceSource, build_trace_metadata
+from src.services.integrations.context import DeviceBoundToAnotherChat
 from src.shared.enums import (
     TERMINAL_STREAM_EVENTS,
     AgentErrorCategory,
@@ -288,7 +289,22 @@ def _stream_failure_category(exc: BaseException) -> AgentErrorCategory:
         return AgentErrorCategory.CONFLICT
     if isinstance(exc, AgentThreadResolutionError):
         return AgentErrorCategory.INVALID_REQUEST
+    if isinstance(exc, DeviceBoundToAnotherChat):
+        return AgentErrorCategory.DEVICE_BOUND_TO_ANOTHER_CHAT
     return classify_agent_error(exc)
+
+
+def _stream_failure_message(exc: BaseException) -> BaseException | str:
+    """Wire message for the /stream catch-all: a safe literal for the
+    failures a user can act on, otherwise the exception itself, which
+    ``error_frame_payload`` turns into the generic client-safe message."""
+    if isinstance(exc, ActiveRunConflict):
+        return "A response is already in progress for this thread."
+    if isinstance(exc, AgentThreadResolutionError):
+        return _CONFIRM_NOT_FOUND_MESSAGE
+    if isinstance(exc, DeviceBoundToAnotherChat):
+        return DeviceBoundToAnotherChat.client_message
+    return exc
 
 
 def _request_trace_id(request: Any) -> str:
@@ -3303,15 +3319,7 @@ async def stream_event_generator(
             with contextlib.suppress(Exception):
                 await persist_partial_stop()
         category = _stream_failure_category(e)
-        wire_error: BaseException | str = (
-            "A response is already in progress for this thread."
-            if isinstance(e, ActiveRunConflict)
-            else (
-                _CONFIRM_NOT_FOUND_MESSAGE
-                if isinstance(e, AgentThreadResolutionError)
-                else e
-            )
-        )
+        wire_error = _stream_failure_message(e)
         if terminal_frame_sent:
             # Audit S2-M3: a terminal already went out — ERROR after it
             # corrupts the client state machine, and an absorbing FAILED

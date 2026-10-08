@@ -20,8 +20,12 @@ import httpx
 import pytest
 from openai import RateLimitError
 
-from src.api.agent.streaming import _stream_failure_category
+from src.api.agent.streaming import _stream_failure_category, _stream_failure_message
 from src.services.agent.agent_run_service import ActiveRunConflict
+from src.services.integrations.context import (
+    DeviceBoundToAnotherChat,
+    IntegrationAccessDenied,
+)
 from src.shared.enums import AgentErrorCategory
 from tests.utils.agent_stream import frames_of_type, make_stream_request, sse_data
 
@@ -69,11 +73,13 @@ def _rate_limit_error() -> RateLimitError:
     )
 
 
-async def _run_stream(graph: Any) -> list[str]:
+async def _run_stream(graph: Any, **overrides: Any) -> list[str]:
     from src.api.agent.streaming import stream_event_generator
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = make_stream_request(thread_id="11111111-1111-1111-1111-111111111301")
+    body = make_stream_request(
+        thread_id="11111111-1111-1111-1111-111111111301", **overrides
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -303,6 +309,56 @@ def test_active_thread_writer_is_a_conflict() -> None:
     assert (
         _stream_failure_category(ActiveRunConflict("safe"))
         is AgentErrorCategory.CONFLICT
+    )
+
+
+BOUND_MESSAGE = (
+    "This device is bound to another chat — connect it to this chat or pick "
+    "another device."
+)
+
+
+@pytest.mark.asyncio
+async def test_a_device_bound_to_another_chat_is_named_on_the_wire() -> None:
+    """AD-3: the catch-all names the chat-binding mismatch, the one preflight
+    failure the user can fix from the chat."""
+    # The mint runs in the Codex preflight, before the graph: resolve the
+    # thread so the stream reaches create_chat_context, which then refuses.
+    thread = SimpleNamespace(id="11111111-1111-1111-1111-111111111301")
+    with (
+        patch(
+            "src.api.agent.streaming._resolve_thread",
+            new=AsyncMock(return_value=(thread, None)),
+        ),
+        patch(
+            "src.api.agent.harness_streaming.create_chat_context",
+            new=AsyncMock(side_effect=DeviceBoundToAnotherChat()),
+        ) as mint,
+    ):
+        frames = await _run_stream(
+            _RaisingGraph(AssertionError("the graph must not run")),
+            execution_provider="codex",
+            device_id=uuid4(),
+            workspace_id=uuid4(),
+        )
+    mint.assert_awaited_once()
+    payload = _error_payload(frames)
+    assert payload["category"] == "device_bound_to_another_chat"
+    assert payload["error"] == BOUND_MESSAGE
+
+
+def test_other_preflight_failures_keep_the_generic_treatment() -> None:
+    # The generic message predates S2 and stays for every other failure.
+    for other in (
+        IntegrationAccessDenied(),
+        ValueError("The selected workspace is not bound to this chat project"),
+        ValueError("Local harness execution is disabled by server policy"),
+    ):
+        assert _stream_failure_category(other) is AgentErrorCategory.INTERNAL
+        assert _stream_failure_message(other) is other
+    assert (
+        _stream_failure_message(ActiveRunConflict("safe"))
+        == "A response is already in progress for this thread."
     )
 
 

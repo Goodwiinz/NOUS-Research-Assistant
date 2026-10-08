@@ -38,6 +38,7 @@ from src.schemas.integration_context import (
 from src.services.artifacts import service as artifacts
 from src.services.artifacts.storage import MemoryArtifactStorage
 from src.services.integrations.context import (
+    DeviceBoundToAnotherChat,
     IntegrationAccessDenied,
     create_request,
     decide_request,
@@ -395,3 +396,48 @@ async def test_device_list_names_the_only_chats_a_computer_runs_in(
         "Tools": [],
         "Revoked": [],
     }
+
+
+async def _mint_run(
+    db: AsyncSession, device_id: UUID, thread_id: UUID, scopes: set[str]
+) -> Any:
+    return await mint_integration_grant(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        scopes=frozenset(scopes),
+        thread_id=thread_id,
+        device_id=device_id,
+    )
+
+
+# AD-3: the one mint denial the owner can fix from the chat names its cause.
+async def test_a_device_bound_to_another_chat_says_so(db: AsyncSession) -> None:
+    device = await register_device(db, OWNER, DeviceCreate(label="Laptop"))
+    await _consent(db, device.id, THREAD, RUN)
+    with pytest.raises(DeviceBoundToAnotherChat):
+        await _mint_run(db, device.id, UNTITLED_THREAD, {"harness:execute"})
+    assert await _mint_run(db, device.id, THREAD, {"harness:execute"})
+
+
+@pytest.mark.parametrize(
+    "case", ["no-consent", "scope-short-elsewhere", "two-lineages"]
+)
+async def test_every_other_mint_denial_stays_opaque(
+    db: AsyncSession, case: str
+) -> None:
+    device = await register_device(db, OWNER, DeviceCreate(label="Laptop"))
+    if case == "scope-short-elsewhere":
+        # Bound to another chat AND lacking the scope: not fixable by
+        # connecting this chat with the same scopes, so it stays generic.
+        await _consent(db, device.id, UNTITLED_THREAD, SCOPES)
+    elif case == "two-lineages":
+        # Ambiguous here; a consent bound to another chat does not make the
+        # binding the cause.
+        await _consent(db, device.id, None, RUN)
+        await _consent(db, device.id, None, RUN)
+        await _consent(db, device.id, UNTITLED_THREAD, RUN)
+    with pytest.raises(IntegrationAccessDenied) as denied:
+        await _mint_run(db, device.id, THREAD, {"harness:execute"})
+    assert type(denied.value) is IntegrationAccessDenied

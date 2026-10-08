@@ -37,6 +37,21 @@ class IntegrationAccessDenied(PermissionError):
     """Opaque denial: do not reveal foreign objects or credentials."""
 
 
+class DeviceBoundToAnotherChat(IntegrationAccessDenied):
+    """The device's run consent for this project authorizes other chats only
+    (Plan 06 slice 2).
+
+    Still an IntegrationAccessDenied, so every caller that maps denials keeps
+    doing so. Only the chat stream names the cause, and only to the device's
+    owner: validate_binding has already checked the device is theirs.
+    """
+
+    client_message = (
+        "This device is bound to another chat — connect it to this chat or "
+        "pick another device."
+    )
+
+
 class IntegrationConflict(Exception):
     """A request was already decided, consumed or expired."""
 
@@ -354,20 +369,22 @@ async def mint_integration_grant(
     )
     request_id = None
     if device_id is not None:
-        consents = await db.scalars(
-            select(IntegrationGrantRequest)
-            .where(
-                IntegrationGrantRequest.user_id == user_id,
-                IntegrationGrantRequest.organization_id == organization_id,
-                IntegrationGrantRequest.project_id == project_id,
-                IntegrationGrantRequest.workspace_id == workspace_id,
-                IntegrationGrantRequest.device_id == device_id,
-                IntegrationGrantRequest.status == "consumed",
-                IntegrationGrantRequest.consent_revoked_at.is_(None),
-                IntegrationGrantRequest.is_deleted.is_(False),
+        consents = (
+            await db.scalars(
+                select(IntegrationGrantRequest)
+                .where(
+                    IntegrationGrantRequest.user_id == user_id,
+                    IntegrationGrantRequest.organization_id == organization_id,
+                    IntegrationGrantRequest.project_id == project_id,
+                    IntegrationGrantRequest.workspace_id == workspace_id,
+                    IntegrationGrantRequest.device_id == device_id,
+                    IntegrationGrantRequest.status == "consumed",
+                    IntegrationGrantRequest.consent_revoked_at.is_(None),
+                    IntegrationGrantRequest.is_deleted.is_(False),
+                )
+                .execution_options(populate_existing=True)
             )
-            .execution_options(populate_existing=True)
-        )
+        ).all()
         # A chat-bound consent authorizes only its chat; a project-wide
         # consent (thread_id NULL) authorizes any chat in the project.
         matching_consents = [
@@ -380,6 +397,15 @@ async def mint_integration_grant(
         # that the currently paired bridge credential cannot renew. Fail closed
         # until the owner leaves one unambiguous active consent for this device.
         if len(matching_consents) != 1:
+            # Name the one cause the owner can fix from the chat: a consent
+            # with enough scopes exists but is bound to another chat. No
+            # consent, too few scopes or two lineages stay opaque.
+            if not matching_consents and any(
+                scopes <= set(consent.scopes)
+                and consent.thread_id not in (None, thread_id)
+                for consent in consents
+            ):
+                raise DeviceBoundToAnotherChat()
             raise IntegrationAccessDenied()
         request_id = matching_consents[0].id
     grant, issued = _new_grant(
