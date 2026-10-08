@@ -36,7 +36,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from src.core.database import AsyncSessionLocal
 from src.core.probes import PROBE_EXEMPT_PATHS
 from src.core.security import TokenData, verify_token
-from src.core.user_provisioning import ensure_user_and_org
+from src.core.user_provisioning import SupabaseEmailLookupError, ensure_user_and_org
 from src.exceptions.analytics_exceptions import PermissionDeniedException
 from src.middleware.responses import error_response
 from src.models.organization import Organization
@@ -234,6 +234,14 @@ class MultiTenancyMiddleware(BaseHTTPMiddleware):
                     )
         except PermissionDeniedException as e:
             return error_response(403, str(e))
+        except SupabaseEmailLookupError:
+            logger.warning("Identity provider unavailable during tenant resolution")
+            return error_response(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Identity provider temporarily unavailable",
+                "service_unavailable",
+                headers={"Retry-After": "5"},
+            )
         except Exception as e:
             logger.error(f"Multi-tenancy middleware error: {e}")
             return error_response(

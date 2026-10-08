@@ -12,13 +12,13 @@ from sqlalchemy.orm import selectinload
 
 from src.core.config import settings
 from src.core.database import get_db
-from src.core.security import get_current_user_token
+from src.core.security import TokenData, get_current_user_token
 from src.models.organization import Organization
 from src.models.user import User, UserRole
 
 
 async def get_current_user(
-    token_data: dict = Depends(get_current_user_token),
+    token_data: TokenData = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Get current authenticated user with eagerly loaded organization"""
@@ -49,9 +49,19 @@ async def get_current_user(
     user = result.scalars().first()
 
     if user is None:
-        from src.core.user_provisioning import ensure_user_and_org
+        from src.core.user_provisioning import (
+            SupabaseEmailLookupError,
+            ensure_user_and_org,
+        )
 
-        provisioned = await ensure_user_and_org(db, token_data)
+        try:
+            provisioned = await ensure_user_and_org(db, token_data)
+        except SupabaseEmailLookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Identity provider temporarily unavailable",
+                headers={"Retry-After": "5"},
+            ) from exc
         if provisioned:
             await db.commit()
             result = await db.execute(
@@ -65,11 +75,25 @@ async def get_current_user(
             )
             user = result.scalars().first()
 
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive",
-            )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
+
+    # JWT email values are snapshots. Reconcile only through the provider's
+    # current user record, and let AuthService own the database transaction.
+    if not token_data.is_cli and token_data.email:
+        from src.services.security.auth_service import AuthService
+
+        user = await AuthService(db).sync_user_email_from_provider(
+            user, token_data.email
+        )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
 
     return user
 

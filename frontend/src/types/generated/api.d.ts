@@ -29393,6 +29393,13 @@ export interface operations {
                     "application/json": components["schemas"]["DocumentListResponse"];
                 };
             };
+            /** @description Invalid processing_status filter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Not authenticated - missing or invalid token */
             401: {
                 headers: {

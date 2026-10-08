@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import secrets
 from typing import Optional
@@ -5,12 +6,18 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.core.security import TokenData, get_password_hash
 from src.models.organization import Organization, StorageTier
 from src.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
+
+
+class SupabaseEmailLookupError(Exception):
+    """The provider could not be reached to confirm an account email."""
+
 
 _FREE_STORAGE = Organization.get_default_storage_limit(StorageTier.FREE)
 
@@ -41,8 +48,57 @@ async def ensure_user_and_org(
     if existing:
         return existing
 
+    # A first-login row cannot safely take its email from a JWT snapshot: the
+    # subject may present an unexpired token minted before a confirmed change.
+    # End the empty-row read transaction before the provider round trip, then
+    # create the row only from the provider's current confirmed address.
+    await db.rollback()
+    if getattr(token_data, "is_cli", False):
+        return None
+    verified_email = await asyncio.to_thread(
+        get_verified_supabase_email, str(token_data.user_id)
+    )
+    if not verified_email:
+        return None
+
     org = await _resolve_or_create_org(db, token_data)
-    return await _create_user(db, token_data, org)
+    return await _create_user(db, token_data, org, verified_email=verified_email)
+
+
+def get_verified_supabase_email(user_id: str) -> Optional[str]:
+    """Return the provider's current confirmed email for a subject.
+
+    JWT email claims are snapshots and can outlive an address change. This
+    server-side admin lookup supplies the email for first-login provisioning
+    and reconciles changed non-CLI token claims. Keep the network operation
+    synchronous here so callers can move it to a worker thread without blocking
+    the event loop.
+    """
+    try:
+        from src.core.supabase_client import get_supabase_client
+
+        client = get_supabase_client()
+        if client is None:
+            raise SupabaseEmailLookupError(
+                "Supabase admin client is temporarily unavailable"
+            )
+        response = client.auth.admin.get_user_by_id(user_id)
+        provider_user = response.user
+        if provider_user is None or provider_user.email_confirmed_at is None:
+            return None
+        email = (provider_user.email or "").strip().lower()
+        return email or None
+    except SupabaseEmailLookupError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Current Supabase email lookup failed for user %s: %s",
+            user_id,
+            type(exc).__name__,
+        )
+        raise SupabaseEmailLookupError(
+            "Current Supabase email could not be confirmed"
+        ) from exc
 
 
 async def _resolve_or_create_org(
@@ -141,8 +197,10 @@ async def _create_user(
     db: AsyncSession,
     token_data: TokenData,
     org: Optional[Organization],
+    *,
+    verified_email: str,
 ) -> Optional[User]:
-    email = token_data.email or f"{token_data.user_id}@provisioned.local"
+    email = verified_email.strip().lower()
     prefix = email.split("@")[0]
     parts = prefix.split(".")
     # Names the user typed at sign-up (Supabase user_metadata) win; guessing
@@ -177,5 +235,20 @@ async def _create_user(
         await db.rollback()
         result = await db.execute(select(User).where(User.id == token_data.user_id))
         user = result.scalars().first()
+        if user is None:
+            # The INSERT conflicted, but not with a row for this subject. In
+            # practice another row already holds this verified address in
+            # users.email (UNIQUE): a stale row, or a squat via the pre-GOO-405
+            # PUT /auth/me. Do NOT add a fallback lookup by email that adopts
+            # that row. Whoever wrote that email would then get this person's
+            # identity, which turns squatting into account takeover. Fail
+            # closed (the caller returns 401) and leave reconciliation to an
+            # operator. Log the subject id, never the email (PII).
+            logger.warning(
+                "JIT provisioning for user %s failed: unique conflict on a row "
+                "that is not this user's (likely users.email held by another "
+                "account); operator reconciliation required",
+                token_data.user_id,
+            )
 
     return user
