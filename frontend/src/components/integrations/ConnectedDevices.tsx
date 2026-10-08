@@ -6,27 +6,9 @@ import { useState, type ReactElement } from 'react';
 
 import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { useAuth } from '@/hooks/useAuth';
+import { scopeSummary } from '@/lib/integrations/scopeLabels';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
 import type { ApiConnectionConsent } from '@/types/api/integration-connections-contract';
-
-const SCOPE_TEXT: Record<string, string> = {
-  'harness:execute': 'run coding sessions',
-  'tools:read': 'read project documents',
-  'tools:write': 'request notes (you approve each one)',
-  'context:read': 'read memories you chose to share',
-  'artifacts:publish': 'publish files to chats',
-  'handoff:read': "read this chat's handoff",
-  'handoff:write': "save this chat's handoff",
-  'library:read': 'list the folders in the workspace',
-  'library:write': 'change folders and paper details without asking each time',
-};
-
-// Own keys only, like scopeLabel: a scope named like an Object.prototype
-// member ("constructor") shows as itself, never as an inherited function.
-const scopeText = (scope: string): string =>
-  Object.prototype.hasOwnProperty.call(SCOPE_TEXT, scope)
-    ? SCOPE_TEXT[scope]
-    : scope;
 
 // A consent reaches one project, or every project of one workspace (Plan 07).
 const consentTarget = (consent: ApiConnectionConsent): string =>
@@ -34,10 +16,19 @@ const consentTarget = (consent: ApiConnectionConsent): string =>
     ? `Workspace ${consent.workspace_label ?? ''} (${consent.workspace_id ?? ''}), every project in it`
     : `${consent.project_label ?? ''} (${consent.project_id ?? ''})`;
 
-const consentName = (consent: ApiConnectionConsent): string =>
-  consent.kind === 'workspace'
-    ? `workspace ${consent.workspace_label ?? ''}`
-    : (consent.project_label ?? '');
+// Names a consent apart from its siblings in control labels: two consents of
+// one device for the same project differ only by the chat they are bound to.
+// Truthiness, not `!== null`: a backend older than this page omits thread_id.
+const consentName = (consent: ApiConnectionConsent): string => {
+  const target =
+    consent.kind === 'workspace'
+      ? `workspace ${consent.workspace_label ?? ''}`
+      : (consent.project_label ?? '');
+  if (!consent.thread_id) return target;
+  return consent.thread_label
+    ? `${target}, only from chat ${consent.thread_label}`
+    : `${target}, only from a chat that is no longer available`;
+};
 
 /**
  * Connected coding devices and what each may do. Revoking takes effect on
@@ -167,7 +158,7 @@ export function ConnectedDevices(): ReactElement {
                         </p>
                       )}
                       <p className="text-sm text-muted-foreground">
-                        {consent.scopes.map(scopeText).join(', ')}
+                        {consent.scopes.map(scopeSummary).join(', ')}
                       </p>
                       {consent.scopes.includes('context:read') && (
                         <p className="text-sm">
@@ -176,6 +167,7 @@ export function ConnectedDevices(): ReactElement {
                             className="underline"
                           >
                             Choose shared memories
+                            <span className="sr-only">{` for ${consentName(consent)}`}</span>
                           </Link>
                         </p>
                       )}
@@ -185,7 +177,7 @@ export function ConnectedDevices(): ReactElement {
                       disabled={busy}
                       onClick={() => revokeConsent.mutate(consent.request_id)}
                       className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-                      aria-label={`Revoke ${device.device_label} access to ${consentName(consent)}`}
+                      aria-label={`Revoke ${device.device_label} (${device.device_id}) access to ${consentName(consent)}`}
                     >
                       Revoke
                     </button>

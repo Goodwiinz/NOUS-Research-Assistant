@@ -74,7 +74,7 @@ describe('ConnectedDevices', () => {
     const { user } = render(<ConnectedDevices />);
     await user.click(
       await screen.findByRole('button', {
-        name: 'Revoke Laptop access to Thesis',
+        name: 'Revoke Laptop (d1) access to Thesis',
       })
     );
     expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledWith(
@@ -161,8 +161,10 @@ describe('ConnectedDevices', () => {
 
   it('lists a workspace consent and revokes it on its own', async () => {
     vi.mocked(integrationConnectionsService.list)
-      .mockResolvedValueOnce([{ ...laptop, consents: [workspaceConsent] }])
-      .mockResolvedValue([{ ...laptop, consents: [] }]);
+      .mockResolvedValueOnce([
+        { ...laptop, consents: [...laptop.consents, workspaceConsent] },
+      ])
+      .mockResolvedValue([laptop]);
     vi.mocked(integrationConnectionsService.revokeConsent).mockResolvedValue();
     const { user } = render(<ConnectedDevices />);
     expect(
@@ -173,17 +175,24 @@ describe('ConnectedDevices', () => {
         'list the folders in the workspace, change folders and paper details without asking each time, read project documents, request notes (you approve each one)'
       )
     ).toBeInTheDocument();
+    expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();
     await user.click(
       screen.getByRole('button', {
-        name: 'Revoke Laptop access to workspace Lab',
+        name: 'Revoke Laptop (d1) access to workspace Lab',
       })
+    );
+    expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledTimes(
+      1
     );
     expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledWith(
       'r2'
     );
-    expect(
-      await screen.findByText('No active project access.')
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Workspace Lab (w1), every project in it')
+      ).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();
   });
 
   it('links a memory-sharing consent to its memory selection', async () => {
@@ -198,9 +207,10 @@ describe('ConnectedDevices', () => {
     ]);
     render(<ConnectedDevices />);
     const links = await screen.findAllByRole('link', {
-      name: 'Choose shared memories',
+      name: /^Choose shared memories/,
     });
     expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAccessibleName('Choose shared memories for Thesis');
     expect(links[0]).toHaveAttribute('href', '/integrations/context/r1');
   });
 
@@ -230,6 +240,37 @@ describe('ConnectedDevices', () => {
     expect(
       screen.getByText(/a chat that is no longer available/)
     ).toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to Thesis, only from chat Lit review',
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to Thesis, only from a chat that is no longer available',
+      })
+    ).toBeInTheDocument();
+  });
+
+  it('names each revoke control apart after a reconnect', async () => {
+    // Reconnecting adds a second device with the same label and a fresh
+    // consent for the same project; the Disconnect copy tells the user to
+    // Revoke the old one, so the two controls must not share a name.
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      laptop,
+      {
+        ...laptop,
+        device_id: 'd2',
+        consents: [{ ...laptop.consents[0], request_id: 'r9' }],
+      },
+    ]);
+    render(<ConnectedDevices />);
+    const revokes = await screen.findAllByRole('button', { name: /^Revoke / });
+    expect(revokes.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Revoke Laptop (d1) access to Thesis',
+      'Revoke Laptop (d2) access to Thesis',
+    ]);
   });
 
   it('shows a scope it does not know by its own name', async () => {
@@ -261,7 +302,9 @@ describe('ConnectedDevices', () => {
     render(<ConnectedDevices />);
     expect(await screen.findByText('Thesis (p1)')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Revoke Laptop access to Thesis' })
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to Thesis',
+      })
     ).toBeInTheDocument();
     expect(screen.queryByText(/Only from chat/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Workspace/)).not.toBeInTheDocument();
