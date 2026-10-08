@@ -49,7 +49,9 @@ export function renderEvidenceReadme(report) {
     `Backend identity: ${identity}.`,
     `Command: ${code(run.command)}. Run id ${code(run.id)}, ${run.startedAt} to ${run.finishedAt}.`,
     `Binaries (not committed): ${code(displayDir(run.evidenceDir))} with ${run.artifacts?.checkpointCount ?? 0} checkpoint PNG(s), `
-      + `${videos.length} video(s)${videos.length ? ` (${videos.map(code).join(', ')})` : ''}, trace ${code(run.artifacts?.trace ?? 'none')}.`,
+      + `${videos.length} video(s)${videos.length ? ` (${videos.map(code).join(', ')})` : ''}, `
+      + `trace(s) ${(run.artifacts?.traces ?? []).length ? run.artifacts.traces.map(code).join(', ') : code('none')} `
+      + '(secret-bearing: session cookies and tokens; never attach, commit or upload).',
     '',
     `Overall: ${overall(report)}. A PASS here is assertion-level only until the checkpoints below were viewed and the feature pass criteria confirmed by the operator (record that in the PR).`,
     '',

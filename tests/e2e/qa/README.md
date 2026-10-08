@@ -90,7 +90,10 @@ scenarios, which is a dry run of the selection.
 Every run records video and a Playwright trace, and scenarios call
 `evidence.checkpoint('<name>')` for the full-page screenshots named in
 `docs/engineering/flows/<feature>.md`. All of it goes under `--evidence-dir`
-(default `.verify-artifacts/<run-id>/`, gitignored). `--evidence-record DIR`
+(default `.verify-artifacts/<run-id>/`, gitignored). With credentials, tracing
+starts only after login reaches a protected route and pauses for any later
+login, so the password is not recorded; traces still carry session cookies
+and tokens, so never attach, commit or upload a `trace*.zip`. `--evidence-record DIR`
 also writes the committed text README described in
 `docs/engineering/verification.md`; it lists file names and never links
 binaries. `scripts/verify/boot_local.sh` starts a local target. The unit

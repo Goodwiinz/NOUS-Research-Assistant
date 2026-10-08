@@ -324,7 +324,7 @@ export async function runCampaign(config, options = {}) {
         provenance: normalizedConfig.deploymentEvidence?.provenance ?? null,
       },
       evidenceDir: normalizedConfig.evidenceDir ?? null,
-      artifacts: { videos: [], trace: null, checkpointCount: 0 },
+      artifacts: { videos: [], traces: [], checkpointCount: 0 },
     },
     cases: [],
     cleanup: { status: 'not-started', retained: [], errors: [] },
@@ -501,7 +501,7 @@ export async function runCampaign(config, options = {}) {
       // Video paths are final only after close(); redactValue below covers them.
       report.run.artifacts = {
         videos: [...(session.artifacts?.videos ?? [])],
-        trace: session.artifacts?.trace ?? null,
+        traces: [...(session.artifacts?.traces ?? [])],
         checkpointCount: session.artifacts?.checkpoints?.length ?? 0,
       };
     }

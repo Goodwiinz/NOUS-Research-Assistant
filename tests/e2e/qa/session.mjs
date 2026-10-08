@@ -251,7 +251,8 @@ export class QASession {
     this.pendingStreams = new Map();
     this.uncertainStreams = [];
     this.evidenceDir = config.evidenceDir ?? null;
-    this.artifacts = { videos: [], trace: null, checkpoints: [] };
+    this.artifacts = { videos: [], traces: [], checkpoints: [] };
+    this.tracingActive = false;
   }
 
   assertOperational({ internal = false } = {}) {
@@ -294,7 +295,11 @@ export class QASession {
       }
       context = await browser.newContext(contextOptions);
       this.assertOperational();
-      if (this.evidenceDir && context.tracing) await context.tracing.start({ screenshots: true, snapshots: true });
+      // A credential login types the QA password and receives tokens; the
+      // trace must not record it, so credential runs start tracing in login()
+      // after the protected route is reached. Anonymous and storage-state
+      // sessions trace from the start (see startTracing for what remains).
+      if (!this.hasCredentials) await this.startTracing(context);
       page = await context.newPage();
       this.assertOperational();
       this.browser = browser;
@@ -334,16 +339,34 @@ export class QASession {
   }
 
   /**
+   * Playwright traces still carry session cookies and bearer tokens from
+   * network snapshots; trace files are secret-bearing and never published.
+   */
+  async startTracing(context = this.context) {
+    if (!this.evidenceDir || !context?.tracing || this.tracingActive) return;
+    await context.tracing.start({ screenshots: true, snapshots: true });
+    this.tracingActive = true;
+  }
+
+  /** Save the current trace segment: trace.zip, then trace-2.zip, ... */
+  async stopTracing(context = this.context) {
+    if (!this.tracingActive || !context?.tracing) return;
+    this.tracingActive = false;
+    const name = this.artifacts.traces.length === 0 ? 'trace.zip' : `trace-${this.artifacts.traces.length + 1}.zip`;
+    await context.tracing.stop({ path: join(this.evidenceDir, name) });
+    this.artifacts.traces.push(name);
+  }
+
+  /**
    * Stop tracing and note the video file before a context closes. Shared by
    * close() and quarantine() so a timed-out scenario still leaves a trace.
    * Failures are returned as messages; evidence never masks the real result.
    */
   async collectBrowserEvidence(page, context) {
     const errors = [];
-    if (context?.tracing && this.evidenceDir) {
+    if (this.tracingActive) {
       try {
-        await context.tracing.stop({ path: join(this.evidenceDir, 'trace.zip') });
-        this.artifacts.trace = 'trace.zip';
+        await this.stopTracing(context);
       } catch (error) {
         errors.push(`trace: ${sanitizeError(error, this.secrets).message}`);
       }
@@ -396,8 +419,11 @@ export class QASession {
       if (/\/login(?:$|[?#])/.test(new URL(page.url()).pathname)) {
         throw new QASessionError('Storage state did not reach a protected route');
       }
+      await this.startTracing();
       return page;
     }
+    // Never record credential entry: pause any running trace segment.
+    await this.stopTracing();
     await this.goto('/login');
     // Verify the origin again immediately before entering credentials. A
     // compromised redirect must never receive owner credentials.
@@ -418,6 +444,7 @@ export class QASession {
     if (/\/login(?:$|[?#])/.test(new URL(page.url()).pathname)) {
       throw new QASessionError('Login did not complete on the configured target');
     }
+    await this.startTracing();
     return page;
   }
 

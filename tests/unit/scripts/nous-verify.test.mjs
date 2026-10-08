@@ -198,7 +198,7 @@ test('browser context records video and trace into the evidence directory', asyn
     assert.deepEqual(record.tracingStart, { screenshots: true, snapshots: true });
     await session.close();
     assert.equal(record.tracingStop.path, join(dir, 'trace.zip'));
-    assert.equal(session.artifacts.trace, 'trace.zip');
+    assert.deepEqual(session.artifacts.traces, ['trace.zip']);
     assert.deepEqual(session.artifacts.videos, ['/tmp/fake.webm']);
   });
 });
@@ -213,6 +213,60 @@ test('a session without an evidence directory records no video or trace', async 
   assert.equal(record.tracingStop, undefined);
 });
 
+// Credential login fake: records the order of fill/click and tracing calls.
+function loginPlaywright(events) {
+  let path = '/login';
+  const field = (name) => ({ fill: async () => { events.push(`fill ${name}`); } });
+  const page = {
+    url: () => `http://127.0.0.1:3000${path}`,
+    goto: async (url) => { path = new URL(url).pathname === '/login' ? '/login' : new URL(url).pathname; events.push(`goto ${path}`); return {}; },
+    locator: (selector) => (selector === 'form'
+      ? { getByRole: () => ({ click: async () => { events.push('submit'); path = '/chat'; } }) }
+      : field(selector)),
+    waitForURL: async () => {},
+    waitForLoadState: async () => {},
+    video: () => null,
+  };
+  const context = {
+    tracing: {
+      start: async () => { events.push('tracing.start'); },
+      stop: async (options) => { events.push(`tracing.stop ${options.path.split('/').at(-1)}`); },
+    },
+    newPage: async () => page,
+    close: async () => {},
+  };
+  return { chromium: { launch: async () => ({ newContext: async () => context, close: async () => {} }) } };
+}
+
+test('credential login is never traced: tracing starts after login and pauses for a re-login', async () => {
+  await withEvidenceDir(async (dir) => {
+    const events = [];
+    const session = new QASession(
+      { ...sessionConfig(dir), credentials: { email: 'qa@example.test', password: 'sentinel-password' } },
+      { playwright: loginPlaywright(events) },
+    );
+    await session.login();
+    const firstStart = events.indexOf('tracing.start');
+    assert.ok(firstStart > events.indexOf('submit'), `tracing started before login completed: ${events.join(', ')}`);
+    events.length = 0;
+    await session.login();
+    assert.deepEqual(events.slice(0, 1), ['tracing.stop trace.zip']);
+    assert.ok(events.indexOf('tracing.start') > events.indexOf('submit'));
+    await session.close();
+    assert.deepEqual(session.artifacts.traces, ['trace.zip', 'trace-2.zip']);
+  });
+});
+
+test('storage-state and anonymous sessions trace from browser open', async () => {
+  await withEvidenceDir(async (dir) => {
+    const events = [];
+    const session = new QASession(sessionConfig(dir), { playwright: loginPlaywright(events) });
+    await session.openBrowser();
+    assert.deepEqual(events, ['tracing.start']);
+    await session.close();
+  });
+});
+
 test('a quarantined (timed-out) session still stops tracing', async () => {
   await withEvidenceDir(async (dir) => {
     const record = { screenshots: [] };
@@ -220,7 +274,7 @@ test('a quarantined (timed-out) session still stops tracing', async () => {
     await session.openBrowser();
     await session.quarantine();
     assert.equal(record.tracingStop.path, join(dir, 'trace.zip'));
-    assert.equal(session.artifacts.trace, 'trace.zip');
+    assert.deepEqual(session.artifacts.traces, ['trace.zip']);
   });
 });
 
@@ -247,7 +301,7 @@ test('checkpoint rejects invalid names and a missing page', async () => {
 function fakeRunnerSession(taken) {
   return {
     observations: [],
-    artifacts: { videos: ['/tmp/ev/video/a.webm'], trace: 'trace.zip', checkpoints: taken },
+    artifacts: { videos: ['/tmp/ev/video/a.webm'], traces: ['trace.zip'], checkpoints: taken },
     checkpoint: async (scenarioId, name) => {
       const item = { kind: 'checkpoint', name, file: `${scenarioId}--${name}.png` };
       taken.push(item);
@@ -268,7 +322,7 @@ test('runner passes evidence.checkpoint to scenarios and lists checkpoints on th
   assert.equal(report.cases[0].status, 'PASS');
   assert.deepEqual(report.cases[0].checkpoints, [{ kind: 'checkpoint', name: 'x.one', file: 'smoke.x--x.one.png' }]);
   assert.equal(report.run.evidenceDir, '/tmp/ev');
-  assert.deepEqual(report.run.artifacts, { videos: ['/tmp/ev/video/a.webm'], trace: 'trace.zip', checkpointCount: 1 });
+  assert.deepEqual(report.run.artifacts, { videos: ['/tmp/ev/video/a.webm'], traces: ['trace.zip'], checkpointCount: 1 });
 });
 
 test('a failing scenario keeps the checkpoints it took', async () => {
@@ -297,7 +351,7 @@ const REPORT = {
   run: {
     id: 'r1', startedAt: '2026-10-08T10:00:00.000Z', finishedAt: '2026-10-08T10:01:00.000Z', command: "'pnpm' 'qa:nous' '--features' 'login'", target: 'http://127.0.0.1:3000',
     localSource: { sha: 'a'.repeat(40), dirty: 'clean', provenance: 'git HEAD' }, configuration: { apiUrl: 'http://127.0.0.1:8000/api/v1', features: ['login'] },
-    observedIdentity: { backendSha: null, frontendSha: null, provenance: null }, evidenceDir: '/tmp/ev', artifacts: { videos: ['/tmp/ev/video/x.webm'], trace: 'trace.zip', checkpointCount: 1 },
+    observedIdentity: { backendSha: null, frontendSha: null, provenance: null }, evidenceDir: '/tmp/ev', artifacts: { videos: ['/tmp/ev/video/x.webm'], traces: ['trace.zip'], checkpointCount: 1 },
   },
   cases: [
     { id: 'smoke.login-availability', title: 'Login page renders', status: 'PASS', reason: null, checkpoints: [{ kind: 'checkpoint', name: 'login.form', file: 'smoke.login-availability--login.form.png' }] },

@@ -36,7 +36,13 @@ case, or an exit code of `2` from `pnpm qa:nous` is `BLOCKED` or `NOT RUN`.
 | --- | --- | --- |
 | Feature map | `docs/engineering/feature-map.yaml` | yes |
 | Flow charts | `docs/engineering/flows/<feature>.md` | yes |
-| Checkpoint PNGs, video, trace, JSON/HTML reports | `.verify-artifacts/<run-id>/` | no (gitignored; upload as CI/PR artifact) |
+| Checkpoint PNGs, video, JSON/HTML reports | `.verify-artifacts/<run-id>/` | no (gitignored; upload as CI/PR artifact) |
+| Playwright traces (`trace.zip`, `trace-<n>.zip`) | `.verify-artifacts/<run-id>/` | no, and never attached or uploaded (secret-bearing) |
+
+Traces are secret-bearing. The runner pauses tracing while it types
+credentials, but a trace still records session cookies, bearer tokens and
+API responses. Keep traces local: never attach one to a PR, commit it, or
+upload it anywhere public.
 | Evidence record | `docs/testing/evidence/verify-<feature>-<YYYYMMDD>/README.md` | yes |
 
 ## Feature map
