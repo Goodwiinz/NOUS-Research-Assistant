@@ -567,6 +567,10 @@ async def test_legacy_workspace_chain_reads_back_and_continues(
     await _make_legacy(db)
     first = await save(db, _ctx(), _payload())
     assert await read_latest(db, _ctx()) == first
+    # The original symptom: a stale save got 409 with latest:null.
+    with pytest.raises(HandoffConflict) as caught:
+        await save(db, _ctx(), _payload())
+    assert caught.value.latest == first
     second = await save(db, _ctx(), _payload(parent=1, goal="Next"))
     assert second.version == 2
     workspace = await db.get(Workspace, WORKSPACE)
@@ -580,7 +584,7 @@ async def test_legacy_workspace_chain_reads_back_and_continues(
     assert await _count(db) == 2
 
 
-async def test_legacy_workspace_chain_follows_its_owner_out_of_the_org(
+async def test_legacy_workspace_chain_is_hidden_from_the_old_org_after_the_owner_moves(
     db: AsyncSession,
 ) -> None:
     await _make_legacy(db)
@@ -598,3 +602,16 @@ async def test_legacy_workspace_chain_follows_its_owner_out_of_the_org(
     workspace = await db.get(Workspace, WORKSPACE)
     assert workspace is not None
     assert await workspace_organization_id(db, workspace) == OTHER_ORG
+
+
+async def test_legacy_workspace_without_any_org_has_no_organization(
+    db: AsyncSession,
+) -> None:
+    await _make_legacy(db)
+    await db.execute(update(User).where(User.id == USER).values(organization_id=None))
+    await db.commit()
+    workspace = await db.get(Workspace, WORKSPACE)
+    assert workspace is not None
+    # Neither the workspace nor its owner has an organization: no org to
+    # scope by, so the browser route shows no handoff.
+    assert await workspace_organization_id(db, workspace) is None
