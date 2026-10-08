@@ -9,7 +9,7 @@ import threading
 import time
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import pytest
 
@@ -268,6 +268,15 @@ def thread_pool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         arxiv_fulltext, "_executor_factory", lambda: ThreadPoolExecutor(1)
     )
+
+
+@pytest.fixture(autouse=True)
+async def _drop_parse_slots() -> AsyncIterator[None]:
+    # A semaphore that a waiter bound to this test's loop holds that loop, so
+    # its weak key would keep the closed loop alive for the whole session.
+    # Production runs one loop per process and never needs this.
+    yield
+    arxiv_fulltext._parse_slots_by_loop.pop(asyncio.get_running_loop(), None)
 
 
 async def test_timed_out_extraction_does_not_poison_the_next_call(
