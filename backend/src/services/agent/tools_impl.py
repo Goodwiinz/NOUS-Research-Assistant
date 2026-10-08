@@ -5126,18 +5126,44 @@ async def _tool_execute_code(
     deadline = loop.time() + AGENT_CELL_TIMEOUT_SECONDS
 
     # Install extra packages if requested
+    install_warning: Optional[str] = None
     if packages:
         install_result = await manager.install_packages(
             thread_id, packages, timeout=AGENT_CELL_TIMEOUT_SECONDS
         )
+        if install_result.error == "timeout" or deadline - loop.time() < 1:
+            # The install used the budget. Running the cell on the manager's
+            # 1 s minimum would burn an execution and report the install's
+            # timeout as the code's own; the install's stderr says whether
+            # the box was kept or reset.
+            stderr = (
+                f"Installing packages used this call's {AGENT_CELL_TIMEOUT_SECONDS}s "
+                "budget, so the code was not run."
+            )
+            if install_result.stderr:
+                stderr += f" Package install: {install_result.stderr}"
+            return {
+                "status": "error",
+                "stdout": install_result.stdout,
+                "stderr": stderr,
+                "exit_code": install_result.exit_code or 124,
+                "execution_time_ms": install_result.execution_time_ms,
+                "description": description,
+                "error": "package_install_timeout",
+            }
         if install_result.error:
             logger.warning(f"Package install warning: {install_result.stderr}")
+            install_warning = f"Package install failed ({install_result.error})."
+            if install_result.stderr:
+                install_warning += f" {install_result.stderr}"
 
     result = await manager.execute(
         thread_id=thread_id,
         code=code,
         language=language,
-        timeout=max(1, int(deadline - loop.time())),
+        timeout=max(
+            1, min(AGENT_CELL_TIMEOUT_SECONDS, math.ceil(deadline - loop.time()))
+        ),
     )
 
     response: Dict[str, Any] = {
@@ -5162,6 +5188,9 @@ async def _tool_execute_code(
 
     if result.results:
         response["outputs"] = result.results
+
+    if install_warning:
+        response["warning"] = install_warning
 
     return response
 

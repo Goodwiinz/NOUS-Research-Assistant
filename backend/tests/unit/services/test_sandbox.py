@@ -469,6 +469,43 @@ class TestSandboxExecutionBounds:
             await execution
             await manager.cleanup_all()
 
+    async def test_cached_box_does_not_wait_for_other_thread_creation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A thread whose box is cached must not queue behind another thread's
+        box creation (up to MAX_EXECUTION_TIMEOUT of DEFAULT_PACKAGES). That
+        wait is outside the cell budget, so the agent's outer limit could
+        cancel the cell and kill a box that holds the user's variables.
+
+        Mutation: drop the lock-free cache lookup in ``get_or_create_sandbox``;
+        the cached thread then waits on the lock and the guard times out.
+        """
+        installing = asyncio.Event()
+        release_install = asyncio.Event()
+        cached = _KernelBox()
+        new_box = AsyncMock()
+
+        async def install(*args: Any, **kwargs: Any) -> Any:
+            installing.set()
+            await release_install.wait()
+            return _make_e2b_execution()
+
+        new_box.run_code.side_effect = install
+        manager, _ = self._manager(monkeypatch, new_box)
+        manager._sandboxes["ready"] = cached
+        creation = asyncio.create_task(manager.get_or_create_sandbox("other-thread"))
+        try:
+            await asyncio.wait_for(installing.wait(), timeout=1)
+            result = await asyncio.wait_for(
+                manager.execute("ready", "print('hi')"), timeout=1
+            )
+            assert result.stdout == "hi\n"
+            assert not creation.done()
+        finally:
+            release_install.set()
+            await creation
+            await manager.cleanup_all()
+
     async def test_transport_failure_retires_box_without_replenishing_budget(
         self, monkeypatch
     ):
@@ -1323,7 +1360,8 @@ class TestToolExecuteCode:
         assert result["status"] == "success"
 
     async def test_package_install_warning_does_not_abort(self):
-        """A non-zero install result should log a warning but still run the code."""
+        """A failed install still runs the code, and the install error reaches
+        the model as a warning instead of only the server log."""
         from src.services.sandbox.e2b_sandbox_manager import ExecutionResult
 
         tools_impl = _import_tools_impl()
@@ -1355,6 +1393,136 @@ class TestToolExecuteCode:
 
         mock_mgr.execute.assert_awaited_once()
         assert result["status"] == "success"
+        assert "error" not in result
+        assert "some warning" in result["warning"]
+        assert "WARNING: ..." in result["warning"]
+
+    async def _run_with_install(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        install: Any = None,
+        *,
+        budget: int | None = None,
+        packages: list[str] | None = None,
+    ) -> tuple[dict[str, Any], AsyncMock]:
+        """Run the tool against a mocked manager. ``install`` is the
+        ``install_packages`` side effect; ``budget`` overrides
+        AGENT_CELL_TIMEOUT_SECONDS."""
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        if budget is not None:
+            monkeypatch.setattr(module, "AGENT_CELL_TIMEOUT_SECONDS", budget)
+        tools_impl = _import_tools_impl()
+        mock_mgr = AsyncMock()
+        mock_mgr.is_available = True
+        mock_mgr.install_packages = AsyncMock(side_effect=install)
+        mock_mgr.execute = AsyncMock(
+            return_value=module.ExecutionResult(
+                stdout="ok\n", stderr="", exit_code=0, execution_time_ms=20
+            )
+        )
+        monkeypatch.setattr(module, "get_sandbox_manager", lambda: mock_mgr)
+        result = await tools_impl._tool_execute_code(
+            {"code": "print('ok')", "packages": packages},
+            thread_id="t-budget",
+            current_user=_mock_user(),
+        )
+        return result, mock_mgr
+
+    async def test_install_and_cell_share_one_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IN-2: the cell gets what the install left of the per-call budget,
+        rounded up.
+
+        Mutation: give the cell the full AGENT_CELL_TIMEOUT_SECONDS; this
+        fails on ``3 == 2``.
+        """
+        from src.services.sandbox.e2b_sandbox_manager import ExecutionResult
+
+        async def slow_install(*_args: Any, **_kwargs: Any) -> Any:
+            await asyncio.sleep(1.2)
+            return ExecutionResult(
+                stdout="", stderr="", exit_code=0, execution_time_ms=1200
+            )
+
+        result, mgr = await self._run_with_install(
+            monkeypatch, slow_install, budget=3, packages=["rdkit"]
+        )
+        assert mgr.install_packages.await_args.kwargs["timeout"] == 3
+        assert mgr.execute.await_args.kwargs["timeout"] == 2  # ceil(3 - 1.2)
+        assert result["status"] == "success"
+
+    async def test_cell_without_packages_gets_the_whole_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Rounding the remaining budget down gave the cell 89 s of 90."""
+        from src.services.sandbox.e2b_sandbox_manager import AGENT_CELL_TIMEOUT_SECONDS
+
+        _, mgr = await self._run_with_install(monkeypatch)
+        mgr.install_packages.assert_not_awaited()
+        assert mgr.execute.await_args.kwargs["timeout"] == AGENT_CELL_TIMEOUT_SECONDS
+
+    async def test_install_timeout_skips_the_cell(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An install that timed out used the whole budget. Running the cell
+        on the 1 s minimum would burn an execution and report the install's
+        timeout as the code's own, so the code is not run and the install's
+        kept/reset message is passed on.
+
+        Mutation: drop the early return; the cell runs and this fails on
+        ``execute.assert_not_awaited``.
+        """
+        from src.services.sandbox.e2b_sandbox_manager import ExecutionResult
+
+        reset = (
+            "Execution timed out after 90s. The sandbox was reset, so earlier "
+            "variables are gone."
+        )
+
+        async def timed_out(*_args: Any, **_kwargs: Any) -> Any:
+            return ExecutionResult(
+                stdout="",
+                stderr=reset,
+                exit_code=124,
+                execution_time_ms=90_000,
+                error="timeout",
+            )
+
+        result, mgr = await self._run_with_install(
+            monkeypatch, timed_out, packages=["rdkit"]
+        )
+        mgr.execute.assert_not_awaited()
+        assert result["status"] == "error"
+        assert result["error"] == "package_install_timeout"
+        assert result["exit_code"] == 124
+        assert "was not run" in result["stderr"]
+        assert reset in result["stderr"]
+
+    async def test_install_that_spends_the_budget_skips_the_cell(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An install that finished with under 1 s of budget left also skips
+        the cell rather than run it on the 1 s minimum.
+
+        Mutation: drop the remaining-budget check; the cell runs and this
+        fails on ``execute.assert_not_awaited``.
+        """
+        from src.services.sandbox.e2b_sandbox_manager import ExecutionResult
+
+        async def slow_install(*_args: Any, **_kwargs: Any) -> Any:
+            await asyncio.sleep(1.2)
+            return ExecutionResult(
+                stdout="", stderr="", exit_code=0, execution_time_ms=1200
+            )
+
+        result, mgr = await self._run_with_install(
+            monkeypatch, slow_install, budget=2, packages=["rdkit"]
+        )
+        mgr.execute.assert_not_awaited()
+        assert result["error"] == "package_install_timeout"
+        assert "was not run" in result["stderr"]
 
     async def test_image_outputs_included_in_response(self):
         from src.services.sandbox.e2b_sandbox_manager import ExecutionResult

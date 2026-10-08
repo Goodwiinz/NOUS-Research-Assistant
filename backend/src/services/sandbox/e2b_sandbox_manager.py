@@ -81,13 +81,12 @@ MAX_EXECUTIONS_PER_RUN = 5
 # IN-2: the agent runs execute_code in its SLOW tool tier
 # (_nodes_tools._SLOW_TOOL_TIMEOUT_SECONDS = 120). One tool call's optional
 # package install and its cell share this budget, each followed by at most
-# one probe, so the sandbox's own limit normally fires before the agent's
-# outer wait_for, whose cancellation kills the box and its variables.
-# Getting the box is outside the budget: a thread's first call creates it and
-# installs DEFAULT_PACKAGES (up to MAX_EXECUTION_TIMEOUT), and any call can
-# wait on the creation lock while another thread does that. After such a wait
-# the outer limit can still cancel the call, killing the box if a cell is
-# running (a first call's new box holds no earlier variables).
+# one probe, so the sandbox's own limit fires before the agent's outer
+# wait_for, whose cancellation kills the box and its variables. Only creating
+# a box is outside the budget: creation installs DEFAULT_PACKAGES (up to
+# MAX_EXECUTION_TIMEOUT) and may queue behind other threads' creations, so the
+# outer limit can still cancel that call. The box it kills is new and holds no
+# earlier variables; a cached box is returned without taking the lock.
 AGENT_CELL_TIMEOUT_SECONDS = 90
 
 # After our limit closes the /execute stream, the code-interpreter server
@@ -179,6 +178,12 @@ class SandboxManager:
             raise RuntimeError(
                 "E2B is not configured. Set E2B_API_KEY environment variable."
             )
+
+        # A cached box never queues behind another thread's creation (IN-2).
+        cached = self._sandboxes.get(thread_id)
+        if cached is not None:
+            self._last_used[thread_id] = time.monotonic()
+            return cached
 
         async with self._lock:
             if thread_id in self._sandboxes:
