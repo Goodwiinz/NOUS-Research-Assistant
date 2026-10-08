@@ -794,6 +794,89 @@ async def test_external_search_cap_round_robins_uneven_connectors(
     assert payload["total_results"] == 10
 
 
+@pytest.mark.parametrize(
+    ("tool", "arguments", "hint", "valid"),
+    [
+        (
+            "search_external_database",
+            {"query": "p53", "domain": "biology"},
+            "valid_domains",
+            "biomedical",
+        ),
+        (
+            "search_external_database",
+            {"query": "p53", "connector": "no-such-db"},
+            "available_connectors",
+            "pubmed",
+        ),
+        (
+            "list_external_databases",
+            {"domain": "biology"},
+            "valid_domains",
+            "biomedical",
+        ),
+    ],
+    ids=["bad-domain", "unknown-connector", "list-bad-domain"],
+)
+async def test_external_argument_mistakes_return_the_valid_values(
+    db: AsyncSession,
+    context: IntegrationContext,
+    tool: str,
+    arguments: dict[str, Any],
+    hint: str,
+    valid: str,
+) -> None:
+    result = await invoke_read(db, context, _invocation(tool, **arguments))
+    assert result.is_error is True
+    payload = result.content[0]
+    assert payload["error"] == "invalid_arguments"
+    assert valid in payload[hint]
+    # Only the public registry list: never the message text.
+    assert set(payload) == {"error", hint}
+    assert result.source_refs == []
+
+
+async def test_rejected_connector_filters_are_an_argument_error(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "search_external_database",
+            query="p53",
+            connector="pubmed",
+            filters={"no_such_filter": "x"},
+        ),
+    )
+    assert result.content == [
+        {
+            "error": "invalid_arguments",
+            "error_category": "unsupported_connector_filter",
+        }
+    ]
+
+
+async def test_connector_and_domain_names_match_case_insensitively(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    search = AsyncMock(return_value={"results": []})
+    monkeypatch.setattr(read_tools, "_tool_search_external_database", search)
+    await invoke_read(
+        db,
+        context,
+        _invocation(
+            "search_external_database",
+            query="p53",
+            connector="PubMed",
+            domain=" Biomedical ",
+        ),
+    )
+    assert search.await_args is not None
+    assert search.await_args.args[0]["connector"] == "pubmed"
+    assert search.await_args.args[0]["domain"] == "biomedical"
+
+
 async def _set_content(db: AsyncSession, document_id: UUID, text_: str) -> None:
     await db.execute(
         update(Document)
