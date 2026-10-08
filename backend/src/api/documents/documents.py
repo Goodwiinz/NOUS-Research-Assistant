@@ -486,6 +486,8 @@ async def list_documents(
             ),
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to list documents", exc_info=True)
         raise HTTPException(
