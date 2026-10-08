@@ -848,6 +848,157 @@ async def test_poll_skips_session_that_fails_authorization(
     assert stale.run_id not in await lease_runs(db, context, DEVICE)
 
 
+def _bridge_socket(frames: list[str]) -> Any:
+    """Fake bridge socket: feeds ``frames`` then disconnects; records replies."""
+    from types import SimpleNamespace
+
+    from fastapi import WebSocketDisconnect
+
+    class Socket:
+        url = SimpleNamespace(scheme="wss")
+        headers = {"x-nous-integration-grant": "opaque"}
+
+        def __init__(self) -> None:
+            self.sent: list[Any] = []
+            self.closed: list[dict[str, Any]] = []
+
+        async def accept(self, **kwargs: Any) -> None:
+            pass
+
+        async def receive_text(self) -> str:
+            if not frames:
+                raise WebSocketDisconnect()
+            return frames.pop(0)
+
+        async def send_json(self, value: Any) -> None:
+            self.sent.append(value)
+
+        async def close(self, **kwargs: Any) -> None:
+            self.closed.append(kwargs)
+
+    return Socket()
+
+
+def _serve_harness_socket(
+    monkeypatch: pytest.MonkeyPatch, db: AsyncSession, resolve: AsyncMock
+) -> Any:
+    from src.api import harness
+    from src.core.websocket_auth import WebSocketAuthenticator
+
+    monkeypatch.setattr(
+        harness,
+        "AsyncSessionLocal",
+        async_sessionmaker(db.bind, expire_on_commit=False),
+    )
+    monkeypatch.setattr(
+        WebSocketAuthenticator,
+        "authenticate",
+        AsyncMock(return_value={"sub": str(USER)}),
+    )
+    monkeypatch.setattr(harness, "resolve_integration_context", resolve)
+    return harness
+
+
+# BR-1. Mutation: backend/src/api/harness.py event branch — remove the
+# `except IntegrationAccessDenied:` around the ingest calls; this test then fails
+# with "one denied run closed the whole device socket".
+# Command: cd backend && /Users/goodwiinz/development/RAG_system/backend/.venv/bin/python
+#   -m pytest tests/unit/services/harness/test_delivery.py -k "denied_run or grant_lost" -xvs
+async def test_socket_rejects_a_denied_run_event_and_keeps_serving_the_device(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from src.models.bridge_device import WorkspaceBinding
+    from src.models.thread import Thread
+    from src.services.agent.agent_submission_service import accept_submission
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
+
+    other_thread, other_workspace = uuid4(), uuid4()
+    db.add_all(
+        [
+            Thread(
+                id=other_thread,
+                conversation_id=CONVERSATION,
+                source_project_id=PROJECT,
+                title="deleted mid-run",
+                created_by_id=USER,
+            ),
+            WorkspaceBinding(
+                device_id=DEVICE,
+                workspace_id=other_workspace,
+                project_id=PROJECT,
+                label="other",
+            ),
+        ]
+    )
+    await db.commit()
+    denied = await accept_submission(
+        db,
+        current_user=SimpleNamespace(id=USER, organization_id=ORG),
+        request=request().model_copy(
+            update={"thread_id": str(other_thread), "workspace_id": other_workspace}
+        ),
+        thread=await db.get(Thread, other_thread),
+        integration_context=context,
+    )
+    assert await dispatch_pending(db) == 1
+    [denied_command] = await lease_commands(db, context, DEVICE)
+    assert str(denied_command.runId) == denied.run_id
+    # The user deletes that chat while its Codex turn is still producing output.
+    await db.execute(
+        update(Thread).where(Thread.id == other_thread).values(is_deleted=True)
+    )
+    await db.commit()
+
+    harness = _serve_harness_socket(monkeypatch, db, AsyncMock(return_value=context))
+    socket = _bridge_socket(
+        [event(denied_command).model_dump_json(), event(command).model_dump_json()]
+    )
+    await harness.connect(socket)
+
+    assert socket.closed == [], "one denied run closed the whole device socket"
+    assert socket.sent == [
+        {
+            "reject": {
+                "runId": str(denied_command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": denied_command.generation,
+                "code": "run_access_denied",
+            }
+        },
+        {
+            "ack": {
+                "runId": str(command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": command.generation,
+                "canonicalSeq": 2,
+            }
+        },
+    ]
+    # NOUS wrote nothing for the refused run; its workspace stays locked because
+    # releasing it needs terminal evidence (delivery.py lease_commands comment).
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(HarnessReceipt)
+            .where(HarnessReceipt.run_id == denied.run_id)
+        )
+        == 0
+    )
+    session = await db.scalar(
+        select(HarnessSession)
+        .where(HarnessSession.run_id == denied.run_id)
+        .execution_options(populate_existing=True)
+    )
+    assert session is not None and session.workspace_locked is True
+
+
 async def test_chat_bound_grant_leases_only_runs_in_its_chat(
     db: AsyncSession, context: IntegrationContext, external_run: Any
 ) -> None:
