@@ -15,7 +15,7 @@ import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,6 @@ def _key(arxiv_id: str) -> str:
 
 _PER_PROCESS_GAP_S = 3.0  # arXiv's minimum spacing, as in _make_async_request
 _sleep = asyncio.sleep
-_executor: ProcessPoolExecutor | None = None
 
 
 def _executor_factory() -> Any:
@@ -56,22 +55,42 @@ def _extract(pdf_path: str) -> str:
     return full_text
 
 
-async def _extract_in_subprocess(pdf_path: str) -> str:
-    """Parse in a single-worker process pool; a cancelled/timed-out parse
-    kills the pool so a stuck pypdf cannot outlive the request."""
-    global _executor
-    if _executor is None:
-        _executor = _executor_factory()
-    executor = _executor
+_T = TypeVar("_T")
+
+
+def _kill_workers(executor: Any) -> None:
+    """Kill a process pool's workers: ``shutdown`` never stops a running task.
+
+    CPython keeps them in ``_processes``. A thread pool (the tests' stand-in)
+    has none, so this is a no-op there.
+    """
+    for process in list((getattr(executor, "_processes", None) or {}).values()):
+        process.kill()
+
+
+async def _run_in_subprocess(fn: Callable[..., _T], *args: Any) -> _T:
+    """Run ``fn(*args)`` in a worker process that belongs to this call alone.
+
+    The worker is killed when the call fails, times out or is cancelled, so a
+    stuck pypdf parse cannot outlive its request; a worker that dies breaks
+    only its own call; and one caller's timeout never cancels another
+    caller's parse. A shared single-worker pool did all three (audit RT-3).
+    Parses no longer queue behind one worker: the arXiv gate spaces downloads
+    at least 3 s apart and every parse ends with its caller's budget.
+    """
+    executor = _executor_factory()
     try:
-        return await asyncio.get_running_loop().run_in_executor(
-            executor, _extract, pdf_path
-        )
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        executor.shutdown(wait=False, cancel_futures=True)
-        if _executor is executor:
-            _executor = None
+        return await asyncio.get_running_loop().run_in_executor(executor, fn, *args)
+    except BaseException:
+        _kill_workers(executor)
         raise
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+async def _extract_in_subprocess(pdf_path: str) -> str:
+    """Parse ``pdf_path`` with pypdf in a worker process of its own."""
+    return await _run_in_subprocess(_extract, pdf_path)
 
 
 async def fetch_text(arxiv_id: str) -> str:

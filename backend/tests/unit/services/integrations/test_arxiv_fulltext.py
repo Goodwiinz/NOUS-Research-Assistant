@@ -1,8 +1,11 @@
 """Transient arXiv full-text pages: cached once, paginated, never persisted."""
 
+import asyncio
 import json
+import multiprocessing
 import os
 import time
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any
 
@@ -229,14 +232,11 @@ def thread_pool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         arxiv_fulltext, "_executor_factory", lambda: ThreadPoolExecutor(1)
     )
-    monkeypatch.setattr(arxiv_fulltext, "_executor", None)
 
 
-async def test_timed_out_extraction_replaces_the_executor(
+async def test_timed_out_extraction_does_not_poison_the_next_call(
     monkeypatch: pytest.MonkeyPatch, thread_pool: None
 ) -> None:
-    import asyncio
-
     import src.services.arxiv.arxiv_service as mod
 
     async def slot() -> float | None:
@@ -249,14 +249,11 @@ async def test_timed_out_extraction_replaces_the_executor(
         await arxiv_fulltext.get_page(
             "2401.00001", offset=0, limit=10, redis=FakeRedis(), budget=0.05
         )
-    first = arxiv_fulltext._executor
-    assert first is None  # shut down and dropped
     monkeypatch.setattr(arxiv_fulltext, "_extract", _fake_extract)
     page = await arxiv_fulltext.get_page(
         "2401.00001", offset=0, limit=10, redis=FakeRedis(), budget=5
     )
     assert page["text"] == "body"
-    assert arxiv_fulltext._executor is not None  # recreated lazily
 
 
 async def test_no_shared_gate_falls_back_to_per_process_spacing(
@@ -301,3 +298,52 @@ async def test_stale_entry_is_served_when_refresh_times_out() -> None:
         "2401.00001", offset=0, limit=10, redis=redis, fetch=hang, budget=0.05
     )
     assert page["text"] == "old"
+
+
+# --- RT-3: real worker processes ---------------------------------------------
+#
+# Builtins pickle by reference under fork (Linux, production) and spawn
+# (macOS), so these workers need no importable test module. The thread_pool
+# fixture cannot stand in here: a thread can be neither killed nor broken.
+
+
+async def _new_children_alive(before: set[int | None]) -> list[Any]:
+    """Child processes started after ``before`` still alive after up to 5 s."""
+    deadline = time.monotonic() + 5
+    alive = [p for p in multiprocessing.active_children() if p.pid not in before]
+    while alive and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+        alive = [p for p in multiprocessing.active_children() if p.pid not in before]
+    return alive
+
+
+async def test_timed_out_parse_is_killed_with_its_call() -> None:
+    before = {p.pid for p in multiprocessing.active_children()}
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            arxiv_fulltext._run_in_subprocess(time.sleep, 10), timeout=1.0
+        )
+    assert await _new_children_alive(before) == []
+
+
+async def test_dead_worker_breaks_only_its_own_call() -> None:
+    # A worker that dies mid-parse (an OOM kill) breaks its pool.
+    with pytest.raises(BrokenProcessPool):
+        await arxiv_fulltext._run_in_subprocess(os._exit, 137)
+    assert await arxiv_fulltext._run_in_subprocess(pow, 2, 10) == 1024
+
+
+async def test_one_callers_timeout_never_cancels_another_callers_parse() -> None:
+    slow = asyncio.create_task(
+        asyncio.wait_for(arxiv_fulltext._run_in_subprocess(time.sleep, 3), 0.5)
+    )
+    others = []
+    for exponent in (1, 2, 3):
+        await asyncio.sleep(0.1)
+        others.append(
+            asyncio.create_task(arxiv_fulltext._run_in_subprocess(pow, 2, exponent))
+        )
+    results = await asyncio.gather(slow, *others, return_exceptions=True)
+    assert isinstance(results[0], asyncio.TimeoutError)
+    # With one shared pool the queued callers got a bare CancelledError.
+    assert results[1:] == [2, 4, 8]
