@@ -78,6 +78,19 @@ MAX_EXECUTION_TIMEOUT = 300  # 5 minutes
 # Maximum number of code executions per agent graph run
 MAX_EXECUTIONS_PER_RUN = 5
 
+# IN-2: the agent runs execute_code in its SLOW tool tier
+# (_nodes_tools._SLOW_TOOL_TIMEOUT_SECONDS = 120). One tool call's sandbox work
+# (optional package install + the cell, each followed by at most one probe)
+# shares this budget, so our own limit always fires before the agent's outer
+# wait_for cancels the call. Cancellation kills the box and its variables.
+AGENT_CELL_TIMEOUT_SECONDS = 90
+
+# After our limit closes the /execute stream, the code-interpreter server
+# interrupts the kernel (e2b-dev/code-interpreter#237), which keeps variables.
+# A kernel that still cannot run a no-op within this window is unhealthy.
+POST_TIMEOUT_PROBE_SECONDS = 10
+_KERNEL_PROBE_CODE = "1"
+
 
 # GOO-312: one-shot isolated execution for the research ``analyze`` step.
 ISOLATED_WORKDIR = "/work"
@@ -259,12 +272,23 @@ class SandboxManager:
             )
 
         except (asyncio.TimeoutError, E2BTimeoutException):
-            if sandbox is not None:
+            # IN-2: keep the session when the interrupted kernel answers; kill
+            # only a box whose kernel is still busy (remote code not stopped).
+            kept = sandbox is not None and await self._kernel_answers(
+                thread_id, sandbox, language
+            )
+            if sandbox is not None and not kept:
                 await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return ExecutionResult(
                 stdout="",
-                stderr=f"Execution timed out after {timeout}s.",
+                stderr=(
+                    f"Execution timed out after {timeout}s and was interrupted. "
+                    "Variables from earlier cells are still available."
+                    if kept
+                    else f"Execution timed out after {timeout}s. The sandbox was "
+                    "reset, so earlier variables are gone."
+                ),
                 exit_code=124,
                 execution_time_ms=elapsed_ms,
                 error="timeout",
@@ -453,6 +477,30 @@ class SandboxManager:
         if self._sandboxes.get(thread_id) is sandbox:
             self._sandboxes.pop(thread_id)
         await self._kill_sandbox(thread_id, sandbox)
+
+    async def _kernel_answers(
+        self, thread_id: str, sandbox: Any, language: str
+    ) -> bool:
+        """Whether the kernel runs a no-op after our timeout (IN-2).
+
+        Not charged to the execution budget. A run cancelled while probing
+        still kills the box, as every cancellation does (#1864).
+        """
+        try:
+            probe = await asyncio.wait_for(
+                sandbox.run_code(
+                    _KERNEL_PROBE_CODE,
+                    language=language,
+                    timeout=POST_TIMEOUT_PROBE_SECONDS,
+                ),
+                timeout=POST_TIMEOUT_PROBE_SECONDS,
+            )
+        except asyncio.CancelledError:
+            await self._discard_sandbox(thread_id, sandbox)
+            raise
+        except Exception:
+            return False
+        return not probe.error
 
     async def cleanup(self, thread_id: str) -> None:
         """Kill and remove sandbox for a thread."""

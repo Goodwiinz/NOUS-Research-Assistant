@@ -8,9 +8,12 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import sys
 import time
 from types import ModuleType
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
@@ -121,6 +124,42 @@ def _text_result(text: str = "some text"):
     r.png = None
     r.text = text
     return r
+
+
+class _KernelBox:
+    """Stateful fake box: one namespace per box, like a Jupyter kernel.
+
+    A cell whose first line is ``#sleep <seconds>`` awaits that long first.
+    Cancelling a cell leaves the namespace intact, which is what the
+    code-interpreter server's kernel interrupt does when our side closes the
+    /execute stream (e2b-dev/code-interpreter#237). ``kill`` ends the box.
+    """
+
+    def __init__(self) -> None:
+        self.ns: dict[str, Any] = {}
+        self.killed = False
+        self.sandbox_id = "kernel-box"
+
+    async def run_code(self, code: str, **_kwargs: Any) -> Any:
+        if self.killed:
+            raise RuntimeError("sandbox was killed")
+        first = code.splitlines()[0] if code else ""
+        if first.startswith("#sleep "):
+            await asyncio.sleep(float(first.split()[1]))
+        if "pip" in code and "install" in code:
+            return _make_e2b_execution(stdout="")
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                exec(code, self.ns)
+        except Exception as exc:
+            return _make_e2b_execution(
+                stdout=out.getvalue(), error=f"{type(exc).__name__}: {exc}"
+            )
+        return _make_e2b_execution(stdout=out.getvalue())
+
+    async def kill(self) -> None:
+        self.killed = True
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +418,10 @@ class TestSandboxExecutionBounds:
     async def test_timeout_kills_without_waiting_for_other_thread_initialization(
         self, monkeypatch
     ):
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        # The cached box stays busy, so the post-timeout probe fails too.
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 0.2)
         running = asyncio.Event()
         installing = asyncio.Event()
         release_install = asyncio.Event()
@@ -484,6 +527,8 @@ class TestSandboxExecutionBounds:
         sandbox.run_code.side_effect = [
             _make_e2b_execution(),
             ProviderTimeout("private timeout detail"),
+            # The post-timeout probe also times out: the kernel never recovered.
+            ProviderTimeout("kernel still busy"),
         ]
         manager, _ = self._manager(monkeypatch, sandbox)
         result = await manager.execute("timed-out", "while True: pass")
@@ -510,7 +555,10 @@ class TestSandboxExecutionBounds:
             manager.execute("wall-clock", "while True: pass", timeout=1), timeout=2
         )
         assert result.error == "timeout"
-        sandbox.kill.assert_awaited_once()
+        # The kernel answered the probe after the interrupt: keep the box.
+        sandbox.kill.assert_not_awaited()
+        assert manager._sandboxes["wall-clock"] is sandbox
+        await manager.cleanup_all()
 
     async def test_replacement_box_does_not_replenish_budget(self, monkeypatch):
         from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
@@ -518,9 +566,11 @@ class TestSandboxExecutionBounds:
         sandbox = AsyncMock()
 
         async def run(code, **kwargs):
-            if code == "while True: pass":
-                raise asyncio.TimeoutError()
-            return _make_e2b_execution()
+            if "pip" in code:
+                return _make_e2b_execution()
+            # The cell and the post-timeout probe both time out, so each
+            # timeout kills the box and the next call needs a replacement.
+            raise asyncio.TimeoutError()
 
         sandbox.run_code.side_effect = run
         manager, provider = self._manager(monkeypatch, sandbox)
@@ -573,6 +623,100 @@ class TestSandboxExecutionBounds:
         sandbox.kill.assert_awaited_once()
         assert "cancelled" not in manager._sandboxes
         assert manager._execution_counts["cancelled"] == 1
+
+    async def test_timeout_interrupts_cell_and_keeps_responsive_box(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IN-2: our limit closes the /execute stream, the server interrupts the
+        kernel, and a kernel that then answers keeps the session's variables.
+
+        Mutation: make ``SandboxManager._kernel_answers`` return False; this
+        fails on the "still available" assertion. Run from backend/:
+        pytest -q tests/unit/services/test_sandbox.py -k keeps_responsive_box
+        """
+        box = _KernelBox()
+        manager, provider = self._manager(monkeypatch, box)
+        try:
+            assert (await manager.execute("kept", "df = [1, 2, 3]")).exit_code == 0
+            timed_out = await manager.execute(
+                "kept", "#sleep 5\nmodel = sum(df)", timeout=1
+            )
+            assert timed_out.error == "timeout"
+            assert "still available" in timed_out.stderr
+            follow_up = await manager.execute("kept", "print(len(df))")
+            assert follow_up.error is None, follow_up.error
+            assert follow_up.stdout == "3\n"
+            assert manager._sandboxes["kept"] is box and not box.killed
+            assert provider.create.await_count == 1
+            # DECISION F-2: the timed-out cell still costs one execution; the
+            # post-timeout health probe costs none.
+            assert manager._execution_counts["kept"] == 3
+        finally:
+            await manager.cleanup_all()
+
+    async def test_timeout_kills_box_whose_kernel_stays_busy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A kernel that still cannot run a no-op after the interrupt (older
+        template, or code ignoring SIGINT) is unhealthy: kill it so remote code
+        stops (#1864) and say the session was reset."""
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 0.2)
+        sandbox = AsyncMock()
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            if "pip" in code:
+                return _make_e2b_execution()
+            await asyncio.Event().wait()  # busy: the cell, then the probe
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        try:
+            result = await asyncio.wait_for(
+                manager.execute("busy", "while True: pass", timeout=1), timeout=3
+            )
+            assert result.error == "timeout"
+            assert "reset" in result.stderr
+            sandbox.kill.assert_awaited_once()
+            assert "busy" not in manager._sandboxes
+            assert sandbox.run_code.await_count == 3  # install, cell, probe
+        finally:
+            await manager.cleanup_all()
+
+    async def test_cancellation_during_probe_still_kills_box(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A run cancelled while the box is being probed still stops remote
+        code: user-initiated cancellation keeps #1864's cleanup."""
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        probing = asyncio.Event()
+        sandbox = AsyncMock()
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            if "pip" in code:
+                return _make_e2b_execution()
+            if code == module._KERNEL_PROBE_CODE:
+                probing.set()
+            await asyncio.Event().wait()
+
+        sandbox.run_code.side_effect = run
+        manager, _ = self._manager(monkeypatch, sandbox)
+        task = asyncio.create_task(
+            manager.execute("cancel-probe", "while True: pass", timeout=1)
+        )
+        try:
+            await asyncio.wait_for(probing.wait(), timeout=3)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            sandbox.kill.assert_awaited_once()
+            assert "cancel-probe" not in manager._sandboxes
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await manager.cleanup_all()
 
     async def test_failed_executions_still_consume_budget(self, monkeypatch):
         from src.services.sandbox.e2b_sandbox_manager import MAX_EXECUTIONS_PER_RUN
