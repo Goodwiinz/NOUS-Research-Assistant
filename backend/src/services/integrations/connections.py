@@ -47,25 +47,26 @@ async def _binding_label(
     user_id: UUID,
     organization_id: UUID,
     consent: IntegrationGrantRequest,
-    cache: dict[UUID, str | None],
+    workspace_bound: bool,
+    cache: dict[tuple[bool, UUID], str | None],
 ) -> str | None:
-    """The name of the consent's project or workspace while the user may
-    still reach it, else None. A consent binds exactly one of the two
-    (ck_integration_grant_requests_one_binding); project and workspace ids
-    never collide, so one cache serves both."""
-    target = consent.project_id or consent.workspace_id
+    """The name of the consent's workspace (when workspace_bound) or project
+    while the user may still reach it, else None. A consent binds exactly
+    one of the two (ck_integration_grant_requests_one_binding)."""
+    target = consent.workspace_id if workspace_bound else consent.project_id
     if target is None:
         return None
-    if target not in cache:
+    key = (workspace_bound, target)
+    if key not in cache:
         try:
-            if consent.project_id is not None:
-                row = await authorized_project(db, user_id, organization_id, target)
-            else:
+            if workspace_bound:
                 row = await authorized_workspace(db, user_id, organization_id, target)
-            cache[target] = str(row.name)
+            else:
+                row = await authorized_project(db, user_id, organization_id, target)
+            cache[key] = str(row.name)
         except IntegrationAccessDenied:
-            cache[target] = None
-    return cache[target]
+            cache[key] = None
+    return cache[key]
 
 
 async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice]:
@@ -105,12 +106,14 @@ async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice
         )
     ).all()
     by_device: dict[UUID, list[ConnectionConsent]] = {d.id: [] for d in devices}
-    labels: dict[UUID, str | None] = {}
+    labels: dict[tuple[bool, UUID], str | None] = {}
     for consent in consents:
-        label = await _binding_label(db, user_id, organization_id, consent, labels)
+        workspace_bound = consent.workspace_id is not None
+        label = await _binding_label(
+            db, user_id, organization_id, consent, workspace_bound, labels
+        )
         if label is None:
             continue
-        workspace_bound = consent.workspace_id is not None
         by_device[consent.device_id].append(
             ConnectionConsent(
                 request_id=consent.id,

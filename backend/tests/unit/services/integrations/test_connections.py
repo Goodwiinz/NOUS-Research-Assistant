@@ -175,7 +175,8 @@ async def workspace_consent(db: AsyncSession) -> None:
 
 async def _consents(db: AsyncSession, device_id: UUID) -> dict[UUID, ConnectionConsent]:
     devices = await list_connections(db, await _user(db))
-    device = next(d for d in devices if d.device_id == device_id)
+    device = next((d for d in devices if d.device_id == device_id), None)
+    assert device is not None
     return {c.request_id: c for c in device.consents}
 
 
