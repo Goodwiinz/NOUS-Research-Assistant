@@ -6,25 +6,34 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
+import psycopg2  # type: ignore[import-untyped]
 import pytest
 import yaml
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select, text
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import src.api.research_engine.runs as runs_module
@@ -1959,3 +1968,318 @@ def create_e2e_app() -> FastAPI:
     ):
         app.include_router(research_router, prefix="/api/v1")
     return app
+
+
+# ---------------------------------------------------------------------------
+# GOO-335: migration round-trip for 20260927_daily_research_brief_reviews
+# ---------------------------------------------------------------------------
+#
+# These run the real Alembic chain (``env.py`` included) in a subprocess
+# against a scratch database created on the ``postgres_container`` fixture, or
+# on ``ORCHESTRATION_TEST_DATABASE_URL`` when that is set (the role needs
+# CREATEDB). The scratch database is dropped in a ``finally`` block.
+#
+# A plain ``alembic downgrade`` from head cannot reach this revision:
+# ``b7c4e1d9a2f6`` (widen encrypted user names), which descends from the
+# Daily Brief merge, is deliberately irreversible. So the branch-specific
+# downgrade is proven two ways: with Alembic at the revision boundary
+# (``daily_brief_reviews_20260927`` -> ``agent_ops_20260925`` touches only this
+# revision), and by running the revision's own ``downgrade()``/``upgrade()``
+# against a schema that was upgraded fresh to head.
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_REVIEWS_REVISION = "daily_brief_reviews_20260927"
+_REVIEWS_PARENT = "agent_ops_20260925"
+_REVIEWS_TABLE = "research_stage_reviews"
+_REVIEWS_INDEXES = frozenset(
+    {
+        "ix_research_stage_reviews_run_step",
+        "ix_research_stage_reviews_owner_id",
+        "ix_research_stage_reviews_reviewer_id",
+        "ix_research_stage_reviews_organization_id",
+    }
+)
+_ALEMBIC_TIMEOUT_SECONDS = 900
+
+
+def _script_head() -> str:
+    config = Config(str(_BACKEND_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
+    heads = ScriptDirectory.from_config(config).get_heads()
+    assert len(heads) == 1, heads
+    return heads[0]
+
+
+def _migration_admin_dsn(request: pytest.FixtureRequest) -> str:
+    configured = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
+    if configured:
+        raw = configured
+    else:
+        # Without testcontainers the fixture skips itself; without a Docker
+        # daemon it raises DockerException, which is an environment gap.
+        try:
+            from docker.errors import DockerException  # type: ignore[import-untyped]
+        except ImportError:  # pragma: no cover - fixture skips first
+
+            class DockerException(Exception):  # type: ignore[no-redef]
+                pass
+
+        try:
+            raw = str(request.getfixturevalue("postgres_container")["url"])
+        except DockerException as exc:
+            pytest.skip(
+                "ORCHESTRATION_TEST_DATABASE_URL is not configured and Docker is "
+                f"unavailable for postgres_container ({type(exc).__name__})"
+            )
+    return make_url(raw).set(drivername="postgresql").render_as_string(False)
+
+
+@contextmanager
+def _scratch_database(admin_dsn: str) -> Iterator[str]:
+    name = f"goo335_reviews_{uuid.uuid4().hex[:16]}"
+    admin = psycopg2.connect(admin_dsn)
+    admin.autocommit = True
+    try:
+        with admin.cursor() as cursor:
+            cursor.execute(f'CREATE DATABASE "{name}"')
+        yield make_url(admin_dsn).set(database=name).render_as_string(False)
+    finally:
+        with admin.cursor() as cursor:
+            cursor.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        admin.close()
+
+
+def _alembic(dsn: str, *arguments: str) -> None:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"SUPABASE_DB_URL", "DATABASE_URL"}
+    }
+    env["DATABASE_URL"] = dsn
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(_BACKEND_ROOT / "alembic.ini"),
+            *arguments,
+        ],
+        cwd=_BACKEND_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_ALEMBIC_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"alembic {' '.join(arguments)} failed:\n" + completed.stderr[-4000:]
+    )
+
+
+def _applied_versions(dsn: str) -> set[str]:
+    with psycopg2.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT version_num FROM alembic_version")
+        return {row[0] for row in cursor.fetchall()}
+
+
+def _reviews_catalog(dsn: str) -> dict[str, Any] | None:
+    """Snapshot the review ledger's columns, indexes and constraints.
+
+    Column defaults are deliberately left out and checked by
+    ``_assert_known_default_drift``: on a fresh chain ``r6h3_model_baseline``
+    creates this table from the ORM model (no server defaults) and the
+    revision's guarded ``create_table`` is skipped, while the revision itself
+    declares ``gen_random_uuid()``/``now()``.
+    """
+    with psycopg2.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT to_regclass(%s) IS NOT NULL", (_REVIEWS_TABLE,))
+        if not cursor.fetchone()[0]:
+            return None
+        cursor.execute(
+            """
+            SELECT column_name, data_type, character_maximum_length, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = %s
+            ORDER BY ordinal_position
+            """,
+            (_REVIEWS_TABLE,),
+        )
+        columns = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT indexname, indexdef FROM pg_indexes
+            WHERE schemaname = current_schema() AND tablename = %s
+            ORDER BY indexname
+            """,
+            (_REVIEWS_TABLE,),
+        )
+        indexes = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT conname, contype, pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conrelid = to_regclass(%s)
+            ORDER BY conname
+            """,
+            (_REVIEWS_TABLE,),
+        )
+        constraints = cursor.fetchall()
+    return {"columns": columns, "indexes": indexes, "constraints": constraints}
+
+
+_MIGRATION_DEFAULTS = {"id": "gen_random_uuid()", "created_at": "now()"}
+
+
+def _column_defaults(dsn: str) -> dict[str, str]:
+    with psycopg2.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT column_name, column_default FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = %s
+              AND column_default IS NOT NULL
+            """,
+            (_REVIEWS_TABLE,),
+        )
+        return dict(cursor.fetchall())
+
+
+def _assert_known_default_drift(dsn: str) -> None:
+    """Only id/created_at may carry a server default, and only the revision's."""
+    defaults = _column_defaults(dsn)
+    assert {name: _MIGRATION_DEFAULTS.get(name) for name in defaults} == defaults
+
+
+def _relations_exist(dsn: str, names: set[str]) -> dict[str, bool]:
+    with psycopg2.connect(dsn) as connection, connection.cursor() as cursor:
+        found = {}
+        for name in sorted(names):
+            cursor.execute("SELECT to_regclass(%s) IS NOT NULL", (name,))
+            found[name] = bool(cursor.fetchone()[0])
+        return found
+
+
+def _assert_reviews_contract(catalog: dict[str, Any] | None) -> None:
+    assert catalog is not None, "research_stage_reviews is missing"
+    column_names = [column[0] for column in catalog["columns"]]
+    assert column_names == [column.name for column in ResearchStageReview.__table__.c]
+    assert {name for name, _definition in catalog["indexes"]} >= _REVIEWS_INDEXES
+    constraints = {
+        name: (kind, definition) for name, kind, definition in catalog["constraints"]
+    }
+    assert constraints["uq_research_stage_reviews_gate"] == (
+        "u",
+        "UNIQUE (run_id, step_index, output_hash, review_kind)",
+    )
+    foreign_keys = sorted(
+        definition for kind, definition in constraints.values() if kind == "f"
+    )
+    assert foreign_keys == [
+        "FOREIGN KEY (organization_id) REFERENCES organizations(id)",
+        "FOREIGN KEY (owner_id) REFERENCES users(id)",
+        "FOREIGN KEY (reviewer_id) REFERENCES users(id)",
+        "FOREIGN KEY (run_id) REFERENCES research_runs(id)",
+    ]
+
+
+def _load_reviews_migration() -> ModuleType:
+    path = (
+        _BACKEND_ROOT
+        / "alembic"
+        / "versions"
+        / "20260927_daily_research_brief_reviews.py"
+    )
+    spec = importlib.util.spec_from_file_location("_goo335_reviews_migration", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _revision_boundary_round_trip(admin_dsn: str) -> None:
+    head = _script_head()
+    with _scratch_database(admin_dsn) as dsn:
+        _alembic(dsn, "upgrade", _REVIEWS_REVISION)
+        assert _applied_versions(dsn) == {_REVIEWS_REVISION}
+        at_revision = _reviews_catalog(dsn)
+        _assert_reviews_contract(at_revision)
+        _assert_known_default_drift(dsn)
+
+        # Branch-specific: only this revision descends from its parent here.
+        _alembic(dsn, "downgrade", _REVIEWS_PARENT)
+        assert _applied_versions(dsn) == {_REVIEWS_PARENT}
+        assert _reviews_catalog(dsn) is None
+        assert not any(_relations_exist(dsn, set(_REVIEWS_INDEXES)).values())
+        # The parent's objects and the run table the ledger references survive.
+        assert _relations_exist(
+            dsn, {"research_runs", "agent_tool_operations", "agent_tool_receipts"}
+        ) == {
+            "agent_tool_operations": True,
+            "agent_tool_receipts": True,
+            "research_runs": True,
+        }
+
+        _alembic(dsn, "upgrade", _REVIEWS_REVISION)
+        assert _applied_versions(dsn) == {_REVIEWS_REVISION}
+        assert _reviews_catalog(dsn) == at_revision
+        # The table now comes from the revision's own create_table.
+        assert _column_defaults(dsn) == _MIGRATION_DEFAULTS
+
+        _alembic(dsn, "upgrade", "head")
+        assert _applied_versions(dsn) == {head}
+        assert _reviews_catalog(dsn) == at_revision
+        assert _column_defaults(dsn) == _MIGRATION_DEFAULTS
+
+
+def _fresh_head_round_trip(admin_dsn: str) -> None:
+    head = _script_head()
+    with _scratch_database(admin_dsn) as dsn:
+        _alembic(dsn, "upgrade", "head")
+        assert _applied_versions(dsn) == {head}
+        at_head = _reviews_catalog(dsn)
+        _assert_reviews_contract(at_head)
+        _assert_known_default_drift(dsn)
+
+        migration = _load_reviews_migration()
+        engine = create_engine(dsn)
+        try:
+            with engine.begin() as connection:
+                setattr(
+                    migration, "op", Operations(MigrationContext.configure(connection))
+                )
+                migration.downgrade()
+            assert _reviews_catalog(dsn) is None
+            assert not any(_relations_exist(dsn, set(_REVIEWS_INDEXES)).values())
+            assert _relations_exist(dsn, {"research_runs"}) == {"research_runs": True}
+            with engine.begin() as connection:
+                setattr(
+                    migration, "op", Operations(MigrationContext.configure(connection))
+                )
+                migration.upgrade()
+        finally:
+            engine.dispose()
+        assert _reviews_catalog(dsn) == at_head
+        assert _column_defaults(dsn) == _MIGRATION_DEFAULTS
+
+        # Re-upgrading the stamped head is a no-op that keeps the ledger.
+        _alembic(dsn, "upgrade", "head")
+        assert _applied_versions(dsn) == {head}
+        assert _reviews_catalog(dsn) == at_head
+
+
+async def test_daily_brief_review_migration_downgrades_only_its_revision(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Alembic round-trips the review ledger at its revision boundary, then to head."""
+
+    admin_dsn = _migration_admin_dsn(request)
+    await asyncio.to_thread(_revision_boundary_round_trip, admin_dsn)
+
+
+async def test_daily_brief_review_migration_round_trips_on_fresh_head_schema(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Fresh upgrade to head, revision downgrade, re-upgrade: same catalog."""
+
+    admin_dsn = _migration_admin_dsn(request)
+    await asyncio.to_thread(_fresh_head_round_trip, admin_dsn)
