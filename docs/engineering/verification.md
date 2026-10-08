@@ -12,8 +12,8 @@ checkpoint screenshots are available, and every v1 feature is `covered`.
 `covered` means the mapped scenarios and their `checkpoint()` calls exist; it
 is not a live `PASS`. The v1 live runs are `NOT RUN` until a run against a
 target with QA credentials produces an evidence record. The
-`nous-loop.md` step 7b stop gate is still planned in
-[the implementation plan](../plans/2026-10-08-nous-verify.md).
+[nous-loop.md](nous-loop.md) step 7b stop gate and the step 8 post-deploy
+rerun are live (see [Stop gate](#stop-gate)).
 
 ## Vocabulary
 
@@ -38,12 +38,12 @@ case, or an exit code of `2` from `pnpm qa:nous` is `BLOCKED` or `NOT RUN`.
 | Flow charts | `docs/engineering/flows/<feature>.md` | yes |
 | Checkpoint PNGs, video, JSON/HTML reports | `.verify-artifacts/<run-id>/` | no (gitignored; upload as CI/PR artifact) |
 | Playwright traces (`trace.zip`, `trace-<n>.zip`) | `.verify-artifacts/<run-id>/` | no, and never attached or uploaded (secret-bearing) |
+| Evidence record | `docs/testing/evidence/verify-<feature>-<YYYYMMDD>/README.md` | yes |
 
 Traces are secret-bearing. The runner pauses tracing while it types
 credentials, but a trace still records session cookies, bearer tokens and
 API responses. Keep traces local: never attach one to a PR, commit it, or
 upload it anywhere public.
-| Evidence record | `docs/testing/evidence/verify-<feature>-<YYYYMMDD>/README.md` | yes |
 
 ## Feature map
 
@@ -94,8 +94,9 @@ in `docs/testing/evidence/README.md`.
 
 ## Stop gate
 
-(planned) `docs/engineering/nous-loop.md` step 7b will require a local `PASS`
-for every mapped feature the diff touches before an outcome of `merged`;
-`BLOCKED` or `NOT RUN` will end the tick as `ready-for-human`. Step 8 will
-rerun the same features against the deployed lane after deployment and file
-a regression on failure. Neither step exists in `nous-loop.md` yet.
+[nous-loop.md](nous-loop.md) step 7b requires a local `PASS` for every mapped
+feature the diff touches before a tick can end as `merged`; `BLOCKED` or
+`NOT RUN` ends the tick as `ready-for-human`. A diff that touches no mapped
+feature records `NOT RUN (no mapped feature)` and proceeds. Step 8 reruns the
+same features against the deployed lane after deployment; a `FAILED` rerun
+files a regression instead of closing the tick as clean.

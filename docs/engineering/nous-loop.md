@@ -276,6 +276,36 @@ Run targeted tests plus every applicable repository gate. Use
 preserving every skipped or unverified item in the report. Local success never
 implies that omitted integration, end-to-end, security, or hosted checks passed.
 
+### 7b. Prove it as a user
+
+Run the user-level gate from [verification.md](verification.md) whenever the
+diff touches a feature mapped in `docs/engineering/feature-map.yaml`.
+`pnpm qa:nous --changed-from origin/develop --list` is a dry run of the
+selection; an exit of `2` with "No mapped feature changed" records
+`NOT RUN (no mapped feature)` and the tick proceeds.
+
+```bash
+scripts/verify/boot_local.sh start
+pnpm qa:nous --changed-from origin/develop --allow-writes \
+  --base-url http://127.0.0.1:3000 --api-url http://127.0.0.1:8000/api/v1 \
+  --evidence-record docs/testing/evidence/verify-<feature>-<YYYYMMDD>
+scripts/verify/boot_local.sh stop
+```
+
+Credentials come only from `NOUS_QA_EMAIL` and `NOUS_QA_PASSWORD` (or
+`--storage-state`). Open every checkpoint screenshot under
+`.verify-artifacts/<run-id>/checkpoints/` and confirm the feature's pass
+criteria visually; assertions alone are not a `PASS`, and a screenshot that
+contradicts a criterion is `FAILED`. Commit the evidence README with the fix
+and add it to `docs/testing/evidence/README.md`; never attach, commit, or
+upload a `trace*.zip`, which carries session secrets.
+
+The tick cannot be `merged` without a local `PASS` for every touched mapped
+feature. A result of `BLOCKED` or `NOT RUN` ends the tick as `ready-for-human`,
+naming the missing credential, target, or service. When local boot is
+impossible, a Vercel preview with the dev API is an acceptable target only if
+the report names it as such.
+
 ### 8. Publish, recheck, and close
 
 Use truthful authorship. Push and open a PR only when authorized. Include the
@@ -291,7 +321,17 @@ address real issues.
 Whenever the published diff changes, return to the causal test proof and local
 gates, repeat independent review whenever the diff changes, and repeat security
 review when applicable. Re-publish the reviewed commit and re-check hosted
-evidence. Apply the following protocol to every PR, including reconciled work:
+evidence.
+
+After a merged change that touched a mapped feature is deployed to the dev
+lane, rerun the step 7b features against `https://goodwiinz.tech` and
+`https://dev-api.goodwiinz.tech/api/v1` with
+`--expected-backend-sha <deployed sha>` (and `--deployment-evidence` when the
+server exposes no identity). A `FAILED` rerun files a regression with the
+evidence README attached instead of closing the tick as clean; a `BLOCKED`
+or `NOT RUN` rerun is recorded as such in the tick report, never as a pass.
+
+Apply the following protocol to every PR, including reconciled work:
 
 1. **Resolve the live requirements.** Read classic branch protection and all
    applicable active rulesets for the actual destination. Inspect their rules,

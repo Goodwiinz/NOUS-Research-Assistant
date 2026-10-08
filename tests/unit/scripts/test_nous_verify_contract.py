@@ -71,3 +71,33 @@ def test_qa_readme_documents_verification_flags() -> None:
     assert "## Verification selection and evidence" in readme
     for flag in ("--features", "--changed-from", "--evidence-dir", "--evidence-record"):
         assert flag in readme
+
+
+def test_nous_loop_has_the_user_level_stop_gate() -> None:
+    loop = (REPO_ROOT / "docs" / "engineering" / "nous-loop.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(loop.split())
+    step7 = loop.index("### 7. Run local gates")
+    step7b = loop.index("### 7b. Prove it as a user")
+    step8 = loop.index("### 8. Publish, recheck, and close")
+    assert step7 < step7b < step8
+    gate = " ".join(loop[step7b:step8].split())
+
+    assert "[verification.md](verification.md)" in gate
+    assert "--changed-from origin/develop" in gate
+    assert "cannot be `merged` without a local `PASS`" in gate
+    assert "`BLOCKED` or `NOT RUN` ends the tick as `ready-for-human`" in gate
+    assert "checkpoints/" in gate
+    assert "trace" in gate
+    assert "--expected-backend-sha" in normalized
+    assert "files a regression" in normalized
+    assert "https://goodwiinz.tech" in normalized
+
+
+def test_verification_contract_marks_the_stop_gate_live() -> None:
+    text = " ".join(CONTRACT.read_text(encoding="utf-8").split())
+    assert "step 7b stop gate is still planned" not in text
+    assert "(planned)" not in text
+    assert "Neither step exists" not in text
+    assert "step 7b" in text
