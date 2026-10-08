@@ -230,8 +230,14 @@ export async function connect(
     scopes.every((scope) => previous.scopes?.includes(scope)) &&
     (await grantIsLive(store, previous.credentialHandle, base, fetchFn))
   ) {
+    // Reuse never narrows a grant (the documented superset rule): name any
+    // stored scope this command did not ask for, and how to drop it (BR-3).
+    const retained = (previous.scopes ?? []).filter((scope) => !scopes.includes(scope));
     announce(
-      `Reusing binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.`,
+      `Reusing binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.` +
+        (retained.length
+          ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also stops the device's other runs), run nous-harness disconnect or revoke its access at /integrations/devices, then connect again.`
+          : ""),
     );
     return { deviceId: previous.deviceId, credentialHandle: previous.credentialHandle };
   }
@@ -900,7 +906,7 @@ const help = `Usage: nous-harness connect --api https://host/api/v1 (--project U
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions.
   connect --library (needs --tools and --write) also requests library:read and library:write.
-  connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow.
+  connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, disconnect, then connect.
   nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.
   nous-harness handoff show    Print the bound chat's latest handoff.
   nous-harness handoff save --file handoff.json [--parent N]    Journal the handoff locally, then save it; --parent sets expected_parent_version (default null, the first handoff).

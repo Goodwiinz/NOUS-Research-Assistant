@@ -73,9 +73,17 @@ test("same binding with a live grant reuses it without login or consent", async 
     // The liveness probe is one forced renewal; no /cli-auth/start, no consent.
     assert.deepEqual(t.since(mark), [`https://nous.test/api/v1/integrations/grants/${GRANT}/renew`]);
     assert.match(t.messages.at(-1)!, /^Reusing binding/);
+    // An exact reuse keeps nothing the command did not ask for.
+    assert.doesNotMatch(t.messages.at(-1)!, /keeps scopes/);
     assert.equal(t.state().credentialHandle, first.credentialHandle);
-    // Requesting a subset of the stored scopes is satisfied by the same binding.
+    // Requesting a subset of the stored scopes is satisfied by the same binding
+    // (the documented superset rule), and the notice names what the device
+    // keeps and how to drop it (BR-3).
     assert.deepEqual(await connect({ ...t.base, threadId: CHAT, tools: true }), first);
+    assert.match(
+      t.messages.at(-1)!,
+      /It keeps scopes this command did not request: handoff:read, handoff:write\. To drop them \(which also stops the device's other runs\), run nous-harness disconnect or revoke its access at \/integrations\/devices, then connect again\.$/,
+    );
     assert.ok(!t.messages.join("\n").includes("secret"));
   } finally {
     t.cleanup();
