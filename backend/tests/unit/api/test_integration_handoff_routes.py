@@ -299,3 +299,31 @@ def test_browser_route_scopes_by_the_chats_workspace_org(
         response = client.get(f"/api/v2/threads/{THREAD}/handoff")
     assert response.status_code == 200
     assert state["read_orgs"] == [thread_org]
+
+
+class _OwnerOrgSession:
+    """Answers the one query workspace_organization_id makes for a legacy
+    workspace: the owner's organization."""
+
+    async def scalar(self, _statement: Any) -> UUID:
+        return ORG
+
+
+def test_browser_route_reads_a_legacy_workspace_under_its_owners_org(
+    app: FastAPI, state: dict[str, Any]
+) -> None:
+    """WG-2c: a workspace with no organization is its owner's, never NULL."""
+    state["thread"] = SimpleNamespace(
+        conversation=SimpleNamespace(
+            workspace=SimpleNamespace(organization_id=None, owner_id=USER)
+        )
+    )
+
+    async def owner_db() -> AsyncIterator[Any]:
+        yield _OwnerOrgSession()
+
+    app.dependency_overrides[get_db] = owner_db
+    with TestClient(app) as client:
+        response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+    assert response.status_code == 200
+    assert state["read_orgs"] == [ORG]
