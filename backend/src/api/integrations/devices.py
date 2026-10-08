@@ -13,6 +13,7 @@ from src.models.user import User
 from src.schemas.integration_context import (
     DeviceCreate,
     DeviceDTO,
+    DeviceListItemDTO,
     WorkspaceBindingCreate,
     WorkspaceBindingDTO,
 )
@@ -30,10 +31,10 @@ async def create_device(
     return await call(service.register_device(db, user, data))
 
 
-@router.get("/devices", response_model=list[DeviceDTO])
+@router.get("/devices", response_model=list[DeviceListItemDTO])
 async def get_devices(
     user: User = Depends(require_pairing_user), db: AsyncSession = Depends(get_db)
-) -> list[BridgeDevice]:
+) -> list[DeviceListItemDTO]:
     return await call(service.list_devices(db, user))
 
 
