@@ -48,10 +48,18 @@ def _require_org_scope(organization_id: Any) -> str:
         ) from None
 
 
+# ts_headline wraps each hit in these (StartSel/StopSel); the splitter reads them.
+_HIGHLIGHT_PRE_TAG = "<mark>"
+_HIGHLIGHT_POST_TAG = "</mark>"
+_HIGHLIGHT_TAGS = re.compile(
+    f"{re.escape(_HIGHLIGHT_PRE_TAG)}|{re.escape(_HIGHLIGHT_POST_TAG)}"
+)
 # A sentence ends at ".", "!" or "?" followed by whitespace and a capital
 # letter (possibly highlighted), so "95.3%", "v2.1" and "(Fig. 3)" never end
 # one. retrieve_passages quotes these sentences to a model (audit RT-1).
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=(?:<mark>)?[A-Z])")
+_SENTENCE_END = re.compile(
+    rf"(?<=[.!?])\s+(?=(?:{re.escape(_HIGHLIGHT_PRE_TAG)})?[A-Z])"
+)
 # A capitalised word after one of these does not start a new sentence.
 _ABBREVIATIONS = frozenset(
     {
@@ -78,7 +86,11 @@ def _sentences(text: str) -> List[str]:
     """Split ``text`` into sentences without cutting numbers or abbreviations."""
     sentences: List[str] = []
     for piece in _SENTENCE_END.split(text):
-        last_word = (sentences[-1].split() or [""])[-1].lower() if sentences else ""
+        tail = sentences[-1].rsplit(None, 1) if sentences else []
+        # "(e.g." and "<mark>Fig</mark>." are the abbreviations "e.g." and "fig."
+        last_word = (
+            _HIGHLIGHT_TAGS.sub("", tail[-1]).lstrip("([{\"'").lower() if tail else ""
+        )
         if last_word in _ABBREVIATIONS:
             sentences[-1] = f"{sentences[-1]} {piece}"
         else:
@@ -94,8 +106,8 @@ class FullTextSearchService:
         self.min_query_length = 2
         self.default_limit = 20
         self.max_limit = 100
-        self.highlight_pre_tag = "<mark>"
-        self.highlight_post_tag = "</mark>"
+        self.highlight_pre_tag = _HIGHLIGHT_PRE_TAG
+        self.highlight_post_tag = _HIGHLIGHT_POST_TAG
         self.snippet_length = 200
         self.snippet_surround = 50
 

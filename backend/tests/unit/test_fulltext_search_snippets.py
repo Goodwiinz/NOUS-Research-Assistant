@@ -65,6 +65,38 @@ def test_snippets_keep_numbers_and_abbreviations_whole(
     assert _passage(headline) == expected
 
 
+@pytest.mark.parametrize(
+    ("headline", "expected"),
+    [
+        (
+            "Large models (e.g. BERT) <mark>help</mark>.",
+            "Large models (e.g. BERT) help.",
+        ),
+        (
+            "Ablations (Fig. S1) show <mark>gains</mark>.",
+            "Ablations (Fig. S1) show gains.",
+        ),
+        (
+            "Prior work (cf. Smith et al. 2020) reports <mark>gains</mark>.",
+            "Prior work (cf. Smith et al. 2020) reports gains.",
+        ),
+        (
+            "See <mark>Fig</mark>. A1 for details.",
+            "See Fig. A1 for details.",
+        ),
+        (
+            "Results (<mark>Fig</mark>. S1) improve.",
+            "Results (Fig. S1) improve.",
+        ),
+    ],
+    ids=["paren-e-g", "paren-fig", "paren-cf", "highlighted-fig", "paren-highlighted"],
+)
+def test_abbreviations_in_parentheses_or_highlights_do_not_end_a_sentence(
+    headline: str, expected: str
+) -> None:
+    assert _passage(headline) == expected
+
+
 def test_e_g_and_a_version_number_survive_after_the_title() -> None:
     passage = _passage(
         "We use e.g. <mark>BERT</mark> and v2.1 of the tokenizer.",
