@@ -140,6 +140,14 @@ async def test_search_positive_control_same_org(clients: Clients) -> None:
 # --- CI1: citations -------------------------------------------------------
 
 
+def _cit_keys(cit: str) -> tuple:
+    return (f"{cit}-title", f"{cit}-quote")
+
+
+def _export(cit: str) -> dict:
+    return {"citation_ids": [str(sid(cit))], "format": "bibtex"}
+
+
 async def test_foreign_private_citation_is_404(clients: Clients) -> None:
     r = await clients("A").get(f"/api/v1/citations/{sid('b-cit')}")
     assert r.status_code == 404
@@ -162,7 +170,9 @@ async def test_foreign_org_citation_detail_is_404(clients: Clients, cit: str) ->
 async def test_citation_list_and_count_exclude_foreign_org(clients: Clients) -> None:
     r = await clients("A").get("/api/v1/citations")
     assert r.status_code == 200
-    assert_no_canary(r.content, "b-pub-cit-title", "a-old-org-cit-title")
+    assert_no_canary(
+        r.content, *_cit_keys("b-cit"), *_cit_keys("b-pub-cit"), "a-old-org-cit-title"
+    )
     assert r.json()["total"] == 1
 
 
@@ -181,3 +191,77 @@ async def test_citation_export_excludes_foreign_private(clients: Clients) -> Non
         json={"citation_ids": [str(sid("b-cit"))], "format": "bibtex"},
     )
     assert_no_canary(r.content, "b-cit-title", "b-cit-quote")
+
+
+async def test_foreign_private_citation_hidden_from_every_read(
+    clients: Clients,
+) -> None:
+    """CI1 across detail, list + ``total`` and export: org-b's private b-cit
+    stays invisible to A now that same-org reads are org-wide (GOO-410)."""
+    a = clients("A")
+    r = await a.get(f"/api/v1/citations/{sid('b-cit')}")
+    assert r.status_code == 404
+    assert_no_canary(r.content, *_cit_keys("b-cit"))
+
+    r = await a.get(f"/api/v1/citations?document_id={sid('b-doc')}")
+    assert r.status_code == 200
+    assert_no_canary(r.content, *_cit_keys("b-cit"))
+    assert r.json()["total"] == 0
+
+    r = await a.post("/api/v1/citations/export", json=_export("b-cit"))
+    assert r.status_code == 404
+    assert_no_canary(r.content, *_cit_keys("b-cit"))
+
+
+# --- CI4: same-organization citations follow the document (GOO-410) -------
+
+ORG_B_CITATIONS = ("b-cit", "b-pub-cit", "a-old-org-cit")  # on org-b documents
+
+
+async def test_same_org_colleague_reads_private_citation(clients: Clients) -> None:
+    """C shares org-b with B, so b-cit (on B's private b-doc) reads like D2."""
+    r = await clients("C").get(f"/api/v1/citations/{sid('b-cit')}")
+    assert r.status_code == 200
+    assert canary("b-cit-quote") in r.text
+
+
+async def test_same_org_colleague_citation_list_and_total(clients: Clients) -> None:
+    """C lists every org-b document citation, private or public, whoever
+    uploaded it; nothing from org-a, and ``total`` counts exactly those."""
+    r = await clients("C").get("/api/v1/citations")
+    assert r.status_code == 200
+    body = r.json()
+    assert {c["id"] for c in body["citations"]} == {
+        str(sid(c)) for c in ORG_B_CITATIONS
+    }
+    assert body["total"] == len(ORG_B_CITATIONS)
+    assert canary("b-cit-quote") in r.text
+    assert_no_canary(r.content, *_cit_keys("a-cit"))
+
+
+async def test_same_org_colleague_exports_private_citation(clients: Clients) -> None:
+    r = await clients("C").post("/api/v1/citations/export", json=_export("b-cit"))
+    assert r.status_code == 200
+    assert canary("b-cit-title") in r.text
+
+
+@pytest.mark.parametrize("who", ["B", "C"])
+async def test_deleted_document_hides_its_citation(
+    clients: Clients, test_db: AsyncSession, who: str
+) -> None:
+    """Soft-deleting b-doc revokes b-cit for its uploader and the colleague."""
+    await soft_delete(test_db, Document, "b-doc")
+    client = clients(who)
+
+    r = await client.get(f"/api/v1/citations/{sid('b-cit')}")
+    assert r.status_code == 404
+    assert_no_canary(r.content, *_cit_keys("b-cit"))
+
+    r = await client.get("/api/v1/citations")
+    assert r.status_code == 200
+    assert_no_canary(r.content, *_cit_keys("b-cit"))
+    assert r.json()["total"] == len(ORG_B_CITATIONS) - 1
+
+    r = await client.post("/api/v1/citations/export", json=_export("b-cit"))
+    assert r.status_code == 404
+    assert_no_canary(r.content, *_cit_keys("b-cit"))

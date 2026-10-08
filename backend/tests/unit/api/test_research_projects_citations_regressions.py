@@ -149,10 +149,22 @@ def _make_note(project_id, user_id, **overrides):
 
 
 @pytest.mark.asyncio
-async def test_get_citation_rejects_inaccessible_private_document():
+@pytest.mark.parametrize(
+    "doc_overrides",
+    [
+        {"organization_id": uuid4()},  # foreign organization, even if public
+        {"organization_id": uuid4(), "is_public": True},
+        {"is_deleted": True},  # caller's organization, but soft-deleted
+    ],
+)
+async def test_get_citation_rejects_foreign_org_or_deleted_document(
+    doc_overrides: dict,
+) -> None:
     current_user = _make_user()
-    private_doc = _make_document(uploaded_by_user_id=uuid4(), is_public=False)
-    citation = _make_citation(document_id=private_doc.id, document=private_doc)
+    doc = _make_document(
+        **{"organization_id": current_user.organization_id, **doc_overrides}
+    )
+    citation = _make_citation(document_id=doc.id, document=doc)
     db = AsyncMock()
     db.execute = AsyncMock(return_value=_result(scalar=citation))
 
@@ -164,6 +176,29 @@ async def test_get_citation_rejects_inaccessible_private_document():
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_citation_allows_same_org_colleague_private_document() -> None:
+    """GOO-410: documents are organization-shared, so a colleague's private
+    document's citation is readable like the document itself."""
+    current_user = _make_user()
+    private_doc = _make_document(
+        organization_id=current_user.organization_id,
+        uploaded_by_user_id=uuid4(),
+        is_public=False,
+    )
+    citation = _make_citation(document_id=private_doc.id, document=private_doc)
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_result(scalar=citation))
+
+    response = await citations_api.get_citation(
+        citation_id=citation.id,
+        current_user=current_user,
+        db=db,
+    )
+
+    assert response.id == citation.id
 
 
 @pytest.mark.asyncio
@@ -202,8 +237,11 @@ async def test_list_citations_applies_access_filter_in_sql():
     assert len(response.citations) == 1
     count_sql, list_sql = executed
     for sql in (count_sql, list_sql):
-        assert "is_public" in sql
-        assert "uploaded_by_user_id" in sql
+        # GOO-410: the document branch is org + not deleted, nothing narrower.
+        assert "documents.organization_id" in sql
+        assert "documents.is_deleted" in sql
+        assert "documents.is_public" not in sql
+        assert "documents.uploaded_by_user_id" not in sql
         assert "owner_id" in sql
     assert "limit" in list_sql and "offset" in list_sql
 
@@ -254,16 +292,23 @@ async def test_export_bibliography_rejects_inaccessible_project():
 
 
 @pytest.mark.asyncio
-async def test_add_document_to_project_rejects_unowned_private_document():
+async def test_add_document_to_project_accepts_colleague_private_document() -> None:
+    """GOO-410: the org-scoped document lookup is the whole check, so a
+    colleague's private document passes it. The junction lookup then finds a
+    live row (409), which proves the document check let it through."""
     current_user = _make_user()
     project_id = uuid4()
-    private_doc = _make_document(uploaded_by_user_id=uuid4(), is_public=False)
+    private_doc = _make_document(
+        organization_id=current_user.organization_id,
+        uploaded_by_user_id=uuid4(),
+        is_public=False,
+    )
 
     db = AsyncMock()
     db.execute = AsyncMock(
         side_effect=[
             _result(scalar=private_doc),
-            _result(scalar=None),
+            _result(scalar=SimpleNamespace(is_deleted=False)),
         ]
     )
     db.commit = AsyncMock()
@@ -283,7 +328,8 @@ async def test_add_document_to_project_rejects_unowned_private_document():
                 db=db,
             )
 
-    assert exc_info.value.status_code == 404
+    assert exc_info.value.status_code == 409
+    assert db.execute.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -315,6 +361,47 @@ async def test_add_document_to_project_scopes_document_lookup_to_org():
     assert exc_info.value.status_code == 404
     assert "documents.organization_id" in statements[0]
     assert "documents.is_deleted" in statements[0]
+
+
+@pytest.mark.asyncio
+async def test_project_bibliography_scopes_citations_and_fallback_to_org() -> None:
+    """GOO-410: a project can link a document from another organization (a
+    cross-org workspace member added it), so the bibliography's citation read
+    and its document-metadata fallback both apply the org + not-deleted
+    boundary, like list_project_documents and the citations export."""
+    current_user = _make_user()
+    project = _make_project()
+    statements = []
+    results = iter(
+        [
+            _result(rows=[(uuid4(),)]),  # project document ids
+            _result(scalars=[]),  # citations for those documents
+            _result(scalars=[]),  # document-metadata fallback
+        ]
+    )
+
+    async def capture_execute(statement: object) -> object:
+        statements.append(str(statement).lower())
+        return next(results)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=capture_execute)
+
+    with patch.object(
+        projects_api, "_get_project_with_auth", AsyncMock(return_value=project)
+    ):
+        response = await projects_api.get_project_bibliography(
+            project_id=project.id,
+            format="bibtex",
+            current_user=current_user,
+            db=db,
+        )
+
+    assert response["citation_count"] == 0
+    citation_sql, fallback_sql = statements[1], statements[2]
+    for sql in (citation_sql, fallback_sql):
+        assert "documents.organization_id" in sql
+        assert "documents.is_deleted" in sql
 
 
 @pytest.mark.asyncio
