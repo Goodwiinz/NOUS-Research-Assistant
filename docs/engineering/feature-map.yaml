@@ -1,0 +1,205 @@
+version: 1
+features:
+  - id: login
+    status: planned
+    surfaces:
+      web: ["/login"]
+      api: []
+      cli: []
+    states: [empty, loading, error, done]
+    pass_criteria:
+      - "The login form renders #email, #password and one submit button."
+      - "Valid credentials leave /login and land on a protected route."
+    scenarios: [smoke.login-availability]
+    owns:
+      - "frontend/app/(auth)/login/**"
+      - "frontend/src/components/auth/**"
+      - "frontend/src/lib/supabase/**"
+  - id: chat-send-stream-reload
+    status: planned
+    surfaces:
+      web: ["/chat", "/chat?thread=<id>"]
+      api: ["POST /api/v1/agent/stream", "GET /api/v2/threads/{id}/messages"]
+      cli: ["./nous \"<prompt>\""]
+    states: [empty, streaming, done, error]
+    pass_criteria:
+      - "A message typed in the composer appears as a user transcript row."
+      - "An assistant row streams and reaches a terminal state."
+      - "After reload both rows are still rendered and the API lists the user message."
+    scenarios: [workflow.reload-persistence]
+    owns:
+      - "frontend/app/(dashboard)/chat/**"
+      - "frontend/src/components/chat/**"
+      - "frontend/src/store/chat/**"
+      - "frontend/src/store/chat-store.ts"
+      - "frontend/src/services/agentChatService.ts"
+      - "backend/src/api/agent/**"
+      - "backend/src/api/threads/**"
+      - "backend/src/services/agent/agent_submission_service.py"
+      - "backend/src/services/agent/run_event_store.py"
+  - id: hitl-approve-deny
+    status: planned
+    surfaces:
+      web: ["/chat?thread=<id>"]
+      api: ["POST /api/v1/agent/stream/confirm", "POST /api/v1/agent/confirm/{job_id}"]
+      cli: []
+    states: [HITL-pending, done, error]
+    pass_criteria:
+      - "A destructive tool call pauses the run and shows the 'Approval needed' dialog."
+      - "Approve resumes the run and the tool's effect exists afterwards."
+      - "Deny ends the run without the effect and the transcript says so."
+    scenarios: []
+    owns:
+      - "frontend/src/components/chat/aui/HitlApprovalToolUI.tsx"
+      - "frontend/src/components/chat/aui/hitlConstants.ts"
+      - "backend/src/services/agent/_nodes_tools.py"
+      - "backend/src/services/agent/_builders.py"
+  - id: document-upload
+    status: planned
+    surfaces:
+      web: ["/documents", "/documents/<id>", "/documents/upload"]
+      api: ["POST /api/v1/files/upload", "GET /api/v1/documents/{id}"]
+      cli: []
+    states: [empty, loading, done, error]
+    pass_criteria:
+      - "Uploading a supported file returns an owned document id and filename."
+      - "The document detail page renders that filename as its title."
+    scenarios: [workflow.document-upload-and-attachment]
+    owns:
+      - "frontend/app/(dashboard)/documents/**"
+      - "frontend/src/components/documents/**"
+      - "backend/src/api/documents/**"
+  - id: project-creation-via-chat
+    status: planned
+    surfaces:
+      web: ["/chat?thread=<id>", "/projects/<id>"]
+      api: ["GET /api/v1/projects", "DELETE /api/v1/projects/{id}"]
+      cli: []
+    states: [HITL-pending, done]
+    pass_criteria:
+      - "Asking the agent to create a named project triggers the approval dialog."
+      - "After Approve the project exists in GET /api/v1/projects?search=<name> and /projects/<id> renders it."
+    scenarios: []
+    owns:
+      - "frontend/app/(dashboard)/projects/**"
+      - "backend/src/api/research/projects.py"
+      - "backend/src/services/agent/tools.py"
+ignore:
+  # Shrink-only. Remove a path when a feature claims it; the checker fails on
+  # entries that no longer exist or that a feature also claims.
+  pages:
+    - "frontend/app/(auth)/cli-auth/page.tsx"
+    - "frontend/app/(auth)/forgot-password/page.tsx"
+    - "frontend/app/(auth)/register/page.tsx"
+    - "frontend/app/(auth)/reset-password/page.tsx"
+    - "frontend/app/(auth)/verify-email/page.tsx"
+    - "frontend/app/(dashboard)/analytics/page.tsx"
+    - "frontend/app/(dashboard)/dashboard/page.tsx"
+    - "frontend/app/(dashboard)/design-system/page.tsx"
+    - "frontend/app/(dashboard)/diagnostics/page.tsx"
+    - "frontend/app/(dashboard)/entities/page.tsx"
+    - "frontend/app/(dashboard)/integrations/actions/[invocationId]/page.tsx"
+    - "frontend/app/(dashboard)/integrations/approve/page.tsx"
+    - "frontend/app/(dashboard)/integrations/context/[requestId]/page.tsx"
+    - "frontend/app/(dashboard)/integrations/devices/page.tsx"
+    - "frontend/app/(dashboard)/notifications/page.tsx"
+    - "frontend/app/(dashboard)/quality-metrics-demo/page.tsx"
+    - "frontend/app/(dashboard)/research-engine/page.tsx"
+    - "frontend/app/(dashboard)/research-engine/projects/[id]/blueprint/page.tsx"
+    - "frontend/app/(dashboard)/research-engine/projects/[id]/graph/page.tsx"
+    - "frontend/app/(dashboard)/research-engine/runs/[id]/page.tsx"
+    - "frontend/app/(dashboard)/research/[id]/page.tsx"
+    - "frontend/app/(dashboard)/research/page.tsx"
+    - "frontend/app/(dashboard)/search/page.tsx"
+    - "frontend/app/(dashboard)/settings/api-keys/page.tsx"
+    - "frontend/app/(dashboard)/settings/organization/page.tsx"
+    - "frontend/app/(dashboard)/settings/page.tsx"
+    - "frontend/app/(public)/arxiv/page.tsx"
+    - "frontend/app/agent-plan-demo/page.tsx"
+    - "frontend/app/auth/orcid/callback/page.tsx"
+    - "frontend/app/page.tsx"
+    - "frontend/app/visual-test/agent-citations/page.tsx"
+    - "frontend/app/visual-test/chat-mobile-controls/page.tsx"
+    - "frontend/app/visual-test/response-renderer/page.tsx"
+  routers:
+    - "backend/src/api/analytics/dashboards.py"
+    - "backend/src/api/analytics/metrics.py"
+    - "backend/src/api/analytics/realtime.py"
+    - "backend/src/api/analytics/reports.py"
+    - "backend/src/api/artifacts.py"
+    - "backend/src/api/arxiv/arxiv_bulk.py"
+    - "backend/src/api/arxiv/arxiv_change_tracking.py"
+    - "backend/src/api/arxiv/arxiv_extraction.py"
+    - "backend/src/api/arxiv/arxiv_knowledge_graph.py"
+    - "backend/src/api/arxiv/arxiv_llm_bulk.py"
+    - "backend/src/api/arxiv/arxiv_local.py"
+    - "backend/src/api/arxiv/arxiv_local_simple.py"
+    - "backend/src/api/arxiv/core.py"
+    - "backend/src/api/auth/api_keys.py"
+    - "backend/src/api/auth/auth.py"
+    - "backend/src/api/auth/cli_auth.py"
+    - "backend/src/api/auth/tenant_management.py"
+    - "backend/src/api/auth_orcid.py"
+    - "backend/src/api/connectors/router.py"
+    - "backend/src/api/diagnostics/retrieval_diagnostics.py"
+    - "backend/src/api/evidence/router.py"
+    - "backend/src/api/harness.py"
+    - "backend/src/api/infrastructure/evaluation.py"
+    - "backend/src/api/infrastructure/workers.py"
+    - "backend/src/api/integrations/__init__.py"
+    - "backend/src/api/integrations/actions.py"
+    - "backend/src/api/integrations/connections.py"
+    - "backend/src/api/integrations/devices.py"
+    - "backend/src/api/integrations/grants.py"
+    - "backend/src/api/integrations/handoffs.py"
+    - "backend/src/api/integrations/selected_context.py"
+    - "backend/src/api/integrations/tools.py"
+    - "backend/src/api/quality/ab_testing.py"
+    - "backend/src/api/quality/performance_dashboard.py"
+    - "backend/src/api/quality/quality_metrics.py"
+    - "backend/src/api/quality/quality_recommendations.py"
+    - "backend/src/api/quality/user_behavior.py"
+    - "backend/src/api/realtime/realtime_document_status.py"
+    - "backend/src/api/realtime/realtime_quality_metrics.py"
+    - "backend/src/api/realtime/websocket_v2.py"
+    - "backend/src/api/research/chat.py"
+    - "backend/src/api/research/citations.py"
+    - "backend/src/api/research/claims.py"
+    - "backend/src/api/research/deposits.py"
+    - "backend/src/api/research/drafts.py"
+    - "backend/src/api/research/export.py"
+    - "backend/src/api/research/extraction_matrix.py"
+    - "backend/src/api/research/manuscript_releases.py"
+    - "backend/src/api/research/peer_review.py"
+    - "backend/src/api/research/pipeline.py"
+    - "backend/src/api/research/project_chat.py"
+    - "backend/src/api/research/project_report.py"
+    - "backend/src/api/research/project_skills.py"
+    - "backend/src/api/research/statements.py"
+    - "backend/src/api/research/tone_engine.py"
+    - "backend/src/api/research/writer.py"
+    - "backend/src/api/research_engine/acquisition.py"
+    - "backend/src/api/research_engine/appraisals.py"
+    - "backend/src/api/research_engine/blueprints.py"
+    - "backend/src/api/research_engine/capabilities.py"
+    - "backend/src/api/research_engine/corpus.py"
+    - "backend/src/api/research_engine/evidence.py"
+    - "backend/src/api/research_engine/experiments.py"
+    - "backend/src/api/research_engine/identities.py"
+    - "backend/src/api/research_engine/journey.py"
+    - "backend/src/api/research_engine/projects.py"
+    - "backend/src/api/research_engine/protocols.py"
+    - "backend/src/api/research_engine/reruns.py"
+    - "backend/src/api/research_engine/review_versions.py"
+    - "backend/src/api/research_engine/reviews.py"
+    - "backend/src/api/research_engine/runs.py"
+    - "backend/src/api/research_engine/screening.py"
+    - "backend/src/api/research_engine/search_updates.py"
+    - "backend/src/api/research_engine/steps.py"
+    - "backend/src/api/research_engine/synthesis.py"
+    - "backend/src/api/search/knowledge_graph.py"
+    - "backend/src/api/search/search.py"
+    - "backend/src/api/search/search_quality.py"
+    - "backend/src/api/security/compliance.py"
+    - "backend/src/api/security/encryption.py"
+    - "backend/src/api/security/rbac_management.py"
