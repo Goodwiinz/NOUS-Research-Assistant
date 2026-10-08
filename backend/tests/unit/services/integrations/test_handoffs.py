@@ -20,7 +20,10 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_handoff import HandoffCreate
 from src.services.integrations import handoffs
-from src.services.integrations.context import IntegrationAccessDenied
+from src.services.integrations.context import (
+    IntegrationAccessDenied,
+    workspace_organization_id,
+)
 from src.services.integrations.handoffs import (
     HandoffConflict,
     HandoffInvalid,
@@ -544,3 +547,54 @@ async def test_browser_read_requires_the_workspace_org(db: AsyncSession) -> None
         await read_latest_for_thread(db, organization_id=OTHER_ORG, thread_id=THREAD)
         is None
     )
+
+
+async def _make_legacy(db: AsyncSession) -> None:
+    """WORKSPACE as a legacy row: no organization, so it is its owner's."""
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(organization_id=None)
+    )
+    await db.commit()
+
+
+# WG-2c (was HO-1): grants admitted legacy workspaces while the chain query
+# did not, so v1 saved and then every read was empty and every save a 409
+# with latest:null. Mutation: restore `Workspace.organization_id ==
+# organization_id` in _live_chain and the first read-back fails.
+async def test_legacy_workspace_chain_reads_back_and_continues(
+    db: AsyncSession,
+) -> None:
+    await _make_legacy(db)
+    first = await save(db, _ctx(), _payload())
+    assert await read_latest(db, _ctx()) == first
+    second = await save(db, _ctx(), _payload(parent=1, goal="Next"))
+    assert second.version == 2
+    workspace = await db.get(Workspace, WORKSPACE)
+    assert workspace is not None
+    # The browser route scopes by the org this gives, never the NULL column.
+    assert await workspace_organization_id(db, workspace) == ORG
+    assert (
+        await read_latest_for_thread(db, organization_id=ORG, thread_id=THREAD)
+        == second
+    )
+    assert await _count(db) == 2
+
+
+async def test_legacy_workspace_chain_follows_its_owner_out_of_the_org(
+    db: AsyncSession,
+) -> None:
+    await _make_legacy(db)
+    await save(db, _ctx(), _payload())
+    # The owner moves to OTHER_ORG and the legacy workspace goes with them:
+    # ORG no longer sees the chain although the row itself carries ORG.
+    await db.execute(
+        update(User).where(User.id == USER).values(organization_id=OTHER_ORG)
+    )
+    await db.commit()
+    assert await read_latest(db, _ctx()) is None
+    assert (
+        await read_latest_for_thread(db, organization_id=ORG, thread_id=THREAD) is None
+    )
+    workspace = await db.get(Workspace, WORKSPACE)
+    assert workspace is not None
+    assert await workspace_organization_id(db, workspace) == OTHER_ORG

@@ -118,6 +118,21 @@ def workspace_in_org(organization_id: UUID | None) -> ColumnElement[bool]:
     )
 
 
+async def workspace_organization_id(
+    db: AsyncSession, workspace: Workspace
+) -> UUID | None:
+    """The organization ``workspace_in_org`` places ``workspace`` in: its own,
+    or for a legacy workspace without one, its owner's (None when neither
+    has one). For callers that need the value, such as the browser handoff
+    card."""
+    if workspace.organization_id is not None:
+        return cast(UUID, workspace.organization_id)
+    owner_org = await db.scalar(
+        select(User.organization_id).where(User.id == workspace.owner_id)
+    )
+    return cast("UUID | None", owner_org)
+
+
 def _workspace_organization_admits(
     organization_id: UUID | None,
 ) -> ColumnElement[bool]:
