@@ -550,6 +550,27 @@ async def test_legacy_workspace_grant_follows_web_semantics(
         await resolve_integration_context(db, token, required_scope="library:read")
 
 
+# `== None` compiles to `IS NULL`, so an unguarded None organization would
+# match the live owning organization here and every legacy row below.
+# Mutation: drop the `organization_id is None` guard from either helper.
+async def test_a_missing_organization_admits_no_workspace(db: AsyncSession) -> None:
+    from src.services.integrations.context import (
+        _workspace_organization_admits,
+        workspace_in_org,
+    )
+
+    async def admitted(predicate: Any) -> list[Any]:
+        return list((await db.scalars(select(Workspace.id).where(predicate))).all())
+
+    assert await admitted(_workspace_organization_admits(ORG)) == [WORKSPACE]
+    assert await admitted(_workspace_organization_admits(None)) == []
+    await db.execute(update(Workspace).values(organization_id=None))
+    await db.execute(update(User).values(organization_id=None))
+    await db.commit()
+    assert await admitted(workspace_in_org(None)) == []
+    assert await admitted(_workspace_organization_admits(None)) == []
+
+
 async def test_workspace_listing_rechecks_permissions_and_foreign_devices(
     db: AsyncSession, owner: Any, pending: Any
 ) -> None:

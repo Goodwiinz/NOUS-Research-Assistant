@@ -6,7 +6,7 @@ from secrets import token_urlsafe
 from typing import Any, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, exists, or_, select, update
+from sqlalchemy import ColumnElement, and_, exists, false, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -101,30 +101,40 @@ def _legacy_workspace_in_org(organization_id: UUID) -> ColumnElement[bool]:
     )
 
 
-def workspace_in_org(organization_id: UUID) -> ColumnElement[bool]:
+def workspace_in_org(organization_id: UUID | None) -> ColumnElement[bool]:
     """``Workspace`` belongs to ``organization_id``, legacy NULL rows included.
 
     The one organization predicate for integration queries that join
     ``Workspace``. Never compare ``Workspace.organization_id`` directly
     (rule c of test_integration_boundaries.py): 2c3d56d82 taught two checks
-    the legacy rule and missed three (WG-2).
+    the legacy rule and missed three (WG-2). A missing organization admits
+    nothing: ``== None`` would compile to ``IS NULL`` and match every legacy row.
     """
+    if organization_id is None:
+        return false()
     return or_(
         Workspace.organization_id == organization_id,
         _legacy_workspace_in_org(organization_id),
     )
 
 
-def _workspace_organization_admits(organization_id: UUID) -> ColumnElement[bool]:
+def _workspace_organization_admits(
+    organization_id: UUID | None,
+) -> ColumnElement[bool]:
     """The organization rule of ``authorized_project`` and
     ``authorized_workspace``: a live owning organization (an explicit member
     from another organization keeps access), or a legacy workspace whose
-    owner is in the caller's organization."""
+    owner is in the caller's organization. A missing organization admits
+    nothing. The owning organization is aliased for the same reason as the
+    owner in ``_legacy_workspace_in_org``."""
+    if organization_id is None:
+        return false()
+    owning = aliased(Organization)
     return or_(
         exists().where(
-            Organization.id == Workspace.organization_id,
-            Organization.is_deleted.is_(False),
-            Organization.is_active.is_(True),
+            owning.id == Workspace.organization_id,
+            owning.is_deleted.is_(False),
+            owning.is_active.is_(True),
         ),
         _legacy_workspace_in_org(organization_id),
     )
