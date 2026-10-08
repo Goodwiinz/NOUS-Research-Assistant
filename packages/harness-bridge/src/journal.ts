@@ -701,6 +701,19 @@ export class Journal {
   async reconcile(id: string, adapter: HarnessAdapter): Promise<void> {
     const row = this.row(id);
     if (!row || terminal(row.state) || row.state === "terminal_pending") return;
+    if (row.state === "denied") {
+      // NOUS refused this run: ask Codex nothing (a vanished thread would fail
+      // every reconnect) and report nothing, but keep the expiry watchdog armed
+      // so the native turn is still interrupted once its lease lapses.
+      if (row.session && row.turn)
+        void this.watchLease(
+          (JSON.parse(row.command) as BridgeCommand).expiresAt,
+          adapter,
+          row.session,
+          row.turn,
+        ).catch(() => this.quarantine(id));
+      return;
+    }
     if (!row.session) {
       this.quarantine(id);
       return;

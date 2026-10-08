@@ -321,7 +321,10 @@ export async function connectBridge(options: {
             await journal.execute(c, a);
           }
           for (const c of journal.activeCommands()) {
-            if (journal.state(c.commandId) === "recovering")
+            const state = journal.state(c.commandId);
+            // A refused run makes no Codex call; reconcile only re-arms its
+            // watchdog.
+            if (state === "recovering" || state === "denied")
               await journal.reconcile(
                 c.commandId,
                 options.adapterFor(c.workspaceId, c.runId),

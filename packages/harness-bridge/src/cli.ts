@@ -27,7 +27,7 @@ import {
   standaloneInstallCommand,
 } from "./mcp/config.ts";
 import { runStdioMcp } from "./mcp/stdio.ts";
-import type { SessionOptions } from "./contracts.ts";
+import type { HarnessAdapter, SessionOptions } from "./contracts.ts";
 
 // Harness sessions need one project; a workspace grant cannot hold harness:execute.
 const WORKSPACE_MCP_ONLY =
@@ -490,6 +490,25 @@ export async function addWorkspace(
   );
   return { workspaceId, root };
 }
+/** One local reconciliation pass over the locked runs, without the network. */
+export async function reconcileLocal(
+  journal: Journal,
+  adapterFor: (workspaceId: string, runId: string) => HarnessAdapter,
+): Promise<void> {
+  for (const c of journal.activeCommands()) {
+    const state = journal.state(c.commandId);
+    // A refused run makes no Codex call; reconcile only re-arms its watchdog.
+    if (state === "recovering" || state === "denied")
+      try {
+        await journal.reconcile(
+          c.commandId,
+          adapterFor(c.workspaceId, c.runId),
+        );
+      } catch {
+        journal.quarantine(c.commandId);
+      }
+  }
+}
 export async function runBridge(
   stateDir: string,
   signal: AbortSignal,
@@ -543,17 +562,7 @@ export async function runBridge(
     while (!signal.aborted) {
       // Local native evidence and the expiry watchdog must work even while the
       // network is unavailable or authentication cannot open a new connection.
-      for (const c of journal.activeCommands()) {
-        if (journal.state(c.commandId) === "recovering")
-          try {
-            await journal.reconcile(
-              c.commandId,
-              adapterFor(c.workspaceId, c.runId),
-            );
-          } catch {
-            journal.quarantine(c.commandId);
-          }
-      }
+      await reconcileLocal(journal, adapterFor);
       try {
         await connectBridge({
           url: url.href,
