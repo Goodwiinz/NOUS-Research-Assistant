@@ -12,6 +12,7 @@ import {
   scenariosForFeatures,
 } from '../../../tests/e2e/qa/feature-map.mjs';
 import { CLIConfigError, main, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
+import { QASession } from '../../../tests/e2e/qa/session.mjs';
 
 const MAP = `
 version: 1
@@ -150,4 +151,92 @@ test('main reports a selection error with exit code 2 when no mapped feature cha
       console.error = original;
     }
   });
+});
+
+function fakePlaywright(record) {
+  const page = {
+    url: () => 'http://127.0.0.1:3000/login',
+    goto: async () => ({}),
+    screenshot: async (options) => { record.screenshots.push(options); },
+    video: () => ({ path: async () => '/tmp/fake.webm' }),
+  };
+  const context = {
+    tracing: {
+      start: async (options) => { record.tracingStart = options; },
+      stop: async (options) => { record.tracingStop = options; },
+    },
+    newPage: async () => page,
+    close: async () => { record.contextClosed = true; },
+  };
+  const browser = { newContext: async (options) => { record.contextOptions = options; return context; }, close: async () => {} };
+  return { chromium: { launch: async () => browser } };
+}
+
+function sessionConfig(evidenceDir) {
+  return { baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:3000/api/v1', runId: 'r1', timeoutMs: 100, evidenceDir };
+}
+
+async function withEvidenceDir(work) {
+  const dir = await mkdtemp(join(tmpdir(), 'nous-verify-ev-'));
+  try {
+    return await work(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('browser context records video and trace into the evidence directory', async () => {
+  await withEvidenceDir(async (dir) => {
+    const record = { screenshots: [] };
+    const session = new QASession(sessionConfig(dir), { playwright: fakePlaywright(record) });
+    await session.openBrowser();
+    assert.equal(record.contextOptions.recordVideo.dir, join(dir, 'video'));
+    assert.equal(record.contextOptions.baseURL, 'http://127.0.0.1:3000');
+    assert.deepEqual(record.tracingStart, { screenshots: true, snapshots: true });
+    await session.close();
+    assert.equal(record.tracingStop.path, join(dir, 'trace.zip'));
+    assert.equal(session.artifacts.trace, 'trace.zip');
+    assert.deepEqual(session.artifacts.videos, ['/tmp/fake.webm']);
+  });
+});
+
+test('a session without an evidence directory records no video or trace', async () => {
+  const record = { screenshots: [] };
+  const session = new QASession(sessionConfig(undefined), { playwright: fakePlaywright(record) });
+  await session.openBrowser();
+  assert.equal(record.contextOptions.recordVideo, undefined);
+  assert.equal(record.tracingStart, undefined);
+  await session.close();
+  assert.equal(record.tracingStop, undefined);
+});
+
+test('a quarantined (timed-out) session still stops tracing', async () => {
+  await withEvidenceDir(async (dir) => {
+    const record = { screenshots: [] };
+    const session = new QASession(sessionConfig(dir), { playwright: fakePlaywright(record) });
+    await session.openBrowser();
+    await session.quarantine();
+    assert.equal(record.tracingStop.path, join(dir, 'trace.zip'));
+    assert.equal(session.artifacts.trace, 'trace.zip');
+  });
+});
+
+test('checkpoint takes a full-page screenshot named by scenario and checkpoint', async () => {
+  await withEvidenceDir(async (dir) => {
+    const record = { screenshots: [] };
+    const session = new QASession(sessionConfig(dir), { playwright: fakePlaywright(record) });
+    await session.openBrowser();
+    const item = await session.checkpoint('smoke.login-availability', 'login.form');
+    assert.deepEqual(item, { kind: 'checkpoint', name: 'login.form', file: 'smoke.login-availability--login.form.png' });
+    assert.equal(record.screenshots[0].fullPage, true);
+    assert.equal(record.screenshots[0].path, join(dir, 'checkpoints', 'smoke.login-availability--login.form.png'));
+    assert.deepEqual(session.artifacts.checkpoints, [item]);
+  });
+});
+
+test('checkpoint rejects invalid names and a missing page', async () => {
+  const session = new QASession(sessionConfig('/nonexistent-ev'), {});
+  await assert.rejects(session.checkpoint('x', 'Bad Name'), /Checkpoint name/);
+  await assert.rejects(session.checkpoint('x', '../escape'), /Checkpoint name/);
+  await assert.rejects(session.checkpoint('smoke.login-availability', 'login.form'), /no open page/);
 });

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { redactText, sanitizeError, sanitizeRequestObservation } from './report.mjs';
 
@@ -6,6 +8,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SAFE_PATH = /^\/(?:[^\s?#]|%[0-9a-f]{2})*(?:\?[^\s#]*)?$/i;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_SSE_BYTES = 2 * 1024 * 1024;
+// Checkpoint names come from docs/engineering/flows/*.md (`checkpoint: <name>`)
+// and become file names, so they are restricted to a safe lowercase slug.
+const CHECKPOINT_NAME = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 
 export class FixtureOwnershipError extends Error {
   constructor(kind, id) {
@@ -245,6 +250,8 @@ export class QASession {
     this.uncertainMutations = [];
     this.pendingStreams = new Map();
     this.uncertainStreams = [];
+    this.evidenceDir = config.evidenceDir ?? null;
+    this.artifacts = { videos: [], trace: null, checkpoints: [] };
   }
 
   assertOperational({ internal = false } = {}) {
@@ -279,8 +286,15 @@ export class QASession {
       this.assertOperational();
       const contextOptions = { baseURL: this.config.baseUrl };
       if (this.config.storageState) contextOptions.storageState = this.config.storageState;
+      if (this.evidenceDir) {
+        // Video must be configured when the context is created; every
+        // verification run records it so a reviewer can replay the journey.
+        await mkdir(join(this.evidenceDir, 'video'), { recursive: true, mode: 0o700 });
+        contextOptions.recordVideo = { dir: join(this.evidenceDir, 'video') };
+      }
       context = await browser.newContext(contextOptions);
       this.assertOperational();
+      if (this.evidenceDir && context.tracing) await context.tracing.start({ screenshots: true, snapshots: true });
       page = await context.newPage();
       this.assertOperational();
       this.browser = browser;
@@ -296,6 +310,54 @@ export class QASession {
       }
       throw error;
     }
+  }
+
+  /**
+   * Full-page screenshot for a flow-chart checkpoint, written to
+   * <evidenceDir>/checkpoints/<scenario>--<name>.png. Returns the record the
+   * runner lists on the case.
+   */
+  async checkpoint(scenarioId, name) {
+    if (!CHECKPOINT_NAME.test(String(name))) {
+      throw new QASessionError(`Checkpoint name is invalid: ${redactText(String(name), this.secrets)}`);
+    }
+    if (!this.page) throw new QASessionError(`Checkpoint ${name} has no open page`);
+    const file = `${String(scenarioId).replace(/[^A-Za-z0-9.-]/g, '_')}--${name}.png`;
+    const item = { kind: 'checkpoint', name, file };
+    if (this.evidenceDir) {
+      const dir = join(this.evidenceDir, 'checkpoints');
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await this.page.screenshot({ path: join(dir, file), fullPage: true });
+    }
+    this.artifacts.checkpoints.push(item);
+    return item;
+  }
+
+  /**
+   * Stop tracing and note the video file before a context closes. Shared by
+   * close() and quarantine() so a timed-out scenario still leaves a trace.
+   * Failures are returned as messages; evidence never masks the real result.
+   */
+  async collectBrowserEvidence(page, context) {
+    const errors = [];
+    if (context?.tracing && this.evidenceDir) {
+      try {
+        await context.tracing.stop({ path: join(this.evidenceDir, 'trace.zip') });
+        this.artifacts.trace = 'trace.zip';
+      } catch (error) {
+        errors.push(`trace: ${sanitizeError(error, this.secrets).message}`);
+      }
+    }
+    try {
+      const video = page?.video?.();
+      if (video) {
+        const path = await video.path();
+        if (path && !this.artifacts.videos.includes(path)) this.artifacts.videos.push(path);
+      }
+    } catch (error) {
+      errors.push(`video: ${sanitizeError(error, this.secrets).message}`);
+    }
+    return errors;
   }
 
   assertTrustedBrowserUrl(value) {
@@ -774,6 +836,9 @@ export class QASession {
         tokenPromise,
         new Promise((resolve) => setTimeout(resolve, Math.min(250, this.config.timeoutMs ?? 250))),
       ]);
+      for (const error of await this.collectBrowserEvidence(page, context)) {
+        this.quarantineErrors.push({ kind: 'browser evidence', error });
+      }
       for (const [label, resource] of [['browser context', context], ['browser', browser]]) {
         try {
           await resource?.close();
@@ -965,7 +1030,7 @@ export class QASession {
     if (this.closed) return;
     this.closed = true;
     this.abort();
-    const errors = [];
+    const errors = await this.collectBrowserEvidence(this.page, this.context);
     for (const [label, resource] of [['browser context', this.context], ['browser', this.browser]]) {
       try {
         await resource?.close();
