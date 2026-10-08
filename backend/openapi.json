@@ -40217,6 +40217,9 @@
             },
             "description": "Successfully retrieved documents"
           },
+          "400": {
+            "description": "Invalid processing_status filter"
+          },
           "401": {
             "description": "Not authenticated - missing or invalid token"
           },

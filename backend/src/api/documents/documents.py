@@ -331,6 +331,7 @@ async def _run_duplicate_lookup(
                 }
             },
         },
+        400: {"description": "Invalid processing_status filter"},
         401: {"description": "Not authenticated - missing or invalid token"},
         403: {"description": "Not authorized to access this organization's documents"},
         500: {"description": "Internal server error"},
