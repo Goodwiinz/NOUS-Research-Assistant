@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0",
+  "suite": "nous-harness-mcp-v1",
+  "recorded_at": "",
+  "repository_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "agent_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "harbor_version": "0.6.6",
+  "harness": {
+    "kind": "harbor-built-in-agents",
+    "agents": [
+      "claude-code",
+      "codex"
+    ],
+    "models": {
+      "claude-code": "anthropic/claude-sonnet-5-5",
+      "codex": "openai/gpt-6.1-sol (pre-registered; confirm reachability before trial 1, see evals/specs/harness-mcp-discovery-v1/harness.md)"
+    },
+    "cli_versions": "installed by Harbor at trial setup; pin with --ak version=<x> and record agent_info.version from each trial's result.json",
+    "agent_kwargs": {
+      "claude-code": "--ak disallowed_tools=WebSearch,WebFetch (Claude Code --disallowedTools)",
+      "codex": "none; the task image pre-seeds web_search = \"disabled\" in /tmp/codex-home/config.toml"
+    },
+    "aggregate_sha256": "b035fa960de8b1bdf489b04e407453ff954d19ad4def0746e5f1ef206f620ee9",
+    "files": [
+      {
+        "path": "evals/harbor_common/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "evals/harbor_common/db.py",
+        "sha256": "c58f42e130c7d0d5b85a56d66f20ed31c4e79e075caeb4e972141e3931716d7a"
+      },
+      {
+        "path": "evals/harbor_common/envelope.py",
+        "sha256": "bcd762a0e34f310bc1bc5bb3489a2106e2e592c846862a8102bc0cacc9325f73"
+      },
+      {
+        "path": "evals/harbor_common/judge.py",
+        "sha256": "dc26f92e0530971dbafd00b0a81d1b71e23e103271661b13618ba294f809a4f5"
+      },
+      {
+        "path": "evals/harbor_common/network.py",
+        "sha256": "9e049a9f6c73d41c416446c324428f0d84cc7719c4cb1761105084d9062b85cd"
+      },
+      {
+        "path": "evals/harbor_common/selftest.py",
+        "sha256": "2b51cf8101ed1f82eb4edf6f416667d0d1a6a741d4a4128b7261c58aa1e6dc81"
+      },
+      {
+        "path": "evals/harbor_common/serialization.py",
+        "sha256": "a88e5b3caddb254d306b8f2827f3f12f4b2be770fa3f19220930c376960281ba"
+      },
+      {
+        "path": "evals/harbor_common/templates/proxy/Dockerfile",
+        "sha256": "2cf4fb6258750657fcee67df6fe52188985cb782be21aba988aae7a2cb9d8c24"
+      },
+      {
+        "path": "evals/harbor_common/templates/proxy/entrypoint.sh",
+        "sha256": "4e35de38b4d9375ca44d4f87967df7eaaaf89d833a2d6f5ef4045b51354a4f99"
+      },
+      {
+        "path": "evals/harbor_common/templates/test.sh",
+        "sha256": "c45372bcae1665615aab55fcebc3477ea1dba70f59d3af267a83bff713cb9733"
+      },
+      {
+        "path": "evals/harbor_common/trajectory.py",
+        "sha256": "78191f73087ba20ba8bb6729e9dad2833bd1e8ed8c53ff295e27322a3b4f01b4"
+      },
+      {
+        "path": "harbor/agents/installed/base.py",
+        "sha256": "f3905f73910ae22fcac23b8712f729ffd0806d946df286afb22b8dcc1079b41f"
+      },
+      {
+        "path": "harbor/agents/installed/claude_code.py",
+        "sha256": "ecd83757f19c1a89edf92df3c815c3814f2a31b25c4001fa3148d05b28d54715"
+      },
+      {
+        "path": "harbor/agents/installed/codex.py",
+        "sha256": "653bcf38c7e2319f2866d81c6ca1cd3fd909265b053fc7e10d7daef36269415a"
+      }
+    ]
+  },
+  "digest_algorithm": "SHA-256 of shasum -a 256 lines sorted by repository-relative path (LC_ALL=C sort -k2); __pycache__ files excluded. Harbor agent files are keyed by their path inside the harbor 0.6.6 package.",
+  "task_digests": {
+    "harness-mcp-discovery-v1": "sha256:19f77aa3b9a307677d5e43f267cdb0f0e49613055603bf1aa48a25b5a52869ef"
+  },
+  "dataset_digests": {
+    "harness-mcp-discovery-v1": "sha256:44325af56deb0d66b69ff2a268309c5ba9a5fb0f38ded500f70158e9b76fb022"
+  },
+  "env_flags": "N/A: no NOUS backend process runs; the gateway is a deterministic double. Record harness, model and CLI version per trial instead.",
+  "invalidation_rule": "Any repository, task, dataset, harness (Harbor version, agent file or CLI version) or model change requires new run evidence and a new baseline declaration.",
+  "digest_reproducibility_note": "Computed on macOS on 2026-10-07 over the uncommitted working tree of branch eval/plan07-s5-harness-discovery, cut from develop 57fc21bc7, with the installed Harbor 0.6.6 package. Not guaranteed to reproduce byte-for-byte elsewhere; the recorded-run step recomputes and finalizes these digests. This task is NOT YET GATED: no run has been recorded."
+}

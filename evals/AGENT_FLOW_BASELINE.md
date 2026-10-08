@@ -240,6 +240,7 @@ Harbor task lands and its calibration fixtures pass.
 | 15 | Knowledge-base retrieval | task landed | `search_documents`, `do_kb_retrieve` (Harbor task `agent-kb-retrieval-v1`; awaiting first recorded run — `summarize_document` deferred, see coverage note) |
 | 16 | Code execution | task landed | `execute_code` (HITL), real research-subgraph routing, E2B wire double, fabricated-execution guard (Harbor task `agent-code-execution-v1`; awaiting first recorded run) |
 | 17 | External databases | task landed | `list_external_databases`, `search_external_database`, real general-intent routing, 11-connector registry (3 key-gated), fabricated-result trap (Harbor task `agent-external-databases-v1`; awaiting first recorded run) |
+| 18 | External-harness MCP discovery | task landed | `search_documents`, `search_arxiv`, `search_external_database` reached by Claude Code and Codex through the real harness-bridge MCP server against a gateway double; Plan 07 Slice 5 decision eval (Harbor task `harness-mcp-discovery-v1`; awaiting first recorded run) |
 
 ### 5. arXiv research flow
 
@@ -979,6 +980,66 @@ not exercised — the instruction pins
 the deterministic fixture-containment check above, not a free-text judgment.
 
 **Status:** NOT YET GATED — awaits first recorded run.
+
+### 18. External-harness MCP discovery
+
+**Agent under test:** not the NOUS graph. Harbor's built-in `claude-code`
+and `codex` agents run their CLIs in the task container and reach NOUS only
+through the task's stdio MCP server, which execs the real
+`packages/harness-bridge` (`nous-harness mcp`) against `mock-nous`, a
+deterministic double of `GET /api/v1/integrations/tools` and
+`POST /api/v1/integrations/tools/read`. The double's catalog is generated from
+`read_tools.list_read_tools(["tools:read"])` and checked for drift by
+`environment/mock_nous/generate_catalog.py --check`. Spec:
+`evals/specs/harness-mcp-discovery-v1/`.
+
+**Preconditions:** project-scoped `tools:read` catalog (13 tools); two planted
+items per source with unique identifiers: library documents
+`4c0e7a52-…3a19`/`9b3d1f68-…5d73`, arXiv `2509.17001`/`2509.17002`, PubMed
+PMIDs `40517001`/`40517002` (DOIs `10.5555/nouseval.2025.*`). Model
+credentials come from the host running Harbor (`ANTHROPIC_API_KEY` for
+`claude-code`, `OPENAI_API_KEY` for `codex`), never from `task.toml`.
+
+**Objective gates** (`tests/verify.py`, exit 10 on failure):
+- Every integration request came from the bridge (User-Agent `node`); any
+  other client bypassed the MCP primitives.
+- The double accepted (HTTP 200) at least one bridge `search_documents`,
+  `search_arxiv` and `search_external_database` call with a non-empty `query`.
+- `/app/answer.md` exists, is a regular singly linked file (never read
+  through a symlink) and is not blank.
+- The answer cites a planted library document (id or exact title), a planted
+  arXiv id, and a planted PMID or DOI.
+- No fabricated identifier: every arXiv-style id, PMID (labelled, listed,
+  PubMed URL, or standalone on a PubMed/PMID line or table), PMCID, DOI and
+  UUID in the answer was served by the double.
+- Every paper-list row names a served identifier or exact served title.
+
+**Infrastructure gate** (exit 2, no reward): double unreachable; no successful
+bridge `GET /api/v1/integrations/tools` (the MCP server never connected); a
+bridge request without both `Authorization` and `X-NOUS-Integration-Grant`.
+
+**Semantic gate:** N/A (no judge) — counts as pass.
+
+**Calibration:** `pass.json` (exit 0); `wrong-missing-external.json`,
+`wrong-fabricated-id.json`, `wrong-fabricated-doi.json`,
+`wrong-uncited-row.json`, `wrong-symlinked-answer.json`,
+`wrong-bypassed-bridge.json` (exit 10); `infra-no-catalog.json` (exit 2).
+
+**Coverage note:** this capability measures the external-harness MCP surface,
+not the agent graph, so this file's manifest keys apply with substitutions:
+the harness is Harbor 0.6.6's built-in agents plus the CLI versions Harbor
+records per trial (not `evals/harbor_agents/*.py`), and `env_flags` are N/A
+because no backend process runs (record the harness name, model and CLI
+version instead). Its first use is the pre-registered Plan 07 Slice 5
+decision (`specs/harness-mcp-discovery-v1/harness.md`: five scoreable trials
+per harness; primitives suffice iff every harness passes at least 4 of 5).
+That product decision rule is not this suite's gate; promoting the task to
+GATED still needs 5/5 objective passes with zero infrastructure failures
+under the go/no-go threshold above.
+
+**Status:** NOT YET GATED — task landed, calibration verified locally (8/8
+expected exit codes), awaits first recorded run. See
+`source-manifests/agent-flow-2026-10-07-harness-mcp-discovery.json`.
 
 **Sequencing note:** "next" tier = highest defect-density areas by repo
 history (fake-success writers, HITL, tenant scope, arXiv ingest). Build one

@@ -1,0 +1,119 @@
+{
+  "_calibration": "expect exit 0: all three primitives called with a query; answer cites only served ids from all three sources",
+  "evidence": {
+    "schema_version": "1.0",
+    "benchmark_id": "harness-mcp-discovery-v1",
+    "answer_path": "/app/answer.md",
+    "answer_exists": true,
+    "answer_is_regular_file": true,
+    "answer_file_mode": "-rw-r--r--",
+    "answer_bytes": 973,
+    "answer_truncated": false,
+    "answer": "# Literature scan: retrieval-augmented generation for clinical question answering\n\n- Ward-Round Notes on Citation-Grounded RAG for Clinical Question Answering | NOUS library document 4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19 | NOUS library\n- Hallucination Audit of a Hospital Formulary RAG Assistant | NOUS library document 9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73 | NOUS library\n- Chart-Aware Retrieval-Augmented Generation for Clinical Question Answering over Electronic Health Records | arXiv:2509.17001v1 | arXiv\n- Guideline Graph Re-Ranking Reduces Hallucination in Medical Retrieval-Augmented Question Answering | arXiv:2509.17002v1 | arXiv\n- Retrieval-augmented large language models for answering clinicians' drug-dosing questions: a prospective evaluation | PMID 40517001, DOI 10.5555/nouseval.2025.40517001 | PubMed\n- Citation fidelity of retrieval-augmented generation in emergency medicine question answering | PMID 40517002, DOI 10.5555/nouseval.2025.40517002 | PubMed\n"
+  },
+  "state": {
+    "events": [
+      {
+        "seq": 1,
+        "t": 2.114,
+        "method": "GET",
+        "path": "/api/v1/integrations/tools",
+        "tool_name": null,
+        "arguments": null,
+        "invocation_id": null,
+        "headers_present": {
+          "authorization": true,
+          "grant": true
+        },
+        "user_agent": "node",
+        "status": 200
+      },
+      {
+        "seq": 2,
+        "t": 9.871,
+        "method": "POST",
+        "path": "/api/v1/integrations/tools/read",
+        "tool_name": "list_external_databases",
+        "arguments": {},
+        "invocation_id": "0f6b2c1e-8d4a-4f57-9b3e-2a1c7d5e9f01",
+        "headers_present": {
+          "authorization": true,
+          "grant": true
+        },
+        "user_agent": "node",
+        "status": 200,
+        "is_error": false,
+        "returned_ids": []
+      },
+      {
+        "seq": 3,
+        "t": 12.402,
+        "method": "POST",
+        "path": "/api/v1/integrations/tools/read",
+        "tool_name": "search_documents",
+        "arguments": {
+          "query": "clinical question answering"
+        },
+        "invocation_id": "1a7c3e5f-2b4d-4e6f-8a0c-3d5e7f9b1c02",
+        "headers_present": {
+          "authorization": true,
+          "grant": true
+        },
+        "user_agent": "node",
+        "status": 200,
+        "is_error": false,
+        "returned_ids": [
+          "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73",
+          "4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19"
+        ]
+      },
+      {
+        "seq": 4,
+        "t": 14.937,
+        "method": "POST",
+        "path": "/api/v1/integrations/tools/read",
+        "tool_name": "search_arxiv",
+        "arguments": {
+          "query": "retrieval-augmented generation clinical question answering",
+          "max_results": 10
+        },
+        "invocation_id": "2b8d4f6a-3c5e-4f7a-9b1d-4e6f8a0c2d03",
+        "headers_present": {
+          "authorization": true,
+          "grant": true
+        },
+        "user_agent": "node",
+        "status": 200,
+        "is_error": false,
+        "returned_ids": [
+          "2509.17001v1",
+          "2509.17002v1"
+        ]
+      },
+      {
+        "seq": 5,
+        "t": 19.255,
+        "method": "POST",
+        "path": "/api/v1/integrations/tools/read",
+        "tool_name": "search_external_database",
+        "arguments": {
+          "query": "retrieval-augmented generation clinical question answering",
+          "connector": "pubmed",
+          "max_results": 10
+        },
+        "invocation_id": "3c9e5a7b-4d6f-4a8b-8c2e-5f7a9b1d3e04",
+        "headers_present": {
+          "authorization": true,
+          "grant": true
+        },
+        "user_agent": "node",
+        "status": 200,
+        "is_error": false,
+        "returned_ids": [
+          "40517001",
+          "40517002"
+        ]
+      }
+    ]
+  }
+}

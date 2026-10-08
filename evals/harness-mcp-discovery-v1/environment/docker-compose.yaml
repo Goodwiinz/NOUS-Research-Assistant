@@ -1,0 +1,29 @@
+services:
+  main:
+    build:
+      context: ../../..
+      dockerfile: evals/harness-mcp-discovery-v1/environment/Dockerfile
+    depends_on:
+      mock-nous:
+        condition: service_healthy
+    # `default` keeps public egress for the harness's model API and Harbor's
+    # agent install; `nous-eval` is the private link to the mock backend.
+    networks:
+      - default
+      - nous-eval
+
+  mock-nous:
+    build:
+      context: ./mock_nous
+    networks:
+      - nous-eval
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2).read()"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+networks:
+  # internal: the mock has no route out, and nothing but main can reach it.
+  nous-eval:
+    internal: true

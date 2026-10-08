@@ -1,0 +1,3 @@
+I'm starting a literature review on retrieval-augmented generation for clinical question answering. Using the NOUS tools available to you, scan three places for relevant papers: what is already in my NOUS library, recent arXiv preprints, and the published biomedical literature.
+
+Write the result to /app/answer.md with one paper per line. Give each paper's title, its identifier (the NOUS library document id, the arXiv id, or the PMID or DOI) and its source. Search only with the NOUS tools, not the web or any other source. List only papers that the tools actually returned to you; do not add papers from memory.

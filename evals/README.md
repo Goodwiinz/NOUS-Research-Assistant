@@ -29,6 +29,7 @@ records positive and negative network probes.
 | `agent-fast-path-cancel-v1` | Keep fast-path cancellation terminal and prefix-safe | Deterministic stream and durability checks |
 | `agent-hitl-lifecycle-v1` | Preserve confirm, reject, timeout, and replay semantics | Deterministic interrupt, mutation, and idempotency checks |
 | `agent-tenant-isolation-v1` | Reject cross-tenant probes across agent read paths | Deterministic tenant-state and leakage checks |
+| `harness-mcp-discovery-v1` | An external harness (Claude Code or Codex) combines `search_documents`, `search_arxiv` and `search_external_database` through the real harness-bridge MCP server into one cited literature scan (Plan 07 Slice 5 decision eval) | Deterministic gateway-double request log plus answer-file containment and anti-fabrication checks (no judge) |
 
 GOO-293's current-writing evaluation uses
 [`academic-writing-baseline-v1`](academic-writing-baseline-v1/README.md). That
@@ -66,6 +67,19 @@ their first recorded run. `agent-code-execution-v1` and
 `agent-external-databases-v1` send real turns through production intent
 classification; see `AGENT_FLOW_BASELINE.md` capabilities 16/17 for their
 routing and grounding contracts.
+
+`harness-mcp-discovery-v1` is the exception to the run boundary above: its
+agent is an external harness, not the production graph. Harbor's built-in
+`claude-code` and `codex` agents run in a Node 24 container with public egress
+(for the model API and Harbor's agent install) and reach NOUS only through the
+real `packages/harness-bridge` stdio MCP server, which talks to a deterministic
+gateway double on an internal network. It needs no production image or Azure
+credentials; the harness reads `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from the
+shell running Harbor. Run it with `--agent claude-code` or `--agent codex`
+instead of `--agent-import-path`; the commands, models and the pre-registered
+Slice 5 decision rule are in
+[`specs/harness-mcp-discovery-v1/harness.md`](specs/harness-mcp-discovery-v1/harness.md).
+It is NOT YET GATED, awaiting its first recorded run.
 
 Tasks added after 2026-08-07 import their adapter and verifier helpers from the
 shared `harbor_common/` package; the original three tasks keep their inline
