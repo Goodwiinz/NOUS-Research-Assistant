@@ -52,6 +52,18 @@ function start(deviceId: string, expiresAt = later()): BridgeCommand {
   };
 }
 
+// Watchdog tests give a start a short lease. execute() refuses a lapsed lease
+// ("lease expired; verified renewal required") and arms the watchdog for what
+// is left of it, so the lease is stamped right before execute, never when the
+// test began: under full-suite load, opening the journal alone can outlast it.
+// The command's identity digest excludes expiresAt.
+const LEASE_MS = 300;
+async function executeLeased(j: Journal, c: BridgeCommand, adapter: HarnessAdapter): Promise<void> {
+  c.expiresAt = later(LEASE_MS);
+  await j.execute(c, adapter);
+}
+/** Outlasts a lease that executeLeased() stamped before this call. */
+const lapse = () => new Promise((resolve) => setTimeout(resolve, LEASE_MS + 100));
 // Connection tests stop after a number of polls, not a fixed time, so a slow
 // run still serves every frame its assertions count on; the timeout only ends
 // a connection that stalls, whose assertions then fail.
@@ -256,14 +268,14 @@ test("a reject that names an event journaled after the run completed keeps it co
 // is not interrupted (0 !== 1).
 test("a refused run's lease is not renewed, so its turn is interrupted even while NOUS still leases it", async () => {
   const f = fixture();
-  const r1 = start(randomUUID(), later(150));
+  const r1 = start(randomUUID());
   const a1 = codex("r1");
   const j = new Journal(f.path, () => options);
   try {
-    await j.execute(r1, a1); // arms the watchdog for the command's lease
+    await executeLeased(j, r1, a1); // arms the watchdog for the command's lease
     assert.equal(j.reject(refusal(r1)), true);
     j.renewLease(r1.deviceId, later(60_000), { [r1.runId]: r1.generation });
-    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    await lapse(); // the lease lapses
     assert.equal(a1.interrupts, 1);
     assert.equal(j.state(r1.commandId), "denied");
   } finally {
@@ -278,15 +290,15 @@ test("a refused run's lease is not renewed, so its turn is interrupted even whil
 // and the finished turn is interrupted (1 !== 0).
 test("the watchdog does not interrupt a refused run whose folder was released", async () => {
   const f = fixture();
-  const r1 = start(randomUUID(), later(150));
+  const r1 = start(randomUUID());
   const a1 = codex("r1");
   const j = new Journal(f.path, () => options);
   try {
-    await j.execute(r1, a1); // r1#1 observation:running
+    await executeLeased(j, r1, a1); // r1#1 observation:running
     j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" }); // r1#2
     assert.equal(j.reject(refusal(r1)), true);
     assert.equal(j.workspaceLocked(r1.workspaceId), false);
-    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    await lapse(); // the lease lapses
     assert.equal(a1.interrupts, 0);
     assert.equal(j.state(r1.commandId), "denied");
   } finally {
@@ -304,10 +316,10 @@ test("the watchdog does not interrupt a refused run whose folder was released", 
 // second pass reads the turn again (2 !== 1).
 test("after a restart a refused run's turn is read back once and interrupted once its lease lapses", async () => {
   const f = fixture();
-  const r1 = start(randomUUID(), later(150));
+  const r1 = start(randomUUID());
   let j = new Journal(f.path, () => options);
   try {
-    await j.execute(r1, codex("r1"));
+    await executeLeased(j, r1, codex("r1"));
     j.reject(refusal(r1));
     j.close(); // a restart drops the in-process watchdog timer and the adapter
     j = new Journal(f.path, () => options);
@@ -318,7 +330,7 @@ test("after a restart a refused run's turn is read back once and interrupted onc
       inspected += 1;
       return inspect(sessionId, commandId);
     };
-    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    await lapse(); // the lease lapses
     await j.reconcile(r1.commandId, a1);
     await j.reconcile(r1.commandId, a1); // the next pass, e.g. the next socket open
     assert.equal(a1.interrupts, 1);
@@ -336,10 +348,10 @@ test("after a restart a refused run's turn is read back once and interrupted onc
 // inspectTurn error escape reconcile() and it rejects.
 test("a refused run whose thread Codex no longer knows does not fail the reconnect", async () => {
   const f = fixture();
-  const r1 = start(randomUUID(), later(150));
+  const r1 = start(randomUUID());
   let j = new Journal(f.path, () => options);
   try {
-    await j.execute(r1, codex("r1"));
+    await executeLeased(j, r1, codex("r1"));
     j.reject(refusal(r1));
     j.close();
     j = new Journal(f.path, () => options);
@@ -347,7 +359,7 @@ test("a refused run whose thread Codex no longer knows does not fail the reconne
     a1.inspectTurn = async () => {
       throw new Error("Codex no longer knows this thread");
     };
-    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    await lapse(); // the lease lapses
     await j.reconcile(r1.commandId, a1);
     // The watchdog still fires; Codex has no such turn to stop.
     assert.equal(a1.unknownInterrupts, 1);
@@ -367,16 +379,16 @@ test("a refused run whose thread Codex no longer knows does not fail the reconne
 // interrupted (0 !== 1).
 test("offline after a restart, the local pass re-arms a refused run's watchdog", async () => {
   const f = fixture();
-  const r1 = start(randomUUID(), later(150));
+  const r1 = start(randomUUID());
   let j = new Journal(f.path, () => options);
   try {
-    await j.execute(r1, codex("r1"));
+    await executeLeased(j, r1, codex("r1"));
     j.reject(refusal(r1));
     j.close(); // a restart drops the in-process watchdog timer and the adapter
     j = new Journal(f.path, () => options);
     const a1 = codex("r1");
     await reconcileLocal(j, () => a1);
-    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    await lapse(); // the lease lapses
     assert.equal(a1.interrupts, 1);
     assert.equal(j.state(r1.commandId), "denied");
   } finally {
@@ -404,8 +416,9 @@ function withSocket(t: { after: (fn: () => void) => void }, Socket: unknown) {
 test("a run refused while connected gets its watchdog from the next lease frame", async (t) => {
   const { connectBridge } = await import("../src/connection.ts");
   const f = fixture();
-  const r1 = start(randomUUID(), later(150));
+  const r1 = start(randomUUID());
   let j = new Journal(f.path, () => options);
+  const done = new AbortController();
   let polls = 0;
   let refused = false;
   let inspected = 0;
@@ -424,6 +437,7 @@ test("a run refused while connected gets its watchdog from the next lease frame"
         inspectedBeforeReject = inspected;
         refused = j.reject(refusal(r1));
       }
+      if (polls === 8) return done.abort(); // six lease frames after the refusal
       const lease = { deviceId: r1.deviceId, expiresAt: later(), runs: {} };
       queueMicrotask(() =>
         this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ commands: [], lease }) })),
@@ -439,7 +453,7 @@ test("a run refused while connected gets its watchdog from the next lease frame"
   }
   withSocket(t, Socket);
   try {
-    await j.execute(r1, codex("r1"));
+    await executeLeased(j, r1, codex("r1"));
     j.close(); // a restart drops the watchdog timer; r1 reopens 'recovering'
     j = new Journal(f.path, () => options);
     const a1 = codex("r1");
@@ -449,14 +463,14 @@ test("a run refused while connected gets its watchdog from the next lease frame"
       if (!refused) return { state: "unknown", sessionId, turnId: null };
       return inspect(sessionId, commandId);
     };
-    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    await lapse(); // the lease lapses
     await connectBridge({
       url: "wss://example.test/api/v1/harness/connect",
       deviceId: r1.deviceId,
       credentials: { accessToken: "jwt", grantToken: "grant" },
       journal: j,
       adapterFor: () => a1,
-      signal: AbortSignal.timeout(200),
+      signal: until(done),
       timing: { pollMs: 10, livenessMs: 1000 },
     });
     assert.ok(polls > 3);
@@ -481,7 +495,7 @@ test("a run refused while connected gets its watchdog from the next lease frame"
 test("NOUS still leasing a refused run: its Stop is delivered, its approval dropped, and the socket stays open", async (t) => {
   const { connectBridge } = await import("../src/connection.ts");
   const f = fixture();
-  const r1 = start(randomUUID(), later(150));
+  const r1 = start(randomUUID());
   const a1 = codex("r1");
   let responded = 0;
   a1.respondToRequest = async () => {
@@ -500,6 +514,7 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
     body: { kind: "respond", requestId: 7, approvalRecordId: randomUUID(), response: { kind: "decision", allow: true } },
   };
   const j = new Journal(f.path, () => options);
+  const done = new AbortController();
   let polls = 0;
   class Socket extends EventTarget {
     static OPEN = 1;
@@ -510,7 +525,7 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
     }
     send(raw: string) {
       if (!JSON.parse(raw).poll) return;
-      polls += 1;
+      if ((polls += 1) === 6) return done.abort(); // five redeliveries
       const lease = { deviceId: r1.deviceId, expiresAt: later(), runs: { [r1.runId]: r1.generation } };
       queueMicrotask(() =>
         this.dispatchEvent(
@@ -528,9 +543,9 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
   }
   withSocket(t, Socket);
   try {
-    await j.execute(r1, a1);
+    await executeLeased(j, r1, a1);
     assert.equal(j.reject(refusal(r1)), true);
-    await new Promise((resolve) => setTimeout(resolve, 250)); // the watchdog blocks the lapsed lease
+    await lapse(); // the watchdog blocks the lapsed lease
     assert.equal(a1.interrupts, 1);
     await connectBridge({
       url: "wss://example.test/api/v1/harness/connect",
@@ -538,7 +553,7 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
       credentials: { accessToken: "jwt", grantToken: "grant" },
       journal: j,
       adapterFor: () => a1,
-      signal: AbortSignal.timeout(150),
+      signal: until(done),
       timing: { pollMs: 10, livenessMs: 1000 },
     });
     assert.ok(polls > 2);
