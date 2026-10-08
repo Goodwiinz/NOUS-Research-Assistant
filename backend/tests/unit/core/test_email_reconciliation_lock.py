@@ -35,7 +35,7 @@ async def test_shared_lock_serializes_same_subject_across_workers(
 ) -> None:
     redis = _FakeRedis()
 
-    async def get_redis_client():
+    async def get_redis_client() -> _FakeRedis:
         return redis
 
     monkeypatch.setattr(cli_token_revocation, "get_redis_client", get_redis_client)
