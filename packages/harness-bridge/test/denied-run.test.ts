@@ -100,7 +100,13 @@ test("a refused run's unsent events are dropped and nothing more is journaled fo
     j.recordNative(r1.commandId, { kind: "delta", sessionId: "s-r1", turnId: "t-r1", text: "after its chat was deleted" }); // r1#2
     await j.execute(r2, a2); // r2#1
     j.recordNative(r2.commandId, { kind: "delta", sessionId: "s-r2", turnId: "t-r2", text: "answer" }); // r2#2
+    assert.throws(() => j.reject({ ...refusal(r1), runId: r2.runId }), /rejection identity mismatch/);
     assert.throws(() => j.reject({ ...refusal(r1), generation: 2 }), /rejection identity mismatch/);
+    assert.throws(
+      () => j.reject({ ...refusal(r1), code: "access_denied" } as unknown as Rejection),
+      /rejection identity mismatch/,
+    );
+    assert.throws(() => j.reject({ ...refusal(r1), sourceSeq: 0 }), /rejection identity mismatch/);
     assert.throws(() => j.reject({ ...refusal(r1), sourceSeq: 3 }), /rejection identity mismatch/);
     assert.throws(() => j.reject({ ...refusal(r1), sourceId: randomUUID() }), /unknown rejection/);
     assert.equal(j.reject(refusal(r1)), true);
@@ -184,3 +190,87 @@ for (const [when, finished] of [
       f.cleanup();
     }
   });
+
+// A reject names an event, not a run state. Codex can finish the turn while the
+// user's approval is being delivered, so the respond's command_ack is journaled
+// after the terminal observation. Once NOUS acknowledges that observation the
+// run is completed; a reject of the later command_ack must drop it and leave
+// the run completed, not flip it to 'denied'.
+// Mutation: delete the terminal() guard in src/journal.ts reject() and the
+// reject returns true (true !== false).
+test("a reject that names an event journaled after the run completed keeps it completed", async () => {
+  const f = fixture();
+  const r1 = start(randomUUID());
+  const a1 = codex("r1");
+  const j = new Journal(f.path, () => options);
+  try {
+    await j.execute(r1, a1); // r1#1 observation:running
+    a1.respondToRequest = async () => {
+      j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" }); // r1#2
+    };
+    const respond: BridgeCommand = {
+      ...r1,
+      commandId: randomUUID(),
+      body: { kind: "respond", requestId: 7, approvalRecordId: randomUUID(), response: { kind: "decision", allow: true } },
+    };
+    await j.execute(respond, a1); // r1#3 command_ack
+    for (const sourceSeq of [1, 2])
+      j.acknowledge({ runId: r1.runId, sourceId: r1.commandId, sourceSeq, generation: 1, canonicalSeq: sourceSeq });
+    assert.equal(j.state(r1.commandId), "completed");
+    assert.deepEqual(queued(j), [`${r1.runId}#3`]);
+    assert.equal(j.reject(refusal(r1, 3)), false);
+    assert.equal(j.state(r1.commandId), "completed");
+    assert.deepEqual(queued(j), []);
+    assert.equal(j.workspaceLocked(r1.workspaceId), false);
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});
+
+// Renewal gap: after a grant renewal NOUS can refuse a run's event before the
+// next lease poll re-leases the run under the new grant, then keep leasing it.
+// A reject is final for the run, so the bridge must stop extending its lease or
+// the watchdog re-arms on every renewal and never interrupts the turn.
+// Mutation: drop the 'denied' skip in src/journal.ts renewLease() and the turn
+// is not interrupted (0 !== 1).
+test("a refused run's lease is not renewed, so its turn is interrupted even while NOUS still leases it", async () => {
+  const f = fixture();
+  const r1 = start(randomUUID(), later(150));
+  const a1 = codex("r1");
+  const j = new Journal(f.path, () => options);
+  try {
+    await j.execute(r1, a1); // arms the watchdog for the command's lease
+    assert.equal(j.reject(refusal(r1)), true);
+    j.renewLease(r1.deviceId, later(60_000), { [r1.runId]: r1.generation });
+    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    assert.equal(a1.interrupts, 1);
+    assert.equal(j.state(r1.commandId), "denied");
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});
+
+// D-2' released the folder of a run refused after its terminal observation was
+// journaled: Codex has stopped, so the watchdog has no turn to interrupt.
+// Mutation: drop the 'denied'-without-lock return in src/journal.ts watchLease()
+// and the finished turn is interrupted (1 !== 0).
+test("the watchdog does not interrupt a refused run whose folder was released", async () => {
+  const f = fixture();
+  const r1 = start(randomUUID(), later(150));
+  const a1 = codex("r1");
+  const j = new Journal(f.path, () => options);
+  try {
+    await j.execute(r1, a1); // r1#1 observation:running
+    j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" }); // r1#2
+    assert.equal(j.reject(refusal(r1)), true);
+    assert.equal(j.workspaceLocked(r1.workspaceId), false);
+    await new Promise((resolve) => setTimeout(resolve, 250)); // the lease lapses
+    assert.equal(a1.interrupts, 0);
+    assert.equal(j.state(r1.commandId), "denied");
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});

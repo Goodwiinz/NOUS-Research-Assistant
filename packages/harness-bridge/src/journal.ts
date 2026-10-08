@@ -256,6 +256,9 @@ export class Journal {
       throw new Error("invalid verified lease");
     for (const c of this.activeCommands()) {
       if (c.deviceId !== deviceId || runs[c.runId] !== c.generation) continue;
+      // A refused run is final (see reject) even while NOUS still leases it:
+      // let its lease lapse so the watchdog interrupts the turn.
+      if (this.state(c.commandId) === "denied") continue;
       this.db
         .prepare(
           "INSERT INTO leases(run_id,device,expires,blocked) VALUES(?,?,?,0) ON CONFLICT(run_id) DO UPDATE SET expires=excluded.expires,blocked=0",
@@ -563,7 +566,9 @@ export class Journal {
   }
   /** NOUS refused this run's events while the device grant stayed valid: its
    * chat was deleted or linked to another project, its folder binding was
-   * removed, or its consent was superseded. Final for the upload only: drop
+   * removed, its consent was superseded, or a renewed grant had not yet
+   * re-leased the run (NOUS may then keep leasing it, so renewLease skips a
+   * 'denied' run and its lease still lapses). Final for the upload only: drop
    * every unsent event of the run and journal no more (append and observe skip
    * a 'denied' command). A refusal is not evidence that the native turn
    * stopped, so mid-run the workspace lock stays, as NOUS keeps its own, and
@@ -572,7 +577,7 @@ export class Journal {
    * released: NOUS authorizes an event before its receipt lookup, so the
    * refused event can be the replay of one it stored, after which it may have
    * finalized the run and released its own lock. Returns whether the run was
-   * newly refused. */
+   * newly refused: false when it was already refused or already finished. */
   reject(rejection: Rejection): boolean {
     return this.tx(() => {
       const row =
@@ -593,13 +598,16 @@ export class Journal {
       this.db
         .prepare("UPDATE events SET acked=2 WHERE command=? AND acked=0")
         .run(row.id);
+      // NOUS acknowledged the run's terminal observation (that ack released the
+      // lock); the refused event was journaled after it, e.g. a respond's
+      // command_ack. Drop it, and keep the run's final state.
+      if (terminal(row.state)) return false;
       if (row.state === "denied") return false;
       this.db
         .prepare("UPDATE commands SET state='denied' WHERE id=?")
         .run(row.id);
       // 'terminal_pending': the terminal observation is journaled, not yet
-      // acknowledged (observe() sets both in one transaction). An acknowledged
-      // terminal state needs no release here: that ack released the lock.
+      // acknowledged (observe() sets both in one transaction).
       if (row.state === "terminal_pending")
         this.db.prepare("DELETE FROM locks WHERE command=?").run(row.id);
       return true;
@@ -767,6 +775,13 @@ export class Journal {
     const owner =
       rows.find((r) => r.turn === turnId) || rows.find((r) => r.turn === null);
     if (owner && (terminal(owner.state) || owner.state === "terminal_pending"))
+      return;
+    // reject() released a refused run's lock only after its terminal
+    // observation was journaled: Codex has stopped, nothing to interrupt.
+    if (
+      owner?.state === "denied" &&
+      !this.db.prepare("SELECT 1 FROM locks WHERE command=?").get(owner.id)
+    )
       return;
     const command = owner
       ? (JSON.parse(owner.command) as BridgeCommand)
