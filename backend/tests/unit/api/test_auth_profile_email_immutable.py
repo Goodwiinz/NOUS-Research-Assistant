@@ -427,8 +427,18 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
     current_result.scalars.return_value.first.return_value = user
     restored_result = MagicMock()
     restored_result.scalars.return_value.first.return_value = restored_user
+    retried_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
+    retried_result = MagicMock()
+    retried_result.scalars.return_value.first.return_value = retried_user
     db.execute = AsyncMock(
-        side_effect=[current_result, current_result, restored_result, restored_result]
+        side_effect=[
+            current_result,
+            current_result,
+            restored_result,
+            restored_result,
+            restored_result,
+            retried_result,
+        ]
     )
     db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
     lookups = 0
@@ -449,11 +459,12 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
         current_user, VICTIM_EMAIL
     )
 
-    assert current_user is restored_user
-    assert second_user is restored_user
     assert lookups == 1
     db.commit.assert_awaited_once()
+    assert db.execute.await_count == 4
     assert db.rollback.await_count == 4
+    assert current_user is restored_user
+    assert second_user is restored_user
 
 
 @pytest.mark.unit
