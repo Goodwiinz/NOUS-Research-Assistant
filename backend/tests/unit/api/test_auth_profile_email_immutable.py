@@ -18,40 +18,37 @@ request with 400 before anything is written.
 
 GOO-405 reconciliation backoff mutation evidence (run from ``backend/``):
 
-* Guard at ``src/services/security/auth_service.py:498``: a provider-disproved
+* Guard at ``src/services/security/auth_service.py:534``: a provider-disproved
   JWT email claim is remembered. Removing that call makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_disproved_stale_claim_does_not_repeat_provider_lookup`` fail
   because it performs a second provider lookup.
-* Guard at ``src/services/security/auth_service.py:514``: a confirmed email
+* Guard at ``src/services/security/auth_service.py:578``: a confirmed email
   collision is remembered after rollback. Removing that call makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_email_conflict_backs_off_repeated_sync`` fail
   because it repeats the lookup and commit.
-* Guard at ``src/services/security/auth_service.py:483``: provider lookup
+* Guard at ``src/services/security/auth_service.py:519``: provider lookup
   failures receive a short backoff. Removing it makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_lookup_failure_leaves_email_unchanged`` fail
   because every request retries the failed lookup.
-* Guard at ``src/services/security/auth_service.py:181``: the lock key is the
+* Guard at ``src/services/security/auth_service.py:208``: the lock key is the
   subject, so different JWT claims for one account are serialized. Making the
   key unique per request makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_different_claims_for_same_subject_serialize_without_holding_connections``
   fail because the stale provider result can overwrite the newer result.
-* Guard at ``src/services/security/auth_service.py:239``: same-process requests
+* Guard at ``src/services/security/auth_service.py:266``: same-process requests
   acquire the same keyed lock. Replacing ``async with lock`` with a fresh lock
   makes ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_concurrent_reconciliation_uses_one_provider_lookup`` fail because
   both requests call the provider.
-* The Redis lease acquisition at ``src/services/security/auth_service.py:187`` serializes
+* The Redis lease acquisition at ``src/services/security/auth_service.py:214`` serializes
   the subject across workers. Making acquisition unconditional makes
   ``python -m pytest -q tests/unit/core/test_email_reconciliation_lock.py::test_shared_lock_serializes_same_subject_across_workers`` fail because
   the second worker enters before release.
-* The positive cache is intentionally not populated after a successful write.
-  Adding that cache write makes
-  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_successful_sync_does_not_cache_provider_email`` fail when the provider later confirms that address again.
-* Guard at ``src/services/security/auth_service.py:453``: the initial read
+* Guard at ``src/services/security/auth_service.py:480``: the initial read
   transaction is ended before waiting on the per-subject lock. Removing this
   rollback makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_different_claims_for_same_subject_serialize_without_holding_connections``
   fail because the waiting request has not released its session connection.
-* Guard at ``src/services/security/auth_service.py:472``: the refreshed read
+* Guard at ``src/services/security/auth_service.py:508``: the refreshed read
   transaction is ended before the provider request. Removing this rollback
   makes the same focused test fail because the first lookup starts while its
   session still owns a connection.
@@ -59,21 +56,35 @@ GOO-405 reconciliation backoff mutation evidence (run from ``backend/``):
 Each proof disables one guard, observes its focused failure, then restores the
 source byte-for-byte before running the focused test on the restored source.
 
-The current-token equality case still performs provider reconciliation. Adding
-an equality shortcut before that lookup makes
+The current-token equality case still performs provider reconciliation.
+The bounded success marker at ``src/services/security/auth_service.py:490``
+suppresses repeated provider calls for 60 seconds only while the DB row still
+matches the claim. Removing that marker makes
+``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_matching_provider_email_is_revalidated_after_short_ttl`` fail because
+the second immediate request performs an unnecessary provider lookup. The
+expiry check keeps reconciliation periodic. Adding an equality shortcut before
+the provider lookup makes
 ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_matching_stale_token_is_reconciled_with_provider`` fail because a
-reassigned stale address remains attached to the old subject. The Redis lease
-renewal at ``src/services/security/auth_service.py:111`` is proved by
+reassigned stale address remains attached to the old subject. The atomic
+database compare-and-swap at
+``src/services/security/auth_service.py:553`` is proved by
+``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_stale_provider_result_cannot_overwrite_a_newer_row_version``; removing
+the updated_at predicate lets an old provider result overwrite a concurrent
+writer. The Redis lease renewal at ``src/services/security/auth_service.py:138`` is proved by
 ``python -m pytest -q tests/unit/core/test_email_reconciliation_lock.py::test_shared_lease_renews_before_expiration``; removing renewal makes the
 lease expire during a long lookup. The ownership check at
-``src/services/security/auth_service.py:503`` is proved by
+``src/services/security/auth_service.py:546`` is proved by
 ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_lost_redis_lease_skips_email_write``; removing it allows a former
-lease holder to commit. The short Redis-failure backoff at
-``src/services/security/auth_service.py:454`` is proved by
+lease holder to proceed without the fast-path guard. The process-wide Redis
+failure circuit at ``src/services/security/auth_service.py:481`` is proved by
 ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_redis_lock_failure_backs_off_repeated_authentication``; removing it
-retries the unavailable lock on every request. First-login provider failures
-become retryable 503 responses at ``src/core/dependencies.py:59``; removing
-that translation makes
+causes a second subject to retry the unavailable Redis store. First-login
+provider failures become retryable 503 responses at
+``src/core/dependencies.py:59``; the deployed middleware preserves that
+response at ``src/middleware/multi_tenancy.py:237``. The middleware test
+``python -m pytest -q tests/unit/middleware/test_multi_tenancy_merge_contract.py::test_jit_provider_outage_remains_retryable_through_tenant_middleware``
+fails if it converts the outage to a generic 500. Removing the dependency
+translation makes
 ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_first_login_provider_outage_returns_retryable_503`` fail.
 
 First-login provisioning also verifies the current provider email before
@@ -88,9 +99,11 @@ import inspect
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from threading import Event as ThreadingEvent
 from time import sleep
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -115,6 +128,7 @@ PROFILE_URL = "/api/v1/auth/me"
 @pytest.fixture(autouse=True)
 def local_shared_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep unit auth tests independent of the shared Redis service."""
+    auth_service_module._email_lock_failure_backoff.clear()
 
     class _Lease:
         async def still_owned(self) -> bool:
@@ -262,7 +276,7 @@ async def test_verified_supabase_email_change_syncs_by_subject_id(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: "new-owner@example.com",
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     token_data = TokenData(user_id=str(user.id), email="new-owner@example.com")
@@ -286,7 +300,7 @@ async def test_stale_supabase_claim_cannot_roll_email_back(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: "current@example.com",
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     token_data = TokenData(user_id=str(user.id), email=OWNER_EMAIL)
@@ -310,7 +324,7 @@ async def test_matching_stale_token_is_reconciled_with_provider(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: "new-owner@example.com",
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
 
@@ -321,6 +335,107 @@ async def test_matching_stale_token_is_reconciled_with_provider(
     assert current_user is user
     assert user.email == "new-owner@example.com"
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_matching_provider_email_is_revalidated_after_short_ttl(
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A short positive marker bounds provider traffic but still rechecks later."""
+    setattr(user, "id", uuid.uuid4())
+    lookups = 0
+
+    def current_email(_user_id: str) -> str:
+        nonlocal lookups
+        lookups += 1
+        return OWNER_EMAIL
+
+    monkeypatch.setattr(
+        auth_service_module,
+        "_PROVIDER_EMAIL_VALIDATION_TTL_SECONDS",
+        0.05,
+    )
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", current_email
+    )
+    result = MagicMock(rowcount=1)
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
+    service = AuthService(db)
+
+    await service.sync_user_email_from_provider(user, OWNER_EMAIL)
+    await service.sync_user_email_from_provider(user, OWNER_EMAIL)
+    assert lookups == 1
+
+    await asyncio.sleep(0.06)
+    await service.sync_user_email_from_provider(user, OWNER_EMAIL)
+
+    assert lookups == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_stale_provider_result_cannot_overwrite_a_newer_row_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject_id = str(uuid.uuid4())
+    observed_at = datetime(2026, 1, 1)
+    newer_at = datetime(2026, 1, 2)
+    original = User(
+        id=subject_id,
+        email="before@example.com",
+        password_hash="unused",
+        first_name="Ada",
+        last_name="Lovelace",
+        role=UserRole.USER,
+        is_active=True,
+        is_deleted=False,
+        updated_at=observed_at,
+    )
+    newer = User(
+        id=subject_id,
+        email="newer@example.com",
+        password_hash="unused",
+        first_name="Ada",
+        last_name="Lovelace",
+        role=UserRole.USER,
+        is_active=True,
+        is_deleted=False,
+        updated_at=newer_at,
+    )
+    original_result = MagicMock(rowcount=1)
+    original_result.scalars.return_value.first.return_value = original
+    newer_result = MagicMock(rowcount=1)
+    newer_result.scalars.return_value.first.return_value = newer
+    compare_and_swap_miss = MagicMock(rowcount=0)
+    reads = iter([original_result, newer_result, newer_result])
+    statements = []
+    db = AsyncMock()
+
+    async def execute(statement: Any) -> MagicMock:
+        if getattr(statement, "is_update", False):
+            statements.append(statement)
+            return compare_and_swap_miss
+        return next(reads)
+
+    db.execute.side_effect = execute
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "stale-provider@example.com",
+    )
+
+    current = await AuthService(db).sync_user_email_from_provider(
+        original, "stale-token@example.com"
+    )
+
+    assert current is newer
+    assert newer.email == "newer@example.com"
+    assert len(statements) == 1
+    where_sql = str(statements[0])
+    assert "users.email" in where_sql
+    assert "users.updated_at" in where_sql
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.unit
@@ -346,7 +461,7 @@ async def test_lost_redis_lease_skips_email_write(
     monkeypatch.setattr(
         auth_service_module._email_reconciliation_locks, "hold", lost_lease
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
 
@@ -364,7 +479,7 @@ def test_first_login_provider_outage_returns_retryable_503(
     db: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Provider outages must not be translated into credential rejection."""
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = None
     db.execute.return_value = result
 
@@ -413,7 +528,7 @@ async def test_disproved_stale_claim_does_not_repeat_provider_lookup(
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email", current_email
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     service = AuthService(db)
@@ -458,10 +573,10 @@ async def test_concurrent_reconciliation_uses_one_provider_lookup(
     refreshed_user = SimpleNamespace(id=subject_id, email="current@example.com")
     first_db = AsyncMock()
     second_db = AsyncMock()
-    first_result = MagicMock()
+    first_result = MagicMock(rowcount=1)
     first_result.scalars.return_value.first.return_value = first_user
     first_db.execute.return_value = first_result
-    refreshed_result = MagicMock()
+    refreshed_result = MagicMock(rowcount=1)
     refreshed_result.scalars.return_value.first.return_value = refreshed_user
     second_db.execute.return_value = refreshed_result
     lookups = 0
@@ -511,7 +626,7 @@ async def test_successful_sync_does_not_cache_provider_email(
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email", current_email
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     service = AuthService(db)
@@ -545,7 +660,7 @@ async def test_different_claims_for_same_subject_serialize_without_holding_conne
     )
     first_db = AsyncMock()
     second_db = AsyncMock()
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     first_db.execute.return_value = result
     second_db.execute.return_value = result
@@ -602,21 +717,18 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
     """A provider-confirmed local collision is retried only after backoff."""
     setattr(user, "id", uuid.uuid4())
     restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
-    current_result = MagicMock()
+    current_result = MagicMock(rowcount=1)
     current_result.scalars.return_value.first.return_value = user
-    restored_result = MagicMock()
+    restored_result = MagicMock(rowcount=1)
     restored_result.scalars.return_value.first.return_value = restored_user
-    retried_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
-    retried_result = MagicMock()
-    retried_result.scalars.return_value.first.return_value = retried_user
+    write_result = MagicMock(rowcount=1)
     db.execute = AsyncMock(
         side_effect=[
             current_result,
             current_result,
+            write_result,
             restored_result,
             restored_result,
-            restored_result,
-            retried_result,
         ]
     )
     db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
@@ -640,7 +752,7 @@ async def test_provider_email_conflict_backs_off_repeated_sync(
 
     assert lookups == 1
     db.commit.assert_awaited_once()
-    assert db.execute.await_count == 4
+    assert db.execute.await_count == 5
     assert db.rollback.await_count == 4
     assert current_user is restored_user
     assert second_user is restored_user
@@ -663,7 +775,7 @@ async def test_provider_lookup_failure_leaves_email_unchanged(
     monkeypatch.setattr(
         "src.core.user_provisioning.get_verified_supabase_email", unavailable
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     token_data = TokenData(user_id=str(user.id), email=VICTIM_EMAIL)
@@ -697,14 +809,26 @@ async def test_redis_lock_failure_backs_off_repeated_authentication(
         "hold",
         unavailable,
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     service = AuthService(db)
 
     await service.sync_user_email_from_provider(user, VICTIM_EMAIL)
-    await service.sync_user_email_from_provider(user, VICTIM_EMAIL)
+    another_subject = User(
+        id=uuid.uuid4(),
+        email=OWNER_EMAIL,
+        password_hash="unused",
+        first_name="Ada",
+        last_name="Lovelace",
+        role=UserRole.USER,
+        is_active=True,
+        is_deleted=False,
+    )
+    await service.sync_user_email_from_provider(another_subject, VICTIM_EMAIL)
 
+    # One unavailable shared store opens a process-wide circuit, so another
+    # subject does not pay the same Redis connection timeout.
     assert attempts == 1
     db.commit.assert_not_awaited()
 
@@ -719,7 +843,7 @@ def test_profile_accepts_the_email_from_the_current_provider_record(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: "new-owner@example.com",
     )
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     token_data = TokenData(user_id=str(user.id), email="new-owner@example.com")
@@ -748,7 +872,7 @@ async def test_stale_cli_email_cannot_overwrite_provider_email(
 ) -> None:
     """CLI tokens contain a minted snapshot, so they are not sync authority."""
     setattr(user, "email", "current@example.com")
-    result = MagicMock()
+    result = MagicMock(rowcount=1)
     result.scalars.return_value.first.return_value = user
     db.execute.return_value = result
     token_data = TokenData(user_id=str(user.id), email=OWNER_EMAIL, is_cli=True)
@@ -774,13 +898,20 @@ async def test_verified_email_conflict_keeps_user_bound_to_subject(
         "src.core.user_provisioning.get_verified_supabase_email",
         lambda _user_id: VICTIM_EMAIL,
     )
-    current_result = MagicMock()
+    current_result = MagicMock(rowcount=1)
     current_result.scalars.return_value.first.return_value = user
     restored_user = SimpleNamespace(id=user.id, email=OWNER_EMAIL)
-    restored_result = MagicMock()
+    restored_result = MagicMock(rowcount=1)
     restored_result.scalars.return_value.first.return_value = restored_user
+    write_result = MagicMock(rowcount=1)
     db.execute = AsyncMock(
-        side_effect=[current_result, current_result, current_result, restored_result]
+        side_effect=[
+            current_result,
+            current_result,
+            current_result,
+            write_result,
+            restored_result,
+        ]
     )
     db.commit.side_effect = IntegrityError("UPDATE users", {}, Exception("duplicate"))
     token_data = TokenData(user_id=str(user.id), email=VICTIM_EMAIL)
@@ -791,7 +922,7 @@ async def test_verified_email_conflict_keeps_user_bound_to_subject(
     assert current_user is restored_user
     assert current_user.email == OWNER_EMAIL
     assert db.rollback.await_count == 3
-    assert db.execute.await_count == 4
+    assert db.execute.await_count == 5
     refetch_where = str(db.execute.await_args_list[-1].args[0]).split("WHERE", 1)[1]
     assert "users.id" in refetch_where
     assert "users.email" not in refetch_where

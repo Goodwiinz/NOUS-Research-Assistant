@@ -74,19 +74,22 @@ def get_verified_supabase_email(user_id: str) -> Optional[str]:
     synchronous here so callers can move it to a worker thread without blocking
     the event loop.
     """
-    from src.core.supabase_client import get_supabase_client
-
-    client = get_supabase_client()
-    if client is None:
-        return None
-
     try:
+        from src.core.supabase_client import get_supabase_client
+
+        client = get_supabase_client()
+        if client is None:
+            raise SupabaseEmailLookupError(
+                "Supabase admin client is temporarily unavailable"
+            )
         response = client.auth.admin.get_user_by_id(user_id)
         provider_user = response.user
         if provider_user is None or provider_user.email_confirmed_at is None:
             return None
         email = (provider_user.email or "").strip().lower()
         return email or None
+    except SupabaseEmailLookupError:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Current Supabase email lookup failed for user %s: %s",

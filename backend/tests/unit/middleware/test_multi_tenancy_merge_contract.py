@@ -14,6 +14,7 @@ from starlette.testclient import TestClient
 from src.core.config import settings
 from src.core.database import get_db
 from src.core.security import TokenData, get_current_user_token
+from src.core.user_provisioning import SupabaseEmailLookupError
 from src.middleware import multi_tenancy
 from src.models.organization import Organization
 from src.models.user import User
@@ -385,6 +386,39 @@ def test_jit_provisioning_db_failure_is_sanitized_500(
     assert reached == [] and rows[User] is None
     assert all(s.closed and not s.pending for s in sessions)
     assert any(event.endswith(":flush") for s in sessions for event in s.events)
+
+
+@pytest.mark.parametrize("embedded_org", [None, "org-old"])
+def test_jit_provider_outage_remains_retryable_through_tenant_middleware(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_token: str,
+    provisioning_db: tuple[dict[Any, Any], list[_ProvisioningSession]],
+    embedded_org: str | None,
+) -> None:
+    rows, sessions = provisioning_db
+
+    def unavailable(_user_id: str) -> None:
+        raise SupabaseEmailLookupError("provider unavailable")
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", unavailable
+    )
+    rows[Organization].id = embedded_org or "org-1"
+    reached: list[str | None] = []
+    response = TestClient(_tenant_probe(reached)).get(
+        "/api/v1/threads",
+        headers={"Authorization": f"Bearer {_token_with_org(embedded_org)}"},
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.headers["retry-after"] == "5"
+    assert response.json()["error"] == {
+        "message": "Identity provider temporarily unavailable",
+        "status_code": 503,
+        "type": "service_unavailable",
+    }
+    assert reached == [] and rows[User] is None
+    assert all(session.closed and not session.pending for session in sessions)
 
 
 @pytest.mark.parametrize("embedded_org", [None, "org-old"])

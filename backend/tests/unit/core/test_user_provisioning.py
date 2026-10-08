@@ -14,11 +14,11 @@ it serializes writers, so the unique-violation window never opens.
 
 GOO-405 mutation evidence (run from ``backend/``):
 
-* Guard at ``src/core/user_provisioning.py:234``: the user-race refetch.
+* Guard at ``src/core/user_provisioning.py:236``: the user-race refetch.
   Replacing its assignment with ``user = None`` made
   ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_race_refetches_concurrently_created_user``
   fail because the returned user was ``None`` instead of the concurrent row.
-* Guard at ``src/core/user_provisioning.py:235``: warn only when the ID
+* Guard at ``src/core/user_provisioning.py:238``: warn only when the ID
   refetch finds no subject row. Replacing the condition with ``if False`` made
   ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_email_conflict_warns_with_user_id_and_never_resolves_by_email``
   fail because the required warning was absent. Replacing it with ``if True``
@@ -26,6 +26,12 @@ GOO-405 mutation evidence (run from ``backend/``):
   fail because a benign same-subject race emitted a warning.
 * Each mutation was restored in ``finally``; the source bytes matched before
   and after the runs. The same focused commands pass on the restored source.
+
+Provider-client construction failure is an operational outage, not an
+unconfirmed identity. The typed failure at
+``src/core/user_provisioning.py:80`` is covered by
+``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_missing_supabase_admin_client_is_a_provider_outage``; returning None
+instead makes the test fail because no retryable error is raised.
 """
 
 from __future__ import annotations
@@ -39,7 +45,11 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from src.core.security import TokenData, _extract_supabase_token_data
-from src.core.user_provisioning import SupabaseEmailLookupError, ensure_user_and_org
+from src.core.user_provisioning import (
+    SupabaseEmailLookupError,
+    ensure_user_and_org,
+    get_verified_supabase_email,
+)
 from src.models.organization import Organization
 from src.models.user import User, UserRole
 
@@ -182,6 +192,16 @@ async def test_first_login_provider_outage_is_not_an_unconfirmed_identity(monkey
 
     db.add.assert_not_called()
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.unit
+def test_missing_supabase_admin_client_is_a_provider_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("src.core.supabase_client.get_supabase_client", lambda: None)
+
+    with pytest.raises(SupabaseEmailLookupError):
+        get_verified_supabase_email("subject-1")
 
 
 @pytest.mark.unit
