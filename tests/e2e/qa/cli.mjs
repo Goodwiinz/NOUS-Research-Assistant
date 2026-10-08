@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+import { writeEvidenceRecord } from './evidence.mjs';
 import { featuresForChangedPaths, loadFeatureMap, scenariosForFeatures } from './feature-map.mjs';
 import { redactText, writeReports } from './report.mjs';
 import { exitCodeForReport, runCampaign } from './runner.mjs';
@@ -336,6 +337,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, depe
     console.log(`NOUS QA ${report.run.id}: ${report.summary.passed} passed, ${report.summary.failed} failed, ${report.summary.blocked} blocked, ${report.summary.skipped} skipped`);
     console.log(`JSON: ${redactText(paths.jsonPath, config.secrets)}`);
     console.log(`HTML: ${redactText(paths.htmlPath, config.secrets)}`);
+    if (config.evidenceRecordDir) {
+      // The report is already redacted by runCampaign; the README only uses it.
+      const readme = await writeEvidenceRecord(report, config.evidenceRecordDir);
+      console.log(`Evidence: ${redactText(readme, config.secrets)}`);
+    }
     return exitCodeForReport(report);
   } catch (error) {
     const message = config

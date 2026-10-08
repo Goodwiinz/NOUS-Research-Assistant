@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,7 @@ import {
 import { CLIConfigError, main, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { QASession } from '../../../tests/e2e/qa/session.mjs';
 import { runCampaign } from '../../../tests/e2e/qa/runner.mjs';
+import { renderEvidenceReadme, writeEvidenceRecord } from '../../../tests/e2e/qa/evidence.mjs';
 
 const MAP = `
 version: 1
@@ -289,4 +290,74 @@ test('a checkpoint on a session that cannot screenshot fails the scenario', asyn
   );
   assert.equal(report.cases[0].status, 'FAIL');
   assert.match(report.cases[0].reason, /cannot take screenshots/);
+});
+
+const REPORT = {
+  run: {
+    id: 'r1', startedAt: '2026-10-08T10:00:00.000Z', finishedAt: '2026-10-08T10:01:00.000Z', command: "'pnpm' 'qa:nous' '--features' 'login'", target: 'http://127.0.0.1:3000',
+    localSource: { sha: 'a'.repeat(40), dirty: 'clean', provenance: 'git HEAD' }, configuration: { apiUrl: 'http://127.0.0.1:8000/api/v1', features: ['login'] },
+    observedIdentity: { backendSha: null, frontendSha: null, provenance: null }, evidenceDir: '/tmp/ev', artifacts: { videos: ['/tmp/ev/video/x.webm'], trace: 'trace.zip', checkpointCount: 1 },
+  },
+  cases: [
+    { id: 'smoke.login-availability', title: 'Login page renders', status: 'PASS', reason: null, checkpoints: [{ kind: 'checkpoint', name: 'login.form', file: 'smoke.login-availability--login.form.png' }] },
+    { id: 'workflow.x', title: 'x', status: 'BLOCKED', reason: 'Missing credentials | retry', checkpoints: [] },
+  ],
+  cleanup: { status: 'complete', retained: [], errors: [] },
+  summary: { selected: 2, passed: 1, failed: 0, blocked: 1, skipped: 0, incomplete: true },
+};
+
+test('evidence README records SHA, target, per-scenario result and checkpoints, and maps BLOCKED to NOT RUN', () => {
+  const text = renderEvidenceReadme(REPORT);
+  assert.match(text, /^# Verification evidence: login \(2026-10-08\)/);
+  assert.match(text, new RegExp('a'.repeat(40)));
+  assert.match(text, /http:\/\/127\.0\.0\.1:3000/);
+  assert.match(text, /\| smoke\.login-availability \| PASS \|/);
+  assert.match(text, /\| workflow\.x \| BLOCKED \(NOT RUN\) \| Missing credentials \\\| retry \|/);
+  assert.match(text, /\| smoke\.login-availability \| login\.form \| smoke\.login-availability--login\.form\.png \|/);
+  assert.match(text, /Overall: BLOCKED/);
+  assert.doesNotMatch(text, /\]\(/, 'binaries are listed by name, never linked');
+});
+
+test('overall is PASS only when every case passed and cleanup completed', () => {
+  const passing = { ...REPORT, cases: [REPORT.cases[0]], summary: { ...REPORT.summary, selected: 1, blocked: 0, incomplete: false } };
+  assert.match(renderEvidenceReadme(passing), /Overall: PASS \(assertions\); visual confirmation pending/);
+  const failing = { ...passing, summary: { ...passing.summary, failed: 1 } };
+  assert.match(renderEvidenceReadme(failing), /Overall: FAILED/);
+  const dirtyCleanup = { ...passing, cleanup: { status: 'incomplete', retained: [{ kind: 'thread', id: 'x' }], errors: [] } };
+  assert.match(renderEvidenceReadme(dirtyCleanup), /Overall: BLOCKED/);
+});
+
+test('writeEvidenceRecord creates the directory and README', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nous-verify-'));
+  try {
+    const path = await writeEvidenceRecord(REPORT, join(dir, 'verify-login-20261008'));
+    assert.equal(path, join(dir, 'verify-login-20261008', 'README.md'));
+    assert.match(await readFile(path, 'utf8'), /^# Verification evidence: login/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('main writes the evidence README when --evidence-record is given', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nous-verify-main-'));
+  const original = console.log;
+  const lines = [];
+  console.log = (line) => lines.push(String(line));
+  try {
+    const registry = [{ id: 'smoke.x', title: 'x', suite: 'smoke', prerequisites: [], async run(_s, evidence) { await evidence.checkpoint('x.one'); return { assertion: 'ok' }; } }];
+    const record = join(dir, 'verify-x-20261008');
+    const code = await main(
+      ['--scenario', 'smoke.x', '--output-dir', join(dir, 'report'), '--evidence-dir', join(dir, 'ev'), '--evidence-record', record],
+      {},
+      { sessionFactory: async () => fakeRunnerSession([]), registry },
+    );
+    assert.equal(code, 0);
+    const text = await readFile(join(record, 'README.md'), 'utf8');
+    assert.match(text, /\| smoke\.x \| PASS \|/);
+    assert.match(text, /\| smoke\.x \| x\.one \| smoke\.x--x\.one\.png \|/);
+    assert.ok(lines.some((line) => line.startsWith('Evidence: ')));
+  } finally {
+    console.log = original;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
