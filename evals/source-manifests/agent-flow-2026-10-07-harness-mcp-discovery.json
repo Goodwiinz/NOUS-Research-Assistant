@@ -12,10 +12,10 @@
       "codex"
     ],
     "models": {
-      "claude-code": "anthropic/claude-sonnet-5-5",
-      "codex": "openai/gpt-6.1-sol (pre-registered; confirm reachability before trial 1, see evals/specs/harness-mcp-discovery-v1/harness.md)"
+      "claude-code": "us.anthropic.claude-sonnet-5-5 on Amazon Bedrock (amended 2026-10-07 before any trial; NOT RUN until the owner re-authenticates AWS)",
+      "codex": "openai/gpt-5.6-terra on Azure OpenAI v1 (amended 2026-10-07 before any trial; Infisical OPENAI_API_KEY is a placeholder)"
     },
-    "cli_versions": "installed by Harbor at trial setup; pin with --ak version=<x> and record agent_info.version from each trial's result.json",
+    "cli_versions": "pinned with --ak version: codex 0.161.0, claude-code 2.1.292; record agent_info.version from each trial result.json",
     "agent_kwargs": {
       "claude-code": "--ak disallowed_tools=WebSearch,WebFetch (Claude Code --disallowedTools)",
       "codex": "none; the task image pre-seeds web_search = \"disabled\" in /tmp/codex-home/config.toml"

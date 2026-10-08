@@ -22,6 +22,13 @@ Models (pre-registered):
 - `claude-code`: `-m anthropic/claude-sonnet-5-5`.
 - `codex`: `-m openai/gpt-6.1-sol`, the model the local Codex CLI is configured to use (`~/.codex/config.toml`, codex-cli 0.153.4, read 2026-10-07). Confirm before trial 1 that this model is reachable with the `OPENAI_API_KEY` used for the run; if it is not, choose the replacement before any codex trial and record it here. Changing a model after a trial has run starts a new pre-registration.
 
+Amendment 2026-10-07, before any trial ran. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in Infisical dev `/app` are placeholders, and no other Infisical environment holds either key, so neither model above is reachable. Replacements:
+
+- `codex`: the Azure OpenAI deployment `gpt-5.6-terra`, the strongest GPT deployment on the dev resource. Run with `-m openai/gpt-5.6-terra`, `OPENAI_BASE_URL=https://goodwiinzapix.cognitiveservices.azure.com/openai/v1` and `OPENAI_API_KEY` set to `AZURE_OPENAI_CHAT_API_KEY` from Infisical dev `/azure-openai`, both exported in the host shell. Harbor writes the key to `auth.json` and the base URL to `config.toml` (`codex.py` 755-776); Codex then posts to `<base>/responses` with a Bearer key. A wire-level probe on 2026-10-07 got HTTP 200 for Bearer auth, a streamed Responses call and a function call on this deployment.
+- `claude-code`: Amazon Bedrock `us.anthropic.claude-sonnet-5-5` with a short-term Bedrock API key minted from the owner's AWS session (`aws-bedrock-token-generator`), exported in the host shell as `AWS_BEARER_TOKEN_BEDROCK` with `AWS_REGION=us-east-1`, plus `--ae ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-sonnet-5-5`. The dev Azure resource has no Claude deployment. Local AWS credentials had expired on 2026-10-07, so Claude Code trials stay NOT RUN until the owner runs `aws login`.
+
+Decision with one harness: the rule below applies to each harness that has five scoreable trials. If only Codex has run, PRIMITIVES INSUFFICIENT for Codex opens Slice 5, and PRIMITIVES SUFFICE for Codex closes Slice 5 as not needed, recorded as Codex-only evidence. A later Claude Code run with 3 or fewer passes reopens it.
+
 Versions: pin both CLIs for the decision run with `--ak version=<x>` and record the versions Harbor reports in each trial's `result.json` (`agent_info`). Versions observed locally on 2026-10-07: Claude Code 2.1.292, codex-cli 0.153.4. The pinned codex version must accept the image's `web_search = "disabled"` (checked on 0.153.4: an unknown key value fails config load, which would surface as an infrastructure failure).
 
 Commands (repository root; Docker running; Harbor 0.6.6):
@@ -39,13 +46,16 @@ for f in pass wrong-missing-external wrong-fabricated-id wrong-fabricated-doi \
   echo "$f -> $?"   # expect 0, then 10 for every wrong-*, then 2
 done
 
-# Claude Code: 5 trials (ANTHROPIC_API_KEY exported in this shell)
+# Claude Code (amended 2026-10-07): 5 trials against Bedrock.
+# export AWS_BEARER_TOKEN_BEDROCK=<short-term key>  AWS_REGION=us-east-1
+# unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_OAUTH_TOKEN
 harbor run \
   --path evals/harness-mcp-discovery-v1 \
   --agent claude-code \
-  --model anthropic/claude-sonnet-5-5 \
-  --ak version=<claude-code version> \
+  --model us.anthropic.claude-sonnet-5-5 \
+  --ak version=2.1.292 \
   --ak disallowed_tools=WebSearch,WebFetch \
+  --ae ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-sonnet-5-5 \
   --env docker \
   --jobs-dir evals/jobs \
   --job-name harness-mcp-discovery-v1-claude-code-<revision> \
@@ -54,12 +64,14 @@ harbor run \
   --force-build \
   --yes
 
-# Codex: 5 trials (OPENAI_API_KEY exported in this shell)
+# Codex (amended 2026-10-07): 5 trials against Azure OpenAI.
+# export OPENAI_API_KEY="$AZURE_OPENAI_CHAT_API_KEY"   # Infisical dev /azure-openai
+# export OPENAI_BASE_URL=https://goodwiinzapix.cognitiveservices.azure.com/openai/v1
 harbor run \
   --path evals/harness-mcp-discovery-v1 \
   --agent codex \
-  --model openai/gpt-6.1-sol \
-  --ak version=<codex version> \
+  --model openai/gpt-5.6-terra \
+  --ak version=0.161.0 \
   --env docker \
   --jobs-dir evals/jobs \
   --job-name harness-mcp-discovery-v1-codex-<revision> \
