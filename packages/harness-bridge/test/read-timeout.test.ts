@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
@@ -9,6 +12,9 @@ import {
   SLOW_READ_TIMEOUT_MS,
 } from "../src/mcp/client.ts";
 import { createNousMcpServer } from "../src/mcp/server.ts";
+import { CredentialStore } from "../src/credentials.ts";
+import { buildManagedMcpConfig } from "../src/mcp/config.ts";
+import { mcpInstallCommand } from "../src/cli.ts";
 
 // RT-2: NOUS gives search_arxiv and get_arxiv_paper_content a 120 s budget (125 s
 // outer guard, backend/src/services/integrations/read_tools.py), but the bridge
@@ -54,4 +60,31 @@ test("slow arXiv tools get the long bound; other reads time out as upstream_time
   assert.equal(result.isError, true);
   assert.deepEqual(result.structuredContent, { content: [{ error: "upstream_timeout" }], source_refs: [] });
   await mcp.close();
+});
+
+test("managed Codex sessions get the longer MCP tool timeout; mcp install says what to add", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-read-timeout-"));
+  try {
+    const config = buildManagedMcpConfig({ apiOrigin: origin, credentialHandle: randomUUID(), stateDir });
+    assert.equal(config.nous?.tool_timeout_sec, MCP_TOOL_TIMEOUT_SEC);
+    await new CredentialStore(stateDir).writeLocal("connection", {
+      apiUrl: origin,
+      deviceId: randomUUID(),
+      projectId: randomUUID(),
+      credentialHandle: randomUUID(),
+      scopes: ["harness:execute", "tools:read"],
+      workspaces: [],
+    });
+    const announced: string[] = [];
+    const command = await mcpInstallCommand(stateDir, { announce: (m) => announced.push(m) });
+    // stdout stays the bare command; the package never edits ~/.codex/config.toml.
+    assert.match(command, /^codex mcp add nous -- /);
+    assert.equal(command.includes("tool_timeout_sec"), false);
+    assert.ok(
+      announced.some((m) => m.includes("[mcp_servers.nous]") && m.includes(`tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`)),
+      announced.join("\n"),
+    );
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });

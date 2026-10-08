@@ -21,7 +21,7 @@ import {
   type QueueEntry,
 } from "./handoffs/queue.ts";
 import { record } from "./rpc.ts";
-import { apiBase, type McpSession } from "./mcp/client.ts";
+import { apiBase, MCP_TOOL_TIMEOUT_SEC, type McpSession } from "./mcp/client.ts";
 import {
   buildManagedMcpConfig,
   standaloneInstallCommand,
@@ -693,6 +693,11 @@ export async function mcpInstallCommand(
   const state = value as LocalState;
   if (!state.scopes?.includes("tools:read"))
     throw new Error("reconnect with --tools to authorize NOUS tools");
+  // RT-2: this package never edits ~/.codex/config.toml, so say what to add.
+  // Announced before any publish line: artifacts.test.ts reads the last one.
+  (options.announce ?? console.error)(
+    `After you run the command below, add tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC} under [mcp_servers.nous] in ~/.codex/config.toml: Codex stops waiting for an MCP tool after 60 s by default, and NOUS's arXiv tools can take up to 125 s.`,
+  );
   // Publication binds one registered root, chosen explicitly when ambiguous.
   let root: string | undefined;
   if (!state.scopes.includes("artifacts:publish") && options.root !== undefined)

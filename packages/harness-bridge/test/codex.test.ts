@@ -601,6 +601,18 @@ test("start/resume propagate local MCP and restrictive turn settings only", asyn
   await consume;
 });
 
+test("a local MCP tool timeout reaches Codex; a malformed one is refused", async (t) => {
+  const { server, adapter, options } = setup(t);
+  for (const bad of [0, -1, 1.5, 601, "150"]) {
+    options.mcpConfig = { nous: { command: "nous-mcp", args: [], tool_timeout_sec: bad as number } };
+    await assert.rejects(adapter.resumeSession("s", options), /invalid local MCP configuration/);
+  }
+  options.mcpConfig = { nous: { command: "nous-mcp", args: [], tool_timeout_sec: 150 } };
+  await adapter.resumeSession("s", options);
+  const resume: any = server.calls("thread/resume")[0];
+  assert.equal(resume.params.config.mcp_servers.nous.tool_timeout_sec, 150);
+});
+
 test("denies network and temporary-root policy widening", async (t) => {
   const { server, adapter, options } = setup(t);
   server.replyToStart({
