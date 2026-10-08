@@ -18,35 +18,50 @@ request with 400 before anything is written.
 
 GOO-405 reconciliation backoff mutation evidence (run from ``backend/``):
 
-* Guard at ``src/services/security/auth_service.py:343``: a provider-disproved
+* Guard at ``src/services/security/auth_service.py:405``: a provider-disproved
   JWT email claim is remembered. Removing that call makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_disproved_stale_claim_does_not_repeat_provider_lookup`` fail
   because it performs a second provider lookup.
-* Guard at ``src/services/security/auth_service.py:353``: a confirmed email
+* Guard at ``src/services/security/auth_service.py:415``: a confirmed email
   collision is remembered after rollback. Removing that call makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_email_conflict_backs_off_repeated_sync`` fail
   because it repeats the lookup and commit.
-* Guard at ``src/services/security/auth_service.py:336``: provider lookup
+* Guard at ``src/services/security/auth_service.py:398``: provider lookup
   failures receive a short backoff. Removing it makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_provider_lookup_failure_leaves_email_unchanged`` fail
   because every request retries the failed lookup.
-* Guard at ``src/services/security/auth_service.py:97``: the lock key is the
+* Guard at ``src/services/security/auth_service.py:156``: the lock key is the
   subject, so different JWT claims for one account are serialized. Making the
   key unique per request makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_different_claims_for_same_subject_serialize_without_holding_connections``
   fail because the stale provider result can overwrite the newer result.
-* Guard at ``src/services/security/auth_service.py:316``: the initial read
+* Guard at ``src/services/security/auth_service.py:162``: same-process requests
+  acquire the same keyed lock. Replacing ``async with lock`` with a fresh lock
+  makes ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_concurrent_reconciliation_uses_one_provider_lookup`` fail because
+  both requests call the provider.
+* The Redis lease at ``src/services/security/auth_service.py:107`` serializes
+  the subject across workers. Making acquisition unconditional makes
+  ``python -m pytest -q tests/unit/core/test_email_reconciliation_lock.py::test_shared_lock_serializes_same_subject_across_workers`` fail because
+  the second worker enters before release.
+* The positive cache is intentionally not populated after a successful write.
+  Adding that cache write makes
+  ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_successful_sync_does_not_cache_provider_email`` fail when the provider later confirms that address again.
+* Guard at ``src/services/security/auth_service.py:376``: the initial read
   transaction is ended before waiting on the per-subject lock. Removing this
   rollback makes
   ``python -m pytest -q tests/unit/api/test_auth_profile_email_immutable.py::test_different_claims_for_same_subject_serialize_without_holding_connections``
   fail because the waiting request has not released its session connection.
-* Guard at ``src/services/security/auth_service.py:328``: the refreshed read
+* Guard at ``src/services/security/auth_service.py:390``: the refreshed read
   transaction is ended before the provider request. Removing this rollback
   makes the same focused test fail because the first lookup starts while its
   session still owns a connection.
 
 Each proof disables one guard, observes its focused failure, then restores the
 source byte-for-byte before running the focused test on the restored source.
+
+First-login provisioning also verifies the current provider email before
+creating any organization or user row. Removing that authoritative email input
+makes ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_first_login_uses_current_confirmed_provider_email`` fail because it inserts the stale JWT address.
 """
 
 from __future__ import annotations
@@ -54,7 +69,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from threading import Event as ThreadingEvent
 from time import sleep
 from types import SimpleNamespace
@@ -70,11 +86,23 @@ from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.security import TokenData, get_current_user_token
 from src.models.user import User, UserRole
+from src.services.security import auth_service as auth_service_module
 from src.services.security.auth_service import AuthService, get_auth_service
 
 OWNER_EMAIL = "owner@example.com"
 VICTIM_EMAIL = "victim@example.com"
 PROFILE_URL = "/api/v1/auth/me"
+
+
+@pytest.fixture(autouse=True)
+def local_shared_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit auth tests independent of the shared Redis service."""
+
+    @asynccontextmanager
+    async def acquired(_user_id: str) -> AsyncIterator[bool]:
+        yield True
+
+    monkeypatch.setattr(auth_service_module, "_hold_shared_email_lock", acquired)
 
 
 @pytest.fixture
@@ -344,6 +372,38 @@ async def test_concurrent_reconciliation_uses_one_provider_lookup(
     assert second_user_result is refreshed_user
     first_db.commit.assert_awaited_once()
     second_db.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_successful_sync_does_not_cache_provider_email(
+    user: User, db: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later confirmed return to an email must still be reconciled."""
+    setattr(user, "id", uuid.uuid4())
+    setattr(user, "email", "old@example.com")
+    lookups = 0
+
+    def current_email(_user_id: str) -> str:
+        nonlocal lookups
+        lookups += 1
+        return OWNER_EMAIL
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", current_email
+    )
+    result = MagicMock()
+    result.scalars.return_value.first.return_value = user
+    db.execute.return_value = result
+    service = AuthService(db)
+
+    await service.sync_user_email_from_provider(user, OWNER_EMAIL)
+    setattr(user, "email", "intervening@example.com")
+    await service.sync_user_email_from_provider(user, OWNER_EMAIL)
+
+    assert lookups == 2
+    assert user.email == OWNER_EMAIL
+    assert db.commit.await_count == 2
 
 
 @pytest.mark.unit

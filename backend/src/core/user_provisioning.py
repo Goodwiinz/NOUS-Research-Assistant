@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import secrets
 from typing import Optional
@@ -42,17 +43,31 @@ async def ensure_user_and_org(
     if existing:
         return existing
 
+    # A first-login row cannot safely take its email from a JWT snapshot: the
+    # subject may present an unexpired token minted before a confirmed change.
+    # End the empty-row read transaction before the provider round trip, then
+    # create the row only from the provider's current confirmed address.
+    await db.rollback()
+    if getattr(token_data, "is_cli", False):
+        return None
+    verified_email = await asyncio.to_thread(
+        get_verified_supabase_email, str(token_data.user_id)
+    )
+    if not verified_email:
+        return None
+
     org = await _resolve_or_create_org(db, token_data)
-    return await _create_user(db, token_data, org)
+    return await _create_user(db, token_data, org, verified_email=verified_email)
 
 
 def get_verified_supabase_email(user_id: str) -> Optional[str]:
     """Return the provider's current confirmed email for a subject.
 
     JWT email claims are snapshots and can outlive an address change. This
-    server-side admin lookup is used only when a non-CLI token's claim differs
-    from the stored profile. Keep the network operation synchronous here so
-    callers can move it to a worker thread without blocking the event loop.
+    server-side admin lookup supplies the email for first-login provisioning
+    and reconciles changed non-CLI token claims. Keep the network operation
+    synchronous here so callers can move it to a worker thread without blocking
+    the event loop.
     """
     from src.core.supabase_client import get_supabase_client
 
@@ -172,8 +187,10 @@ async def _create_user(
     db: AsyncSession,
     token_data: TokenData,
     org: Optional[Organization],
+    *,
+    verified_email: str,
 ) -> Optional[User]:
-    email = token_data.email or f"{token_data.user_id}@provisioned.local"
+    email = verified_email.strip().lower()
     prefix = email.split("@")[0]
     parts = prefix.split(".")
     # Names the user typed at sign-up (Supabase user_metadata) win; guessing

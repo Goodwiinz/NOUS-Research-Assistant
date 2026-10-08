@@ -269,6 +269,10 @@ class _ProvisioningSession(_Session):
 def provisioning_db(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[dict[Any, Any], list[_ProvisioningSession]]:
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "user@example.com",
+    )
     rows: dict[Any, Any] = {
         User: None,
         Organization: Organization(

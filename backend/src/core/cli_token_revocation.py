@@ -79,12 +79,22 @@ async def _get_redis() -> Optional["redis.Redis"]:
         return None
 
 
+async def get_redis_client() -> Optional["redis.Redis"]:
+    """Return the shared async Redis client for security coordination."""
+    return await _get_redis()
+
+
 def _reset_client() -> None:
     """Drop the cached client so the next call reconnects. Prevents a client
     bound to a now-dead event loop from failing every subsequent call (which
     would silently defeat revocation forever — fail-open with no recovery)."""
     global _client
     _client = None
+
+
+def reset_redis_client() -> None:
+    """Reset the shared Redis client after a failed security operation."""
+    _reset_client()
 
 
 class CliTokenRevocationUnavailable(Exception):

@@ -79,6 +79,14 @@ def _token(user_id="user-1", email="user@example.com", organization_id=None, **e
     )
 
 
+@pytest.fixture(autouse=True)
+def confirmed_provider_email(monkeypatch):
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "a.two@example.com",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Guard clauses / happy paths
 # ---------------------------------------------------------------------------
@@ -118,10 +126,43 @@ async def test_happy_path_creates_org_and_user_with_org_id():
     assert isinstance(user, User)
     assert user.id == "user-1"
     assert user.organization_id == "org-42"
-    db.rollback.assert_not_called()
+    db.rollback.assert_awaited_once()
     # Two objects added (org, then user), two flushes.
     assert db.add.call_count == 2
     assert db.flush.await_count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_first_login_uses_current_confirmed_provider_email(monkeypatch):
+    db = _session(execute_results=[None, None], flush_side_effects=[None, None])
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "current@example.com",
+    )
+
+    user = await ensure_user_and_org(
+        db, _token(email="stale@example.com", organization_id="org-42")
+    )
+
+    assert user.email == "current@example.com"
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_first_login_fails_closed_when_provider_email_is_unavailable(monkeypatch):
+    db = _session(execute_results=[None], flush_side_effects=[])
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: None,
+    )
+
+    result = await ensure_user_and_org(db, _token(email="stale@example.com"))
+
+    assert result is None
+    db.add.assert_not_called()
+    db.rollback.assert_awaited_once()
 
 
 @pytest.mark.unit
@@ -140,7 +181,7 @@ async def test_happy_path_creates_per_user_org_without_org_id():
     added_org = db.add.call_args_list[0].args[0]
     assert isinstance(added_org, Organization)
     assert added_org.name == "user-user-1 Organization"
-    db.rollback.assert_not_called()
+    db.rollback.assert_awaited_once()
 
 
 def _fake_db_with_org_table():
@@ -289,7 +330,7 @@ async def test_org_race_refetches_concurrently_created_org():
 
     assert isinstance(user, User)
     assert user.organization_id == "org-42"  # from the refetched org
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
 
 
 @pytest.mark.unit
@@ -307,7 +348,7 @@ async def test_org_less_fallback_org_race_refetches_by_name():
 
     assert isinstance(user, User)
     assert user.organization_id == "org-default"
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
 
 
 @pytest.mark.unit
@@ -326,7 +367,7 @@ async def test_user_race_refetches_concurrently_created_user():
     result = await ensure_user_and_org(db, _token(organization_id="org-42"))
 
     assert result is concurrent_user
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
 
 
 @pytest.mark.unit
@@ -356,7 +397,7 @@ async def test_user_email_conflict_warns_with_user_id_and_never_resolves_by_emai
         result = await ensure_user_and_org(db, token)
 
     assert result is None
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
     # Exactly user lookup, org lookup, and ONE refetch, and that refetch is by id.
     assert db.execute.await_count == 3
     refetch_where = str(db.execute.await_args_list[2].args[0]).split("WHERE", 1)[1]
@@ -418,8 +459,8 @@ async def test_simultaneous_provisioning_converges_on_one_user():
 
     assert winner.id == winner_user_id
     assert loser.id == winner_user_id  # loser converged on the winner's row
-    loser_db.rollback.assert_awaited_once()
-    winner_db.rollback.assert_not_called()
+    assert loser_db.rollback.await_count == 2
+    winner_db.rollback.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
