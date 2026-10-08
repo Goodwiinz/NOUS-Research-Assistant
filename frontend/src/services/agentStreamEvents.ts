@@ -55,6 +55,7 @@ export const AGENT_ERROR_CATEGORIES = [
   'invalid_request',
   'conflict',
   'internal',
+  'device_bound_to_another_chat',
 ] as const;
 
 /** Union of every server-authored error category (mirror of backend enum). */

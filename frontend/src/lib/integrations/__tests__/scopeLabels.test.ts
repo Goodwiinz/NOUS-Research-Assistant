@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { scopeLabel } from '../scopeLabels';
+import { scopeLabel, scopeSummary } from '../scopeLabels';
 
 // Every scope the backend accepts (STANDARD_SCOPES in
 // backend/src/schemas/integration_context.py).
@@ -33,19 +33,27 @@ describe('scopeLabel', () => {
       /Deleting folders and ingesting papers still require your approval/
     );
   });
+});
+
+// scopeLabel is the consent page's sentence; scopeSummary is the short
+// fragment the Connected devices page joins into one line per consent.
+describe.each([
+  ['scopeLabel', scopeLabel],
+  ['scopeSummary', scopeSummary],
+] as const)('%s', (_name, describeScope) => {
   it('falls back to the raw scope', () => {
-    expect(scopeLabel('weird:scope')).toBe('weird:scope');
+    expect(describeScope('weird:scope')).toBe('weird:scope');
   });
   it.each(STANDARD_SCOPES)(
     'labels %s in words, not as the raw scope',
     (scope) => {
-      expect(scopeLabel(scope)).not.toBe(scope);
+      expect(describeScope(scope)).not.toBe(scope);
     }
   );
   it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__'])(
     'treats the object key %s as an unknown scope',
     (scope) => {
-      expect(scopeLabel(scope)).toBe(scope);
+      expect(describeScope(scope)).toBe(scope);
     }
   );
 });

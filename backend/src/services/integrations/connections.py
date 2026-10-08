@@ -19,11 +19,14 @@ from src.core.cli_token_revocation import (
 )
 from src.models.bridge_device import BridgeDevice
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
+from src.models.thread import Thread
 from src.models.user import User
 from src.schemas.integration_connections import ConnectedDevice, ConnectionConsent
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     authorized_project,
+    authorized_workspace,
+    validate_binding,
 )
 
 
@@ -39,6 +42,58 @@ def _identity(user: User) -> tuple[UUID, UUID]:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _binding_label(
+    db: AsyncSession,
+    user_id: UUID,
+    organization_id: UUID,
+    consent: IntegrationGrantRequest,
+    workspace_bound: bool,
+    cache: dict[tuple[bool, UUID], str | None],
+) -> str | None:
+    """The name of the consent's workspace (when workspace_bound) or project
+    while the user may still reach it, else None. A consent binds exactly
+    one of the two (ck_integration_grant_requests_one_binding)."""
+    target = consent.workspace_id if workspace_bound else consent.project_id
+    if target is None:
+        return None
+    key = (workspace_bound, target)
+    if key not in cache:
+        try:
+            if workspace_bound:
+                row = await authorized_workspace(db, user_id, organization_id, target)
+            else:
+                row = await authorized_project(db, user_id, organization_id, target)
+            cache[key] = str(row.name)
+        except IntegrationAccessDenied:
+            cache[key] = None
+    return cache[key]
+
+
+async def _thread_label(
+    db: AsyncSession,
+    user_id: UUID,
+    organization_id: UUID,
+    consent: IntegrationGrantRequest,
+) -> str | None:
+    """The bound chat's title while the binding still holds, by the same
+    check a grant mint runs (validate_binding). None once the chat is
+    deleted, linked to another project or out of reach: the consent can no
+    longer mint, but stays listed so it can be revoked."""
+    try:
+        await validate_binding(
+            db,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=consent.project_id,
+            thread_id=consent.thread_id,
+        )
+    except IntegrationAccessDenied:
+        return None
+    title = await db.scalar(select(Thread.title).where(Thread.id == consent.thread_id))
+    # Same fallback as the approval page (context.request_dto).
+    return str(title or "Untitled chat")
 
 
 async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice]:
@@ -78,24 +133,29 @@ async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice
         )
     ).all()
     by_device: dict[UUID, list[ConnectionConsent]] = {d.id: [] for d in devices}
-    labels: dict[UUID, str | None] = {}
+    labels: dict[tuple[bool, UUID], str | None] = {}
     for consent in consents:
-        if consent.project_id not in labels:
-            try:
-                project = await authorized_project(
-                    db, user_id, organization_id, consent.project_id
-                )
-                labels[consent.project_id] = str(project.name)
-            except IntegrationAccessDenied:
-                labels[consent.project_id] = None
-        label = labels[consent.project_id]
+        workspace_bound = consent.workspace_id is not None
+        label = await _binding_label(
+            db, user_id, organization_id, consent, workspace_bound, labels
+        )
         if label is None:
             continue
+        thread_label = (
+            await _thread_label(db, user_id, organization_id, consent)
+            if consent.thread_id is not None
+            else None
+        )
         by_device[consent.device_id].append(
             ConnectionConsent(
                 request_id=consent.id,
+                kind="workspace" if workspace_bound else "project",
                 project_id=consent.project_id,
-                project_label=str(label),
+                project_label=None if workspace_bound else label,
+                workspace_id=consent.workspace_id,
+                workspace_label=label if workspace_bound else None,
+                thread_id=consent.thread_id,
+                thread_label=thread_label,
                 scopes=sorted(consent.scopes or []),
                 status=str(consent.status),
                 approved_at=consent.approved_at,
@@ -124,7 +184,7 @@ async def _revoke_grants(db: AsyncSession, **match: Any) -> None:
 
 
 async def revoke_consent(db: AsyncSession, user: User, request_id: UUID) -> None:
-    """End one device's access to one project, and every grant issued under it."""
+    """End one device's access to one project or workspace, and every grant issued under it."""
     user_id, organization_id = _identity(user)
     revoked = await db.execute(
         update(IntegrationGrantRequest)

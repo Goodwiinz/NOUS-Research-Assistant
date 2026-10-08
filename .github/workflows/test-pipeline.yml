@@ -856,9 +856,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-test-
             ${{ runner.os }}-pip-
+      - name: Install PDF renderer system libraries
+        # WeasyPrint (backend/requirements.txt) loads pango at runtime. The
+        # X4 PDF-export isolation tests render real PDFs (GOO-400). Same
+        # packages as backend/docker/Dockerfile.prod.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core
       - name: Install dependencies
         run: |
           pip install --build-constraint backend/constraints-ci.txt -r backend/requirements.txt
+      - name: Verify the PDF renderer
+        run: |
+          python -c 'from weasyprint import HTML; pdf = HTML(string="<h1>PDF smoke</h1>").write_pdf(); assert pdf.startswith(b"%PDF-"), pdf[:8]; print("weasyprint pdf_bytes=%d" % len(pdf))'
       - name: Run integration tests
         run: |
           mkdir -p test-results
@@ -913,6 +924,8 @@ jobs:
           INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           INGESTION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
           CLI_REVOCATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # X4 PDF-export tests fail instead of skipping without the renderer.
+          PDF_EXPORT_TEST_REQUIRE_RENDERER: "1"
       - name: Run ingestion recovery PostgreSQL tests
         if: matrix.shard == 1
         # These integration-marked tests live outside the sharded directory.
