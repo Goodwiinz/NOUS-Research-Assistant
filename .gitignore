@@ -81,6 +81,10 @@ pids/
 *.seed
 *.pid.lock
 
+# nous-verify binaries (PNG/webm/trace) and NOUS QA private reports
+.verify-artifacts/
+.nous-qa-reports/
+
 # Coverage directory used by tools like istanbul
 coverage/
 coverage.xml
