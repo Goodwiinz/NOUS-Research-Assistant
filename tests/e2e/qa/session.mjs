@@ -997,6 +997,7 @@ export class QASession {
             thread: `/api/v2/threads/${encodeURIComponent(resource.id)}`,
             document: `/api/v1/documents/${encodeURIComponent(resource.id)}`,
             collection: `/api/v2/collections/${encodeURIComponent(resource.id)}`,
+            project: `/api/v1/projects/${encodeURIComponent(resource.id)}`,
           }[resource.kind];
           if (!path) throw new QASessionError(`No cleanup route for fixture kind ${resource.kind}`);
           await this.request(path, { method: 'DELETE', internal: true });

@@ -1,8 +1,10 @@
 # Flow: HITL approve and deny
 
-States: HITL-pending → done | error. No runnable scenario exists yet;
-`adversarial.hitl-synthetic-scope` is a permanent `BLOCKED` placeholder, so
-the approve and deny journeys are added with the runner work.
+States: HITL-pending → done | error. Scenarios:
+`workflow.project-creation-via-chat` (Approve, using `create_project` as the
+destructive tool) and `workflow.hitl-deny` (Deny). The Approve path's pending
+screenshot is `project.pending`; `hitl.pending` is taken on the Deny path.
+`adversarial.hitl-synthetic-scope` stays a `BLOCKED` placeholder.
 
 ```mermaid
 flowchart TD

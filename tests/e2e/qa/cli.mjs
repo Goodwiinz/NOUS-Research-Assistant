@@ -319,7 +319,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, depe
     return 0;
   }
   if (config.listOnly) {
-    console.log(JSON.stringify(listScenarios(config.suite).map((scenario) => ({
+    // With --scenario/--features/--changed-from this is a dry run of the
+    // selection; without them it lists the whole suite.
+    const selected = new Set(config.selectedIds);
+    const listed = listScenarios(config.suite).filter((scenario) => selected.size === 0 || selected.has(scenario.id));
+    console.log(JSON.stringify(listed.map((scenario) => ({
       id: scenario.id,
       title: scenario.title,
       suite: scenario.suite,

@@ -15,6 +15,7 @@ import { CLIConfigError, main, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { QASession } from '../../../tests/e2e/qa/session.mjs';
 import { runCampaign } from '../../../tests/e2e/qa/runner.mjs';
 import { renderEvidenceReadme, writeEvidenceRecord } from '../../../tests/e2e/qa/evidence.mjs';
+import { registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
 
 const MAP = `
 version: 1
@@ -359,5 +360,82 @@ test('main writes the evidence README when --evidence-record is given', async ()
   } finally {
     console.log = original;
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('v1 verification scenarios are registered with honest prerequisites', () => {
+  const byId = Object.fromEntries(registry.map((scenario) => [scenario.id, scenario]));
+  assert.deepEqual(byId['workflow.login-authenticated'].prerequisites, ['auth', 'browser']);
+  for (const id of ['workflow.chat-send-stream-reload', 'workflow.project-creation-via-chat', 'workflow.hitl-deny']) {
+    assert.deepEqual(byId[id].prerequisites, ['auth', 'writes', 'model', 'browser'], id);
+    assert.equal(byId[id].callsModel, true, id);
+    assert.equal(byId[id].createsFixtures, true, id);
+    assert.equal(byId[id].suite, 'workflow', id);
+  }
+  assert.ok(byId['workflow.document-upload-and-attachment'].prerequisites.includes('browser'));
+});
+
+test('the real feature map covers every v1 feature with registered scenarios', async () => {
+  const map = await loadFeatureMap(join(import.meta.dirname, '../../../docs/engineering/feature-map.yaml'));
+  const ids = new Set(registry.map((scenario) => scenario.id));
+  for (const feature of map.features) {
+    assert.equal(feature.status, 'covered', feature.id);
+    assert.ok(feature.scenarios.length > 0, feature.id);
+    for (const id of feature.scenarios) assert.ok(ids.has(id), `${feature.id}: ${id}`);
+  }
+  assert.deepEqual(scenariosForFeatures(map, ['hitl-approve-deny']), ['workflow.project-creation-via-chat', 'workflow.hitl-deny']);
+});
+
+function visibleLocator() {
+  return { first: () => ({ waitFor: async () => {} }), count: async () => 1 };
+}
+
+test('login smoke takes the login.form checkpoint and still works without evidence', async () => {
+  const taken = [];
+  const session = {
+    config: { timeoutMs: 100 },
+    goto: async () => {},
+    page: { locator: () => visibleLocator() },
+  };
+  await smokeLogin(session, { checkpoint: async (name) => taken.push(name) });
+  assert.deepEqual(taken, ['login.form']);
+  await smokeLogin(session);
+});
+
+test('authenticated login scenario takes the login.landed checkpoint', async () => {
+  const taken = [];
+  const scenario = registry.find((item) => item.id === 'workflow.login-authenticated');
+  const session = { login: async () => ({ url: () => 'http://127.0.0.1:3000/chat' }) };
+  const result = await scenario.run(session, { checkpoint: async (name) => taken.push(name) });
+  assert.deepEqual(taken, ['login.landed']);
+  assert.deepEqual(result.evidence, [{ path: '/chat' }]);
+});
+
+test('authenticated login scenario fails if the browser is still on /login', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.login-authenticated');
+  const session = { login: async () => ({ url: () => 'http://127.0.0.1:3000/login' }) };
+  await assert.rejects(scenario.run(session, { checkpoint: async () => {} }), /still on \/login/);
+});
+
+test('project fixtures have a cleanup route', async () => {
+  const calls = [];
+  const session = new QASession({ baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:3000/api/v1', runId: 'r1', timeoutMs: 100 }, {});
+  session.request = async (path, options) => { calls.push([options.method, path]); return { status: 204, data: null }; };
+  session.registerFixture('project', '11111111-1111-4111-8111-111111111111', {});
+  const result = await session.cleanup();
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(calls, [['DELETE', '/api/v1/projects/11111111-1111-4111-8111-111111111111']]);
+});
+
+test('--list with --features lists only the selected scenarios (dry run)', async () => {
+  const original = console.log;
+  const lines = [];
+  console.log = (line) => lines.push(String(line));
+  try {
+    const code = await main(['--list', '--features', 'login'], {});
+    assert.equal(code, 0);
+    assert.deepEqual(JSON.parse(lines.join('\n')).map((item) => item.id), ['smoke.login-availability', 'workflow.login-authenticated']);
+  } finally {
+    console.log = original;
   }
 });
