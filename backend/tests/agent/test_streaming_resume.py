@@ -3,6 +3,7 @@ Redis stream buffer, with finish_stream after the terminal frame."""
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -953,6 +954,116 @@ def test_resume_matching_stream_param_replays(monkeypatch):
 
     assert resp.status_code == 200
     assert "event: done" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# BR-2: a stream-less resume (the frontend cold-load probe) must not replay a
+# finished Codex run; it is already in the transcript. Mutation: execute.py
+# resume_stream — drop the `not JobStatus(...).is_terminal` clause of the
+# stream-less Codex fallback; the parametrized test then fails with
+# "a finished Codex run was handed to the replay path".
+# ---------------------------------------------------------------------------
+
+
+def _codex_run(status: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        job_id=str(uuid4()), status=status, execution_provider="codex"
+    )
+
+
+def _no_native_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod, "_pending_confirmation_frame", AsyncMock(return_value=None)
+    )
+
+
+def _fake_harness_stream(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    from src.api.agent import harness_streaming
+
+    cursors: list[int] = []
+
+    async def stream(*_args: object, after_seq: int = 0) -> AsyncIterator[str]:
+        cursors.append(after_seq)
+        yield "id: 1\nevent: status\ndata: {}\n\n"
+
+    monkeypatch.setattr(
+        harness_streaming,
+        "context_for_accepted_run",
+        AsyncMock(return_value=object()),
+    )
+    monkeypatch.setattr(harness_streaming, "stream_harness_run", stream)
+    return cursors
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_streamless_resume_does_not_replay_a_finished_codex_run(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    from src.api.agent import harness_streaming
+
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod, "get_active_run_for_thread", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod,
+        "get_latest_run_for_thread",
+        AsyncMock(return_value=_codex_run(status)),
+    )
+    monkeypatch.setattr(
+        harness_streaming,
+        "context_for_accepted_run",
+        AsyncMock(
+            side_effect=AssertionError(
+                "a finished Codex run was handed to the replay path"
+            )
+        ),
+    )
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 204
+
+
+def test_streamless_resume_still_attaches_to_an_active_codex_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod,
+        "get_active_run_for_thread",
+        AsyncMock(return_value=_codex_run("running")),
+    )
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 200
+    assert "event: status" in resp.text
+    assert cursors == [0]
+
+
+def test_named_stream_still_replays_a_just_finished_codex_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The resume effect passes stream=<run id>; a run that finished while the
+    browser reconnected must still deliver its tail from the caller's cursor."""
+    run = _codex_run("completed")
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod, "get_latest_run_for_thread", AsyncMock(return_value=run)
+    )
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={run.job_id}&after=7"
+    )
+
+    assert resp.status_code == 200
+    assert cursors == [7]
 
 
 def test_envelope_carries_stream_id_only_when_present():

@@ -1393,6 +1393,12 @@ async def resume_stream(
                     latest_run_for_resume is not None
                     and getattr(latest_run_for_resume, "execution_provider", "nous")
                     == "codex"
+                    # Without a stream id the caller is the cold-load probe. A
+                    # finished Codex run is already in the transcript; replaying
+                    # its ledger from seq 0 re-streamed old answers and re-added
+                    # "failed to generate" bubbles (BR-2). A named stream still
+                    # replays a just-finished run in the branch above.
+                    and not JobStatus(latest_run_for_resume.status).is_terminal
                 ):
                     external_run = latest_run_for_resume
         if external_run is not None:
