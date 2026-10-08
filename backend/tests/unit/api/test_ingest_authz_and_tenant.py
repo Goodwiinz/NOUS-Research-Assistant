@@ -385,7 +385,9 @@ def test_scoped_router_allows_authorized_user_with_mocked_effects(
     response = isolated_api.request()
 
     assert response.status_code == 200, response.text
-    isolated_api.db.execute.assert_awaited_once()
+    # Auth now re-reads the subject while reconciling the provider's current
+    # email, so this contract asserts database-backed auth, not a query count.
+    isolated_api.db.execute.assert_awaited()
     if isinstance(isolated_api.expected_effect, AsyncMock):
         isolated_api.expected_effect.assert_awaited_once()
     elif isolated_api.expected_effect is not None:

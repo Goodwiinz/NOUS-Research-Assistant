@@ -14,6 +14,11 @@ from src.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
 
+
+class SupabaseEmailLookupError(Exception):
+    """The provider could not be reached to confirm an account email."""
+
+
 _FREE_STORAGE = Organization.get_default_storage_limit(StorageTier.FREE)
 
 # Org names the provisioner mints itself and then RESOLVES BY NAME. A
@@ -88,7 +93,9 @@ def get_verified_supabase_email(user_id: str) -> Optional[str]:
             user_id,
             type(exc).__name__,
         )
-        return None
+        raise SupabaseEmailLookupError(
+            "Current Supabase email could not be confirmed"
+        ) from exc
 
 
 async def _resolve_or_create_org(

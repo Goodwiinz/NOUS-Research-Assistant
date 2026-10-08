@@ -49,9 +49,19 @@ async def get_current_user(
     user = result.scalars().first()
 
     if user is None:
-        from src.core.user_provisioning import ensure_user_and_org
+        from src.core.user_provisioning import (
+            SupabaseEmailLookupError,
+            ensure_user_and_org,
+        )
 
-        provisioned = await ensure_user_and_org(db, token_data)
+        try:
+            provisioned = await ensure_user_and_org(db, token_data)
+        except SupabaseEmailLookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Identity provider temporarily unavailable",
+                headers={"Retry-After": "5"},
+            ) from exc
         if provisioned:
             await db.commit()
             result = await db.execute(
