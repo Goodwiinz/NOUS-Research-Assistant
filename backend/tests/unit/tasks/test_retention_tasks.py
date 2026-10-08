@@ -14,6 +14,7 @@ Contract under test (all three riders):
 - All tasks are flag-gated by RETENTION_ENABLED.
 """
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -26,7 +27,7 @@ from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy import table as sa_table
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import src.models  # noqa: F401 — load full mapper registry (relationships)
@@ -285,11 +286,12 @@ def test_soft_deleted_org_scoping(session_factory):
 
 
 def test_soft_deleted_apply_skips_a_thread_the_database_refuses(
-    session_factory, monkeypatch: pytest.MonkeyPatch
+    session_factory, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """One thread whose delete fails is rolled back alone and skipped; the
     rest of the batch still commits (audit HO-2: one blocked thread used to
-    roll back every org's purge on every run).
+    roll back every org's purge on every run). The skip is logged at ERROR,
+    naming the thread, so a permanently refused chat stays visible.
 
     Mutation check (docs/engineering/testing.md): in
     purge_soft_deleted_threads replace ``with db.begin_nested():`` by
@@ -316,11 +318,12 @@ def test_soft_deleted_apply_skips_a_thread_the_database_refuses(
 
     monkeypatch.setattr(retention_tasks, "_delete_checkpoint_rows", refuse_blocked)
 
-    result = _run(
-        retention_tasks.purge_soft_deleted_threads,
-        session_factory,
-        _retention_settings(apply=True),
-    )
+    with caplog.at_level(logging.ERROR, logger=retention_tasks.logger.name):
+        result = _run(
+            retention_tasks.purge_soft_deleted_threads,
+            session_factory,
+            _retention_settings(apply=True),
+        )
 
     assert (result["threads"], result["skipped"]) == (2, 1)
     assert (result["messages"], result["checkpoints"]) == (4, 8)
@@ -329,6 +332,53 @@ def test_soft_deleted_apply_skips_a_thread_the_database_refuses(
     assert _thread_exists(session_factory, blocked)
     assert _message_count(session_factory, blocked) == 2
     assert _checkpoint_count(session_factory, blocked) == 4
+    errors = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == retention_tasks.logger.name
+        and record.levelno == logging.ERROR
+    ]
+    assert len(errors) == 1 and blocked in errors[0], errors
+
+
+def test_soft_deleted_apply_aborts_on_a_lost_connection(
+    session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dropped connection is not the database refusing one thread: the run
+    raises and stops, instead of counting it and every later thread as
+    skipped.
+
+    Mutation check: remove ``if exc.connection_invalidated: raise`` from
+    purge_soft_deleted_threads and this fails with ``DID NOT RAISE``.
+    """
+    old = NOW - timedelta(days=60)
+    lost, _ = _seed_thread(session_factory, is_deleted=True, updated_at=old)
+    later, _ = _seed_thread(
+        session_factory, is_deleted=True, updated_at=old + timedelta(days=10)
+    )
+    delete_checkpoints = retention_tasks._delete_checkpoint_rows
+
+    def drop_connection(db, thread_id: str) -> int:
+        if thread_id == lost:
+            raise OperationalError(
+                "DELETE FROM checkpoints",
+                {},
+                Exception("server closed the connection unexpectedly"),
+                connection_invalidated=True,
+            )
+        return delete_checkpoints(db, thread_id)
+
+    monkeypatch.setattr(retention_tasks, "_delete_checkpoint_rows", drop_connection)
+
+    with pytest.raises(OperationalError):
+        _run(
+            retention_tasks.purge_soft_deleted_threads,
+            session_factory,
+            _retention_settings(apply=True),
+        )
+
+    assert _thread_exists(session_factory, lost)
+    assert _thread_exists(session_factory, later)  # never attempted
 
 
 # ---------------------------------------------------------------------------

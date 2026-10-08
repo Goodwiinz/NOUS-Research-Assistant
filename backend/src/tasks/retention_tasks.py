@@ -172,6 +172,12 @@ def purge_soft_deleted_threads(organization_id: Optional[str] = None) -> dict:
 
     Two-stage safety: no-op when ``RETENTION_ENABLED`` is false; DRY-RUN
     (log-only) when ``RETENTION_APPLY`` is false. Org-scoped, bounded batch.
+
+    APPLY deletes each thread in its own SAVEPOINT. A thread whose delete the
+    database refuses is rolled back alone, logged at ERROR and counted in the
+    result's ``"skipped"``; the rest of the batch still commits. A lost
+    connection is not a refusal: it aborts the run. A dry run always reports
+    ``skipped=0``, because it deletes nothing and so cannot predict a refusal.
     """
     from src.models.chat_message import ChatMessage
     from src.models.conversation import Conversation
@@ -247,7 +253,11 @@ def purge_soft_deleted_threads(organization_id: Optional[str] = None) -> dict:
                     db.query(Thread).filter(Thread.id == thread.id).delete(
                         synchronize_session=False
                     )
-            except DBAPIError:
+            except DBAPIError as exc:
+                # A dropped connection is not the database refusing this
+                # thread: every later thread would fail the same way.
+                if exc.connection_invalidated:
+                    raise
                 threads_skipped += 1
                 logger.exception(
                     "purge_soft_deleted_threads: skipped thread %s (org=%s); "
