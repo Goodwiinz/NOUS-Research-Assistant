@@ -138,6 +138,12 @@ def test_integration_job_enrolls_retention_purge_regression() -> None:
     )
     env = step["env"]
     assert env.get("RETENTION_PURGE_TEST_DATABASE_URL") == env["DATABASE_URL"]
+    # The proof must read the name CI sets, or a rename skips it silently.
+    proof = REPO_ROOT / "backend" / "tests" / "integration"
+    source = (proof / "test_retention_thread_purge_postgres.py").read_text(
+        encoding="utf-8"
+    )
+    assert "RETENTION_PURGE_TEST_DATABASE_URL" in source
 
 
 @pytest.mark.parametrize(
