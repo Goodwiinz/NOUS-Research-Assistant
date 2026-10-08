@@ -14884,6 +14884,21 @@ export interface components {
             /** Label */
             label: string;
         };
+        /**
+         * DeviceListItemDTO
+         * @description A paired computer as the chat composer lists it.
+         */
+        DeviceListItemDTO: {
+            /** Bound Thread Ids */
+            bound_thread_ids: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+        };
         /** DiffHunk */
         DiffHunk: {
             /** New */
@@ -31432,7 +31447,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeviceDTO"][];
+                    "application/json": components["schemas"]["DeviceListItemDTO"][];
                 };
             };
         };

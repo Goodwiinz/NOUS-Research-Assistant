@@ -42,6 +42,7 @@ from src.services.integrations.context import (
     create_request,
     decide_request,
     exchange_request,
+    list_devices,
     mint_integration_grant,
     register_device,
     renew_grant,
@@ -62,6 +63,8 @@ FOREIGN_THREADS = {
 SCOPES = {"tools:read", "artifacts:publish"}
 CONTENT = b"handoff\n"
 OWNER = SimpleNamespace(id=USER, organization_id=ORG)
+# A run consent: what create_chat_context mints for a Codex turn.
+RUN = {"harness:execute", "tools:read"}
 
 
 def _user(user_id: UUID, email: str) -> dict[str, str]:
@@ -339,3 +342,42 @@ async def test_workspace_member_can_bind_a_project_chat(db: AsyncSession) -> Non
     await db.commit()
     request = await _request(db, THREAD, member)
     assert request.thread_id == THREAD
+
+
+async def _consent(
+    db: AsyncSession, device_id: UUID, thread_id: UUID | None, scopes: set[str]
+) -> UUID:
+    """A consumed consent of OWNER for PROJECT on an existing device."""
+    request = await create_request(
+        db,
+        OWNER,
+        GrantRequestCreate(
+            project_id=PROJECT, device_id=device_id, scopes=scopes, thread_id=thread_id
+        ),
+    )
+    await decide_request(db, OWNER, request.id, approved=True)
+    await exchange_request(db, OWNER, request.id)
+    return request.id
+
+
+# AD-3: the composer lists, per computer, the only chats it can run Codex in.
+async def test_device_list_names_the_only_chats_a_computer_runs_in(
+    db: AsyncSession,
+) -> None:
+    devices: dict[str, UUID] = {}
+    for label in ("Chat", "Project", "Tools", "Revoked"):
+        devices[label] = (
+            await register_device(db, OWNER, DeviceCreate(label=label))
+        ).id
+    await _consent(db, devices["Chat"], THREAD, RUN)
+    await _consent(db, devices["Project"], None, RUN)
+    await _consent(db, devices["Tools"], THREAD, SCOPES)  # no harness:execute
+    revoked = await _consent(db, devices["Revoked"], THREAD, RUN)
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == revoked)
+        .values(consent_revoked_at=func.now())
+    )
+    await db.commit()
+    listed = {d.label: d.bound_thread_ids for d in await list_devices(db, OWNER)}
+    assert listed == {"Chat": [THREAD], "Project": [], "Tools": [], "Revoked": []}

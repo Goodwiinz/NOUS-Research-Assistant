@@ -52,7 +52,9 @@ type ConnectedHarness = RenderHookResult<
   receive: (event: { type: string; runId?: string }) => void;
 };
 
-function renderConnectedHarness(threadId = 'thread-a'): ConnectedHarness {
+function renderConnectedHarness(
+  threadId: string | null = 'thread-a'
+): ConnectedHarness {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -143,7 +145,10 @@ describe('useHarnessConnection', () => {
       expired: false,
     });
     const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
     });
     const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -201,10 +206,9 @@ describe('useHarnessConnection', () => {
       await Promise.all([first, second]);
     });
 
-    expect(view.result.current.pendingRequests.map((item) => item.id).sort()).toEqual([
-      'request-one',
-      'request-two',
-    ]);
+    expect(
+      view.result.current.pendingRequests.map((item) => item.id).sort()
+    ).toEqual(['request-one', 'request-two']);
   });
 
   it('fetches the exact native request before submitting its target-bound decision', async () => {
@@ -279,7 +283,11 @@ describe('useHarnessConnection', () => {
       method: 'item/tool/requestUserInput',
       target: {
         questions: [
-          { id: 'goal', header: 'Goal', question: 'What are you trying to do?' },
+          {
+            id: 'goal',
+            header: 'Goal',
+            question: 'What are you trying to do?',
+          },
         ],
       },
       targetHash: 'd'.repeat(64),
@@ -439,5 +447,55 @@ describe('useHarnessConnection', () => {
     expect(
       screen.getByRole('combobox', { name: 'Project workspace' })
     ).toBeDisabled();
+  });
+
+  it('marks a computer bound to another chat unavailable and blocks sending', async () => {
+    listDevices.mockResolvedValue([
+      {
+        id: 'device-a',
+        label: 'My laptop',
+        bound_thread_ids: ['thread-other'],
+      },
+      { id: 'device-b', label: 'Desk', bound_thread_ids: [] },
+      { id: 'device-c', label: 'Chat laptop', bound_thread_ids: ['thread-a'] },
+    ]);
+    listWorkspaces.mockResolvedValue([
+      { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
+    ]);
+    const view = renderConnectedHarness('thread-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(3));
+    expect(view.result.current.isBoundToAnotherChat('device-a')).toBe(true);
+    expect(view.result.current.isBoundToAnotherChat('device-b')).toBe(false);
+    expect(view.result.current.isBoundToAnotherChat('device-c')).toBe(false);
+    act(() => {
+      view.result.current.selectProvider('codex');
+      view.result.current.selectDevice('device-a');
+      view.result.current.selectWorkspace('workspace-a');
+    });
+    await waitFor(() => expect(view.result.current.workspaces).toHaveLength(1));
+    expect(view.result.current.disabledReason).toBe(
+      'This computer is bound to another chat — connect it to this chat or pick another computer.'
+    );
+    expect(view.canSend()).toBe(false);
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+    expect(
+      screen.getByRole('option', { name: 'My laptop (bound to another chat)' })
+    ).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Chat laptop' })).toBeEnabled();
+  });
+
+  it('treats a new chat as another chat for a chat-bound computer', async () => {
+    listDevices.mockResolvedValue([
+      { id: 'device-c', label: 'Chat laptop', bound_thread_ids: ['thread-a'] },
+    ]);
+    const view = renderConnectedHarness(null);
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    expect(view.result.current.isBoundToAnotherChat('device-c')).toBe(true);
   });
 });

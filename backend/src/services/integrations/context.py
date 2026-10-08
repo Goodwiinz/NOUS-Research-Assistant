@@ -23,6 +23,7 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import (
     STANDARD_SCOPES,
     DeviceCreate,
+    DeviceListItemDTO,
     GrantRequestCreate,
     GrantRequestDTO,
     GrantRequestStatus,
@@ -726,19 +727,52 @@ async def register_device(
     return device
 
 
-async def list_devices(db: AsyncSession, user: Any) -> list[BridgeDevice]:
-    return list(
-        (
-            await db.scalars(
-                select(BridgeDevice).where(
-                    BridgeDevice.user_id == user.id,
-                    BridgeDevice.organization_id == user.organization_id,
-                    BridgeDevice.revoked_at.is_(None),
-                    BridgeDevice.is_deleted.is_(False),
-                )
+async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
+    devices = (
+        await db.scalars(
+            select(BridgeDevice).where(
+                BridgeDevice.user_id == user.id,
+                BridgeDevice.organization_id == user.organization_id,
+                BridgeDevice.revoked_at.is_(None),
+                BridgeDevice.is_deleted.is_(False),
             )
-        ).all()
-    )
+        )
+    ).all()
+    if not devices:
+        return []
+    # The consents a Codex mint could use: consumed and not revoked, exactly
+    # as mint_integration_grant filters them.
+    consents = (
+        await db.scalars(
+            select(IntegrationGrantRequest).where(
+                IntegrationGrantRequest.user_id == user.id,
+                IntegrationGrantRequest.organization_id == user.organization_id,
+                IntegrationGrantRequest.device_id.in_([d.id for d in devices]),
+                IntegrationGrantRequest.status == "consumed",
+                IntegrationGrantRequest.consent_revoked_at.is_(None),
+                IntegrationGrantRequest.is_deleted.is_(False),
+            )
+        )
+    ).all()
+    run_chats: dict[UUID, list[UUID | None]] = {d.id: [] for d in devices}
+    for consent in consents:
+        if "harness:execute" in (consent.scopes or []):
+            run_chats[consent.device_id].append(consent.thread_id)
+    return [
+        DeviceListItemDTO(
+            id=device.id,
+            label=device.label,
+            bound_thread_ids=(
+                []
+                if None in run_chats[device.id]
+                else sorted(
+                    {chat for chat in run_chats[device.id] if chat is not None},
+                    key=str,
+                )
+            ),
+        )
+        for device in devices
+    ]
 
 
 async def bind_workspace(

@@ -73,6 +73,27 @@ function isTerminal(type: string): boolean {
   return type === 'done' || type === 'error' || type === 'confirmation';
 }
 
+const BOUND_TO_ANOTHER_CHAT =
+  'This computer is bound to another chat — connect it to this chat or pick another computer.';
+
+/**
+ * A computer whose every run consent is bound to other chats (Plan 06 slice 2)
+ * cannot run Codex in this one: the server refuses to mint for it. A draft
+ * (threadId null) is a new chat, so it is another chat too. Data missing from
+ * an older backend never blocks.
+ */
+function boundToAnotherChat(
+  device: HarnessDevice,
+  threadId: string | null
+): boolean {
+  const bound: unknown = device.bound_thread_ids;
+  return (
+    Array.isArray(bound) &&
+    bound.length > 0 &&
+    (threadId === null || !bound.includes(threadId))
+  );
+}
+
 export interface HarnessConnectionController extends HarnessSelection {
   devices: HarnessDevice[];
   workspaces: HarnessWorkspace[];
@@ -85,6 +106,8 @@ export interface HarnessConnectionController extends HarnessSelection {
   selectProvider(provider: HarnessProvider): void;
   selectDevice(deviceId: string | null): void;
   selectWorkspace(workspaceId: string | null): void;
+  /** True when this computer can only run Codex in other chats. */
+  isBoundToAnotherChat(deviceId: string): boolean;
   receive(
     event: { type: string; runId?: string; detail?: string },
     targetThreadId?: string | null
@@ -128,9 +151,7 @@ export function useHarnessConnection(
     ) {
       const draftSelection = selections[draftKey] ?? readSelection(draftKey);
       setSelections((current) =>
-        current[key]
-          ? current
-          : { ...current, [key]: draftSelection }
+        current[key] ? current : { ...current, [key]: draftSelection }
       );
     }
     previousThreadId.current = threadId;
@@ -175,9 +196,7 @@ export function useHarnessConnection(
     queryKey: ['harness', 'workspaces', userId, selection.deviceId],
     queryFn: () => harnessService.listWorkspaces(selection.deviceId!),
     enabled: Boolean(
-      userId &&
-        selection.executionProvider === 'codex' &&
-        selection.deviceId
+      userId && selection.executionProvider === 'codex' && selection.deviceId
     ),
     staleTime: 30_000,
   });
@@ -289,7 +308,7 @@ export function useHarnessConnection(
     await stopMutation.mutateAsync();
   }, [patchRuntime, runId, stopMutation, threadId]);
 
-  const deviceExists = devicesQuery.data?.some(
+  const selectedDevice = devicesQuery.data?.find(
     (device) => device.id === selection.deviceId
   );
   const workspaceExists = workspacesQuery.data?.some(
@@ -302,13 +321,15 @@ export function useHarnessConnection(
         ? 'Sign in to connect Codex.'
         : !devicesQuery.data?.length
           ? 'Pair this computer with NOUS before using Codex.'
-          : !selection.deviceId || !deviceExists
+          : !selection.deviceId || !selectedDevice
             ? 'Choose a paired computer.'
-            : !workspacesQuery.data?.length
-              ? 'Bind a project workspace to this computer.'
-              : !selection.workspaceId || !workspaceExists
-                ? 'Choose a bound project workspace.'
-                : null;
+            : boundToAnotherChat(selectedDevice, threadId)
+              ? BOUND_TO_ANOTHER_CHAT
+              : !workspacesQuery.data?.length
+                ? 'Bind a project workspace to this computer.'
+                : !selection.workspaceId || !workspaceExists
+                  ? 'Choose a bound project workspace.'
+                  : null;
   const blocked =
     connectionState === 'lost' ||
     connectionState === 'reconciling' ||
@@ -343,6 +364,10 @@ export function useHarnessConnection(
         updateSelection({ deviceId, workspaceId: null }),
       selectWorkspace: (workspaceId: string | null) =>
         updateSelection({ workspaceId }),
+      isBoundToAnotherChat: (deviceId: string) => {
+        const device = devicesQuery.data?.find((item) => item.id === deviceId);
+        return device !== undefined && boundToAnotherChat(device, threadId);
+      },
       receive,
       markConnectionLost,
       loadApproval,
@@ -363,6 +388,7 @@ export function useHarnessConnection(
       selection,
       statusLabel,
       stop,
+      threadId,
       updateSelection,
       workspacesQuery.data,
     ]
