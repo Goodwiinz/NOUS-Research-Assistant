@@ -8,11 +8,13 @@ the downloaded PDF lives in a temporary directory for the duration of one call.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import logging
 import re
 import tempfile
 import time
+import weakref
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeVar
@@ -36,7 +38,9 @@ _sleep = asyncio.sleep
 
 
 def _executor_factory() -> Any:
-    return ProcessPoolExecutor(max_workers=1)
+    # gc.freeze: the worker's collector then never walks, so never dirties, the
+    # copy-on-write pages a forked worker inherits from the API process.
+    return ProcessPoolExecutor(max_workers=1, initializer=gc.freeze)
 
 
 def _extract(pdf_path: str) -> str:
@@ -56,14 +60,38 @@ def _extract(pdf_path: str) -> str:
 
 
 _T = TypeVar("_T")
+_MAX_CONCURRENT_PARSES = 2  # per process; each parse is a worker of its own
+_parse_slots_by_loop: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Semaphore
+] = weakref.WeakKeyDictionary()
+
+
+def _parse_slots() -> asyncio.Semaphore:
+    """The parse slots of the running loop, created on first use.
+
+    A Python 3.11 semaphore binds to the first loop that waits on it, so a
+    single module-level one would fail on any later loop (pytest runs one per
+    test). Production runs one loop per process, so the cap is per process.
+    """
+    loop = asyncio.get_running_loop()
+    slots = _parse_slots_by_loop.get(loop)
+    if slots is None:
+        slots = asyncio.Semaphore(_MAX_CONCURRENT_PARSES)
+        _parse_slots_by_loop[loop] = slots
+    return slots
 
 
 def _kill_workers(executor: Any) -> None:
     """Kill a process pool's workers: ``shutdown`` never stops a running task.
 
-    CPython keeps them in ``_processes``. A thread pool (the tests' stand-in)
-    has none, so this is a no-op there.
+    Python 3.14 has a public ``kill_workers``; before that CPython keeps the
+    workers in ``_processes``. A thread pool (the tests' stand-in) has
+    neither, so this is a no-op there.
     """
+    kill_workers = getattr(executor, "kill_workers", None)
+    if kill_workers is not None:
+        kill_workers()
+        return
     for process in list((getattr(executor, "_processes", None) or {}).values()):
         process.kill()
 
@@ -75,17 +103,23 @@ async def _run_in_subprocess(fn: Callable[..., _T], *args: Any) -> _T:
     stuck pypdf parse cannot outlive its request; a worker that dies breaks
     only its own call; and one caller's timeout never cancels another
     caller's parse. A shared single-worker pool did all three (audit RT-3).
-    Parses no longer queue behind one worker: the arXiv gate spaces downloads
-    at least 3 s apart and every parse ends with its caller's budget.
+
+    At most ``_MAX_CONCURRENT_PARSES`` (2) parses run at once in a process,
+    so a burst of reads cannot start enough workers to exhaust the pod's
+    memory. The arXiv rate gate is no bound here: it lets a download through
+    once the queue wait passes 30 s, and spaces only per process when Redis
+    fails. A caller waits for a slot inside its own budget; its timeout or
+    cancellation ends only that wait.
     """
-    executor = _executor_factory()
-    try:
-        return await asyncio.get_running_loop().run_in_executor(executor, fn, *args)
-    except BaseException:
-        _kill_workers(executor)
-        raise
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    async with _parse_slots():
+        executor = _executor_factory()
+        try:
+            return await asyncio.get_running_loop().run_in_executor(executor, fn, *args)
+        except BaseException:
+            _kill_workers(executor)
+            raise
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 async def _extract_in_subprocess(pdf_path: str) -> str:

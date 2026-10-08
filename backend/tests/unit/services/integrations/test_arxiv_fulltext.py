@@ -1,9 +1,11 @@
 """Transient arXiv full-text pages: cached once, paginated, never persisted."""
 
 import asyncio
+import gc
 import json
 import multiprocessing
 import os
+import threading
 import time
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -347,3 +349,73 @@ async def test_one_callers_timeout_never_cancels_another_callers_parse() -> None
     assert isinstance(results[0], asyncio.TimeoutError)
     # With one shared pool the queued callers got a bare CancelledError.
     assert results[1:] == [2, 4, 8]
+
+
+async def test_a_third_parse_waits_for_one_of_two_running_parses(
+    thread_pool: None,
+) -> None:
+    # The thread pool stands in so the two running parses can be held open
+    # with events; the cap sits in front of the executor either way.
+    started = [threading.Event(), threading.Event()]
+    release = [threading.Event(), threading.Event()]
+    ran: list[str] = []
+
+    def hold(i: int) -> str:
+        started[i].set()
+        release[i].wait(5)
+        ran.append(f"held {i}")
+        return f"held {i}"
+
+    def quick(name: str) -> str:
+        ran.append(name)
+        return name
+
+    running = [
+        asyncio.create_task(arxiv_fulltext._run_in_subprocess(hold, i)) for i in (0, 1)
+    ]
+    try:
+        for event in started:
+            assert await asyncio.to_thread(event.wait, 5)
+        # A third caller's own timeout ends only its wait for a slot ...
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                arxiv_fulltext._run_in_subprocess(quick, "timed out"), 0.2
+            )
+        assert ran == [] and not any(task.done() for task in running)
+        # ... and the next caller starts as soon as one running parse ends.
+        waiting = asyncio.create_task(
+            arxiv_fulltext._run_in_subprocess(quick, "waited")
+        )
+        await asyncio.sleep(0.1)
+        assert not waiting.done()
+        release[0].set()
+        assert await waiting == "waited"
+        assert ran == ["held 0", "waited"] and not running[1].done()
+    finally:
+        for event in release:
+            event.set()
+    assert await asyncio.gather(*running) == ["held 0", "held 1"]
+
+
+def test_kill_workers_prefers_the_public_kill_workers() -> None:
+    # ProcessPoolExecutor.kill_workers is public from Python 3.14.
+    calls: list[str] = []
+
+    class Worker:
+        def kill(self) -> None:
+            calls.append("_processes")
+
+    class Pool:
+        _processes = {1: Worker()}
+
+        def kill_workers(self) -> None:
+            calls.append("kill_workers")
+
+    arxiv_fulltext._kill_workers(Pool())
+    assert calls == ["kill_workers"]
+
+
+async def test_parse_worker_freezes_the_objects_it_starts_with() -> None:
+    # Frozen objects are never walked by the worker's collector, so a forked
+    # worker does not dirty the copy-on-write pages it inherited.
+    assert await arxiv_fulltext._run_in_subprocess(gc.get_freeze_count) > 0
