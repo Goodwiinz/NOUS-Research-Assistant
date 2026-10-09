@@ -234,6 +234,26 @@ async def _skill_snapshot(
             _skill_option(item)
     except (KeyError, ValueError, TypeError):
         return None
+    if not include_expired:
+        # A frozen catalog preserves version choice, not authority to read a
+        # deleted version/skill. Historical metadata remains usable only for
+        # the browser's explicit reselection path below.
+        live_ids = (
+            await db.scalars(
+                select(ProjectSkillVersion.id)
+                .join(ProjectSkill, ProjectSkill.id == ProjectSkillVersion.skill_id)
+                .where(
+                    ProjectSkillVersion.id.in_(
+                        [UUID(value) for value in selection.skill_version_ids]
+                    ),
+                    ProjectSkillVersion.is_deleted.is_(False),
+                    ProjectSkill.is_deleted.is_(False),
+                    ProjectSkill.project_id == selection.project_id,
+                )
+            )
+        ).all()
+        if {str(value) for value in live_ids} != set(selection.skill_version_ids):
+            return None
     return snapshot
 
 

@@ -149,6 +149,44 @@ async def test_live_activation_does_not_change_frozen_skill(db: AsyncSession) ->
     assert result.content[0]["instructions"] == "Use the approved rubric."
 
 
+@pytest.mark.parametrize("deleted_model", [ProjectSkill, ProjectSkillVersion])
+async def test_deleted_selected_skill_is_unavailable_and_can_be_reselected(
+    db: AsyncSession, deleted_model: Any
+) -> None:
+    chosen = await skill(db)
+    retained = await skill(db, "retained-rubric")
+    await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen, retained]
+    )
+    version: Any = await db.get(ProjectSkillVersion, chosen)
+    deleted_id = version.skill_id if deleted_model is ProjectSkill else chosen
+    await db.execute(
+        update(deleted_model)
+        .where(deleted_model.id == deleted_id)
+        .values(is_deleted=True)
+    )
+    # The remaining frozen version must stay selectable even when it is no
+    # longer the active version in the current catalog.
+    await db.execute(update(ProjectSkill).values(active_version_id=None))
+    await db.commit()
+    options = await service.context_options(db, await _user(db), CONSENT)
+    assert options.skill_snapshot_status == "unavailable"
+    assert options.selected_skill_version_ids == [chosen, retained]
+    result = await service.read_selected_context(db, _grant_context(RENEWED))
+    assert result.is_error
+    assert result.content == [{"error": "skill_snapshot_unavailable"}]
+    assert result.source_refs == []
+    refreshed = await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP], skill_version_ids=[retained]
+    )
+    assert refreshed.skill_snapshot_status == "ready"
+    loaded = await service.load_selected_skill(
+        db, _grant_context(RENEWED), "retained-rubric"
+    )
+    assert not loaded.is_error
+    assert loaded.content[0]["version_id"] == str(retained)
+
+
 async def test_expired_snapshot_requires_explicit_browser_refresh(
     db: AsyncSession,
 ) -> None:
