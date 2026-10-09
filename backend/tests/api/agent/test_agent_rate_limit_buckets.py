@@ -31,6 +31,7 @@ _TURN_BODY = {
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     from src.core.database import get_db
     from src.core.dependencies import get_current_user
+    from src.core.security import TokenData, get_current_user_token
 
     user = Mock()
     user.id = str(uuid4())
@@ -46,6 +47,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(execute_mod.router)
     app.dependency_overrides[get_current_user] = lambda: user
+    # /stream also resolves the raw token for the Codex authority gate; without
+    # this override the real HTTPBearer dependency would 403 before the limiter.
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=user.id, organization_id=user.organization_id
+    )
     app.dependency_overrides[get_db] = lambda: db
 
     @asynccontextmanager
