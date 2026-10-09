@@ -24,10 +24,14 @@ from src.core.dependencies import get_current_user
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.draft_citation import DraftCitation
+from src.models.draft_review import DraftReview
+from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
 from src.models.organization import Organization
+from src.models.research_project import ResearchProject
+from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.user import User
-from src.models.workspace import Workspace
+from src.models.workspace import Workspace, WorkspaceMember
 from src.services.research.draft_generation_service import DraftGenerationService
 
 pytestmark = [
@@ -98,11 +102,16 @@ async def _postgres_draft_schema(dsn: str) -> AsyncIterator[_DraftDatabase]:
                 Organization,
                 User,
                 Workspace,
+                WorkspaceMember,
                 Collection,
+                ResearchProjectRoleAssignment,
+                ResearchProject,
                 Document,
                 CollectionDocument,
                 GeneratedDraft,
                 DraftCitation,
+                DraftReview,
+                DraftTaskResult,
             ):
                 await connection.run_sync(cast(Any, model).__table__.create)
 
