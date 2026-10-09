@@ -61,9 +61,9 @@ backend:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
     repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
-    tag: "7eea90fe7eae2f27563be8874cd040ea9b2de8ff"
-    digest: "sha256:3db46906ca195c20d46f4840e0c08ac32fe106cf80c15982256d59802e4622d3"
-    sourceSha: "7eea90fe7eae2f27563be8874cd040ea9b2de8ff"
+    tag: "a0d4c6b3d6a81352b870450a5bc74708ca6843c9"
+    digest: "sha256:91ba8332ef16b3de3744d35cb64a337b18132a64b76351cace3bf3675975c16a"
+    sourceSha: "a0d4c6b3d6a81352b870450a5bc74708ca6843c9"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -394,7 +394,7 @@ keda:
     databaseIndex: "0"
 syntheticTraffic:
   enabled: true
-  suspend: true
+  suspend: false
   schedule: "*/20 * * * *"
   args: ["--rotate"]
   activeDeadlineSeconds: 900

@@ -73,9 +73,17 @@ test("same binding with a live grant reuses it without login or consent", async 
     // The liveness probe is one forced renewal; no /cli-auth/start, no consent.
     assert.deepEqual(t.since(mark), [`https://nous.test/api/v1/integrations/grants/${GRANT}/renew`]);
     assert.match(t.messages.at(-1)!, /^Reusing binding/);
+    // An exact reuse keeps nothing the command did not ask for.
+    assert.doesNotMatch(t.messages.at(-1)!, /keeps scopes/);
     assert.equal(t.state().credentialHandle, first.credentialHandle);
-    // Requesting a subset of the stored scopes is satisfied by the same binding.
+    // Requesting a subset of the stored scopes is satisfied by the same binding
+    // (the documented superset rule), and the notice names what the device
+    // keeps and how to drop it (BR-3).
     assert.deepEqual(await connect({ ...t.base, threadId: CHAT, tools: true }), first);
+    assert.match(
+      t.messages.at(-1)!,
+      /It keeps scopes this command did not request: handoff:read, handoff:write\. To drop them \(which also stops the device's runs\), revoke this device's access at \/integrations\/devices, or run nous-harness disconnect, then connect again; after disconnect, register its folders again with nous-harness workspace add\.$/,
+    );
     assert.ok(!t.messages.join("\n").includes("secret"));
   } finally {
     t.cleanup();
@@ -190,6 +198,24 @@ test("status reports the binding offline, and says not connected without state",
     assert.match(out, /Grant: expires \d{4}-\d{2}-\d{2}T/);
     assert.match(out, /Pending handoffs: 2/);
     assert.ok(!out.includes("secret"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a workspace reuse names the scopes it keeps but not workspace add (it has no folders)", async () => {
+  const t = setup();
+  try {
+    const { projectId: _project, ...noProject } = t.base;
+    const workspace = { ...noProject, workspaceId: WORKSPACE, tools: true };
+    await connect({ ...workspace, write: true });
+    await connect(workspace);
+    // A workspace connection runs nothing on the device; dropping scopes cuts its tools.
+    assert.match(
+      t.messages.at(-1)!,
+      /It keeps scopes this command did not request: tools:write\. To drop them \(which also cuts this device's NOUS tools until it reconnects\), revoke this device's access at \/integrations\/devices, or run nous-harness disconnect, then connect again\.$/,
+    );
+    assert.doesNotMatch(t.messages.at(-1)!, /workspace add|stops the device's runs/);
   } finally {
     t.cleanup();
   }

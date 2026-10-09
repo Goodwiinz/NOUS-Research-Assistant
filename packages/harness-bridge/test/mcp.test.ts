@@ -324,7 +324,7 @@ test("connect --tools requests and persists tools:read; plain connect does not",
     assert.deepEqual(withTools.body.scopes, ["harness:execute", "tools:read"]);
     const state = JSON.parse(readFileSync(join(dir, "tools", "connection.json"), "utf8"));
     assert.deepEqual(state.scopes, ["harness:execute", "tools:read"]);
-    assert.ok(await mcpInstallCommand(join(dir, "tools")));
+    assert.ok(await mcpInstallCommand(join(dir, "tools"), { announce: () => {} }));
 
     calls.length = 0;
     await connect({ ...base, stateDir: join(dir, "plain") });
@@ -405,7 +405,7 @@ test("connect --workspace --library requests a workspace binding and the library
     assert.equal(messages.at(-1), `Connected to workspace ${WORKSPACE}.`);
     // The standalone MCP command knows the grant can write the library and is bound to no folder.
     // tools:write brings --actions as on a project: NOUS refuses a workspace grant only a note.
-    const install = await mcpInstallCommand(dir);
+    const install = await mcpInstallCommand(dir, { announce: () => {} });
     assert.equal(install.includes("'--actions'"), true);
     assert.equal(install.includes("'--library'"), true);
     assert.equal(install.includes("'--root'"), false);

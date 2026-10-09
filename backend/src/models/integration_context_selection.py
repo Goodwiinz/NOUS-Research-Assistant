@@ -26,7 +26,10 @@ class IntegrationContextSelection(BaseModel):
         GUID(), ForeignKey("collections.id"), nullable=False
     )
     consent_id: Mapped[UUID] = mapped_column(
-        GUID(), ForeignKey("integration_grant_requests.id"), nullable=False, unique=True
+        GUID(),
+        ForeignKey("integration_grant_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
     )
     # Ordered memory ids as strings; revalidated against the project on every read.
     memory_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)

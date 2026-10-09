@@ -1340,3 +1340,136 @@ async def test_apply_approved_overlays_is_deterministic_and_preserves_stage_outp
     assert first["extractions"] == [original_extractions[0]]
     assert context["extractions"] == output["extractions"]
     assert step.output == original
+
+
+# GOO-334 mutation checks (docs/engineering/testing.md), focused command
+# `pytest -q backend/tests/unit/services/test_research_review_service.py -k <name>`:
+# - final decline: make the attestation branch in `_submit_transaction`
+#   unconditional (`if request.decision == ReviewDecision.APPROVE:` -> `if True:`)
+#   -> a declined final review writes a release attestation and the test fails.
+# - overlay tenant isolation: add the row's `owner_id`/`organization_id` to the
+#   `apply_approved_overlays` audit entry -> the persisted report leaks them.
+
+
+@pytest.mark.asyncio
+async def test_final_decline_is_durable_but_never_attests_a_release(
+    db: AsyncSession,
+) -> None:
+    """GOO-334: only a final ``approve`` row can attest an export for release."""
+
+    verification = _verification_output()
+    export = _export_output(verification)
+    owner_id, _organization_id, run, export_step = await _seed_gate(
+        db, output=export, review_kind="final", step_index=5
+    )
+    db.add(
+        ResearchStep(
+            id=uuid4(),
+            run_id=run.id,
+            step_index=4,
+            step_type="verify",
+            mode="deterministic",
+            output=verification,
+            outputs_hash=canonical_stage_output_hash(verification),
+        )
+    )
+    await db.commit()
+
+    response = (
+        await _review_module()
+        .ResearchReviewService(db)
+        .submit_review(
+            run_id=run.id,
+            step_index=export_step.step_index,
+            reviewer_id=owner_id,
+            request=_request(
+                kind="final",
+                output_hash=canonical_stage_output_hash(export),
+                payload={},
+                decision="decline",
+                note="Not ready for release.",
+            ),
+        )
+    )
+
+    await db.refresh(run)
+    assert response.decision.value == "decline"
+    assert run.status == "paused"
+    manifest = run.reproducibility_manifest
+    assert "final_approval_attestation" not in manifest
+    assert manifest["pending_review"]["status"] == "pending"
+    assert "review_id" not in manifest["pending_review"]
+    stored = await db.scalar(select(ResearchStageReview))
+    assert stored is not None
+    assert (stored.review_kind, stored.decision) == ("final", "decline")
+
+
+@pytest.mark.asyncio
+async def test_approved_overlay_audit_carries_reviewer_evidence_but_no_tenant_ids(
+    db: AsyncSession,
+) -> None:
+    """GOO-334: the overlay audit that persisted exports embed is tenant-free.
+
+    Review rows store the authorizing ``owner_id`` and ``organization_id``. The
+    overlay audit (``approved_review_overlays``) becomes the persisted report's
+    ``reviews`` list, so it must keep ``review_id``/``reviewer_id`` evidence and
+    drop both tenant identifiers, through every rendered export format.
+    """
+
+    from src.services.research_engine.report_rendering import (
+        build_report,
+        render_csv,
+        render_markdown,
+    )
+
+    output = _extract_output()
+    owner_id, organization_id, run, step = await _seed_gate(
+        db, output=output, review_kind="extraction", step_index=2
+    )
+    reviewer_id = uuid4()
+    service = _review_module().ResearchReviewService(db)
+    response = await service.submit_review(
+        run_id=run.id,
+        step_index=step.step_index,
+        reviewer_id=reviewer_id,
+        request=_request(
+            kind="extraction",
+            output_hash=canonical_stage_output_hash(output),
+            payload=_extract_payload(),
+        ),
+    )
+    stored = await db.scalar(select(ResearchStageReview))
+    assert stored is not None
+    assert (stored.owner_id, stored.organization_id) == (owner_id, organization_id)
+
+    projected = await service.apply_approved_overlays(
+        run_id=run.id,
+        context={
+            "contract_version": 1,
+            "extractions": copy.deepcopy(output["extractions"]),
+        },
+    )
+    report = build_report(projected)
+    rendered = [
+        json.dumps(projected, sort_keys=True, default=str),
+        json.dumps(report, sort_keys=True, default=str),
+        render_markdown(report),
+        render_csv(
+            [],
+            final_status="unverified",
+            review_history=projected["approved_review_overlays"],
+        ),
+    ]
+
+    assert report["reviews"][0]["review_id"] == str(response.id)
+    assert report["reviews"][0]["reviewer_id"] == str(reviewer_id)
+    for text_value in rendered:
+        for forbidden in (
+            "owner_id",
+            "organization_id",
+            str(owner_id),
+            str(organization_id),
+            owner_id.hex,
+            organization_id.hex,
+        ):
+            assert forbidden not in text_value, forbidden

@@ -289,46 +289,30 @@ async def can_access_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> tuple[User, any]:
-    """Check if user can access a document"""
+    """Return the document if the caller may read it.
+
+    GOO-410: the document read boundary is the caller's organization plus
+    not soft-deleted, the rule every document, file and citation read route
+    applies. ``is_public`` is a label only, and an org-less caller reads
+    nothing. Every denial is the same 404 as a missing document, so ids
+    cannot be probed. (R4-L18 had narrowed this helper, which has no route
+    callers, to uploader-or-admin; that contradicted every live read route.)
+    """
     from src.models.document import Document
 
-    stmt = select(Document).where(
-        Document.id == document_id, Document.is_deleted == False
-    )
-    result = await db.execute(stmt)
-    document = result.scalars().first()
+    document = None
+    if current_user.organization_id is not None:
+        stmt = select(Document).where(
+            Document.id == document_id,
+            Document.organization_id == current_user.organization_id,
+            Document.is_deleted == False,
+        )
+        result = await db.execute(stmt)
+        document = result.scalars().first()
 
     if not document:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        )
-
-    # Check if user belongs to same organization
-    if document.organization_id != current_user.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
-
-    # Check if document is public or user has sufficient permissions.
-    #
-    # R4-L18: this used to read
-    #   `not document.is_public and not current_user.has_permission(UserRole.USER)`
-    # which can never fire — UserRole.USER is rank 0 in the role hierarchy
-    # (models/user.py has_permission), so has_permission(UserRole.USER) is
-    # True for every authenticated user and the branch is dead. The org
-    # membership check above already restricts access to same-org users; a
-    # private (non-public) document's evident additional intent is to
-    # further restrict to its uploader or an admin, not every coworker in
-    # the org.
-    if (
-        not document.is_public
-        and current_user.id != document.uploaded_by_user_id
-        and not current_user.has_permission(UserRole.ADMIN)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to private document",
         )
 
     return current_user, document

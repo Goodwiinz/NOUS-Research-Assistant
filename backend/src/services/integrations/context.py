@@ -6,9 +6,10 @@ from secrets import token_urlsafe
 from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, exists, or_, select, update
+from sqlalchemy import ColumnElement, and_, exists, false, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from src.core.cli_token_revocation import revoke_user_cli_tokens
 from src.models.agent_run import AgentRun
@@ -97,6 +98,80 @@ def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> Non
         raise IntegrationAccessDenied()
 
 
+def _legacy_workspace_in_org(organization_id: UUID) -> ColumnElement[bool]:
+    """A workspace without organization metadata belongs to its owner's.
+
+    ``workspaces.organization_id`` is nullable and legacy rows carry NULL.
+    Research-engine access (``project_access.py``) coalesces such a row to its
+    owner's organization; every integration check must agree with it. The
+    owner is aliased so an enclosing query that joins ``users`` cannot
+    correlate this subquery onto its own row.
+    """
+    owner = aliased(User)
+    return and_(
+        Workspace.organization_id.is_(None),
+        exists().where(
+            owner.id == Workspace.owner_id,
+            owner.organization_id == organization_id,
+        ),
+    )
+
+
+def workspace_in_org(organization_id: UUID | None) -> ColumnElement[bool]:
+    """``Workspace`` belongs to ``organization_id``, legacy NULL rows included.
+
+    The organization predicate for integration data queries that join
+    ``Workspace`` (grant checks use ``_workspace_organization_admits``).
+    Never compare ``Workspace.organization_id`` directly
+    (rule c of test_integration_boundaries.py): 2c3d56d82 taught two checks
+    the legacy rule and missed three (WG-2). A missing organization admits
+    nothing: ``== None`` would compile to ``IS NULL`` and match every legacy row.
+    """
+    if organization_id is None:
+        return false()
+    return or_(
+        Workspace.organization_id == organization_id,
+        _legacy_workspace_in_org(organization_id),
+    )
+
+
+async def workspace_organization_id(
+    db: AsyncSession, workspace: Workspace
+) -> UUID | None:
+    """The organization ``workspace_in_org`` places ``workspace`` in: its own,
+    or for a legacy workspace without one, its owner's (None when neither
+    has one). For callers that need the value, such as the browser handoff
+    card."""
+    if workspace.organization_id is not None:
+        return cast(UUID, workspace.organization_id)
+    owner_org = await db.scalar(
+        select(User.organization_id).where(User.id == workspace.owner_id)
+    )
+    return cast("UUID | None", owner_org)
+
+
+def _workspace_organization_admits(
+    organization_id: UUID | None,
+) -> ColumnElement[bool]:
+    """The organization rule of ``authorized_project`` and
+    ``authorized_workspace``: a live owning organization (an explicit member
+    from another organization keeps access), or a legacy workspace whose
+    owner is in the caller's organization. A missing organization admits
+    nothing. The owning organization is aliased for the same reason as the
+    owner in ``_legacy_workspace_in_org``."""
+    if organization_id is None:
+        return false()
+    owning = aliased(Organization)
+    return or_(
+        exists().where(
+            owning.id == Workspace.organization_id,
+            owning.is_deleted.is_(False),
+            owning.is_active.is_(True),
+        ),
+        _legacy_workspace_in_org(organization_id),
+    )
+
+
 async def authorized_project(
     db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
 ) -> Row[Any]:
@@ -120,20 +195,7 @@ async def authorized_project(
                 ),
                 # Legacy workspaces without organization metadata inherit the
                 # owner's organization, matching research-engine access.
-                or_(
-                    exists().where(
-                        Organization.id == Workspace.organization_id,
-                        Organization.is_deleted.is_(False),
-                        Organization.is_active.is_(True),
-                    ),
-                    and_(
-                        Workspace.organization_id.is_(None),
-                        exists().where(
-                            User.id == Workspace.owner_id,
-                            User.organization_id == organization_id,
-                        ),
-                    ),
-                ),
+                _workspace_organization_admits(organization_id),
                 exists().where(
                     User.id == user_id,
                     User.organization_id == organization_id,
@@ -170,11 +232,7 @@ async def authorized_workspace(
                 Workspace.id == workspace_id,
                 Workspace.is_deleted.is_(False),
                 or_(Workspace.owner_id == user_id, member),
-                exists().where(
-                    Organization.id == Workspace.organization_id,
-                    Organization.is_deleted.is_(False),
-                    Organization.is_active.is_(True),
-                ),
+                _workspace_organization_admits(organization_id),
                 exists().where(
                     User.id == user_id,
                     User.organization_id == organization_id,
@@ -288,11 +346,11 @@ async def validate_binding(
                         WorkspaceMember.is_deleted.is_(False),
                     ),
                 ),
-                # Same legacy organization fallback as authorized_project.
-                or_(
-                    Workspace.organization_id.is_(None),
-                    Workspace.organization_id == organization_id,
-                ),
+                # The chat's workspace is in the grant's organization, by the
+                # same legacy rule as authorized_project: a legacy NULL-org
+                # workspace whose owner is in another organization is refused
+                # here, matching web access.
+                workspace_in_org(organization_id),
                 Thread.source_project_id == project_id,
             )
         )

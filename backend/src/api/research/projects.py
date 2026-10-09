@@ -412,7 +412,9 @@ async def add_document_to_project(
     try:
         await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
-        # Verify document exists
+        # Verify the caller can read the document: same organization and not
+        # deleted. GOO-410: documents are organization-shared, so a colleague's
+        # private document can be added too; is_public is a label only.
         doc_query = select(Document).where(
             Document.id == document_id,
             Document.organization_id == current_user.organization_id,
@@ -422,14 +424,6 @@ async def add_document_to_project(
         document = doc_result.scalar_one_or_none()
 
         if not document:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document {document_id} not found",
-            )
-
-        if document.uploaded_by_user_id != current_user.id and not getattr(
-            document, "is_public", False
-        ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found",
@@ -1026,13 +1020,17 @@ async def get_project_bibliography(
                 "generated_at": datetime.utcnow().isoformat(),
             }
 
-        # Get citations for these documents
+        # Get citations for these documents. A project can hold a document
+        # from another organization (a cross-org workspace member added it),
+        # so both reads apply the org + not-deleted document boundary, as
+        # list_project_documents and the citations export do (GOO-410).
         citation_query = (
             select(Citation)
             .join(Document, Citation.document_id == Document.id)
             .where(
                 Citation.document_id.in_(document_ids),
                 Citation.is_deleted.is_(False),
+                Document.organization_id == current_user.organization_id,
                 Document.is_deleted.is_(False),
             )
         )
@@ -1046,6 +1044,7 @@ async def get_project_bibliography(
 
             doc_stmt = select(Document).where(
                 Document.id.in_(document_ids),
+                Document.organization_id == current_user.organization_id,
                 Document.is_deleted == False,
             )
             doc_result2 = await db.execute(doc_stmt)

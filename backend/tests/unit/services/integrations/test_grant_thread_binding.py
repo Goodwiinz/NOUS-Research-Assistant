@@ -345,6 +345,39 @@ async def test_workspace_member_can_bind_a_project_chat(db: AsyncSession) -> Non
     assert request.thread_id == THREAD
 
 
+# DECISION B-1: a chat in a NULL-organization workspace belongs to the owner's
+# organization, exactly as its projects do. Mutation: restore validate_binding's
+# old loose chat check `or_(Workspace.organization_id.is_(None),
+# Workspace.organization_id == organization_id)` in place of
+# workspace_in_org(organization_id), and the last _request is admitted.
+async def test_chat_in_legacy_workspace_follows_owner_org(db: AsyncSession) -> None:
+    chat = FOREIGN_THREADS["other_owner_thread"]  # OTHER_WORKSPACE, source PROJECT
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=OTHER_WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    assert (await _request(db, chat)).thread_id == chat
+    other_org = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=other_org, name="Other", storage_limit_bytes=10**6
+        )
+    )
+    await db.execute(
+        update(Workspace)
+        .where(Workspace.id == OTHER_WORKSPACE)
+        .values(organization_id=None)
+    )
+    await db.execute(
+        update(User).where(User.id == OTHER_USER).values(organization_id=other_org)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):  # admitted before B-1
+        await _request(db, chat)
+
+
 async def _consent(
     db: AsyncSession, device_id: UUID, thread_id: UUID | None, scopes: set[str]
 ) -> UUID:

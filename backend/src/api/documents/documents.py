@@ -524,12 +524,8 @@ async def get_document(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     return DocumentDetailResponse(
         id=str(document.id),
@@ -681,12 +677,8 @@ async def get_document_entities(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     try:
         # Build entities conditions
@@ -779,12 +771,8 @@ async def get_document_status(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     # Get latest processing job
     job_stmt = (

@@ -1,13 +1,11 @@
-"""R4-L12 / R4-L18: dead-branch cleanup in core/dependencies.py.
+"""R4-L12 / GOO-410: access helpers in core/dependencies.py.
 
-R4-L18: ``can_access_document``'s private-document gate used to read
-``not document.is_public and not current_user.has_permission(UserRole.USER)``.
-``UserRole.USER`` is rank 0 in the role hierarchy (models/user.py
-``has_permission``), so ``has_permission(UserRole.USER)`` is ``True`` for
-every authenticated user and the branch could never fire. The org-membership
-check earlier in the function already restricts access to same-org users, so
-a private document's evident additional intent — restrict further to its
-uploader or an admin — is now the actual enforced check.
+GOO-410: ``can_access_document`` applies the organization-wide document read
+boundary (the caller's organization, not soft-deleted), the rule every
+document, file and citation read route applies. R4-L18 had narrowed it to
+uploader-or-admin for private documents, which contradicted the live read
+routes; ``is_public`` is now a label only. A denial is the same 404 as a
+missing document, and an org-less caller is denied without a query.
 
 R4-L12: ``get_current_user_optional`` had an unreachable ``if not token_data:
 return None`` branch, since its dependency chain always either returns a
@@ -18,20 +16,20 @@ the branch was deleted rather than reworked into genuine optional auth.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 
 from src.core.dependencies import can_access_document, get_current_user_optional
-from src.models.user import UserRole
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 
-def _db_with_document(document: Mock) -> AsyncMock:
+def _db_with_document(document: Optional[Mock]) -> AsyncMock:
     db = AsyncMock()
     result = MagicMock()
     result.scalars.return_value.first.return_value = document
@@ -39,17 +37,15 @@ def _db_with_document(document: Mock) -> AsyncMock:
     return db
 
 
-def _user(
-    user_id: object = None, org_id: object = None, is_admin: bool = False
-) -> Mock:
+def _user(org_id: Optional[UUID]) -> Mock:
     u = Mock()
-    u.id = user_id or uuid4()
-    u.organization_id = org_id or uuid4()
-    u.has_permission = Mock(return_value=is_admin)
+    u.id = uuid4()
+    u.organization_id = org_id
+    u.has_permission = Mock(return_value=False)
     return u
 
 
-def _document(org_id: object, uploader_id: object, is_public: bool) -> Mock:
+def _document(org_id: Optional[UUID], uploader_id: object, is_public: bool) -> Mock:
     doc = Mock()
     doc.organization_id = org_id
     doc.uploaded_by_user_id = uploader_id
@@ -57,71 +53,68 @@ def _document(org_id: object, uploader_id: object, is_public: bool) -> Mock:
     return doc
 
 
-# --- R4-L18: can_access_document private-document gate ----------------------
+def _where_sql(db: AsyncMock) -> str:
+    stmt = db.execute.await_args.args[0]
+    sql = str(
+        stmt.compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    return sql.split("WHERE", 1)[1].replace("-", "")
 
 
-async def test_private_document_accessible_by_uploader() -> None:
+# --- GOO-410: can_access_document is the org-wide read boundary -------------
+
+
+@pytest.mark.parametrize("is_public", [False, True])
+async def test_same_org_colleague_reads_document_whatever_is_public(
+    is_public: bool,
+) -> None:
     org = uuid4()
-    user = _user(org_id=org)
-    doc = _document(org_id=org, uploader_id=user.id, is_public=False)
+    user = _user(org)
+    doc = _document(org_id=org, uploader_id=uuid4(), is_public=is_public)
     db = _db_with_document(doc)
 
-    result_user, result_doc = await can_access_document("doc-1", user, db)
+    result_user, result_doc = await can_access_document(str(uuid4()), user, db)
 
     assert result_user is user
     assert result_doc is doc
+    user.has_permission.assert_not_called()  # no uploader/role narrowing
 
 
-async def test_private_document_denied_for_non_uploader_non_admin() -> None:
+async def test_lookup_is_scoped_to_caller_org_and_not_deleted() -> None:
     org = uuid4()
-    user = _user(org_id=org, is_admin=False)
-    doc = _document(
-        org_id=org, uploader_id=uuid4(), is_public=False
-    )  # different uploader
-    db = _db_with_document(doc)
+    user = _user(org)
+    db = _db_with_document(_document(org_id=org, uploader_id=None, is_public=False))
+
+    await can_access_document(str(uuid4()), user, db)
+
+    where = _where_sql(db)
+    assert f"documents.organization_id = '{org.hex}'" in where
+    assert "documents.is_deleted" in where
+    assert "is_public" not in where
+    assert "uploaded_by_user_id" not in where
+
+
+async def test_foreign_org_or_missing_document_is_404() -> None:
+    user = _user(uuid4())
+    db = _db_with_document(None)  # the org-scoped query matched nothing
 
     with pytest.raises(HTTPException) as exc:
-        await can_access_document("doc-1", user, db)
+        await can_access_document(str(uuid4()), user, db)
 
-    assert exc.value.status_code == 403
-
-
-async def test_private_document_accessible_by_admin_non_uploader() -> None:
-    org = uuid4()
-    user = _user(org_id=org, is_admin=True)
-    doc = _document(org_id=org, uploader_id=uuid4(), is_public=False)
-    db = _db_with_document(doc)
-
-    result_user, result_doc = await can_access_document("doc-1", user, db)
-
-    assert result_user is user
-    assert result_doc is doc
-    user.has_permission.assert_any_call(UserRole.ADMIN)
+    assert exc.value.status_code == 404
 
 
-async def test_public_document_accessible_by_any_org_member() -> None:
-    org = uuid4()
-    user = _user(org_id=org, is_admin=False)
-    doc = _document(org_id=org, uploader_id=uuid4(), is_public=True)
-    db = _db_with_document(doc)
-
-    result_user, result_doc = await can_access_document("doc-1", user, db)
-
-    assert result_user is user
-    assert result_doc is doc
-
-
-async def test_cross_org_document_still_denied_before_private_check() -> None:
-    user = _user(org_id=uuid4())
-    doc = _document(
-        org_id=uuid4(), uploader_id=user.id, is_public=True
-    )  # different org
-    db = _db_with_document(doc)
+async def test_orgless_caller_is_404_without_a_query() -> None:
+    user = _user(None)
+    db = _db_with_document(_document(org_id=None, uploader_id=user.id, is_public=True))
 
     with pytest.raises(HTTPException) as exc:
-        await can_access_document("doc-1", user, db)
+        await can_access_document(str(uuid4()), user, db)
 
-    assert exc.value.status_code == 403
+    assert exc.value.status_code == 404
+    db.execute.assert_not_awaited()
 
 
 # --- R4-L12: get_current_user_optional dead-branch removal ------------------
