@@ -3,6 +3,11 @@ import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/clie
 import { api } from '@/services/api-client';
 import { clearWorkspaceServiceCache } from '@/services/workspaceService';
 import { getAppQueryClient } from '@/lib/query-client';
+import {
+  clearClientOwner,
+  readClientOwner,
+  writeClientOwner,
+} from '@/lib/client-owner';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { resetAccountSession } from '@/lib/account-session';
 import { useChatStore } from '@/store/chat-store';
@@ -130,6 +135,11 @@ function clearUserScopedClientState(): void {
   useNotificationStore.getState().clearAll();
   useLLMChatStore.getState().setCopiedMessageId(null);
   clearWorkspaceServiceCache();
+  // Nobody vouches for the persisted caches once they have been cleared, so
+  // forget who owned them: the next sign-in, by anyone, clears again instead
+  // of trusting whatever a late write put back. observeIdentity re-stamps
+  // the new account right after an account switch.
+  clearClientOwner();
   useArtifactPanelStore.getState().reset();
   // The root QueryClient and APIClient singleton survive client-side auth
   // transitions, so neither may retain the previous user's private data or
@@ -167,7 +177,13 @@ function settleMissingSession(): void {
 }
 
 function observeIdentity(userId: string): void {
-  const previousId = useAuthStore.getState().user?.id ?? sessionUserId;
+  // In-memory identity answers first: a tab still holding A must clear on
+  // B's event even when another tab already re-stamped the shared storage as
+  // B. Only a fresh load, where memory knows nothing, consults the persisted
+  // owner stamp so the same account keeps its caches across a reload. An
+  // unknown stamp (first deploy, storage denied) counts as a different owner.
+  const previousId =
+    useAuthStore.getState().user?.id ?? sessionUserId ?? readClientOwner();
   if (previousId !== userId) {
     authRevision += 1;
     profileFetchInFlight = null;
@@ -182,6 +198,7 @@ function observeIdentity(userId: string): void {
     });
   }
   sessionUserId = userId;
+  writeClientOwner(userId);
 }
 
 function scheduleProfileFetch(): void {

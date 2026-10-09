@@ -115,6 +115,22 @@ describe('workspaceService default workspace cache', () => {
     expect(localStorage.getItem('default-workspace-id')).toBeNull();
     expect(create).not.toHaveBeenCalled();
   });
+
+  it('leaves the client owner stamp to the auth store', async () => {
+    // authStore reads the stamp, compares, clears, then re-stamps. A cache
+    // clear that also dropped the stamp would be harmless there, but it must
+    // never be the thing that decides ownership.
+    const { clearWorkspaceServiceCache } =
+      await import('@/services/workspaceService');
+    const { CLIENT_OWNER_STORAGE_KEY } = await import('@/lib/client-owner');
+    localStorage.setItem(CLIENT_OWNER_STORAGE_KEY, 'user-A');
+    localStorage.setItem('chat-storage', '{"state":{}}');
+
+    clearWorkspaceServiceCache();
+
+    expect(localStorage.getItem('chat-storage')).toBeNull();
+    expect(localStorage.getItem(CLIENT_OWNER_STORAGE_KEY)).toBe('user-A');
+  });
 });
 
 describe('workspaceService message cancellation', () => {
