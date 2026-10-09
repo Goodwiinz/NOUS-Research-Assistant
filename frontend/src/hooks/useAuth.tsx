@@ -112,7 +112,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     AuthContext.Provider,
     // Discard page-local drafts, dialogs and cached results at an account boundary.
     // A token refresh keeps this key, so unsaved work stays mounted.
-    { value: contextValue, key: accountRevision },
+    // MUTATION M2 (BS4): key: accountRevision removed
+    { value: contextValue },
     children
   );
 };

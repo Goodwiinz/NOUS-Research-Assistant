@@ -1122,12 +1122,10 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     # Run on both push and PR, but use different test suites
-    needs: [ci-plan, integration-tests, frontend-tests]
+    # MUTATION RUN ONLY: start E2E without waiting for unit/integration jobs.
+    needs: [ci-plan]
     if: >-
-      !cancelled() && needs.ci-plan.result == 'success' &&
-      needs.ci-plan.outputs.e2e == 'true' &&
-      (needs.integration-tests.result == 'success' || needs.ci-plan.outputs.integration == 'false') &&
-      (needs.frontend-tests.result == 'success' || needs.ci-plan.outputs.frontend == 'false')
+      !cancelled() && needs.ci-plan.result == 'success'
     # Backend image build/cache export can take ~33 minutes on a cold runner;
     # leave enough time for infrastructure startup and the actual Playwright run.
     timeout-minutes: 60
@@ -1457,7 +1455,7 @@ jobs:
             # --max-failures: a systemic failure (stack misconfig, dead
             # selector everywhere) exits fast and REPORTS instead of burning
             # the whole job budget and getting killed as "cancelled".
-            pnpm --dir tests/e2e exec playwright test --project=chromium --reporter=html,github --max-failures=15
+            pnpm --dir tests/e2e exec playwright test tests/account-switch-isolation.spec.ts --project=chromium --reporter=html,github
           fi
       - name: Upload E2E test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
