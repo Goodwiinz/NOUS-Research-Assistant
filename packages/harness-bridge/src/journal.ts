@@ -18,6 +18,7 @@ import {
   type Ack,
   type BridgeCommand,
   type BridgeEvent,
+  type Rejection,
 } from "./connection.ts";
 import { nativeRequestBody } from "./approvals.ts";
 
@@ -175,6 +176,12 @@ export class Journal {
   workspaceLocked(id: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM locks WHERE workspace=?").get(id);
   }
+  /** Whether this command still holds its workspace's local lock. */
+  holdsLock(commandId: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM locks WHERE command=?")
+      .get(commandId);
+  }
   activeCommands(): BridgeCommand[] {
     return (
       this.db
@@ -188,7 +195,7 @@ export class Journal {
     if (this.closed) return;
     this.db
       .prepare(
-        "UPDATE commands SET state='recovering' WHERE id=? AND state NOT IN ('completed','failed','interrupted','terminal_pending','delivered')",
+        "UPDATE commands SET state='recovering' WHERE id=? AND state NOT IN ('completed','failed','interrupted','terminal_pending','delivered','denied')",
       )
       .run(id);
   }
@@ -255,6 +262,9 @@ export class Journal {
       throw new Error("invalid verified lease");
     for (const c of this.activeCommands()) {
       if (c.deviceId !== deviceId || runs[c.runId] !== c.generation) continue;
+      // A refused run is final (see reject) even while NOUS still leases it:
+      // let its lease lapse so the watchdog interrupts the turn.
+      if (this.state(c.commandId) === "denied") continue;
       this.db
         .prepare(
           "INSERT INTO leases(run_id,device,expires,blocked) VALUES(?,?,?,0) ON CONFLICT(run_id) DO UPDATE SET expires=excluded.expires,blocked=0",
@@ -302,9 +312,16 @@ export class Journal {
     const lease = this.db
       .prepare("SELECT expires,blocked FROM leases WHERE run_id=?")
       .get(command.runId) as { expires: string; blocked: number } | undefined;
+    // NOUS can keep leasing a run the bridge refused (see reject), whose own
+    // lease is left to lapse. An interrupt of it only stops work, and an
+    // approval for it is dropped below, so neither needs a live lease.
+    const refused =
+      command.body.kind !== "start" &&
+      this.owner(command)?.state === "denied";
     if (
-      Date.parse(expiresAt) <= Date.now() ||
-      (lease && (lease.blocked || Date.parse(lease.expires) <= Date.now()))
+      !refused &&
+      (Date.parse(expiresAt) <= Date.now() ||
+        (lease && (lease.blocked || Date.parse(lease.expires) <= Date.now())))
     )
       throw new Error("lease expired; verified renewal required");
     const b = command.body;
@@ -327,6 +344,8 @@ export class Journal {
           (owner.session !== b.sessionId || owner.turn !== b.turnId)
         )
           throw new Error("interrupt target mismatch");
+        // A refused run is final: its approvals are dropped, not forwarded.
+        if (b.kind === "respond" && owner.state === "denied") return false;
         if (b.kind === "respond" && owner.state !== "running")
           throw new Error("approval blocked during recovery");
       }
@@ -453,10 +472,12 @@ export class Journal {
     id: string,
     body: BridgeEvent["body"],
     eventCommandId?: string,
-  ): BridgeEvent {
+  ): BridgeEvent | undefined {
     return this.tx(() => {
       const row = this.row(id);
       if (!row) throw new Error("unknown command");
+      // NOUS refused this run (see reject): nothing more of it is uploaded.
+      if (row.state === "denied") return undefined;
       const command: BridgeCommand = JSON.parse(row.command);
       const { expiresAt, body: ignored, ...identity } = command;
       const event: BridgeEvent = {
@@ -486,7 +507,12 @@ export class Journal {
   ): void {
     this.tx(() => {
       const row = this.row(id)!;
-      if (row.state === "terminal_pending" || terminal(row.state)) return;
+      if (
+        row.state === "terminal_pending" ||
+        row.state === "denied" ||
+        terminal(row.state)
+      )
+        return;
       this.append(id, { kind: "observation", state, sessionId, turnId });
       this.db
         .prepare("UPDATE commands SET session=?,turn=?,state=? WHERE id=?")
@@ -504,6 +530,7 @@ export class Journal {
         );
     });
   }
+  // events.acked: 0 unsent, 1 acknowledged by NOUS, 2 refused by NOUS (reject).
   pending(limit = 64): BridgeEvent[] {
     return (
       this.db
@@ -550,6 +577,55 @@ export class Journal {
           .run(event.body.state, row.id);
         this.db.prepare("DELETE FROM locks WHERE command=?").run(row.id);
       }
+    });
+  }
+  /** NOUS refused this run's events while the device grant stayed valid: its
+   * chat was deleted or linked to another project, its folder binding was
+   * removed, its consent was superseded, or a renewed grant had not yet
+   * re-leased the run (NOUS may then keep leasing it, so renewLease skips a
+   * 'denied' run and its lease still lapses). Final for the upload only: drop
+   * every unsent event of the run and journal no more (append and observe skip
+   * a 'denied' command). A refusal is not evidence that the native turn
+   * stopped, so mid-run the workspace lock stays, as NOUS keeps its own, and
+   * the lease watchdog still interrupts the turn. Once the run's terminal
+   * observation is journaled, Codex has stopped writing and the lock is
+   * released: NOUS authorizes an event before its receipt lookup, so the
+   * refused event can be the replay of one it stored, after which it may have
+   * finalized the run and released its own lock. Returns whether the run was
+   * newly refused: false when it was already refused or already finished. */
+  reject(rejection: Rejection): boolean {
+    return this.tx(() => {
+      const row =
+        typeof rejection.sourceId === "string"
+          ? this.row(rejection.sourceId)
+          : undefined;
+      if (!row) throw new Error("unknown rejection");
+      const c: BridgeCommand = JSON.parse(row.command);
+      if (
+        rejection.code !== "run_access_denied" ||
+        c.runId !== rejection.runId ||
+        c.generation !== rejection.generation ||
+        !Number.isSafeInteger(rejection.sourceSeq) ||
+        rejection.sourceSeq < 1 ||
+        rejection.sourceSeq > row.seq
+      )
+        throw new Error("rejection identity mismatch");
+      this.db
+        .prepare("UPDATE events SET acked=2 WHERE command=? AND acked=0")
+        .run(row.id);
+      // NOUS acknowledged the run's terminal observation (that ack released the
+      // lock); the refused event was journaled after it, e.g. a respond's
+      // command_ack. Drop it, and keep the run's final state.
+      if (terminal(row.state)) return false;
+      if (row.state === "denied") return false;
+      this.db
+        .prepare("UPDATE commands SET state='denied' WHERE id=?")
+        .run(row.id);
+      // 'terminal_pending': the terminal observation is journaled, not yet
+      // acknowledged (observe() sets both in one transaction).
+      if (row.state === "terminal_pending")
+        this.db.prepare("DELETE FROM locks WHERE command=?").run(row.id);
+      return true;
     });
   }
   private delta(id: string, text: string): void {
@@ -640,11 +716,33 @@ export class Journal {
   async reconcile(id: string, adapter: HarnessAdapter): Promise<void> {
     const row = this.row(id);
     if (!row || terminal(row.state) || row.state === "terminal_pending") return;
+    const c: BridgeCommand = JSON.parse(row.command);
+    if (row.state === "denied") {
+      // NOUS refused this run: report nothing, but keep the expiry watchdog
+      // armed so the native turn is still interrupted once its lease lapses.
+      // Once per turn: skip it while a watchdog waits or after one claimed.
+      if (
+        !row.session ||
+        !row.turn ||
+        this.timers.has(`${row.session}/${row.turn}`) ||
+        this.db
+          .prepare("SELECT 1 FROM interrupts WHERE session=? AND turn=?")
+          .get(row.session, row.turn)
+      )
+        return;
+      // A fresh adapter (after a restart) interrupts only a turn it started or
+      // read back, so read it back. A thread Codex no longer knows must not
+      // fail the reconnect; the run stays refused either way.
+      await adapter.inspectTurn(row.session, id).catch(() => undefined);
+      void this.watchLease(c.expiresAt, adapter, row.session, row.turn).catch(
+        () => this.quarantine(id),
+      );
+      return;
+    }
     if (!row.session) {
       this.quarantine(id);
       return;
     }
-    const c: BridgeCommand = JSON.parse(row.command);
     const history = await adapter.inspectTurn(row.session, id);
     if (
       history.sessionId !== row.session ||
@@ -715,6 +813,9 @@ export class Journal {
       rows.find((r) => r.turn === turnId) || rows.find((r) => r.turn === null);
     if (owner && (terminal(owner.state) || owner.state === "terminal_pending"))
       return;
+    // reject() released a refused run's lock only after its terminal
+    // observation was journaled: Codex has stopped, nothing to interrupt.
+    if (owner?.state === "denied" && !this.holdsLock(owner.id)) return;
     const command = owner
       ? (JSON.parse(owner.command) as BridgeCommand)
       : undefined;
