@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { redactText, sanitizeError, sanitizeRequestObservation } from './report.mjs';
@@ -11,6 +11,28 @@ const MAX_SSE_BYTES = 2 * 1024 * 1024;
 // Checkpoint names come from docs/engineering/flows/*.md (`checkpoint: <name>`)
 // and become file names, so they are restricted to a safe lowercase slug.
 const CHECKPOINT_NAME = /^[a-z0-9][a-z0-9.-]{0,63}$/;
+// Frontend client state that steers which workspace, conversation and chat
+// transcript /chat opens (workspaceService.ts `default-workspace-*` and
+// `default-conversation-id`, chat-store.ts `chat-storage`). A --storage-state
+// file captured from a real browser may carry it; scenarios resolve the
+// workspace from the API instead, so these entries are dropped at load.
+const FRONTEND_CLIENT_STATE_KEY = /^(?:default-workspace-.*|default-conversation-id|chat-storage)$/;
+
+/** Playwright storage state without the frontend's cached client selection. */
+export function sanitizeStorageState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    throw new QASessionError('Storage state must be a JSON object');
+  }
+  if (!Array.isArray(state.origins)) return { ...state };
+  return {
+    ...state,
+    origins: state.origins.map((origin) => (
+      Array.isArray(origin?.localStorage)
+        ? { ...origin, localStorage: origin.localStorage.filter((entry) => !FRONTEND_CLIENT_STATE_KEY.test(String(entry?.name ?? ''))) }
+        : origin
+    )),
+  };
+}
 
 export class FixtureOwnershipError extends Error {
   constructor(kind, id) {
@@ -301,7 +323,7 @@ export class QASession {
       }
       this.assertOperational();
       const contextOptions = { baseURL: this.config.baseUrl };
-      if (this.config.storageState) contextOptions.storageState = this.config.storageState;
+      if (this.config.storageState) contextOptions.storageState = await this.loadStorageState();
       if (this.evidenceDir) {
         // Video must be configured when the context is created; every
         // verification run records it so a reviewer can replay the journey.
@@ -330,6 +352,18 @@ export class QASession {
       }
       throw error;
     }
+  }
+
+  /** Read --storage-state and drop the frontend's cached client selection. */
+  async loadStorageState() {
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(this.config.storageState, 'utf8'));
+    } catch {
+      // The path is reported by the CLI; its contents hold session cookies.
+      throw new QASessionError('Storage state file could not be read as JSON');
+    }
+    return sanitizeStorageState(parsed);
   }
 
   /**

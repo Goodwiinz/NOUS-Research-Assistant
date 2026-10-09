@@ -41,8 +41,12 @@ Chat history/draft and missing-thread coverage create their threads inside the
 workspace `/chat` will open (the account workspace with the highest collection
 + conversation count from `GET /api/v2/workspaces`, the frontend's own rule);
 that workspace is never registered or deleted, only the conversations and
-threads created in it. A planted default-workspace cache is not used: the
-frontend clears it on every page load. The missing-thread case asserts the
+threads created in it. The frontend would prefer its own localStorage cache
+(`default-workspace-*`) over that rule, so the runner never plants one and
+drops `default-workspace-*`, `default-conversation-id` and `chat-storage`
+entries from a `--storage-state` file when it opens the browser; a storage
+state captured from a real session must not be relied on to carry them. The
+missing-thread case asserts the
 product's recovery (unavailable toast, stale id dropped from the URL, the
 recovered thread reads 200) and records which thread it landed on without
 asserting it. Q&A and Stop streams

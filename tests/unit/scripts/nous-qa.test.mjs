@@ -12,6 +12,7 @@ import {
   FixtureLedger,
   FixtureOwnershipError,
   QASession,
+  sanitizeStorageState,
 } from '../../../tests/e2e/qa/session.mjs';
 import http from 'node:http';
 
@@ -873,6 +874,63 @@ test('storage state is rejected when protected navigation redirects to /login', 
   await assert.rejects(() => session.login(), /protected route/i);
 });
 
+test('storage state drops the frontend client-selection keys and keeps everything else', () => {
+  const state = {
+    cookies: [{ name: 'sb-project-auth-token', value: 'x', domain: 'qa.example.test' }],
+    origins: [{
+      origin: 'https://qa.example.test',
+      localStorage: [
+        { name: 'default-workspace-object', value: '{"id":"w"}' },
+        { name: 'default-workspace-cached-at', value: '1' },
+        { name: 'default-workspace-id', value: 'w' },
+        { name: 'default-conversation-id', value: 'c' },
+        { name: 'chat-storage', value: '{}' },
+        { name: 'theme', value: 'dark' },
+      ],
+    }, { origin: 'https://other.example.test' }],
+  };
+  const sanitized = sanitizeStorageState(state);
+  assert.deepEqual(sanitized.origins[0].localStorage, [{ name: 'theme', value: 'dark' }]);
+  assert.deepEqual(sanitized.origins[1], { origin: 'https://other.example.test' });
+  assert.deepEqual(sanitized.cookies, state.cookies);
+  assert.equal(state.origins[0].localStorage.length, 6, 'the input is not mutated');
+  assert.throws(() => sanitizeStorageState([]), /JSON object/);
+});
+
+test('opening the browser with --storage-state strips the client-selection keys before the context is created', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nous-qa-storage-state-'));
+  const path = join(dir, 'state.json');
+  await writeFile(path, JSON.stringify({
+    cookies: [],
+    origins: [{ origin: 'http://127.0.0.1:3000', localStorage: [
+      { name: 'default-workspace-id', value: 'planted' },
+      { name: 'sb-project-auth-token', value: 'keep' },
+    ] }],
+  }));
+  const record = {};
+  const page = { url: () => 'http://127.0.0.1:3000/dashboard' };
+  const playwright = { chromium: { launch: async () => ({
+    newContext: async (options) => { record.contextOptions = options; return { newPage: async () => page, close: async () => {} }; },
+    close: async () => {},
+  }) } };
+  try {
+    const session = new QASession({
+      runId: 'run-storage-state-strip',
+      baseUrl: 'http://127.0.0.1:3000',
+      apiUrl: 'http://127.0.0.1:8000/api/v1',
+      timeoutMs: 100,
+      storageState: path,
+    }, { playwright });
+    await session.openBrowser();
+    assert.deepEqual(record.contextOptions.storageState.origins[0].localStorage, [{ name: 'sb-project-auth-token', value: 'keep' }]);
+    await writeFile(path, 'not json');
+    const broken = new QASession({ runId: 'run-storage-state-broken', baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:8000/api/v1', timeoutMs: 100, storageState: path }, { playwright });
+    await assert.rejects(broken.openBrowser(), /could not be read as JSON/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('browser auth decodes ordered Supabase SSR cookie chunks only on the trusted frontend domain', async () => {
   const token = 'synthetic-cookie-access-token-0123456789';
   const encoded = `base64-${Buffer.from(JSON.stringify({ access_token: token })).toString('base64url')}`;
@@ -1592,11 +1650,11 @@ test('unsupported attachment passes only with the failed chip, the status notice
  *   conversation is no longer available.') (react-hot-toast: role="status")
  *   and router.replace()s the URL
  * The workspace whose threads the sidebar lists is resolved the way
- * frontend/src/services/workspaceService.ts _resolveDefaultWorkspace does:
- * highest collection_count + conversation_count from GET /api/v2/workspaces,
- * first on a tie. A localStorage cache planted by a test is ignored because
- * frontend/src/stores/authStore.ts observeIdentity() clears it on every page
- * load (clearWorkspaceServiceCache).
+ * frontend/src/services/workspaceService.ts _resolveDefaultWorkspace does
+ * without a cached selection: highest collection_count + conversation_count
+ * from GET /api/v2/workspaces, first on a tie. The fake has no localStorage
+ * cache, matching a runner that never plants one and strips it from
+ * --storage-state (session.mjs sanitizeStorageState).
  */
 function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = 'fallback' } = {}) {
   const state = {
@@ -1628,8 +1686,8 @@ function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = '
   });
   const page = {
     url: () => `http://127.0.0.1:3000/chat${state.threadId ? `?thread=${state.threadId}` : ''}`,
-    // A planted default-workspace cache is wiped on load by the live app, so
-    // the fake ignores it as well.
+    // No scenario may steer /chat through localStorage; a page.evaluate that
+    // tried to plant a cache is a no-op here.
     evaluate: async () => ({}),
     locator: (selector) => {
       if (selector === 'button.sb-conv') {

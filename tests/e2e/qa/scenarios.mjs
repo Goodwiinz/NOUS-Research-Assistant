@@ -223,11 +223,12 @@ async function makeThread(session, evidence, title = 'lifecycle', options = {}) 
  * The workspace /chat will open. workspaceService._resolveDefaultWorkspace
  * (frontend/src/services/workspaceService.ts) lists GET /api/v2/workspaces
  * and keeps the one with the highest collection_count + conversation_count,
- * the first on a tie. Its localStorage cache is cleared on every page load by
- * authStore.observeIdentity (clearWorkspaceServiceCache), so a planted cache
- * entry is never honored: fixtures the sidebar must list are created inside
- * this workspace instead. It belongs to the account and is never registered
- * for cleanup.
+ * the first on a tie, unless its localStorage cache (`default-workspace-*`)
+ * already names one. The runner never plants that cache and strips those
+ * keys from a --storage-state file (session.mjs sanitizeStorageState), so
+ * the list rule is the one /chat applies, and fixtures the sidebar must
+ * list are created inside this workspace. It belongs to the account and is
+ * never registered for cleanup.
  */
 async function appSelectedWorkspaceId(session) {
   if (typeof session.login === 'function') await session.login();
