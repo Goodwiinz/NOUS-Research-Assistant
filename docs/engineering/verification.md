@@ -7,10 +7,13 @@ from the diff, with visual evidence a reviewer can inspect.
 Rollout status: the feature map, the flow charts and
 `scripts/ci/check_feature_map.py` are live and blocking. The runner flags
 under [Running](#running) (`--features`, `--changed-from`, `--evidence-dir`,
-`--evidence-record`), `scripts/verify/boot_local.sh`, checkpoint screenshots
-and the `nous-loop.md` step 7b stop gate are planned in
-[the implementation plan](../plans/2026-10-08-nous-verify.md) and are not
-available until those changes land; until then every feature stays `planned`.
+`--evidence-record`), `scripts/verify/boot_local.sh`, video/trace capture and
+checkpoint screenshots are available, and every v1 feature is `covered`.
+`covered` means the mapped scenarios and their `checkpoint()` calls exist; it
+is not a live `PASS`. The v1 live runs are `NOT RUN` until a run against a
+target with QA credentials produces an evidence record. The
+[nous-loop.md](nous-loop.md) step 7b stop gate and the step 8 post-deploy
+rerun are live (see [Stop gate](#stop-gate)).
 
 ## Vocabulary
 
@@ -33,12 +36,19 @@ case, or an exit code of `2` from `pnpm qa:nous` is `BLOCKED` or `NOT RUN`.
 | --- | --- | --- |
 | Feature map | `docs/engineering/feature-map.yaml` | yes |
 | Flow charts | `docs/engineering/flows/<feature>.md` | yes |
-| Checkpoint PNGs, video, trace, JSON/HTML reports | `.verify-artifacts/<run-id>/` | no (gitignored; upload as CI/PR artifact) |
+| Checkpoint PNGs, video, JSON/HTML reports | `.verify-artifacts/<run-id>/` | no (gitignored; upload as CI/PR artifact) |
+| Playwright traces (`trace.zip`, `trace-<n>.zip`) | `.verify-artifacts/<run-id>/` | no, and never attached or uploaded (secret-bearing) |
 | Evidence record | `docs/testing/evidence/verify-<feature>-<YYYYMMDD>/README.md` | yes |
+
+Traces are secret-bearing. The runner pauses tracing while it types
+credentials, but a trace still records session cookies, bearer tokens and
+API responses. Keep traces local: never attach one to a PR, commit it, or
+upload it anywhere public.
 
 ## Feature map
 
-One entry per feature: `id`, `status` (`planned` or `covered`), `surfaces`
+One entry per feature: `id`, `status` (`planned` or `covered`; `covered`
+only says scenarios and checkpoint calls exist, never that they passed), `surfaces`
 (`web` routes, `api` endpoints, `cli` commands), `states`, `pass_criteria`,
 `scenarios` (ids from `tests/e2e/qa/scenarios.mjs`), `owns` (path globs,
 `fnmatch` semantics: `*` also crosses `/`). `ignore.pages` and
@@ -84,8 +94,9 @@ in `docs/testing/evidence/README.md`.
 
 ## Stop gate
 
-(planned) `docs/engineering/nous-loop.md` step 7b will require a local `PASS`
-for every mapped feature the diff touches before an outcome of `merged`;
-`BLOCKED` or `NOT RUN` will end the tick as `ready-for-human`. Step 8 will
-rerun the same features against the deployed lane after deployment and file
-a regression on failure. Neither step exists in `nous-loop.md` yet.
+[nous-loop.md](nous-loop.md) step 7b requires a local `PASS` for every mapped
+feature the diff touches before a tick can end as `merged`; `BLOCKED` or
+`NOT RUN` ends the tick as `ready-for-human`. A diff that touches no mapped
+feature records `NOT RUN (no mapped feature)` and proceeds. Step 8 reruns the
+same features against the deployed lane after deployment; a `FAILED` rerun
+files a regression instead of closing the tick as clean.

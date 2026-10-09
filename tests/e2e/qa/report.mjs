@@ -169,6 +169,8 @@ export function configForReport(config = {}) {
       : null,
     storageState: config.storageState ? '[provided]' : null,
     credentialsConfigured: Boolean(config.credentials?.email && config.credentials?.password),
+    features: Array.isArray(config.features) ? [...config.features] : [],
+    evidenceDir: config.evidenceDir ? '[provided]' : null,
   };
   return output;
 }

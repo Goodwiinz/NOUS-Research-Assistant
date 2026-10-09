@@ -796,6 +796,10 @@ jobs:
         run: |
           pnpm --filter @nous/harness-bridge type-check
           pnpm --filter @nous/harness-bridge test
+      - name: Check NOUS QA runner (node:test)
+        # tests/e2e/qa (pnpm qa:nous) and its nous-verify selection/evidence
+        # code have no other CI coverage; the suites need no browser.
+        run: node --test ../tests/unit/scripts/nous-qa.test.mjs ../tests/unit/scripts/nous-verify.test.mjs
       # Blocking ratchet: global coverage may never fall below the floors
       # committed in frontend/quality-baseline.json ("coverage" key).
       # Raising or lowering a floor is an intentional, reviewed JSON edit.
