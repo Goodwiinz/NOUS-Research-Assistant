@@ -11865,16 +11865,32 @@ export interface components {
         ArtifactEditConflictDetail: {
             /** Current Version Id */
             current_version_id: string | null;
+        };
+        /** ArtifactEditConflictError */
+        ArtifactEditConflictError: {
+            details: components["schemas"]["ArtifactEditConflictDetail"];
             /**
              * Message
              * @default Artifact publication conflict
              * @constant
              */
             message: "Artifact publication conflict";
+            /**
+             * Status Code
+             * @default 409
+             * @constant
+             */
+            status_code: 409;
+            /**
+             * Type
+             * @default http_error
+             * @constant
+             */
+            type: "http_error";
         };
         /** ArtifactEditConflictResponse */
         ArtifactEditConflictResponse: {
-            detail: components["schemas"]["ArtifactEditConflictDetail"];
+            error: components["schemas"]["ArtifactEditConflictError"];
         };
         /** ArtifactProvenance */
         ArtifactProvenance: {

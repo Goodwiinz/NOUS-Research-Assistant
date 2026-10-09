@@ -53,6 +53,7 @@ async def pg_factory(
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured")
+    assert dsn is not None
     dsn = dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
     schema = "harness_cancel_" + uuid4().hex
     admin = create_async_engine(dsn)
@@ -66,7 +67,7 @@ async def pg_factory(
             await conn.exec_driver_sql(
                 "CREATE TABLE agent_runtime_snapshots (id UUID PRIMARY KEY)"
             )
-            for model in [
+            models: list[Any] = [
                 Organization,
                 User,
                 Workspace,
@@ -85,7 +86,8 @@ async def pg_factory(
                 HarnessSession,
                 HarnessCommand,
                 HarnessReceipt,
-            ]:
+            ]
+            for model in models:
                 await conn.run_sync(model.__table__.create)
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as db:

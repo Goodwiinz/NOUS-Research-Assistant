@@ -6,7 +6,7 @@ from typing import Any, Iterator
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.core.database import get_db
@@ -47,7 +47,7 @@ def _version() -> ArtifactVersionDTO:
 
 
 @pytest.fixture
-def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+def app(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> FastAPI:
     from src.api import artifacts
     from src.core.config import settings
 
@@ -107,6 +107,10 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         yield None
 
     application = FastAPI()
+    if getattr(request, "param", False):
+        from src.main import http_exception_handler
+
+        application.add_exception_handler(HTTPException, http_exception_handler)
     application.include_router(artifacts.router, prefix="/api/v1")
     application.dependency_overrides[get_db] = fake_db
     application.dependency_overrides[get_current_user_token] = lambda: TokenData(
@@ -386,6 +390,9 @@ def test_cli_cannot_read_browser_capabilities(client: TestClient) -> None:
     assert client.get("/api/v1/artifacts/capabilities").status_code == 403
 
 
+@pytest.mark.parametrize(
+    "app", [False, True], indirect=True, ids=["router", "real-handler"]
+)
 def test_edit_conflict_returns_safe_current_version(
     app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -413,8 +420,11 @@ def test_edit_conflict_returns_safe_current_version(
     )
     assert response.status_code == 409
     assert response.json() == {
-        "detail": {
+        "error": {
             "message": "Artifact publication conflict",
-            "current_version_id": str(VERSION),
+            "status_code": 409,
+            "type": "http_error",
+            "details": {"current_version_id": str(VERSION)},
         }
     }
+    assert response.headers["cache-control"] == "private, no-store"

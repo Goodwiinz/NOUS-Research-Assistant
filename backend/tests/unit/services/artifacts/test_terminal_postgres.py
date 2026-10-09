@@ -40,6 +40,7 @@ async def test_artifact_cannot_append_after_terminal(
         pytest.skip(
             "Set ORCHESTRATION_TEST_DATABASE_URL to an isolated PostgreSQL database"
         )
+    assert url is not None
     url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     schema = "agent_architecture_audit_" + uuid4().hex
     engine = create_async_engine(
