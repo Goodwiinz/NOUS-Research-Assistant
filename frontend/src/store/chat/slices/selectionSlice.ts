@@ -6,12 +6,14 @@
  * Split out of chat-store.ts (Task 5.4) with no behavior change.
  */
 import type { Thread } from '@/types/workspace';
+import { takePersistedSelection } from '../persistedSelection';
 import type { ChatSliceCreator, ChatState } from '../types';
 
 export interface SelectionSlice {
   setCurrentWorkspace: (workspaceId: string | null) => Promise<void>;
   setCurrentConversation: (conversationId: string | null) => Promise<void>;
   setCurrentThread: (threadId: string | null) => void;
+  adoptPersistedSelection: (ownerUserId: string) => void;
   setThreadProjectBinding: (
     threadId: string,
     projectId: string | null
@@ -80,6 +82,30 @@ export const createSelectionSlice: ChatSliceCreator<SelectionSlice> = (
     } else if (threadId && freshness === 'stale') {
       void get().refreshMessages(threadId);
     }
+  },
+
+  // The hydrated selection waited in persistedSelection.ts for the account
+  // to be known. Adopt it only for the account it was written for, and never
+  // over a selection the user already made (a deep link, a sidebar click).
+  // Taking it is one-shot either way, so a different account later in this
+  // tab cannot pick it up. Stamping ownerUserId makes every later persisted
+  // write carry this account, which is what the next load compares against.
+  adoptPersistedSelection: (ownerUserId) => {
+    const pending = takePersistedSelection();
+    const adopted =
+      pending && pending.ownerUserId === ownerUserId ? pending : null;
+    set((state) => {
+      state.ownerUserId = ownerUserId;
+      const untouched =
+        state.currentWorkspaceId === null &&
+        state.currentConversationId === null &&
+        state.currentThreadId === null;
+      if (adopted && untouched) {
+        state.currentWorkspaceId = adopted.currentWorkspaceId;
+        state.currentConversationId = adopted.currentConversationId;
+        state.currentThreadId = adopted.currentThreadId;
+      }
+    });
   },
 
   // The project binding lives on the thread row (source_project_id), not

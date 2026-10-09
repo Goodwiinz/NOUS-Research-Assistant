@@ -45,8 +45,78 @@ import { api } from '@/services/api-client';
 const API_PREFIX = '/api/v2';
 
 const WS_CACHE_KEY = 'default-workspace-object';
-const WS_CACHE_AT_KEY = 'default-workspace-cached-at';
+const WS_CACHE_VERSION = 1;
 const WS_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Loose keys older builds wrote next to the record. Never read; removed
+// whenever the record is removed or rewritten.
+const LEGACY_WS_CACHE_KEYS = [
+  'default-workspace-cached-at',
+  'default-workspace-id',
+  'default-conversation-id',
+];
+
+/**
+ * The cached default workspace names the account it was fetched for. A
+ * record for another account, or one without an owner (older builds), is
+ * discarded unread: a lagging tab still signed in as A can write A's
+ * workspace after this origin has moved to B, and B must neither request nor
+ * display it. Without a known account the cache is neither read nor written.
+ */
+interface CachedWorkspaceRecord {
+  version: typeof WS_CACHE_VERSION;
+  ownerUserId: string;
+  cachedAt: number;
+  workspace: ApiWorkspace;
+}
+
+function removeCachedWorkspace(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(WS_CACHE_KEY);
+  for (const key of LEGACY_WS_CACHE_KEYS) localStorage.removeItem(key);
+}
+
+function readCachedWorkspace(
+  ownerUserId: string,
+  now = Date.now()
+): ApiWorkspace | null {
+  if (typeof window === 'undefined') return null;
+  const raw = localStorage.getItem(WS_CACHE_KEY);
+  if (!raw) return null;
+  try {
+    const record = JSON.parse(raw) as Partial<CachedWorkspaceRecord> | null;
+    const owned =
+      !!record &&
+      record.version === WS_CACHE_VERSION &&
+      record.ownerUserId === ownerUserId;
+    const fresh =
+      owned &&
+      typeof record.cachedAt === 'number' &&
+      now - record.cachedAt < WS_CACHE_TTL_MS;
+    const workspace = fresh ? record.workspace : undefined;
+    if (workspace && typeof workspace.id === 'string' && workspace.id) {
+      return workspace;
+    }
+  } catch {
+    // Corrupted JSON is removed with the other rejects below.
+  }
+  removeCachedWorkspace();
+  return null;
+}
+
+function writeCachedWorkspace(
+  ownerUserId: string,
+  workspace: ApiWorkspace
+): void {
+  if (typeof window === 'undefined') return;
+  const record: CachedWorkspaceRecord = {
+    version: WS_CACHE_VERSION,
+    ownerUserId,
+    cachedAt: Date.now(),
+    workspace,
+  };
+  localStorage.setItem(WS_CACHE_KEY, JSON.stringify(record));
+  for (const key of LEGACY_WS_CACHE_KEYS) localStorage.removeItem(key);
+}
 
 // Collapses concurrent getOrCreateDefaultWorkspace callers onto one promise.
 // The chat layout (useChatPersistence) and the chat page (useChatSession)
@@ -78,11 +148,8 @@ const _defaultConversationInFlight = new Map<
 /** Clear all workspace service caches (localStorage). Called on auth errors. */
 export function clearWorkspaceServiceCache(): void {
   cacheGeneration += 1;
+  removeCachedWorkspace();
   if (typeof window !== 'undefined') {
-    localStorage.removeItem(WS_CACHE_KEY);
-    localStorage.removeItem(WS_CACHE_AT_KEY);
-    localStorage.removeItem('default-workspace-id');
-    localStorage.removeItem('default-conversation-id');
     localStorage.removeItem('chat-storage');
   }
   _defaultWorkspaceInFlight = null;
@@ -425,9 +492,16 @@ export const workspaceService = {
   // Helper: Get or Create Default Workspace
   // ============================================================================
 
-  async getOrCreateDefaultWorkspace(): Promise<ApiWorkspace> {
+  /**
+   * `ownerUserId` is the verified account making the request (null while it
+   * is unknown). It decides whether the persisted cache may be read or
+   * written; the request itself is authorized by the backend as always.
+   */
+  async getOrCreateDefaultWorkspace(
+    ownerUserId: string | null
+  ): Promise<ApiWorkspace> {
     if (_defaultWorkspaceInFlight) return _defaultWorkspaceInFlight;
-    const inFlight = this._resolveDefaultWorkspace().finally(() => {
+    const inFlight = this._resolveDefaultWorkspace(ownerUserId).finally(() => {
       if (_defaultWorkspaceInFlight === inFlight)
         _defaultWorkspaceInFlight = null;
     });
@@ -435,65 +509,29 @@ export const workspaceService = {
     return inFlight;
   },
 
-  async _resolveDefaultWorkspace(): Promise<ApiWorkspace> {
+  async _resolveDefaultWorkspace(
+    ownerUserId: string | null
+  ): Promise<ApiWorkspace> {
     const assertCurrentSession = captureCacheGeneration();
-    const cacheWorkspace = (ws: ApiWorkspace) => {
+    const cacheWorkspace = (ws: ApiWorkspace): void => {
       assertCurrentSession();
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(WS_CACHE_KEY, JSON.stringify(ws));
-        localStorage.setItem(WS_CACHE_AT_KEY, String(Date.now()));
-        localStorage.setItem('default-workspace-id', ws.id);
-      }
+      // No account, no cache: an unstamped record could be read by anyone.
+      if (ownerUserId) writeCachedWorkspace(ownerUserId, ws);
     };
 
-    const clearCachedWorkspace = () => {
-      assertCurrentSession();
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(WS_CACHE_KEY);
-        localStorage.removeItem(WS_CACHE_AT_KEY);
-        localStorage.removeItem('default-workspace-id');
-      }
-    };
-
-    // Check localStorage for a cached full workspace object — avoids any API call on warm hits.
-    if (typeof window !== 'undefined') {
-      const cachedJson = localStorage.getItem(WS_CACHE_KEY);
-      const cachedAt = localStorage.getItem(WS_CACHE_AT_KEY);
-
-      if (
-        cachedJson &&
-        cachedAt &&
-        Date.now() - Number(cachedAt) < WS_CACHE_TTL_MS
-      ) {
-        try {
-          const cachedWorkspace = JSON.parse(
-            cachedJson
-          ) as Partial<ApiWorkspace>;
-
-          if (cachedWorkspace.id) {
-            try {
-              const workspace = await this.getWorkspace(cachedWorkspace.id);
-              cacheWorkspace(workspace);
-              return workspace;
-            } catch (error: unknown) {
-              assertCurrentSession();
-              const apiError = error as { error?: { status_code?: number } };
-              const status = apiError?.error?.status_code;
-              if (status === 403 || status === 404) {
-                clearCachedWorkspace();
-              }
-            }
-          } else {
-            clearCachedWorkspace();
-          }
-        } catch {
-          assertCurrentSession();
-          // Corrupted JSON — fall through to API
-          clearCachedWorkspace();
-        }
-      } else if (cachedJson) {
-        // TTL expired — clear stale entry
-        clearCachedWorkspace();
+    // Warm hit: a fresh record this account wrote, revalidated by one read
+    // of the workspace itself instead of a list request.
+    const cached = ownerUserId ? readCachedWorkspace(ownerUserId) : null;
+    if (cached) {
+      try {
+        const workspace = await this.getWorkspace(cached.id);
+        cacheWorkspace(workspace);
+        return workspace;
+      } catch (error: unknown) {
+        assertCurrentSession();
+        const apiError = error as { error?: { status_code?: number } };
+        const status = apiError?.error?.status_code;
+        if (status === 403 || status === 404) removeCachedWorkspace();
       }
     }
 
@@ -575,20 +613,12 @@ export const workspaceService = {
     workspaceId: string
   ): Promise<ApiConversation> {
     const assertCurrentSession = captureCacheGeneration();
-    const cacheConversationId = (id: string) => {
-      assertCurrentSession();
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('default-conversation-id', id);
-      }
-    };
 
     try {
       const response = await this.listConversations(workspaceId, { limit: 1 });
       assertCurrentSession();
       if (response.conversations.length > 0) {
-        const conv = response.conversations[0];
-        cacheConversationId(conv.id);
-        return conv;
+        return response.conversations[0];
       }
     } catch (error: unknown) {
       assertCurrentSession();
@@ -598,25 +628,18 @@ export const workspaceService = {
         console.warn(
           '[WorkspaceService] Workspace not found (404), clearing stale data'
         );
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem(WS_CACHE_KEY);
-          localStorage.removeItem(WS_CACHE_AT_KEY);
-          localStorage.removeItem('default-workspace-id');
-          localStorage.removeItem('default-conversation-id');
-        }
+        removeCachedWorkspace();
         throw error;
       }
       console.warn('[WorkspaceService] Error listing conversations:', error);
     }
 
     console.log('[WorkspaceService] Creating default conversation');
-    const conv = await this.createConversation({
+    return this.createConversation({
       workspace_id: workspaceId,
       title: 'New Chat',
       description: 'A new conversation',
     });
-    cacheConversationId(conv.id);
-    return conv;
   },
 };
 

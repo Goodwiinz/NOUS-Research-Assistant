@@ -2140,7 +2140,9 @@ export function useChatStreaming(
             if (!threadConversation) {
               if (!activeWorkspaceId) {
                 const defaultWorkspace =
-                  await workspaceService.getOrCreateDefaultWorkspace();
+                  await workspaceService.getOrCreateDefaultWorkspace(
+                    useAuthStore.getState().user?.id ?? null
+                  );
                 if (preflightWasSuperseded()) return;
                 activeWorkspaceId = defaultWorkspace.id;
               }

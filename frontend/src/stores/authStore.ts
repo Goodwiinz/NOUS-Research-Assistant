@@ -201,6 +201,17 @@ function observeIdentity(userId: string): void {
   writeClientOwner(userId);
 }
 
+/**
+ * A verified account is about to be published. Hand it the persisted chat
+ * selection first: the chat store adopts that selection only if it was
+ * written for this same account, and stamps its later writes with the
+ * account, so the consumers that react to `isAuthenticated` already see a
+ * settled selection and never a previous account's.
+ */
+function adoptClientCachesFor(userId: string): void {
+  useChatStore.getState().adoptPersistedSelection(userId);
+}
+
 function scheduleProfileFetch(): void {
   const revision = authRevision;
   // Supabase invokes auth listeners while holding its auth lock. Leave the
@@ -290,6 +301,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         if (activeSignIn !== attempt || revision !== authRevision)
           throw new SignInSupersededError();
         observeIdentity(profileData.user.id);
+        adoptClientCachesFor(profileData.user.id);
         set({
           user: profileData.user,
           organization: profileData.organization ?? null,
@@ -540,6 +552,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         });
         if (revision !== authRevision) return;
         observeIdentity(profileData.user.id);
+        adoptClientCachesFor(profileData.user.id);
 
         set({
           user: profileData.user,

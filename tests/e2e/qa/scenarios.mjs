@@ -195,7 +195,14 @@ async function setDefaultWorkspaceCache(page, workspaceId) {
   return page.evaluate((id) => {
     const keys = ['default-workspace-object', 'default-workspace-cached-at', 'default-workspace-id'];
     const previous = Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)]));
-    localStorage.setItem('default-workspace-object', JSON.stringify({ id }));
+    // One record both parsers accept: current builds read the stamped
+    // { version, ownerUserId, workspace } shape and reject any other owner
+    // (the signed-in app wrote the stamp at login); older deployments read
+    // the top-level id.
+    const ownerUserId = localStorage.getItem('nous:client-owner:v1');
+    localStorage.setItem('default-workspace-object', JSON.stringify({
+      id, version: 1, ownerUserId, cachedAt: Date.now(), workspace: { id },
+    }));
     localStorage.setItem('default-workspace-cached-at', String(Date.now()));
     localStorage.setItem('default-workspace-id', id);
     return previous;

@@ -749,7 +749,7 @@ export function useChatSession(): UseChatSessionReturn {
           : (requestedThreadId ?? selectionAtInitializationStart);
 
         const ws: Workspace =
-          await workspaceService.getOrCreateDefaultWorkspace();
+          await workspaceService.getOrCreateDefaultWorkspace(userId);
         if (!ownsInitialization()) return;
         setWorkspace(ws);
 
