@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  act,
   fireEvent,
   render as testingRender,
   screen,
@@ -465,6 +466,77 @@ describe('ChatSidebar virtual conversation list', () => {
     );
     expect(screen.getByText('Large conversation 499')).toBeInTheDocument();
     expect(screen.queryByText('Large conversation 0')).not.toBeInTheDocument();
+  });
+
+  it('stops revealing a filtered-out active conversation after queued frames and row measurements', () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+    const measurements = new Map<Element, () => void>();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element): void {
+          measurements.set(element, () =>
+            this.callback([], this as unknown as ResizeObserver)
+          );
+        }
+        disconnect(): void {}
+      }
+    );
+    const flushFrames = (): void => {
+      const pending = [...frames.values()];
+      frames.clear();
+      act(() => pending.forEach((callback) => callback(0)));
+    };
+    const view = render(
+      <ChatSidebar
+        conversations={conversations}
+        activeId="large-5"
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+      />
+    );
+    try {
+      const activeRow = screen
+        .getByText('Large conversation 5')
+        .closest('[data-row-index]')!;
+      const previousIndex = activeRow.getAttribute('data-row-index');
+      expect(frames.size).toBeGreaterThan(0);
+      fireEvent.change(screen.getByPlaceholderText('Search threads...'), {
+        target: { value: 'Large conversation 1' },
+      });
+      expect(screen.queryByText('Large conversation 5')).toBeNull();
+      const list = screen.getByRole('list', { name: 'Conversations' });
+      const scroller = list.firstElementChild as HTMLElement;
+      const replacement = list.querySelector<HTMLElement>(
+        `[data-row-index="${previousIndex}"]`
+      )!;
+      expect(replacement).toBeInTheDocument();
+      const rect = (top: number, height: number): DOMRect =>
+        ({ top, bottom: top + height, height } as DOMRect);
+      vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(rect(0, 400));
+      vi.spyOn(replacement, 'getBoundingClientRect').mockReturnValue(
+        rect(500, 96)
+      );
+      const scrollBefore = scroller.scrollTop;
+      flushFrames();
+      expect(scroller.scrollTop).toBe(scrollBefore);
+
+      const content = replacement.firstElementChild!;
+      vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(rect(0, 120));
+      act(() => measurements.get(content)!());
+      flushFrames();
+      expect(scroller.scrollTop).toBe(scrollBefore);
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('tabs into the next checkbox when selection crosses the mounted window', async () => {

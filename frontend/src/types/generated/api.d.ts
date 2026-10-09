@@ -15939,15 +15939,57 @@ export interface components {
          * @enum {string}
          */
         ExecutionMode: "deterministic" | "exploratory";
+        /** ExecutionProviderError */
+        ExecutionProviderError: {
+            /** Message */
+            message: string;
+            /**
+             * Status Code
+             * @constant
+             */
+            status_code: 422;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "http_error";
+        };
+        /** ExecutionRequestValidationError */
+        ExecutionRequestValidationError: {
+            /** Details */
+            details: components["schemas"]["ExecutionValidationDetail"][];
+            /** Message */
+            message: string;
+            /**
+             * Status Code
+             * @constant
+             */
+            status_code: 422;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "validation_error";
+        };
+        /**
+         * ExecutionValidationDetail
+         * @description Sanitized request-validation detail from the application handler.
+         */
+        ExecutionValidationDetail: {
+            /** Loc */
+            loc: (string | number)[];
+            /** Msg */
+            msg: string;
+            /** Type */
+            type: string;
+        };
         /**
          * ExecutionValidationError
-         * @description Polling request validation or an unsupported provider selection.
+         * @description Canonical application envelope for polling request/provider validation.
          */
         ExecutionValidationError: {
-            /** Detail */
-            detail: string | {
-                [key: string]: unknown;
-            }[];
+            /** Error */
+            error: components["schemas"]["ExecutionRequestValidationError"] | components["schemas"]["ExecutionProviderError"];
         };
         /**
          * ExportError

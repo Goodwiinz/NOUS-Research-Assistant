@@ -128,7 +128,8 @@ passes. The complete bridge suite passes 233 tests
 - Browser edits reuse reserve/store/publish and the existing parent
   compare-and-swap. The real PostgreSQL competing-edit proof checks this
   equivalent conflict boundary instead of adding another persistence path.
-- Runtime capabilities expose the existing edit/preview flags. The browser
+- Runtime capabilities combine the master artifact-write switch with the edit
+  flag, and expose the existing preview flag. The browser
   defaults false on failure; no second flag owner or client environment switch
   is introduced.
 - Migration slices stay serial. Preparing the first selected-skills migration
@@ -144,7 +145,10 @@ Zenodo deposition/resume/hash proof; GOO-319/320 authenticated/expert acceptance
 and GOO-337 configured-model release and rollback proof.
 
 Plan03 sharing/native completion and Plans04/05 remain pending their serial
-migration and acceptance prerequisites. The manual same-project handoff from
+migration and acceptance prerequisites. The concrete
+[rich-context/workflow design proposal](../superpowers/specs/2026-10-09-rich-context-workflows-design.md)
+records current source owners, alternatives, lock order, authority, budgets,
+recovery and an acceptance matrix for architectural review before implementation. The manual same-project handoff from
 Plan06 was already implemented; automatic file hooks were explicitly deferred.
 
 ## Environment limits
@@ -156,8 +160,9 @@ service, before checkout or any migration code ran: Docker Hub returned its
 unauthenticated pull-limit error. The test-service images now use the same
 PostgreSQL 15 and Redis 7 tags from the [Docker Official Images registry on ECR Public](https://gallery.ecr.aws/docker/).
 The workflow still runs every existing migration and integration gate.
-This setup correction needs fresh hosted CI; the first failed runs are not
-counted as migration failures or as passes.
+The subsequent hosted migration checks passed on both PRs (repair run
+37991620556 and skills run 37991934588). Final source follow-ups trigger fresh
+checks; the first failed runs are not counted as migration failures or passes.
 
 The backend behavior-test interpreter is Python 3.13; repository CI targets 3.11.
 The unchanged architecture AST-hash guard has a known interpreter-dependent
@@ -167,3 +172,26 @@ annotations remove three errors exposed by that environment. This avoids the
 incompatible NumPy 3.13 stubs in the behavior-test environment. The AST baseline
 was not rewritten, and no quality floor was lowered. Optional PDF renderers and
 live provider checks are identified as unavailable in the linked test evidence.
+
+## Hosted review follow-up
+
+The master `ARTIFACTS_ENABLED` switch now rejects browser edits before service
+invocation, and capabilities suppress editing while keeping the independent
+read preview flag. Unsupported Codex polling requests are rejected before
+rate-limit admission. The polling 422 OpenAPI contract now describes the actual
+application error envelope for both sanitized request validation and unsupported
+provider selection; regressions exercise the real application handlers and
+validate their responses against the generated schema. All 31 affected API tests
+pass (`/tmp/rag-root-hosted-review-green.log`).
+
+Filtering out the active sidebar conversation retires its numeric reveal target
+and cancels any queued frame; subsequent row measurements cannot scroll to a
+different conversation. All 28 sidebar cases pass, including frame/measurement
+regression proof (`/tmp/rag-sidebar-filter-reveal-focused.log`).
+
+The selected-skills PR also revokes external catalog readiness after a selected
+skill or version is deleted; browser reselection can remove it while retaining
+other valid frozen versions. Its final affected matrix passes 76 checks including
+two real PostgreSQL checks; independent review passes all 37 selected-skill cases.
+The final local CI wrapper passes, including the single-head check, targeted
+migration probe and empty-database upgrade.

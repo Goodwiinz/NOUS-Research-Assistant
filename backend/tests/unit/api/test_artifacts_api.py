@@ -390,6 +390,39 @@ def test_cli_cannot_read_browser_capabilities(client: TestClient) -> None:
     assert client.get("/api/v1/artifacts/capabilities").status_code == 403
 
 
+def test_master_write_flag_disables_browser_edits_and_capability(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api import artifacts
+    from src.core.config import settings
+
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=str(USER), organization_id=str(ORG), is_cli=False
+    )
+    monkeypatch.setattr(settings, "ARTIFACTS_ENABLED", False)
+    monkeypatch.setattr(settings, "ARTIFACT_EDITING_ENABLED", True)
+    monkeypatch.setattr(settings, "ARTIFACT_PREVIEW_ENABLED", True)
+
+    async def edit(_db: Any, **values: Any) -> ArtifactVersionDTO:
+        CALLS.append(("edit", values))
+        return _version()
+
+    monkeypatch.setattr(artifacts, "edit_version", edit)
+    response = client.post(
+        f"/api/v1/artifacts/{uuid4()}/edits",
+        json={
+            "expected_parent_version_id": str(VERSION),
+            "publication_id": str(uuid4()),
+            "text": "changed",
+        },
+    )
+    assert response.status_code == 503
+    assert CALLS == []
+    capabilities = client.get("/api/v1/artifacts/capabilities")
+    assert capabilities.json() == {"editing_enabled": False, "preview_enabled": True}
+    assert capabilities.headers["cache-control"] == "private, no-store"
+
+
 @pytest.mark.parametrize(
     "app", [False, True], indirect=True, ids=["router", "real-handler"]
 )
