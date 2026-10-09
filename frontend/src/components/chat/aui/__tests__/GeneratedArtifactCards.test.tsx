@@ -1,5 +1,7 @@
+import { useAuthStore } from '@/stores/authStore';
+import type { User } from '@/types/auth';
 import { act, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/artifactService', () => ({
   artifactService: { listThreadArtifacts: vi.fn() },
@@ -44,6 +46,17 @@ type Row = { id: string; role: 'user' | 'assistant' };
 const row = (id: string, role: Row['role']): Row => ({ id, role });
 
 function seedThread(messages: Row[]): void {
+  useArtifactPanelStore
+    .getState()
+    .setScope(
+      JSON.stringify([
+        'actor',
+        'org',
+        useChatStore.getState().currentWorkspaceId,
+        null,
+        't1',
+      ])
+    );
   act(() =>
     useChatStore.setState((s) => ({
       ...s,
@@ -99,7 +112,10 @@ describe('GeneratedArtifactCards', () => {
       versionId: 'v3',
       title: 'third.md',
     });
-    expect(artifactService.listThreadArtifacts).toHaveBeenCalledWith('t1');
+    expect(artifactService.listThreadArtifacts).toHaveBeenCalledWith(
+      't1',
+      expect.any(AbortSignal)
+    );
   });
 
   it('renders nothing for an unpersisted message or an empty thread', async () => {
@@ -146,5 +162,12 @@ describe('GeneratedArtifactCards', () => {
     expect(
       await screen.findByRole('button', { name: /Open third\.md/ })
     ).toBeInTheDocument();
+  });
+});
+
+beforeEach(() => {
+  useAuthStore.setState({
+    user: { id: 'actor', organization_id: 'org' } as User,
+    isAuthenticated: true,
   });
 });

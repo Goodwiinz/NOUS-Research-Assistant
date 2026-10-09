@@ -740,35 +740,43 @@ export class APIClient {
    */
   /** Authenticated GET returning the raw body and the served content type. */
   async fetchBlobWithType(
-    url: string
+    url: string,
+    callerSignal?: AbortSignal
   ): Promise<{ blob: Blob; contentType: string }> {
     const accountSignal = getAccountSignal();
-    await this.ensureAuth(accountSignal);
-    accountSignal.throwIfAborted();
-
-    const response = await fetch(
-      url.startsWith('http') ? url : `${this.baseURL}${url}`,
-      {
-        headers: this.getHeaders(),
-        signal: accountSignal,
-      }
+    const { signal, cleanup } = composeAbortSignals(
+      callerSignal ? [accountSignal, callerSignal] : [accountSignal]
     );
+    try {
+      await this.ensureAuth(signal);
+      signal.throwIfAborted();
 
-    if (!response.ok) {
-      throw await this.handleErrorResponse(response);
+      const response = await fetch(
+        url.startsWith('http') ? url : `${this.baseURL}${url}`,
+        {
+          headers: this.getHeaders(),
+          signal,
+        }
+      );
+
+      if (!response.ok) {
+        throw await this.handleErrorResponse(response);
+      }
+
+      const blob = await response.blob();
+      signal.throwIfAborted();
+      return {
+        blob,
+        contentType: response.headers.get('content-type') || blob.type || '',
+      };
+    } finally {
+      cleanup();
     }
-
-    const blob = await response.blob();
-    accountSignal.throwIfAborted();
-    return {
-      blob,
-      contentType: response.headers.get('content-type') || blob.type || '',
-    };
   }
 
   /** Authenticated GET returning the raw body; callers decide how to render. */
-  async fetchBlob(url: string): Promise<Blob> {
-    return (await this.fetchBlobWithType(url)).blob;
+  async fetchBlob(url: string, signal?: AbortSignal): Promise<Blob> {
+    return (await this.fetchBlobWithType(url, signal)).blob;
   }
 
   async fetchObjectUrl(

@@ -7,6 +7,7 @@ import { ChatRagProvider, useChatRag } from '@/components/chat/ChatRagContext';
 import { useChatPersistence } from '@/hooks';
 import { cn } from '@/lib/utils';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
+import { useArtifactPanelScope } from '@/hooks/chat/useArtifactScope';
 import {
   resolveBoundProjectId,
   selectCurrentThreadProjectId,
@@ -380,13 +381,19 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   // Split-view artifact panel: when open it takes over the rail's slot, and
   // the rail becomes a button-toggled overlay (Codex-style) so its content
   // stays reachable without a third permanent column.
+  const artifactScope = useArtifactPanelScope(projectId ?? null);
+  const panelScope = useArtifactPanelStore((s) => s.scope);
   const artifact = useArtifactPanelStore((s) => s.artifact);
   const isArtifactPanelOpen = useArtifactPanelStore((s) => s.isOpen);
   const openArtifact = useArtifactPanelStore((s) => s.openArtifact);
   const [railOverlayOpen, setRailOverlayOpen] = useState(false);
   // The overlay only exists while the panel is docked; reset on panel close
   // so reopening the panel starts without a stale overlay.
-  const showArtifactPanel = isArtifactPanelOpen && artifact !== null;
+  const showArtifactPanel =
+    artifactScope !== null &&
+    panelScope === artifactScope &&
+    isArtifactPanelOpen &&
+    artifact !== null;
   const [panelWasOpen, setPanelWasOpen] = useState(showArtifactPanel);
   if (showArtifactPanel !== panelWasOpen) {
     setPanelWasOpen(showArtifactPanel);

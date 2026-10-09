@@ -92,27 +92,42 @@ export function artifactVersionContentPath(versionId: string): string {
 }
 
 export const artifactService = {
-  async listThreadArtifacts(threadId: string): Promise<ThreadArtifact[]> {
+  async listThreadArtifacts(
+    threadId: string,
+    signal?: AbortSignal
+  ): Promise<ThreadArtifact[]> {
     const rows = await api.get<ApiThreadArtifact[]>(
-      `/artifacts/threads/${encodeURIComponent(threadId)}`
+      `/artifacts/threads/${encodeURIComponent(threadId)}`,
+      { signal }
     );
     return rows.map(toThreadArtifact);
   },
-  async listProjectArtifacts(projectId: string): Promise<ProjectArtifact[]> {
+  async listProjectArtifacts(
+    projectId: string,
+    signal?: AbortSignal
+  ): Promise<ProjectArtifact[]> {
     const rows = await api.get<ApiProjectArtifact[]>(
-      `/artifacts/projects/${encodeURIComponent(projectId)}`
+      `/artifacts/projects/${encodeURIComponent(projectId)}`,
+      { signal }
     );
     return rows.map(toProjectArtifact);
   },
-  async listVersions(artifactId: string): Promise<ArtifactVersion[]> {
+  async listVersions(
+    artifactId: string,
+    signal?: AbortSignal
+  ): Promise<ArtifactVersion[]> {
     const rows = await api.get<ApiArtifactVersion[]>(
-      `/artifacts/${encodeURIComponent(artifactId)}/versions`
+      `/artifacts/${encodeURIComponent(artifactId)}/versions`,
+      { signal }
     );
     return rows.map(toArtifactVersion);
   },
   /** Bytes plus the served content type; the caller decides how to render. */
-  async fetchVersionBlob(versionId: string): Promise<Blob> {
-    return api.fetchBlob(artifactVersionContentPath(versionId));
+  async fetchVersionBlob(
+    versionId: string,
+    signal?: AbortSignal
+  ): Promise<Blob> {
+    return api.fetchBlob(artifactVersionContentPath(versionId), signal);
   },
   downloadVersion(version: ArtifactVersion): Promise<void> {
     return api.download(

@@ -29,9 +29,19 @@ export interface OpenArtifactOptions {
    * has pinned the current artifact.
    */
   source?: 'user' | 'agent';
+  /** Captured scope rejects late results from a previous chat/account. */
+  scope?: string | null;
 }
 
+export type GeneratedArtifact = Extract<Artifact, { kind: 'generated' }>;
+
 interface ArtifactPanelState {
+  scope: string | null;
+  tabs: GeneratedArtifact[];
+  activeVersionId: string | null;
+  setScope: (scope: string | null) => void;
+  selectTab: (versionId: string) => void;
+  closeTab: (versionId: string) => void;
   artifact: Artifact | null;
   isOpen: boolean;
   pinned: boolean;
@@ -53,14 +63,68 @@ interface ArtifactPanelState {
  * ledger for why that discipline exists).
  */
 export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
+  scope: null,
+  tabs: [],
+  activeVersionId: null,
   artifact: null,
   isOpen: false,
   pinned: false,
 
+  setScope: (scope) => {
+    if (scope !== get().scope) {
+      set({
+        scope,
+        tabs: [],
+        activeVersionId: null,
+        artifact: null,
+        isOpen: false,
+        pinned: false,
+      });
+    }
+  },
+
+  selectTab: (versionId) => {
+    const artifact = get().tabs.find((tab) => tab.versionId === versionId);
+    if (artifact) set({ artifact, activeVersionId: versionId, isOpen: true });
+  },
+
+  closeTab: (versionId) => {
+    const state = get();
+    const index = state.tabs.findIndex((tab) => tab.versionId === versionId);
+    if (index < 0) return;
+    const tabs = state.tabs.filter((tab) => tab.versionId !== versionId);
+    if (state.activeVersionId !== versionId) {
+      set({ tabs });
+      return;
+    }
+    const artifact = tabs[Math.min(index, tabs.length - 1)] ?? null;
+    set({
+      tabs,
+      artifact,
+      activeVersionId: artifact?.versionId ?? null,
+      isOpen: Boolean(artifact),
+    });
+  },
+
   openArtifact: (artifact, opts) => {
+    if (opts && 'scope' in opts && opts.scope !== get().scope) return;
     const { pinned, isOpen } = get();
     if (opts?.source === 'agent' && pinned && isOpen) return;
-    set({ artifact, isOpen: true });
+    if (artifact.kind === 'generated') {
+      const tabs = get().tabs;
+      set({
+        artifact,
+        isOpen: true,
+        activeVersionId: artifact.versionId,
+        tabs: tabs.some((tab) => tab.versionId === artifact.versionId)
+          ? tabs.map((tab) =>
+              tab.versionId === artifact.versionId ? artifact : tab
+            )
+          : [...tabs, artifact],
+      });
+    } else {
+      set({ artifact, isOpen: true, activeVersionId: null });
+    }
   },
 
   closePanel: () => set({ isOpen: false }),
@@ -71,5 +135,13 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
 
   togglePin: () => set((s) => ({ pinned: !s.pinned })),
 
-  reset: () => set({ artifact: null, isOpen: false, pinned: false }),
+  reset: () =>
+    set({
+      scope: null,
+      tabs: [],
+      activeVersionId: null,
+      artifact: null,
+      isOpen: false,
+      pinned: false,
+    }),
 }));

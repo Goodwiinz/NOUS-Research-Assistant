@@ -1,5 +1,7 @@
-import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { useAuthStore } from '@/stores/authStore';
+import type { User } from '@/types/auth';
+import { act, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/artifactService', () => ({
   artifactService: { fetchVersionBlob: vi.fn(), downloadVersion: vi.fn() },
@@ -95,4 +97,27 @@ describe('ArtifactPreview', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getByText('ok')).toBeInTheDocument());
   });
+});
+
+beforeEach(() => {
+  useAuthStore.setState({
+    user: { id: 'actor', organization_id: 'org' } as User,
+    isAuthenticated: true,
+  });
+});
+
+it('removes rendered bytes immediately when the account scope changes', async () => {
+  vi.mocked(artifactService.fetchVersionBlob)
+    .mockResolvedValueOnce(
+      new Blob(['account A secret'], { type: 'text/plain' })
+    )
+    .mockImplementationOnce(() => new Promise(() => {}));
+  render(<ArtifactPreview version={{ ...base, mimeType: 'text/plain' }} />);
+  await screen.findByText('account A secret');
+  act(() =>
+    useAuthStore.setState({
+      user: { id: 'other', organization_id: 'foreign' } as User,
+    })
+  );
+  expect(screen.queryByText('account A secret')).toBeNull();
 });

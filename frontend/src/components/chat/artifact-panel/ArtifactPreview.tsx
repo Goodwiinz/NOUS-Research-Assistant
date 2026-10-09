@@ -3,6 +3,8 @@
 import React, { useEffect, useState, type ReactElement } from 'react';
 
 import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
+import { useArtifactContent } from '@/hooks/chat/useThreadArtifacts';
+import { useArtifactScope } from '@/hooks/chat/useArtifactScope';
 import {
   artifactService,
   type ArtifactVersion,
@@ -53,38 +55,42 @@ export function ArtifactPreview({
   version: ArtifactVersion;
 }): ReactElement {
   const kind = previewKindFor(version);
+  const scope = useArtifactScope();
+  const content = useArtifactContent(version.versionId, kind !== 'download');
   const [attempt, setAttempt] = useState(0);
   // One load per (version, attempt); a stale `loaded` for another key renders
   // as loading, so no synchronous setState is needed when the key changes.
-  const key = `${version.versionId}:${attempt}`;
+  const key = `${scope}:${version.versionId}:${attempt}`;
   const [loaded, setLoaded] = useState<LoadState | null>(null);
-  const state: LoadState | { status: 'loading' } =
-    loaded && loaded.key === key ? loaded : { status: 'loading' };
+  const state: LoadState | { status: 'loading' } = content.isError
+    ? { key, status: 'error' }
+    : loaded && loaded.key === key
+      ? loaded
+      : { status: 'loading' };
 
   useEffect(() => {
     if (kind === 'download') return;
     let cancelled = false;
     let objectUrl: string | null = null;
-    artifactService
-      .fetchVersionBlob(version.versionId)
-      .then(async (blob) => {
-        if (cancelled) return;
-        if (kind === 'image') {
-          objectUrl = window.URL.createObjectURL(blob);
-          setLoaded({ key, status: 'image', objectUrl });
-        } else {
-          const text = await blobToText(blob);
-          if (!cancelled) setLoaded({ key, status: 'text', text });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setLoaded({ key, status: 'error' });
-      });
+    const blob = content.data;
+    if (!blob) return;
+    const prepare = async (): Promise<void> => {
+      if (kind === 'image') {
+        objectUrl = window.URL.createObjectURL(blob);
+        setLoaded({ key, status: 'image', objectUrl });
+      } else {
+        const text = await blobToText(blob);
+        if (!cancelled) setLoaded({ key, status: 'text', text });
+      }
+    };
+    void prepare().catch(() => {
+      if (!cancelled) setLoaded({ key, status: 'error' });
+    });
     return () => {
       cancelled = true;
       if (objectUrl) window.URL.revokeObjectURL(objectUrl);
     };
-  }, [kind, key, version.versionId]);
+  }, [kind, key, version.versionId, content.data]);
 
   const [downloadFailed, setDownloadFailed] = useState(false);
   const download = (): void => {
@@ -130,7 +136,10 @@ export function ArtifactPreview({
         <button
           type="button"
           className="mt-3 rounded-md border px-3 py-2 text-sm"
-          onClick={() => setAttempt((n) => n + 1)}
+          onClick={() => {
+            setAttempt((n) => n + 1);
+            void content.refetch();
+          }}
         >
           Retry
         </button>
