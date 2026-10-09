@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import re
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -93,9 +94,11 @@ def test_execute_code_cell_budget_fits_inside_its_outer_tier() -> None:
         < _SLOW_TOOL_TIMEOUT_SECONDS
     )
     # The budget is clamped to end this long before the outer limit. The
-    # headroom covers one probe plus the cell timeout's rounding up to whole
-    # seconds, and a call whose setup is quick still gets the full budget.
-    assert AGENT_CELL_HEADROOM_SECONDS >= POST_TIMEOUT_PROBE_SECONDS + 1
+    # headroom covers one probe and the cell timeout's rounding up to whole
+    # seconds, and still leaves a few seconds to record the result
+    # (complete_operation) inside the outer limit. A call whose setup is
+    # quick still gets the full budget.
+    assert AGENT_CELL_HEADROOM_SECONDS - (POST_TIMEOUT_PROBE_SECONDS + 1) >= 3
     assert (
         AGENT_CELL_TIMEOUT_SECONDS + AGENT_CELL_HEADROOM_SECONDS
         <= _SLOW_TOOL_TIMEOUT_SECONDS
@@ -151,7 +154,7 @@ async def _train_then_follow_up(
     inside the outer limit, as execute_tool's user lookup and operation claim
     do before the tool runs. The headroom is scaled too: the fake kernel
     answers the probe at once, so it covers the cell timeout's rounding up to
-    whole seconds plus 0.1 s."""
+    whole seconds plus 1.2 s for the probe and the tool node's bookkeeping."""
     from src.services.agent import _nodes_tools, graph, tools_impl
     from src.services.sandbox import e2b_sandbox_manager as sandbox
 
@@ -166,7 +169,7 @@ async def _train_then_follow_up(
     monkeypatch.setattr(sandbox, "AsyncSandbox", SimpleNamespace(create=create))
     monkeypatch.setattr(sandbox, "_sandbox_manager", sandbox.SandboxManager())
     monkeypatch.setattr(sandbox, "AGENT_CELL_TIMEOUT_SECONDS", cell_budget)
-    monkeypatch.setattr(sandbox, "AGENT_CELL_HEADROOM_SECONDS", 1.1)
+    monkeypatch.setattr(sandbox, "AGENT_CELL_HEADROOM_SECONDS", 2.2)
     monkeypatch.setattr(_nodes_tools, "TOOL_TIMEOUT_SECONDS", 0.5)
     monkeypatch.setattr(_nodes_tools, "_SLOW_TOOL_TIMEOUT_SECONDS", slow_tier)
 
@@ -241,26 +244,33 @@ async def test_slow_setup_still_lets_the_sandbox_time_out_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The outer limit starts before execute_tool resolves the user and claims
-    the operation row. Scaled: slow tier 4 s, cell budget 3 s, and that setup
-    takes 1.5 s, as a 30 s database stall would in production. A fresh 3 s
-    budget would end at 4.5 s, so the outer limit would cancel the cell and
-    kill the box. Clamped to end 1.1 s before the outer limit, the cell gets
-    2 s and the sandbox interrupts it itself.
+    the operation row. Scaled: slow tier 8 s, cell budget 6 s, and that setup
+    takes 3 s, as a 30 s database stall would in production. A fresh 6 s
+    budget would end at 9 s, so the outer limit would cancel the cell and
+    kill the box. Clamped to end 2.2 s before the outer limit, the cell gets
+    at most 3 s (rounded up from what is left) and the sandbox interrupts it
+    itself, at least 1.2 s before the outer limit however slowly this runs.
 
     Mutation: drop the clamp in ``_tool_execute_code``, or the deadline scope
-    around ``wait_for`` in ``_nodes_tools``; the train cell then gets 3 s and
-    the next cell raises NameError.
+    around ``wait_for`` in ``_nodes_tools``; the train cell then gets 6 s, the
+    outer limit cancels it and kills the box, and the next cell raises
+    NameError.
     """
+    cell_budget = 6
     train, follow_up, killed = await _train_then_follow_up(
         monkeypatch,
-        slow_tier=4,
-        cell_budget=3,
-        train_code="#sleep 10\nmodel = sum(df)",
-        setup_seconds=1.5,
+        slow_tier=8,
+        cell_budget=cell_budget,
+        train_code="#sleep 30\nmodel = sum(df)",
+        setup_seconds=3,
     )
     assert train["status"] == "failed"
     stderr = train["result"].get("stderr", "")
-    assert "timed out after 2s" in stderr, train["result"]
+    # The sandbox's own limit fired, and it was the clamped budget, not the
+    # full one; the exact value depends on how long setup really took.
+    timed_out = re.search(r"timed out after (\d+)s", stderr)
+    assert timed_out is not None, train["result"]
+    assert 1 <= int(timed_out.group(1)) < cell_budget
     assert "still available" in stderr
     assert follow_up["status"] == "completed", follow_up["result"]
     assert follow_up["result"]["stdout"] == "3\n"

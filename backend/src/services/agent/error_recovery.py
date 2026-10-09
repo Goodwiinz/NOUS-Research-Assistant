@@ -48,6 +48,17 @@ TOOL_ERROR_HINTS: dict[tuple[str, str], tuple[ErrorCategory, str]] = {
         "transient",
         "ArXiv ingestion timed out. Try fewer papers (max 3 at a time).",
     ),
+    # IN-2: the user lookup and operation claim used the call's time limit
+    # before any code ran. That is the backend's slowness, so it must not
+    # count toward the error ceiling as fatal. Kept here because tools may
+    # not declare "transient" themselves (_DECLARABLE_CATEGORIES); the payload
+    # repeats this suggestion because the model reads the payload.
+    ("execute_code", "sandbox_budget_exhausted"): (
+        "transient",
+        "Nothing ran because setup used this call's time limit. Run the code "
+        "again in a later turn; repeating the identical call in this turn "
+        "returns this result again.",
+    ),
     ("search_arxiv", "no results"): (
         "recoverable",
         "No results found. Try broader search terms or different keywords.",

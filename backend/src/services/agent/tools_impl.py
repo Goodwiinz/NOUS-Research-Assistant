@@ -5125,7 +5125,9 @@ async def _tool_execute_code(
     # SLOW tool limit, so the sandbox interrupts an over-long cell itself and
     # keeps the session instead of the outer limit cancelling the call. That
     # limit started before the user lookup and operation claim, so the budget
-    # ends a probe's headroom before it, whenever this call was dispatched.
+    # ends at the earlier of AGENT_CELL_TIMEOUT_SECONDS from here or
+    # AGENT_CELL_HEADROOM_SECONDS (a probe, rounding, and time to record the
+    # result) before that limit.
     loop = asyncio.get_running_loop()
     deadline = loop.time() + AGENT_CELL_TIMEOUT_SECONDS
     outer_deadline = tool_call_deadline()
@@ -5134,6 +5136,9 @@ async def _tool_execute_code(
         if cutoff - loop.time() < 1:
             # Even the manager's 1 s minimum could outlast the outer limit,
             # whose cancellation kills the box. Nothing ran or was spent.
+            # error_recovery's TOOL_ERROR_HINTS classifies this as transient
+            # with the same suggestion; the durable-operation barrier replays
+            # this result to an identical call later in the same turn.
             return {
                 "status": "error",
                 "stdout": "",
@@ -5145,6 +5150,11 @@ async def _tool_execute_code(
                 "execution_time_ms": 0,
                 "description": description,
                 "error": "sandbox_budget_exhausted",
+                "suggestion": (
+                    "Nothing ran because setup used this call's time limit. "
+                    "Run the code again in a later turn; repeating the "
+                    "identical call in this turn returns this result again."
+                ),
             }
         deadline = min(deadline, cutoff)
 

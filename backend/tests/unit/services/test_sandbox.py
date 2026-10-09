@@ -784,10 +784,14 @@ class TestSandboxExecutionBounds:
         Mutation: await the bounded kill directly in ``_kill_sandbox`` instead
         of shielding its task; the kill is then cancelled and ``killed`` stays
         unset.
+
+        The kill task is held while its caller is gone, and leaves the holding
+        set once it finishes, so the set does not grow for the process's life.
         """
         from src.services.sandbox import e2b_sandbox_manager as module
 
         monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 0.2)
+        monkeypatch.setattr(module, "_PENDING_KILLS", set())
         killing = asyncio.Event()
         release_kill = asyncio.Event()
         killed = asyncio.Event()
@@ -815,9 +819,14 @@ class TestSandboxExecutionBounds:
             task.cancel()  # the agent's outer limit
             with pytest.raises(asyncio.CancelledError):
                 await task
+            assert len(module._PENDING_KILLS) == 1
+            (kill_task,) = module._PENDING_KILLS
             release_kill.set()
             await asyncio.wait_for(killed.wait(), timeout=1)
             sandbox.kill.assert_awaited_once()
+            await asyncio.wait_for(kill_task, timeout=1)
+            await asyncio.sleep(0)  # let the task's done callbacks run
+            assert module._PENDING_KILLS == set()
         finally:
             release_kill.set()
             task.cancel()
@@ -1628,7 +1637,13 @@ class TestToolExecuteCode:
 
         Mutation: drop the early return; the install runs and this fails on
         ``install_packages.assert_not_awaited``.
+
+        The failure is the backend's slowness, not the code's, so the tool node
+        must classify it transient (no error-ceiling charge) rather than fatal,
+        which tells the agent not to recover. The model reads the payload, so
+        the payload carries the same suggestion as the classification.
         """
+        from src.services.agent.error_recovery import classify_error_from_payload
         from src.services.agent.tool_deadline import tool_call_deadline_scope
         from src.services.sandbox.e2b_sandbox_manager import AGENT_CELL_HEADROOM_SECONDS
 
@@ -1639,6 +1654,10 @@ class TestToolExecuteCode:
         assert result["status"] == "error"
         assert result["error"] == "sandbox_budget_exhausted"
         assert "was not run" in result["stderr"]
+        classified = classify_error_from_payload("execute_code", result)
+        assert classified.category == "transient"
+        assert classified.suggestion
+        assert result["suggestion"] == classified.suggestion
 
     async def test_image_outputs_included_in_response(self):
         from src.services.sandbox.e2b_sandbox_manager import ExecutionResult

@@ -101,8 +101,10 @@ AGENT_CELL_TIMEOUT_SECONDS = 90
 # A kernel that still cannot run a no-op within this window is unhealthy.
 POST_TIMEOUT_PROBE_SECONDS = 10
 # How long before the agent's outer limit the budget must end: one probe, 1 s
-# because the cell timeout is rounded up to whole seconds, and 1 s of slack.
-AGENT_CELL_HEADROOM_SECONDS = POST_TIMEOUT_PROBE_SECONDS + 2
+# because the cell timeout is rounded up to whole seconds, and 4 s for
+# execute_tool to record the result (complete_operation) inside that limit.
+# 90 + 15 <= 120, so a call whose setup is quick still gets the full budget.
+AGENT_CELL_HEADROOM_SECONDS = POST_TIMEOUT_PROBE_SECONDS + 5
 # A probe queued before the interrupt lands can hang, or come back aborted
 # (ipykernel ``stop_on_error``), so the window is spent in short attempts.
 _PROBE_ATTEMPT_SECONDS = 2.5
