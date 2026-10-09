@@ -59,6 +59,7 @@ function ScopedFileView({
 }): ReactElement {
   const capabilities = useArtifactCapabilities();
   const [editing, setEditing] = useState(false);
+  const pendingNavigation = useArtifactPanelStore((s) => s.pendingNavigation);
   if (editing)
     return (
       <ArtifactEditor
@@ -75,6 +76,7 @@ function ScopedFileView({
           <button
             type="button"
             className="m-3 rounded-md border px-3 py-2 text-sm"
+            disabled={pendingNavigation?.scope === scope}
             onClick={() => setEditing(true)}
           >
             Edit
@@ -136,11 +138,20 @@ function ArtifactEditor({
   }, [content.data, initial]);
   const dirty = initial !== null && text !== initial;
   useEffect(() => {
-    const guard = (): boolean =>
-      !dirty ||
-      window.confirm(
-        'Discard your unsaved changes? Choose Cancel to keep editing or copy your changes first.'
-      );
+    const guard = (): boolean => {
+      if (!dirty) return true;
+      if (
+        !window.confirm(
+          'Discard your unsaved changes? Choose Cancel to keep editing or copy your changes first.'
+        )
+      )
+        return false;
+      // Retire this buffer before an approved asynchronous navigation starts.
+      // A deferred project write must not allow new edits that its completion loses.
+      mounted.current = false;
+      onCancel();
+      return true;
+    };
     useArtifactPanelStore.getState().setNavigationGuard(guard);
     const beforeUnload = (event: BeforeUnloadEvent): void => {
       if (dirty) {
@@ -154,7 +165,7 @@ function ArtifactEditor({
         useArtifactPanelStore.getState().setNavigationGuard(null);
       window.removeEventListener('beforeunload', beforeUnload);
     };
-  }, [dirty]);
+  }, [dirty, onCancel]);
   const current = (): boolean =>
     mounted.current &&
     useArtifactPanelStore.getState().scope === scope &&

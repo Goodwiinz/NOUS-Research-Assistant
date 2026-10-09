@@ -36,6 +36,7 @@ export interface OpenArtifactOptions {
 export type GeneratedArtifact = Extract<Artifact, { kind: 'generated' }>;
 
 interface ArtifactPanelState {
+  pendingNavigation: { scope: string; token: string } | null;
   navigationGuard: (() => boolean) | null;
   setNavigationGuard: (guard: (() => boolean) | null) => void;
   scope: string | null;
@@ -65,6 +66,7 @@ interface ArtifactPanelState {
  * ledger for why that discipline exists).
  */
 export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
+  pendingNavigation: null,
   navigationGuard: null,
   setNavigationGuard: (navigationGuard) => set({ navigationGuard }),
   scope: null,
@@ -78,6 +80,7 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
     if (scope !== get().scope) {
       set({
         scope,
+        pendingNavigation: null,
         navigationGuard: null,
         tabs: [],
         activeVersionId: null,
@@ -164,6 +167,7 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
 
   reset: () =>
     set({
+      pendingNavigation: null,
       navigationGuard: null,
       scope: null,
       tabs: [],

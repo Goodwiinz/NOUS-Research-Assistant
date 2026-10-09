@@ -41,14 +41,12 @@ it('hides and clears all identities on account, org, workspace, project or threa
     () => rerender({ projectId: 'p2' }),
   ]) {
     act(() =>
-      useArtifactPanelStore
-        .getState()
-        .openArtifact({
-          kind: 'generated',
-          artifactId: 'a1',
-          versionId: 'v1',
-          title: 'private',
-        })
+      useArtifactPanelStore.getState().openArtifact({
+        kind: 'generated',
+        artifactId: 'a1',
+        versionId: 'v1',
+        title: 'private',
+      })
     );
     const previous = result.current;
     act(change);
@@ -74,7 +72,11 @@ it('does not reuse an in-flight previous account version result for the same ID'
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  const wrapper = ({ children }: { children: ReactNode }) => (
+  const wrapper = ({
+    children,
+  }: {
+    children: ReactNode;
+  }): import('react').ReactElement => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
   const { result } = renderHook(() => useArtifactVersions('same-id'), {

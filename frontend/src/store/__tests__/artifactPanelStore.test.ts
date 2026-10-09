@@ -1,3 +1,4 @@
+import { beginArtifactNavigation } from '@/utils/artifactNavigation';
 /**
  * Unit tests for the artifact panel store (Zustand).
  *
@@ -159,4 +160,15 @@ describe('generated artifact tabs', () => {
       pinned: false,
     });
   });
+});
+
+it('older pending navigation cleanup cannot release a newer UI lock', () => {
+  useArtifactPanelStore.getState().setScope('qa-scope');
+  const finishA = beginArtifactNavigation();
+  const finishB = beginArtifactNavigation();
+  const pendingB = useArtifactPanelStore.getState().pendingNavigation;
+  finishA?.();
+  expect(useArtifactPanelStore.getState().pendingNavigation).toBe(pendingB);
+  finishB?.();
+  expect(useArtifactPanelStore.getState().pendingNavigation).toBeNull();
 });

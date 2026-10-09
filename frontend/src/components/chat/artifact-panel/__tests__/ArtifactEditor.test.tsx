@@ -1,3 +1,7 @@
+import { ProjectPickerPopover } from '@/components/context-rail/ProjectPickerPopover';
+import { useProjectStore } from '@/store/projectStore';
+import { useProjectChatStore } from '@/store/projectChatStore';
+import Link from 'next/link';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from '@/test/test-utils';
@@ -8,6 +12,11 @@ import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { APIErrorClass } from '@/types/api';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { useSlashCommands } from '@/hooks/chat/useSlashCommands';
+const routerPush = vi.fn();
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: routerPush, replace: vi.fn() }),
+}));
 import { useArtifactPanelScope } from '@/hooks/chat/useArtifactScope';
 vi.mock('@/services/artifactService', () => ({
   artifactService: {
@@ -290,7 +299,11 @@ it('an account A save resolving after account B opens preserves B cache, tabs an
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  const wrapper = ({ children }: { children: ReactNode }) => (
+  const wrapper = ({
+    children,
+  }: {
+    children: ReactNode;
+  }): import('react').ReactElement => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
   function Harness(): import('react').ReactElement | null {
@@ -313,14 +326,12 @@ it('an account A save resolving after account B opens preserves B cache, tabs an
     useAuthStore.setState({ user: { id: 'u2', organization_id: 'o2' } as User })
   );
   act(() =>
-    useArtifactPanelStore
-      .getState()
-      .openArtifact({
-        kind: 'generated',
-        artifactId: 'b-artifact',
-        versionId: 'b1',
-        title: 'B file',
-      })
+    useArtifactPanelStore.getState().openArtifact({
+      kind: 'generated',
+      artifactId: 'b-artifact',
+      versionId: 'b1',
+      title: 'B file',
+    })
   );
   await user.click(await screen.findByRole('button', { name: 'Edit' }));
   await screen.findByLabelText('Edit file contents');
@@ -339,5 +350,172 @@ it('an account A save resolving after account B opens preserves B cache, tabs an
   expect(client.getQueryData(bKey)).toEqual([bVersion]);
   expect(useArtifactPanelStore.getState().tabs).toEqual(bTabs);
   expect(useArtifactPanelStore.getState().activeVersionId).toBe('b1');
+  expect(screen.getByLabelText('Edit file contents')).toHaveValue('B draft');
+});
+
+function NavigationHarness(): import('react').ReactElement {
+  useArtifactPanelScope();
+  const open = useArtifactPanelStore((state) => state.isOpen);
+  const activeThreadId = useChatStore((state) => state.currentThreadId);
+  const commands = useSlashCommands({
+    input: '',
+    setInput: vi.fn(),
+    handleSubmit: vi.fn(),
+    retryLast: vi.fn(),
+    conversations: [],
+    activeThreadId,
+    setCurrentThread: useChatStore.getState().setCurrentThread,
+    chatInputRef: { current: null },
+  });
+  return (
+    <>
+      <button onClick={commands.startNewChat}>New chat</button>
+      <Link href="/projects">Projects</Link>
+      <ProjectPickerPopover
+        threadId="t1"
+        workspaceId="w1"
+        onProjectBound={() => useChatStore.setState({ currentThreadId: 't2' })}
+      >
+        <button>Bind project</button>
+      </ProjectPickerPopover>
+      {open && <ArtifactFileView version={version} />}
+    </>
+  );
+}
+it('actual New chat action preserves dirty edits when declined and navigates only after discard', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  const { user } = render(<NavigationHarness />);
+  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  fireEvent.change(await screen.findByLabelText('Edit file contents'), {
+    target: { value: 'keep my draft' },
+  });
+  await user.click(screen.getByRole('button', { name: 'New chat' }));
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(useChatStore.getState().currentThreadId).toBe('t1');
+  expect(screen.getByLabelText('Edit file contents')).toHaveValue(
+    'keep my draft'
+  );
+  expect(routerPush).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole('button', { name: 'New chat' }));
+  expect(useChatStore.getState().currentThreadId).toBeNull();
+  expect(screen.queryByLabelText('Edit file contents')).toBeNull();
+  expect(routerPush).toHaveBeenCalledWith('/chat?new=1');
+});
+it('same-actor client links and back navigation cannot discard dirty edits after Stay', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  const restore = vi.spyOn(window.history, 'pushState');
+  const { user } = render(<NavigationHarness />);
+  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  fireEvent.change(await screen.findByLabelText('Edit file contents'), {
+    target: { value: 'keep my draft' },
+  });
+  const link = screen.getByRole('link', { name: 'Projects' });
+  const allowed = link.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
+  );
+  expect(allowed).toBe(false);
+  const before = confirm.mock.calls.length;
+  act(() => window.dispatchEvent(new PopStateEvent('popstate', { state: {} })));
+  expect(confirm.mock.calls.length).toBe(before + 1);
+  expect(restore).toHaveBeenCalled();
+  expect(screen.getByLabelText('Edit file contents')).toHaveValue(
+    'keep my draft'
+  );
+});
+
+it('project picker decides before the write and retires the approved buffer while HTTP is deferred', async () => {
+  let finish!: (value: null) => void;
+  const link = vi.fn(
+    () =>
+      new Promise<null>((resolve) => {
+        finish = resolve;
+      })
+  );
+  useProjectChatStore.setState({ linkThreadToProject: link });
+  useProjectStore.setState({
+    projects: [{ id: 'p2', name: 'Other project' }] as ReturnType<
+      typeof useProjectStore.getState
+    >['projects'],
+    loading: false,
+    fetchProjects: vi.fn().mockResolvedValue(undefined),
+  });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  const { user } = render(<NavigationHarness />);
+  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  fireEvent.change(await screen.findByLabelText('Edit file contents'), {
+    target: { value: 'draft' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Bind project' }));
+  await user.click(
+    await screen.findByRole('button', { name: 'Other project' })
+  );
+  expect(link).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('Edit file contents')).toHaveValue('draft');
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole('button', { name: 'Other project' }));
+  expect(link).toHaveBeenCalledOnce();
+  expect(screen.queryByLabelText('Edit file contents')).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Edit', exact: true })
+  ).toBeDisabled();
+  await act(async () => finish(null));
+  expect(screen.getByRole('alert')).toHaveTextContent('Failed to link');
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(await screen.findByRole('button', { name: 'Edit' })).toBeVisible();
+});
+
+it('a deferred picker result for A never steers B or clears its new draft', async () => {
+  type LinkResult = Awaited<
+    ReturnType<
+      ReturnType<typeof useProjectChatStore.getState>['linkThreadToProject']
+    >
+  >;
+  let finish!: (value: LinkResult) => void;
+  const link = vi.fn(
+    () =>
+      new Promise<LinkResult>((resolve) => {
+        finish = resolve;
+      })
+  );
+  useProjectChatStore.setState({ linkThreadToProject: link });
+  useProjectStore.setState({
+    projects: [{ id: 'p2', name: 'Other project' }] as ReturnType<
+      typeof useProjectStore.getState
+    >['projects'],
+    loading: false,
+    fetchProjects: vi.fn().mockResolvedValue(undefined),
+  });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const { user } = render(<NavigationHarness />);
+  await user.click(
+    await screen.findByRole('button', { name: 'Edit', exact: true })
+  );
+  fireEvent.change(await screen.findByLabelText('Edit file contents'), {
+    target: { value: 'A draft' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Bind project' }));
+  await user.click(
+    await screen.findByRole('button', { name: 'Other project' })
+  );
+  act(() => useChatStore.setState({ currentThreadId: 'B' }));
+  act(() =>
+    useArtifactPanelStore
+      .getState()
+      .openArtifact({
+        kind: 'generated',
+        artifactId: 'a1',
+        versionId: 'v1',
+        title: 'memo.txt',
+      })
+  );
+  await user.click(
+    await screen.findByRole('button', { name: 'Edit', exact: true })
+  );
+  fireEvent.change(await screen.findByLabelText('Edit file contents'), {
+    target: { value: 'B draft' },
+  });
+  await act(async () => finish({} as NonNullable<LinkResult>));
+  expect(useChatStore.getState().currentThreadId).toBe('B');
   expect(screen.getByLabelText('Edit file contents')).toHaveValue('B draft');
 });

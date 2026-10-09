@@ -1,3 +1,7 @@
+import {
+  beginArtifactNavigation,
+  confirmArtifactNavigation,
+} from '@/utils/artifactNavigation';
 import { useChatSessionGuard } from './useChatSessionGuard';
 import { onChatSessionReset } from '@/store/chat-store';
 import { useCallback, useState, useEffect } from 'react';
@@ -124,6 +128,7 @@ export function useSlashCommands({
 
   // Start a fresh chat — shared by the sidebar "new" button and the /new command
   const startNewChat = useCallback(() => {
+    if (!confirmArtifactNavigation()) return;
     setCommandOutputs([]);
     setCurrentThread(null);
     router.push(getNewChatUrl());
@@ -138,6 +143,8 @@ export function useSlashCommands({
   const handleSetProjectContext = useCallback(
     (projectId: string, projectName: string) => {
       if (!isCurrentSession()) return;
+      const finishNavigation = beginArtifactNavigation();
+      if (!finishNavigation) return;
       const params = new URLSearchParams(window.location.search);
       params.set('projectId', projectId);
       router.replace(`/chat?${params.toString()}`);
@@ -153,31 +160,38 @@ export function useSlashCommands({
         },
       ]);
 
-      if (!activeThreadId) return;
+      if (!activeThreadId) {
+        finishNavigation();
+        return;
+      }
       void (async () => {
-        const linked = await useProjectChatStore
-          .getState()
-          .linkThreadToProject(projectId, { thread_id: activeThreadId });
-        if (!isCurrentSession() || linked) return;
-        // Drop the param we optimistically set: a thread the store has not
-        // loaded yet DOES read it, so leaving it behind would hand the agent
-        // a project the attach just failed to make real.
-        const current = new URLSearchParams(window.location.search);
-        if (current.get('projectId') === projectId) {
-          current.delete('projectId');
-          const query = current.toString();
-          router.replace(query ? `/chat?${query}` : '/chat');
+        try {
+          const linked = await useProjectChatStore
+            .getState()
+            .linkThreadToProject(projectId, { thread_id: activeThreadId });
+          if (!isCurrentSession() || linked) return;
+          // Drop the param we optimistically set: a thread the store has not
+          // loaded yet DOES read it, so leaving it behind would hand the agent
+          // a project the attach just failed to make real.
+          const current = new URLSearchParams(window.location.search);
+          if (current.get('projectId') === projectId) {
+            current.delete('projectId');
+            const query = current.toString();
+            router.replace(query ? `/chat?${query}` : '/chat');
+          }
+          // The param can't stand in for a thread that is already loaded, so a
+          // failed attach means no project context at all — say so instead of
+          // leaving the success line up.
+          patchOutput(outId, {
+            lines: [
+              `Could not attach this chat to ${projectName}.`,
+              useProjectChatStore.getState().errors[projectId] ||
+                'Please try again.',
+            ],
+          });
+        } finally {
+          finishNavigation();
         }
-        // The param can't stand in for a thread that is already loaded, so a
-        // failed attach means no project context at all — say so instead of
-        // leaving the success line up.
-        patchOutput(outId, {
-          lines: [
-            `Could not attach this chat to ${projectName}.`,
-            useProjectChatStore.getState().errors[projectId] ||
-              'Please try again.',
-          ],
-        });
       })();
     },
     [router, activeThreadId, patchOutput, isCurrentSession]
@@ -469,6 +483,7 @@ export function useSlashCommands({
       if (!isCurrentSession()) return;
       switch (action.type) {
         case 'open-thread':
+          if (!confirmArtifactNavigation()) return;
           setCurrentThread(action.id);
           router.push(getSelectedThreadUrl(action.id));
           return;

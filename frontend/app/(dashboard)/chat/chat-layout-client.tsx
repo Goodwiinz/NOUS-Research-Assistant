@@ -1,5 +1,8 @@
 'use client';
 
+import { useArtifactRouter } from '@/hooks/chat/useArtifactRouter';
+import { useRouter } from 'next/navigation';
+
 import { ArtifactPanel } from '@/components/chat/artifact-panel/ArtifactPanel';
 import { ContextRail, ContextRailDrawer } from '@/components/context-rail';
 import type { WorkingFoldersSelection } from '@/components/context-rail/WorkingFoldersPanel';
@@ -32,7 +35,7 @@ import {
   Settings,
   Share2,
 } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import {
   Suspense,
   useCallback,
@@ -348,7 +351,8 @@ function CommandPalette({
 // ============================================
 
 function ChatLayoutContent({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
+  const router = useArtifactRouter();
+  const committedRouter = useRouter();
   const searchParams = useSearchParams();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const { currentThreadId, currentWorkspaceId } = useChatPersistence();
@@ -421,9 +425,9 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
       }
       const params = new URLSearchParams(searchParams.toString());
       params.set('projectId', boundProjectId);
-      router.replace(`/chat?${params.toString()}`);
+      committedRouter.replace(`/chat?${params.toString()}`);
     },
-    [router, searchParams]
+    [committedRouter, searchParams]
   );
 
   // Rail file-tree selections open in the artifact panel beside the chat
