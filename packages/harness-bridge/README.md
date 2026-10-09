@@ -50,7 +50,7 @@ Tools are the backend's read allowlist. All are under the `tools:read` scope exc
 | `search_documents` | granted project | title/filename search, ≤ 50 results |
 | `list_project_documents` | granted project | paginated listing |
 | `do_kb_retrieve` | granted project | semantic chunks; needs `document_ids` and a provisioned KB |
-| `retrieve_passages` | granted project | PostgreSQL full-text search: the best `top_k` (≤ 20) documents, one excerpt each (up to three matching sentences, the title included), every query word must match; `document_ids` optional; works without a KB |
+| `retrieve_passages` | granted project | PostgreSQL full-text search: the best `top_k` (≤ 20) documents, one excerpt each (up to three matching sentences, the title included), every stemmed query word must match (English stop words and one-letter words are ignored); `document_ids` optional; works without a KB |
 | `get_document_content` | granted project | summary or full text, `offset`/`limit` ≤ 48,000 chars, follow `next_offset` |
 | `get_current_draft` | granted project | latest generated draft |
 | `search_arxiv` | arXiv (external) | ≤ 20 results advertised, 120 s budget |

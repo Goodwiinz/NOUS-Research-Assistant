@@ -54,11 +54,16 @@ _HIGHLIGHT_POST_TAG = "</mark>"
 _HIGHLIGHT_TAGS = re.compile(
     f"{re.escape(_HIGHLIGHT_PRE_TAG)}|{re.escape(_HIGHLIGHT_POST_TAG)}"
 )
-# A sentence ends at ".", "!" or "?" followed by whitespace and a capital
-# letter (possibly highlighted), so "95.3%", "v2.1" and "(Fig. 3)" never end
-# one. retrieve_passages quotes these sentences to a model (audit RT-1).
+# Quotes and brackets that may open or close a sentence around its words.
+_OPENING_MARKS = "\"'“‘([{"
+_CLOSING_MARKS = "\"'”’)]}"
+# A sentence ends at ".", "!" or "?" (perhaps followed by a closing mark)
+# followed by whitespace and a capital letter (perhaps after opening marks or
+# a highlight), so "95.3%", "v2.1" and "(Fig. 3)" never end one.
+# retrieve_passages quotes these sentences to a model (audit RT-1).
 _SENTENCE_END = re.compile(
-    rf"(?<=[.!?])\s+(?=(?:{re.escape(_HIGHLIGHT_PRE_TAG)})?[A-Z])"
+    rf"(?:(?<=[.!?])|(?<=[.!?][{re.escape(_CLOSING_MARKS)}]))\s+"
+    rf"(?=[{re.escape(_OPENING_MARKS)}]*(?:{re.escape(_HIGHLIGHT_PRE_TAG)})?[A-Z])"
 )
 # A capitalised word after one of these does not start a new sentence.
 _ABBREVIATIONS = frozenset(
@@ -87,9 +92,14 @@ def _sentences(text: str) -> List[str]:
     sentences: List[str] = []
     for piece in _SENTENCE_END.split(text):
         tail = sentences[-1].rsplit(None, 1) if sentences else []
-        # "(e.g." and "<mark>Fig</mark>." are the abbreviations "e.g." and "fig."
+        # "(e.g.", "al.)" and "<mark>Fig</mark>." are abbreviations too.
         last_word = (
-            _HIGHLIGHT_TAGS.sub("", tail[-1]).lstrip("([{\"'").lower() if tail else ""
+            _HIGHLIGHT_TAGS.sub("", tail[-1])
+            .lstrip(_OPENING_MARKS)
+            .rstrip(_CLOSING_MARKS)
+            .lower()
+            if tail
+            else ""
         )
         if last_word in _ABBREVIATIONS:
             sentences[-1] = f"{sentences[-1]} {piece}"

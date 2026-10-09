@@ -671,14 +671,16 @@ def test_catalog_lists_plan07_tools_without_identity_args() -> None:
 
 
 def test_retrieve_passages_says_it_is_document_level() -> None:
-    # RT-6: one excerpt per document and every word required, so a model
-    # neither expects every passage nor sends a whole question.
+    # RT-6: one excerpt per document and every indexed word required, so a
+    # model neither expects every passage nor sends a whole question. Stop
+    # words and one-letter words are not indexed (PR #1946 review).
     description = {tool.name: tool.description for tool in list_read_tools()}[
         "retrieve_passages"
     ]
     assert "best-matching documents, at most top_k" in description
     assert "one short excerpt" in description
-    assert "every query word" in description
+    assert "every stemmed query word" in description
+    assert "ignoring English stop words and one-letter words" in description
 
 
 async def test_search_arxiv_is_dispatched_with_clamped_results(

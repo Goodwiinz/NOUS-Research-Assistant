@@ -111,3 +111,61 @@ def test_only_the_sentences_with_a_highlight_are_kept() -> None:
         "here. Unrelated closing sentence."
     )
     assert passage == "The dropout rate is 0.5 here."
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [('"', '"'), ("“", "”"), ("(", ")"), ("[", "]"), ("'", "'")],
+    ids=["straight-quote", "curly-quote", "paren", "bracket", "single-quote"],
+)
+def test_a_sentence_opening_with_a_quote_or_bracket_is_split_off(
+    opening: str, closing: str
+) -> None:
+    # The old split on every "." separated these; the capital-letter
+    # lookahead must look past the opening mark (PR #1946 review).
+    passage = _passage(
+        f"Unrelated text. {opening}The <mark>result</mark> improves.{closing}"
+    )
+    assert passage == f"{opening}The result improves.{closing}"
+
+
+def test_a_highlighted_word_after_an_opening_quote_starts_a_sentence() -> None:
+    passage = _passage('Unrelated text. "<mark>Results</mark> improve."')
+    assert passage == '"Results improve."'
+
+
+def test_a_sentence_closed_by_a_quote_is_split_from_the_next_one() -> None:
+    passage = _passage(
+        'Unrelated text. "The <mark>result</mark> improves." Unrelated closing '
+        "sentence."
+    )
+    assert passage == '"The result improves."'
+
+
+@pytest.mark.parametrize(
+    ("headline", "expected"),
+    [
+        (
+            "Large models help, e.g. (Fig. 2) the <mark>ResNet</mark> family "
+            "at 95.3% accuracy.",
+            "Large models help, e.g. (Fig. 2) the ResNet family at 95.3% " "accuracy.",
+        ),
+        (
+            'Large models (e.g. "BERT") <mark>help</mark> by 4.7%.',
+            'Large models (e.g. "BERT") help by 4.7%.',
+        ),
+        (
+            "Large models (“e.g. BERT”) <mark>help</mark>.",
+            "Large models (“e.g. BERT”) help.",
+        ),
+        (
+            "Prior work (Smith et al.) <mark>BERT</mark> variants help.",
+            "Prior work (Smith et al.) BERT variants help.",
+        ),
+    ],
+    ids=["e-g-paren-fig", "e-g-quoted", "curly-quoted-e-g", "et-al-closing-paren"],
+)
+def test_quotes_and_brackets_keep_abbreviations_and_decimals_whole(
+    headline: str, expected: str
+) -> None:
+    assert _passage(headline) == expected
