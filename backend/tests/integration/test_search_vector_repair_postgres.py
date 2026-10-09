@@ -12,9 +12,15 @@ Each case builds a scratch *database* (not a schema: the chain hard-codes
 ``public`` in places) with ``alembic upgrade`` to the repair's parent, seeds
 the two-account chat chains so the triggers have rows to fill, breaks the
 schema the way a restore could have, runs ``alembic upgrade head`` through
-the real ``env.py`` and checks the health probe, the GIN indexes, the
-triggers and the backfill. The correct-schema case proves the no-op: every
-row keeps its ``xmin`` and a hand-set vector survives.
+the real ``env.py`` and checks the health probe, the indexes, the triggers
+and the backfill. The correct-schema case proves the no-op: every row keeps
+its ``xmin``, a hand-set vector survives, every trigger and index keeps its
+OID, and the repair takes no AccessExclusiveLock on any relation.
+
+The restore was ``pg_restore --no-owner``, so the live objects may belong to
+another role; two cases run the chain as a scratch non-owner role and expect
+the migration's own error, naming the object, its owner, the runner and the
+``ALTER ... OWNER TO`` remedy, before any DDL.
 
 The last test is the guard: the chat search routes and the health endpoint
 against the migration-built schema rather than ``create_all``, so a chain
@@ -22,23 +28,28 @@ that stops producing these objects fails here before it reaches a database.
 
 Uses the two-account PostgreSQL lane: skips unless
 ``TWO_ACCOUNT_PG_TEST_DATABASE_URL`` names a disposable server whose user may
-``CREATE DATABASE`` (CI's ``test`` superuser; the step rejects a skipped run).
-Every scratch database is dropped in a ``finally``.
+``CREATE DATABASE`` and ``CREATE ROLE`` (CI's ``test`` superuser; the step
+rejects a skipped run). Every scratch database and role is dropped in a
+``finally``.
 
-Mutation-verified (2026-10-09, PostgreSQL 14): the NULL-only backfill guard,
-the two ``WHERE search_vector IS NULL`` clauses in
-``backend/alembic/versions/sv01_search_vector_repair.py``, was removed;
-``test_upgrade_head_leaves_a_correct_schema_untouched`` and
-``test_upgrade_head_is_idempotent_after_a_repair`` then failed on the
-advanced ``xmin`` of every thread, and passed again once it was restored
-with ``git diff`` empty. Focused command:
+Mutation-verified (2026-10-09, PostgreSQL 14), each guard in
+``backend/alembic/versions/sv01_search_vector_repair.py`` removed in turn,
+the focused test observed failing on the named defect, the guard restored
+with ``git diff`` empty and the test passing again. Focused command:
 ``TWO_ACCOUNT_PG_TEST_DATABASE_URL=... pytest
 backend/tests/integration/test_search_vector_repair_postgres.py
--c backend/pytest.ini -m integration -k "untouched or idempotent"``.
+-c backend/pytest.ini -m integration -k "<expr>"``.
+
+- the ``WHERE search_vector IS NULL`` of each backfill UPDATE (NULL-only
+  rewrite): ``-k mixed`` fails on the hand-set vector being rewritten.
+- the ``IF column_added OR EXISTS (...)`` around each backfill (no UPDATE
+  statement on a correct schema): ``-k untouched`` fails on the
+  RowExclusiveLock the UPDATE takes on threads.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -51,7 +62,8 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine, make_url
+from sqlalchemy.engine import URL, Engine, make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -73,20 +85,24 @@ from tests.integration.two_account.conftest import (
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+MIGRATION = BACKEND_ROOT / "alembic" / "versions" / "sv01_search_vector_repair.py"
 PARENT = "rp01_thread_fk_ondelete"
 REVISION = "sv01_search_vector_repair"
 # Supabase's default; pinned so plainto_tsquery() stems like the 'english'
 # builders whatever locale the server was initialised with.
 TEXT_SEARCH_CONFIG = "pg_catalog.english"
 QUERY = "ISO-CANARY"  # matches every seeded title and message
+SCRATCH_PASSWORD = "svr-scratch-not-a-secret"
 
-# The objects b2c3d4e5f6g7 creates on the two tables, by name.
+# The objects b2c3d4e5f6g7 creates, by name.
 GIN_INDEXES = {
     "idx_threads_search_vector",
     "idx_threads_title_gin",
     "idx_chat_messages_search_vector",
     "idx_chat_messages_content_gin",
 }
+BTREE_INDEXES = {"idx_threads_conversation_status", "idx_chat_messages_thread_role"}
+CITATIONS_INDEX = "idx_citations_snippet_gin"
 TRIGGERS = {
     "trigger_update_thread_search_vector",
     "trigger_update_chat_message_search_vector",
@@ -138,8 +154,18 @@ DRIFT: Dict[str, List[str]] = {
         *_DROP_EXPRESSION_INDEXES,
         "DROP INDEX IF EXISTS idx_threads_search_vector",
         "DROP INDEX IF EXISTS idx_chat_messages_search_vector",
+        "DROP INDEX IF EXISTS idx_threads_conversation_status",
+        "DROP INDEX IF EXISTS idx_chat_messages_thread_role",
+        "DROP INDEX IF EXISTS idx_citations_snippet_gin",
         "UPDATE threads SET search_vector = NULL",
         "UPDATE chat_messages SET search_vector = NULL",
+    ],
+    # namesakes that cannot serve: a btree under a GIN name, and an INVALID
+    # index (an interrupted CONCURRENTLY build; added by _apply_drift)
+    "unusable_indexes": [
+        "DROP INDEX idx_threads_title_gin",
+        "CREATE INDEX idx_threads_title_gin ON threads USING btree (title)",
+        "DROP INDEX idx_chat_messages_search_vector",
     ],
     # (c) nothing wrong: the migration must change nothing
     "correct": [],
@@ -186,32 +212,37 @@ def _admin_engine() -> Engine:
     )
 
 
-def _create_database(name: str, template: str | None = None) -> None:
-    clause = f' TEMPLATE "{template}"' if template else ""
+def _admin_user() -> str:
+    return cast(str, make_url(pg_url("psycopg2")).username)
+
+
+def _admin(*statements: str) -> None:
     admin = _admin_engine()
     try:
         with admin.connect() as connection:
-            connection.exec_driver_sql(f'CREATE DATABASE "{name}"{clause}')
+            for statement in statements:
+                connection.exec_driver_sql(statement)
     finally:
         admin.dispose()
+
+
+def _create_database(name: str, template: str | None = None) -> None:
+    clause = f' TEMPLATE "{template}"' if template else ""
+    _admin(f'CREATE DATABASE "{name}"{clause}')
 
 
 def _drop_database(name: str) -> None:
-    admin = _admin_engine()
-    try:
-        with admin.connect() as connection:
-            connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-    finally:
-        admin.dispose()
+    _admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
 
-def _alembic(database: str, *alembic_args: str) -> str:
-    """Run the real ``alembic`` CLI (``env.py`` and all) against ``database``."""
-    url = make_url(pg_url("psycopg2")).set(drivername="postgresql", database=database)
+def _alembic_run(url: URL, *alembic_args: str) -> subprocess.CompletedProcess[str]:
+    """Run the real ``alembic`` CLI (``env.py`` and all) against ``url``."""
     # env.py prefers SUPABASE_DB_URL: it must not point the run elsewhere.
     env = {k: v for k, v in os.environ.items() if k != "SUPABASE_DB_URL"}
-    env["DATABASE_URL"] = url.render_as_string(hide_password=False)
-    done = subprocess.run(
+    env["DATABASE_URL"] = url.set(drivername="postgresql").render_as_string(
+        hide_password=False
+    )
+    return subprocess.run(
         [sys.executable, "-m", "alembic", *alembic_args],
         cwd=BACKEND_ROOT,
         env=env,
@@ -220,8 +251,22 @@ def _alembic(database: str, *alembic_args: str) -> str:
         timeout=300,
         check=False,
     )
+
+
+def _alembic(database: str, *alembic_args: str) -> str:
+    url = make_url(pg_url("psycopg2")).set(database=database)
+    done = _alembic_run(url, *alembic_args)
     assert done.returncode == 0, done.stderr[-4000:]
     return done.stderr
+
+
+def _repair_sql() -> List[str]:
+    """The migration's three DO blocks, for running outside alembic."""
+    spec = importlib.util.spec_from_file_location("sv01_repair_under_test", MIGRATION)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return [module._THREADS, module._CHAT_MESSAGES, module._CITATIONS]
 
 
 @dataclass(frozen=True)
@@ -289,6 +334,30 @@ async def _seed(scratch: Scratch, tmp_path: Path) -> None:
         await seed_accounts(db, tmp_path)
 
 
+def _apply_drift(scratch: Scratch, state: str) -> None:
+    scratch.execute(*DRIFT[state])
+    if state == "unusable_indexes":
+        # Leave an INVALID GIN idx_chat_messages_search_vector behind: a
+        # CONCURRENTLY build whose (immutable) expression fails on the first
+        # row dies after the catalog entry exists, like an interrupted deploy.
+        with scratch.sync.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as connection:
+            with pytest.raises(DBAPIError, match="division by zero"):
+                connection.exec_driver_sql(
+                    "CREATE INDEX CONCURRENTLY idx_chat_messages_search_vector "
+                    "ON chat_messages USING GIN "
+                    "(to_tsvector('english', (length(content) / 0)::text))"
+                )
+        assert (
+            scratch.scalar(
+                "SELECT indisvalid FROM pg_index "
+                "WHERE indexrelid = 'idx_chat_messages_search_vector'::regclass"
+            )
+            is False
+        )
+
+
 # --- observations ------------------------------------------------------------
 
 
@@ -297,6 +366,10 @@ def _health(scratch: Scratch) -> Dict[str, Any]:
     with scratch.session() as db:
         body = search_health_check(db=db, current_user=cast(User, None))
     return cast(Dict[str, Any], body)
+
+
+def _health_index_names(scratch: Scratch) -> set[str]:
+    return {index["name"] for index in _health(scratch)["gin_indexes"]}
 
 
 def _column_type(scratch: Scratch, table: str) -> str | None:
@@ -310,7 +383,8 @@ def _column_type(scratch: Scratch, table: str) -> str | None:
     )
 
 
-def _gin_indexes(scratch: Scratch) -> set[str]:
+def _indexes(scratch: Scratch, access_method: str) -> set[str]:
+    """Valid indexes of ``access_method`` on the three b2c3d4e5f6g7 tables."""
     return {
         name
         for (name,) in scratch.rows(
@@ -318,8 +392,8 @@ def _gin_indexes(scratch: Scratch) -> set[str]:
             "JOIN pg_class c ON c.oid = i.indexrelid "
             "JOIN pg_class t ON t.oid = i.indrelid "
             "JOIN pg_am am ON am.oid = c.relam "
-            "WHERE t.relname IN ('threads', 'chat_messages') "
-            "AND am.amname = 'gin' AND i.indisvalid"
+            "WHERE t.relname IN ('threads', 'chat_messages', 'citations') "
+            f"AND am.amname = '{access_method}' AND i.indisvalid"
         )
     }
 
@@ -360,6 +434,48 @@ def _xmins(scratch: Scratch, table: str) -> Dict[str, str]:
         str(row_id): str(xmin)
         for row_id, xmin in scratch.rows(f"SELECT id, xmin::text FROM {table}")
     }
+
+
+def _object_identity(scratch: Scratch) -> Dict[str, Tuple[str, ...]]:
+    """OID (and row xmin) of every trigger and index the repair owns: a
+    recreated object gets a new OID, a touched catalog row a new xmin."""
+    identity: Dict[str, Tuple[str, ...]] = {}
+    for name, oid, xmin in scratch.rows(
+        "SELECT tgname, oid, xmin::text FROM pg_trigger WHERE NOT tgisinternal "
+        "AND tgrelid IN ('threads'::regclass, 'chat_messages'::regclass)"
+    ):
+        identity[f"trigger:{name}"] = (str(oid), xmin)
+    for name, oid in scratch.rows(
+        "SELECT c.relname, c.oid FROM pg_index i "
+        "JOIN pg_class c ON c.oid = i.indexrelid "
+        "JOIN pg_class t ON t.oid = i.indrelid "
+        "WHERE t.relname IN ('threads', 'chat_messages', 'citations')"
+    ):
+        identity[f"index:{name}"] = (str(oid),)
+    return identity
+
+
+def _locks_taken_by_repair(scratch: Scratch) -> List[Tuple[str, str]]:
+    """(relation, mode) of every lock stronger than AccessShare the repair
+    holds inside its own transaction (inspected before rollback). On a correct
+    schema there must be none: no DDL (AccessExclusive) and no UPDATE
+    (RowExclusive)."""
+    with scratch.sync.connect() as connection:
+        transaction = connection.begin()
+        try:
+            for statement in _repair_sql():
+                connection.execute(text(statement))
+            rows = connection.execute(
+                text(
+                    "SELECT relation::regclass::text, mode FROM pg_locks "
+                    "WHERE pid = pg_backend_pid() AND locktype = 'relation' "
+                    "AND mode <> 'AccessShareLock' "
+                    "AND relation::regclass::text NOT LIKE 'pg_%'"
+                )
+            ).all()
+        finally:
+            transaction.rollback()
+    return sorted((str(row[0]), str(row[1])) for row in rows)
 
 
 def _assert_triggers_fill_new_rows(scratch: Scratch) -> None:
@@ -411,40 +527,12 @@ def _assert_triggers_fill_new_rows(scratch: Scratch) -> None:
     assert _unfilled(scratch, "chat_messages", MESSAGE_VECTOR) == 0
 
 
-# --- the repair --------------------------------------------------------------
-
-
-@pytest.mark.parametrize("state", sorted(DRIFT))
-async def test_upgrade_head_restores_full_text_search(
-    scratch: Scratch, tmp_path: Path, state: str
-) -> None:
-    await _seed(scratch, tmp_path)
-    assert scratch.scalar("SELECT COUNT(*) FROM threads") == 3
-    assert scratch.scalar("SELECT COUNT(*) FROM chat_messages") == 3
-    scratch.execute(*DRIFT[state])
-
-    broken = _health(scratch)
-    if state == "column_dropped":
-        # the live symptom: the probe statement itself fails
-        assert broken["search_functional"] is False, broken
-    if state == "column_is_text":
-        # PostgreSQL defines text @@ tsquery (implicit to_tsvector), so the
-        # probe survives this state; the column type is the evidence.
-        assert _column_type(scratch, "threads") == "text"
-        assert _column_type(scratch, "chat_messages") == "text"
-    if state != "correct":
-        assert not _gin_indexes(scratch) & {
-            "idx_threads_search_vector",
-            "idx_chat_messages_search_vector",
-        }
-        assert not _triggers(scratch) & TRIGGERS
-
-    _alembic(scratch.name, "upgrade", "head")
+def _assert_repaired(scratch: Scratch) -> None:
     assert scratch.scalar("SELECT version_num FROM alembic_version") == REVISION
-
     assert _column_type(scratch, "threads") == "tsvector"
     assert _column_type(scratch, "chat_messages") == "tsvector"
-    assert _gin_indexes(scratch) >= GIN_INDEXES
+    assert _indexes(scratch, "gin") >= GIN_INDEXES | {CITATIONS_INDEX}
+    assert _indexes(scratch, "btree") >= BTREE_INDEXES
     assert _triggers(scratch) >= TRIGGERS
     assert _functions(scratch) >= FUNCTIONS
     assert (
@@ -479,14 +567,59 @@ async def test_upgrade_head_restores_full_text_search(
         == 3
     )
 
+
+# --- the repair --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("state", sorted(DRIFT))
+async def test_upgrade_head_restores_full_text_search(
+    scratch: Scratch, tmp_path: Path, state: str
+) -> None:
+    await _seed(scratch, tmp_path)
+    assert scratch.scalar("SELECT COUNT(*) FROM threads") == 3
+    assert scratch.scalar("SELECT COUNT(*) FROM chat_messages") == 3
+    _apply_drift(scratch, state)
+
+    broken = _health(scratch)
+    if state == "column_dropped":
+        # the live symptom: the probe statement itself fails
+        assert broken["search_functional"] is False, broken
+    if state == "column_is_text":
+        # PostgreSQL defines text @@ tsquery (implicit to_tsvector), so the
+        # probe survives this state; the column type is the evidence.
+        assert _column_type(scratch, "threads") == "text"
+        assert _column_type(scratch, "chat_messages") == "text"
+    if state == "unusable_indexes":
+        # the btree namesake is not a GIN index and the INVALID one serves
+        # no query: neither may count as healthy
+        assert "idx_threads_title_gin" not in _health_index_names(scratch)
+        assert "idx_chat_messages_search_vector" not in _health_index_names(scratch)
+    if state not in ("correct", "unusable_indexes"):
+        assert not _indexes(scratch, "gin") & {
+            "idx_threads_search_vector",
+            "idx_chat_messages_search_vector",
+        }
+        assert not _triggers(scratch) & TRIGGERS
+
+    _alembic(scratch.name, "upgrade", "head")
+    _assert_repaired(scratch)
+    if state == "unusable_indexes":
+        assert "USING gin (search_vector)" in scratch.scalar(
+            "SELECT pg_get_indexdef('idx_chat_messages_search_vector'::regclass)"
+        )
+        assert "USING gin (to_tsvector(" in scratch.scalar(
+            "SELECT pg_get_indexdef('idx_threads_title_gin'::regclass)"
+        )
     _assert_triggers_fill_new_rows(scratch)
 
 
 async def test_upgrade_head_leaves_a_correct_schema_untouched(
     scratch: Scratch, tmp_path: Path
 ) -> None:
-    """A correct schema is a no-op: no row is rewritten and a vector that is
-    not what the builder would produce is kept (the backfill is NULL-only)."""
+    """A correct schema is a no-op: no row is rewritten, a vector that is
+    not what the builder would produce is kept (the backfill is NULL-only),
+    every trigger and index keeps its OID, and no AccessExclusiveLock is
+    taken on any relation."""
     await _seed(scratch, tmp_path)
     sentinel_thread, sentinel_message = sid("a-thread"), sid("a-msg")
     scratch.execute(
@@ -497,7 +630,11 @@ async def test_upgrade_head_leaves_a_correct_schema_untouched(
     )
     thread_xmins = _xmins(scratch, "threads")
     message_xmins = _xmins(scratch, "chat_messages")
-    objects_before = (_gin_indexes(scratch), _triggers(scratch), _functions(scratch))
+    identity = _object_identity(scratch)
+    assert {"trigger:" + name for name in TRIGGERS} <= set(identity)
+    assert {"index:" + name for name in GIN_INDEXES | BTREE_INDEXES} <= set(identity)
+
+    assert _locks_taken_by_repair(scratch) == []
 
     _alembic(scratch.name, "upgrade", "head")
     assert scratch.scalar("SELECT version_num FROM alembic_version") == REVISION
@@ -512,26 +649,135 @@ async def test_upgrade_head_leaves_a_correct_schema_untouched(
         "SELECT search_vector = to_tsvector('simple', 'sentinel') "
         f"FROM chat_messages WHERE id = '{sentinel_message}'"
     )
-    assert (_gin_indexes(scratch), _triggers(scratch), _functions(scratch)) == (
-        objects_before
-    )
+    assert _object_identity(scratch) == identity
+    assert _functions(scratch) >= FUNCTIONS
     assert _health(scratch)["search_functional"] is True
+
+
+async def test_backfill_fills_only_null_vectors_in_a_mixed_table(
+    scratch: Scratch, tmp_path: Path
+) -> None:
+    """When only some rows lost their vector, the backfill fills exactly
+    those and leaves every other row (even one whose vector is not what the
+    builder would produce) with its value and its xmin."""
+    await _seed(scratch, tmp_path)
+    kept_thread, kept_message = sid("a-thread"), sid("a-msg")
+    lost_thread, lost_message = sid("b-thread"), sid("b-msg")
+    scratch.execute(
+        "UPDATE threads SET search_vector = to_tsvector('simple', 'sentinel') "
+        f"WHERE id = '{kept_thread}'",
+        "UPDATE chat_messages SET search_vector = to_tsvector('simple', 'sentinel') "
+        f"WHERE id = '{kept_message}'",
+        f"UPDATE threads SET search_vector = NULL WHERE id = '{lost_thread}'",
+        f"UPDATE chat_messages SET search_vector = NULL WHERE id = '{lost_message}'",
+    )
+    thread_xmins = _xmins(scratch, "threads")
+    message_xmins = _xmins(scratch, "chat_messages")
+
+    _alembic(scratch.name, "upgrade", "head")
+
+    assert scratch.scalar(
+        "SELECT search_vector = to_tsvector('simple', 'sentinel') "
+        f"FROM threads WHERE id = '{kept_thread}'"
+    )
+    assert scratch.scalar(
+        "SELECT search_vector = to_tsvector('simple', 'sentinel') "
+        f"FROM chat_messages WHERE id = '{kept_message}'"
+    )
+    assert scratch.scalar(
+        f"SELECT search_vector = ({THREAD_VECTOR}) FROM threads "
+        f"WHERE id = '{lost_thread}'"
+    )
+    assert scratch.scalar(
+        f"SELECT search_vector = ({MESSAGE_VECTOR}) FROM chat_messages "
+        f"WHERE id = '{lost_message}'"
+    )
+    # only the two refilled rows were written
+    assert {
+        k for k, v in _xmins(scratch, "threads").items() if v != thread_xmins[k]
+    } == {str(lost_thread)}
+    assert {
+        k for k, v in _xmins(scratch, "chat_messages").items() if v != message_xmins[k]
+    } == {str(lost_message)}
 
 
 async def test_upgrade_head_is_idempotent_after_a_repair(
     scratch: Scratch, tmp_path: Path
 ) -> None:
     """Re-running the chain (a re-deploy, ``alembic stamp`` + upgrade) after
-    the repair rewrites nothing."""
+    the repair rewrites nothing and recreates nothing."""
     await _seed(scratch, tmp_path)
-    scratch.execute(*DRIFT["column_dropped"])
+    _apply_drift(scratch, "column_dropped")
     _alembic(scratch.name, "upgrade", "head")
     thread_xmins = _xmins(scratch, "threads")
+    identity = _object_identity(scratch)
     _alembic(scratch.name, "downgrade", PARENT)  # a no-op that only re-stamps
     assert _column_type(scratch, "threads") == "tsvector"
     _alembic(scratch.name, "upgrade", "head")
     assert _xmins(scratch, "threads") == thread_xmins
+    assert _object_identity(scratch) == identity
     assert _health(scratch)["search_functional"] is True
+
+
+# --- ownership ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("foreign", ["table", "function"])
+async def test_runner_without_ownership_fails_by_name_before_any_ddl(
+    scratch: Scratch, tmp_path: Path, foreign: str
+) -> None:
+    """``pg_restore --no-owner`` can leave the objects owned by another role.
+    A runner that holds GRANT ALL but not ownership must get the migration's
+    own message (object, owner, runner, ``ALTER ... OWNER TO`` remedy), not
+    PostgreSQL's mid-block "must be owner of ...", and the chain must stay at
+    the parent. ``foreign=function``: the tables are the runner's, only the
+    trigger functions belong to someone else."""
+    await _seed(scratch, tmp_path)
+    runner = f"svr_runner_{uuid.uuid4().hex[:12]}"
+    owner = _admin_user()
+    _admin(
+        f"CREATE ROLE \"{runner}\" LOGIN PASSWORD '{SCRATCH_PASSWORD}'",
+        f'GRANT CONNECT ON DATABASE "{scratch.name}" TO "{runner}"',
+    )
+    try:
+        scratch.execute(
+            f'GRANT USAGE, CREATE ON SCHEMA public TO "{runner}"',
+            f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{runner}"',
+            f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{runner}"',
+        )
+        if foreign == "function":
+            scratch.execute(
+                *(
+                    f'ALTER TABLE {table} OWNER TO "{runner}"'
+                    for table in ("threads", "chat_messages", "citations")
+                )
+            )
+            expected = (
+                f"function update_thread_search_vector() is owned by {owner}",
+                f"ALTER FUNCTION update_thread_search_vector() OWNER TO {runner};",
+            )
+        else:
+            expected = (
+                f"table threads is owned by {owner}",
+                f"ALTER TABLE threads OWNER TO {runner};",
+            )
+
+        url = make_url(pg_url("psycopg2")).set(
+            database=scratch.name, username=runner, password=SCRATCH_PASSWORD
+        )
+        done = _alembic_run(url, "upgrade", "head")
+
+        assert done.returncode != 0
+        for fragment in (*expected, f"this migration runs as {runner}"):
+            assert fragment in done.stderr, done.stderr[-3000:]
+        assert "must be owner of" not in done.stderr
+        assert scratch.scalar("SELECT version_num FROM alembic_version") == PARENT
+    finally:
+        scratch.execute(
+            f'REASSIGN OWNED BY "{runner}" TO "{owner}"',
+            f'DROP OWNED BY "{runner}"',
+        )
+        _admin(f'DROP ROLE "{runner}"')
 
 
 # --- the guard ---------------------------------------------------------------
