@@ -149,6 +149,16 @@ Plan06 was already implemented; automatic file hooks were explicitly deferred.
 
 ## Environment limits
 
+Published follow-up PRs: [repairs #1965](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/1965)
+and [selected frozen skills #1964](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/1964).
+Their first migration-check jobs failed while initializing the PostgreSQL
+service, before checkout or any migration code ran: Docker Hub returned its
+unauthenticated pull-limit error. The test-service images now use the same
+PostgreSQL 15 and Redis 7 tags from the [Docker Official Images registry on ECR Public](https://gallery.ecr.aws/docker/).
+The workflow still runs every existing migration and integration gate.
+This setup correction needs fresh hosted CI; the first failed runs are not
+counted as migration failures or as passes.
+
 The backend behavior-test interpreter is Python 3.13; repository CI targets 3.11.
 The unchanged architecture AST-hash guard has a known interpreter-dependent
 failure under 3.13. A separate Python 3.11 environment with the exact CI lint
