@@ -306,3 +306,17 @@ Ledger: note under I1/I9/I13 rows. **Requires cluster access authorization (nous
 **Parallelization:** Tasks 1, 2, 3 fully independent (parallel sessions/worktrees). Tasks 4–9 independent of each other but touch distinct files — safe parallel. Tasks 10–13 sequential-ish (both touch config/dead-code overlaps: run 10 before 13).
 
 **Estimated PR count:** 13.
+
+## Amendment (2026-10-09)
+
+Added when this plan was committed (PR #1958). The tasks above are kept as
+written; these notes correct them and point to the current code.
+
+- Task 1: `(env or "development")` turns an explicitly empty `ENVIRONMENT`
+  into `development`, which contradicts the test that lists `""` as strict.
+  Default only when `env is None`, as `backend/src/core/config.py`
+  (`_is_strict_environment`) does.
+- Task 6: `if not allowed: return True` also treats an explicit empty list as
+  unrestricted. `None` means all endpoints; `[]` must deny every endpoint, as
+  `backend/src/core/api_key_auth.py` does (`if allowed is None: return True`,
+  then match entries and otherwise deny).
