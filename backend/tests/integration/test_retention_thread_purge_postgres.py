@@ -31,6 +31,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import Engine, create_engine, func, select, text
+from sqlalchemy.exc import InternalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.models.agent_run import AgentRun
@@ -507,6 +508,33 @@ def test_purge_skips_a_chat_postgres_refuses_and_commits_the_rest(
         assert db.get(Thread, blocked) is not None
         # Rolled back to the savepoint: the refused chat keeps its message.
         assert _count(db, ChatMessage, ChatMessage.thread_id == blocked) == 1
+
+
+def test_purge_fails_when_postgres_refuses_every_delete(engine: Engine) -> None:
+    """A read-only transaction refuses every chat's DELETE with SQLSTATE 25006,
+    which psycopg2 raises as InternalError, not IntegrityError, and keeps the
+    connection. The run raises, instead of counting every chat as skipped and
+    reporting the purge as a success.
+
+    Mutation check: widen ``except IntegrityError`` back to
+    ``except DBAPIError`` in purge_soft_deleted_threads and this fails with
+    ``DID NOT RAISE``.
+    """
+    factory = sessionmaker(engine)
+    with factory() as db:
+        owner = _seed_owner(db)
+        oldest = _seed_thread(db, owner, age_days=60)
+        newest = _seed_thread(db, owner, age_days=40)
+        db.commit()
+
+    with pytest.raises(InternalError) as raised:
+        _purge(engine.execution_options(postgresql_readonly=True))
+
+    assert getattr(raised.value.orig, "pgcode", None) == "25006"
+    assert not raised.value.connection_invalidated
+    with factory() as db:
+        assert _count(db, Thread, Thread.id.in_([oldest, newest])) == 2
+        assert _count(db, ChatMessage) == 2
 
 
 def _migration() -> ModuleType:

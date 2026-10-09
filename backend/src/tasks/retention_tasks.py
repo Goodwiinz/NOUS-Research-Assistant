@@ -55,7 +55,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy import table as sa_table
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import IntegrityError
 
 from src.core.config import get_settings
 from src.core.database import SessionLocal
@@ -173,11 +173,14 @@ def purge_soft_deleted_threads(organization_id: Optional[str] = None) -> dict:
     Two-stage safety: no-op when ``RETENTION_ENABLED`` is false; DRY-RUN
     (log-only) when ``RETENTION_APPLY`` is false. Org-scoped, bounded batch.
 
-    APPLY deletes each thread in its own SAVEPOINT. A thread whose delete the
-    database refuses is rolled back alone, logged at ERROR and counted in the
-    result's ``"skipped"``; the rest of the batch still commits. A lost
-    connection is not a refusal: it aborts the run. A dry run always reports
-    ``skipped=0``, because it deletes nothing and so cannot predict a refusal.
+    APPLY deletes each thread in its own SAVEPOINT. A thread whose delete a
+    constraint refuses (``IntegrityError``, e.g. an FK with no ON DELETE rule)
+    is rolled back alone, logged at ERROR and counted in the result's
+    ``"skipped"``; the rest of the batch still commits. Any other database
+    error (a lost connection, a statement timeout, a read-only transaction) is
+    not about one thread: it aborts the run and the task fails. A dry run
+    always reports ``skipped=0``, because it deletes nothing and so cannot
+    predict a refusal.
     """
     from src.models.chat_message import ChatMessage
     from src.models.conversation import Conversation
@@ -253,15 +256,17 @@ def purge_soft_deleted_threads(organization_id: Optional[str] = None) -> dict:
                     db.query(Thread).filter(Thread.id == thread.id).delete(
                         synchronize_session=False
                     )
-            except DBAPIError as exc:
-                # A dropped connection is not the database refusing this
-                # thread: every later thread would fail the same way.
-                if exc.connection_invalidated:
-                    raise
+            except IntegrityError:
+                # Only a constraint refusal is about this thread: a row the
+                # FK rules do not cover (SQLSTATE 23503). Every other database
+                # error (a lost connection, a statement timeout, a read-only
+                # transaction) would refuse every later thread the same way,
+                # so it propagates and the run fails instead of reporting a
+                # batch of skips as success.
                 threads_skipped += 1
                 logger.exception(
                     "purge_soft_deleted_threads: skipped thread %s (org=%s); "
-                    "the database refused its delete",
+                    "a constraint refused its delete",
                     tid,
                     org_id,
                 )
