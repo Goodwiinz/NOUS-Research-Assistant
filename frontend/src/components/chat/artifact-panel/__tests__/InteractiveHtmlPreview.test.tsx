@@ -1,5 +1,5 @@
 import { act, screen } from '@testing-library/react';
-import { expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { render } from '@/test/test-utils';
 import {
   buildHtmlPreviewDocument,
@@ -8,6 +8,14 @@ import {
 } from '../InteractiveHtmlPreview';
 
 const nonce = 'preview-test-nonce-12345';
+const appNonce = 'dHJ1c3RlZC1hcHAtbm9uY2UtMTIzNDU=';
+beforeEach(() => {
+  const script = document.createElement('script');
+  script.nonce = appNonce;
+  script.dataset.testCsp = 'true';
+  document.head.append(script);
+});
+afterEach(() => document.querySelector('script[data-test-csp]')?.remove());
 it('contains only the nonce bootstrap in the outer document and JSON-escapes closing-script source', () => {
   const html = buildHtmlPreviewDocument(
     '</script><script>parent.pwned=1</script>\u2028',
@@ -120,4 +128,20 @@ it('shows a stable timeout and ignores a same-frame message from a nonopaque ori
   } finally {
     vi.useRealTimers();
   }
+});
+
+it('uses the trusted document script nonce separately from the per-mount message nonce', () => {
+  render(<InteractiveHtmlPreview source="<p>source</p>" />);
+  const frame = screen.getByTitle(
+    'Interactive HTML preview'
+  ) as HTMLIFrameElement;
+  const wrapper = new DOMParser().parseFromString(frame.srcdoc, 'text/html');
+  expect(wrapper.querySelector('script')?.nonce).toBe(appNonce);
+  expect(frame.srcdoc.match(/const nonce = "([^"]+)"/)?.[1]).not.toBe(appNonce);
+});
+it('fails safely without a trusted document nonce', () => {
+  document.querySelector('script[data-test-csp]')?.remove();
+  render(<InteractiveHtmlPreview source="<p>source</p>" />);
+  expect(screen.queryByTitle('Interactive HTML preview')).toBeNull();
+  expect(screen.getByRole('alert')).toHaveTextContent('Preview is unavailable');
 });

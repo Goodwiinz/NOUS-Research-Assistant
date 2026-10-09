@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
 const MAX_HEIGHT = 2000;
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+const SCRIPT_NONCE = /^[A-Za-z0-9+/_=-]{16,128}$/;
 type PreviewMessage =
   { type: 'height'; height: number } | { type: 'ready' | 'error' };
 
@@ -43,15 +44,17 @@ function scriptJson(value: string): string {
  */
 export function buildHtmlPreviewDocument(
   source: string,
-  nonce: string
+  nonce: string,
+  scriptNonce: string = nonce
 ): string {
   if (!/^[A-Za-z0-9-]{16,128}$/.test(nonce))
     throw new Error('Invalid preview nonce');
   if (new TextEncoder().encode(source).byteLength > MAX_SOURCE_BYTES)
     throw new Error('Preview exceeds limit');
+  if (!SCRIPT_NONCE.test(scriptNonce)) throw new Error('Invalid script nonce');
   const restrictions =
     "default-src 'none'; frame-src blob:; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'";
-  const policy = `${restrictions}; script-src 'nonce-${nonce}'`;
+  const policy = `${restrictions}; script-src 'nonce-${scriptNonce}'`;
   const inlineOnly = `${restrictions}; script-src 'unsafe-inline'`;
   const reporter = `(() => {
     const nonce = ${scriptJson(nonce)};
@@ -61,9 +64,10 @@ export function buildHtmlPreviewDocument(
     addEventListener('unhandledrejection', () => send('error'));
     addEventListener('DOMContentLoaded', () => { new ResizeObserver(measure).observe(document.documentElement); measure(); send('ready'); });
   })();`;
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="Content-Security-Policy" content="${inlineOnly}"><meta name="referrer" content="no-referrer"></head><body><script nonce="${nonce}">
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><meta http-equiv="Content-Security-Policy" content="${inlineOnly}"><meta name="referrer" content="no-referrer"></head><body><script nonce="${scriptNonce}">
 (() => {
   const nonce = ${scriptJson(nonce)};
+  const scriptNonce = ${scriptJson(scriptNonce)};
   const source = ${scriptJson(source)};
   const doc = new DOMParser().parseFromString(source, 'text/html');
   doc.querySelectorAll('base, meta[http-equiv]').forEach(node => node.remove());
@@ -72,12 +76,12 @@ export function buildHtmlPreviewDocument(
   });
   doc.querySelectorAll('script').forEach(node => {
     if (node.hasAttribute('src') || node.hasAttribute('href') || node.hasAttribute('xlink:href')) node.remove();
-    else node.setAttribute('nonce', nonce);
+    else node.setAttribute('nonce', scriptNonce);
   });
   const csp = doc.createElement('meta');
   csp.httpEquiv = 'Content-Security-Policy'; csp.content = ${scriptJson(policy)};
   doc.head.prepend(csp);
-  const status = doc.createElement('script'); status.setAttribute('nonce', nonce); status.textContent = ${scriptJson(reporter)};
+  const status = doc.createElement('script'); status.setAttribute('nonce', scriptNonce); status.textContent = ${scriptJson(reporter)};
   csp.after(status);
   const child = document.createElement('iframe');
   child.title = 'HTML content'; child.setAttribute('sandbox', 'allow-scripts'); child.referrerPolicy = 'no-referrer';
@@ -103,6 +107,14 @@ export function InteractiveHtmlPreview({
   source: string;
 }): ReactElement {
   const [nonce] = useState(() => crypto.randomUUID());
+  const [scriptNonce] = useState(() => {
+    const trusted =
+      typeof window === 'undefined'
+        ? null
+        : window.document.querySelector<HTMLScriptElement>('script[nonce]')
+            ?.nonce;
+    return trusted && SCRIPT_NONCE.test(trusted) ? trusted : null;
+  });
   const [height, setHeight] = useState(360);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>(
     'loading'
@@ -110,11 +122,12 @@ export function InteractiveHtmlPreview({
   const [stopped, setStopped] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
   const document = useMemo(
-    () => buildHtmlPreviewDocument(source, nonce),
-    [source, nonce]
+    () =>
+      scriptNonce ? buildHtmlPreviewDocument(source, nonce, scriptNonce) : null,
+    [source, nonce, scriptNonce]
   );
   useEffect(() => {
-    if (stopped) return;
+    if (stopped || !scriptNonce) return;
     const timeout = window.setTimeout(() => setStatus('error'), 5000);
     const receive = (event: MessageEvent): void => {
       if (
@@ -135,7 +148,13 @@ export function InteractiveHtmlPreview({
       window.clearTimeout(timeout);
       window.removeEventListener('message', receive);
     };
-  }, [nonce, stopped]);
+  }, [nonce, stopped, scriptNonce]);
+  if (!document)
+    return (
+      <p role="alert" className="p-4">
+        Preview is unavailable for this page. Use the source below.
+      </p>
+    );
   return (
     <div className="p-4">
       <p className="mb-3 text-sm">

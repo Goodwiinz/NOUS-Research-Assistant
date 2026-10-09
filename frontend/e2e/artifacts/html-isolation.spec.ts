@@ -2,14 +2,32 @@ import { expect, test, type Page } from '@playwright/test';
 import { buildHtmlPreviewDocument } from '../../src/components/chat/artifact-panel/InteractiveHtmlPreview';
 
 const nonce = 'browser-preview-nonce-12345';
+const scriptNonce = 'dHJ1c3RlZC1hcHAtbm9uY2UtMTIzNDU=';
+// Production proxy.ts policy, including inherited nonce/strict-dynamic.
+const parentCsp = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-src 'self' blob:",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  `script-src 'self' 'nonce-${scriptNonce}' 'strict-dynamic'`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https: wss:",
+  "worker-src 'self' blob:",
+  'upgrade-insecure-requests',
+].join('; ');
 async function mount(page: Page, source: string): Promise<string[]> {
   const requests: string[] = [];
-  const wrapper = buildHtmlPreviewDocument(source, nonce);
+  const wrapper = buildHtmlPreviewDocument(source, nonce, scriptNonce);
   await page.route('**/*', (route) => {
     if (route.request().url() === 'http://preview.test/')
       return route.fulfill({
         contentType: 'text/html',
-        body: `<!doctype html><h1>Host</h1><script>window.hostSecret='secret';window.events=[];addEventListener('message', e => window.events.push(e.data));</script><iframe id="wrapper" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe><script>document.querySelector('iframe').srcdoc=${JSON.stringify(wrapper).replace(/</g, '\\u003c')};</script>`,
+        headers: { 'Content-Security-Policy': parentCsp },
+        body: `<!doctype html><h1>Host</h1><script nonce="${scriptNonce}">window.hostSecret='secret';window.events=[];addEventListener('message', e => window.events.push(e.data));</script><iframe id="wrapper" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe><script nonce="${scriptNonce}">document.querySelector('iframe').srcdoc=${JSON.stringify(wrapper).replace(/</g, '\\u003c')};</script>`,
       });
     requests.push(route.request().url());
     return route.abort();
@@ -33,12 +51,12 @@ test('nonce-only CSP runs a calculator while removing inline handlers and extern
   const wrapper = page.frames().find((frame) => frame.url() === 'about:srcdoc');
   expect(
     await wrapper?.evaluate(() => document.querySelector('script')?.nonce)
-  ).toBe(nonce);
+  ).toBe(scriptNonce);
   expect(
     await wrapper?.evaluate(() =>
       document.querySelector('meta')?.getAttribute('content')
     )
-  ).toContain(`script-src 'nonce-${nonce}'`);
+  ).toContain(`script-src 'nonce-${scriptNonce}'`);
 });
 
 test('opaque HTML cannot access host, cookies, network, forms, popups, top navigation or workers', async ({
@@ -56,7 +74,7 @@ test('opaque HTML cannot access host, cookies, network, forms, popups, top navig
       await new Promise(resolve => {const socket = new WebSocket('wss://probe.test/socket'); socket.onerror = () => {blocked.push('socket');resolve(null)};});
       try {navigator.sendBeacon('https://probe.test/beacon','x')}catch {blocked.push('beacon')}
       const img=new Image();img.src='https://probe.test/image';document.body.append(img);
-      const script=document.createElement('script');script.nonce=document.currentScript?.nonce || '${nonce}';script.src='https://probe.test/copied-nonce.js';document.head.append(script);
+      const script=document.createElement('script');script.nonce='${scriptNonce}';script.src='https://probe.test/copied-nonce.js';document.head.append(script);
       const form=document.createElement('form');form.action='https://probe.test/form';document.body.append(form);form.submit();
       const child=document.createElement('iframe');child.src='https://probe.test/frame';document.body.append(child);
       const popup=window.open('https://probe.test/popup'); if(!popup) blocked.push('popup');
@@ -104,7 +122,7 @@ test('HTTP self navigation is blocked before a request leaves the frame', async 
     document.querySelector('#http').addEventListener('click',()=>location.href='https://probe.test/self');
     document.querySelector('#blob').addEventListener('click',()=>{
       const code="fetch('https://probe.test/after-blob').catch(()=>document.querySelector('output').textContent='blocked')";
-      location.href=URL.createObjectURL(new Blob(['<output>waiting</output><scr'+'ipt nonce="${nonce}">'+code+'</scr'+'ipt>'],{type:'text/html'}));
+      location.href=URL.createObjectURL(new Blob(['<output>waiting</output><scr'+'ipt nonce="${scriptNonce}">'+code+'</scr'+'ipt>'],{type:'text/html'}));
     });
   </script>`
   );
@@ -127,8 +145,8 @@ test('blob self navigation retains inherited network and external script restric
     page,
     `<button>Blob</button><script>
     document.querySelector('button').addEventListener('click',()=>{
-      const code="fetch('https://probe.test/after-blob').catch(()=>document.querySelector('output').textContent='blocked');const script=document.createElement('script');script.nonce='${nonce}';script.src='https://probe.test/after-blob-script';document.head.append(script)";
-      location.href=URL.createObjectURL(new Blob(['<output>waiting</output><scr'+'ipt nonce="${nonce}">'+code+'</scr'+'ipt>'],{type:'text/html'}));
+      const code="fetch('https://probe.test/after-blob').catch(()=>document.querySelector('output').textContent='blocked');const script=document.createElement('script');script.nonce='${scriptNonce}';script.src='https://probe.test/after-blob-script';document.head.append(script)";
+      location.href=URL.createObjectURL(new Blob(['<output>waiting</output><scr'+'ipt nonce="${scriptNonce}">'+code+'</scr'+'ipt>'],{type:'text/html'}));
     });
   </script>`
   );

@@ -214,7 +214,10 @@ it('shows an authenticated PDF blob in a sandbox and revokes it on teardown', as
   expect(revoke).toHaveBeenCalledWith('blob:pdf');
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  document.querySelector('script[data-test-csp]')?.remove();
+});
 
 it('keeps HTML escaped and interactive preview absent when capability is off', async () => {
   vi.mocked(artifactService.capabilities).mockResolvedValue({
@@ -232,6 +235,10 @@ it('keeps HTML escaped and interactive preview absent when capability is off', a
   expect(screen.queryByTitle('Interactive HTML preview')).toBeNull();
 });
 it('requires explicit opt-in with capability on, and preserves source below the isolated frame', async () => {
+  const script = document.createElement('script');
+  script.nonce = 'dHJ1c3RlZC1hcHAtbm9uY2UtMTIzNDU=';
+  script.dataset.testCsp = 'true';
+  document.head.append(script);
   vi.mocked(artifactService.capabilities).mockResolvedValue({
     editingEnabled: false,
     previewEnabled: true,
