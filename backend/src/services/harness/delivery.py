@@ -590,13 +590,34 @@ async def has_assistant_projection(db: AsyncSession, run: Any) -> bool:
 
 
 async def reconcile_pending(db: AsyncSession) -> int:
+    # Filter durable execution evidence before the batch cap; offline leased
+    # runs must not monopolize every tick. The helper rechecks under run lock.
     cancelled_ids = (
         await db.scalars(
             select(AgentRun.job_id)
+            .join(HarnessSession, HarnessSession.run_id == AgentRun.job_id)
             .where(
                 AgentRun.execution_provider == "codex",
                 AgentRun.cancel_requested_at.is_not(None),
                 AgentRun.status.notin_([s.value for s in TERMINAL.values()]),
+                AgentRun.started_at.is_(None),
+                HarnessSession.observation == "unknown",
+                HarnessSession.provider_session_id.is_(None),
+                HarnessSession.provider_turn_id.is_(None),
+                HarnessSession.source_id.is_(None),
+                HarnessSession.source_seq == 0,
+                ~select(HarnessCommand.id)
+                .where(
+                    HarnessCommand.run_id == AgentRun.job_id,
+                    or_(
+                        HarnessCommand.lease_until.is_not(None),
+                        HarnessCommand.acknowledged.is_(True),
+                    ),
+                )
+                .exists(),
+                ~select(HarnessReceipt.id)
+                .where(HarnessReceipt.run_id == AgentRun.job_id)
+                .exists(),
             )
             .order_by(AgentRun.job_id)
             .limit(100)

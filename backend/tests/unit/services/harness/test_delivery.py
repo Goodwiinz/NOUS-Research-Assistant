@@ -1282,3 +1282,60 @@ async def test_reconcile_closes_stranded_never_leased_stop_with_bridge_disabled(
     run = await db.get(AgentRun, str(external_run.id))
     session = await db.scalar(select(HarnessSession))
     assert run.status == "cancelled" and not session.workspace_locked
+
+
+async def test_reconcile_does_not_starve_unleased_stop_behind_leased_runs(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import UUID
+
+    cancelled_at = datetime.now(timezone.utc)
+    tail_id = str(UUID(int=2**128 - 1))
+    for number in range(101):
+        run_id = str(UUID(int=number + 1)) if number < 100 else tail_id
+        db.add(
+            AgentRun(
+                job_id=run_id,
+                organization_id=ORG,
+                user_id=USER,
+                execution_provider="codex",
+                status="recovering",
+                cancel_requested_at=cancelled_at,
+            )
+        )
+        db.add(
+            HarnessSession(
+                run_id=run_id,
+                grant_id=context.grant_id,
+                device_id=DEVICE,
+                workspace_id=uuid4(),
+            )
+        )
+        db.add(
+            HarnessCommand(
+                run_id=run_id,
+                generation=1,
+                kind="start",
+                body={"kind": "start", "input": "hello"},
+                expires_at=cancelled_at + timedelta(minutes=15),
+                lease_until=now_expired() if number < 100 else None,
+            )
+        )
+    await db.commit()
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", False)
+    await reconcile_pending(db)
+    db.expire_all()
+    tail: Any = await db.get(AgentRun, tail_id)
+    tail_session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == tail_id)
+    )
+    assert tail.status == "cancelled"
+    assert tail_session is not None and not tail_session.workspace_locked
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentRun)
+            .where(AgentRun.status == "recovering")
+        )
+        == 100
+    )
