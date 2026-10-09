@@ -6,8 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The old root `CLAUDE.md` was retired in #1491. Rules now live in `AGENTS.md` files plus `docs/engineering/`, and this file is only a map. Read the closest contract before editing; don't restate it here.
 
-- Root `AGENTS.md` → `docs/engineering/{backend,frontend,testing,api-contracts,gotchas}.md`. Each rule there names the test or CI gate that enforces it.
-- Nearly every top-level directory has its own `AGENTS.md` (`backend/`, `frontend/`, `tests/`, `docs/`, `src/`, ...). The nearest one adds to the root file.
+Claude Code loads `CLAUDE.md` but not `AGENTS.md`, so the root contract is imported here:
+
+@AGENTS.md
+
+- Root `AGENTS.md` → `docs/engineering/README.md`, then `{backend,frontend,testing,api-contracts,gotchas}.md`. Each rule there names the test or CI gate that enforces it.
+- Nearly every top-level directory has its own `AGENTS.md` (`backend/`, `frontend/`, `tests/`, `docs/`, `src/`, ...). None of them load automatically: read the nearest one before editing in that directory. It adds to the root file and never overrides it.
 - "NOUS loop" / "self-improvement tick" requests: read `docs/engineering/nous-loop.md` completely first. It is the canonical workflow, with its own evidence, review and terminal-outcome (`merged` / `ready-for-human` / `dry`) gates.
 - `docs/plans/`, `docs/audits/`, `docs/archive/` and `evals/baselines/` are dated records, not live contracts. Don't edit history to match new code; add a dated amendment.
 - Some READMEs are stale. `backend/src/services/agent/README.md` still says Qdrant, which is removed. Check the code before trusting one.
@@ -90,5 +94,4 @@ pnpm --dir tests/e2e exec playwright test --project=chromium   # browser + runni
 - Public HTTP errors use stable safe messages, never raw exception text. Sort/filter identifiers come from validated enums (`src/shared/enums.py`), never interpolated into SQL.
 - Count queries must apply the same filters as the result query (shared `_apply_*_filters` helpers), or `total` and `has_more` drift.
 - Every `AIMessage` with `tool_calls` needs matching `ToolMessage`s. `_sanitize_messages` inserts `{"status": "skipped"}` placeholders after cancellations.
-- A race or idempotency test isn't done until mutation verification proves it fails with the guard removed (procedure in `docs/engineering/testing.md`).
 - Keep compatibility exports (e.g. `backend/src/api/threads/workspaces.py`) until every caller has migrated. Removing one is its own deliberate change.

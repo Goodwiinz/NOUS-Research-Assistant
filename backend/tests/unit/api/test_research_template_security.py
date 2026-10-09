@@ -6,7 +6,7 @@ import copy
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -385,3 +385,585 @@ def test_persisted_template_steps_do_not_follow_later_loader_mutation(
     mutable_template["steps"][0]["name"] = "Changed later"
 
     assert saved_steps[0]["name"] == "Bounded Provider Search"
+
+
+# ---------------------------------------------------------------------------
+# GOO-335: every Daily Brief route goes through the canonical access funnel.
+# ---------------------------------------------------------------------------
+#
+# Unlike ``template_api`` above, these tests run the real ``project_access``
+# and ``workspace_access`` code. ``_AccessSession`` answers each statement the
+# funnel issues from one in-memory scope and emulates only the SQL predicates
+# (``is_deleted``, archived) that a mock cannot evaluate; every Python-level
+# guard runs for real. Export and pending-review VIEW routing is pinned by
+# test_research_engine_exports.py / test_research_engine_reviews.py (GOO-404),
+# and the PostgreSQL ACL proof lives in
+# tests/integration/test_research_run_review_export_access_postgres.py.
+#
+# Mutation checks (GOO-335, run 2026-10-08). Each guard was disabled in
+# source, the focused command below was run, and the file was restored with
+# ``git checkout -- <file>`` (``git diff`` empty afterwards):
+#   pytest -q backend/tests/unit/api/test_research_template_security.py -k funnel
+#   M1 project_access.resolve_project ``if workspace_role is None`` -> red:
+#      denies_foreign_owner[review-public] (403) and [export-public] (200).
+#      EDIT routes stay 404 because the EDIT role check backstops them.
+#   M2 workspace_access.get_collection ``user_can_access_workspace`` removed ->
+#      green alone (M1 backstops it); M1 + M2 together -> red on
+#      denies_foreign_owner[review|export-private|public].
+#   M3 resolve_project ``lifecycle[0].is_deleted or lifecycle[1].is_deleted``
+#      removed -> red: hides_soft_deleted_project[*-racing] return 409
+#      "Project is not writable" (existence leak) instead of 404.
+#   M4 resolve_project ``if collection is None`` removed -> red: every
+#      private foreign-owner and soft-deleted case raises AttributeError.
+#   M5 ResearchAction.EDIT -> VIEW at blueprints.create_blueprint,
+#      runs.start_run (require_blueprint) or runs.resume_run (_get_owned_run)
+#      -> red: authorizes_owner_with_route_action, denies_foreign_owner,
+#      hides_mutations_from_viewer_member and cross_org cases for that route.
+#   M6 resolve_project ``if user_org != organization_id`` disabled -> red:
+#      hides_project_from_cross_org_member[*] (all six routes).
+#   M7 resolve_project EDIT workspace-role check disabled -> red:
+#      hides_mutations_from_viewer_member[create|start|resume] (201/200).
+#   M8 resolve_project ``_DECISION_ROLE`` check disabled -> red:
+#      review_requires_reviewer_role.
+#   M9 ReviewService._authorize_review ``ResearchAction.REVIEW`` -> VIEW -> red:
+#      authorizes_review_with_review_action, review_requires_reviewer_role and
+#      the review cases of the foreign-owner and cross-org tests.
+
+from src.models.collection import Collection  # noqa: E402
+from src.models.research_blueprint import ResearchBlueprint  # noqa: E402
+from src.models.research_project import ResearchProject  # noqa: E402
+from src.models.research_project_role import (  # noqa: E402
+    ResearchProjectRole,
+    ResearchProjectRoleAssignment,
+)
+from src.models.research_run import ResearchRun  # noqa: E402
+from src.models.user import User  # noqa: E402
+from src.models.workspace import Workspace, WorkspaceRole  # noqa: E402
+from src.services.research_engine import project_access  # noqa: E402
+from src.services.research_engine.project_access import ResearchAction  # noqa: E402
+from src.services.research_engine.scope import (  # noqa: E402
+    DAILY_BRIEF_SCOPE_FIELDS,
+    resolve_effective_daily_brief_parameters,
+)
+
+_RUNS_MODULE = "src.api.research_engine.runs"
+
+
+class _FunnelWorkspace(SimpleNamespace):
+    def is_member(self, user_id: str) -> bool:
+        return any(
+            not member.is_deleted and str(member.user_id) == str(user_id)
+            for member in self.members
+        )
+
+
+@dataclass
+class _FunnelScope:
+    owner: Any
+    stranger: Any
+    organization_id: uuid.UUID
+    workspace: _FunnelWorkspace
+    collection: Any
+    engine: Any
+    blueprint: Any
+    run: Any
+    roles: dict[uuid.UUID, list[ResearchProjectRole]]
+    stale_collection_read: bool = False
+    # Per-user organization overrides; anyone absent shares the workspace org.
+    user_orgs: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
+
+
+class _Result:
+    def __init__(
+        self, *, first: Any = None, scalar: Any = None, rows: Any = None
+    ) -> None:
+        self._first = first
+        self._scalar = scalar
+        self._rows = rows or []
+
+    def first(self) -> Any:
+        return self._first
+
+    def scalar_one_or_none(self) -> Any:
+        return self._scalar
+
+    def scalars(self) -> "_Result":
+        return self
+
+    def all(self) -> list[Any]:
+        return list(self._rows)
+
+
+class _Transaction:
+    async def __aenter__(self) -> "_Transaction":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+
+class _AccessSession:
+    """Answers the canonical access funnel's statements from one scope."""
+
+    def __init__(self, scope: _FunnelScope) -> None:
+        self.scope = scope
+        self.added: list[Any] = []
+        self.commits = 0
+
+    @staticmethod
+    def _bound_uuids(statement: Any) -> set[uuid.UUID]:
+        return {
+            value
+            for value in statement.compile().params.values()
+            if isinstance(value, uuid.UUID)
+        }
+
+    def _live(self) -> bool:
+        scope = self.scope
+        return not (scope.collection.is_deleted or scope.workspace.is_deleted)
+
+    async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> _Result:
+        scope = self.scope
+        shape = tuple(
+            (description.get("entity"), description.get("name"))
+            for description in statement.column_descriptions
+        )
+        if shape == ((Collection, "Collection"),):
+            # workspace_access.get_collection: ``Collection.is_deleted == False``
+            # unless the test models a read that raced the soft-delete.
+            visible = scope.stale_collection_read or not scope.collection.is_deleted
+            return _Result(first=scope.collection if visible else None)
+        if shape == ((Workspace, "id"),):
+            return _Result()  # Workspace SHARE lock
+        if shape == ((Collection, "id"),):
+            # lock_active_project: live, non-archived Collection + Workspace.
+            writable = (
+                self._live()
+                and scope.collection.research_status != "archived"
+                and not scope.workspace.is_archived
+            )
+            return _Result(scalar=scope.collection.id if writable else None)
+        if shape == ((Collection, "Collection"), (Workspace, "Workspace")):
+            return _Result(first=(scope.collection, scope.workspace))
+        if shape == ((User, "organization_id"),):
+            (user_id,) = self._bound_uuids(statement)
+            return _Result(scalar=scope.user_orgs.get(user_id, scope.organization_id))
+        if shape == ((ResearchProjectRoleAssignment, "role"),):
+            roles = [
+                role
+                for user_id in self._bound_uuids(statement)
+                for role in scope.roles.get(user_id, [])
+            ]
+            return _Result(rows=roles)
+        if shape == ((ResearchProject, "ResearchProject"),):
+            return _Result(first=None if scope.engine.is_deleted else scope.engine)
+        if shape == ((ResearchBlueprint, "ResearchBlueprint"),):
+            return _Result(first=scope.blueprint)
+        if shape == ((ResearchRun, "ResearchRun"), (ResearchBlueprint, "project_id")):
+            return _Result(first=(scope.run, scope.engine.id))
+        raise AssertionError(f"unexpected statement: {statement}")
+
+    async def get(self, model: Any, ident: Any) -> Any:
+        assert model is ResearchBlueprint and ident == self.scope.blueprint.id
+        return self.scope.blueprint
+
+    def add(self, instance: Any) -> None:
+        self.added.append(instance)
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def rollback(self) -> None:
+        return None
+
+    async def refresh(self, instance: Any) -> None:
+        instance.id = getattr(instance, "id", None) or uuid.uuid4()
+        instance.created_at = datetime.now(timezone.utc)
+        instance.updated_at = datetime.now(timezone.utc)
+
+    def in_transaction(self) -> bool:
+        return False
+
+    def begin(self) -> _Transaction:
+        return _Transaction()
+
+
+def _daily_brief_parameters() -> dict[str, Any]:
+    template = BlueprintLoader(daily_research_brief_enabled=True).load_template(
+        "daily_research_brief"
+    )
+    return {
+        **copy.deepcopy(template["parameters"]),
+        "research_question": "Does the controlled treatment reduce score?",
+        "inclusion_criteria": ["Reports the measured score"],
+        "exclusion_criteria": ["No outcome data"],
+        "providers": ["openalex"],
+        "limit_per_provider": 2,
+        "notes": "",
+    }
+
+
+def _scope_confirmation(parameters: dict[str, Any]) -> dict[str, Any]:
+    effective = resolve_effective_daily_brief_parameters(parameters, {})
+    return {
+        **{field: effective[field] for field in DAILY_BRIEF_SCOPE_FIELDS},
+        "confirmed": True,
+    }
+
+
+@dataclass
+class FunnelAPI:
+    client: TestClient
+    scope: _FunnelScope
+    session: _AccessSession
+    actor: dict[str, Any]
+    actions: list[ResearchAction]
+    create_run: AsyncMock
+    lifecycle: Mock
+    load_run: AsyncMock
+    export: AsyncMock
+
+
+@pytest.fixture
+def funnel_api(
+    test_app: FastAPI,
+    test_auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[FunnelAPI]:
+    owner = Mock(id=uuid.uuid4(), email="owner@example.com", is_active=True)
+    stranger = Mock(id=uuid.uuid4(), email="stranger@example.com", is_active=True)
+    organization_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    workspace = _FunnelWorkspace(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        organization_id=organization_id,
+        members=[],
+        is_public=False,
+        is_deleted=False,
+        is_archived=False,
+    )
+    collection = SimpleNamespace(
+        id=uuid.uuid4(),
+        workspace_id=workspace.id,
+        workspace=workspace,
+        name="Daily Brief project",
+        description=None,
+        research_status="active",
+        is_deleted=False,
+        created_at=now,
+        updated_at=now,
+    )
+    engine = SimpleNamespace(
+        id=uuid.uuid4(),
+        collection_id=collection.id,
+        owner_id=owner.id,
+        settings={},
+        is_deleted=False,
+    )
+    parameters = _daily_brief_parameters()
+    blueprint = SimpleNamespace(
+        id=uuid.uuid4(),
+        project_id=engine.id,
+        template_source="daily_research_brief",
+        parameters=parameters,
+        steps=[],
+        version=1,
+        is_deleted=False,
+    )
+    run = SimpleNamespace(
+        id=uuid.uuid4(),
+        blueprint_id=blueprint.id,
+        blueprint_version=1,
+        status="paused",
+        reproducibility_manifest={},
+        total_tokens=0,
+        created_at=now,
+        updated_at=now,
+    )
+    scope = _FunnelScope(
+        owner=owner,
+        stranger=stranger,
+        organization_id=organization_id,
+        workspace=workspace,
+        collection=collection,
+        engine=engine,
+        blueprint=blueprint,
+        run=run,
+        roles={owner.id: [ResearchProjectRole.REVIEWER]},
+    )
+    session = _AccessSession(scope)
+    actor = {"current": owner}
+    test_app.dependency_overrides[get_current_user] = lambda: actor["current"]
+    test_app.dependency_overrides[get_db] = lambda: session
+
+    actions: list[ResearchAction] = []
+    real_resolve_project = project_access.resolve_project
+
+    async def recording_resolve_project(
+        db: Any,
+        project_id: uuid.UUID,
+        user_id: uuid.UUID,
+        action: ResearchAction = ResearchAction.VIEW,
+        **kwargs: Any,
+    ) -> Any:
+        actions.append(action)
+        return await real_resolve_project(db, project_id, user_id, action, **kwargs)
+
+    # Every require_* helper reaches resolve_project through module globals.
+    monkeypatch.setattr(project_access, "resolve_project", recording_resolve_project)
+    create_run = AsyncMock(return_value=run)
+    monkeypatch.setattr(f"{_RUNS_MODULE}.create_approved_run", create_run)
+    monkeypatch.setattr(f"{_RUNS_MODULE}._require_run_conformance", AsyncMock())
+    lifecycle = Mock()
+    lifecycle.return_value.authorize_resume = AsyncMock()
+    monkeypatch.setattr(f"{_RUNS_MODULE}.ResearchRunLifecycleService", lifecycle)
+    # The review service's first post-authorization read; nothing is pending.
+    load_run = AsyncMock(
+        return_value=SimpleNamespace(status="running", reproducibility_manifest={})
+    )
+    monkeypatch.setattr(
+        "src.services.research_engine.review_service.ResearchReviewService._load_run",
+        load_run,
+    )
+    export = AsyncMock(
+        return_value=SimpleNamespace(
+            content=b"# Daily Brief",
+            media_type="text/markdown",
+            filename="daily-brief.md",
+        )
+    )
+    exporter = Mock()
+    exporter.return_value.export = export
+    monkeypatch.setattr(f"{_RUNS_MODULE}.ExportService", exporter)
+
+    @asynccontextmanager
+    async def no_lifespan(_app: Any) -> AsyncIterator[None]:
+        yield
+
+    original_lifespan = test_app.router.lifespan_context
+    test_app.router.lifespan_context = no_lifespan
+    try:
+        with TestClient(test_app, headers=test_auth_headers) as client:
+            yield FunnelAPI(
+                client=client,
+                scope=scope,
+                session=session,
+                actor=actor,
+                actions=actions,
+                create_run=create_run,
+                lifecycle=lifecycle,
+                load_run=load_run,
+                export=export,
+            )
+    finally:
+        test_app.router.lifespan_context = original_lifespan
+        test_app.dependency_overrides.pop(get_current_user, None)
+        test_app.dependency_overrides.pop(get_db, None)
+
+
+def _call_route(api: FunnelAPI, route: str) -> Any:
+    scope = api.scope
+    client = api.client
+    if route == "create":
+        return client.post(
+            f"/api/v1/research-engine/blueprints/projects/{scope.collection.id}",
+            json={
+                "name": "Daily Brief",
+                "template_source": "daily_research_brief",
+                "parameters": {"providers": ["openalex"], "limit_per_provider": 2},
+            },
+        )
+    if route == "start":
+        return client.post(
+            f"/api/v1/research-engine/blueprints/{scope.blueprint.id}/runs",
+            json={
+                "scope_confirmation": _scope_confirmation(scope.blueprint.parameters)
+            },
+        )
+    if route == "resume":
+        return client.post(f"/api/v1/research-engine/runs/{scope.run.id}/resume")
+    if route == "export":
+        return client.get(f"/api/v1/research-engine/runs/{scope.run.id}/export")
+    if route == "stream":
+        return client.get(f"/api/v1/research-engine/runs/{scope.run.id}/stream")
+    if route == "review":
+        return client.post(
+            f"/api/v1/research-engine/runs/{scope.run.id}/reviews/1",
+            json={
+                "review_kind": "screening",
+                "output_hash": "a" * 64,
+                "decision": "approve",
+                "decision_payload": {
+                    "items": [
+                        {
+                            "source_id": "source-a",
+                            "part_id": "p0001",
+                            "decision": "include",
+                        }
+                    ]
+                },
+            },
+        )
+    raise AssertionError(route)
+
+
+_DAILY_BRIEF_ROUTES = ("create", "start", "resume", "stream", "review", "export")
+_ROUTE_ACTIONS = {"review": ResearchAction.REVIEW, "export": ResearchAction.VIEW}
+
+
+@pytest.mark.parametrize(
+    ("route", "status_code", "expected_actions"),
+    [
+        ("create", 201, [ResearchAction.EDIT]),
+        ("start", 201, [ResearchAction.EDIT, ResearchAction.EDIT]),
+        ("resume", 200, [ResearchAction.EDIT, ResearchAction.EDIT]),
+        ("export", 200, [ResearchAction.VIEW]),
+    ],
+)
+def test_daily_brief_funnel_authorizes_owner_with_route_action(
+    funnel_api: FunnelAPI,
+    route: str,
+    status_code: int,
+    expected_actions: list[ResearchAction],
+) -> None:
+    response = _call_route(funnel_api, route)
+
+    assert response.status_code == status_code, response.text
+    assert funnel_api.actions == expected_actions
+    if route == "create":
+        assert funnel_api.session.added[-1].template_source == "daily_research_brief"
+        assert response.json()["project_id"] == str(funnel_api.scope.collection.id)
+    if route == "start":
+        context = funnel_api.create_run.await_args.args[1]
+        assert context.collection is funnel_api.scope.collection
+        manifest = funnel_api.create_run.await_args.kwargs["manifest_metadata"]
+        assert manifest["scope_confirmation"]["confirmed_by"] == str(
+            funnel_api.scope.owner.id
+        )
+    if route == "resume":
+        funnel_api.lifecycle.return_value.authorize_resume.assert_awaited_once()
+    if route == "export":
+        funnel_api.export.assert_awaited_once()
+        assert response.content == b"# Daily Brief"
+
+
+def test_daily_brief_funnel_authorizes_review_with_review_action(
+    funnel_api: FunnelAPI,
+) -> None:
+    response = _call_route(funnel_api, "review")
+
+    # Access passed; the service then refuses because no gate is pending.
+    assert funnel_api.actions == [ResearchAction.REVIEW]
+    funnel_api.load_run.assert_awaited_once()
+    assert response.status_code == 409, response.text
+
+
+def test_daily_brief_funnel_review_requires_reviewer_role(
+    funnel_api: FunnelAPI,
+) -> None:
+    funnel_api.scope.roles = {}
+
+    response = _call_route(funnel_api, "review")
+
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["message"] == "reviewer role required"
+    assert funnel_api.actions == [ResearchAction.REVIEW]
+    funnel_api.load_run.assert_not_awaited()
+
+
+def _assert_hidden(api: FunnelAPI, response: Any) -> None:
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["message"] == "Project not found"
+    assert api.session.added == []
+    assert api.session.commits == 0
+    api.create_run.assert_not_awaited()
+    api.lifecycle.return_value.authorize_resume.assert_not_awaited()
+    api.load_run.assert_not_awaited()
+    api.export.assert_not_awaited()
+
+
+@pytest.mark.parametrize("is_public", [False, True], ids=["private", "public"])
+@pytest.mark.parametrize("route", _DAILY_BRIEF_ROUTES)
+def test_daily_brief_funnel_denies_foreign_owner(
+    funnel_api: FunnelAPI, route: str, is_public: bool
+) -> None:
+    # A public workspace lets get_collection return the row; only the
+    # membership check in resolve_project keeps artifacts private.
+    funnel_api.scope.workspace.is_public = is_public
+    funnel_api.actor["current"] = funnel_api.scope.stranger
+
+    response = _call_route(funnel_api, route)
+
+    _assert_hidden(funnel_api, response)
+    assert funnel_api.actions == [_ROUTE_ACTIONS.get(route, ResearchAction.EDIT)]
+
+
+# ``racing`` excludes export: VIEW takes no lifecycle lock, so a read ordered
+# before the soft-delete commit may serve that snapshot (linearizable).
+@pytest.mark.parametrize(
+    ("route", "racing"),
+    [
+        pytest.param(route, racing, id=f"{route}-{'racing' if racing else 'deleted'}")
+        for route in _DAILY_BRIEF_ROUTES
+        for racing in (False, True)
+        if not (racing and route == "export")
+    ],
+)
+def test_daily_brief_funnel_hides_soft_deleted_project(
+    funnel_api: FunnelAPI, route: str, racing: bool
+) -> None:
+    funnel_api.scope.collection.is_deleted = True
+    # ``racing``: the access read saw the row before the soft-delete committed;
+    # the locked lifecycle re-read must still answer 404, never 409.
+    funnel_api.scope.stale_collection_read = racing
+
+    response = _call_route(funnel_api, route)
+
+    _assert_hidden(funnel_api, response)
+
+
+def _add_member(api: FunnelAPI, role: WorkspaceRole) -> None:
+    api.scope.workspace.members.append(
+        SimpleNamespace(user_id=api.scope.stranger.id, role=role, is_deleted=False)
+    )
+    api.actor["current"] = api.scope.stranger
+
+
+@pytest.mark.parametrize("route", ("create", "start", "resume"))
+def test_daily_brief_funnel_hides_mutations_from_viewer_member(
+    funnel_api: FunnelAPI, route: str
+) -> None:
+    # A VIEWER can read the project but EDIT routes must not reveal it.
+    _add_member(funnel_api, WorkspaceRole.VIEWER)
+
+    response = _call_route(funnel_api, route)
+
+    _assert_hidden(funnel_api, response)
+    assert funnel_api.actions == [ResearchAction.EDIT]
+
+
+def test_daily_brief_funnel_lets_viewer_member_export(funnel_api: FunnelAPI) -> None:
+    _add_member(funnel_api, WorkspaceRole.VIEWER)
+
+    response = _call_route(funnel_api, "export")
+
+    assert response.status_code == 200, response.text
+    assert funnel_api.actions == [ResearchAction.VIEW]
+
+
+@pytest.mark.parametrize("route", _DAILY_BRIEF_ROUTES)
+def test_daily_brief_funnel_hides_project_from_cross_org_member(
+    funnel_api: FunnelAPI, route: str
+) -> None:
+    # Membership alone is not enough: the caller's organization must match.
+    _add_member(funnel_api, WorkspaceRole.EDITOR)
+    funnel_api.scope.roles = {
+        funnel_api.scope.stranger.id: [ResearchProjectRole.REVIEWER]
+    }
+    funnel_api.scope.user_orgs[funnel_api.scope.stranger.id] = uuid.uuid4()
+
+    response = _call_route(funnel_api, route)
+
+    _assert_hidden(funnel_api, response)
+    assert funnel_api.actions == [_ROUTE_ACTIONS.get(route, ResearchAction.EDIT)]

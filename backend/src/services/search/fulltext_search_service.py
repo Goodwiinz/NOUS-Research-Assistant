@@ -48,6 +48,66 @@ def _require_org_scope(organization_id: Any) -> str:
         ) from None
 
 
+# ts_headline wraps each hit in these (StartSel/StopSel); the splitter reads them.
+_HIGHLIGHT_PRE_TAG = "<mark>"
+_HIGHLIGHT_POST_TAG = "</mark>"
+_HIGHLIGHT_TAGS = re.compile(
+    f"{re.escape(_HIGHLIGHT_PRE_TAG)}|{re.escape(_HIGHLIGHT_POST_TAG)}"
+)
+# Quotes and brackets that may open or close a sentence around its words.
+_OPENING_MARKS = "\"'“‘([{"
+_CLOSING_MARKS = "\"'”’)]}"
+# A sentence ends at ".", "!" or "?" (perhaps followed by a closing mark)
+# followed by whitespace and a capital letter (perhaps after opening marks or
+# a highlight), so "95.3%", "v2.1" and "(Fig. 3)" never end one.
+# retrieve_passages quotes these sentences to a model (audit RT-1).
+_SENTENCE_END = re.compile(
+    rf"(?:(?<=[.!?])|(?<=[.!?][{re.escape(_CLOSING_MARKS)}]))\s+"
+    rf"(?=[{re.escape(_OPENING_MARKS)}]*(?:{re.escape(_HIGHLIGHT_PRE_TAG)})?[A-Z])"
+)
+# A capitalised word after one of these does not start a new sentence.
+_ABBREVIATIONS = frozenset(
+    {
+        "al.",
+        "approx.",
+        "cf.",
+        "dr.",
+        "e.g.",
+        "eq.",
+        "eqs.",
+        "fig.",
+        "figs.",
+        "i.e.",
+        "no.",
+        "ref.",
+        "refs.",
+        "sec.",
+        "vs.",
+    }
+)
+
+
+def _sentences(text: str) -> List[str]:
+    """Split ``text`` into sentences without cutting numbers or abbreviations."""
+    sentences: List[str] = []
+    for piece in _SENTENCE_END.split(text):
+        tail = sentences[-1].rsplit(None, 1) if sentences else []
+        # "(e.g.", "al.)" and "<mark>Fig</mark>." are abbreviations too.
+        last_word = (
+            _HIGHLIGHT_TAGS.sub("", tail[-1])
+            .lstrip(_OPENING_MARKS)
+            .rstrip(_CLOSING_MARKS)
+            .lower()
+            if tail
+            else ""
+        )
+        if last_word in _ABBREVIATIONS:
+            sentences[-1] = f"{sentences[-1]} {piece}"
+        else:
+            sentences.append(piece)
+    return sentences
+
+
 class FullTextSearchService:
     """Service for PostgreSQL full-text search functionality"""
 
@@ -56,8 +116,8 @@ class FullTextSearchService:
         self.min_query_length = 2
         self.default_limit = 20
         self.max_limit = 100
-        self.highlight_pre_tag = "<mark>"
-        self.highlight_post_tag = "</mark>"
+        self.highlight_pre_tag = _HIGHLIGHT_PRE_TAG
+        self.highlight_post_tag = _HIGHLIGHT_POST_TAG
         self.snippet_length = 200
         self.snippet_surround = 50
 
@@ -533,8 +593,9 @@ class FullTextSearchService:
 
         # Extract content snippets
         if highlighted_content and self.highlight_pre_tag in highlighted_content:
-            # Split content into sentences around highlighted terms
-            sentences = re.split(r"[.!?]+", highlighted_content)
+            # Whole sentences around highlighted terms: a split on every "."
+            # cut "95.3%" to "3%" and "et al." mid-sentence (RT-1).
+            sentences = _sentences(highlighted_content)
 
             for sentence in sentences:
                 sentence = sentence.strip()

@@ -230,7 +230,7 @@ function fixtureText(prefix) {
   return `${prefix} Kestrel fixture. The control number is 7314. The absent fact is the color amber.`;
 }
 
-export async function smokeLogin(session) {
+export async function smokeLogin(session, evidence) {
   await session.goto('/login', { timeoutMs: session.config.timeoutMs });
   const page = session.page;
   // React can render the login shell after DOMContentLoaded. Wait for the
@@ -240,7 +240,88 @@ export async function smokeLogin(session) {
   await waitForVisibleUnique(page.locator('#email'), 'Login email field', timeoutMs);
   await waitForVisibleUnique(page.locator('#password'), 'Login password field', timeoutMs);
   await waitForVisibleUnique(page.locator('form button[type="submit"]'), 'Login submit control', timeoutMs);
+  // Optional so direct callers without a runner evidence object still work;
+  // written as a plain call so check_feature_map.py sees the checkpoint.
+  if (typeof evidence?.checkpoint === 'function') await evidence.checkpoint('login.form');
   return { assertion: 'Accessible login fields are rendered', evidence: ['#email', '#password', 'form button[type="submit"]'] };
+}
+
+async function assertAssistantContains(page, text, label, timeoutMs = 10_000) {
+  // The prompt itself contains the expected token, so only assistant rows
+  // count as an answer.
+  const marker = page.locator('[data-role="assistant"]').filter({ hasText: text });
+  await marker.first().waitFor({ state: 'visible', timeout: timeoutMs });
+  assertThat(await marker.count() > 0, `${label} did not render the expected assistant message`);
+}
+
+async function sendFromComposer(page, content) {
+  await messageComposer(page).fill(content);
+  // The /chat composer's Send button has no aria-label; its accessible name
+  // is its visible text.
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+}
+
+const DENY_SETTLE_MS = 10_000;
+// Emitted by the main graph when the user denies a destructive tool call
+// (backend/src/services/agent/_nodes_tools.py).
+const HITL_DENIED_TEXT = 'Action cancelled by user';
+
+/**
+ * Drive `create_project` (a destructive tool) through the web approval
+ * dialog. Approve must create the named project; Deny must not, checked over
+ * a bounded settle window because a denied run has no positive signal.
+ */
+async function driveProjectCreation(session, evidence, decision) {
+  const fixture = await makeThread(session, evidence, `project ${decision}`);
+  const page = await session.login();
+  const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
+  const projectName = `${evidence.fixturePrefix} project ${decision}`;
+  const findProject = async () => {
+    const response = await session.request(`/api/v1/projects?search=${encodeURIComponent(projectName)}&limit=10`, { target: 'backend' });
+    const items = Array.isArray(response.data?.projects) ? response.data.projects : [];
+    return items.find((item) => item?.name === projectName) ?? null;
+  };
+  let registeredProjectId = null;
+  const registerProject = (project) => {
+    if (registeredProjectId || !UUID.test(String(project.id))) return;
+    session.registerFixture('project', String(project.id), { name: projectName });
+    registeredProjectId = String(project.id);
+  };
+  try {
+    await session.goto(threadUrl(fixture.threadId));
+    evidence.consumeModelTurn();
+    await sendFromComposer(page, `Create a new research project named "${projectName}". Do nothing else.`);
+    const dialog = page.getByRole('alertdialog', { name: 'Approval needed' });
+    await dialog.waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+    if (decision === 'approve') await evidence.checkpoint('project.pending');
+    else await evidence.checkpoint('hitl.pending');
+    await dialog.getByRole('button', { name: decision === 'approve' ? 'Approve' : 'Deny', exact: true }).click();
+    await dialog.waitFor({ state: 'hidden', timeout: session.config.timeoutMs });
+    let match = null;
+    if (decision === 'approve') {
+      match = await waitForCondition(findProject, session.config.timeoutMs, 'Approved project did not appear in GET /api/v1/projects');
+    } else {
+      const deadline = Date.now() + Math.min(DENY_SETTLE_MS, session.config.timeoutMs);
+      while (!match && Date.now() < deadline) {
+        match = await findProject();
+        if (!match) await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+    if (match) registerProject(match);
+    return { fixture, page, projectName, match };
+  } finally {
+    // A failed or timed-out wait can still leave an agent-created project
+    // behind; look once more so cleanup owns it.
+    if (!registeredProjectId) {
+      try {
+        const late = await findProject();
+        if (late) registerProject(late);
+      } catch {
+        // The original failure is the result; a lookup error must not mask it.
+      }
+    }
+    await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
+  }
 }
 
 async function authenticatedPage(session, path = '/chat') {
@@ -480,6 +561,90 @@ const scenarios = [
     },
   },
   {
+    id: 'workflow.login-authenticated',
+    title: 'Valid credentials leave /login and land on a protected route',
+    suite: 'workflow',
+    prerequisites: ['auth', 'browser'],
+    mode: 'live',
+    async run(session, evidence) {
+      const page = await session.login();
+      const path = new URL(page.url()).pathname;
+      assertThat(!/^\/login(?:\/|$)/.test(path), 'Login is still on /login');
+      await evidence.checkpoint('login.landed');
+      return { assertion: 'Login left /login for a protected route', evidence: [{ path }] };
+    },
+  },
+  {
+    id: 'workflow.chat-send-stream-reload',
+    title: 'A message sent from the composer streams an answer that survives reload',
+    suite: 'workflow',
+    prerequisites: ['auth', 'writes', 'model', 'browser'],
+    createsFixtures: true,
+    callsModel: true,
+    mode: 'live-model',
+    async run(session, evidence) {
+      const fixture = await makeThread(session, evidence, 'send');
+      const page = await session.login();
+      const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
+      const token = 'KestrelAck42';
+      try {
+        await session.goto(threadUrl(fixture.threadId));
+        const content = `Reply exactly with ${token} for ${evidence.fixturePrefix}.`;
+        evidence.consumeModelTurn();
+        await sendFromComposer(page, content);
+        await assertTranscriptContains(page, content, 'Sent message', session.config.timeoutMs);
+        await evidence.checkpoint('chat.sent');
+        await assertAssistantContains(page, token, 'Streamed answer', session.config.timeoutMs);
+        await evidence.checkpoint('chat.streamed');
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: session.config.timeoutMs });
+        await assertTranscriptContains(page, content, 'Reloaded user message', session.config.timeoutMs);
+        await assertAssistantContains(page, token, 'Reloaded answer', session.config.timeoutMs);
+        await evidence.checkpoint('chat.reloaded');
+        const messages = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=20`, { target: 'backend' });
+        const values = messages.data?.messages ?? messages.data?.items ?? [];
+        assertThat(values.some((item) => item.role === 'user' && item.content === content), 'Composer message was not persisted on the owned thread');
+        assertThat(values.some((item) => item.role === 'assistant' && String(item.content ?? '').includes(token)), 'Streamed answer was not persisted on the owned thread');
+        return { assertion: 'Composer send streamed an answer and both rows survived reload', evidence: [{ threadId: fixture.threadId }] };
+      } finally {
+        await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
+      }
+    },
+  },
+  {
+    id: 'workflow.project-creation-via-chat',
+    title: 'Asking the agent for a project pauses for approval and creates it after Approve',
+    suite: 'workflow',
+    prerequisites: ['auth', 'writes', 'model', 'browser'],
+    createsFixtures: true,
+    callsModel: true,
+    mode: 'live-model',
+    async run(session, evidence) {
+      const { page, match } = await driveProjectCreation(session, evidence, 'approve');
+      assertThat(match && UUID.test(String(match.id)), 'Approved project creation produced no owned project');
+      await evidence.checkpoint('hitl.approved');
+      await session.goto(`/projects/${encodeURIComponent(match.id)}`);
+      await page.getByRole('heading', { name: match.name }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+      await evidence.checkpoint('project.created');
+      return { assertion: 'HITL Approve created the requested project and its page renders', evidence: [{ projectId: match.id }] };
+    },
+  },
+  {
+    id: 'workflow.hitl-deny',
+    title: 'Deny ends the run without creating the project',
+    suite: 'workflow',
+    prerequisites: ['auth', 'writes', 'model', 'browser'],
+    createsFixtures: true,
+    callsModel: true,
+    mode: 'live-model',
+    async run(session, evidence) {
+      const { match } = await driveProjectCreation(session, evidence, 'deny');
+      assertThat(match === null, 'Denied project creation still created a project');
+      await assertAssistantContains(session.page, HITL_DENIED_TEXT, 'Denied run', session.config.timeoutMs);
+      await evidence.checkpoint('hitl.denied');
+      return { assertion: 'HITL Deny left no project behind', evidence: [{ created: false }] };
+    },
+  },
+  {
     id: 'workflow.unicode-message',
     title: 'Unicode message content round-trips without corruption',
     suite: 'workflow',
@@ -705,9 +870,9 @@ const scenarios = [
   },
   {
     id: 'workflow.document-upload-and-attachment',
-    title: 'Supported attachment upload returns an owned document fixture',
+    title: 'Supported attachment upload returns an owned document fixture whose detail page renders',
     suite: 'workflow',
-    prerequisites: ['auth', 'writes'],
+    prerequisites: ['auth', 'writes', 'browser'],
     createsFixtures: true,
     mode: 'live',
     async run(session, evidence) {
@@ -715,13 +880,18 @@ const scenarios = [
       const form = new FormData();
       const filename = `${evidence.fixturePrefix.replace(/[^A-Za-z0-9_-]/g, '_')}.txt`;
       form.append('file', new Blob([fixtureText(evidence.fixturePrefix)], { type: 'text/plain' }), filename);
-      form.append('title', `${evidence.fixturePrefix} document`);
+      const title = `${evidence.fixturePrefix} document`;
+      form.append('title', title);
       form.append('description', 'Synthetic QA attachment');
       const response = await session.request('/api/v1/files/upload', { target: 'backend', method: 'POST', body: form });
       const documentId = responseId(response, 'document_id');
       session.registerFixture('document', documentId, { filename });
       assertThat(response.data?.filename === filename, 'Upload response did not identify the submitted file');
-      return { assertion: 'Supported text attachment is returned with an exact owned document ID', evidence: [{ documentId, filename }] };
+      // The detail page heading renders the document title (documents/[id]/page.tsx).
+      await session.goto(`/documents/${encodeURIComponent(documentId)}`);
+      await session.page.getByRole('heading', { name: title }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+      await evidence.checkpoint('upload.detail');
+      return { assertion: 'Supported text attachment is returned with an exact owned document ID and its detail page renders the title', evidence: [{ documentId, filename }] };
     },
   },
   {

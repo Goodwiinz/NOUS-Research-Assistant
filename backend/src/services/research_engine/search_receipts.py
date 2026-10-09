@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Dict, cast
 from uuid import UUID
@@ -112,9 +113,15 @@ class SearchReceiptJournal:
         *,
         step_id: str,
         strategy: Dict[str, Any],
-        output: Dict[str, Any],
+        output: Mapping[str, Any],
     ) -> None:
-        """Attach final import IDs and provider outcomes without losing attempts."""
+        """Attach final import IDs and provider outcomes without losing attempts.
+
+        ``output`` is the stage envelope the engine has already hashed, and the
+        lifecycle re-hashes it before persisting the step, so it is read-only
+        here. Attempt history stays in this journal, keyed by the receipt's
+        execution, page and attempt IDs.
+        """
         async with self._write_lock:
             run = await self._locked_run()
             manifest: Dict[str, Any] = deepcopy(
@@ -145,45 +152,24 @@ class SearchReceiptJournal:
                 attempt_receipts.setdefault(attempt_id, deepcopy(receipt))
                 execution["status"] = receipt.get("status", execution["status"])
 
+                # Pages that only an interrupted earlier attempt requested stay
+                # in the journal, even when the provider now returns a
+                # different page sequence.
                 durable_pages = execution.get("pages", {})
-                receipt_pages = list(receipt.get("pages") or [])
-                seen_page_ids: set[str] = set()
-                for page in receipt_pages:
-                    page_id = str(page.get("page_id") or "")
-                    if not page_id:
-                        continue
-                    seen_page_ids.add(page_id)
-                    page_entry = durable_pages.get(page_id)
+                for page in receipt.get("pages") or []:
+                    page_entry = durable_pages.get(str(page.get("page_id") or ""))
                     if page_entry is None:
                         continue
-                    attempts = page_entry.get("attempts", [])
                     current_attempt = next(
                         (
                             item
-                            for item in attempts
+                            for item in page_entry.get("attempts", [])
                             if item.get("attempt_id") == page.get("attempt_id")
                         ),
                         None,
                     )
                     if current_attempt is not None:
                         current_attempt["page"] = deepcopy(page)
-                    page["attempt_history"] = deepcopy(attempts)
-
-                # Preserve pages from an interrupted earlier attempt even when
-                # the provider now returns a different page sequence.
-                for page_id, page_entry in durable_pages.items():
-                    if page_id in seen_page_ids:
-                        continue
-                    first_attempt = next(iter(page_entry.get("attempts", [])), None)
-                    if first_attempt is not None:
-                        previous_page = deepcopy(first_attempt["page"])
-                        previous_page["attempt_history"] = deepcopy(
-                            page_entry["attempts"]
-                        )
-                        receipt_pages.append(previous_page)
-                receipt["pages"] = sorted(
-                    receipt_pages, key=lambda page: int(page.get("page_index", 0))
-                )
 
             manifest[_MANIFEST_KEY] = journal
             setattr(run, "reproducibility_manifest", manifest)

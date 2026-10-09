@@ -396,3 +396,164 @@ Minor points resolved in the documents rather than in code:
 
 The CI result for the enrolled test is not yet observed. It counts only once
 the Integration Tests job passes on the exact pushed head.
+
+## Lifecycle fix follow-up
+
+Date: 2026-10-08, 19:59Z–20:22Z. This section was added after the rest of the
+record. It leaves the sections above unchanged.
+
+Branch `fix/daily-brief-pg-lifecycle-hash`, cut from `origin/develop`
+`1cef024b8` (which includes #1939). The code under test is `487f6f926`. The
+commit that adds this section changes only this record and the ledger. Same
+interpreter and PostgreSQL 14.23 as above, in disposable databases that were
+dropped afterwards. A private Redis 8.2.2 on `127.0.0.1:6391` served the
+Redis-gated suites. Nothing was pushed or deployed, and no cluster or flag was
+touched.
+
+Decision: search attempt history belongs in the run's search-receipt journal
+(`_search_receipts_v1` in the run manifest), not in the hashed stage envelope.
+
+- The engine computes the envelope hash once. That value is the
+  `step_complete` hash, the review-gate `run_paused` `output_hash`, the
+  `stage_hashes` entry and the persisted step's `outputs_hash`. Hashing after
+  `finalize_search_step` would need a second hash in the route and would still
+  leave the engine's pause hash stale.
+- The journal already keeps every attempt, per page and per provider attempt.
+  Its keys are the execution, page and attempt IDs that the envelope's
+  receipts carry. The corpus export already reads attempt history from the
+  journal. Nothing reads `attempt_history` from a step output: the frontend
+  does not, and `step_executor` only strips it from prompt context.
+- Effect: a page that only an interrupted earlier attempt requested now stays
+  only in the journal, so the progress UI counts the pages of the attempt that
+  completed.
+
+Changes:
+
+- `search_receipts.py`: `finalize_search_step` reads the envelope as a
+  `Mapping` and writes only to the journal.
+- `test_search_receipts.py`: new
+  `test_finalize_keeps_attempt_history_out_of_the_hashed_envelope`. The older
+  test's last assertion (`attempt_history` in the output) became journal
+  assertions.
+- `research_engine_postgres_support.create_research_engine_tables` always
+  creates `research_decision_streams` and `research_decision_events`. With
+  `ResearchSource` it also creates `research_studies`, `research_reports`,
+  `research_report_identifiers` and `research_report_observations`. The search
+  step reached them through `persist_step_completion` → `observe_sources`
+  (GOO-299), not only through review.
+- `test_partial_provider_failure_deduplicates_and_persists_metadata_only`
+  asserts the GOO-298 receipt fields (provider, status, completion, error
+  type, limit and counts, plus the failed page's literal request) and does not
+  compare per-run IDs or timestamps.
+- `test_draft_source_scope_postgres.py`: the bounded schema gained
+  `workspace_members`, `research_project_role_assignments`,
+  `research_projects`, `draft_task_results` and `draft_reviews`. That also
+  fixes `test_task4_connected_identity_postgres.py`, which reuses this schema.
+- CI: the `Run integration tests` step sets `ORCHESTRATION_TEST_DATABASE_URL`
+  and `ORCHESTRATION_TEST_REDIS_URL` (Redis database 15) and no longer sets
+  `DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL`. The disabled-flag test reads
+  `ORCHESTRATION_TEST_DATABASE_URL` like the rest of its module. The contract
+  test is now `test_integration_job_enrolls_orchestration_postgres_suites`.
+
+```text
+# develop 1cef024b8, before any change
+$ ORCHESTRATION_TEST_DATABASE_URL=… PYTHONPATH=backend backend/.venv/bin/python -m pytest \
+  -c backend/pytest.ini -q backend/tests/integration/test_daily_research_brief_postgres.py
+4 failed, 2 passed             (the four failures above; the passes are all_provider_failure and the rollback test)
+
+# RED, new unit test before the fix
+$ pytest -c backend/pytest.ini -q backend/tests/unit/services/test_search_receipts.py
+1 failed, 1 passed             (assert output == envelope)
+# after the fix
+2 passed
+
+# module after the envelope fix only
+Completed-step hash error gone; the stream now fails on
+relation "research_decision_streams" does not exist (persist_step_completion -> observe_sources)
+# after the harness repair
+1 failed, 5 passed             (partial-provider receipt shape)
+# after the receipt assertion update
+6 passed
+
+$ pytest -c backend/pytest.ini -q backend/tests/unit/ci/test_shard_tests.py -k orchestration
+1 failed                       (RED: assert None == "postgresql://test:test@localhost:${{ … }}/test_db")
+$ pytest -c backend/pytest.ini -q backend/tests/unit/ci          (after the workflow change)
+450 passed
+
+$ pytest -c backend/pytest.ini -q -n 6 backend/tests/unit/api backend/tests/unit/architecture \
+  backend/tests/unit/services backend/tests/unit/ci
+5968 passed, 71 skipped, 3 xpassed
+```
+
+An earlier run of that unit command with `-x` stopped on
+`test_multimodal_pdf_s3_path.py::test_process_pdf_s3_document_extracts_text`.
+That failure came from the local AWS credential provider ("requires
+botocore[crt]"). The test passed in the full rerun and passed alone on
+`1cef024b8`.
+
+Mutation (procedure in `docs/engineering/testing.md`): the injected line was
+restored from a byte copy, `git diff` on the source file was empty, and the
+focused tests were rerun.
+
+| ID | Mutation | Focused tests | RED | Restored |
+| --- | --- | --- | --- | --- |
+| E1 | In `search_receipts.py:finalize_search_step` (~L172), after `current_attempt["page"] = deepcopy(page)`, add `page["attempt_history"] = deepcopy(page_entry.get("attempts", []))` | the new unit test; `test_controlled_lifecycle_persists_each_stage_exactly_once`; `test_terminal_search_scenarios_are_durable[no_evidence]` | 3 failed: `assert output == envelope`, and both PostgreSQL tests with `ResearchRunLifecycleError: Completed step hash does not match its persisted envelope` | 3 passed |
+
+Enrollment check. First, the files gated on `ORCHESTRATION_TEST_DATABASE_URL`
+were run on unchanged develop `1cef024b8` with that variable set: 11 files
+(the ingestion lifecycle file excluded), 12 failed and 78 passed. Six failures
+were `test_agent_run_concurrency.py` reaching its fallback Redis
+`127.0.0.1:32775`, which is why CI now sets `ORCHESTRATION_TEST_REDIS_URL`.
+Four were the Daily Brief failures. One was the draft-scope test
+(`relation "workspace_members" does not exist`). The last was the task-4
+identity test (`KeyError: 'status'`), whose `create_project_note` call failed
+on the same missing table.
+
+Then every Integration Tests shard was run as CI runs it (`scripts/ci/shard_tests.py`
+split, `-m integration`, the step's environment, a fresh database per shard).
+The base used develop `1cef024b8` with the current CI environment. The branch
+used `487f6f926` with the new environment.
+
+| Run | Shard 1 | Shard 2 | Shard 3 |
+| --- | --- | --- | --- |
+| Base | 1 failed, 187 passed, 17 skipped, 89 errors | 8 failed, 80 passed, 61 skipped, 59 errors | 1 failed, 43 passed, 30 skipped, 54 errors |
+| Branch | 9 failed, 141 passed, 9 skipped, 85 errors | 192 passed, 3 skipped, 63 errors | 1 failed, 60 passed, 13 skipped, 54 errors |
+
+The split is by file size, so changed files move between shards. Compared per
+test case across all shards, the base had 310 passed, 108 skipped, 10 failed
+and 202 errors, and the branch had 393 passed, 25 skipped, 10 failed and 202
+errors. The only difference was 83 tests going from skipped to passed:
+`test_document_deletion_postgres` 39, `test_job_store_redis_publication` 14,
+`test_agent_run_concurrency` 12, `test_research_engine_resume_postgres` 7,
+`test_daily_research_brief_postgres` 5, `test_research_review_concurrency_postgres` 2,
+and 1 each in `test_draft_source_scope_postgres`, `test_harness_dispatch_postgres`,
+`test_same_project_continuation` and `test_task4_connected_identity_postgres`.
+No test went from passing to failing or erroring. Every failure and error was
+the same test on both sides, for local reasons:
+
+- 203 need a Docker daemon, which this machine does not run.
+- 8 need WeasyPrint's pango libraries, which CI installs.
+- 1 is `test_processing_publication_postgres.py::test_reserved_but_unsent_attempt_is_recovered_by_sweeper`
+  (`{'swept': 0} == {'swept': 1}`). It is already enrolled through
+  `INGESTION_TEST_DATABASE_URL`, and it passed in CI run 37826102057 on
+  `1cef024b8`.
+
+Remaining branch skips: 13 ingestion-lifecycle tests (the spaCy model, which CI
+installs), 9 AI-provider tests without keys, and 3 marked pytest-asyncio
+skips. Apart from the ingestion-lifecycle file, no file gated on the
+orchestration variables skips any more.
+
+CI on develop `1cef024b8` (Test Pipeline run 37826102057, all three
+Integration Tests shards green) shows the gap. The five lifecycle tests are
+`SKIPPED`, and the disabled-flag test `PASSED` through
+`DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL`.
+
+Gates: the changed-file Ruff, Black and isort checks pass on all six changed
+Python files. No Python file was added, so the CI mypy gate does not apply;
+advisory mypy on `search_receipts.py` reports no issues on either side.
+`actionlint` reports only the existing SC2086 info at line 1295, as it does on
+the base. `generate_openapi.py --check` is up to date.
+
+NOT RUN: the browser E2E (reasons above), and CI on the pushed head, because
+nothing was pushed. The CI result counts only once the Integration Tests job
+passes on the exact pushed head.

@@ -14,6 +14,7 @@ Contract under test (all three riders):
 - All tasks are flag-gated by RETENTION_ENABLED.
 """
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -26,6 +27,7 @@ from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy import table as sa_table
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, IntegrityError, InternalError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import src.models  # noqa: F401 — load full mapper registry (relationships)
@@ -281,6 +283,161 @@ def test_soft_deleted_org_scoping(session_factory):
     assert result["threads"] == 1
     assert not _thread_exists(session_factory, scoped)  # in-scope org deleted
     assert _thread_exists(session_factory, keep)  # other org untouched
+
+
+def test_soft_deleted_apply_skips_a_thread_the_database_refuses(
+    session_factory, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One thread whose delete fails is rolled back alone and skipped; the
+    rest of the batch still commits (audit HO-2: one blocked thread used to
+    roll back every org's purge on every run). The skip is logged at ERROR,
+    naming the thread, so a permanently refused chat stays visible.
+
+    Mutation check (docs/engineering/testing.md): in
+    purge_soft_deleted_threads replace ``with db.begin_nested():`` by
+    ``if True:`` and this fails on ``_message_count(..., blocked) == 2``
+    (0: the refused thread's messages were committed deleted); remove the
+    ``try``/``except IntegrityError`` as well and it fails with
+    IntegrityError.
+    """
+    old = NOW - timedelta(days=60)
+    oldest, _ = _seed_thread(session_factory, is_deleted=True, updated_at=old)
+    blocked, _ = _seed_thread(
+        session_factory, is_deleted=True, updated_at=old + timedelta(days=10)
+    )
+    newest, _ = _seed_thread(
+        session_factory, is_deleted=True, updated_at=old + timedelta(days=20)
+    )
+    delete_checkpoints = retention_tasks._delete_checkpoint_rows
+
+    def refuse_blocked(db, thread_id: str) -> int:
+        # Runs after the thread's messages are deleted, so only a savepoint
+        # can bring them back.
+        if thread_id == blocked:
+            raise IntegrityError("DELETE FROM threads", {}, Exception("referenced"))
+        return delete_checkpoints(db, thread_id)
+
+    monkeypatch.setattr(retention_tasks, "_delete_checkpoint_rows", refuse_blocked)
+
+    with caplog.at_level(logging.ERROR, logger=retention_tasks.logger.name):
+        result = _run(
+            retention_tasks.purge_soft_deleted_threads,
+            session_factory,
+            _retention_settings(apply=True),
+        )
+
+    assert (result["threads"], result["skipped"]) == (2, 1)
+    assert (result["messages"], result["checkpoints"]) == (4, 8)
+    assert not _thread_exists(session_factory, oldest)
+    assert not _thread_exists(session_factory, newest)
+    assert _thread_exists(session_factory, blocked)
+    assert _message_count(session_factory, blocked) == 2
+    assert _checkpoint_count(session_factory, blocked) == 4
+    errors = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == retention_tasks.logger.name
+        and record.levelno == logging.ERROR
+    ]
+    assert len(errors) == 1 and blocked in errors[0], errors
+
+
+def test_soft_deleted_apply_aborts_on_a_lost_connection(
+    session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dropped connection is not the database refusing one thread: the run
+    raises and stops, instead of counting it and every later thread as
+    skipped.
+
+    Mutation check: widen ``except IntegrityError`` back to
+    ``except DBAPIError`` in purge_soft_deleted_threads and this fails
+    with ``DID NOT RAISE``.
+    """
+    old = NOW - timedelta(days=60)
+    lost, _ = _seed_thread(session_factory, is_deleted=True, updated_at=old)
+    later, _ = _seed_thread(
+        session_factory, is_deleted=True, updated_at=old + timedelta(days=10)
+    )
+    delete_checkpoints = retention_tasks._delete_checkpoint_rows
+    attempted: list[str] = []
+
+    def drop_connection(db, thread_id: str) -> int:
+        attempted.append(thread_id)
+        if thread_id == lost:
+            raise OperationalError(
+                "DELETE FROM checkpoints",
+                {},
+                Exception("server closed the connection unexpectedly"),
+                connection_invalidated=True,
+            )
+        return delete_checkpoints(db, thread_id)
+
+    monkeypatch.setattr(retention_tasks, "_delete_checkpoint_rows", drop_connection)
+
+    with pytest.raises(OperationalError):
+        _run(
+            retention_tasks.purge_soft_deleted_threads,
+            session_factory,
+            _retention_settings(apply=True),
+        )
+
+    # The run stopped at ``lost``: ``later`` (newer, so next in the batch) was
+    # never attempted, not merely rolled back with the run.
+    assert attempted == [lost]
+    assert _thread_exists(session_factory, lost)
+    assert _thread_exists(session_factory, later)
+
+
+@pytest.mark.parametrize(
+    ("error_type", "message"),
+    [
+        (OperationalError, "canceling statement due to statement timeout"),
+        (InternalError, "cannot execute DELETE in a read-only transaction"),
+    ],
+    ids=["statement-timeout", "read-only-transaction"],
+)
+def test_soft_deleted_apply_fails_the_run_on_a_non_constraint_error(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[DBAPIError],
+    message: str,
+) -> None:
+    """Only a constraint refusal (IntegrityError) is about one thread. A
+    statement timeout or a read-only transaction keeps the connection
+    (``connection_invalidated`` is False) but refuses every thread alike, so
+    the run raises and the Celery task fails, instead of reporting each thread
+    as skipped and the run as a success.
+
+    Mutation check: widen ``except IntegrityError`` back to
+    ``except DBAPIError`` in purge_soft_deleted_threads and this fails with
+    ``DID NOT RAISE``.
+    """
+    old = NOW - timedelta(days=60)
+    first, _ = _seed_thread(session_factory, is_deleted=True, updated_at=old)
+    later, _ = _seed_thread(
+        session_factory, is_deleted=True, updated_at=old + timedelta(days=10)
+    )
+    attempted: list[str] = []
+
+    def refuse_every_thread(db, thread_id: str) -> int:
+        # Runs after the thread's messages are deleted, like a real refusal of
+        # the checkpoint DELETE.
+        attempted.append(thread_id)
+        raise error_type("DELETE FROM checkpoints", {}, Exception(message))
+
+    monkeypatch.setattr(retention_tasks, "_delete_checkpoint_rows", refuse_every_thread)
+
+    with pytest.raises(error_type):
+        _run(
+            retention_tasks.purge_soft_deleted_threads,
+            session_factory,
+            _retention_settings(apply=True),
+        )
+
+    assert attempted == [first]
+    assert _thread_exists(session_factory, first)
+    assert _thread_exists(session_factory, later)
+    assert _message_count(session_factory, first) == 2
 
 
 # ---------------------------------------------------------------------------

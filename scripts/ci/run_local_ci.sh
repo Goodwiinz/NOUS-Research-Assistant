@@ -87,6 +87,9 @@ ruff check backend/src; check $? "ruff backend/src"
 step "Directory docs lint (blocking)"
 "$PY" scripts/docs/check_dir_docs.py; check $? "check_dir_docs"
 
+step "Feature map (blocking)"
+"$PY" scripts/ci/check_feature_map.py --base "$BASE"; check $? "check_feature_map"
+
 step "Changed-file quality ratchet (blocking) — base=$BASE"
 if ! MERGE_BASE="$(git merge-base "$BASE" HEAD 2>/dev/null)"; then
   MERGE_BASE=""
@@ -418,6 +421,7 @@ fi
 if [ "$DO_FRONTEND" -eq 1 ]; then
   step "Frontend type-check + quality ratchet (blocking) + full lint (advisory)"
   ( cd frontend && pnpm run type-check ); check $? "pnpm type-check"
+  node --test tests/unit/scripts/nous-qa.test.mjs tests/unit/scripts/nous-verify.test.mjs; check $? "nous-qa node tests"
 
   # Keep one full ESLint JSON run as the input to the same blocking ratchets
   # used by .github/workflows/test-pipeline.yml. ESLint returns nonzero when
