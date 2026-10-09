@@ -101,6 +101,8 @@ def test_nous_loop_has_the_user_level_stop_gate() -> None:
     assert "[verification.md](verification.md)" in gate
     assert "--changed-from origin/develop" in gate
     assert "--allow-writes" in _bash_block(raw_gate)
+    # Real agent turns outlast the runner's 30 s default.
+    assert "--timeout-ms 180000" in _bash_block(raw_gate)
     assert "cannot be `merged` without a local `PASS`" in gate
     assert "`BLOCKED` or `NOT RUN` ends the tick as `ready-for-human`" in gate
     assert "checkpoints/" in gate

@@ -12,7 +12,7 @@ import {
   scenariosForFeatures,
 } from '../../../tests/e2e/qa/feature-map.mjs';
 import { CLIConfigError, main, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
-import { QASession } from '../../../tests/e2e/qa/session.mjs';
+import { BrowserUnavailableError, QASession } from '../../../tests/e2e/qa/session.mjs';
 import { runCampaign } from '../../../tests/e2e/qa/runner.mjs';
 import { renderEvidenceReadme, writeEvidenceRecord } from '../../../tests/e2e/qa/evidence.mjs';
 import { registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
@@ -543,7 +543,9 @@ function fakeJourney({ onSend = () => {}, projects = () => [], messages = () => 
     locator: roleLocator,
     getByRole: (role, options = {}) => {
       if (role === 'textbox') return { fill: async (value) => { draft = value; } };
-      if (role === 'button' && options.name === 'Send message') {
+      // The live /chat composer's Send button has no aria-label; its
+      // accessible name is its visible text, exactly "Send".
+      if (role === 'button' && options.name === 'Send' && options.exact === true) {
         return { click: async () => { state.transcript.push({ role: 'user', text: draft }); onSend(state, draft); } };
       }
       if (role === 'alertdialog') {
@@ -663,4 +665,24 @@ test('evidence README shows the evidence dir relative to the repo root, not the 
   } finally {
     process.chdir(original);
   }
+});
+
+test('a Chromium launch failure surfaces as BrowserUnavailableError', async () => {
+  const playwright = { chromium: { launch: async () => { throw new Error("browserType.launch: Executable doesn't exist at /x/chrome-headless-shell"); } } };
+  const session = new QASession(sessionConfig(undefined), { playwright });
+  await assert.rejects(session.openBrowser(), (error) => {
+    assert.ok(error instanceof BrowserUnavailableError);
+    assert.match(error.message, /playwright install chromium-headless-shell/);
+    return true;
+  });
+});
+
+test('a scenario whose browser cannot launch is BLOCKED, not FAIL', async () => {
+  const registry = [{ id: 'smoke.b', title: 'b', suite: 'smoke', prerequisites: [], async run() { throw new BrowserUnavailableError('Chromium could not launch'); } }];
+  const report = await runCampaign(
+    { baseUrl: 'http://127.0.0.1:3000', apiUrl: 'http://127.0.0.1:3000/api/v1' },
+    { sessionFactory: async () => fakeRunnerSession([]), registry },
+  );
+  assert.equal(report.cases[0].status, 'BLOCKED');
+  assert.match(report.cases[0].reason, /Chromium could not launch/);
 });
