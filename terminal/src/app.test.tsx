@@ -271,7 +271,11 @@ test("an approval decision typed as soon as the prompt renders is not lost", asy
             "confirmation",
             {
               thread_id: "thread-1",
-              confirmation: { tool_name: "create_note", tool_args: {} },
+              confirmation: {
+                approval_id: "a".repeat(64),
+                tool_name: "create_note",
+                tool_args: {},
+              },
             },
           ],
         ])
@@ -318,7 +322,11 @@ test("a pasted single-chunk decision submits once and shows no control character
               "confirmation",
               {
                 thread_id: "thread-1",
-                confirmation: { tool_name: "create_note", tool_args: {} },
+                confirmation: {
+                  approval_id: "a".repeat(64),
+                  tool_name: "create_note",
+                  tool_args: {},
+                },
               },
             ],
           ])
@@ -350,7 +358,11 @@ test("a pasted single-chunk decision submits once and shows no control character
     "Resumed response renders from a single-chunk paste",
   );
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1].body, { thread_id: "thread-1", confirmed: false });
+  assert.deepEqual(calls[1].body, {
+    thread_id: "thread-1",
+    confirmed: false,
+    approval_id: "a".repeat(64),
+  });
   assert.doesNotMatch(ui.frames.join("\n"), /no\r/);
   ui.unmount();
 });
