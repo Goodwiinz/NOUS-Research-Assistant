@@ -59,10 +59,14 @@ def _normalize_citation_relationship_type(value: str) -> str:
 
 
 def _document_is_accessible(document: object, current_user: User) -> bool:
-    """GOO-349: documents are organization-scoped. ``is_public`` / uploader
-    identity only narrow access *inside* the caller's current organization;
-    neither may bypass it (a foreign-org public document, or one the caller
-    uploaded in a previous org). An org-less caller gets no document path."""
+    """The document read boundary: same organization as the caller and not
+    soft-deleted. An org-less caller gets no document path.
+
+    GOO-410: documents are organization-shared, the rule the document and file
+    read routes already apply. ``is_public`` and uploader identity grant
+    nothing across organizations (a foreign-org public document, or one the
+    caller uploaded in a previous org, stays hidden: GOO-349) and restrict
+    nothing inside one. Uploader-only rules belong to mutations, not reads."""
     if document is None:
         return False
     if getattr(document, "is_deleted", False) is True:
@@ -70,24 +74,17 @@ def _document_is_accessible(document: object, current_user: User) -> bool:
     org_id = current_user.organization_id
     if org_id is None or getattr(document, "organization_id", None) != org_id:
         return False
-
-    return bool(
-        getattr(document, "is_public", False)
-        or getattr(document, "uploaded_by_user_id", None) == current_user.id
-    )
+    return True
 
 
 def _document_access_clause(current_user: User):
-    """SQL mirror of ``_document_is_accessible`` (same org fail-closed rule)."""
+    """SQL mirror of ``_document_is_accessible``: the one org + not-deleted
+    predicate every citation path applies to document reads."""
     if current_user.organization_id is None:
         return false()
     return and_(
         Document.is_deleted.is_(False),
         Document.organization_id == current_user.organization_id,
-        or_(
-            Document.is_public.is_(True),
-            Document.uploaded_by_user_id == current_user.id,
-        ),
     )
 
 
@@ -197,13 +194,12 @@ async def create_citation(
         Created citation
     """
     try:
-        # Verify the referenced document belongs to the user's organization
+        # Verify the caller can read the referenced document (org + not deleted)
         if citation_data.document_id:
             doc_check = await db.execute(
                 select(Document.id).where(
                     Document.id == citation_data.document_id,
-                    Document.organization_id == current_user.organization_id,
-                    Document.is_deleted == False,
+                    _document_access_clause(current_user),
                 )
             )
             if doc_check.scalar_one_or_none() is None:
@@ -331,7 +327,7 @@ async def list_citations(
             filters.append(Citation.needs_review == needs_review)
 
         # SQL equivalent of _citation_is_accessible: accessible via the
-        # document (caller's org AND public-or-own) OR via the message's
+        # document (caller's org, not deleted) OR via the message's
         # thread → conversation → workspace ownership chain. All joins are
         # many-to-one from Citation, so no row multiplication.
         access_filter = or_(
@@ -506,16 +502,15 @@ async def extract_citation(
         extraction_service = CitationExtractionService(db)
 
         if resolved_document_id:
-            # Tenant scope: verify the client-supplied document_id belongs to the
-            # caller's organization before the extraction service reads its
-            # metadata / PDF. Without this, another org's document title / DOI /
-            # arXiv id (and PDF contents) leak. Mirrors the create_citation check;
-            # 404 (not 403) so document ids can't be probed for existence.
+            # Tenant scope: verify the caller can read the client-supplied
+            # document_id (the shared org + not-deleted read boundary) before
+            # the extraction service reads its metadata / PDF. Without this,
+            # another org's document title / DOI / arXiv id (and PDF contents)
+            # leak. 404 (not 403) so document ids can't be probed for existence.
             doc_check = await db.execute(
                 select(Document.id).where(
                     Document.id == resolved_document_id,
-                    Document.organization_id == current_user.organization_id,
-                    Document.is_deleted == False,  # noqa: E712
+                    _document_access_clause(current_user),
                 )
             )
             if doc_check.scalar_one_or_none() is None:
@@ -639,16 +634,15 @@ async def lookup_citation(
         extraction_service = CitationExtractionService(db)
 
         if resolved_document_id:
-            # Tenant scope: verify the client-supplied document_id belongs to the
-            # caller's organization before the extraction service reads its
-            # metadata / PDF. Without this, another org's document title / DOI /
-            # arXiv id (and PDF contents) leak. Mirrors the create_citation check;
-            # 404 (not 403) so document ids can't be probed for existence.
+            # Tenant scope: verify the caller can read the client-supplied
+            # document_id (the shared org + not-deleted read boundary) before
+            # the extraction service reads its metadata / PDF. Without this,
+            # another org's document title / DOI / arXiv id (and PDF contents)
+            # leak. 404 (not 403) so document ids can't be probed for existence.
             doc_check = await db.execute(
                 select(Document.id).where(
                     Document.id == resolved_document_id,
-                    Document.organization_id == current_user.organization_id,
-                    Document.is_deleted == False,  # noqa: E712
+                    _document_access_clause(current_user),
                 )
             )
             if doc_check.scalar_one_or_none() is None:
@@ -804,8 +798,7 @@ async def export_bibliography(
 
             doc_stmt = select(Document).where(
                 Document.id.in_(document_ids),
-                Document.is_deleted == False,
-                Document.organization_id == current_user.organization_id,
+                _document_access_clause(current_user),
             )
             doc_result = await db.execute(doc_stmt)
             docs = list(doc_result.scalars().all())
@@ -1091,8 +1084,7 @@ async def get_citation_graph(
         doc_check = await db.execute(
             select(Document.id).where(
                 Document.id == document_id,
-                Document.organization_id == current_user.organization_id,
-                Document.is_deleted == False,
+                _document_access_clause(current_user),
             )
         )
         if doc_check.scalar_one_or_none() is None:

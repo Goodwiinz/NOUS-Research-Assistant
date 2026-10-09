@@ -14,7 +14,10 @@ vi.mock('@/hooks/useAuth', () => ({
 
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
 import { render } from '@/test/test-utils';
-import type { ApiConnectedDevice } from '@/types/api/integration-connections-contract';
+import type {
+  ApiConnectedDevice,
+  ApiConnectionConsent,
+} from '@/types/api/integration-connections-contract';
 
 import { ConnectedDevices } from '../ConnectedDevices';
 
@@ -25,13 +28,32 @@ const laptop: ApiConnectedDevice = {
   consents: [
     {
       request_id: 'r1',
+      kind: 'project',
       project_id: 'p1',
       project_label: 'Thesis',
+      workspace_id: null,
+      workspace_label: null,
+      thread_id: null,
+      thread_label: null,
       scopes: ['harness:execute', 'tools:read'],
       status: 'consumed',
       approved_at: null,
     },
   ],
+};
+
+const workspaceConsent: ApiConnectionConsent = {
+  request_id: 'r2',
+  kind: 'workspace',
+  project_id: null,
+  project_label: null,
+  workspace_id: 'w1',
+  workspace_label: 'Lab',
+  thread_id: null,
+  thread_label: null,
+  scopes: ['library:read', 'library:write', 'tools:read', 'tools:write'],
+  status: 'consumed',
+  approved_at: null,
 };
 
 describe('ConnectedDevices', () => {
@@ -52,7 +74,7 @@ describe('ConnectedDevices', () => {
     const { user } = render(<ConnectedDevices />);
     await user.click(
       await screen.findByRole('button', {
-        name: 'Revoke Laptop access to Thesis',
+        name: 'Revoke Laptop (d1) access to Thesis',
       })
     );
     expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledWith(
@@ -76,6 +98,18 @@ describe('ConnectedDevices', () => {
     expect(
       screen.getByText(/ends all existing CLI sign-ins/)
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/every other connected device also stops working/)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/keep their integration project access/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /rather than disconnecting the old device, which would end every CLI sign-in again/
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/disconnect the old/i)).not.toBeInTheDocument();
     await user.click(
       screen.getByRole('button', { name: 'Disconnect and end CLI sign-ins' })
     );
@@ -129,5 +163,156 @@ describe('ConnectedDevices', () => {
       screen.queryByText(/ends all existing CLI sign-ins/)
     ).not.toBeInTheDocument();
     expect(integrationConnectionsService.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('lists a workspace consent and revokes it on its own', async () => {
+    vi.mocked(integrationConnectionsService.list)
+      .mockResolvedValueOnce([
+        { ...laptop, consents: [...laptop.consents, workspaceConsent] },
+      ])
+      .mockResolvedValue([laptop]);
+    vi.mocked(integrationConnectionsService.revokeConsent).mockResolvedValue();
+    const { user } = render(<ConnectedDevices />);
+    expect(
+      await screen.findByText('Workspace Lab (w1), every project in it')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'list the folders in the workspace, change folders and paper details without asking each time, read project documents, request notes (you approve each one)'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to workspace Lab',
+      })
+    );
+    expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledTimes(
+      1
+    );
+    expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledWith(
+      'r2'
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Workspace Lab (w1), every project in it')
+      ).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();
+  });
+
+  it('links a memory-sharing consent to its memory selection', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      {
+        ...laptop,
+        consents: [
+          { ...laptop.consents[0], scopes: ['context:read', 'tools:read'] },
+          { ...laptop.consents[0], request_id: 'r3', project_label: 'Grant' },
+        ],
+      },
+    ]);
+    render(<ConnectedDevices />);
+    const links = await screen.findAllByRole('link', {
+      name: /^Choose shared memories/,
+    });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAccessibleName('Choose shared memories for Thesis');
+    expect(links[0]).toHaveAttribute('href', '/integrations/context/r1');
+  });
+
+  it('names the chat a consent is bound to', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      {
+        ...laptop,
+        consents: [
+          {
+            ...laptop.consents[0],
+            thread_id: 't1',
+            thread_label: 'Lit review',
+          },
+          {
+            ...laptop.consents[0],
+            request_id: 'r3',
+            thread_id: 't2',
+            thread_label: null,
+          },
+        ],
+      },
+    ]);
+    render(<ConnectedDevices />);
+    expect(
+      await screen.findByRole('link', { name: 'Lit review' })
+    ).toHaveAttribute('href', '/chat?thread=t1');
+    expect(
+      screen.getByText(/a chat that is no longer available/)
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to Thesis, only from chat Lit review',
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to Thesis, only from a chat that is no longer available',
+      })
+    ).toBeInTheDocument();
+  });
+
+  it('names each revoke control apart after a reconnect', async () => {
+    // Reconnecting adds a second device with the same label and a fresh
+    // consent for the same project; the Disconnect copy tells the user to
+    // Revoke the old one, so the two controls must not share a name.
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      laptop,
+      {
+        ...laptop,
+        device_id: 'd2',
+        consents: [{ ...laptop.consents[0], request_id: 'r9' }],
+      },
+    ]);
+    render(<ConnectedDevices />);
+    const revokes = await screen.findAllByRole('button', { name: /^Revoke / });
+    expect(revokes.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Revoke Laptop (d1) access to Thesis',
+      'Revoke Laptop (d2) access to Thesis',
+    ]);
+  });
+
+  it('shows a scope it does not know by its own name', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      {
+        ...laptop,
+        consents: [{ ...laptop.consents[0], scopes: ['constructor'] }],
+      },
+    ]);
+    render(<ConnectedDevices />);
+    expect(await screen.findByText('constructor')).toBeInTheDocument();
+  });
+
+  it('reads an old-backend consent without the binding fields as a project consent', async () => {
+    // Vercel can ship this page before the backend image, so the page may
+    // briefly read a payload from before kind/workspace_*/thread_* existed.
+    // Those fields are then absent (undefined), not null.
+    const oldBackendConsent = {
+      request_id: 'r1',
+      project_id: 'p1',
+      project_label: 'Thesis',
+      scopes: ['harness:execute', 'tools:read'],
+      status: 'consumed',
+      approved_at: null,
+    } as ApiConnectionConsent;
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      { ...laptop, consents: [oldBackendConsent] },
+    ]);
+    render(<ConnectedDevices />);
+    expect(await screen.findByText('Thesis (p1)')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to Thesis',
+      })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Only from chat/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Workspace/)).not.toBeInTheDocument();
   });
 });

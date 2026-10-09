@@ -364,36 +364,6 @@ services:
       timeout: 20s
       retries: 3
 
-  # Serena MCP Server (Semantic Code Analysis)
-  serena:
-    image: ghcr.io/oraios/serena:latest
-    container_name: rag-serena-dev
-    ports:
-      - "9121:9121"      # MCP server port
-      - "24282:24282"    # Web dashboard port
-    environment:
-      - SERENA_DOCKER=1
-      - SERENA_PORT=9121
-      - SERENA_DASHBOARD_PORT=24282
-    volumes:
-      # Mount the entire project for code analysis
-      - ../../:/workspaces/projects/RAG_system
-      # Persist Serena configuration and memories
-      - ../../.serena:/workspaces/serena/config
-    command: >
-      serena start-mcp-server
-      --transport streamable-http
-      --host 0.0.0.0
-      --port 9121
-      --project /workspaces/projects/RAG_system
-      --enable-web-dashboard true
-      --open-web-dashboard false
-      --enable-gui-log-window false
-    networks:
-      - multimodal-rag-network
-    restart: unless-stopped
-    # Note: Serena doesn't require other services to start
-
   # Development Tools
   adminer:
     image: adminer:latest
@@ -423,7 +393,6 @@ volumes:
   frontend_workspace_node_modules:
   frontend_next_cache:
   redis_dev_data:
-  serena_dev_data:
   neo4j_dev_data:
   neo4j_dev_logs:
   neo4j_dev_import:

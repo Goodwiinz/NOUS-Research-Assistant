@@ -17,7 +17,7 @@
     "./connection": "./src/connection.ts"
   },
   "scripts": {
-    "test": "node --experimental-sqlite --import tsx --test",
+    "test": "node --experimental-sqlite --import tsx --test --test-timeout=60000",
     "type-check": "tsc --noEmit",
     "start": "node --import tsx src/cli.ts"
   },
