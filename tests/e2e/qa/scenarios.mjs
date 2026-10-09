@@ -217,6 +217,24 @@ async function assertTranscriptContains(page, text, label, timeoutMs = 10_000) {
   assertThat(await marker.count() > 0, `${label} did not render the expected transcript message`);
 }
 
+/**
+ * Bound for one wait inside a scenario. The runner's timeoutMs covers the
+ * whole scenario; an inner wait that spends the full budget turns a stuck UI
+ * into a runner timeout with no message about what was being waited for. One
+ * third leaves room for at least two such waits plus the failure report.
+ */
+function innerWaitMs(session) {
+  return Math.max(1, Math.floor((session?.config?.timeoutMs ?? 30_000) / 3));
+}
+
+async function waitVisible(locator, label, timeoutMs) {
+  try {
+    await locator.first().waitFor({ state: 'visible', timeout: timeoutMs });
+  } catch {
+    throw new Error(`${label} did not appear within ${timeoutMs}ms`);
+  }
+}
+
 async function waitForVisibleUnique(locator, label, timeoutMs) {
   try {
     await locator.first().waitFor({ state: 'visible', timeout: timeoutMs });
@@ -1113,14 +1131,42 @@ const scenarios = [
     mode: 'live',
     async run(session, evidence) {
       const page = await authenticatedPage(session, '/chat');
-      await page.getByLabel('Attach file', { exact: true }).setInputFiles({
-        name: `${evidence.fixturePrefix}.exe`,
-        mimeType: 'application/octet-stream',
-        buffer: Buffer.from('MZ'),
-      });
-      const error = latestAlertLocator(page);
-      await error.waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-      return { assertion: 'Unsupported attachment is rejected with a user-facing alert', evidence: ['Attach file', 'role=alert'] };
+      const filename = `${evidence.fixturePrefix.replace(/[^A-Za-z0-9_-]/g, '_')}.exe`;
+      const waitMs = innerWaitMs(session);
+      // A rejected upload (backend 400 "File type is not allowed") must leave no
+      // document. Whatever the UI shows, any hit is registered so cleanup owns it.
+      const findDocuments = async () => {
+        const listed = await session.request(`/api/v1/files/?search=${encodeURIComponent(filename)}&size=50`, { target: 'backend' });
+        const files = Array.isArray(listed.data?.files) ? listed.data.files : [];
+        return files.filter((item) => item?.filename === filename || item?.title === filename);
+      };
+      let uiError = null;
+      try {
+        await page.getByLabel('Attach file', { exact: true }).setInputFiles({
+          name: filename,
+          mimeType: 'application/octet-stream',
+          buffer: Buffer.from('MZ'),
+        });
+        // ChatInput.tsx renders the failed chip inside <ul aria-label="Attached
+        // files"> with title `${name}, upload failed` and a role=status notice.
+        // The error toast is also role=status (react-hot-toast), never
+        // role=alert, so both checks are scoped to the composer's own text.
+        const composerChips = page.locator('ul[aria-label="Attached files"]');
+        await waitVisible(composerChips.getByTitle(`${filename}, upload failed`, { exact: true }), `Composer chip "${filename}, upload failed"`, waitMs);
+        await waitVisible(page.getByRole('status').filter({ hasText: 'Remove failed attachments before sending.' }), 'Composer notice "Remove failed attachments before sending."', waitMs);
+      } catch (error) {
+        uiError = error;
+      }
+      const created = await findDocuments();
+      for (const item of created) {
+        if (UUID.test(String(item?.id))) session.registerFixture('document', String(item.id), { filename });
+      }
+      if (uiError) throw uiError;
+      assertThat(created.length === 0, `Unsupported attachment created ${created.length} document(s) despite the composer failure`);
+      return {
+        assertion: 'Unsupported attachment shows the failed chip and status notice in the composer, and no document was created',
+        evidence: ['Attach file', 'Attached files', `${filename}, upload failed`, 'Remove failed attachments before sending.', { documents: 0 }],
+      };
     },
   },
   {

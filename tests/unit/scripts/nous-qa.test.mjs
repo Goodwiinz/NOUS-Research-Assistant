@@ -1400,6 +1400,104 @@ test('markdown export is not proven by the thread title alone (Q-C1)', async () 
   assert.match(result.assertion, /User role heading/);
 });
 
+/**
+ * /chat composer after a rejected upload, as the live frontend renders it:
+ * - frontend/src/components/chat/ChatInput.tsx:823 `<input type="file" aria-label="Attach file">`
+ * - ChatInput.tsx:624 `<ul aria-label="Attached files">`, chip span title
+ *   `${name}, upload failed` (ChatInput.tsx:664-666)
+ * - ChatInput.tsx:713-721 `<p role="status">Remove failed attachments before sending.</p>`
+ * - useChatComposerActions.ts:115-118 toast.error(`Upload failed for ${name}.`),
+ *   rendered by react-hot-toast as role="status" (never role="alert")
+ */
+function fakeAttachmentJourney({ chipFails = true, notice = true, alert = false, documents = () => [] } = {}) {
+  const state = { files: [], registered: [], requests: [] };
+  const visibleWhen = (count) => ({
+    first: () => ({
+      waitFor: async ({ state: wanted }) => {
+        if (wanted === 'visible' && count() === 0) throw new Error('synthetic locator timeout');
+      },
+    }),
+    count: async () => count(),
+  });
+  const page = {
+    url: () => 'http://127.0.0.1:3000/chat',
+    getByLabel: (label, options = {}) => {
+      if (label === 'Attach file' && options.exact === true) {
+        return { setInputFiles: async (file) => { state.files.push(file.name); } };
+      }
+      throw new Error(`unexpected getByLabel ${label}`);
+    },
+    locator: (selector) => {
+      if (selector === 'ul[aria-label="Attached files"]') {
+        return {
+          getByTitle: (title, options = {}) => visibleWhen(() => (
+            chipFails && options.exact === true && state.files.some((name) => `${name}, upload failed` === title) ? 1 : 0
+          )),
+        };
+      }
+      throw new Error(`unexpected locator ${selector}`);
+    },
+    getByRole: (role) => {
+      if (role === 'alert') return { last: () => visibleWhen(() => (alert ? 1 : 0)).first() };
+      if (role === 'status') {
+        return {
+          filter: ({ hasText }) => visibleWhen(() => (
+            state.files.length > 0 && (
+              (notice && hasText === 'Remove failed attachments before sending.')
+              || state.files.some((name) => hasText === `Upload failed for ${name}.`)
+            ) ? 1 : 0
+          )),
+        };
+      }
+      throw new Error(`unexpected getByRole ${role}`);
+    },
+  };
+  const session = {
+    config: { timeoutMs: 60 },
+    page,
+    login: async () => page,
+    goto: async () => {},
+    assertTrustedBrowserUrl: () => {},
+    registerFixture: (kind, id, metadata) => state.registered.push([kind, id, metadata]),
+    request: async (path) => {
+      state.requests.push(path);
+      if (path.startsWith('/api/v1/files/?')) return { status: 200, data: { files: documents(state), total: 0, page: 1, size: 50, has_more: false } };
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  return { state, session, evidence: { fixturePrefix: 'NOUS QA t1' } };
+}
+
+test('unsupported attachment is not proven by a generic alert; it needs the composer failure chip (Q-C2)', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+  assert.ok(scenario, 'unsupported-attachment scenario must remain registered');
+  const alertOnly = fakeAttachmentJourney({ chipFails: false, notice: false, alert: true });
+  const started = Date.now();
+  await assert.rejects(scenario.run(alertOnly.session, alertOnly.evidence), /NOUS_QA_t1\.exe, upload failed/);
+  assert.ok(Date.now() - started < alertOnly.session.config.timeoutMs, 'the chip wait must be bounded below the scenario timeout');
+});
+
+test('unsupported attachment fails when a document was created anyway and registers it for cleanup (Q-C2)', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+  const leakedId = '55555555-5555-4555-8555-555555555555';
+  const leaked = fakeAttachmentJourney({
+    documents: () => [{ id: leakedId, filename: 'NOUS_QA_t1.exe', title: 'NOUS_QA_t1.exe' }],
+  });
+  await assert.rejects(scenario.run(leaked.session, leaked.evidence), /created 1 document/);
+  assert.deepEqual(leaked.state.registered, [['document', leakedId, { filename: 'NOUS_QA_t1.exe' }]]);
+  assert.ok(leaked.state.requests.some((path) => path === '/api/v1/files/?search=NOUS_QA_t1.exe&size=50'), 'the document search must target the exact fixture filename');
+});
+
+test('unsupported attachment passes only with the failed chip, the status notice and no created document (Q-C2)', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+  const clean = fakeAttachmentJourney();
+  const result = await scenario.run(clean.session, clean.evidence);
+  assert.match(result.assertion, /no document was created/);
+  assert.deepEqual(clean.state.registered, []);
+  const noNotice = fakeAttachmentJourney({ notice: false });
+  await assert.rejects(scenario.run(noNotice.session, noNotice.evidence), /Remove failed attachments before sending/);
+});
+
 test('idempotency oracle rejects a duplicate persisted row even when IDs are echoed', () => {
   const row = { client_message_id: 'cmid-1', content: 'exact content' };
   assert.throws(() => assertIdempotentMessage({
