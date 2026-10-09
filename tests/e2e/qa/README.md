@@ -33,12 +33,15 @@ target only those registered IDs, in reverse creation order. A failed cleanup
 is visible as `incomplete` and retained IDs remain in the private report for
 manual recovery; no title search or broad deletion is used.
 
-Chat history/draft coverage creates both threads inside the workspace `/chat`
-will open (the account workspace with the highest collection + conversation
-count from `GET /api/v2/workspaces`, the frontend's own rule); that workspace
-is never registered or deleted, only the conversations and threads created in
-it. A planted default-workspace cache is not used: the frontend clears it on
-every page load. Q&A and Stop streams
+Chat history/draft and missing-thread coverage create their threads inside the
+workspace `/chat` will open (the account workspace with the highest collection
++ conversation count from `GET /api/v2/workspaces`, the frontend's own rule);
+that workspace is never registered or deleted, only the conversations and
+threads created in it. A planted default-workspace cache is not used: the
+frontend clears it on every page load. The missing-thread case asserts the
+product's recovery (unavailable toast, stale id dropped from the URL, the
+recovered thread reads 200) and records which thread it landed on without
+asserting it. Q&A and Stop streams
 must carry an exact ledger-owned `thread_id`. Every accepted run is registered
 centrally. A transport timeout before acceptance is recorded as an uncertain
 stream, retains its owned fixture tree, and makes cleanup incomplete instead

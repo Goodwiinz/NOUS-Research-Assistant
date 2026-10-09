@@ -1525,6 +1525,7 @@ function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = '
     search: '',
     drafts: new Map(),
     toasts: [],
+    messages: [],
   };
   let nextId = 1;
   const id = () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
@@ -1604,6 +1605,10 @@ function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = '
     request: async (path, options = {}) => {
       const method = options.method ?? 'GET';
       if (method === 'GET' && path === '/api/v2/workspaces') return { status: 200, data: state.workspaces.map((workspace) => ({ ...workspace })) };
+      const threadMessages = /^\/api\/v2\/threads\/([^/?]+)\/messages/.exec(path);
+      if (method === 'GET' && threadMessages) {
+        return { status: 200, data: { messages: state.messages.filter((item) => item.thread_id === threadMessages[1]) } };
+      }
       const threadDetail = /^\/api\/v2\/threads\/([^/?]+)$/.exec(path);
       if (method === 'GET' && threadDetail) {
         if (state.threads.has(threadDetail[1])) return { status: 200, data: { id: threadDetail[1] } };
@@ -1631,7 +1636,11 @@ function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = '
         state.threads.set(threadId, { id: threadId, title: options.json.title, conversationId: options.json.conversation_id });
         return { status: 201, data: { id: threadId } };
       }
-      if (path === '/api/v2/messages') return { status: 201, data: { id: id() } };
+      if (path === '/api/v2/messages') {
+        const message = { id: id(), ...options.json };
+        state.messages.push(message);
+        return { status: 201, data: message };
+      }
       throw new Error(`unexpected request POST ${path}`);
     },
   };
@@ -1674,6 +1683,39 @@ test('history scenario fails fast and names the missing sidebar row (Q-I1)', asy
   const started = Date.now();
   await assert.rejects(scenario.run(journey.session, journey.evidence), /Sidebar row "NOUS QA t1 history-a" did not appear within \d+ms/);
   assert.ok(Date.now() - started < journey.session.config.timeoutMs, 'the sidebar wait must be bounded below the scenario timeout');
+});
+
+test('missing-thread recovers to an owned thread with the unavailable toast and a 200 thread GET (Q-C3)', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.missing-thread-ui');
+  assert.ok(scenario, 'missing-thread scenario must remain registered');
+  const journey = fakeHistoryJourney({ workspaces: [
+    { id: MY_WORKSPACE, name: 'My Workspace', collection_count: 0, conversation_count: 1 },
+    { id: BUSY_WORKSPACE, name: 'Research', collection_count: 2, conversation_count: 3 },
+  ] });
+  const result = await scenario.run(journey.session, journey.evidence);
+  assert.equal(result.status, undefined, 'a recovered missing thread is a PASS');
+  assert.match(result.assertion, /recovered thread reads 200/);
+  const [detail] = result.evidence;
+  assert.match(detail.recoveredThreadId, /^00000000-0000-4000-8000-/);
+  assert.notEqual(detail.recoveredThreadId, '00000000-0000-4000-8000-000000000000');
+  assert.equal(detail.recoveredFixture, true);
+  assert.ok(!journey.state.posts.includes('/api/v2/workspaces'), 'the scenario must not create a workspace of its own');
+  assert.deepEqual(journey.state.posts.filter((path) => path.includes('/conversations')), [`/api/v2/workspaces/${BUSY_WORKSPACE}/conversations`]);
+  assert.deepEqual(journey.state.registered.map(([kind]) => kind), ['conversation', 'thread']);
+});
+
+test('missing-thread fails fast when the URL keeps the stale id (Q-C3)', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.missing-thread-ui');
+  const journey = fakeHistoryJourney({ workspaces: [{ id: MY_WORKSPACE, name: 'My Workspace', collection_count: 0, conversation_count: 1 }], staleRecovery: 'none' });
+  const started = Date.now();
+  await assert.rejects(scenario.run(journey.session, journey.evidence), /stale thread id|That conversation is no longer available/);
+  assert.ok(Date.now() - started < journey.session.config.timeoutMs, 'the recovery wait must be bounded below the scenario timeout');
+});
+
+test('missing-thread fails when the app recovers without the unavailable toast (Q-C3)', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.missing-thread-ui');
+  const journey = fakeHistoryJourney({ workspaces: [{ id: MY_WORKSPACE, name: 'My Workspace', collection_count: 0, conversation_count: 1 }], staleRecovery: 'silent' });
+  await assert.rejects(scenario.run(journey.session, journey.evidence), /Toast "That conversation is no longer available\." did not appear within \d+ms/);
 });
 
 test('idempotency oracle rejects a duplicate persisted row even when IDs are echoed', () => {
