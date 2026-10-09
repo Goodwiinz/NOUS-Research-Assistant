@@ -17,10 +17,28 @@ Parsing, model and network work belongs outside the lock.
 
 from __future__ import annotations
 
+from collections.abc import Collection, Iterable
+from typing import Any
+
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from src.models.document import Document
-from src.models.processing import JobStatus, ProcessingJob
+from src.models.document import Document, ProcessingStatus
+from src.models.processing import JobStatus, JobType, ProcessingJob
+
+# Statuses a worker can still move forward (``not ProcessingJob.is_finished``).
+NON_TERMINAL_JOB_STATUSES: frozenset[JobStatus] = frozenset(
+    {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING}
+)
+# ``ProcessingJob.is_active``: what POST /processing/jobs/{id}/cancel accepts.
+ACTIVE_JOB_STATUSES: frozenset[JobStatus] = frozenset(
+    {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING}
+)
+_ACTIVE_DOCUMENT_STATUSES = (
+    ProcessingStatus.PENDING,
+    ProcessingStatus.PROCESSING,
+    ProcessingStatus.RETRYING,
+)
 
 
 class ProcessingStopped(Exception):
@@ -103,3 +121,124 @@ def require_active_ingestion(
     if job.status != JobStatus.RUNNING:
         raise ProcessingStopped(job.status.value)
     return job, document
+
+
+def fail_document_unless_owned(
+    document: Document | None,
+    ended_job: ProcessingJob,
+    locked_jobs: Iterable[ProcessingJob],
+    message: str | None,
+) -> bool:
+    """FAIL the document of an ingestion job that just ended (GOO-359, IN-1).
+
+    The caller holds the Document -> ProcessingJob locks and passes every
+    locked job. The document is left alone unless ``ended_job`` is an
+    ingestion job, the document is live and still pending/processing/retrying,
+    and no other live ingestion job for it is still non-terminal.
+    """
+    if (
+        ended_job.job_type != JobType.DOCUMENT_INGESTION
+        or document is None
+        or document.is_deleted
+        or document.processing_status not in _ACTIVE_DOCUMENT_STATUSES
+    ):
+        return False
+    if any(
+        other.id != ended_job.id
+        and other.document_id == document.id
+        and other.organization_id == document.organization_id
+        and other.job_type == JobType.DOCUMENT_INGESTION
+        and not other.is_deleted
+        and other.status in NON_TERMINAL_JOB_STATUSES
+        for other in locked_jobs
+    ):
+        return False
+    document.update_processing_status(ProcessingStatus.FAILED, message)
+    return True
+
+
+def end_processing_job(
+    db: Session,
+    job_id: Any,
+    *,
+    message: str,
+    error_type: str | None = None,
+    cancel: bool = False,
+    expected_statuses: Collection[JobStatus] = NON_TERMINAL_JOB_STATUSES,
+    expected_task_ids: Collection[str | None] | None = None,
+) -> bool:
+    """End one job and, for ingestion, its document in the same transaction.
+
+    Locks Document -> ProcessingJob (the job plus the document's other live
+    ingestion jobs, in id order), the order claim, stage writes, deletion and
+    the stuck sweep use, then re-checks the job on the locked row: it must be
+    live, associated as first read, its status in ``expected_statuses`` and,
+    when given, its ``celery_task_id`` in ``expected_task_ids``. Returns False
+    without writing when a check fails: someone else already moved the job.
+    On True the job is FAILED (CANCELLED with ``cancel``) and its ingestion
+    document FAILED unless another active ingestion owns it. The caller
+    commits or rolls back; these rows are reloaded, so it must not hold
+    unflushed changes to them.
+    """
+    with db.no_autoflush:
+        key = (
+            db.query(
+                ProcessingJob.id,
+                ProcessingJob.document_id,
+                ProcessingJob.organization_id,
+            )
+            .filter(ProcessingJob.id == job_id)
+            .first()
+        )
+        if key is None:
+            return False
+        document = None
+        scope = ProcessingJob.id == key.id
+        if key.document_id is not None:
+            document = (
+                db.query(Document)
+                .filter(
+                    Document.id == key.document_id,
+                    Document.organization_id == key.organization_id,
+                )
+                .populate_existing()
+                .with_for_update()
+                .first()
+            )
+            scope = or_(
+                scope,
+                and_(
+                    ProcessingJob.document_id == key.document_id,
+                    ProcessingJob.organization_id == key.organization_id,
+                    ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                    ProcessingJob.is_deleted == False,  # noqa: E712
+                ),
+            )
+        jobs = (
+            db.query(ProcessingJob)
+            .filter(scope)
+            .order_by(ProcessingJob.id)
+            .populate_existing()
+            .with_for_update()
+            .all()
+        )
+    job = next((row for row in jobs if row.id == key.id), None)
+    if (
+        job is None
+        or job.is_deleted
+        or job.status not in expected_statuses
+        or (
+            expected_task_ids is not None
+            and job.celery_task_id not in expected_task_ids
+        )
+        or job.document_id != key.document_id
+        or job.organization_id != key.organization_id
+    ):
+        return False
+    if cancel:
+        job.cancel_job()
+        job.error_message = message
+    else:
+        job.fail_job(message, error_type=error_type)
+    fail_document_unless_owned(document, job, jobs, message)
+    return True
