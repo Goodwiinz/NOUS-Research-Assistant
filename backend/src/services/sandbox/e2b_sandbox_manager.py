@@ -82,22 +82,27 @@ MAX_EXECUTIONS_PER_RUN = 5
 # (_nodes_tools._SLOW_TOOL_TIMEOUT_SECONDS = 120). One tool call's optional
 # package install and its cell share this budget, each followed by at most
 # one probe, so the sandbox's own limit fires before the agent's outer
-# wait_for, whose cancellation kills the box and its variables. Only creating
+# wait_for, whose cancellation kills the box and its variables. The outer
+# limit starts before execute_tool resolves the user and claims the
+# durable-operation row, so the budget is also cut to end
+# AGENT_CELL_HEADROOM_SECONDS before that limit (tool_deadline). Only creating
 # a box is outside the budget: creation installs DEFAULT_PACKAGES (up to
 # MAX_EXECUTION_TIMEOUT) and may queue behind other threads' creations, so the
 # outer limit can still cancel that call. The box it kills is new and holds no
 # earlier variables; a cached box is returned without taking the lock. Also
-# outside the budget: killing a box after a failed probe (up to 60 s) and the
-# durable-operation bookkeeping around the call. Neither loses variables: the
-# kill runs after the box has left the cache, and the bookkeeping runs before
-# the cell starts or after it ends, when an outer cancellation leaves the box
-# alone.
+# outside the budget: killing a box after a failed probe (up to
+# SANDBOX_KILL_TIMEOUT_SECONDS) and recording the result. The outer limit can
+# end either one's wait but not the kill itself, and recording runs after the
+# cell has ended.
 AGENT_CELL_TIMEOUT_SECONDS = 90
 
 # After our limit closes the /execute stream, the code-interpreter server
 # interrupts the kernel (e2b-dev/code-interpreter#237), which keeps variables.
 # A kernel that still cannot run a no-op within this window is unhealthy.
 POST_TIMEOUT_PROBE_SECONDS = 10
+# How long before the agent's outer limit the budget must end: one probe, 1 s
+# because the cell timeout is rounded up to whole seconds, and 1 s of slack.
+AGENT_CELL_HEADROOM_SECONDS = POST_TIMEOUT_PROBE_SECONDS + 2
 # A probe queued before the interrupt lands can hang, or come back aborted
 # (ipykernel ``stop_on_error``), so the window is spent in short attempts.
 _PROBE_ATTEMPT_SECONDS = 2.5
@@ -160,6 +165,24 @@ class IsolatedResult:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Every kill runs on a box that has already left the cache, so a kill that a
+# caller's cancellation abandoned would never be retried (IN-2). Each kill is
+# its own task, held here so it is not garbage-collected once its caller is
+# gone.
+SANDBOX_KILL_TIMEOUT_SECONDS = 60
+_PENDING_KILLS: set["asyncio.Task[None]"] = set()
+
+
+async def _bounded_kill(thread_id: str, sandbox: Any) -> None:
+    try:
+        await asyncio.wait_for(sandbox.kill(), timeout=SANDBOX_KILL_TIMEOUT_SECONDS)
+        logger.info("Sandbox cleaned up for thread %s", thread_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to kill sandbox for %s: %s", thread_id, type(exc).__name__
+        )
 
 
 class SandboxManager:
@@ -488,14 +511,15 @@ class SandboxManager:
                 logger.warning("Isolated sandbox kill failed: %s", type(exc).__name__)
 
     async def _kill_sandbox(self, thread_id: str, sandbox: Any) -> None:
-        """Bound provider cleanup even after execution cancellation."""
-        try:
-            await asyncio.wait_for(sandbox.kill(), timeout=60)
-            logger.info("Sandbox cleaned up for thread %s", thread_id)
-        except Exception as exc:
-            logger.warning(
-                "Failed to kill sandbox for %s: %s", thread_id, type(exc).__name__
-            )
+        """Kill a box that has left the cache, within SANDBOX_KILL_TIMEOUT_SECONDS.
+
+        Cancelling the caller does not cancel the kill: nothing else could
+        retry it, so remote code would run on until the box expires (IN-2).
+        """
+        kill = asyncio.create_task(_bounded_kill(thread_id, sandbox))
+        _PENDING_KILLS.add(kill)
+        kill.add_done_callback(_PENDING_KILLS.discard)
+        await asyncio.shield(kill)
 
     async def _discard_sandbox(self, thread_id: str, sandbox: Any) -> None:
         """Evict this exact box without replenishing the execution budget."""

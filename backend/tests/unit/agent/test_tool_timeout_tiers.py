@@ -82,6 +82,7 @@ def test_execute_code_cell_budget_fits_inside_its_outer_tier() -> None:
     Package install + cell share the budget, each may add one probe, and the
     manager's minimum cell timeout is 1 s."""
     from src.services.sandbox.e2b_sandbox_manager import (
+        AGENT_CELL_HEADROOM_SECONDS,
         AGENT_CELL_TIMEOUT_SECONDS,
         POST_TIMEOUT_PROBE_SECONDS,
     )
@@ -90,6 +91,14 @@ def test_execute_code_cell_budget_fits_inside_its_outer_tier() -> None:
     assert (
         AGENT_CELL_TIMEOUT_SECONDS + 2 * POST_TIMEOUT_PROBE_SECONDS + 1
         < _SLOW_TOOL_TIMEOUT_SECONDS
+    )
+    # The budget is clamped to end this long before the outer limit. The
+    # headroom covers one probe plus the cell timeout's rounding up to whole
+    # seconds, and a call whose setup is quick still gets the full budget.
+    assert AGENT_CELL_HEADROOM_SECONDS >= POST_TIMEOUT_PROBE_SECONDS + 1
+    assert (
+        AGENT_CELL_TIMEOUT_SECONDS + AGENT_CELL_HEADROOM_SECONDS
+        <= _SLOW_TOOL_TIMEOUT_SECONDS
     )
 
 
@@ -128,16 +137,21 @@ class _KernelBox:
         self.killed = True
 
 
-@pytest.mark.unit
-async def test_long_cell_keeps_conversation_sandbox_state(
+async def _train_then_follow_up(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """IN-2 end to end through the tool node. Time is scaled: default tier
-    0.5 s, slow tier 4 s, cell budget 1 s. A 3 s cell sits between the cell
-    budget and the slow tier, as a 45 s training cell sits between 30 s and
-    120 s. Before the fix the 0.5 s outer limit cancelled the call, #1864's
-    cancellation path killed the box, and the next cell raised NameError.
-    """
+    *,
+    slow_tier: float,
+    cell_budget: int,
+    train_code: str,
+    setup_seconds: float = 0,
+) -> tuple[dict[str, Any], dict[str, Any], list[bool]]:
+    """Run load, train and describe cells through the tool node on scaled
+    time, and return the train and describe executions and whether each box
+    created was killed before cleanup. ``setup_seconds`` delays the train call
+    inside the outer limit, as execute_tool's user lookup and operation claim
+    do before the tool runs. The headroom is scaled too: the fake kernel
+    answers the probe at once, so it covers the cell timeout's rounding up to
+    whole seconds plus 0.1 s."""
     from src.services.agent import _nodes_tools, graph, tools_impl
     from src.services.sandbox import e2b_sandbox_manager as sandbox
 
@@ -151,12 +165,15 @@ async def test_long_cell_keeps_conversation_sandbox_state(
     monkeypatch.setattr(sandbox, "_e2b_available", True)
     monkeypatch.setattr(sandbox, "AsyncSandbox", SimpleNamespace(create=create))
     monkeypatch.setattr(sandbox, "_sandbox_manager", sandbox.SandboxManager())
-    monkeypatch.setattr(sandbox, "AGENT_CELL_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(sandbox, "AGENT_CELL_TIMEOUT_SECONDS", cell_budget)
+    monkeypatch.setattr(sandbox, "AGENT_CELL_HEADROOM_SECONDS", 1.1)
     monkeypatch.setattr(_nodes_tools, "TOOL_TIMEOUT_SECONDS", 0.5)
-    monkeypatch.setattr(_nodes_tools, "_SLOW_TOOL_TIMEOUT_SECONDS", 4)
+    monkeypatch.setattr(_nodes_tools, "_SLOW_TOOL_TIMEOUT_SECONDS", slow_tier)
 
     async def execute(**kwargs: Any) -> dict[str, Any]:
         # execute_tool's dispatch for execute_code, minus durable-operation rows.
+        if kwargs["args"].get("description") == "train":
+            await asyncio.sleep(setup_seconds)
         return cast(
             dict[str, Any],
             await tools_impl._tool_execute_code(
@@ -189,13 +206,62 @@ async def test_long_cell_keeps_conversation_sandbox_state(
 
     manager = sandbox.get_sandbox_manager()
     try:
-        assert (await cell("load", "df = [1, 2, 3]"))["status"] == "completed"
-        assert (await cell("train", "#sleep 3\nmodel = sum(df)"))["status"] == "failed"
+        load = await cell("load", "df = [1, 2, 3]")
+        assert load["status"] == "completed", load["result"]
+        train = await cell("train", train_code)
         follow_up = await cell("describe", "print(len(df))")
-        assert follow_up["status"] == "completed", follow_up["result"]
-        assert follow_up["result"]["stdout"] == "3\n"
-        assert len(boxes) == 1 and not boxes[0].killed
+        return train, follow_up, [box.killed for box in boxes]
     finally:
         await manager.cleanup_all()
         if manager._cleanup_task is not None:
             manager._cleanup_task.cancel()
+
+
+@pytest.mark.unit
+async def test_long_cell_keeps_conversation_sandbox_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IN-2 end to end through the tool node. Time is scaled: default tier
+    0.5 s, slow tier 4 s, cell budget 1 s. A 3 s cell sits between the cell
+    budget and the slow tier, as a 45 s training cell sits between 30 s and
+    120 s. Before the fix the 0.5 s outer limit cancelled the call, #1864's
+    cancellation path killed the box, and the next cell raised NameError.
+    """
+    train, follow_up, killed = await _train_then_follow_up(
+        monkeypatch, slow_tier=4, cell_budget=1, train_code="#sleep 3\nmodel = sum(df)"
+    )
+    assert train["status"] == "failed"
+    assert follow_up["status"] == "completed", follow_up["result"]
+    assert follow_up["result"]["stdout"] == "3\n"
+    assert killed == [False]
+
+
+@pytest.mark.unit
+async def test_slow_setup_still_lets_the_sandbox_time_out_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The outer limit starts before execute_tool resolves the user and claims
+    the operation row. Scaled: slow tier 4 s, cell budget 3 s, and that setup
+    takes 1.5 s, as a 30 s database stall would in production. A fresh 3 s
+    budget would end at 4.5 s, so the outer limit would cancel the cell and
+    kill the box. Clamped to end 1.1 s before the outer limit, the cell gets
+    2 s and the sandbox interrupts it itself.
+
+    Mutation: drop the clamp in ``_tool_execute_code``, or the deadline scope
+    around ``wait_for`` in ``_nodes_tools``; the train cell then gets 3 s and
+    the next cell raises NameError.
+    """
+    train, follow_up, killed = await _train_then_follow_up(
+        monkeypatch,
+        slow_tier=4,
+        cell_budget=3,
+        train_code="#sleep 10\nmodel = sum(df)",
+        setup_seconds=1.5,
+    )
+    assert train["status"] == "failed"
+    stderr = train["result"].get("stderr", "")
+    assert "timed out after 2s" in stderr, train["result"]
+    assert "still available" in stderr
+    assert follow_up["status"] == "completed", follow_up["result"]
+    assert follow_up["result"]["stdout"] == "3\n"
+    assert killed == [False]

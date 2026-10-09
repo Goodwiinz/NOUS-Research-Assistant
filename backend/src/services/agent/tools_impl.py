@@ -5109,7 +5109,9 @@ async def _tool_execute_code(
     if not thread_id:
         return {"error": "Code execution requires a conversation thread."}
 
+    from src.services.agent.tool_deadline import tool_call_deadline
     from src.services.sandbox.e2b_sandbox_manager import (
+        AGENT_CELL_HEADROOM_SECONDS,
         AGENT_CELL_TIMEOUT_SECONDS,
         get_sandbox_manager,
     )
@@ -5121,15 +5123,41 @@ async def _tool_execute_code(
 
     # IN-2: package install and the cell share one budget below the agent's
     # SLOW tool limit, so the sandbox interrupts an over-long cell itself and
-    # keeps the session instead of the outer limit cancelling the call.
+    # keeps the session instead of the outer limit cancelling the call. That
+    # limit started before the user lookup and operation claim, so the budget
+    # ends a probe's headroom before it, whenever this call was dispatched.
     loop = asyncio.get_running_loop()
     deadline = loop.time() + AGENT_CELL_TIMEOUT_SECONDS
+    outer_deadline = tool_call_deadline()
+    if outer_deadline is not None:
+        cutoff = outer_deadline - AGENT_CELL_HEADROOM_SECONDS
+        if cutoff - loop.time() < 1:
+            # Even the manager's 1 s minimum could outlast the outer limit,
+            # whose cancellation kills the box. Nothing ran or was spent.
+            return {
+                "status": "error",
+                "stdout": "",
+                "stderr": (
+                    "This call used its time limit before the code could "
+                    "start, so the code was not run."
+                ),
+                "exit_code": 124,
+                "execution_time_ms": 0,
+                "description": description,
+                "error": "sandbox_budget_exhausted",
+            }
+        deadline = min(deadline, cutoff)
+
+    def budget_left() -> int:
+        return max(
+            1, min(AGENT_CELL_TIMEOUT_SECONDS, math.ceil(deadline - loop.time()))
+        )
 
     # Install extra packages if requested
     install_warning: Optional[str] = None
     if packages:
         install_result = await manager.install_packages(
-            thread_id, packages, timeout=AGENT_CELL_TIMEOUT_SECONDS
+            thread_id, packages, timeout=budget_left()
         )
         if install_result.error == "timeout" or deadline - loop.time() < 1:
             # The install used the budget. Running the cell on the manager's
@@ -5137,10 +5165,9 @@ async def _tool_execute_code(
             # timeout as the code's own; the install's stderr says whether
             # the box was kept or reset.
             stderr = (
-                f"Installing packages used this call's {AGENT_CELL_TIMEOUT_SECONDS}s "
-                "budget, so the code was not run. Install the packages in a "
-                'separate call (for example with code="pass"), then run the code '
-                "without packages."
+                "Installing packages used this call's time budget, so the code "
+                "was not run. Install the packages in a separate call (for "
+                'example with code="pass"), then run the code without packages.'
             )
             if install_result.stderr:
                 stderr += f" Package install: {install_result.stderr}"
@@ -5160,12 +5187,7 @@ async def _tool_execute_code(
                 install_warning += f" {install_result.stderr}"
 
     result = await manager.execute(
-        thread_id=thread_id,
-        code=code,
-        language=language,
-        timeout=max(
-            1, min(AGENT_CELL_TIMEOUT_SECONDS, math.ceil(deadline - loop.time()))
-        ),
+        thread_id=thread_id, code=code, language=language, timeout=budget_left()
     )
 
     response: Dict[str, Any] = {

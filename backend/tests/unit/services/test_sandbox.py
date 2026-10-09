@@ -772,6 +772,58 @@ class TestSandboxExecutionBounds:
             await asyncio.gather(task, return_exceptions=True)
             await manager.cleanup_all()
 
+    async def test_outer_limit_during_kill_does_not_abandon_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cell that times out and fails its probe ends about 100 s into
+        the 120 s outer limit, and the kill may take up to 60 s. The box has
+        already left the cache, so if the outer limit cancelling the call also
+        cancelled the kill, nothing would retry it and the user's code would
+        keep running remotely until the provider expires the box.
+
+        Mutation: await the bounded kill directly in ``_kill_sandbox`` instead
+        of shielding its task; the kill is then cancelled and ``killed`` stays
+        unset.
+        """
+        from src.services.sandbox import e2b_sandbox_manager as module
+
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 0.2)
+        killing = asyncio.Event()
+        release_kill = asyncio.Event()
+        killed = asyncio.Event()
+        sandbox = AsyncMock()
+
+        async def run(code: str, **kwargs: Any) -> Any:
+            if "pip" in code:
+                return _make_e2b_execution()
+            await asyncio.Event().wait()  # busy: the cell, then the probe
+
+        async def kill() -> None:
+            killing.set()
+            await release_kill.wait()
+            killed.set()
+
+        sandbox.run_code.side_effect = run
+        sandbox.kill.side_effect = kill
+        manager, _ = self._manager(monkeypatch, sandbox)
+        task = asyncio.create_task(
+            manager.execute("slow-kill", "while True: pass", timeout=1)
+        )
+        try:
+            await asyncio.wait_for(killing.wait(), timeout=3)
+            assert "slow-kill" not in manager._sandboxes
+            task.cancel()  # the agent's outer limit
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            release_kill.set()
+            await asyncio.wait_for(killed.wait(), timeout=1)
+            sandbox.kill.assert_awaited_once()
+        finally:
+            release_kill.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await manager.cleanup_all()
+
     @pytest.mark.parametrize("first_probe", ["hangs", "sdk_timeout", "aborted"])
     async def test_probe_retries_until_interrupted_kernel_answers(
         self, monkeypatch: pytest.MonkeyPatch, first_probe: str
@@ -1528,6 +1580,65 @@ class TestToolExecuteCode:
         assert result["error"] == "package_install_timeout"
         assert "was not run" in result["stderr"]
         assert "separate call" in result["stderr"]
+
+    async def test_budget_ends_before_the_outer_limit_after_slow_setup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The agent's outer limit starts before execute_tool resolves the user
+        and claims the operation row. If that took 30 s, a fresh 90 s budget
+        plus its probe would end after the 120 s outer limit, which would then
+        cancel the cell and kill the box. Install and cell must instead end
+        AGENT_CELL_HEADROOM_SECONDS before the outer limit.
+
+        Mutation: drop the outer-deadline clamp in ``_tool_execute_code``; both
+        timeouts are then the full budget and this fails on ``90 == 60``.
+        """
+        from src.services.agent.tool_deadline import tool_call_deadline_scope
+        from src.services.sandbox.e2b_sandbox_manager import (
+            AGENT_CELL_HEADROOM_SECONDS,
+            AGENT_CELL_TIMEOUT_SECONDS,
+            ExecutionResult,
+        )
+
+        async def install(*_args: Any, **_kwargs: Any) -> Any:
+            return ExecutionResult(
+                stdout="", stderr="", exit_code=0, execution_time_ms=1
+            )
+
+        setup = 30
+        outer = AGENT_CELL_TIMEOUT_SECONDS + AGENT_CELL_HEADROOM_SECONDS - setup
+        with tool_call_deadline_scope(outer):
+            result, mgr = await self._run_with_install(
+                monkeypatch, install, packages=["rdkit"]
+            )
+        assert mgr.install_packages.await_args.kwargs["timeout"] == (
+            AGENT_CELL_TIMEOUT_SECONDS - setup
+        )
+        assert mgr.execute.await_args.kwargs["timeout"] == (
+            AGENT_CELL_TIMEOUT_SECONDS - setup
+        )
+        assert result["status"] == "success"
+
+    async def test_code_is_not_run_when_setup_used_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Setup that leaves under 1 s before the headroom skips the install
+        and the cell: even the manager's 1 s minimum could outlast the outer
+        limit, whose cancellation kills the box. No execution is spent.
+
+        Mutation: drop the early return; the install runs and this fails on
+        ``install_packages.assert_not_awaited``.
+        """
+        from src.services.agent.tool_deadline import tool_call_deadline_scope
+        from src.services.sandbox.e2b_sandbox_manager import AGENT_CELL_HEADROOM_SECONDS
+
+        with tool_call_deadline_scope(AGENT_CELL_HEADROOM_SECONDS + 0.5):
+            result, mgr = await self._run_with_install(monkeypatch, packages=["rdkit"])
+        mgr.install_packages.assert_not_awaited()
+        mgr.execute.assert_not_awaited()
+        assert result["status"] == "error"
+        assert result["error"] == "sandbox_budget_exhausted"
+        assert "was not run" in result["stderr"]
 
     async def test_image_outputs_included_in_response(self):
         from src.services.sandbox.e2b_sandbox_manager import ExecutionResult
