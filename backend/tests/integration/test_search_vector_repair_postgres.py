@@ -24,6 +24,17 @@ Uses the two-account PostgreSQL lane: skips unless
 ``TWO_ACCOUNT_PG_TEST_DATABASE_URL`` names a disposable server whose user may
 ``CREATE DATABASE`` (CI's ``test`` superuser; the step rejects a skipped run).
 Every scratch database is dropped in a ``finally``.
+
+Mutation-verified (2026-10-09, PostgreSQL 14): the NULL-only backfill guard,
+the two ``WHERE search_vector IS NULL`` clauses in
+``backend/alembic/versions/sv01_search_vector_repair.py``, was removed;
+``test_upgrade_head_leaves_a_correct_schema_untouched`` and
+``test_upgrade_head_is_idempotent_after_a_repair`` then failed on the
+advanced ``xmin`` of every thread, and passed again once it was restored
+with ``git diff`` empty. Focused command:
+``TWO_ACCOUNT_PG_TEST_DATABASE_URL=... pytest
+backend/tests/integration/test_search_vector_repair_postgres.py
+-c backend/pytest.ini -m integration -k "untouched or idempotent"``.
 """
 
 from __future__ import annotations
