@@ -34,7 +34,11 @@ from src.services.search.fulltext_search_service import fulltext_search_service
 from src.shared.enums import SatelliteSyncStatus
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
-from src.tasks.processing_lifecycle import ProcessingStopped, require_active_ingestion
+from src.tasks.processing_lifecycle import (
+    ProcessingStopped,
+    end_processing_job,
+    require_active_ingestion,
+)
 from src.tasks.replay_guard import claim_job_for_processing
 
 logger = logging.getLogger(__name__)
@@ -320,21 +324,12 @@ class ProcessingTask(Task):
             job_id = args[0]
             db = SessionLocal()
             try:
-                job = (
-                    db.query(ProcessingJob)
-                    .filter(ProcessingJob.id == job_id)
-                    .with_for_update()
-                    .first()
-                )
-
                 # Never overwrite a finished job (cancelled, swept, already
-                # failed by the task) or one a newer attempt has claimed.
-                if (
-                    job
-                    and not job.is_finished
-                    and job.celery_task_id in (None, task_id)
-                ):
-                    job.fail_job(str(exc))
+                # failed by the task) or one a newer attempt has claimed. An
+                # ingestion job's document fails with it (IN-1).
+                end_processing_job(
+                    db, job_id, message=str(exc), expected_task_ids=(None, task_id)
+                )
                 db.commit()
             except Exception as e:
                 logger.error(f"Failed to update job status: {str(e)}")

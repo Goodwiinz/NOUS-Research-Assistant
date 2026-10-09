@@ -311,6 +311,34 @@ def test_failure_of_live_attempt_still_fails_job_and_document(
         assert doc_status == ProcessingStatus.FAILED
 
 
+@pytest.mark.parametrize("owner", [None, "newer-attempt"])
+def test_failure_before_claim_ends_document_with_job(
+    stubbed: pytest.MonkeyPatch, owner: str | None
+) -> None:
+    """IN-1 path B: a crash before this attempt owns the job (here the claim
+    itself fails) reaches ProcessingTask.on_failure, which failed only the job
+    and left the document PENDING forever. A job a newer attempt owns stays."""
+    with _ingestion() as env:
+        if owner:
+            with env.Session() as db:
+                db.get(ProcessingJob, env.job_id).start_job(
+                    worker_id="worker-2", celery_task_id=owner
+                )
+                db.commit()
+
+        def unavailable(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("database unavailable during claim")
+
+        stubbed.setattr(pt, "claim_job_for_processing", unavailable)
+        _run(env, stubbed)
+
+        status, doc_status, _ = _state(env)
+        if owner:
+            assert (status, doc_status) == (JobStatus.RUNNING, ProcessingStatus.PENDING)
+        else:
+            assert (status, doc_status) == (JobStatus.FAILED, ProcessingStatus.FAILED)
+
+
 def test_happy_path_still_completes(stubbed: pytest.MonkeyPatch) -> None:
     with _ingestion() as env:
         result = _run(env, stubbed).get()
