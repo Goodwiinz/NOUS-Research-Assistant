@@ -882,11 +882,12 @@ const scenarios = [
         );
         if (streamSettled) {
           const early = await streamOutcomePromise;
-          if (early.ok && (early.value?.events ?? []).some((item) => item?.event === 'done')) {
-            return blockedRunCompletedBeforeStop('completed');
-          }
           if (!early.ok) throw early.error;
-          throw new Error('Agent stream ended before Stop without a done event');
+          const done = (early.value?.events ?? []).some((item) => item?.event === 'done');
+          // A done frame alone is not proof; the durable run status is.
+          const job = await jobStatus();
+          if (done && job?.status === 'completed') return blockedRunCompletedBeforeStop(job.status);
+          throw new Error(`Agent stream ended before Stop (done=${done}) while the run status was ${job?.status ?? 'unknown'}`);
         }
         assertThat(partialSeen, 'Agent stream produced no observable partial output before Stop');
         let cancelResponse;
@@ -904,7 +905,9 @@ const scenarios = [
           cancelSent = true;
           const job = await jobStatus();
           if (job?.status === 'completed') {
-            await streamOutcomePromise;
+            // Let the SSE reader settle, but only within the inner bound: the
+            // durable status above is the proof, not the reader.
+            await Promise.race([streamOutcomePromise, new Promise((resolve) => setTimeout(resolve, waitMs))]);
             return blockedRunCompletedBeforeStop(job.status);
           }
           throw new Error(`Stop endpoint returned 409 while the run status was ${job?.status ?? 'unknown'}`);

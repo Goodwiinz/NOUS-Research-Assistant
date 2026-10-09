@@ -1814,6 +1814,7 @@ function fakeStopJourney({
   cancel = () => ({ status: 204 }),
   job = () => ({ status: 'cancelled' }),
   completesBeforeStop = false,
+  streamNeverSettles = false,
   stoppedContent = '```\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n```',
   rendered = '1 2 3 4 5 6 7 8 9 10 11 12',
 } = {}) {
@@ -1875,8 +1876,9 @@ function fakeStopJourney({
     request: async (path, options = {}) => {
       if (options.method === 'POST' && path.startsWith('/api/v1/agent/stream/cancel/')) {
         state.cancelRequests += 1;
-        // The run reaches its terminal state as Stop arrives.
-        release();
+        // The run reaches its terminal state as Stop arrives; the SSE reader
+        // may still hang (streamNeverSettles).
+        if (!streamNeverSettles) release();
         const outcome = cancel(state);
         if (outcome.status >= 400) {
           const error = new Error(`Request failed (${outcome.status})`);
@@ -1908,13 +1910,28 @@ test('stop-active-run is BLOCKED, not FAIL, when Stop returns 409 because the ru
   assert.match(raced.state.prompt, /one per line/, 'the prompt must force output long enough for Stop to land mid-stream');
 });
 
-test('stop-active-run is BLOCKED when the stream finishes before Stop can be sent (Q-I4)', async () => {
+test('stop-active-run is BLOCKED when the stream finishes before Stop can be sent and the job confirms completed (Q-I4)', async () => {
   const scenario = registry.find((item) => item.id === 'workflow.stop-active-run');
-  const early = fakeStopJourney({ completesBeforeStop: true });
+  const early = fakeStopJourney({ completesBeforeStop: true, job: () => ({ status: 'completed' }) });
   const result = await scenario.run(early.session, early.evidence);
   assert.equal(result.status, 'BLOCKED');
   assert.equal(result.reason, 'run completed before Stop');
   assert.equal(early.state.cancelRequests, 0);
+});
+
+test('stop-active-run fails when the stream reports done before Stop but the job is not completed (Q-I4)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.stop-active-run');
+  const contradicted = fakeStopJourney({ completesBeforeStop: true, job: () => ({ status: 'running' }) });
+  await assert.rejects(scenario.run(contradicted.session, contradicted.evidence), /ended before Stop \(done=true\) while the run status was running/);
+});
+
+test('stop-active-run bounds the stream wait after a 409 on a completed run (Q-I4)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.stop-active-run');
+  const hung = fakeStopJourney({ cancel: () => ({ status: 409 }), job: () => ({ status: 'completed' }), streamNeverSettles: true });
+  const started = Date.now();
+  const result = await scenario.run(hung.session, hung.evidence);
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(Date.now() - started < 1_000, 'a hung SSE reader must not hold the BLOCKED verdict beyond the inner bound');
 });
 
 test('stop-active-run still fails on a 409 whose run is not complete (Q-I4)', async () => {
