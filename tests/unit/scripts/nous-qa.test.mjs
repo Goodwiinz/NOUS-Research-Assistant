@@ -1544,15 +1544,35 @@ test('markdown export is not proven by the thread title alone (Q-C1)', async () 
 
 /**
  * /chat composer after a rejected upload, as the live frontend renders it:
- * - frontend/src/components/chat/ChatInput.tsx:823 `<input type="file" aria-label="Attach file">`
+ * - frontend/src/components/chat/ChatInput.tsx:505 ComposerPrimitive.Root is a
+ *   <form> (assistant-ui) holding the Message textbox (:759-768), the
+ *   `<input type="file" multiple aria-label="Attach file">` (:821-823) and the
+ *   `aria-label="Attach image"` input (:849-852); `extraFileInput` adds a
+ *   second "Attach file" input outside that form, as seen live
  * - ChatInput.tsx:624 `<ul aria-label="Attached files">`, chip span title
  *   `${name}, upload failed` (ChatInput.tsx:664-666)
  * - ChatInput.tsx:713-721 `<p role="status">Remove failed attachments before sending.</p>`
  * - useChatComposerActions.ts:115-118 toast.error(`Upload failed for ${name}.`),
  *   rendered by react-hot-toast as role="status" (never role="alert")
  */
-function fakeAttachmentJourney({ chipFails = true, notice = true, alert = false, documents = () => [] } = {}) {
-  const state = { files: [], registered: [], requests: [] };
+function fakeAttachmentJourney({ chipFails = true, notice = true, alert = false, documents = () => [], extraFileInput = false } = {}) {
+  const state = { files: [], registered: [], requests: [], filesByForm: { composer: [], other: [] } };
+  const MESSAGE_TEXTBOX = Symbol('Message textbox');
+  const fileInputs = [
+    { ariaLabel: 'Attach file', form: 'composer' },
+    { ariaLabel: 'Attach image', form: 'composer' },
+    ...(extraFileInput ? [{ ariaLabel: 'Attach file', form: 'other' }] : []),
+  ];
+  // Playwright strictness: an action on a locator that resolves to more than
+  // one element fails before anything happens.
+  const inputLocator = (matches, source) => ({
+    count: async () => matches.length,
+    setInputFiles: async (file) => {
+      if (matches.length !== 1) throw new Error(`strict mode violation: ${source} resolved to ${matches.length} elements`);
+      state.files.push(file.name);
+      state.filesByForm[matches[0].form].push(file.name);
+    },
+  });
   const visibleWhen = (count) => ({
     first: () => ({
       waitFor: async ({ state: wanted }) => {
@@ -1564,12 +1584,24 @@ function fakeAttachmentJourney({ chipFails = true, notice = true, alert = false,
   const page = {
     url: () => 'http://127.0.0.1:3000/chat',
     getByLabel: (label, options = {}) => {
-      if (label === 'Attach file' && options.exact === true) {
-        return { setInputFiles: async (file) => { state.files.push(file.name); } };
-      }
-      throw new Error(`unexpected getByLabel ${label}`);
+      const matches = fileInputs.filter((input) => (options.exact ? input.ariaLabel === label : input.ariaLabel.includes(label)));
+      return inputLocator(matches, `getByLabel('${label}')`);
     },
     locator: (selector) => {
+      if (selector === 'form') {
+        return {
+          filter: ({ has }) => {
+            // Only the composer form contains the Message textbox.
+            const forms = has === MESSAGE_TEXTBOX ? ['composer'] : [];
+            return {
+              locator: (inner) => {
+                if (inner !== 'input[type="file"][aria-label="Attach file"]') throw new Error(`unexpected locator ${inner}`);
+                return inputLocator(fileInputs.filter((input) => forms.includes(input.form) && input.ariaLabel === 'Attach file'), `form >> ${inner}`);
+              },
+            };
+          },
+        };
+      }
       if (selector === 'ul[aria-label="Attached files"]') {
         return {
           getByTitle: (title, options = {}) => visibleWhen(() => (
@@ -1579,7 +1611,8 @@ function fakeAttachmentJourney({ chipFails = true, notice = true, alert = false,
       }
       throw new Error(`unexpected locator ${selector}`);
     },
-    getByRole: (role) => {
+    getByRole: (role, options = {}) => {
+      if (role === 'textbox' && options.name === 'Message' && options.exact === true) return MESSAGE_TEXTBOX;
       if (role === 'alert') return { last: () => visibleWhen(() => (alert ? 1 : 0)).first() };
       if (role === 'status') {
         return {
@@ -1628,6 +1661,14 @@ test('unsupported attachment fails when a document was created anyway and regist
   await assert.rejects(scenario.run(leaked.session, leaked.evidence), /created 1 document/);
   assert.deepEqual(leaked.state.registered, [['document', leakedId, { filename: 'NOUS_QA_t1.exe' }]]);
   assert.ok(leaked.state.requests.some((path) => path === '/api/v1/files/?search=NOUS_QA_t1.exe&size=50'), 'the document search must target the exact fixture filename');
+});
+
+test('unsupported attachment targets the composer\'s own Attach file input when another file input is on the page (Q-C2)', async () => {
+  const scenario = registry.find((item) => item.id === 'adversarial.unsupported-attachment');
+  const crowded = fakeAttachmentJourney({ extraFileInput: true });
+  const result = await scenario.run(crowded.session, crowded.evidence);
+  assert.match(result.assertion, /no document was created/);
+  assert.deepEqual(crowded.state.filesByForm, { composer: ['NOUS_QA_t1.exe'], other: [] }, 'the file must reach the composer input, never the stray one');
 });
 
 test('unsupported attachment passes only with the failed chip, the status notice and no created document (Q-C2)', async () => {

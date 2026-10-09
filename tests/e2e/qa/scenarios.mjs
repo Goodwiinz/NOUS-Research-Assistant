@@ -148,6 +148,21 @@ function messageComposer(page) {
   return page.getByRole('textbox', { name: 'Message', exact: true });
 }
 
+/**
+ * The composer form: assistant-ui's ComposerPrimitive.Root renders a <form>
+ * (ChatInput.tsx:505) that holds the Message textbox (:759-768) and the
+ * attach controls. Scoping to it keeps a file input elsewhere on the page
+ * from turning a page-wide label lookup into a strict-mode violation.
+ */
+function composerForm(page) {
+  return page.locator('form').filter({ has: messageComposer(page) });
+}
+
+/** ChatInput.tsx:821-823 `<input type="file" multiple aria-label="Attach file">`; the image input (:849-852) is "Attach image". */
+function attachFileInput(page) {
+  return composerForm(page).locator('input[type="file"][aria-label="Attach file"]');
+}
+
 /** Scope transient transport failures to the newest alert in a long chat. */
 export function latestAlertLocator(page) {
   return page.getByRole('alert').last();
@@ -1260,7 +1275,10 @@ const scenarios = [
       };
       let uiError = null;
       try {
-        await page.getByLabel('Attach file', { exact: true }).setInputFiles({
+        const input = attachFileInput(page);
+        const inputCount = await input.count();
+        assertThat(inputCount === 1, `Composer exposes ${inputCount} "Attach file" inputs (expected exactly 1)`);
+        await input.setInputFiles({
           name: filename,
           mimeType: 'application/octet-stream',
           buffer: Buffer.from('MZ'),
@@ -1303,7 +1321,7 @@ const scenarios = [
       await message.type('line two');
       const value = await message.inputValue();
       assertThat(value.includes('line one') && value.includes('line two'), 'Composer lost keyboard-entered text at narrow width');
-      assertThat(await page.getByLabel('Attach file').count() === 1, 'Attachment control is not accessible on narrow layout');
+      assertThat(await attachFileInput(page).count() === 1, 'Attachment control is not accessible on narrow layout');
       return { assertion: 'Mobile composer retains keyboard text and exposes an accessible attachment control', evidence: [{ beforeLength: before.length, valueLength: value.length }] };
     },
   },
