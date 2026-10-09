@@ -15939,6 +15939,58 @@ export interface components {
          * @enum {string}
          */
         ExecutionMode: "deterministic" | "exploratory";
+        /** ExecutionProviderError */
+        ExecutionProviderError: {
+            /** Message */
+            message: string;
+            /**
+             * Status Code
+             * @constant
+             */
+            status_code: 422;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "http_error";
+        };
+        /** ExecutionRequestValidationError */
+        ExecutionRequestValidationError: {
+            /** Details */
+            details: components["schemas"]["ExecutionValidationDetail"][];
+            /** Message */
+            message: string;
+            /**
+             * Status Code
+             * @constant
+             */
+            status_code: 422;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "validation_error";
+        };
+        /**
+         * ExecutionValidationDetail
+         * @description Sanitized request-validation detail from the application handler.
+         */
+        ExecutionValidationDetail: {
+            /** Loc */
+            loc: (string | number)[];
+            /** Msg */
+            msg: string;
+            /** Type */
+            type: string;
+        };
+        /**
+         * ExecutionValidationError
+         * @description Canonical application envelope for polling request/provider validation.
+         */
+        ExecutionValidationError: {
+            /** Error */
+            error: components["schemas"]["ExecutionRequestValidationError"] | components["schemas"]["ExecutionProviderError"];
+        };
         /**
          * ExportError
          * @description Error response for export failures.
@@ -25055,13 +25107,13 @@ export interface operations {
                     "application/json": components["schemas"]["JobStartResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Invalid request or Local Codex selection; Local Codex requires /api/v1/agent/stream. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ExecutionValidationError"];
                 };
             };
         };

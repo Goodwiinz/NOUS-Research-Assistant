@@ -205,6 +205,12 @@ export function VirtualizedConversationList<T extends Conversation>({
     );
     if (index < 0) {
       lastRevealedId.current = null;
+      lastRevealedIndex.current = -1;
+      revealTarget.current = null;
+      if (revealFrame.current !== null) {
+        cancelAnimationFrame(revealFrame.current);
+        revealFrame.current = null;
+      }
     } else if (
       lastRevealedId.current !== activeId ||
       lastRevealedIndex.current !== index

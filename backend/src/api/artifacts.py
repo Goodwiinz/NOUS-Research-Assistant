@@ -61,7 +61,8 @@ async def artifact_capabilities(
     """Browser controls follow the same default-off flags as the server."""
     response.headers["Cache-Control"] = "private, no-store"
     return ArtifactCapabilitiesDTO(
-        editing_enabled=settings.ARTIFACT_EDITING_ENABLED,
+        editing_enabled=settings.ARTIFACTS_ENABLED
+        and settings.ARTIFACT_EDITING_ENABLED,
         preview_enabled=settings.ARTIFACT_PREVIEW_ENABLED,
     )
 
@@ -246,6 +247,7 @@ async def edit_artifact(
     user: User = Depends(require_interactive_user),
     db: AsyncSession = Depends(get_db),
 ) -> ArtifactVersionDTO | JSONResponse:
+    _require_publishing()
     if not settings.ARTIFACT_EDITING_ENABLED:
         raise HTTPException(503, "Artifact editing is disabled")
     user_id, organization_id = _identity(user)

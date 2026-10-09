@@ -44,3 +44,23 @@ def test_different_master_key_cannot_decrypt_existing_field(
     monkeypatch.setenv("ENCRYPTION_MASTER_KEY", base64.b64encode(b"b" * 32).decode())
     encryption.initialize_encryption()
     assert field.process_result_value(stored, None) is None
+
+
+def test_rejected_data_rotation_keeps_fields_decryptable_after_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENCRYPTION_MASTER_KEY", base64.b64encode(b"a" * 32).decode())
+    encryption.initialize_encryption()
+    manager = encryption.get_key_manager()
+    original = manager.get_active_key(encryption.EncryptionKeyType.DATA)
+    assert original is not None
+
+    with pytest.raises(encryption.KeyManagementError, match="DATA key rotation"):
+        manager.rotate_key(original.key_id)
+
+    assert original.is_active
+    assert manager.get_active_key(encryption.EncryptionKeyType.DATA) is original
+    field = EncryptedString().copy(field_name="first_name")
+    stored = field.process_bind_param("Alice after rejected rotation", None)
+    encryption.initialize_encryption()
+    assert field.process_result_value(stored, None) == "Alice after rejected rotation"

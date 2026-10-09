@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import React from "react";
+import React, { useEffect } from "react";
+import { useFocusManager } from "ink";
 import { render, cleanup } from "ink-testing-library";
 import { App } from "./app";
 import { saveConfig, loadConfig } from "../../frontend/cli/auth/store";
@@ -72,10 +73,23 @@ async function key(ui: ReturnType<typeof render>, text: string) {
   ui.stdin.write(text);
   await delay(70);
 }
+const focus = new WeakMap<ReturnType<typeof render>, { activeId?: string }>();
 async function mount(props: React.ComponentProps<typeof App> = {}) {
-  const ui = render(<App {...props} />);
+  const observed: { activeId?: string } = {};
+  function ObservedApp() {
+    const { activeId } = useFocusManager();
+    useEffect(() => {
+      observed.activeId = activeId;
+    }, [activeId]);
+    return <App {...props} />;
+  }
+  const ui = render(<ObservedApp />);
+  focus.set(ui, observed);
   await until(
-    () => ui.frames.length > 1 && !!ui.lastFrame()?.includes("Ask NOUS"),
+    () =>
+      observed.activeId !== undefined &&
+      ui.frames.length > 1 &&
+      !!ui.lastFrame()?.includes("Ask NOUS"),
   );
   await delay(70);
   return ui;
@@ -147,8 +161,15 @@ test("deleted branches cannot be selected", async () => {
     ],
   };
   const ui = await mount({ initialHistory: history });
+  const originalFocus = focus.get(ui)?.activeId;
   await key(ui, "/delete branch-2");
   await key(ui, "\r");
+  await until(() => !!ui.lastFrame()?.includes("Delete thread branch-2"));
+  await until(
+    () =>
+      focus.get(ui)?.activeId !== undefined &&
+      focus.get(ui)?.activeId !== originalFocus,
+  );
   await key(ui, "delete");
   await key(ui, "\r");
   await until(() => calls.some((c) => c.method === "DELETE"));

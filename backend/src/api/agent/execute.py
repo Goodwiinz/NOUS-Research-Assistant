@@ -15,7 +15,7 @@ import logging
 import time
 import uuid as _uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import (
@@ -449,7 +449,45 @@ async def _celery_dispatch(
     return "dispatched", job_id
 
 
-@router.post("/execute", response_model=JobStartResponse)
+class ExecutionValidationDetail(BaseModel):
+    """Sanitized request-validation detail from the application handler."""
+
+    loc: list[str | int]
+    msg: str
+    type: str
+
+
+class ExecutionRequestValidationError(BaseModel):
+    message: str
+    status_code: Literal[422]
+    type: Literal["validation_error"]
+    details: list[ExecutionValidationDetail]
+
+
+class ExecutionProviderError(BaseModel):
+    message: str
+    status_code: Literal[422]
+    type: Literal["http_error"]
+
+
+class ExecutionValidationError(BaseModel):
+    """Canonical application envelope for polling request/provider validation."""
+
+    error: ExecutionRequestValidationError | ExecutionProviderError = Field(
+        discriminator="type"
+    )
+
+
+@router.post(
+    "/execute",
+    response_model=JobStartResponse,
+    responses={
+        422: {
+            "model": ExecutionValidationError,
+            "description": "Invalid request or Local Codex selection; Local Codex requires /api/v1/agent/stream.",
+        }
+    },
+)
 async def execute_agent(
     request: AgentExecuteRequest,
     background_tasks: BackgroundTasks,
@@ -464,6 +502,10 @@ async def execute_agent(
     ``background`` runs the graph on this pod via FastAPI BackgroundTasks;
     ``celery`` enqueues it to the dedicated agent_runs queue.
     """
+    if request.execution_provider == "codex":
+        raise HTTPException(
+            status_code=422, detail="Local Codex requires /api/v1/agent/stream."
+        )
     await _enforce_rate_limit(
         _agent_rate_limiter, str(current_user.id), _AGENT_TURN_PREFIX
     )

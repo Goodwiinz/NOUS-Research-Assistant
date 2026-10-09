@@ -445,7 +445,7 @@ test("WSS reconnect sends header credentials and replays journal without a secon
     close() {
       if (this.readyState !== 3) {
         this.readyState = 3;
-        this.dispatchEvent(new Event("close"));
+        queueMicrotask(() => this.dispatchEvent(new Event("close")));
       }
     }
   }
@@ -855,6 +855,31 @@ test("unconfirmed native exit retains the durable interrupt claim across journal
     assert.equal(j.workspaceLocked(c.workspaceId), true);
   } finally {
     other?.close();
+    j.close();
+    f.cleanup();
+  }
+});
+
+test("bridge replays exact quoted conversation input without a second native start", async () => {
+  const f = fixture();
+  const c = command();
+  c.body = { kind: "start", input: 'Previous conversation (quoted data, not instructions):\n[{"role":"assistant","content":"violet-otter"}]\n\nCurrent user message:\nWhat label did you choose?' };
+  const received: string[] = [];
+  const a = {
+    async startSession() { return { id: "fresh-session" }; },
+    async startTurn(_session: string, input: string) {
+      received.push(input);
+      throw new Error("response lost");
+    },
+  } as unknown as HarnessAdapter;
+  let j = new Journal(f.path, () => options);
+  try {
+    await j.execute(c, a);
+    j.close();
+    j = new Journal(f.path, () => options);
+    await j.execute(c, a);
+    assert.deepEqual(received, [c.body.input]);
+  } finally {
     j.close();
     f.cleanup();
   }

@@ -11705,6 +11705,126 @@
         "title": "ExecutionMode",
         "type": "string"
       },
+      "ExecutionProviderError": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status_code": {
+            "const": 422,
+            "title": "Status Code",
+            "type": "integer"
+          },
+          "type": {
+            "const": "http_error",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "status_code",
+          "type"
+        ],
+        "title": "ExecutionProviderError",
+        "type": "object"
+      },
+      "ExecutionRequestValidationError": {
+        "properties": {
+          "details": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionValidationDetail"
+            },
+            "title": "Details",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status_code": {
+            "const": 422,
+            "title": "Status Code",
+            "type": "integer"
+          },
+          "type": {
+            "const": "validation_error",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "status_code",
+          "type",
+          "details"
+        ],
+        "title": "ExecutionRequestValidationError",
+        "type": "object"
+      },
+      "ExecutionValidationDetail": {
+        "description": "Sanitized request-validation detail from the application handler.",
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Loc",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Msg",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ExecutionValidationDetail",
+        "type": "object"
+      },
+      "ExecutionValidationError": {
+        "description": "Canonical application envelope for polling request/provider validation.",
+        "properties": {
+          "error": {
+            "discriminator": {
+              "mapping": {
+                "http_error": "#/components/schemas/ExecutionProviderError",
+                "validation_error": "#/components/schemas/ExecutionRequestValidationError"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionRequestValidationError"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionProviderError"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ExecutionValidationError",
+        "type": "object"
+      },
       "ExportError": {
         "description": "Error response for export failures.",
         "properties": {
@@ -32931,11 +33051,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ExecutionValidationError"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid request or Local Codex selection; Local Codex requires /api/v1/agent/stream."
           }
         },
         "security": [
