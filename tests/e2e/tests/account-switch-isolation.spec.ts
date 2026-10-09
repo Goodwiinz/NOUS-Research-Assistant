@@ -23,7 +23,6 @@ const PROJECTS_URL = "**/api/v1/projects*";
 const SEARCH_URL = "**/api/v1/search/hybrid";
 // frontend/src/hooks/chat/chatAuthRecovery.ts CHAT_AUTH_RECOVERY_STORAGE_KEY
 const CHAT_AUTH_RECOVERY_KEY = "nous:chat-auth-recovery:v1";
-const TEXT_WATCH_KEY = "iso:text-watch";
 
 type Credentials = { email: string; password: string };
 
@@ -59,43 +58,6 @@ async function signOutOnCurrentPage(page: Page): Promise<void> {
 async function followAppLink(page: Page, path: string): Promise<void> {
   await page.locator(`a[href="${path}"]`).first().click();
   await page.waitForURL((url) => url.pathname === path);
-}
-
-/**
- * Record whether watched text ever enters the DOM, in every document of this
- * page. A polling assertion can miss a one-render flash; a MutationObserver
- * sees every commit. Arm it with armTextWatch; the state lives in
- * sessionStorage so it survives client and full navigations in the tab.
- */
-async function installTextWatch(page: Page): Promise<void> {
-  await page.addInitScript((key) => {
-    const check = () => {
-      const watched = window.sessionStorage.getItem(key);
-      if (!watched || watched.startsWith("seen:")) return;
-      if (document.body?.textContent?.includes(watched)) {
-        window.sessionStorage.setItem(key, `seen:${location.pathname}`);
-      }
-    };
-    new MutationObserver(check).observe(document, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-  }, TEXT_WATCH_KEY);
-}
-
-async function armTextWatch(page: Page, text: string): Promise<void> {
-  await page.evaluate(
-    ([key, value]) => window.sessionStorage.setItem(key, value),
-    [TEXT_WATCH_KEY, text] as const,
-  );
-}
-
-async function textWatchState(page: Page): Promise<string | null> {
-  return page.evaluate(
-    (key) => window.sessionStorage.getItem(key),
-    TEXT_WATCH_KEY,
-  );
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -220,13 +182,14 @@ test.describe("Account switch isolation @smoke @regression", () => {
   });
 
   // Guard: clearUserScopedClientState resets useProjectStore at sign-out
-  // (frontend/src/stores/authStore.ts:125). Mutation: delete that reset and
-  // this test fails on the text watch ("seen:/research"): ProjectsPage renders
-  // the stored list once before its fetch sets `loading`, so B would see A's
-  // project for one render. Holding B's response would not catch it, because
-  // the page shows its loading skeleton while the fetch is pending.
+  // (frontend/src/stores/authStore.ts:125). B's project fetch fails here, so
+  // ProjectsPage keeps whatever the store held: without the reset that is A's
+  // project, shown to B next to the error. Mutation: delete that reset and
+  // this test fails on the "A's project is absent" check. A successful B fetch
+  // cannot catch it: holding the response only shows the loading skeleton,
+  // and once it lands B's list replaces A's.
   // Focused: pnpm --dir tests/e2e exec playwright test tests/account-switch-isolation.spec.ts --project=chromium -g "project list"
-  test("B's project list never renders A's project, even for one frame", async ({
+  test("B's project list never shows A's project when B's fetch fails", async ({
     page,
     context,
   }, testInfo) => {
@@ -242,17 +205,20 @@ test.describe("Account switch isolation @smoke @regression", () => {
       ) {
         return route.continue();
       }
+      if (account === "B") {
+        return route.fulfill({
+          status: 500,
+          json: { detail: "Synthetic project list failure" },
+        });
+      }
       return route.fulfill({
         json: {
           projects: [
             {
-              id:
-                account === "A"
-                  ? "11111111-1111-4111-8111-111111111111"
-                  : "22222222-2222-4222-8222-222222222222",
+              id: "11111111-1111-4111-8111-111111111111",
               workspace_id: "33333333-3333-4333-8333-333333333333",
-              name: projectName(account),
-              description: `Synthetic ${account} project`,
+              name: projectName("A"),
+              description: "Synthetic A project",
               research_status: "active",
               tags: [],
               created_at: "2026-10-01T00:00:00Z",
@@ -263,7 +229,6 @@ test.describe("Account switch isolation @smoke @regression", () => {
         },
       });
     });
-    await installTextWatch(page);
 
     await helpers.login(TEST_DATA.USERS.ADMIN);
     await helpers.navigateTo("/projects");
@@ -272,15 +237,19 @@ test.describe("Account switch isolation @smoke @regression", () => {
     // store itself, which would hide a missing sign-out reset.
     await followAppLink(page, "/search");
     await expect(page.getByText(projectName("A"))).toHaveCount(0);
-    await armTextWatch(page, projectName("A"));
 
     await signOutOnCurrentPage(page);
     account = "B";
     await signInOnCurrentPage(page, TEST_DATA.USERS.REGULAR);
     await followAppLink(page, "/research");
-    await expect(page.getByText(projectName("B"))).toBeVisible();
+    // The failed fetch has settled once its error banner renders.
+    await expect(
+      page
+        .getByRole("alert")
+        .filter({ has: page.getByRole("button", { name: "Dismiss" }) }),
+    ).toBeVisible({ timeout: 20000 });
     await expect(page.getByText(projectName("A"))).toHaveCount(0);
-    expect(await textWatchState(page)).toBe(projectName("A"));
+    await expect(page.getByText("No projects yet")).toBeVisible();
   });
 
   // Guard: AuthProvider remounts the app under `key: accountRevision`

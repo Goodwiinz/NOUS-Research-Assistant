@@ -230,7 +230,7 @@ responses are synthetic (intercepted); sign-in uses real credentials.
 | --- | --- | --- | --- | --- |
 | BS1 | same tab | chat transcript; the selected thread and canary in `localStorage` | client store clearing, GOO-350 (PR #1854) | pass |
 | BS2 | same tab | agent panel | client store clearing, GOO-350 | pass |
-| BS3 | same tab | `/research` never renders A's project, checked by a MutationObserver that sees a one-render flash | `useProjectStore` reset in `clearUserScopedClientState` | pending CI |
+| BS3 | same tab; B's project list request fails | `/research` shows the error and an empty list, never A's project | `useProjectStore` reset in `clearUserScopedClientState` | pending CI |
 | BS4 | second tab signs A out and B in; `/search` stays mounted | A's earlier answer and a held A response never show for B | `AuthProvider` `key: accountRevision` remount; the account abort signal | pending CI |
 | BS5 | A's chat stream is rejected, then B signs in | the canary is absent from the page, `localStorage`, and the `sessionStorage` chat recovery draft | `observeIdentity` discards a draft owned by another account | pending CI |
 
