@@ -64,7 +64,9 @@ class IntegrationToolAction(BaseModel):
     workspace_id: Mapped[UUID | None] = mapped_column(
         GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
     )
-    thread_id: Mapped[UUID | None] = mapped_column(GUID(), ForeignKey("threads.id"))
+    thread_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("threads.id", ondelete="SET NULL")
+    )
     run_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("agent_runs.job_id")
     )

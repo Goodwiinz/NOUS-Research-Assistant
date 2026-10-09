@@ -130,6 +130,22 @@ def test_integration_job_enrolls_daily_brief_rollback_regression() -> None:
     assert "job.services.postgres.ports['5432']" in env["DATABASE_URL"]
 
 
+def test_integration_job_enrolls_retention_purge_regression() -> None:
+    # HO-2: the thread-purge FK proof skips without a PostgreSQL URL.
+    job = _integration_job()
+    step = next(
+        step for step in job["steps"] if step.get("name") == "Run integration tests"
+    )
+    env = step["env"]
+    assert env.get("RETENTION_PURGE_TEST_DATABASE_URL") == env["DATABASE_URL"]
+    # The proof must read the name CI sets, or a rename skips it silently.
+    proof = REPO_ROOT / "backend" / "tests" / "integration"
+    source = (proof / "test_retention_thread_purge_postgres.py").read_text(
+        encoding="utf-8"
+    )
+    assert "RETENTION_PURGE_TEST_DATABASE_URL" in source
+
+
 @pytest.mark.parametrize(
     ("case_xml", "pytest_exit", "accepted"),
     [
