@@ -23,7 +23,10 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.agent.agent_submission_service import finalize_submission
 from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
-from src.services.harness.runs import authorize_external_submission
+from src.services.harness.runs import (
+    authorize_external_submission,
+    cancel_undelivered_start,
+)
 from src.services.integrations.context import IntegrationAccessDenied, _validate_grant
 from src.shared.enums import AgentOutboxStatus, JobStatus
 
@@ -120,6 +123,7 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 event_type=RunEventType.RUN_CANCELLED,
                 payload={"reason": "Cancelled before local execution started."},
                 provider="codex",
+                commit=False,
             )
             return
         message = "Local Codex could not be started."
@@ -133,25 +137,35 @@ async def dispatch_pending(db: AsyncSession) -> int:
             error_code="harness_dispatch_failed",
             error=message,
             provider="codex",
+            commit=False,
         )
 
     try:
         rows = (
             await db.scalars(
-                select(AgentOutbox)
+                select(AgentOutbox.run_id)
                 .where(
                     AgentOutbox.kind == "harness.execute",
                     AgentOutbox.status == "pending",
                 )
-                .order_by(AgentOutbox.created_at)
+                .order_by(AgentOutbox.run_id, AgentOutbox.created_at)
                 .limit(100)
-                .with_for_update(skip_locked=True)
             )
         ).all()
         count = 0
-        for raw_outbox in rows:
-            outbox: Any = raw_outbox
-            run, session = await _locked(db, str(outbox.run_id))
+        for run_id in rows:
+            run, session = await _locked(db, str(run_id))
+            outbox: Any = await db.scalar(
+                select(AgentOutbox)
+                .where(
+                    AgentOutbox.run_id == run_id,
+                    AgentOutbox.kind == "harness.execute",
+                    AgentOutbox.status == "pending",
+                )
+                .with_for_update()
+            )
+            if outbox is None:
+                continue
             if JobStatus(run.status).is_terminal:
                 outbox.status = AgentOutboxStatus.FAILED.value
                 outbox.updated_at = now()
@@ -235,6 +249,7 @@ async def lease_commands(
                         else [AgentRun.thread_id == context.thread_id]
                     ),
                 )
+                .order_by(HarnessSession.run_id)
                 .limit(100)
             )
         ).all()
@@ -276,6 +291,13 @@ async def lease_commands(
                         )
                     )
                     await db.flush()
+            # Match Stop/dispatch ordering even if source validation retires
+            # this command below: run, then accepted outbox, then commands.
+            await db.scalars(
+                select(AgentOutbox)
+                .where(AgentOutbox.run_id == run.job_id)
+                .with_for_update()
+            )
             commands = (
                 await db.scalars(
                     select(HarnessCommand)
@@ -554,6 +576,21 @@ async def has_assistant_projection(db: AsyncSession, run: Any) -> bool:
 
 
 async def reconcile_pending(db: AsyncSession) -> int:
+    cancelled_ids = (
+        await db.scalars(
+            select(AgentRun.job_id)
+            .where(
+                AgentRun.execution_provider == "codex",
+                AgentRun.cancel_requested_at.is_not(None),
+                AgentRun.status.notin_([s.value for s in TERMINAL.values()]),
+            )
+            .order_by(AgentRun.job_id)
+            .limit(100)
+        )
+    ).all()
+    for run_id in cancelled_ids:
+        await cancel_undelivered_start(db, run_id=run_id)
+    await db.commit()
     ids = list(
         (
             await db.scalars(

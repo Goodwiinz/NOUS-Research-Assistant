@@ -1194,3 +1194,91 @@ async def test_chat_bound_grant_leases_only_runs_in_its_chat(
     assert await lease_commands(db, await bind(other_chat), DEVICE) == []
     leased = await lease_commands(db, await bind(THREAD), DEVICE)
     assert [c.runId for c in leased] == [external_run.id]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_stop_after_dispatch_before_delivery_releases_ownership(
+    db, context, external_run, monkeypatch, enabled
+):
+    from src.services.harness.runs import record_observation
+    from tests.unit.services.harness.test_runs import accept
+
+    assert await dispatch_pending(db) == 1
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", enabled)
+    await cancel(db, str(external_run.id))
+    await cancel(db, str(external_run.id))
+    await record_observation(db, run_id=external_run.id, observation="unknown")
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "cancelled"
+    assert not session.workspace_locked
+    assert await lease_commands(db, context, DEVICE) == []
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentRunEvent)
+            .where(AgentRunEvent.event_type == "run.cancelled")
+        )
+        == 1
+    )
+    assert (await accept(db, context)).run_id != str(external_run.id)
+
+
+async def test_expired_lease_is_not_proof_of_nonexecution(db, context, command):
+    await db.execute(update(HarnessCommand).values(lease_until=now_expired()))
+    await db.commit()
+    await cancel(db, str(command.runId))
+    db.expire_all()
+    run = await db.get(AgentRun, str(command.runId))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "stopping"
+    assert session.workspace_locked
+
+
+def now_expired():
+    return datetime.now(timezone.utc) - timedelta(seconds=1)
+
+
+async def test_undelivered_stop_rolls_back_as_one_transaction(
+    db, context, external_run
+):
+    assert await dispatch_pending(db) == 1
+    await request_run_cancellation(
+        db,
+        run_id=str(external_run.id),
+        thread_id=THREAD,
+        user_id=USER,
+        organization_id=ORG,
+        reason="user",
+    )
+    await db.rollback()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "queued" and session.workspace_locked
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentRunEvent)
+            .where(AgentRunEvent.event_type == "run.cancelled")
+        )
+        == 0
+    )
+
+
+async def test_reconcile_closes_stranded_never_leased_stop_with_bridge_disabled(
+    db, context, external_run, monkeypatch
+):
+    assert await dispatch_pending(db) == 1
+    await db.execute(
+        update(AgentRun).values(
+            status="recovering", cancel_requested_at=datetime.now(timezone.utc)
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", False)
+    await reconcile_pending(db)
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "cancelled" and not session.workspace_locked
