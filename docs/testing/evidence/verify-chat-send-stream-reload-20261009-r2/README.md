@@ -34,7 +34,7 @@ Cleanup: complete.
 
 All 8 checkpoints were viewed and compared with the feature-map pass criteria. Deployed lane, so this is not a nous-loop step 7b local `PASS`.
 
-- `chat-send-stream-reload`: **PASS**. `chat.sent` shows the prompt as a user row. `chat.streamed` shows the assistant answer `KestrelAck42` in a terminal state, at about 11 s. `chat.reloaded` still shows both rows.
+- `chat-send-stream-reload`: **PASS with one criterion unproven** (corrected 2026-10-09 after audit). `chat.sent` shows the prompt as a user row. `chat.streamed` shows the assistant answer `KestrelAck42`, but the composer still renders `Stop` and `Queue`, so the run was still in flight: the criterion "reaches a terminal state" was not shown before the scenario reloaded. `chat.reloaded` shows both rows persisted with `Send`/`Copy`/`Regenerate`, so the persisted turn is terminal. The scenario must wait for the terminal state before reloading.
 - `project-creation-via-chat`: **PASS**. `project.pending` shows the Approval needed card for Create project. `hitl.approved` shows the agent's reply "Created the project … Project ID …". `project.created` shows the project page, Active.
 - `hitl-approve-deny`: **PASS**. The approve path is the same as above. `hitl.pending` shows the approval card, and `hitl.denied` shows "Action cancelled by user." The runner also asserted that no project was created.
 - Observation, not a criterion failure: in `chat.sent`, the in-progress step labels render clipped ("ing", "ving") while streaming.

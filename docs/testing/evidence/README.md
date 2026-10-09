@@ -8,7 +8,7 @@ Feature- and run-specific evidence bundles. Keep each bundle’s source identity
 
 | Directory | Contents |
 | --- | --- |
-| [verify-chat-send-stream-reload-20261009-r2/](verify-chat-send-stream-reload-20261009-r2/README.md) | nous-verify deployed-lane run (backend `a0d4c6b`): chat send/stream/reload, HITL approve and deny, project creation via chat all PASS, screenshots reviewed |
+| [verify-chat-send-stream-reload-20261009-r2/](verify-chat-send-stream-reload-20261009-r2/README.md) | nous-verify deployed-lane run (backend `a0d4c6b`): HITL approve and deny and project creation via chat PASS; chat send/stream/reload PASS except the terminal-state criterion (run still in flight at the streamed checkpoint); screenshots reviewed |
 | [verify-chat-send-stream-reload-20261009/](verify-chat-send-stream-reload-20261009/README.md) | nous-verify deployed-lane run: document upload PASS; chat journeys failed on a test selector defect (superseded by -r2) |
 | [verify-login-20261009/](verify-login-20261009/README.md) | nous-verify deployed-lane run: login PASS; chat timed out at the 30 s default (superseded) |
 | [daily-research-brief-enablement-20260928/](daily-research-brief-enablement-20260928/README.md) | Retained records and supporting files |
