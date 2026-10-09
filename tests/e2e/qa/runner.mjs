@@ -289,6 +289,54 @@ async function identityGateForWrites(session, config) {
   };
 }
 
+/**
+ * Clean up and close every session the campaign opened, in order. A
+ * scenario timeout retires its session (quarantined, so a late action is
+ * rejected) and the remaining scenarios run on a fresh one; the retired
+ * session keeps its fixture ledger, so its cleanup still runs here. The
+ * campaign cleanup is `complete` only when every session's cleanup is.
+ */
+async function retireSessions(sessions, secrets) {
+  const cleanup = {
+    status: 'complete',
+    retained: [],
+    errors: [],
+    activeRuns: [],
+    uncertainStreams: [],
+    uncertainMutations: [],
+    // Number of QA sessions (browser contexts) the campaign opened. Not named
+    // "sessions": report redaction treats any key containing that word as a
+    // secret.
+    contexts: sessions.length,
+  };
+  const artifacts = { videos: [], traces: [], checkpointCount: 0 };
+  for (const session of sessions) {
+    try {
+      const result = typeof session.cleanup === 'function'
+        ? await session.cleanup()
+        : { status: 'complete', retained: [], errors: [] };
+      if (result?.status !== 'complete') cleanup.status = 'incomplete';
+      for (const key of ['retained', 'errors', 'activeRuns', 'uncertainStreams', 'uncertainMutations']) {
+        if (Array.isArray(result?.[key])) cleanup[key].push(...result[key]);
+      }
+    } catch (error) {
+      cleanup.status = 'incomplete';
+      cleanup.errors.push(sanitizeError(error, secrets));
+    }
+    try {
+      await session.close?.();
+    } catch (error) {
+      cleanup.status = 'incomplete';
+      cleanup.errors.push(sanitizeError(error, secrets));
+    }
+    // Video paths are final only after close(); the caller redacts them.
+    artifacts.videos.push(...(session.artifacts?.videos ?? []));
+    artifacts.traces.push(...(session.artifacts?.traces ?? []));
+    artifacts.checkpointCount += session.artifacts?.checkpoints?.length ?? 0;
+  }
+  return { cleanup, artifacts };
+}
+
 export function exitCodeForReport(report) {
   const summary = report?.summary ?? {};
   if (summary.failed > 0) return 1;
@@ -354,15 +402,22 @@ export async function runCampaign(config, options = {}) {
     return report;
   }
 
+  const sessions = [];
   let session;
   let modelTurns = 0;
   let globalWriteGate = null;
-  let campaignHalted = false;
-  try {
-    session = await (options.sessionFactory ?? createSession)(
+  let sessionRetired = false;
+  let sessionReplacementFailure = null;
+  const openSession = async () => {
+    const opened = await (options.sessionFactory ?? createSession)(
       { ...normalizedConfig, runId },
       options.dependencies ?? {}
     );
+    sessions.push(opened);
+    return opened;
+  };
+  try {
+    session = await openSession();
     if (normalizedConfig.expectedBackendSha && scenarios.some((scenario) =>
       (scenario.prerequisites ?? []).includes('writes') || scenario.callsModel
     )) {
@@ -381,9 +436,20 @@ export async function runCampaign(config, options = {}) {
     }
     for (const scenario of scenarios) {
       const started = Date.now();
-      if (campaignHalted) {
-        report.cases.push(caseResult(scenario, 'BLOCKED', {
-          reason: 'Campaign halted after a timed-out scenario; the session remained quarantined to prevent late actions',
+      if (sessionRetired) {
+        // The previous scenario timed out. Its session stays quarantined so a
+        // late action cannot run; the remaining scenarios get a fresh one.
+        try {
+          session = await openSession();
+          sessionRetired = false;
+        } catch (error) {
+          sessionReplacementFailure = sanitizeError(error, normalizedConfig.secrets ?? []);
+        }
+      }
+      if (sessionReplacementFailure) {
+        report.cases.push(caseResult(scenario, 'FAIL', {
+          reason: `Fresh session could not be opened after a timed-out scenario: ${sessionReplacementFailure.message}`,
+          evidence: [sessionReplacementFailure],
           durationMs: Date.now() - started,
           requests: [],
         }));
@@ -472,7 +538,7 @@ export async function runCampaign(config, options = {}) {
           requests: (session?.observations ?? []).slice(beforeRequests),
           checkpoints: [...checkpoints],
         }));
-        if (error?.code === 'SCENARIO_TIMEOUT' || error?.timedOut === true) campaignHalted = true;
+        if (error?.code === 'SCENARIO_TIMEOUT' || error?.timedOut === true) sessionRetired = true;
       }
     }
   } catch (error) {
@@ -482,31 +548,11 @@ export async function runCampaign(config, options = {}) {
       report.cases.push(caseResult(scenario, 'FAIL', { reason: safe.message, evidence: [safe] }));
     }
   } finally {
-    if (session) {
-      try {
-        report.cleanup = typeof session.cleanup === 'function'
-          ? await session.cleanup()
-          : { status: 'complete', retained: [], errors: [] };
-      } catch (error) {
-        const safe = sanitizeError(error, normalizedConfig.secrets ?? []);
-        report.cleanup = { status: 'incomplete', retained: [], errors: [safe] };
-      }
-      try {
-        await session.close?.();
-      } catch (error) {
-        const safe = sanitizeError(error, normalizedConfig.secrets ?? []);
-        report.cleanup = {
-          ...report.cleanup,
-          status: 'incomplete',
-          errors: [...(report.cleanup.errors ?? []), safe],
-        };
-      }
-      // Video paths are final only after close(); redactValue below covers them.
-      report.run.artifacts = {
-        videos: [...(session.artifacts?.videos ?? [])],
-        traces: [...(session.artifacts?.traces ?? [])],
-        checkpointCount: session.artifacts?.checkpoints?.length ?? 0,
-      };
+    if (sessions.length > 0) {
+      const retired = await retireSessions(sessions, normalizedConfig.secrets ?? []);
+      report.cleanup = retired.cleanup;
+      // redactValue below covers the artifact paths.
+      report.run.artifacts = retired.artifacts;
     }
   }
 

@@ -23,9 +23,13 @@ fault case.
 The CLI accepts only `http` and `https` targets without URL userinfo, query,
 or fragment data. Use `--api-url` explicitly when the backend is on a different
 origin; the runner does not follow redirects to discover an API. Every request
-has a timeout, one browser context is used, model turns are bounded by
-`--max-turns` (default 12, maximum 50), and the runner performs no load or
-bulk-destructive operation.
+has a timeout, model turns are bounded by `--max-turns` (default 12, maximum
+50), and the runner performs no load or bulk-destructive operation. A scenario
+that exceeds `--timeout-ms` is recorded as `FAIL`; its session (browser
+context and API access) is quarantined so a late action cannot run, and the
+remaining scenarios run on a fresh session. Cleanup covers every session's
+registered fixtures, including the quarantined one, and is `incomplete`
+whenever any session's cleanup is.
 
 Each mutating scenario creates resources with a unique `NOUS QA <run-id>`
 prefix and registers the exact IDs returned by the production API. Cleanup can

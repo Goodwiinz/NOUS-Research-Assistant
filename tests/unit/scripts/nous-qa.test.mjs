@@ -458,75 +458,146 @@ test('scenario timeout awaits bounded session cleanup', async () => {
   assert.equal(cleanupFinished, true);
 });
 
-test('scenario timeout quarantines late session actions and halts later cases', async () => {
-  let quarantined = false;
-  let lateRequestRejected = false;
-  let lateFixtureRejected = false;
-  let laterCaseRan = false;
-  const report = await runCampaign(
+/**
+ * Sessions for the timeout tests. Each one quarantines independently (late
+ * actions on it are rejected) and reports its own cleanup, so the runner's
+ * merge across a quarantined and a fresh session is observable.
+ */
+function timeoutSessionFactory({ cleanupFor = () => ({ status: 'complete', retained: [], errors: [] }), failOpen = () => false } = {}) {
+  const sessions = [];
+  const factory = async () => {
+    const index = sessions.length + 1;
+    if (failOpen(index)) throw new Error(`browser pool exhausted for session ${index}`);
+    const session = {
+      index,
+      quarantined: false,
+      lateRequestRejected: false,
+      lateFixtureRejected: false,
+      cleanedUp: false,
+      closed: false,
+      observations: [],
+      artifacts: { videos: [`/tmp/ev/video/session-${index}.webm`], traces: [], checkpoints: [] },
+      quarantine: async () => { session.quarantined = true; },
+      request: async () => {
+        if (session.quarantined) throw new Error('session quarantined');
+        return { status: 200, data: {} };
+      },
+      registerFixture: () => {
+        if (session.quarantined) throw new Error('session quarantined');
+      },
+      cleanup: async () => { session.cleanedUp = true; return cleanupFor(session); },
+      close: async () => { session.closed = true; },
+    };
+    sessions.push(session);
+    return session;
+  };
+  return { sessions, factory };
+}
+
+function timeoutRegistry(record) {
+  return [
     {
+      id: 'late-action',
+      title: 'Late action',
       suite: 'smoke',
-      baseUrl: 'http://127.0.0.1:3000',
-      apiUrl: 'http://127.0.0.1:8000/api/v1',
-      timeoutMs: 20,
-      maxTurns: 1,
-      runId: 'run-timeout-quarantine',
+      prerequisites: [],
+      run: async (session) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        try {
+          await session.request('/late-mutation', { method: 'POST' });
+        } catch {
+          session.lateRequestRejected = true;
+        }
+        try {
+          session.registerFixture('thread', 'late-fixture');
+        } catch {
+          session.lateFixtureRejected = true;
+        }
+      },
     },
     {
-      registry: [
-        {
-          id: 'late-action',
-          title: 'Late action',
-          suite: 'smoke',
-          prerequisites: [],
-          run: async (session) => {
-            await new Promise((resolve) => setTimeout(resolve, 50));
-            try {
-              await session.request('/late-mutation', { method: 'POST' });
-            } catch {
-              lateRequestRejected = true;
-            }
-            try {
-              session.registerFixture('thread', 'late-fixture');
-            } catch {
-              lateFixtureRejected = true;
-            }
-          },
-        },
-        {
-          id: 'must-not-run',
-          title: 'Must not run',
-          suite: 'smoke',
-          prerequisites: [],
-          run: async () => {
-            laterCaseRan = true;
-            return { assertion: 'ran' };
-          },
-        },
-      ],
-      sessionFactory: async () => ({
-        observations: [],
-        quarantine: async () => { quarantined = true; },
-        request: async () => {
-          if (quarantined) throw new Error('session quarantined');
-          return { status: 200, data: {} };
-        },
-        registerFixture: () => {
-          if (quarantined) throw new Error('session quarantined');
-        },
-        cleanup: async () => ({ status: 'complete', retained: [], errors: [] }),
-        close: async () => {},
-      }),
-    }
+      id: 'runs-after-timeout',
+      title: 'Runs after timeout',
+      suite: 'smoke',
+      prerequisites: [],
+      run: async (session) => {
+        record.laterCaseSession = session;
+        return { assertion: 'ran on a fresh session' };
+      },
+    },
+  ];
+}
+
+const TIMEOUT_CONFIG = {
+  suite: 'smoke',
+  baseUrl: 'http://127.0.0.1:3000',
+  apiUrl: 'http://127.0.0.1:8000/api/v1',
+  timeoutMs: 20,
+  maxTurns: 1,
+};
+
+test('scenario timeout quarantines that session, opens a fresh one and the later case still runs (Q-I8)', async () => {
+  const record = {};
+  const { sessions, factory } = timeoutSessionFactory({
+    cleanupFor: (session) => (session.quarantined
+      ? { status: 'incomplete', retained: [{ kind: 'thread', id: 'late-thread' }], errors: [{ kind: 'thread', id: 'late-thread', error: 'cleanup after quarantine failed' }] }
+      : { status: 'complete', retained: [], errors: [] }),
+  });
+  const report = await runCampaign(
+    { ...TIMEOUT_CONFIG, runId: 'run-timeout-quarantine' },
+    { registry: timeoutRegistry(record), sessionFactory: factory }
   );
   await new Promise((resolve) => setTimeout(resolve, 75));
   assert.equal(report.cases[0].status, 'FAIL');
   assert.match(report.cases[0].reason, /timed out/i);
-  assert.equal(quarantined, true);
-  assert.equal(lateRequestRejected, true);
-  assert.equal(lateFixtureRejected, true);
-  assert.equal(laterCaseRan, false);
-  assert.equal(report.cases[1].status, 'BLOCKED');
+  assert.equal(sessions.length, 2, 'a fresh session is opened for the scenarios after the timeout');
+  assert.equal(sessions[0].quarantined, true);
+  assert.equal(sessions[0].lateRequestRejected, true);
+  assert.equal(sessions[0].lateFixtureRejected, true);
+  assert.equal(sessions[1].quarantined, false);
+  assert.equal(record.laterCaseSession, sessions[1], 'the later case must run on the fresh session, never the quarantined one');
+  assert.equal(report.cases[1].status, 'PASS');
+  assert.ok(sessions.every((session) => session.cleanedUp && session.closed), 'cleanup and close cover every session');
+  assert.equal(report.cleanup.status, 'incomplete', 'a quarantined session whose cleanup is not trusted keeps the campaign cleanup incomplete');
+  assert.deepEqual(report.cleanup.retained, [{ kind: 'thread', id: 'late-thread' }]);
+  assert.equal(report.cleanup.contexts, 2);
+  assert.deepEqual(report.run.artifacts.videos, ['/tmp/ev/video/session-1.webm', '/tmp/ev/video/session-2.webm']);
+  assert.equal(report.summary.failed, 1);
+  assert.equal(report.summary.incomplete, true);
+  assert.equal(exitCodeForReport(report), 1);
+});
+
+test('a quarantined session whose cleanup completes keeps the campaign cleanup complete (Q-I8)', async () => {
+  const record = {};
+  const { sessions, factory } = timeoutSessionFactory();
+  const report = await runCampaign(
+    { ...TIMEOUT_CONFIG, runId: 'run-timeout-clean' },
+    { registry: timeoutRegistry(record), sessionFactory: factory }
+  );
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  assert.equal(sessions.length, 2);
+  assert.equal(report.cases[1].status, 'PASS');
+  assert.equal(report.cleanup.status, 'complete');
+  assert.equal(report.summary.incomplete, false);
+  assert.equal(exitCodeForReport(report), 1, 'the timed-out case is still a failure');
+});
+
+test('when no fresh session can be opened after a timeout the remaining cases fail and never reuse the quarantined session (Q-I8)', async () => {
+  const record = {};
+  const { sessions, factory } = timeoutSessionFactory({ failOpen: (index) => index > 1 });
+  const report = await runCampaign(
+    { ...TIMEOUT_CONFIG, runId: 'run-timeout-no-replacement' },
+    { registry: timeoutRegistry(record), sessionFactory: factory }
+  );
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  assert.equal(sessions.length, 1);
+  assert.equal(record.laterCaseSession, undefined);
+  assert.equal(report.cases[0].status, 'FAIL');
+  assert.equal(report.cases[1].status, 'FAIL');
+  assert.match(report.cases[1].reason, /fresh session could not be opened/i);
+  assert.match(report.cases[1].reason, /browser pool exhausted/);
+  assert.equal(sessions[0].cleanedUp, true);
+  assert.equal(report.cleanup.contexts, 1);
 });
 
 test('session close errors remain visible in the cleanup report', async () => {
