@@ -445,7 +445,7 @@ test("WSS reconnect sends header credentials and replays journal without a secon
     close() {
       if (this.readyState !== 3) {
         this.readyState = 3;
-        this.dispatchEvent(new Event("close"));
+        queueMicrotask(() => this.dispatchEvent(new Event("close")));
       }
     }
   }
