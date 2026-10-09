@@ -1930,6 +1930,63 @@
         "title": "ArXivSearchRequest",
         "type": "object"
       },
+      "ArtifactCapabilitiesDTO": {
+        "properties": {
+          "editing_enabled": {
+            "title": "Editing Enabled",
+            "type": "boolean"
+          },
+          "preview_enabled": {
+            "title": "Preview Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "editing_enabled",
+          "preview_enabled"
+        ],
+        "title": "ArtifactCapabilitiesDTO",
+        "type": "object"
+      },
+      "ArtifactEditConflictDetail": {
+        "properties": {
+          "current_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version Id"
+          },
+          "message": {
+            "const": "Artifact publication conflict",
+            "default": "Artifact publication conflict",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_version_id"
+        ],
+        "title": "ArtifactEditConflictDetail",
+        "type": "object"
+      },
+      "ArtifactEditConflictResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/ArtifactEditConflictDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ArtifactEditConflictResponse",
+        "type": "object"
+      },
       "ArtifactProvenance": {
         "additionalProperties": false,
         "properties": {
@@ -10394,6 +10451,33 @@
           "exists"
         ],
         "title": "DuplicateCheckResponse",
+        "type": "object"
+      },
+      "EditArtifactVersionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_parent_version_id": {
+            "format": "uuid",
+            "title": "Expected Parent Version Id",
+            "type": "string"
+          },
+          "publication_id": {
+            "format": "uuid",
+            "title": "Publication Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 2097152,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_parent_version_id",
+          "publication_id",
+          "text"
+        ],
+        "title": "EditArtifactVersionRequest",
         "type": "object"
       },
       "EncryptionStatusResponse": {
@@ -21509,7 +21593,7 @@
         "additionalProperties": false,
         "properties": {
           "byte_size": {
-            "minimum": 1.0,
+            "minimum": 0.0,
             "title": "Byte Size",
             "type": "integer"
           },
@@ -36168,6 +36252,33 @@
         ]
       }
     },
+    "/api/v1/artifacts/capabilities": {
+      "get": {
+        "description": "Browser controls follow the same default-off flags as the server.",
+        "operationId": "artifact_capabilities_api_v1_artifacts_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactCapabilitiesDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Artifact Capabilities",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/v1/artifacts/projects/{project_id}": {
       "get": {
         "operationId": "project_artifacts_api_v1_artifacts_projects__project_id__get",
@@ -36446,6 +36557,74 @@
           }
         ],
         "summary": "Version Content",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/edits": {
+      "post": {
+        "operationId": "edit_artifact_api_v1_artifacts__artifact_id__edits_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditArtifactVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactVersionDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactEditConflictResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit Artifact",
         "tags": [
           "artifacts"
         ]

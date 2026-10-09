@@ -20,6 +20,7 @@ from src.models.artifact import (
 )
 from src.models.collection import Collection
 from src.models.conversation import Conversation
+from src.models.integration_grant import IntegrationGrant
 from src.models.organization import Organization
 from src.models.thread import Thread
 from src.models.user import User
@@ -88,6 +89,7 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         ArtifactReference,
         ArtifactLifecycleOutbox,
         AgentRun,
+        IntegrationGrant,
     ]
     async with engine.begin() as conn:
         for model in tables:
@@ -223,6 +225,46 @@ async def test_changed_replay_conflicts(
         await reserve_upload(db, context, reserve.model_copy(update={"byte_size": 99}))
     same = await reserve_upload(db, context, reserve)
     assert same.upload_id == request.upload_id
+
+
+async def test_renewed_grant_replays_the_same_publication(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    """A renewed bearer must not turn one publication into two artifacts."""
+    consent_id = uuid4()
+    context = context.model_copy(update={"consent_id": consent_id})
+    renewed = context.model_copy(update={"grant_id": uuid4()})
+    for current in (context, renewed):
+        db.add(
+            IntegrationGrant(
+                id=current.grant_id,
+                request_id=consent_id,
+                user_id=current.user_id,
+                organization_id=current.organization_id,
+                project_id=current.project_id,
+                thread_id=current.thread_id,
+                scopes=["artifacts:publish"],
+                token_hash=uuid4().hex,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+                consented_at=datetime.now(timezone.utc),
+            )
+        )
+    await db.commit()
+    request, original = await _published(db, context)
+    reservation = await reserve_upload(db, renewed, _reserve(request.publication_id))
+    assert reservation.upload_id == request.upload_id
+    await store_upload(db, renewed, reservation.upload_id, CONTENT)
+    replayed = await publish_version(db, renewed, request)
+    assert replayed.version_id == original.version_id
+    assert await db.scalar(select(func.count()).select_from(Artifact)) == 1
+    assert await db.scalar(select(func.count()).select_from(ArtifactVersion)) == 1
+    with pytest.raises(ArtifactConflict):
+        await reserve_upload(
+            db, renewed, _reserve(request.publication_id, byte_size=99)
+        )
+    different_consent = renewed.model_copy(update={"consent_id": uuid4()})
+    with pytest.raises(ArtifactNotFound):
+        await publish_version(db, different_consent, request)
 
 
 async def test_digest_and_size_mismatch_never_store(

@@ -22,6 +22,8 @@ class ArtifactAccessDenied(ArtifactError):
 class ArtifactConflict(ArtifactError):
     """Replay with a different payload, stale parent, or expired reservation."""
 
+    current_version_id: UUID | None = None
+
 
 class ArtifactDigestMismatch(ArtifactError):
     """Uploaded bytes do not match the reserved size or SHA-256."""
@@ -51,7 +53,7 @@ class ArtifactProvenance(BaseModel):
 class ReserveArtifactUploadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     publication_id: UUID
-    byte_size: int = Field(ge=1)
+    byte_size: int = Field(ge=0)
     mime_type: str = Field(min_length=1, max_length=255)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -103,3 +105,25 @@ class ProjectArtifactDTO(BaseModel):
     current_version: ArtifactVersionDTO
     thread_id: UUID | None  # chat the current version was produced in, if any
     updated_at: datetime
+
+
+class EditArtifactVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_parent_version_id: UUID
+    publication_id: UUID
+    # The service applies the 2 MiB limit to encoded bytes as well.
+    text: str = Field(max_length=2 * 1024 * 1024)
+
+
+class ArtifactCapabilitiesDTO(BaseModel):
+    editing_enabled: bool
+    preview_enabled: bool
+
+
+class ArtifactEditConflictDetail(BaseModel):
+    message: Literal["Artifact publication conflict"] = "Artifact publication conflict"
+    current_version_id: UUID | None
+
+
+class ArtifactEditConflictResponse(BaseModel):
+    detail: ArtifactEditConflictDetail

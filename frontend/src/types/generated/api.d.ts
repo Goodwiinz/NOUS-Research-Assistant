@@ -1338,6 +1338,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Artifact Capabilities
+         * @description Browser controls follow the same default-off flags as the server.
+         */
+        get: operations["artifact_capabilities_api_v1_artifacts_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/projects/{project_id}": {
         parameters: {
             query?: never;
@@ -1434,6 +1454,23 @@ export interface paths {
         get: operations["version_content_api_v1_artifacts_versions__version_id__content_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifacts/{artifact_id}/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Edit Artifact */
+        post: operations["edit_artifact_api_v1_artifacts__artifact_id__edits_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11817,6 +11854,28 @@ export interface components {
              */
             sort_order: string;
         };
+        /** ArtifactCapabilitiesDTO */
+        ArtifactCapabilitiesDTO: {
+            /** Editing Enabled */
+            editing_enabled: boolean;
+            /** Preview Enabled */
+            preview_enabled: boolean;
+        };
+        /** ArtifactEditConflictDetail */
+        ArtifactEditConflictDetail: {
+            /** Current Version Id */
+            current_version_id: string | null;
+            /**
+             * Message
+             * @default Artifact publication conflict
+             * @constant
+             */
+            message: "Artifact publication conflict";
+        };
+        /** ArtifactEditConflictResponse */
+        ArtifactEditConflictResponse: {
+            detail: components["schemas"]["ArtifactEditConflictDetail"];
+        };
         /** ArtifactProvenance */
         ArtifactProvenance: {
             /** Code Revision */
@@ -15304,6 +15363,21 @@ export interface components {
             document?: components["schemas"]["DocumentResponse"] | null;
             /** Exists */
             exists: boolean;
+        };
+        /** EditArtifactVersionRequest */
+        EditArtifactVersionRequest: {
+            /**
+             * Expected Parent Version Id
+             * Format: uuid
+             */
+            expected_parent_version_id: string;
+            /**
+             * Publication Id
+             * Format: uuid
+             */
+            publication_id: string;
+            /** Text */
+            text: string;
         };
         /**
          * EncryptionStatusResponse
@@ -26983,6 +27057,26 @@ export interface operations {
             };
         };
     };
+    artifact_capabilities_api_v1_artifacts_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactCapabilitiesDTO"];
+                };
+            };
+        };
+    };
     project_artifacts_api_v1_artifacts_projects__project_id__get: {
         parameters: {
             query?: never;
@@ -27158,6 +27252,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_artifact_api_v1_artifacts__artifact_id__edits_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditArtifactVersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactVersionDTO"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactEditConflictResponse"];
                 };
             };
             /** @description Validation Error */
