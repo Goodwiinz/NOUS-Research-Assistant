@@ -1498,6 +1498,184 @@ test('unsupported attachment passes only with the failed chip, the status notice
   await assert.rejects(scenario.run(noNotice.session, noNotice.evidence), /Remove failed attachments before sending/);
 });
 
+/**
+ * /chat sidebar and composer as the live frontend renders them:
+ * - frontend/src/components/chat/ChatSidebar.tsx:307 `<input aria-label="Search threads">`
+ * - ChatSidebar.tsx:454 thread rows are `button.sb-conv`; their text is the thread title
+ * - frontend/src/components/chat/ChatInput.tsx:768 the composer textbox is `aria-label="Message"`
+ * - frontend/src/hooks/chat/useChatSession.ts:803-818 an unavailable `?thread=`
+ *   falls back to the newest listed thread, shows toast.error('That
+ *   conversation is no longer available.') (react-hot-toast: role="status")
+ *   and router.replace()s the URL
+ * The workspace whose threads the sidebar lists is resolved the way
+ * frontend/src/services/workspaceService.ts _resolveDefaultWorkspace does:
+ * highest collection_count + conversation_count from GET /api/v2/workspaces,
+ * first on a tie. A localStorage cache planted by a test is ignored because
+ * frontend/src/stores/authStore.ts observeIdentity() clears it on every page
+ * load (clearWorkspaceServiceCache).
+ */
+function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = 'fallback' } = {}) {
+  const state = {
+    workspaces: workspaces.map((workspace) => ({ ...workspace })),
+    conversations: new Map(),
+    threads: new Map(),
+    registered: [],
+    posts: [],
+    threadId: null,
+    search: '',
+    drafts: new Map(),
+    toasts: [],
+  };
+  let nextId = 1;
+  const id = () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
+  const score = (workspace) => (workspace.collection_count ?? 0) + (workspace.conversation_count ?? 0);
+  const appWorkspace = () => state.workspaces.reduce((best, current) => (score(current) > score(best) ? current : best), state.workspaces[0]);
+  const workspaceThreads = () => [...state.threads.values()].filter((thread) => state.conversations.get(thread.conversationId) === appWorkspace().id);
+  const listedThreads = () => (sidebarLists ? workspaceThreads().filter((thread) => thread.title.includes(state.search)) : []);
+  const visibleWhen = (count, onClick) => ({
+    first: () => ({
+      waitFor: async ({ state: wanted }) => {
+        if (wanted === 'visible' && count() === 0) throw new Error('synthetic locator timeout');
+      },
+      click: async () => onClick?.(),
+    }),
+    count: async () => count(),
+  });
+  const page = {
+    url: () => `http://127.0.0.1:3000/chat${state.threadId ? `?thread=${state.threadId}` : ''}`,
+    // A planted default-workspace cache is wiped on load by the live app, so
+    // the fake ignores it as well.
+    evaluate: async () => ({}),
+    locator: (selector) => {
+      if (selector === 'button.sb-conv') {
+        return {
+          filter: ({ hasText }) => visibleWhen(
+            () => listedThreads().filter((thread) => thread.title.includes(hasText)).length,
+            () => {
+              const target = listedThreads().find((thread) => thread.title.includes(hasText));
+              if (!target) throw new Error('no sidebar row to click');
+              state.threadId = target.id;
+            }
+          ),
+        };
+      }
+      throw new Error(`unexpected locator ${selector}`);
+    },
+    getByLabel: (label) => {
+      if (label === 'Search threads') return { fill: async (value) => { state.search = value; }, inputValue: async () => state.search };
+      throw new Error(`unexpected getByLabel ${label}`);
+    },
+    getByRole: (role, options = {}) => {
+      if (role === 'textbox' && options.name === 'Message') {
+        return {
+          fill: async (value) => { state.drafts.set(state.threadId, value); },
+          inputValue: async () => state.drafts.get(state.threadId) ?? '',
+        };
+      }
+      if (role === 'status') return { filter: ({ hasText }) => visibleWhen(() => state.toasts.filter((text) => text.includes(hasText)).length) };
+      throw new Error(`unexpected getByRole ${role}`);
+    },
+  };
+  const session = {
+    config: { timeoutMs: 60 },
+    page,
+    ledger: {
+      requireOwned: (kind, fixtureId) => {
+        if (!state.registered.some(([k, i]) => k === kind && i === fixtureId)) throw new Error(`unowned ${kind} ${fixtureId}`);
+      },
+    },
+    login: async () => page,
+    goto: async (path) => {
+      const requested = new URL(path, 'http://127.0.0.1:3000').searchParams.get('thread');
+      if (requested && !state.threads.has(requested)) {
+        if (staleRecovery === 'none') {
+          state.threadId = requested;
+        } else {
+          const newest = workspaceThreads().at(-1);
+          state.threadId = newest?.id ?? null;
+          if (staleRecovery === 'fallback') state.toasts.push('That conversation is no longer available.');
+        }
+      } else {
+        state.threadId = requested;
+      }
+      return { status: () => 200 };
+    },
+    registerFixture: (kind, fixtureId, metadata) => state.registered.push([kind, fixtureId, metadata]),
+    request: async (path, options = {}) => {
+      const method = options.method ?? 'GET';
+      if (method === 'GET' && path === '/api/v2/workspaces') return { status: 200, data: state.workspaces.map((workspace) => ({ ...workspace })) };
+      const threadDetail = /^\/api\/v2\/threads\/([^/?]+)$/.exec(path);
+      if (method === 'GET' && threadDetail) {
+        if (state.threads.has(threadDetail[1])) return { status: 200, data: { id: threadDetail[1] } };
+        const error = new Error('Request failed (404)');
+        error.status = 404;
+        throw error;
+      }
+      if (method !== 'POST') throw new Error(`unexpected request ${method} ${path}`);
+      state.posts.push(path);
+      if (path === '/api/v2/workspaces') {
+        const workspace = { id: id(), name: options.json.name, collection_count: 0, conversation_count: 0 };
+        state.workspaces.push(workspace);
+        return { status: 201, data: { id: workspace.id } };
+      }
+      const conversation = /^\/api\/v2\/workspaces\/([^/]+)\/conversations$/.exec(path);
+      if (conversation) {
+        const conversationId = id();
+        state.conversations.set(conversationId, conversation[1]);
+        const workspace = state.workspaces.find((item) => item.id === conversation[1]);
+        if (workspace) workspace.conversation_count = (workspace.conversation_count ?? 0) + 1;
+        return { status: 201, data: { id: conversationId } };
+      }
+      if (path === '/api/v2/threads') {
+        const threadId = id();
+        state.threads.set(threadId, { id: threadId, title: options.json.title, conversationId: options.json.conversation_id });
+        return { status: 201, data: { id: threadId } };
+      }
+      if (path === '/api/v2/messages') return { status: 201, data: { id: id() } };
+      throw new Error(`unexpected request POST ${path}`);
+    },
+  };
+  return { state, session, evidence: { fixturePrefix: 'NOUS QA t1' } };
+}
+
+const MY_WORKSPACE = '11111111-1111-4111-8111-111111111111';
+const BUSY_WORKSPACE = '22222222-2222-4222-8222-222222222222';
+
+test('history scenario builds its fixtures inside the workspace /chat opens and never registers that workspace (Q-I1)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.history-search-and-draft-isolation');
+  assert.ok(scenario, 'history scenario must remain registered');
+  const journey = fakeHistoryJourney({ workspaces: [
+    { id: MY_WORKSPACE, name: 'My Workspace', collection_count: 0, conversation_count: 1 },
+    { id: BUSY_WORKSPACE, name: 'Research', collection_count: 2, conversation_count: 3 },
+  ] });
+  const result = await scenario.run(journey.session, journey.evidence);
+  assert.match(result.assertion, /workspace \/chat opens/);
+  assert.deepEqual(
+    journey.state.posts.filter((path) => path.includes('/conversations')),
+    [`/api/v2/workspaces/${BUSY_WORKSPACE}/conversations`, `/api/v2/workspaces/${BUSY_WORKSPACE}/conversations`]
+  );
+  assert.ok(!journey.state.posts.includes('/api/v2/workspaces'), 'the scenario must not create a workspace of its own');
+  assert.deepEqual(journey.state.registered.map(([kind]) => kind), ['conversation', 'thread', 'conversation', 'thread']);
+});
+
+test('history scenario keeps the first workspace on a score tie, as the frontend does (Q-I1)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.history-search-and-draft-isolation');
+  const journey = fakeHistoryJourney({ workspaces: [
+    { id: MY_WORKSPACE, name: 'My Workspace', collection_count: 1, conversation_count: 1 },
+    { id: BUSY_WORKSPACE, name: 'Research', collection_count: 0, conversation_count: 2 },
+  ] });
+  await scenario.run(journey.session, journey.evidence);
+  assert.ok(journey.state.posts.every((path) => !path.includes('/conversations') || path === `/api/v2/workspaces/${MY_WORKSPACE}/conversations`));
+});
+
+test('history scenario fails fast and names the missing sidebar row (Q-I1)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.history-search-and-draft-isolation');
+  const journey = fakeHistoryJourney({ workspaces: [{ id: MY_WORKSPACE, name: 'My Workspace', collection_count: 0, conversation_count: 1 }], sidebarLists: false });
+  const started = Date.now();
+  await assert.rejects(scenario.run(journey.session, journey.evidence), /Sidebar row "NOUS QA t1 history-a" did not appear within \d+ms/);
+  assert.ok(Date.now() - started < journey.session.config.timeoutMs, 'the sidebar wait must be bounded below the scenario timeout');
+});
+
 test('idempotency oracle rejects a duplicate persisted row even when IDs are echoed', () => {
   const row = { client_message_id: 'cmid-1', content: 'exact content' };
   assert.throws(() => assertIdempotentMessage({

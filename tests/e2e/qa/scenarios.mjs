@@ -158,10 +158,14 @@ async function makeThread(session, evidence, title = 'lifecycle', options = {}) 
   if (typeof session.login === 'function') await session.login();
   const prefix = evidence.fixturePrefix;
   let workspaceId = options.workspaceId ?? null;
-  if (workspaceId) {
-    // The chat UI resolves /chat against the account's default workspace. A
-    // second workspace would be invisible in the same sidebar, so callers
-    // that exercise history/drafts must explicitly reuse an owned workspace.
+  if (options.hostWorkspaceId) {
+    // An existing account workspace (see appSelectedWorkspaceId). Only the
+    // conversation and thread created below are owned and cleaned up; the
+    // workspace itself is never registered.
+    workspaceId = String(options.hostWorkspaceId);
+    assertThat(UUID.test(workspaceId), 'Host workspace id must be a UUID');
+  } else if (workspaceId) {
+    // Reuse of a workspace this campaign created earlier.
     session.ledger.requireOwned('workspace', workspaceId);
   } else {
     const workspaceResponse = await session.request('/api/v2/workspaces', {
@@ -191,24 +195,25 @@ async function makeThread(session, evidence, title = 'lifecycle', options = {}) 
   return { workspaceId, conversationId, threadId };
 }
 
-async function setDefaultWorkspaceCache(page, workspaceId) {
-  return page.evaluate((id) => {
-    const keys = ['default-workspace-object', 'default-workspace-cached-at', 'default-workspace-id'];
-    const previous = Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)]));
-    localStorage.setItem('default-workspace-object', JSON.stringify({ id }));
-    localStorage.setItem('default-workspace-cached-at', String(Date.now()));
-    localStorage.setItem('default-workspace-id', id);
-    return previous;
-  }, workspaceId);
-}
-
-async function restoreDefaultWorkspaceCache(page, previous) {
-  await page.evaluate((values) => {
-    for (const [key, value] of Object.entries(values ?? {})) {
-      if (value === null || value === undefined) localStorage.removeItem(key);
-      else localStorage.setItem(key, value);
-    }
-  }, previous);
+/**
+ * The workspace /chat will open. workspaceService._resolveDefaultWorkspace
+ * (frontend/src/services/workspaceService.ts) lists GET /api/v2/workspaces
+ * and keeps the one with the highest collection_count + conversation_count,
+ * the first on a tie. Its localStorage cache is cleared on every page load by
+ * authStore.observeIdentity (clearWorkspaceServiceCache), so a planted cache
+ * entry is never honored: fixtures the sidebar must list are created inside
+ * this workspace instead. It belongs to the account and is never registered
+ * for cleanup.
+ */
+async function appSelectedWorkspaceId(session) {
+  if (typeof session.login === 'function') await session.login();
+  const response = await session.request('/api/v2/workspaces', { target: 'backend' });
+  const workspaces = Array.isArray(response.data) ? response.data : [];
+  assertThat(workspaces.length > 0, 'The account has no workspace for /chat to open');
+  const score = (workspace) => (workspace?.collection_count ?? 0) + (workspace?.conversation_count ?? 0);
+  const selected = workspaces.reduce((best, current) => (score(current) > score(best) ? current : best), workspaces[0]);
+  assertThat(UUID.test(String(selected?.id)), 'Workspace list did not expose a UUID id for the app-selected workspace');
+  return String(selected.id);
 }
 
 async function assertTranscriptContains(page, text, label, timeoutMs = 10_000) {
@@ -292,7 +297,6 @@ const HITL_DENIED_TEXT = 'Action cancelled by user';
 async function driveProjectCreation(session, evidence, decision) {
   const fixture = await makeThread(session, evidence, `project ${decision}`);
   const page = await session.login();
-  const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
   const projectName = `${evidence.fixturePrefix} project ${decision}`;
   const findProject = async () => {
     const response = await session.request(`/api/v1/projects?search=${encodeURIComponent(projectName)}&limit=10`, { target: 'backend' });
@@ -338,7 +342,6 @@ async function driveProjectCreation(session, evidence, decision) {
         // The original failure is the result; a lookup error must not mask it.
       }
     }
-    await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
   }
 }
 
@@ -603,29 +606,27 @@ const scenarios = [
     async run(session, evidence) {
       const fixture = await makeThread(session, evidence, 'send');
       const page = await session.login();
-      const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
       const token = 'KestrelAck42';
-      try {
-        await session.goto(threadUrl(fixture.threadId));
-        const content = `Reply exactly with ${token} for ${evidence.fixturePrefix}.`;
-        evidence.consumeModelTurn();
-        await sendFromComposer(page, content);
-        await assertTranscriptContains(page, content, 'Sent message', session.config.timeoutMs);
-        await evidence.checkpoint('chat.sent');
-        await assertAssistantContains(page, token, 'Streamed answer', session.config.timeoutMs);
-        await evidence.checkpoint('chat.streamed');
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: session.config.timeoutMs });
-        await assertTranscriptContains(page, content, 'Reloaded user message', session.config.timeoutMs);
-        await assertAssistantContains(page, token, 'Reloaded answer', session.config.timeoutMs);
-        await evidence.checkpoint('chat.reloaded');
-        const messages = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=20`, { target: 'backend' });
-        const values = messages.data?.messages ?? messages.data?.items ?? [];
-        assertThat(values.some((item) => item.role === 'user' && item.content === content), 'Composer message was not persisted on the owned thread');
-        assertThat(values.some((item) => item.role === 'assistant' && String(item.content ?? '').includes(token)), 'Streamed answer was not persisted on the owned thread');
-        return { assertion: 'Composer send streamed an answer and both rows survived reload', evidence: [{ threadId: fixture.threadId }] };
-      } finally {
-        await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
-      }
+      // /chat?thread=<id> is honored for any owned thread (useChatSession
+      // restores it by id), so the fixture's own workspace needs no sidebar
+      // listing here.
+      await session.goto(threadUrl(fixture.threadId));
+      const content = `Reply exactly with ${token} for ${evidence.fixturePrefix}.`;
+      evidence.consumeModelTurn();
+      await sendFromComposer(page, content);
+      await assertTranscriptContains(page, content, 'Sent message', session.config.timeoutMs);
+      await evidence.checkpoint('chat.sent');
+      await assertAssistantContains(page, token, 'Streamed answer', session.config.timeoutMs);
+      await evidence.checkpoint('chat.streamed');
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: session.config.timeoutMs });
+      await assertTranscriptContains(page, content, 'Reloaded user message', session.config.timeoutMs);
+      await assertAssistantContains(page, token, 'Reloaded answer', session.config.timeoutMs);
+      await evidence.checkpoint('chat.reloaded');
+      const messages = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=20`, { target: 'backend' });
+      const values = messages.data?.messages ?? messages.data?.items ?? [];
+      assertThat(values.some((item) => item.role === 'user' && item.content === content), 'Composer message was not persisted on the owned thread');
+      assertThat(values.some((item) => item.role === 'assistant' && String(item.content ?? '').includes(token)), 'Streamed answer was not persisted on the owned thread');
+      return { assertion: 'Composer send streamed an answer and both rows survived reload', evidence: [{ threadId: fixture.threadId }] };
     },
   },
   {
@@ -687,52 +688,55 @@ const scenarios = [
     createsFixtures: true,
     mode: 'live',
     async run(session, evidence) {
-      const firstFixture = await makeThread(session, evidence, 'history-a');
-      const secondFixture = await makeThread(session, evidence, 'history-b', { workspaceId: firstFixture.workspaceId });
+      // The sidebar lists only the workspace /chat opens, so both threads are
+      // created inside it (never a workspace of the campaign's own).
+      const hostWorkspaceId = await appSelectedWorkspaceId(session);
+      const firstFixture = await makeThread(session, evidence, 'history-a', { hostWorkspaceId });
+      const secondFixture = await makeThread(session, evidence, 'history-b', { hostWorkspaceId });
       const firstTitle = `${evidence.fixturePrefix} history-a`;
       const secondTitle = `${evidence.fixturePrefix} history-b`;
       const page = await session.login();
-      const previousCache = await setDefaultWorkspaceCache(page, firstFixture.workspaceId);
-      try {
-        await session.goto(threadUrl(firstFixture.threadId));
-        const rows = page.locator('button.sb-conv');
-        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-        const search = page.getByLabel('Search threads');
-        await search.fill('history-a');
-        await rows.filter({ hasText: firstTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-        await waitForCondition(
-          async () => (await rows.filter({ hasText: secondTitle }).count()) === 0,
-          session.config.timeoutMs,
-          'History search still displayed the other owned conversation'
-        );
-        assertThat(await search.inputValue() === 'history-a', 'History search input did not retain the query');
-        const draft = `${evidence.fixturePrefix} draft only on history-a`;
-        const message = messageComposer(page);
-        await message.fill(draft);
-        assertThat(await message.inputValue() === draft, 'Draft input did not retain its thread-scoped value');
-        await search.fill('');
-        await rows.filter({ hasText: secondTitle }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-        await rows.filter({ hasText: secondTitle }).first().click();
-        await waitForCondition(
-          async () => new URL(page.url()).searchParams.get('thread') === secondFixture.threadId
-            && (await messageComposer(page).inputValue()) !== draft,
-          session.config.timeoutMs,
-          'Sidebar switch to history-b did not restore an independent draft'
-        );
-        assertThat(await messageComposer(page).inputValue() !== draft, 'Draft from history-a leaked into history-b');
-        await rows.filter({ hasText: firstTitle }).first().click();
-        await waitForCondition(
-          async () => new URL(page.url()).searchParams.get('thread') === firstFixture.threadId
-            && (await messageComposer(page).inputValue()) === draft,
-          session.config.timeoutMs,
-          'Sidebar switch back to history-a did not restore its draft'
-        );
-        assertThat(await messageComposer(page).inputValue() === draft, 'History-a draft was not restored after returning');
-        return { assertion: 'History search and in-app sidebar switching keep drafts isolated across two threads in one owned workspace', evidence: ['Search threads', 'button.sb-conv', 'Message', 'thread A/B switch', 'default workspace cache precondition'] };
-      } finally {
-        await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
-      }
+      const waitMs = innerWaitMs(session);
+      await session.goto(threadUrl(firstFixture.threadId));
+      const rows = page.locator('button.sb-conv');
+      const row = (title) => rows.filter({ hasText: title });
+      await waitVisible(row(firstTitle), `Sidebar row "${firstTitle}"`, waitMs);
+      await waitVisible(row(secondTitle), `Sidebar row "${secondTitle}"`, waitMs);
+      const search = page.getByLabel('Search threads');
+      await search.fill('history-a');
+      await waitVisible(row(firstTitle), `Sidebar row "${firstTitle}" after searching history-a`, waitMs);
+      await waitForCondition(
+        async () => (await row(secondTitle).count()) === 0,
+        waitMs,
+        'History search still displayed the other owned conversation'
+      );
+      assertThat(await search.inputValue() === 'history-a', 'History search input did not retain the query');
+      const draft = `${evidence.fixturePrefix} draft only on history-a`;
+      const message = messageComposer(page);
+      await message.fill(draft);
+      assertThat(await message.inputValue() === draft, 'Draft input did not retain its thread-scoped value');
+      await search.fill('');
+      await waitVisible(row(secondTitle), `Sidebar row "${secondTitle}" after clearing the search`, waitMs);
+      await row(secondTitle).first().click();
+      await waitForCondition(
+        async () => new URL(page.url()).searchParams.get('thread') === secondFixture.threadId
+          && (await messageComposer(page).inputValue()) !== draft,
+        waitMs,
+        'Sidebar switch to history-b did not restore an independent draft'
+      );
+      assertThat(await messageComposer(page).inputValue() !== draft, 'Draft from history-a leaked into history-b');
+      await row(firstTitle).first().click();
+      await waitForCondition(
+        async () => new URL(page.url()).searchParams.get('thread') === firstFixture.threadId
+          && (await messageComposer(page).inputValue()) === draft,
+        waitMs,
+        'Sidebar switch back to history-a did not restore its draft'
+      );
+      assertThat(await messageComposer(page).inputValue() === draft, 'History-a draft was not restored after returning');
+      return {
+        assertion: 'History search and in-app sidebar switching keep drafts isolated across two owned threads in the workspace /chat opens',
+        evidence: ['Search threads', 'button.sb-conv', 'Message', 'thread A/B switch', { hostWorkspaceId }],
+      };
     },
   },
   {
@@ -1079,29 +1083,24 @@ const scenarios = [
       assertThat(persistedValues.length === expectedTranscript.length, `Missing-thread fixture persisted an unexpected number of messages (${persistedValues.length})`);
       assertThat(persistedValues.every((item, index) => item?.role === expectedTranscript[index].role && item?.content === expectedTranscript[index].content), 'Missing-thread fixture transcript did not match its exact expected message');
       const page = await session.login();
-      const previousCache = await setDefaultWorkspaceCache(page, fixture.workspaceId);
-      try {
-        const response = await session.goto('/chat?thread=00000000-0000-4000-8000-000000000000');
-        const path = new URL(session.page.url()).pathname;
-        assertThat(response?.status() === undefined || response.status() < 500, 'Missing thread produced a server error page');
-        assertThat(path.startsWith('/chat'), `Unexpected missing-thread navigation: ${path}`);
-        await waitForCondition(
-          () => new URL(page.url()).searchParams.get('thread') === fixture.threadId,
-          session.config.timeoutMs,
-          'Missing thread did not recover to the explicitly owned workspace fixture'
-        );
-        const transcript = page.locator('[data-role="user"], [data-role="assistant"]');
-        await transcript.first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
-        const renderedMessages = await transcript.evaluateAll((nodes) => nodes.map((node) => {
-          const body = node.querySelector('.nous-chat-body, [data-quotable]');
-          return (body?.textContent ?? node.textContent ?? '').trim();
-        }));
-        assertThat(renderedMessages.length === expectedTranscript.length, `Missing-thread recovery rendered unexpected transcript entries (${renderedMessages.length})`);
-        assertThat(renderedMessages.every((text, index) => text === expectedTranscript[index].content), 'Missing-thread recovery rendered an unexpected or reordered transcript message');
-        return { assertion: 'Missing thread recovers inside the explicitly owned workspace and renders exactly its owned transcript', evidence: [{ path, recoveredThreadId: fixture.threadId, expectedCount: expectedTranscript.length, renderedCount: renderedMessages.length }] };
-      } finally {
-        await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
-      }
+      const response = await session.goto('/chat?thread=00000000-0000-4000-8000-000000000000');
+      const path = new URL(session.page.url()).pathname;
+      assertThat(response?.status() === undefined || response.status() < 500, 'Missing thread produced a server error page');
+      assertThat(path.startsWith('/chat'), `Unexpected missing-thread navigation: ${path}`);
+      await waitForCondition(
+        () => new URL(page.url()).searchParams.get('thread') === fixture.threadId,
+        session.config.timeoutMs,
+        'Missing thread did not recover to the explicitly owned workspace fixture'
+      );
+      const transcript = page.locator('[data-role="user"], [data-role="assistant"]');
+      await transcript.first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+      const renderedMessages = await transcript.evaluateAll((nodes) => nodes.map((node) => {
+        const body = node.querySelector('.nous-chat-body, [data-quotable]');
+        return (body?.textContent ?? node.textContent ?? '').trim();
+      }));
+      assertThat(renderedMessages.length === expectedTranscript.length, `Missing-thread recovery rendered unexpected transcript entries (${renderedMessages.length})`);
+      assertThat(renderedMessages.every((text, index) => text === expectedTranscript[index].content), 'Missing-thread recovery rendered an unexpected or reordered transcript message');
+      return { assertion: 'Missing thread recovers inside the explicitly owned workspace and renders exactly its owned transcript', evidence: [{ path, recoveredThreadId: fixture.threadId, expectedCount: expectedTranscript.length, renderedCount: renderedMessages.length }] };
     },
   },
   {
