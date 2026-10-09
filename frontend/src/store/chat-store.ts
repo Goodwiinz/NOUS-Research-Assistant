@@ -22,6 +22,10 @@ import { workspaceService } from '@/services/workspaceService';
 import type { ChatStore } from './chat/types';
 import { initialState } from './chat/initialState';
 import {
+  discardPersistedSelection,
+  mergePersistedChatState,
+} from './chat/persistedSelection';
+import {
   captureChatSession,
   resetChatSession,
   setActiveAbortController,
@@ -63,6 +67,7 @@ export const useChatStore = create<ChatStore>()(
 
       reset: () => {
         resetChatSession();
+        discardPersistedSelection();
         set(initialState);
       },
 
@@ -70,9 +75,9 @@ export const useChatStore = create<ChatStore>()(
         const isCurrentSession = captureChatSession();
         try {
           console.log('[ChatStore] Initializing default workspace...');
-          const { currentWorkspaceId } = get();
+          const { currentWorkspaceId, ownerUserId } = get();
           const workspace =
-            await workspaceService.getOrCreateDefaultWorkspace();
+            await workspaceService.getOrCreateDefaultWorkspace(ownerUserId);
           if (!isCurrentSession()) return;
 
           // Keep local workspace list in sync with bootstrap result.
@@ -127,12 +132,16 @@ export const useChatStore = create<ChatStore>()(
       name: 'chat-storage',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        // Only persist these fields
+        // Only persist these fields. The selection is stamped with the
+        // account it belongs to and held back at hydration until that
+        // account is published again (chat/persistedSelection.ts).
+        ownerUserId: state.ownerUserId,
         currentWorkspaceId: state.currentWorkspaceId,
         currentConversationId: state.currentConversationId,
         currentThreadId: state.currentThreadId,
         sidebarCollapsed: state.sidebarCollapsed,
       }),
+      merge: mergePersistedChatState,
       onRehydrateStorage: () => () => {
         // Reset streaming state on rehydration to prevent stale UI
         setActiveAbortController(null);

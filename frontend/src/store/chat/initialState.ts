@@ -20,6 +20,7 @@ export const initialState: ChatState = {
   currentWorkspaceId: null,
   currentConversationId: null,
   currentThreadId: null,
+  ownerUserId: null,
   workspaces: [],
   conversations: {},
   threads: {},

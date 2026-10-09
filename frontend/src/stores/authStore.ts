@@ -3,6 +3,11 @@ import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/clie
 import { api } from '@/services/api-client';
 import { clearWorkspaceServiceCache } from '@/services/workspaceService';
 import { getAppQueryClient } from '@/lib/query-client';
+import {
+  clearClientOwner,
+  readClientOwner,
+  writeClientOwner,
+} from '@/lib/client-owner';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { resetAccountSession } from '@/lib/account-session';
 import { discardForeignChatAuthRecovery } from '@/hooks/chat/chatAuthRecovery';
@@ -116,27 +121,64 @@ export class SignInSupersededError extends Error {
   }
 }
 
+/**
+ * One step of an account change. Storage can refuse a write (quota) or any
+ * access (SecurityError), and zustand's persist middleware forwards that
+ * synchronous failure out of setState, so one persisted store could
+ * otherwise abort every step after it. The in-memory part of a failed step
+ * has already happened by the time it throws; log it and keep going.
+ */
+function attempt(step: string, run: () => void): void {
+  try {
+    run();
+  } catch (error) {
+    console.warn(`[Auth] Could not ${step} during an account change`, error);
+  }
+}
+
 function clearUserScopedClientState(): void {
-  // Revoke async ownership before resetting any observable state. Abort alone
-  // is insufficient: an already queued callback or decoded body can still run.
-  resetAccountSession();
-  useChatStore.getState().reset();
-  useAgentChatStore.getState().reset();
-  useProjectStore.getState().reset();
-  useProjectChatStore.getState().reset();
-  usePipelineStore.getState().reset();
-  useCitationStore.getState().clearCitations();
-  useResearchEngineStore.setState(useResearchEngineStore.getInitialState());
-  useAgentActivityStore.setState({ runs: {}, currentThreadId: null });
-  useNotificationStore.getState().clearAll();
-  useLLMChatStore.getState().setCopiedMessageId(null);
-  clearWorkspaceServiceCache();
-  useArtifactPanelStore.getState().reset();
-  // The root QueryClient and APIClient singleton survive client-side auth
-  // transitions, so neither may retain the previous user's private data or
-  // bearer token after a session is rejected.
-  getAppQueryClient()?.clear();
+  // Storage-free and security-critical first, so no later failure can skip
+  // them: the APIClient singleton and root QueryClient survive client-side
+  // auth transitions and must not keep the previous user's bearer token or
+  // private data; the account signal revokes async ownership before any
+  // observable state resets (abort alone is insufficient: an already queued
+  // callback or decoded body can still run).
   api.clearAuth();
+  getAppQueryClient()?.clear();
+  resetAccountSession();
+  attempt('reset the chat store', () => useChatStore.getState().reset());
+  attempt('reset the agent chat store', () =>
+    useAgentChatStore.getState().reset()
+  );
+  attempt('reset the project store', () => useProjectStore.getState().reset());
+  attempt('reset the project chat store', () =>
+    useProjectChatStore.getState().reset()
+  );
+  attempt('reset the pipeline store', () =>
+    usePipelineStore.getState().reset()
+  );
+  attempt('clear citations', () => useCitationStore.getState().clearCitations());
+  attempt('reset the research engine store', () =>
+    useResearchEngineStore.setState(useResearchEngineStore.getInitialState())
+  );
+  attempt('reset agent activity', () =>
+    useAgentActivityStore.setState({ runs: {}, currentThreadId: null })
+  );
+  attempt('clear notifications', () =>
+    useNotificationStore.getState().clearAll()
+  );
+  attempt('clear the copied message id', () =>
+    useLLMChatStore.getState().setCopiedMessageId(null)
+  );
+  attempt('clear the workspace cache', clearWorkspaceServiceCache);
+  // Nobody vouches for the persisted caches once they have been cleared, so
+  // forget who owned them: the next sign-in, by anyone, clears again instead
+  // of trusting whatever a late write put back. The next verified profile
+  // re-stamps its own account.
+  attempt('forget the client owner', clearClientOwner);
+  attempt('reset the artifact panel', () =>
+    useArtifactPanelStore.getState().reset()
+  );
 }
 
 function clearSession(): void {
@@ -171,7 +213,13 @@ function observeIdentity(userId: string): void {
   // A rejected session keeps its staged chat draft for the same user's
   // re-login, so clearSession() cannot drop it; any other identity must.
   discardForeignChatAuthRecovery(userId);
-  const previousId = useAuthStore.getState().user?.id ?? sessionUserId;
+  // In-memory identity answers first: a tab still holding A must clear on
+  // B's event even when another tab already re-stamped the shared storage as
+  // B. Only a fresh load, where memory knows nothing, consults the persisted
+  // owner stamp so the same account keeps its caches across a reload. An
+  // unknown stamp (first deploy, storage denied) counts as a different owner.
+  const previousId =
+    useAuthStore.getState().user?.id ?? sessionUserId ?? readClientOwner();
   if (previousId !== userId) {
     authRevision += 1;
     profileFetchInFlight = null;
@@ -186,6 +234,23 @@ function observeIdentity(userId: string): void {
     });
   }
   sessionUserId = userId;
+}
+
+/**
+ * A verified account (getUser + /auth/me, not merely a cookie session) is
+ * about to be published. Only now is the origin stamped with it, so the
+ * stamp and the payload owners share one trust level, and the persisted
+ * chat selection is handed over: the chat store adopts it only if it was
+ * written for this same account and stamps its later writes with it, so
+ * the consumers that react to `isAuthenticated` already see a settled
+ * selection and never a previous account's. A storage failure while
+ * adopting must not tear down a login the backend has just verified.
+ */
+function publishVerifiedAccount(userId: string): void {
+  writeClientOwner(userId);
+  attempt('adopt the persisted chat selection', () =>
+    useChatStore.getState().adoptPersistedSelection(userId)
+  );
 }
 
 function scheduleProfileFetch(): void {
@@ -277,6 +342,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         if (activeSignIn !== attempt || revision !== authRevision)
           throw new SignInSupersededError();
         observeIdentity(profileData.user.id);
+        publishVerifiedAccount(profileData.user.id);
         set({
           user: profileData.user,
           organization: profileData.organization ?? null,
@@ -527,6 +593,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         });
         if (revision !== authRevision) return;
         observeIdentity(profileData.user.id);
+        publishVerifiedAccount(profileData.user.id);
 
         set({
           user: profileData.user,

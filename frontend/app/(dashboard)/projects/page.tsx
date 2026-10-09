@@ -171,7 +171,11 @@ export default function ProjectsPage() {
     const workspaceId =
       currentWorkspace?.id ??
       currentWorkspaceId ??
-      (await workspaceService.getOrCreateDefaultWorkspace()).id;
+      (
+        await workspaceService.getOrCreateDefaultWorkspace(
+          useAuthStore.getState().user?.id ?? null
+        )
+      ).id;
     const project = await createProject({
       workspace_id: workspaceId,
       name: payload.name,
