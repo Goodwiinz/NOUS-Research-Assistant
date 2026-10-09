@@ -13,6 +13,11 @@ this worker's attempt is still the live one. With ``lock=True`` the rows stay
 locked (Document -> ProcessingJob, the order deletion uses) until the caller
 commits, so a cancellation cannot land between the check and the commit.
 Parsing, model and network work belongs outside the lock.
+
+``end_processing_job`` serves writers that end a job from outside the stage
+loop (lost-job reconciler, ``on_failure``, cancel): under the same locks it
+re-checks the job, then fails or cancels it and fails its ingestion document
+in one transaction.
 """
 
 from __future__ import annotations
@@ -34,7 +39,8 @@ NON_TERMINAL_JOB_STATUSES: frozenset[JobStatus] = frozenset(
 ACTIVE_JOB_STATUSES: frozenset[JobStatus] = frozenset(
     {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING}
 )
-_ACTIVE_DOCUMENT_STATUSES = (
+# ``not Document.is_processing_complete``: a document an ingestion may still end.
+ACTIVE_DOCUMENT_STATUSES = (
     ProcessingStatus.PENDING,
     ProcessingStatus.PROCESSING,
     ProcessingStatus.RETRYING,
@@ -140,7 +146,7 @@ def fail_document_unless_owned(
         ended_job.job_type != JobType.DOCUMENT_INGESTION
         or document is None
         or document.is_deleted
-        or document.processing_status not in _ACTIVE_DOCUMENT_STATUSES
+        or document.processing_status not in ACTIVE_DOCUMENT_STATUSES
     ):
         return False
     if any(

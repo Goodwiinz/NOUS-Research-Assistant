@@ -19,6 +19,9 @@ from src.models.base import Base
 from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.tasks.processing_lifecycle import (
+    ACTIVE_DOCUMENT_STATUSES,
+    ACTIVE_JOB_STATUSES,
+    NON_TERMINAL_JOB_STATUSES,
     ProcessingStopped,
     end_processing_job,
     require_active_ingestion,
@@ -174,21 +177,32 @@ def test_end_processing_job_refuses_a_job_someone_else_moved(
 ) -> None:
     job_id, job, doc = _seed(db)
     doc.processing_status = ProcessingStatus.PROCESSING
-    if change == "finished":
-        job.status = JobStatus.COMPLETED
-    elif change == "newer_attempt":
-        job.celery_task_id = "task-2"
-    else:
-        job.soft_delete()
     db.commit()
-    before = (job.status, job.celery_task_id)
+    # This session now holds the live attempt in memory...
+    assert (job.status, job.celery_task_id, job.is_deleted) == (
+        JobStatus.RUNNING,
+        TASK,
+        False,
+    )
+    # ...and someone else moves it and commits, leaving that snapshot stale.
+    other = Session(bind=db.get_bind())
+    moved: Any = other.get(ProcessingJob, job_id)
+    if change == "finished":
+        moved.status = JobStatus.COMPLETED
+    elif change == "newer_attempt":
+        moved.celery_task_id = "task-2"
+    else:
+        moved.soft_delete()
+    other.commit()
+    after = (moved.status, moved.celery_task_id, moved.is_deleted)
+    other.close()
 
     assert not end_processing_job(
         db, job_id, message="late", expected_task_ids=(None, TASK)
     )
     db.rollback()
 
-    assert (job.status, job.celery_task_id) == before
+    assert (job.status, job.celery_task_id, job.is_deleted) == after
     assert doc.processing_status == ProcessingStatus.PROCESSING
 
 
@@ -218,3 +232,18 @@ def test_end_processing_job_leaves_documents_it_does_not_own(
 
     assert job.status == JobStatus.FAILED
     assert doc.processing_status == ProcessingStatus.PROCESSING
+
+
+def test_status_sets_match_the_model_predicates() -> None:
+    """The helper's status sets stay in step with the models' own predicates."""
+    assert NON_TERMINAL_JOB_STATUSES == {
+        status for status in JobStatus if not ProcessingJob(status=status).is_finished
+    }
+    assert ACTIVE_JOB_STATUSES == {
+        status for status in JobStatus if ProcessingJob(status=status).is_active
+    }
+    assert set(ACTIVE_DOCUMENT_STATUSES) == {
+        status
+        for status in ProcessingStatus
+        if not Document(processing_status=status).is_processing_complete
+    }
