@@ -8,6 +8,7 @@ NOUS memory, prompts or state is exposed.
 
 import json
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Any, cast
 from uuid import UUID
 
@@ -20,6 +21,11 @@ from src.models.agent_runtime_snapshot import AgentRuntimeSnapshot
 from src.models.integration_context_selection import IntegrationContextSelection
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.project_memory import ProjectMemory
+from src.models.project_skill import (
+    ProjectSkill,
+    ProjectSkillVersion,
+    ProjectSkillVersionScan,
+)
 from src.models.user import User
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_selected_context import (
@@ -193,6 +199,8 @@ async def _skill_snapshot(
     *,
     include_expired: bool = False,
 ) -> Any:
+    from src.services.agent.runtime_snapshot import _snapshot_has_frozen_loader
+
     if (
         selection is None
         or not selection.skill_version_ids
@@ -218,6 +226,7 @@ async def _skill_snapshot(
         or {v.get("version_id") for v in snapshot.skill_catalog}
         != set(selection.skill_version_ids)
         or (not include_expired and not settings.PROJECT_SKILL_RUNTIME_ENABLED)
+        or (not include_expired and not _snapshot_has_frozen_loader(snapshot))
     ):
         return None
     try:
@@ -226,6 +235,54 @@ async def _skill_snapshot(
     except (KeyError, ValueError, TypeError):
         return None
     return snapshot
+
+
+async def _retained_skill_catalog(
+    db: AsyncSession, row: IntegrationContextSelection, chosen: list[str]
+) -> list[dict[str, Any]]:
+    """Retain frozen choices only while their immutable versions still pass."""
+    previous = await _skill_snapshot(db, row, include_expired=True)
+    if previous is None:
+        return []
+    retained: list[dict[str, Any]] = []
+    for item in previous.skill_catalog:
+        if item["version_id"] not in chosen:
+            continue
+        version: Any = await db.get(
+            ProjectSkillVersion, UUID(item["version_id"]), populate_existing=True
+        )
+        skill: Any = (
+            await db.get(ProjectSkill, version.skill_id, populate_existing=True)
+            if version
+            else None
+        )
+        scan: Any = await db.scalar(
+            select(ProjectSkillVersionScan)
+            .where(ProjectSkillVersionScan.version_id == UUID(item["version_id"]))
+            .order_by(
+                ProjectSkillVersionScan.created_at.desc(),
+                ProjectSkillVersionScan.id.desc(),
+            )
+            .limit(1)
+        )
+        if (
+            version is None
+            or version.is_deleted
+            or skill is None
+            or skill.is_deleted
+            or skill.project_id != row.project_id
+            or skill.normalized_name != item["name"]
+            or version.parsed_name != item["name"]
+            or version.version != item["version"]
+            or version.content_hash != item["content_hash"]
+            or sha256(version.instructions.encode("utf-8")).hexdigest()
+            != item["content_hash"]
+            or scan is None
+            or scan.scan_state != "passed"
+        ):
+            raise ContextSelectionInvalid()
+        retained.append(item)
+    return retained
 
 
 async def _select_skills(
@@ -241,7 +298,7 @@ async def _select_skills(
     chosen = list(dict.fromkeys(str(value) for value in ids))
     if len(chosen) > 32:
         raise ContextSelectionInvalid()
-    if chosen == row.skill_version_ids and not refresh:
+    if set(chosen) == set(row.skill_version_ids) and not refresh:
         return
     if not chosen:
         row.skill_version_ids = []
@@ -249,7 +306,7 @@ async def _select_skills(
         return
     if (
         refresh
-        and chosen == row.skill_version_ids
+        and set(chosen) == set(row.skill_version_ids)
         and await _skill_snapshot(db, row) is not None
     ):
         raise ContextSelectionInvalid()
@@ -261,6 +318,7 @@ async def _select_skills(
             user_id=row.user_id,
             project_id=row.project_id,
             selected_skill_version_ids=[UUID(value) for value in chosen],
+            retained_skill_catalog=await _retained_skill_catalog(db, row, chosen),
             commit=False,
         )
     except ValueError as error:

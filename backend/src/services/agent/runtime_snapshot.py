@@ -240,6 +240,7 @@ async def create_runtime_snapshot(
     thread_id: UUID | str | None = None,
     job_id: str | None = None,
     selected_skill_version_ids: list[UUID] | None = None,
+    retained_skill_catalog: list[dict[str, Any]] | None = None,
     commit: bool = True,
 ) -> RuntimeSnapshot:
     """Persist and return a frozen catalog, or the safe empty fallback.
@@ -295,7 +296,19 @@ async def create_runtime_snapshot(
         )
         if selected_skill_version_ids is not None:
             chosen = {str(value) for value in selected_skill_version_ids}
+            if len(chosen) > MAX_ACTIVE_PROJECT_SKILLS:
+                raise ValueError("Selected skill versions exceed the catalog limit")
+            if skill_runtime and retained_skill_catalog:
+                # Internal callers validate these against an owned consent snapshot,
+                # immutable version hash and latest passed scan before retaining them.
+                combined = {item["version_id"]: item for item in catalog}
+                combined.update(
+                    {item["version_id"]: item for item in retained_skill_catalog}
+                )
+                catalog = list(combined.values())
             catalog = [item for item in catalog if item["version_id"] in chosen]
+            if len({item["name"] for item in catalog}) != len(catalog):
+                raise ValueError("Only one version of each skill may be selected")
             if {item["version_id"] for item in catalog} != chosen:
                 raise ValueError("Selected skill versions are unavailable")
         conditions = {"project_skill_catalog"} if skill_runtime and catalog else set()
@@ -625,7 +638,11 @@ async def load_project_skill_from_snapshot(
     version_project_id = await session.scalar(
         select(ProjectSkill.project_id)
         .join(ProjectSkillVersion, ProjectSkill.id == ProjectSkillVersion.skill_id)
-        .where(ProjectSkillVersion.id == version.id)
+        .where(
+            ProjectSkillVersion.id == version.id,
+            ProjectSkillVersion.is_deleted.is_(False),
+            ProjectSkill.is_deleted.is_(False),
+        )
     )
     if version_project_id != snapshot.project_id:
         return _snapshot_error(

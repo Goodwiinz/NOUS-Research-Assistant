@@ -1,10 +1,11 @@
 """Real PostgreSQL migration and serialization evidence for selected skills.
 
 Run with ORCHESTRATION_TEST_DATABASE_URL configured, PYTHONPATH=backend:
-python -m pytest -o addopts='' -q <this file>
+python -m pytest -o addopts='' -q
+backend/tests/unit/services/integrations/test_selected_skills_postgres.py
 
 Mutation verified 2026-10-09: removing the conditional FOR UPDATE in
-selected_context._owned_consent makes the concurrent-load test fail with
+src/services/integrations/selected_context.py:102 makes the concurrent-load test fail with
 "load escaped consent lock". Restoring it makes the test pass. The held
 consent row also serializes browser replacement against skill loading.
 """

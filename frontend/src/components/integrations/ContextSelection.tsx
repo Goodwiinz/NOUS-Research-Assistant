@@ -9,6 +9,7 @@ import type { ApiContextOptions } from '@/types/api/integration-context-contract
 
 export const MAX_SHARED_MEMORIES = 25;
 export const MAX_SHARED_SKILLS = 32;
+type ScopedSave = SelectionSave & { ownerId: string; requestId: string };
 type SelectionSave = {
   memoryIds: string[];
   skillVersionIds?: string[];
@@ -41,17 +42,26 @@ export function ContextSelection({
       memoryIds,
       skillVersionIds,
       refreshSkills,
-    }: SelectionSave) =>
+      requestId: savedRequestId,
+    }: ScopedSave) =>
       skillVersionIds === undefined
-        ? integrationContextService.save(requestId, memoryIds)
+        ? integrationContextService.save(savedRequestId, memoryIds)
         : integrationContextService.save(
-            requestId,
+            savedRequestId,
             memoryIds,
             skillVersionIds,
             refreshSkills
           ),
-    onSuccess: (saved) => queryClient.setQueryData(queryKey, saved),
+    onSuccess: (saved, initiating) =>
+      queryClient.setQueryData(
+        ['integration-context', initiating.ownerId, initiating.requestId],
+        saved
+      ),
   });
+
+  const currentSave =
+    save.variables?.ownerId === user?.id &&
+    save.variables?.requestId === requestId;
 
   return (
     <section className="mx-auto max-w-2xl space-y-6 p-6">
@@ -73,17 +83,20 @@ export function ContextSelection({
           // A new saved selection (here or in another tab) resets the checks.
           key={`${user?.id}:${options.data.request_id}:${options.data.selected_memory_ids.join(',')}:${options.data.selected_skill_version_ids?.join(',')}:${options.data.skill_snapshot_status}:${options.data.skill_snapshot_expires_at}`}
           data={options.data}
-          saving={save.isPending}
-          onSave={(selection) => save.mutate(selection)}
+          saving={currentSave && save.isPending}
+          onSave={(selection) => {
+            if (user?.id)
+              save.mutate({ ...selection, ownerId: user.id, requestId });
+          }}
         />
       )}
-      {save.isError && (
+      {currentSave && save.isError && (
         <p role="alert">
           The selection was not saved. It may exceed the sharing limit or be out
           of date; reload and try again.
         </p>
       )}
-      {save.isSuccess && options.data && (
+      {currentSave && save.isSuccess && options.data && (
         <p role="status">
           Saved. The connected device can read{' '}
           {options.data.selected_memory_ids.length} selected memories.
@@ -185,7 +198,13 @@ function SelectionForm({
                     const next = new Set(previous);
                     if (next.has(skill.version_id))
                       next.delete(skill.version_id);
-                    else next.add(skill.version_id);
+                    else {
+                      for (const option of data.skills ?? []) {
+                        if (option.name === skill.name)
+                          next.delete(option.version_id);
+                      }
+                      next.add(skill.version_id);
+                    }
                     return next;
                   })
                 }

@@ -283,6 +283,8 @@ async def test_instruction_token_and_utf8_wire_limits_are_durable(
         "deleted-workspace",
         "missing-snapshot",
         "tampered-version",
+        "deleted-version",
+        "deleted-skill",
     ],
 )
 async def test_load_rechecks_live_authority_and_snapshot(
@@ -321,6 +323,14 @@ async def test_load_rechecks_live_authority_and_snapshot(
         await db.execute(
             update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
         )
+    elif condition == "deleted-version":
+        await db.execute(
+            update(ProjectSkillVersion)
+            .where(ProjectSkillVersion.id == chosen)
+            .values(is_deleted=True)
+        )
+    elif condition == "deleted-skill":
+        await db.execute(update(ProjectSkill).values(is_deleted=True))
     elif condition == "missing-snapshot":
         await db.execute(
             update(IntegrationContextSelection).values(runtime_snapshot_id=None)
@@ -446,3 +456,193 @@ async def test_result_budget_includes_catalog_and_all_provenance(
             "content_hash": result.content[0]["skills"][0]["content_hash"],
         }
     ]
+
+
+async def test_adding_a_skill_preserves_previously_frozen_version_after_activation_changes(
+    db: AsyncSession,
+) -> None:
+    chosen = await skill(db)
+    await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen]
+    )
+    await db.execute(update(ProjectSkill).values(active_version_id=None))
+    await db.commit()
+    second = await skill(db, "second-rubric")
+    saved = await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen, second]
+    )
+    assert saved.selected_skill_version_ids == [chosen, second]
+    result = await service.load_selected_skill(db, _grant_context(), "review")
+    assert not result.is_error and result.content[0]["version_id"] == str(chosen)
+
+
+@pytest.mark.parametrize("condition", ["expired", "blocked", "tampered"])
+async def test_refresh_revalidates_retained_versions_without_live_activation(
+    db: AsyncSession, condition: str
+) -> None:
+    chosen = await skill(db)
+    await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen]
+    )
+    await service.load_selected_skill(db, _grant_context(), "review")
+    selection = await db.scalar(select(IntegrationContextSelection))
+    assert selection is not None
+    old_snapshot = selection.runtime_snapshot_id
+    await db.execute(update(ProjectSkill).values(active_version_id=None))
+    await db.execute(
+        update(AgentRuntimeSnapshot).values(
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
+    )
+    if condition == "blocked":
+        db.add(
+            ProjectSkillVersionScan(
+                version_id=chosen,
+                scan_state="blocked",
+                scanner_version="test-new",
+                scanned_by_id=USER,
+                created_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+            )
+        )
+    elif condition == "tampered":
+        await db.execute(
+            update(ProjectSkillVersion)
+            .where(ProjectSkillVersion.id == chosen)
+            .values(instructions="Changed instructions")
+        )
+    await db.commit()
+    if condition == "expired":
+        result = await service.save_selection(
+            db,
+            await _user(db),
+            CONSENT,
+            [KEEP],
+            skill_version_ids=[chosen],
+            refresh_skills=True,
+        )
+        assert (
+            result.skill_snapshot_status == "ready"
+            and selection.runtime_snapshot_id != old_snapshot
+        )
+        new: Any = await db.get(AgentRuntimeSnapshot, selection.runtime_snapshot_id)
+        assert new.loaded_skill_versions == []
+        result2 = await service.load_selected_skill(db, _grant_context(), "review")
+        assert not result2.is_error and result2.content[0]["version_id"] == str(chosen)
+    else:
+        with pytest.raises(service.ContextSelectionInvalid):
+            await service.save_selection(
+                db,
+                await _user(db),
+                CONSENT,
+                [KEEP],
+                skill_version_ids=[chosen],
+                refresh_skills=True,
+            )
+        selection = await db.scalar(select(IntegrationContextSelection))
+        assert selection is not None and selection.runtime_snapshot_id == old_snapshot
+    old: Any = await db.get(AgentRuntimeSnapshot, old_snapshot)
+    assert len(old.loaded_skill_versions) == 1
+
+
+async def test_selection_rejects_two_versions_of_one_name(db: AsyncSession) -> None:
+    chosen = await skill(db)
+    await service.save_selection(
+        db, await _user(db), CONSENT, [], skill_version_ids=[chosen]
+    )
+    version: Any = await db.get(ProjectSkillVersion, chosen)
+    new = ProjectSkillVersion(
+        skill_id=version.skill_id,
+        version=2,
+        instructions="New rubric",
+        parsed_name="review",
+        description="Changed",
+        content_hash=sha256(b"New rubric").hexdigest(),
+        author_id=USER,
+    )
+    db.add(new)
+    await db.flush()
+    newest = UUID(str(new.id))
+    db.add(
+        ProjectSkillVersionScan(
+            version_id=newest,
+            scan_state="passed",
+            scanner_version="test",
+            scanned_by_id=USER,
+        )
+    )
+    await db.execute(
+        update(ProjectSkill)
+        .where(ProjectSkill.id == version.skill_id)
+        .values(active_version_id=newest)
+    )
+    await db.commit()
+    with pytest.raises(service.ContextSelectionInvalid):
+        await service.save_selection(
+            db, await _user(db), CONSENT, [], skill_version_ids=[chosen, newest]
+        )
+
+
+async def test_reordering_unchanged_skill_ids_keeps_snapshot_and_receipts(
+    db: AsyncSession,
+) -> None:
+    """Mutation: services/integrations/selected_context.py:301 set-identity guard.
+
+    On 2026-10-09 replacing that guard with list equality resets the snapshot.
+    DEBUG=false PYTHONPATH=backend /tmp/nous-qa-fix-venv/bin/python -m pytest
+    -o addopts='' -q backend/tests/unit/services/integrations/test_selected_skills.py
+    -k reordering_unchanged
+    """
+    ids = [await skill(db, f"rubric-{index}") for index in range(2)]
+    await service.save_selection(
+        db, await _user(db), CONSENT, [], skill_version_ids=ids
+    )
+    await service.load_selected_skill(db, _grant_context(), "rubric-0")
+    selection = await db.scalar(select(IntegrationContextSelection))
+    assert selection is not None
+    original = selection.runtime_snapshot_id
+    await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP], skill_version_ids=list(reversed(ids))
+    )
+    assert selection.runtime_snapshot_id == original
+    snapshot: Any = await db.get(AgentRuntimeSnapshot, original)
+    assert len(snapshot.loaded_skill_versions) == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tool_registry_hash", "old-registry"),
+        ("tool_registry_version", "old-version"),
+        ("tool_metadata", {"descriptors": []}),
+    ],
+)
+async def test_obsolete_loader_snapshot_offers_explicit_refresh(
+    db: AsyncSession, field: str, value: Any
+) -> None:
+    chosen = await skill(db)
+    await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen]
+    )
+    await service.load_selected_skill(db, _grant_context(), "review")
+    selection = await db.scalar(select(IntegrationContextSelection))
+    assert selection is not None
+    original = selection.runtime_snapshot_id
+    await db.execute(update(AgentRuntimeSnapshot).values(**{field: value}))
+    await db.commit()
+    options = await service.context_options(db, await _user(db), CONSENT)
+    assert options.skill_snapshot_status == "unavailable"
+    assert options.selected_skill_version_ids == [chosen]
+    await service.save_selection(db, await _user(db), CONSENT, [KEEP])
+    assert selection.runtime_snapshot_id == original
+    refreshed = await service.save_selection(
+        db,
+        await _user(db),
+        CONSENT,
+        [KEEP],
+        skill_version_ids=[chosen],
+        refresh_skills=True,
+    )
+    assert refreshed.skill_snapshot_status == "ready"
+    assert selection.runtime_snapshot_id != original
+    old: Any = await db.get(AgentRuntimeSnapshot, original)
+    assert len(old.loaded_skill_versions) == 1
