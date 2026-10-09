@@ -61,6 +61,8 @@ Dated implementation proposals, task breakdowns, remediation roadmaps and delive
 | [2026-08-22-audit-round6-backlog-fix-roadmap.md](2026-08-22-audit-round6-backlog-fix-roadmap.md) | Audit Round-6 Backlog Fix Roadmap |
 | [2026-08-23-chat-bug-hunt-fixes.md](2026-08-23-chat-bug-hunt-fixes.md) | /chat Bug Hunt Fixes Implementation Plan |
 | [2026-08-25-audit-pr7-residual-runtime.md](2026-08-25-audit-pr7-residual-runtime.md) | Reviewed Plan: PR7 Residual Runtime Correctness |
+| [2026-09-05-backend-mediums-and-frontend-cleanup.md](2026-09-05-backend-mediums-and-frontend-cleanup.md) | Backend mediums (#1610) and frontend cleanup Implementation Plan |
+| [2026-09-05-chat-frontend-a11y-fixes.md](2026-09-05-chat-frontend-a11y-fixes.md) | Chat Frontend Audit Fixes (design-system + a11y + states + responsive) Implementation Plan |
 | [2026-09-06-chat-reading-footnotes-design.md](2026-09-06-chat-reading-footnotes-design.md) | Chat reading experience: footnotes direction |
 | [2026-09-06-chat-reading-footnotes.md](2026-09-06-chat-reading-footnotes.md) | Chat reading experience (footnotes) Implementation Plan |
 | [2026-09-14-do-to-aws-migration-design.md](2026-09-14-do-to-aws-migration-design.md) | DigitalOcean → AWS Migration Design |
@@ -68,6 +70,8 @@ Dated implementation proposals, task breakdowns, remediation roadmaps and delive
 | [2026-09-17-typesafe-intent-routing-integration.md](2026-09-17-typesafe-intent-routing-integration.md) | TypeSafe intent-routing integration |
 | [2026-09-21-chat-ux-fixes.md](2026-09-21-chat-ux-fixes.md) | Chat UX fixes |
 | [2026-09-21-draft-revision-contract.md](2026-09-21-draft-revision-contract.md) | Draft revision and citation integrity contract |
+| [2026-09-25-backend-api-audit-fixes.md](2026-09-25-backend-api-audit-fixes.md) | Backend/API Audit Fix Plan (audit backend-api-audit-20260925-150755-68786) |
+| [2026-09-29-academic-r0-r1-closure.md](2026-09-29-academic-r0-r1-closure.md) | Academic R0/R1 Closure Plan (GOO-290..295) |
 | [2026-09-29-goo-297-task-terminal-results.md](2026-09-29-goo-297-task-terminal-results.md) | GOO-297: Persist draft task terminal results bound to exact artifacts |
 | [2026-09-29-goo-299-study-identity.md](2026-09-29-goo-299-study-identity.md) | GOO-299 Study Identity Plan (Academic R2) |
 | [2026-09-29-goo-300-search-import-export.md](2026-09-29-goo-300-search-import-export.md) | GOO-300 Search Import / Corpus Export Plan (Academic R2) |
