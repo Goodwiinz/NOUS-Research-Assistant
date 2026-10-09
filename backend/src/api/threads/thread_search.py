@@ -490,11 +490,14 @@ def search_health_check(
         # Check if GIN indexes exist. Only the index name is surfaced below —
         # not indexdef (the raw DDL) — since the auth gate above narrows who
         # can call this, not what a caller who legitimately can should see.
+        # pg_indexes renders the access method in lower case ("USING gin"),
+        # so the match must be case-insensitive (Q-P3: `LIKE '%GIN%'` never
+        # matched and this endpoint reported index_count 0 on a healthy DB).
         index_check_sql = """
             SELECT indexname, indexdef
             FROM pg_indexes
             WHERE tablename IN ('threads', 'chat_messages')
-                AND indexdef LIKE '%GIN%'
+                AND indexdef ILIKE '%USING gin%'
         """
 
         result = db.execute(text(index_check_sql))
