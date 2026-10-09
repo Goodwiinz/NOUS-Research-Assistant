@@ -1,6 +1,6 @@
 # Migration-free artifact panel completion
 
-Spec: recovered Plan03 `/tmp/rag-linear-audit-20261009.maH9q2/linear-evidence/afda841a-2bc5-4bf0-b947-eeef32ace257.md`, `docs/plans/2026-10-04-harness-plan-amendment.md`, and the parent-approved design recorded in this plan. The original f787a61a7 spec object is unavailable; rulings against that unavailable source are provisional.
+Spec: [original harness and artifact workspace architecture at f787a61a7](https://github.com/Goodwiinz/NOUS-Research-Assistant/blob/f787a61a7/docs/plans/2026-09-27-harness-bridge-and-artifacts.md), recovered Plan03 `/tmp/rag-linear-audit-20261009.maH9q2/linear-evidence/afda841a-2bc5-4bf0-b947-eeef32ace257.md`, `docs/plans/2026-10-04-harness-plan-amendment.md`, and the approved design recorded here. Original sections 5, 6, 8 and 9 were compared in full with this slice: scoped tools remain separate, Query owns artifact bytes/metadata, edits create immutable expected-parent versions, interactive execution is isolated and independently gated, and sharing/native completion remain separate work. No new conflict was found.
 
 ## Global constraints
 
@@ -62,3 +62,11 @@ Independent review proved that `srcDoc` also inherits the application's nonce po
 Review correction: same-actor user navigation confirms before selection changes or project writes. Approval retires the current editor; an identity-bound transient UI lease disables opening a replacement editor until that binding settles. Older completions cannot release newer leases. A picker completion only synchronizes the initiating thread/workspace/actor/URL; a different thread retains its own draft. Actor/org transitions still clear immediately without confirmation.
 
 The root client provider loads one stable navigation listener before Next's popstate effect. Component-owned listeners can be removed by a synchronous Next render during that same event dispatch; an actual Next browser regression caught this. The scope hook refreshes only the committed browser URL/history metadata after every layout commit. Navigation API traversal cancels before route change; the older-browser fallback stops Next's popstate handler and restores the prior entry with pushState. This fallback preserves the current editor but replaces forward history entries. Both paths were exercised against actual Next routes, waiting for dialog completion and URL restoration before asserting scope and exact draft bytes.
+
+## PDF preview adaptation
+
+Chromium blocks its native PDF plugin inside an empty iframe sandbox. PDF preview therefore consumes the existing authenticated, bounded Blob cache through pinned `pdfjs-dist` 6.4.299 and a bundled local module worker. It renders one canvas with explicit page navigation, with no PDF JavaScript, actions, annotation links, XFA, text layer, remote resource bases, font files, CMaps, or Wasm fetch. Compatibility options disable evaluation and font-face loading; resource factories reject network loading.
+
+Bounds: source 2MiB; at most 100 pages; one displayed canvas of at most two million pixels; at most 16 scratch canvases, two million pixels each and eight million aggregate; 30-second operation deadline. Scope/version changes and unmount cancel rendering, destroy the document, and terminate its worker. A stale page response cannot clear the current owner's canvas. Download remains available on renderer failure or unsupported content.
+
+Verification uses real Chromium under the exact production app CSP, including rendered color pixels and Helvetica text, denied PDF actions/network requests, bounds, and teardown. A production Next build/start additionally proves the default bundler resolves its local worker; development CSP and standalone synthetic-host evidence are recorded separately from that production proof.
