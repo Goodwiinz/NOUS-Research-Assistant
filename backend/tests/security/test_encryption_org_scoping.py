@@ -156,7 +156,7 @@ class TestKeyRotationScope:
         kwargs = svc_cls.return_value.rotate_encryption_keys.call_args.kwargs
         assert kwargs["organization_id"] == _ORG_ID
 
-    def test_platform_operator_can_rotate(
+    def test_platform_operator_cannot_rotate_nonpersistent_data_key(
         self, client_with_db: ClientWithDb, operator_allowlist: SetOperator
     ) -> None:
         operator_allowlist(True)
@@ -164,6 +164,24 @@ class TestKeyRotationScope:
             svc_cls.return_value.rotate_encryption_keys.return_value = ROTATION_RESULT
             resp = client_with_db().post(
                 f"{API}/keys/rotate", json={"key_type": "data"}
+            )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["error"]["message"] == (
+            "DATA key rotation is unavailable until versioned keys are durable"
+        )
+        svc_cls.return_value.rotate_encryption_keys.assert_not_called()
+
+    def test_platform_operator_can_rotate_file_key(
+        self, client_with_db: ClientWithDb, operator_allowlist: SetOperator
+    ) -> None:
+        operator_allowlist(True)
+        with patch("src.api.security.encryption.EncryptionService") as svc_cls:
+            svc_cls.return_value.rotate_encryption_keys.return_value = {
+                **ROTATION_RESULT,
+                "key_type": "file",
+            }
+            resp = client_with_db().post(
+                f"{API}/keys/rotate", json={"key_type": "file"}
             )
         assert resp.status_code == 200, resp.text
         kwargs = svc_cls.return_value.rotate_encryption_keys.call_args.kwargs
