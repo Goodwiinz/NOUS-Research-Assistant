@@ -116,6 +116,26 @@ export function assertIdempotentMessage({ firstId, secondId, messages, clientMes
   assertThat(matching[0]?.content === content, 'Idempotent message content was not persisted exactly');
 }
 
+/**
+ * Pattern for a model answer as the transcript renders it: code fences,
+ * inline code, headings, list markers and emphasis removed, then the first
+ * few words joined by optional whitespace, because the renderer may collapse
+ * or drop the line breaks between them. Raw markdown would not match.
+ */
+export function renderedTextPattern(markdown, words = 8) {
+  const plain = String(markdown ?? '')
+    .replace(/```[^\n]*/g, ' ')
+    .replace(/`/g, '')
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '')
+    .replace(/[*_~]+/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, words);
+  assertThat(plain.length > 0, 'Model answer has no renderable text to match');
+  return new RegExp(plain.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s*'));
+}
+
 function threadUrl(threadId) {
   return `/chat?thread=${encodeURIComponent(threadId)}`;
 }
@@ -793,7 +813,10 @@ const scenarios = [
     mode: 'live-model',
     async run(session, evidence) {
       const fixture = await makeThread(session, evidence, 'stop');
-      const prompt = `Keep this bounded QA response working for ${evidence.fixturePrefix}; stop it after acceptance.`;
+      // A one-line answer completes before Stop can land. Hundreds of lines
+      // keep the run streaming long enough for the cancel to be observed.
+      const prompt = `Print the integers from 1 to 400, one per line, with no other text. Run marker: ${evidence.fixturePrefix}.`;
+      const waitMs = innerWaitMs(session);
       let acceptedRunId = null;
       let partialSeen = false;
       let streamSettled = false;
@@ -801,6 +824,30 @@ const scenarios = [
       let provenTerminal = false;
       evidence.consumeModelTurn();
       let streamOutcomePromise;
+      const jobStatus = async () => {
+        try {
+          return (await session.request(`/api/v1/agent/jobs/${acceptedRunId}`, { target: 'backend' })).data ?? null;
+        } catch (error) {
+          if (error?.status === 404) return null;
+          throw error;
+        }
+      };
+      // The run reached its terminal state before Stop could act on it. That
+      // is a race the scenario cannot win, not a product failure: report it
+      // as BLOCKED with the proven status and release the run for cleanup.
+      const blockedRunCompletedBeforeStop = (status) => {
+        session.markRunTerminal(acceptedRunId);
+        provenTerminal = true;
+        // A proven-complete run has nothing left to cancel; the safety-net
+        // cancel in `finally` would only return 409.
+        cancelSent = true;
+        return {
+          status: 'BLOCKED',
+          reason: 'run completed before Stop',
+          assertion: 'Stop cancels the exact active run and persists a stopped response',
+          evidence: [{ threadId: fixture.threadId, runId: acceptedRunId, status }],
+        };
+      };
       try {
         // Attach an outcome handler immediately. A cancelled SSE reader may
         // reject before the scenario reaches its later await; leaving that
@@ -823,35 +870,54 @@ const scenarios = [
         );
         await waitForCondition(
           () => Boolean(acceptedRunId),
-          session.config.timeoutMs,
+          waitMs,
           'Agent stream did not expose an accepted run identity'
         );
         assertThat(UUID.test(acceptedRunId), 'Accepted stream run identity was not a UUID');
+        // Stop is sent as soon as the first token arrives.
         await waitForCondition(
           () => partialSeen || streamSettled,
-          session.config.timeoutMs,
+          waitMs,
           'Agent stream produced no observable partial output before Stop'
         );
-        assertThat(partialSeen && !streamSettled, 'Agent stream completed before the durable Stop control could be exercised');
-        const cancelResponse = await session.request(`/api/v1/agent/stream/cancel/${fixture.threadId}`, {
-          target: 'backend',
-          method: 'POST',
-          json: { expected_run_id: acceptedRunId },
-        });
+        if (streamSettled) {
+          const early = await streamOutcomePromise;
+          if (early.ok && (early.value?.events ?? []).some((item) => item?.event === 'done')) {
+            return blockedRunCompletedBeforeStop('completed');
+          }
+          if (!early.ok) throw early.error;
+          throw new Error('Agent stream ended before Stop without a done event');
+        }
+        assertThat(partialSeen, 'Agent stream produced no observable partial output before Stop');
+        let cancelResponse;
+        try {
+          cancelResponse = await session.request(`/api/v1/agent/stream/cancel/${fixture.threadId}`, {
+            target: 'backend',
+            method: 'POST',
+            json: { expected_run_id: acceptedRunId },
+          });
+        } catch (error) {
+          if (error?.status !== 409) throw error;
+          // execute.py answers 409 "Run is already complete" when the run
+          // finished first. Prove that from the job status instead of
+          // guessing; any other 409 is a real Stop failure.
+          cancelSent = true;
+          const job = await jobStatus();
+          if (job?.status === 'completed') {
+            await streamOutcomePromise;
+            return blockedRunCompletedBeforeStop(job.status);
+          }
+          throw new Error(`Stop endpoint returned 409 while the run status was ${job?.status ?? 'unknown'}`);
+        }
         cancelSent = true;
         assertThat(cancelResponse.status === 204, `Stop endpoint returned ${cancelResponse.status}`);
         const outcome = await streamOutcomePromise;
         if (!outcome.ok && outcome.error?.status !== 408) throw outcome.error;
         const stream = outcome.ok ? outcome.value : { terminal: false, aborted: true };
-        const statusResponse = await waitForCondition(async () => {
-          try {
-            const response = await session.request(`/api/v1/agent/jobs/${acceptedRunId}`, { target: 'backend' });
-            return response.data?.status === 'cancelled' ? response : false;
-          } catch (error) {
-            if (error?.status === 404) return false;
-            throw error;
-          }
-        }, session.config.timeoutMs, 'Cancelled run did not reach a durable terminal status');
+        const cancelledJob = await waitForCondition(async () => {
+          const job = await jobStatus();
+          return job?.status === 'cancelled' ? job : false;
+        }, waitMs, 'Cancelled run did not reach a durable terminal status');
         const messages = await session.request(`/api/v2/threads/${fixture.threadId}/messages?limit=50`, { target: 'backend' });
         const values = messages.data?.messages ?? messages.data?.items ?? [];
         const stoppedAssistant = [...values].reverse().find((item) => item.role === 'assistant');
@@ -863,10 +929,13 @@ const scenarios = [
         session.markRunTerminal(acceptedRunId);
         provenTerminal = true;
         const page = await authenticatedPage(session, threadUrl(fixture.threadId));
+        // Compare the rendered transcript, not raw markdown: the stopped
+        // text is a code block or line-broken list once rendered.
+        const stoppedPattern = renderedTextPattern(stoppedContent);
         const assertStoppedRendered = async (label) => {
-          await page.waitForFunction((threadId) => new URL(window.location.href).searchParams.get('thread') === threadId, fixture.threadId, { timeout: session.config.timeoutMs });
-          await assertTranscriptContains(page, stoppedContent.slice(0, Math.min(120, stoppedContent.length)), label, session.config.timeoutMs);
-          await page.locator('[title="You stopped this response; the text above is partial."]').first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+          await page.waitForFunction((threadId) => new URL(window.location.href).searchParams.get('thread') === threadId, fixture.threadId, { timeout: waitMs });
+          await assertAssistantContains(page, stoppedPattern, `${label} of the stopped answer`, waitMs);
+          await waitVisible(page.locator('[title="You stopped this response; the text above is partial."]'), `${label} stopped-response marker`, waitMs);
           const stopControl = page.getByLabel('Stop agent');
           assertThat(await stopControl.count() === 0 || !(await stopControl.isVisible()), `${label} left the Stop control active after durable cancellation`);
         };
@@ -875,7 +944,7 @@ const scenarios = [
         await assertStoppedRendered('Reload');
         return {
           assertion: 'Exact accepted run reaches durable cancelled status, persists non-empty stopped output, and stays idle after resume/reload',
-          evidence: [{ threadId: fixture.threadId, runId: acceptedRunId, status: statusResponse.data?.status, streamTerminal: stream.terminal, stoppedOutputLength: stoppedContent.length }],
+          evidence: [{ threadId: fixture.threadId, runId: acceptedRunId, status: cancelledJob.status, streamTerminal: stream.terminal, stoppedOutputLength: stoppedContent.length }],
         };
       } finally {
         if (acceptedRunId && !cancelSent) {

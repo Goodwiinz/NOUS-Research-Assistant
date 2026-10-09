@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { isFullIdentity, main, observeSourceIdentity, parseArgs } from '../../../tests/e2e/qa/cli.mjs';
 import { runCampaign, exitCodeForReport, checkExpectedBackendIdentity, sanitizeAssertionEvidence } from '../../../tests/e2e/qa/runner.mjs';
 import { renderHtml } from '../../../tests/e2e/qa/report.mjs';
-import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, latestAlertLocator, registry, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
+import { assertExactAnswer, assertIdempotentMessage, extractAnswerText, isCanonicalEmptyThreadMessageList, latestAlertLocator, registry, renderedTextPattern, smokeLogin } from '../../../tests/e2e/qa/scenarios.mjs';
 import {
   FixtureLedger,
   FixtureOwnershipError,
@@ -1716,6 +1716,145 @@ test('missing-thread fails when the app recovers without the unavailable toast (
   const scenario = registry.find((item) => item.id === 'adversarial.missing-thread-ui');
   const journey = fakeHistoryJourney({ workspaces: [{ id: MY_WORKSPACE, name: 'My Workspace', collection_count: 0, conversation_count: 1 }], staleRecovery: 'silent' });
   await assert.rejects(scenario.run(journey.session, journey.evidence), /Toast "That conversation is no longer available\." did not appear within \d+ms/);
+});
+
+/**
+ * Stop journey: the fake stream reports `accepted` and a first token, then
+ * stays open until Stop is requested (or finishes first when
+ * `completesBeforeStop`). The transcript renders the stopped answer the way
+ * the live markdown renderer does (fences and line breaks gone) and shows the
+ * live stopped marker `title="You stopped this response; the text above is
+ * partial."`; the Stop control is `aria-label="Stop agent"`.
+ */
+function fakeStopJourney({
+  cancel = () => ({ status: 204 }),
+  job = () => ({ status: 'cancelled' }),
+  completesBeforeStop = false,
+  stoppedContent = '```\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n```',
+  rendered = '1 2 3 4 5 6 7 8 9 10 11 12',
+} = {}) {
+  const runId = '77777777-7777-4777-8777-777777777777';
+  const state = { prompt: null, cancelRequests: 0, terminalRuns: [], registered: [] };
+  let release;
+  const released = new Promise((resolve) => { release = resolve; });
+  let nextId = 1;
+  const id = () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
+  const normalize = (text) => String(text).replace(/\s+/g, ' ').trim();
+  // Playwright hasText: a string is a case-insensitive, whitespace-normalized
+  // substring; a RegExp is tested against the normalized text.
+  const matches = (hasText, text) => (hasText instanceof RegExp
+    ? hasText.test(normalize(text))
+    : normalize(text).toLowerCase().includes(normalize(hasText).toLowerCase()));
+  const visibleWhen = (count) => ({
+    first: () => ({
+      waitFor: async ({ state: wanted }) => {
+        if (wanted === 'visible' && count() === 0) throw new Error('synthetic locator timeout');
+      },
+    }),
+    count: async () => count(),
+  });
+  const page = {
+    url: () => 'http://127.0.0.1:3000/chat',
+    waitForFunction: async () => {},
+    reload: async () => {},
+    locator: (selector) => {
+      if (selector === '[data-role="assistant"]') return { filter: ({ hasText }) => visibleWhen(() => (matches(hasText, rendered) ? 1 : 0)) };
+      if (selector === '[data-role="user"], [data-role="assistant"]') return { filter: ({ hasText }) => visibleWhen(() => (matches(hasText, rendered) ? 1 : 0)) };
+      if (selector === '[title="You stopped this response; the text above is partial."]') return visibleWhen(() => 1);
+      throw new Error(`unexpected locator ${selector}`);
+    },
+    getByLabel: (label) => {
+      if (label === 'Stop agent') return { count: async () => 0, isVisible: async () => false };
+      throw new Error(`unexpected getByLabel ${label}`);
+    },
+  };
+  const events = [
+    { event: 'status', data: { phase: 'accepted', run_id: runId } },
+    { event: 'token', data: { content: '1\n' } },
+    { event: 'done', data: { status: 'complete' } },
+  ];
+  const session = {
+    config: { timeoutMs: 60 },
+    page,
+    login: async () => page,
+    goto: async () => {},
+    assertTrustedBrowserUrl: () => {},
+    registerFixture: (kind, fixtureId) => state.registered.push([kind, fixtureId]),
+    markRunTerminal: (terminalRunId) => state.terminalRuns.push(terminalRunId),
+    streamAgent: async (payload, options = {}) => {
+      state.prompt = payload.messages[0].content;
+      await options.onEvent(events[0]);
+      await options.onEvent(events[1]);
+      if (!completesBeforeStop) await released;
+      return { status: 200, events, terminal: true, acceptedRunIds: [runId] };
+    },
+    request: async (path, options = {}) => {
+      if (options.method === 'POST' && path.startsWith('/api/v1/agent/stream/cancel/')) {
+        state.cancelRequests += 1;
+        // The run reaches its terminal state as Stop arrives.
+        release();
+        const outcome = cancel(state);
+        if (outcome.status >= 400) {
+          const error = new Error(`Request failed (${outcome.status})`);
+          error.status = outcome.status;
+          throw error;
+        }
+        return outcome;
+      }
+      if (options.method === 'POST') return { status: 201, data: { id: id() } };
+      if (path.startsWith('/api/v1/agent/jobs/')) return { status: 200, data: job(state) };
+      if (path.includes('/messages')) {
+        return { status: 200, data: { messages: [{ role: 'user', content: state.prompt }, { role: 'assistant', content: stoppedContent, stopped: true }] } };
+      }
+      if (path.startsWith('/api/v1/agent/stream/resume/')) return { status: 204, data: null };
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  return { state, session, evidence: { fixturePrefix: 'NOUS QA t1', consumeModelTurn: () => 1 }, runId };
+}
+
+test('stop-active-run is BLOCKED, not FAIL, when Stop returns 409 because the run already completed (Q-I4)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.stop-active-run');
+  assert.ok(scenario, 'stop scenario must remain registered');
+  const raced = fakeStopJourney({ cancel: () => ({ status: 409 }), job: () => ({ status: 'completed' }) });
+  const result = await scenario.run(raced.session, raced.evidence);
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.reason, 'run completed before Stop');
+  assert.ok(raced.state.terminalRuns.includes(raced.runId), 'a completed run is proven terminal so cleanup does not retain its fixture tree');
+  assert.match(raced.state.prompt, /one per line/, 'the prompt must force output long enough for Stop to land mid-stream');
+});
+
+test('stop-active-run is BLOCKED when the stream finishes before Stop can be sent (Q-I4)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.stop-active-run');
+  const early = fakeStopJourney({ completesBeforeStop: true });
+  const result = await scenario.run(early.session, early.evidence);
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.reason, 'run completed before Stop');
+  assert.equal(early.state.cancelRequests, 0);
+});
+
+test('stop-active-run still fails on a 409 whose run is not complete (Q-I4)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.stop-active-run');
+  const conflicted = fakeStopJourney({ cancel: () => ({ status: 409 }), job: () => ({ status: 'running' }) });
+  await assert.rejects(scenario.run(conflicted.session, conflicted.evidence), /409/);
+});
+
+test('stop-active-run matches the stopped answer as the transcript renders it, not as raw markdown (Q-I4)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.stop-active-run');
+  const stopped = fakeStopJourney();
+  const result = await scenario.run(stopped.session, stopped.evidence);
+  assert.equal(result.status, undefined, 'a durable cancellation is a PASS');
+  assert.equal(stopped.state.cancelRequests, 1);
+  assert.ok(stopped.state.terminalRuns.includes(stopped.runId));
+});
+
+test('rendered text pattern strips markdown and tolerates collapsed or dropped line breaks (Q-I4)', () => {
+  const pattern = renderedTextPattern('```text\n**1**\n2\n- 3\n4. 4\n`5`\n6\n7\n8\n9\n```');
+  assert.match('1 2 3 4 5 6 7 8', pattern, 'paragraph rendering (soft breaks become spaces)');
+  assert.match('12345678', pattern, 'hard-break rendering (text nodes adjoin)');
+  assert.doesNotMatch('1 2 3 5 6 7 8 9', pattern, 'a missing word must not match');
+  assert.doesNotMatch('```text **1** 2', pattern, 'raw markdown is not what the transcript shows');
+  assert.throws(() => renderedTextPattern('```\n```'), /no renderable text/);
 });
 
 test('idempotency oracle rejects a duplicate persisted row even when IDs are echoed', () => {
