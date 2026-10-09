@@ -93,13 +93,18 @@ from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
-from src.schemas.artifact import ArtifactVersionDTO
+from src.schemas.artifact import ArtifactConflict, ArtifactVersionDTO
 from src.schemas.integration_context import IntegrationContext
 from src.services.artifacts import service as artifact_service
+from src.services.artifacts.editing import edit_version
 from src.services.artifacts.storage import MemoryArtifactStorage
 from src.services.integrations import handoffs
 from src.services.integrations.context import resolve_integration_context
-from tests.utils.artifact_publication import publish_content
+from tests.utils.artifact_publication import (
+    publish_content,
+    publish_request,
+    reserve_request,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -364,6 +369,132 @@ async def _publish(
     return version
 
 
+async def _publication_survives_renewal(
+    client: httpx.AsyncClient,
+    factory: async_sessionmaker[AsyncSession],
+    ids: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two in-flight reservations across renewal retain one receipt."""
+    issued = await _consent(client, ids.project, ids.thread)
+    before = await _context(factory, issued["token"])
+    replacement = await client.post(
+        f"{V1}/integrations/grants/{issued['grant_id']}/renew",
+        headers=_cli(issued["token"]),
+    )
+    assert replacement.status_code == 200, replacement.text
+    after = await _context(factory, replacement.json()["token"])
+    assert before.grant_id != after.grant_id
+    assert before.consent_id == after.consent_id
+    request = reserve_request()
+    arrived = asyncio.Event()
+    reads = 0
+    original_lookup = artifact_service._existing_reservation
+
+    async def concurrent_lookup(
+        db: AsyncSession, context: IntegrationContext, publication_id: uuid.UUID
+    ) -> ArtifactUpload | None:
+        nonlocal reads
+        result = await original_lookup(db, context, publication_id)
+        reads += 1
+        if reads <= 2:
+            if reads == 2:
+                arrived.set()
+            await asyncio.wait_for(arrived.wait(), timeout=10)
+        return result
+
+    async def reserve(context: IntegrationContext) -> Any:
+        async with factory() as db:
+            result = await artifact_service.reserve_upload(db, context, request)
+            # Returning a concurrent replay must release its service-owned
+            # project lock while the caller keeps this session alive.
+            assert not db.in_transaction()
+            return result
+
+    # A context resolved before renewal can already have a request in flight;
+    # renewal changes the bearer, never the consent's publication identity.
+    with monkeypatch.context() as patcher:
+        patcher.setattr(artifact_service, "_existing_reservation", concurrent_lookup)
+        first, replay = await asyncio.wait_for(
+            asyncio.gather(reserve(before), reserve(after)), timeout=15
+        )
+    assert first.upload_id == replay.upload_id
+    publication = publish_request(request, first.upload_id)
+    async with factory() as db:
+        await artifact_service.store_upload(db, after, first.upload_id, b"report\n")
+        version = await artifact_service.publish_version(db, after, publication)
+    async with factory() as db:
+        retried = await artifact_service.publish_version(db, after, publication)
+        count = await db.scalar(
+            select(func.count())
+            .select_from(ArtifactUpload)
+            .where(ArtifactUpload.publication_id == request.publication_id)
+        )
+    assert retried.version_id == version.version_id
+    assert count == 1
+    await _editing_is_conflict_safe(factory, after, version, monkeypatch)
+
+
+async def _editing_is_conflict_safe(
+    factory: async_sessionmaker[AsyncSession],
+    context: IntegrationContext,
+    original: ArtifactVersionDTO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both editors observe the old parent before either may commit."""
+    storage = artifact_service.get_artifact_storage()
+    original_exists = storage.exists
+    observed, both_observed = 0, asyncio.Event()
+
+    async def synchronized_exists(key: str) -> bool:
+        nonlocal observed
+        result = await original_exists(key)
+        observed += 1
+        if observed == 2:
+            both_observed.set()
+        await asyncio.wait_for(both_observed.wait(), timeout=10)
+        return result
+
+    async def edit(content: str) -> ArtifactVersionDTO | ArtifactConflict:
+        async with factory() as db:
+            try:
+                return await edit_version(
+                    db,
+                    user_id=context.user_id,
+                    organization_id=context.organization_id,
+                    artifact_id=original.artifact_id,
+                    expected_parent_version_id=original.version_id,
+                    publication_id=uuid.uuid4(),
+                    text=content,
+                )
+            except ArtifactConflict as error:
+                return error
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(storage, "exists", synchronized_exists)
+        outcomes = await asyncio.wait_for(
+            asyncio.gather(edit("first"), edit("second")), timeout=15
+        )
+    assert sum(isinstance(item, ArtifactVersionDTO) for item in outcomes) == 1
+    assert sum(isinstance(item, ArtifactConflict) for item in outcomes) == 1
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(ArtifactVersion)
+                .where(ArtifactVersion.artifact_id == original.artifact_id)
+            )
+            == 2
+        )
+        content, _, _ = await artifact_service.read_version_content(
+            db,
+            user_id=context.user_id,
+            organization_id=context.organization_id,
+            version_id=original.version_id,
+        )
+        assert content == b"report\n"
+
+
 async def _journey(
     client: httpx.AsyncClient,
     factory: async_sessionmaker[AsyncSession],
@@ -625,6 +756,7 @@ async def test_second_session_continues_the_same_project_chat(
             transport=transport, base_url="http://test"
         ) as client:
             await _journey(client, factory, ids, monkeypatch)
+            await _publication_survives_renewal(client, factory, ids, monkeypatch)
     finally:
         await engine.dispose()
         async with admin.begin() as connection:
