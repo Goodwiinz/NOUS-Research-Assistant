@@ -54,7 +54,7 @@ from src.models.workspace import Workspace, WorkspaceMember
 logger = logging.getLogger(__name__)
 
 
-def user_can_access_workspace(workspace: Workspace, user_id: UUID) -> bool:
+def user_can_access_workspace(workspace: Workspace, user_id: Optional[UUID]) -> bool:
     """Canonical workspace access predicate.
 
     Not deleted, then public OR member OR owner. Callers that load
@@ -64,7 +64,7 @@ def user_can_access_workspace(workspace: Workspace, user_id: UUID) -> bool:
     soft-deleted workspace revokes access to everything nested under it even
     though ``delete_workspace`` never cascades to children rows.
     """
-    if workspace.is_deleted:
+    if user_id is None or workspace.is_deleted:
         return False
     if workspace.is_public:
         return True
@@ -347,16 +347,16 @@ async def get_accessible_document_or_none(
 ) -> Optional[Document]:
     """Return a document only if it belongs to the caller's organization.
 
-    Ported verbatim from the router's ``_get_accessible_document_or_none``
-    (Task 4.2) — the org-ownership guard collection-document attach relies
-    on. Falls back to uploader-scoping when the caller has no
-    ``organization_id``, matching prior behavior.
+    Collection attachment uses the same organization boundary as document
+    reads. A former uploader without tenant scope has no document access.
     """
-    filters = [Document.id == document_id, Document.is_deleted == False]  # noqa: E712
-    if organization_id is not None:
-        filters.append(Document.organization_id == organization_id)
-    else:
-        filters.append(Document.uploaded_by_user_id == user_id)
+    if user_id is None or organization_id is None:
+        return None
+    filters = [
+        Document.id == document_id,
+        Document.is_deleted == False,  # noqa: E712
+        Document.organization_id == organization_id,
+    ]
 
     result = await db.execute(select(Document).where(*filters))
     document: Optional[Document] = result.scalars().first()
