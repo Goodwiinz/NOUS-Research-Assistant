@@ -265,6 +265,40 @@ async function waitVisible(locator, label, timeoutMs) {
   }
 }
 
+/**
+ * Arm before typing a sidebar query: resolves to the HTTP status of the
+ * server search (POST /api/v2/search/threads, useThreadSearch.ts), or null
+ * when none arrives within the bound.
+ */
+function watchSearchResponse(page, waitMs) {
+  if (typeof page.waitForResponse !== 'function') return Promise.resolve(null);
+  return page
+    .waitForResponse((response) => response.url().includes('/api/v2/search/threads'), { timeout: waitMs })
+    .then((response) => response.status(), () => null);
+}
+
+/**
+ * Wait for a sidebar row after a search, but fail at once when ChatSidebar.tsx
+ * shows its role=alert "Search failed. Try again." error state, naming the
+ * search response status. A product search failure is a FAIL, not a wait.
+ */
+async function waitForSearchRow(page, rowLocator, label, waitMs, searchStatus) {
+  const failed = page.getByRole('alert').filter({ hasText: 'Search failed. Try again.' });
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    if (await failed.first().isVisible()) {
+      const status = await Promise.race([
+        searchStatus,
+        new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 1_000), null)),
+      ]);
+      throw new Error(`Sidebar thread search failed (UI error state; POST /api/v2/search/threads returned ${status ?? 'no response'})`);
+    }
+    if (await rowLocator.first().isVisible()) return;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
+  }
+  throw new Error(`${label} did not appear within ${waitMs}ms`);
+}
+
 async function waitForVisibleUnique(locator, label, timeoutMs) {
   try {
     await locator.first().waitFor({ state: 'visible', timeout: timeoutMs });
@@ -728,8 +762,9 @@ const scenarios = [
       await waitVisible(row(firstTitle), `Sidebar row "${firstTitle}"`, waitMs);
       await waitVisible(row(secondTitle), `Sidebar row "${secondTitle}"`, waitMs);
       const search = page.getByLabel('Search threads');
+      const searchStatus = watchSearchResponse(page, waitMs);
       await search.fill('history-a');
-      await waitVisible(row(firstTitle), `Sidebar row "${firstTitle}" after searching history-a`, waitMs);
+      await waitForSearchRow(page, row(firstTitle), `Sidebar row "${firstTitle}" after searching history-a`, waitMs, searchStatus);
       await waitForCondition(
         async () => (await row(secondTitle).count()) === 0,
         waitMs,

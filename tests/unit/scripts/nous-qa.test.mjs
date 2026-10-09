@@ -1645,6 +1645,9 @@ test('unsupported attachment passes only with the failed chip, the status notice
  * - frontend/src/components/chat/ChatSidebar.tsx:307 `<input aria-label="Search threads">`
  * - ChatSidebar.tsx:454 thread rows are `button.sb-conv`; their text is the thread title
  * - frontend/src/components/chat/ChatInput.tsx:768 the composer textbox is `aria-label="Message"`
+ * - ChatSidebar.tsx:565-574 a failed server search (POST /api/v2/search/threads,
+ *   useThreadSearch.ts) renders `<div role="alert">` "Search failed. Try again."
+ *   instead of rows
  * - frontend/src/hooks/chat/useChatSession.ts:803-818 an unavailable `?thread=`
  *   falls back to the newest listed thread, shows toast.error('That
  *   conversation is no longer available.') (react-hot-toast: role="status")
@@ -1656,7 +1659,7 @@ test('unsupported attachment passes only with the failed chip, the status notice
  * cache, matching a runner that never plants one and strips it from
  * --storage-state (session.mjs sanitizeStorageState).
  */
-function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = 'fallback' } = {}) {
+function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = 'fallback', searchOutcome = { status: 200 } } = {}) {
   const state = {
     workspaces: workspaces.map((workspace) => ({ ...workspace })),
     conversations: new Map(),
@@ -1665,6 +1668,8 @@ function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = '
     posts: [],
     threadId: null,
     search: '',
+    searchError: false,
+    responseWaiters: [],
     drafts: new Map(),
     toasts: [],
     messages: [],
@@ -1674,18 +1679,23 @@ function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = '
   const score = (workspace) => (workspace.collection_count ?? 0) + (workspace.conversation_count ?? 0);
   const appWorkspace = () => state.workspaces.reduce((best, current) => (score(current) > score(best) ? current : best), state.workspaces[0]);
   const workspaceThreads = () => [...state.threads.values()].filter((thread) => state.conversations.get(thread.conversationId) === appWorkspace().id);
-  const listedThreads = () => (sidebarLists ? workspaceThreads().filter((thread) => thread.title.includes(state.search)) : []);
+  const listedThreads = () => (sidebarLists && !state.searchError ? workspaceThreads().filter((thread) => thread.title.includes(state.search)) : []);
   const visibleWhen = (count, onClick) => ({
     first: () => ({
       waitFor: async ({ state: wanted }) => {
         if (wanted === 'visible' && count() === 0) throw new Error('synthetic locator timeout');
       },
+      isVisible: async () => count() > 0,
       click: async () => onClick?.(),
     }),
     count: async () => count(),
   });
   const page = {
     url: () => `http://127.0.0.1:3000/chat${state.threadId ? `?thread=${state.threadId}` : ''}`,
+    waitForResponse: (predicate, options = {}) => new Promise((resolve, reject) => {
+      state.responseWaiters.push({ predicate, resolve });
+      setTimeout(() => reject(new Error('synthetic waitForResponse timeout')), options.timeout ?? 50);
+    }),
     // No scenario may steer /chat through localStorage; a page.evaluate that
     // tried to plant a cache is a no-op here.
     evaluate: async () => ({}),
@@ -1705,10 +1715,27 @@ function fakeHistoryJourney({ workspaces, sidebarLists = true, staleRecovery = '
       throw new Error(`unexpected locator ${selector}`);
     },
     getByLabel: (label) => {
-      if (label === 'Search threads') return { fill: async (value) => { state.search = value; }, inputValue: async () => state.search };
+      if (label === 'Search threads') {
+        return {
+          fill: async (value) => {
+            state.search = value;
+            // useThreadSearch.ts: queries of two or more characters hit the
+            // server; an emptied box shows the plain list again.
+            if (value.trim().length < 2) {
+              state.searchError = false;
+              return;
+            }
+            const response = { url: () => 'http://127.0.0.1:3000/api/v2/search/threads', status: () => searchOutcome.status };
+            state.searchError = searchOutcome.status >= 400;
+            for (const waiter of state.responseWaiters.splice(0)) if (waiter.predicate(response)) waiter.resolve(response);
+          },
+          inputValue: async () => state.search,
+        };
+      }
       throw new Error(`unexpected getByLabel ${label}`);
     },
     getByRole: (role, options = {}) => {
+      if (role === 'alert') return { filter: ({ hasText }) => visibleWhen(() => (state.searchError && hasText === 'Search failed. Try again.' ? 1 : 0)) };
       if (role === 'textbox' && options.name === 'Message') {
         return {
           fill: async (value) => { state.drafts.set(state.threadId, value); },
@@ -1817,6 +1844,21 @@ test('history scenario keeps the first workspace on a score tie, as the frontend
   ] });
   await scenario.run(journey.session, journey.evidence);
   assert.ok(journey.state.posts.every((path) => !path.includes('/conversations') || path === `/api/v2/workspaces/${MY_WORKSPACE}/conversations`));
+});
+
+test('history scenario fails fast and names the search response when the sidebar search errors (Q-I1)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.history-search-and-draft-isolation');
+  const journey = fakeHistoryJourney({
+    workspaces: [{ id: MY_WORKSPACE, name: 'My Workspace', collection_count: 0, conversation_count: 1 }],
+    searchOutcome: { status: 500 },
+  });
+  const started = Date.now();
+  await assert.rejects(
+    scenario.run(journey.session, journey.evidence),
+    // assert.rejects tests the RegExp against String(error), i.e. "Error: ...".
+    /: Sidebar thread search failed \(UI error state; POST \/api\/v2\/search\/threads returned 500\)$/
+  );
+  assert.ok(Date.now() - started < journey.session.config.timeoutMs, 'the error state must end the wait at once');
 });
 
 test('history scenario fails fast and names the missing sidebar row (Q-I1)', async () => {
