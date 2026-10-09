@@ -240,6 +240,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService } =
           await import('@/services/agentChatService');
+        if (abortController.signal.aborted) return;
         let didMutateProjectData = false;
         let mutatedProjectId: string | undefined;
 
@@ -562,6 +563,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             );
             return; // SSE streaming succeeded
           } catch {
+            if (abortController.signal.aborted) return;
             // R4-L19: the SSE transport died after the backend had already
             // parked this turn awaiting confirmation. The durable fallback
             // below re-runs the turn from the original request payload —
@@ -622,6 +624,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
         // Durable Trigger.dev fallback
         const { runId } =
           await agentChatService.startDurableRun(requestPayload);
+        if (abortController.signal.aborted) return;
         set((state) => {
           // The SSE attempt may have streamed tokens before throwing, in which
           // case its placeholder is still in the list. Pushing a second
@@ -678,6 +681,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
           if (abortController.signal.aborted) return;
 
           const run = await agentChatService.getDurableRunStatus(runId);
+          if (abortController.signal.aborted) return;
           const meta = run.metadata ?? {};
 
           if (meta.status === 'awaiting_confirmation') {
@@ -906,6 +910,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService, isTerminalJobStatus } =
           await import('@/services/agentChatService');
+        if (abortController.signal.aborted) return;
 
         // Try SSE streaming confirm first
         let streamedContent = '';
@@ -1158,6 +1163,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             },
             abortController.signal
           );
+          if (confirmEpoch !== transcriptEpoch) return;
           if (abortController.signal.aborted) {
             set((state) => {
               state.pendingConfirmations[threadId] ??= pendingConfirmation;
@@ -1172,6 +1178,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
         } catch {
           // SSE confirm failed — fall back to polling
         }
+
+        if (abortController.signal.aborted || confirmEpoch !== transcriptEpoch)
+          return;
 
         // Durable run or legacy polling fallback. waitTokenId was captured
         // up-front (before pendingConfirmation was nulled) so this branch is
@@ -1551,6 +1560,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService } =
           await import('@/services/agentChatService');
+        if (loadThreadsToken !== requestToken) return;
         const response = await agentChatService.listThreads();
         if (loadThreadsToken !== requestToken) return; // superseded
 
@@ -1591,6 +1601,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService } =
           await import('@/services/agentChatService');
+        if (loadEpoch !== threadLoadEpoch) return;
         const response = await agentChatService.getThreadMessages(threadId);
 
         const messages: AgentMessage[] = response.messages.map((m) => ({
@@ -1678,6 +1689,12 @@ export const useAgentChatStore = create<AgentChatStore>()(
     },
 
     // Reset
-    reset: () => set(() => ({ ...initialState })),
+    reset: () => {
+      transcriptEpoch += 1;
+      threadLoadEpoch += 1;
+      loadThreadsToken = null;
+      get()._abortController?.abort();
+      set(() => ({ ...initialState, _abortController: null }));
+    },
   }))
 );

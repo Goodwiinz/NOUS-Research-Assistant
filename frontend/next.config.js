@@ -156,7 +156,9 @@ const nextConfig = {
   // Environment variables
   // Do NOT set localhost fallbacks here — they get baked into the production
   // JS bundle and cause CORS/mixed-content errors in K8s deployments.
-  // The frontend uses Next.js rewrites (/api/v1/* → backend) when these are unset.
+  // When unset on a non-local host the frontend falls back to the derived API
+  // host or same-origin /api/v1/* rewrites; on localhost it calls
+  // http://localhost:8000 directly (allowed by the dev-only CSP connect-src).
   env: {
     // Vercel preview builds also use NODE_ENV=production. Bake the actual
     // deployment target into the browser bundle so preview events stay out of

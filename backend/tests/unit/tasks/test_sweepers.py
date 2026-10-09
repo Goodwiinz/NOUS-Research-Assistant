@@ -19,12 +19,16 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
-from src.shared.enums import JobStatus
+from src.models.agent_run_event import AgentRunEvent
+from src.services.agent.run_event_store import append_event, has_terminal_event
+from src.services.agent.run_event_types import RunEventType
+from src.shared.enums import AgentOutboxStatus, JobStatus
 from src.tasks import agent_run_tasks as agent_tasks
 
 pytestmark = pytest.mark.unit
@@ -45,6 +49,8 @@ async def session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(AgentRun.__table__.create)
+        await conn.run_sync(AgentRunEvent.__table__.create)
+        await conn.run_sync(AgentOutbox.__table__.create)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     yield factory
     await engine.dispose()
@@ -117,6 +123,95 @@ async def test_stale_running_run_is_failed(session_factory):
     set_job.assert_not_awaited()
 
 
+async def _seed_stream_submission(
+    session_factory, *, status: str, cancel_requested_at: Optional[datetime] = None
+) -> str:
+    """A ``/stream`` run as accept_submission leaves it: open ledger + intent."""
+    job_id = await _seed(session_factory, status=status, updated_at=STALE)
+    async with session_factory() as db:
+        await append_event(
+            db,
+            run_id=job_id,
+            event_type=RunEventType.RUN_CREATED,
+            payload={},
+            organization_id=None,
+        )
+        db.add(
+            AgentOutbox(
+                run_id=job_id,
+                kind="agent.stream.execute",
+                payload={},
+                status=AgentOutboxStatus.PENDING.value,
+            )
+        )
+        # The ledger append bumps updated_at; age the row back past the cutoff.
+        await db.execute(
+            update(AgentRun)
+            .where(AgentRun.job_id == job_id)
+            .values(updated_at=STALE, cancel_requested_at=cancel_requested_at)
+        )
+        await db.commit()
+    return job_id
+
+
+async def _ledger_and_outbox(session_factory, job_id):
+    async with session_factory() as db:
+        closed = await has_terminal_event(db, job_id)
+        outbox = (
+            await db.execute(
+                select(AgentOutbox.status).where(AgentOutbox.run_id == job_id)
+            )
+        ).scalar_one()
+        return closed, outbox
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("seed_status", "cancel_marker", "expected_status", "expected_event"),
+    [
+        ("queued", None, "failed", RunEventType.RUN_FAILED.value),
+        ("running", STALE, "cancelled", RunEventType.RUN_CANCELLED.value),
+    ],
+)
+async def test_swept_run_closes_its_ledger_and_retires_its_outbox(
+    session_factory, seed_status, cancel_marker, expected_status, expected_event
+):
+    """R8-C4: a sweep terminalization is a full terminalization.
+
+    Status, terminal ledger event and outbox retirement commit together, the
+    same contract ``fail_queued_submission`` keeps — otherwise the ledger
+    stays open (artifact announcements keep appending to a dead run) and a
+    future relay sees live dispatch intent for a failed run.
+
+    Mutation check: drop the outbox UPDATE and ``append_event`` from
+    ``agent_run_service.terminalize_stale_run`` and
+    ``pytest -q backend/tests/unit/tasks/test_sweepers.py -k closes_its_ledger``
+    fails on ``assert (False, 'pending') == (True, 'failed')``.
+    """
+    job_id = await _seed_stream_submission(
+        session_factory, status=seed_status, cancel_requested_at=cancel_marker
+    )
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    assert (await _status(session_factory, job_id))[0] == expected_status
+    assert await _ledger_and_outbox(session_factory, job_id) == (True, "failed")
+    async with session_factory() as db:
+        events = (
+            (
+                await db.execute(
+                    select(AgentRunEvent.event_type)
+                    .where(AgentRunEvent.run_id == job_id)
+                    .order_by(AgentRunEvent.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert events == [RunEventType.RUN_CREATED.value, expected_event]
+
+
 @pytest.mark.asyncio
 async def test_terminal_and_recent_rows_untouched(session_factory):
     done_id = await _seed(session_factory, status="completed", updated_at=VERY_STALE)
@@ -140,7 +235,10 @@ async def test_live_leased_row_belongs_to_its_worker(session_factory):
         status="running",
         updated_at=STALE,
         lease_owner="celery:other",
-        lease_expires_at=NOW + timedelta(minutes=5),
+        # From the clock at run time, not the import-time NOW: the sweeper
+        # compares against the real clock, and a full xdist run can start
+        # this test more than 5 minutes after collection.
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     p1, p2, p3 = _sweep(session_factory)
     with p1, p2, p3:

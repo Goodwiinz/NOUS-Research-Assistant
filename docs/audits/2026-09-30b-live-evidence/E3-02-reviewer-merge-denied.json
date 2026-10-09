@@ -1,0 +1,28 @@
+{
+  "step": "E3-02-reviewer-merge-denied",
+  "as": "reviewer",
+  "at": "2026-09-30T21:07:26.233963+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/reports/merge",
+    "body": {
+      "surviving_report_id": "0642117c-91a3-4ca4-ba56-9eeda4a5d48f",
+      "merged_report_ids": [
+        "284229e8-49e8-4da4-b8fc-c802fed20f8f"
+      ],
+      "rationale": "same untitled-DOI record re-imported in receipt v2",
+      "idempotency_key": "<redacted>"
+    }
+  },
+  "status": 403,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "adjudicator role required",
+      "status_code": 403,
+      "type": "http_error"
+    }
+  }
+}

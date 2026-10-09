@@ -5,6 +5,7 @@ import {
   clearArmedChatAuthRecovery,
   consumeChatAuthRecovery,
   discardChatAuthRecovery,
+  discardForeignChatAuthRecovery,
   markChatAuthRecoveryReady,
   stageChatAuthRecovery,
 } from '@/hooks/chat/chatAuthRecovery';
@@ -86,6 +87,19 @@ describe('chatAuthRecovery session handoff', () => {
         2_000
       )
     ).toBeNull();
+    expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+  });
+
+  it("discards another account's prompt at the account boundary but keeps the owner's", () => {
+    stageChatAuthRecovery(ATTEMPT_A, 1_000);
+    markChatAuthRecoveryReady('attempt-A', 2_000);
+
+    discardForeignChatAuthRecovery('user-A', 2_000);
+    expect(
+      sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)
+    ).not.toBeNull();
+
+    discardForeignChatAuthRecovery('user-B', 2_000);
     expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
   });
 
@@ -182,6 +196,9 @@ describe('chatAuthRecovery session handoff', () => {
         clearArmedChatAuthRecovery('attempt-A', 2_000)
       ).not.toThrow();
       expect(() => discardChatAuthRecovery('attempt-A', 2_000)).not.toThrow();
+      expect(() =>
+        discardForeignChatAuthRecovery('user-B', 2_000)
+      ).not.toThrow();
       expect(
         consumeChatAuthRecovery(
           { ownerUserId: 'user-A', threadId: 'thread-A' },

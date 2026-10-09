@@ -18,6 +18,8 @@
 import { API_CONFIG, APIErrorClass, DEFAULT_HEADERS } from '@/types/api';
 import { parseErrorBody } from '@/utils/parseErrorBody';
 import { ZodSchema } from 'zod';
+import { composeAbortSignals } from '@/lib/abort-signals';
+import { getAccountSignal } from '@/lib/account-session';
 
 // ============================================================================
 // Types
@@ -57,35 +59,6 @@ export interface UploadOptions {
 export interface BinaryDownloadExpectation {
   contentType?: string;
   signature?: string;
-}
-
-function composeAbortSignals(signals: AbortSignal[]): {
-  signal: AbortSignal;
-  cleanup: () => void;
-} {
-  if (signals.length === 1) {
-    return { signal: signals[0], cleanup: () => undefined };
-  }
-
-  const controller = new AbortController();
-  const listeners = signals.map((source) => {
-    const relayAbort = (): void => controller.abort(source.reason);
-    if (source.aborted) {
-      relayAbort();
-    } else {
-      source.addEventListener('abort', relayAbort, { once: true });
-    }
-    return { source, relayAbort };
-  });
-
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      listeners.forEach(({ source, relayAbort }) => {
-        source.removeEventListener('abort', relayAbort);
-      });
-    },
-  };
 }
 
 // ============================================================================
@@ -135,7 +108,7 @@ export class APIClient {
    * security gain. The two authz-decision sites (authStore initialize/
    * fetchProfile) use getUser().
    */
-  private async ensureAuth(): Promise<void> {
+  private async ensureAuth(accountSignal: AbortSignal): Promise<void> {
     if (this.explicitToken) {
       this.token = this.explicitToken;
       return;
@@ -144,12 +117,15 @@ export class APIClient {
 
     try {
       const { createClient } = await import('@/lib/supabase/client');
+      accountSignal.throwIfAborted();
       const supabase = createClient();
       const {
         data: { session },
       } = await supabase.auth.getSession();
+      accountSignal.throwIfAborted();
       this.token = session?.access_token ?? null;
     } catch (error) {
+      accountSignal.throwIfAborted();
       console.warn('Failed to load auth from Supabase session:', error);
     }
   }
@@ -172,7 +148,9 @@ export class APIClient {
 
   async request<T>(endpoint: string, options: RequestConfig = {}): Promise<T> {
     // Ensure we have auth from Supabase session before making requests
-    await this.ensureAuth();
+    const accountSignal = getAccountSignal();
+    await this.ensureAuth(accountSignal);
+    accountSignal.throwIfAborted();
 
     const {
       retries = API_CONFIG.RETRY_ATTEMPTS || 3,
@@ -197,7 +175,9 @@ export class APIClient {
     const controller = new AbortController();
     const callerSignal = fetchOptions.signal;
     const { signal, cleanup: cleanupAbortSignals } = composeAbortSignals(
-      callerSignal ? [callerSignal, controller.signal] : [controller.signal]
+      callerSignal
+        ? [accountSignal, callerSignal, controller.signal]
+        : [accountSignal, controller.signal]
     );
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -209,6 +189,7 @@ export class APIClient {
       });
 
       clearTimeout(timeoutId);
+      accountSignal.throwIfAborted();
 
       if (!response.ok) {
         const error = await this.handleErrorResponse(response);
@@ -221,9 +202,12 @@ export class APIClient {
         return {} as T;
       }
 
-      return await response.json();
+      const data = await response.json();
+      accountSignal.throwIfAborted();
+      return data;
     } catch (error) {
       clearTimeout(timeoutId);
+      accountSignal.throwIfAborted();
 
       // Caller cancellation is control flow, not a timeout or retryable error.
       if (callerSignal?.aborted) {
@@ -248,6 +232,7 @@ export class APIClient {
         this.isRetryableError(error)
       ) {
         await this.delay(retryDelay);
+        accountSignal.throwIfAborted();
         return this.request<T>(endpoint, {
           ...options,
           retries: retries - 1,
@@ -268,45 +253,59 @@ export class APIClient {
     options: RequestConfig = {}
   ): Promise<TypedResponse<T>> {
     // Keep auth behavior consistent with request()
-    await this.ensureAuth();
-
-    const response = await fetch(
-      endpoint.startsWith('http') ? endpoint : `${this.baseURL}${endpoint}`,
-      {
-        ...options,
-        headers: this.mergeHeaders(options.headers, options.body),
-      }
+    const accountSignal = getAccountSignal();
+    const { signal, cleanup } = composeAbortSignals(
+      options.signal ? [accountSignal, options.signal] : [accountSignal]
     );
+    try {
+      await this.ensureAuth(accountSignal);
+      accountSignal.throwIfAborted();
 
-    if (!response.ok) {
-      throw await this.handleErrorResponse(response);
-    }
+      const response = await fetch(
+        endpoint.startsWith('http') ? endpoint : `${this.baseURL}${endpoint}`,
+        {
+          ...options,
+          signal,
+          headers: this.mergeHeaders(options.headers, options.body),
+        }
+      );
 
-    const rawData = await response.json();
-
-    // Validate with Zod schema
-    if (!options.skipValidation) {
-      const result = schema.safeParse(rawData);
-      if (!result.success) {
-        throw new APIErrorClass({
-          message: 'Response validation failed',
-          status_code: 500,
-          type: 'validation_error',
-          details: { errors: result.error.issues },
-        });
+      if (!response.ok) {
+        throw await this.handleErrorResponse(response);
       }
+
+      const rawData = await response.json();
+      accountSignal.throwIfAborted();
+
+      // Validate with Zod schema
+      if (!options.skipValidation) {
+        const result = schema.safeParse(rawData);
+        if (!result.success) {
+          throw new APIErrorClass({
+            message: 'Response validation failed',
+            status_code: 500,
+            type: 'validation_error',
+            details: { errors: result.error.issues },
+          });
+        }
+        return {
+          data: result.data,
+          status: response.status,
+          headers: response.headers,
+        };
+      }
+
       return {
-        data: result.data,
+        data: rawData,
         status: response.status,
         headers: response.headers,
       };
+    } catch (error) {
+      accountSignal.throwIfAborted();
+      throw error;
+    } finally {
+      cleanup();
     }
-
-    return {
-      data: rawData,
-      status: response.status,
-      headers: response.headers,
-    };
   }
 
   // --------------------------------------------------------------------------
@@ -453,39 +452,51 @@ export class APIClient {
     file: File,
     options: UploadOptions = {}
   ): Promise<T> {
-    await this.ensureAuth();
+    const accountSignal = getAccountSignal();
+    const { signal, cleanup } = composeAbortSignals(
+      options.signal ? [accountSignal, options.signal] : [accountSignal]
+    );
+    try {
+      await this.ensureAuth(accountSignal);
+      accountSignal.throwIfAborted();
 
-    const formData = new FormData();
-    formData.append('file', file);
+      const formData = new FormData();
+      formData.append('file', file);
 
-    // Add any additional metadata
-    if (options.metadata) {
-      Object.entries(options.metadata).forEach(([key, value]) => {
-        formData.append(key, value);
+      // Add any additional metadata
+      if (options.metadata) {
+        Object.entries(options.metadata).forEach(([key, value]) => {
+          formData.append(key, value);
+        });
+      }
+
+      // For progress tracking, we need to use XMLHttpRequest
+      if (options.onProgress) {
+        return await this.uploadWithProgress<T>(
+          endpoint,
+          formData,
+          options.onProgress,
+          signal
+        );
+      }
+
+      // Content-Type is intentionally not set here. request() strips the
+      // application/json default (from DEFAULT_HEADERS) for FormData bodies so the
+      // browser can set multipart/form-data with the boundary. Removing that strip
+      // would silently break this upload path — an empty headers object alone does
+      // NOT prevent the inherited JSON Content-Type.
+      return await this.request<T>(endpoint, {
+        method: 'POST',
+        body: formData,
+        headers: {},
+        signal: signal,
       });
+    } catch (error) {
+      accountSignal.throwIfAborted();
+      throw error;
+    } finally {
+      cleanup();
     }
-
-    // For progress tracking, we need to use XMLHttpRequest
-    if (options.onProgress) {
-      return this.uploadWithProgress<T>(
-        endpoint,
-        formData,
-        options.onProgress,
-        options.signal
-      );
-    }
-
-    // Content-Type is intentionally not set here. request() strips the
-    // application/json default (from DEFAULT_HEADERS) for FormData bodies so the
-    // browser can set multipart/form-data with the boundary. Removing that strip
-    // would silently break this upload path — an empty headers object alone does
-    // NOT prevent the inherited JSON Content-Type.
-    return this.request<T>(endpoint, {
-      method: 'POST',
-      body: formData,
-      headers: {},
-      signal: options.signal,
-    });
   }
 
   private uploadWithProgress<T>(
@@ -508,6 +519,7 @@ export class APIClient {
       }
 
       xhr.upload.onprogress = (event) => {
+        if (signal?.aborted) return;
         if (event.lengthComputable) {
           const progress = Math.round((event.loaded / event.total) * 100);
           onProgress(progress);
@@ -515,6 +527,7 @@ export class APIClient {
       };
 
       xhr.onload = () => {
+        if (signal?.aborted) return;
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             resolve(JSON.parse(xhr.responseText));
@@ -583,12 +596,15 @@ export class APIClient {
   }
 
   async download(url: string, filename?: string): Promise<void> {
-    await this.ensureAuth();
+    const accountSignal = getAccountSignal();
+    await this.ensureAuth(accountSignal);
+    accountSignal.throwIfAborted();
 
     const response = await fetch(
       url.startsWith('http') ? url : `${this.baseURL}${url}`,
       {
         headers: this.getHeaders(),
+        signal: accountSignal,
       }
     );
 
@@ -597,6 +613,8 @@ export class APIClient {
     }
 
     const blob = await response.blob();
+    accountSignal.throwIfAborted();
+    accountSignal.throwIfAborted();
     const downloadUrl = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = downloadUrl;
@@ -619,13 +637,16 @@ export class APIClient {
     body?: unknown,
     expectation?: BinaryDownloadExpectation
   ): Promise<void> {
-    await this.ensureAuth();
+    const accountSignal = getAccountSignal();
+    await this.ensureAuth(accountSignal);
+    accountSignal.throwIfAborted();
 
     const response = await fetch(
       url.startsWith('http') ? url : `${this.baseURL}${url}`,
       {
         method: 'POST',
         headers: this.getHeaders(),
+        signal: accountSignal,
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }
     );
@@ -635,6 +656,7 @@ export class APIClient {
     }
 
     const blob = await response.blob();
+    accountSignal.throwIfAborted();
     if (
       expectation &&
       !(await this.matchesDownloadExpectation(response, blob, expectation))
@@ -646,6 +668,7 @@ export class APIClient {
       });
     }
 
+    accountSignal.throwIfAborted();
     const downloadUrl = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = downloadUrl;
@@ -715,15 +738,19 @@ export class APIClient {
    * storage URL transparently. The caller owns the returned objectUrl and MUST
    * call URL.revokeObjectURL(objectUrl) when done to avoid leaking memory.
    */
-  async fetchObjectUrl(
+  /** Authenticated GET returning the raw body and the served content type. */
+  async fetchBlobWithType(
     url: string
-  ): Promise<{ objectUrl: string; contentType: string }> {
-    await this.ensureAuth();
+  ): Promise<{ blob: Blob; contentType: string }> {
+    const accountSignal = getAccountSignal();
+    await this.ensureAuth(accountSignal);
+    accountSignal.throwIfAborted();
 
     const response = await fetch(
       url.startsWith('http') ? url : `${this.baseURL}${url}`,
       {
         headers: this.getHeaders(),
+        signal: accountSignal,
       }
     );
 
@@ -732,10 +759,25 @@ export class APIClient {
     }
 
     const blob = await response.blob();
+    accountSignal.throwIfAborted();
     return {
-      objectUrl: window.URL.createObjectURL(blob),
+      blob,
       contentType: response.headers.get('content-type') || blob.type || '',
     };
+  }
+
+  /** Authenticated GET returning the raw body; callers decide how to render. */
+  async fetchBlob(url: string): Promise<Blob> {
+    return (await this.fetchBlobWithType(url)).blob;
+  }
+
+  async fetchObjectUrl(
+    url: string
+  ): Promise<{ objectUrl: string; contentType: string }> {
+    const accountSignal = getAccountSignal();
+    const { blob, contentType } = await this.fetchBlobWithType(url);
+    accountSignal.throwIfAborted();
+    return { objectUrl: window.URL.createObjectURL(blob), contentType };
   }
 
   // --------------------------------------------------------------------------

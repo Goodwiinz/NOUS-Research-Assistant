@@ -3,8 +3,9 @@ import toast from 'react-hot-toast';
 import { getNewChatUrl } from '@/components/chat/shared/chatNavigation';
 import { ChatConversation } from '@/hooks/chat/chatTypes';
 import { workspaceService } from '@/services/workspaceService';
-import { useChatStore } from '@/store/chat-store';
-import { useCallback, useState } from 'react';
+import { useChatSessionGuard } from './useChatSessionGuard';
+import { useChatStore, onChatSessionReset } from '@/store/chat-store';
+import { useCallback, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
 // ============================================
@@ -66,6 +67,7 @@ export function useChatThreadActions({
   activeThreadId,
 }: UseChatThreadActionsParams): UseChatThreadActionsReturn {
   const router = useRouter();
+  const isCurrentSession = useChatSessionGuard();
 
   // Dialog state for rename/delete — replaces window.prompt/confirm
   const [renameDialog, setRenameDialog] = useState<RenameDialogState>({
@@ -81,8 +83,24 @@ export function useChatThreadActions({
   const [bulkDeleteDialog, setBulkDeleteDialog] =
     useState<BulkDeleteDialogState>({ open: false, ids: [] });
 
+  useEffect(
+    () =>
+      onChatSessionReset(() => {
+        setRenameDialog({
+          open: false,
+          threadId: '',
+          currentTitle: '',
+          value: '',
+        });
+        setDeleteDialog({ open: false, threadId: '' });
+        setBulkDeleteDialog({ open: false, ids: [] });
+      }),
+    []
+  );
+
   const handleRenameThread = useCallback(
     async (threadId: string) => {
+      if (!isCurrentSession()) return;
       const target = conversations.find((c) => c.id === threadId);
       setRenameDialog({
         open: true,
@@ -91,10 +109,11 @@ export function useChatThreadActions({
         value: target?.title ?? '',
       });
     },
-    [conversations]
+    [conversations, isCurrentSession]
   );
 
   const commitRename = useCallback(async () => {
+    if (!isCurrentSession()) return;
     const { threadId, value, currentTitle } = renameDialog;
     const trimmed = value.trim();
     setRenameDialog((d) => ({ ...d, open: false }));
@@ -103,6 +122,7 @@ export function useChatThreadActions({
       const updated = await workspaceService.updateThread(threadId, {
         title: trimmed,
       });
+      if (!isCurrentSession()) return;
       const nextTitleValue = updated.title ?? trimmed;
       setConversations((prev) =>
         prev.map((c) =>
@@ -110,18 +130,20 @@ export function useChatThreadActions({
         )
       );
     } catch (err) {
+      if (!isCurrentSession()) return;
       // The dialog already closed optimistically, so without this the title
       // silently stays the old value and the rename looks like it worked.
       console.error('[Chat] Rename failed', err);
       toast.error('Could not rename the conversation. Please try again.');
     }
-  }, [renameDialog, setConversations]);
+  }, [renameDialog, setConversations, isCurrentSession]);
 
   const handleDeleteThread = useCallback((threadId: string) => {
     setDeleteDialog({ open: true, threadId });
   }, []);
 
   const commitDeleteThread = useCallback(async () => {
+    if (!isCurrentSession()) return;
     const { threadId } = deleteDialog;
     setDeleteDialog({ open: false, threadId: '' });
     // Route through the store action: it aborts the thread's in-flight page
@@ -129,6 +151,7 @@ export function useChatThreadActions({
     // freshness, reverse indexes). Calling workspaceService directly leaked
     // all of those for the deleted thread.
     const deleted = await useChatStore.getState().deleteThread(threadId);
+    if (!isCurrentSession()) return;
     if (!deleted) {
       toast.error('Could not delete the conversation. Please try again.');
       return;
@@ -138,18 +161,26 @@ export function useChatThreadActions({
       // The store already cleared currentThreadId; just leave the URL.
       router.push(getNewChatUrl());
     }
-  }, [deleteDialog, activeThreadId, router, setConversations]);
+  }, [
+    deleteDialog,
+    activeThreadId,
+    router,
+    setConversations,
+    isCurrentSession,
+  ]);
 
   const handleBulkDeleteThreads = useCallback((ids: string[]) => {
     setBulkDeleteDialog({ open: true, ids });
   }, []);
 
   const commitBulkDelete = useCallback(async () => {
+    if (!isCurrentSession()) return;
     const { ids } = bulkDeleteDialog;
     setBulkDeleteDialog({ open: false, ids: [] });
     // Same store-routing rationale as commitDeleteThread: one bulk API call,
     // then per-thread abort + cache cleanup inside the store action.
     const response = await useChatStore.getState().bulkDeleteThreads(ids);
+    if (!isCurrentSession()) return;
     if (!response) {
       toast.error(
         'Could not delete the selected conversations. Please try again.'
@@ -163,7 +194,13 @@ export function useChatThreadActions({
     if (activeThreadId && deletedIds.has(activeThreadId)) {
       router.push(getNewChatUrl());
     }
-  }, [bulkDeleteDialog, activeThreadId, router, setConversations]);
+  }, [
+    bulkDeleteDialog,
+    activeThreadId,
+    router,
+    setConversations,
+    isCurrentSession,
+  ]);
 
   return {
     // Dialog state

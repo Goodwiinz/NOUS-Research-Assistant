@@ -153,6 +153,21 @@ export function discardChatAuthRecovery(
   if (record?.attemptId === attemptId) removeRecoveryRecord(storage);
 }
 
+/**
+ * Drop a draft staged by any account other than `userId`. The chat route only
+ * consumes a draft once it reopens the owner's thread, which another account
+ * never does, so the account boundary must discard it.
+ */
+export function discardForeignChatAuthRecovery(
+  userId: string,
+  now = Date.now()
+): void {
+  const storage = recoveryStorage();
+  if (!storage) return;
+  const record = readRecoveryRecord(storage, now);
+  if (record && record.ownerUserId !== userId) removeRecoveryRecord(storage);
+}
+
 export function consumeChatAuthRecovery(
   owner: { ownerUserId: string; threadId: string },
   now = Date.now()

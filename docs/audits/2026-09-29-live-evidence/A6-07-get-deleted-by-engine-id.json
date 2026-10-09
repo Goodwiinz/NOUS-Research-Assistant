@@ -1,0 +1,21 @@
+{
+  "step": "A6-07-get-deleted-by-engine-id",
+  "as": "owner",
+  "at": "2026-09-29T10:17:46.121495+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/projects/b4e79731-f41e-499c-8ede-b4a7f50b1339",
+    "body": null
+  },
+  "status": 404,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Project not found",
+      "status_code": 404,
+      "type": "http_error"
+    }
+  }
+}

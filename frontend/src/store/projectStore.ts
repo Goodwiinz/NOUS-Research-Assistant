@@ -3,6 +3,7 @@
  */
 
 import { create } from 'zustand';
+import { captureAccountSession } from '@/lib/account-session';
 import { getAppQueryClient } from '@/lib/query-client';
 import { projectService } from '@/services/projectService';
 import type {
@@ -143,15 +144,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // =========================================================================
 
   fetchProjects: async (params, options) => {
+    const isCurrentAccount = captureAccountSession();
     set({ loading: true, error: null });
     try {
       const response = await projectService.listProjects(params, options);
+      if (!isCurrentAccount()) return;
       set({
         projects: response.projects,
         total: response.total,
         loading: false,
       });
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       // Aborted requests (e.g., workspace switched or component unmounted
       // before the previous fetch settled) must still clear `loading` — the
       // common case is that a superseding fetch has already set it back to
@@ -173,6 +177,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   fetchProject: async (projectId) => {
+    const isCurrentAccount = captureAccountSession();
     if (inflightProjectFetch?.id === projectId) {
       return inflightProjectFetch.promise;
     }
@@ -182,6 +187,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const promise = (async () => {
       try {
         const project = await projectService.getProject(projectId);
+        if (!isCurrentAccount()) return;
         if (projectFetchToken !== requestToken) return; // superseded
         // Clear stale documents/notes from the previous project on switch
         const prev = get().currentProject;
@@ -196,6 +202,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           set({ currentProject: project, loading: false });
         }
       } catch (error: unknown) {
+        if (!isCurrentAccount()) return;
         if (projectFetchToken !== requestToken) return; // superseded
         console.error('[ProjectStore] Failed to fetch project:', error);
         set({
@@ -203,7 +210,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           loading: false,
         });
       } finally {
-        if (inflightProjectFetch?.id === projectId) {
+        if (
+          projectFetchToken === requestToken &&
+          inflightProjectFetch?.id === projectId
+        ) {
           inflightProjectFetch = null;
         }
       }
@@ -213,9 +223,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   createProject: async (data) => {
+    const isCurrentAccount = captureAccountSession();
     set({ mutating: true, error: null });
     try {
       const project = await projectService.createProject(data);
+      if (!isCurrentAccount())
+        throw new DOMException('Account changed', 'AbortError');
       set((state) => ({
         projects: [project, ...state.projects],
         total: state.total + 1,
@@ -223,6 +236,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }));
       return project;
     } catch (error: unknown) {
+      if (!isCurrentAccount()) throw error;
       console.error('[ProjectStore] Failed to create project:', error);
       set({
         error: getErrorMessage(error, 'Failed to create project'),
@@ -233,9 +247,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateProject: async (projectId, data) => {
+    const isCurrentAccount = captureAccountSession();
     set({ mutating: true, error: null });
     try {
       const updated = await projectService.updateProject(projectId, data);
+      if (!isCurrentAccount()) return;
       set((state) => ({
         projects: state.projects.map((p) => (p.id === projectId ? updated : p)),
         currentProject:
@@ -245,6 +261,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         mutating: false,
       }));
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to update project:', error);
       set({
         error: getErrorMessage(error, 'Failed to update project'),
@@ -255,9 +272,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   deleteProject: async (projectId) => {
+    const isCurrentAccount = captureAccountSession();
     set({ mutating: true, error: null });
     try {
       await projectService.deleteProject(projectId);
+      if (!isCurrentAccount()) return;
       set((state) => ({
         projects: state.projects.filter((p) => p.id !== projectId),
         currentProject:
@@ -266,6 +285,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         mutating: false,
       }));
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to delete project:', error);
       set({
         error: getErrorMessage(error, 'Failed to delete project'),
@@ -290,14 +310,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // =========================================================================
 
   fetchProjectDocuments: async (projectId) => {
+    const isCurrentAccount = captureAccountSession();
     set({ documentsLoading: true, error: null });
     try {
       const response = await projectService.listProjectDocuments(projectId);
+      if (!isCurrentAccount()) return;
       set({
         projectDocuments: response.documents,
         documentsLoading: false,
       });
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to fetch documents:', error);
       set({
         error: getErrorMessage(error, 'Failed to fetch documents'),
@@ -307,18 +330,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   addDocument: async (projectId, documentId) => {
+    const isCurrentAccount = captureAccountSession();
     set({ documentsLoading: true, error: null });
     try {
       const doc = await projectService.addDocumentToProject(
         projectId,
         documentId
       );
+      if (!isCurrentAccount()) return;
       set((state) => ({
         projectDocuments: [...state.projectDocuments, doc],
         documentsLoading: false,
       }));
       invalidateProjectQueries(projectId, 'documents');
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to add document:', error);
       set({
         error: getErrorMessage(error, 'Failed to add document'),
@@ -329,9 +355,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   removeDocument: async (projectId, documentId) => {
+    const isCurrentAccount = captureAccountSession();
     set({ documentsLoading: true, error: null });
     try {
       await projectService.removeDocumentFromProject(projectId, documentId);
+      if (!isCurrentAccount()) return;
       set((state) => ({
         projectDocuments: state.projectDocuments.filter(
           (d) => d.document_id !== documentId
@@ -340,6 +368,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }));
       invalidateProjectQueries(projectId, 'documents');
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to remove document:', error);
       set({
         error: getErrorMessage(error, 'Failed to remove document'),
@@ -354,16 +383,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // =========================================================================
 
   fetchProjectNotes: async (projectId, pinnedOnly = false) => {
+    const isCurrentAccount = captureAccountSession();
     set({ notesLoading: true, error: null });
     try {
       const response = await projectService.listProjectNotes(projectId, {
         pinned_only: pinnedOnly,
       });
+      if (!isCurrentAccount()) return;
       set({
         projectNotes: response.notes,
         notesLoading: false,
       });
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to fetch notes:', error);
       set({
         error: getErrorMessage(error, 'Failed to fetch notes'),
@@ -373,9 +405,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   createNote: async (projectId, data) => {
+    const isCurrentAccount = captureAccountSession();
     set({ notesLoading: true, error: null });
     try {
       const note = await projectService.createNote(projectId, data);
+      if (!isCurrentAccount())
+        throw new DOMException('Account changed', 'AbortError');
       set((state) => ({
         projectNotes: [note, ...state.projectNotes],
         notesLoading: false,
@@ -383,6 +418,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       invalidateProjectQueries(projectId, 'notes');
       return note;
     } catch (error: unknown) {
+      if (!isCurrentAccount()) throw error;
       console.error('[ProjectStore] Failed to create note:', error);
       set({
         error: getErrorMessage(error, 'Failed to create note'),
@@ -393,9 +429,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateNote: async (projectId, noteId, data) => {
+    const isCurrentAccount = captureAccountSession();
     set({ notesLoading: true, error: null });
     try {
       const updated = await projectService.updateNote(projectId, noteId, data);
+      if (!isCurrentAccount()) return;
       set((state) => ({
         projectNotes: state.projectNotes.map((n) =>
           n.id === noteId ? updated : n
@@ -404,6 +442,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }));
       invalidateProjectQueries(projectId, 'notes');
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to update note:', error);
       set({
         error: getErrorMessage(error, 'Failed to update note'),
@@ -414,15 +453,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   deleteNote: async (projectId, noteId) => {
+    const isCurrentAccount = captureAccountSession();
     set({ notesLoading: true, error: null });
     try {
       await projectService.deleteNote(projectId, noteId);
+      if (!isCurrentAccount()) return;
       set((state) => ({
         projectNotes: state.projectNotes.filter((n) => n.id !== noteId),
         notesLoading: false,
       }));
       invalidateProjectQueries(projectId, 'notes');
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to delete note:', error);
       set({
         error: getErrorMessage(error, 'Failed to delete note'),
@@ -433,8 +475,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   toggleNotePin: async (projectId, noteId) => {
+    const isCurrentAccount = captureAccountSession();
     try {
       const updated = await projectService.toggleNotePin(projectId, noteId);
+      if (!isCurrentAccount()) return;
       set((state) => ({
         projectNotes: state.projectNotes.map((n) =>
           n.id === noteId ? updated : n
@@ -442,6 +486,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }));
       invalidateProjectQueries(projectId, 'notes');
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to toggle pin:', error);
       set({
         error: getErrorMessage(error, 'Failed to toggle pin'),
@@ -455,14 +500,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // =========================================================================
 
   fetchBibliography: async (projectId, format = 'bibtex') => {
+    const isCurrentAccount = captureAccountSession();
     set({ loading: true, error: null });
     try {
       const bibliography = await projectService.getProjectBibliography(
         projectId,
         format
       );
+      if (!isCurrentAccount()) return;
       set({ bibliography, loading: false });
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to fetch bibliography:', error);
       set({
         error: getErrorMessage(error, 'Failed to fetch bibliography'),
@@ -472,9 +520,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   downloadBibliography: async (projectId, format = 'bibtex') => {
+    const isCurrentAccount = captureAccountSession();
     try {
       await projectService.downloadBibliography(projectId, format);
+      if (!isCurrentAccount()) return;
     } catch (error: unknown) {
+      if (!isCurrentAccount()) return;
       console.error('[ProjectStore] Failed to download bibliography:', error);
       set({
         error: getErrorMessage(error, 'Failed to download bibliography'),
@@ -492,6 +543,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   reset: () => {
+    projectFetchToken = null;
+    inflightProjectFetch = null;
     set({
       projects: [],
       currentProject: null,

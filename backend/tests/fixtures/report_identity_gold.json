@@ -1,0 +1,31 @@
+{
+  "description": "GOO-299 report identity gold set. 'gold' is the true report; identifier-only matching must never merge distinct gold reports (precision 1.0). The preprint/published pair shares no identifier and is expected to be missed (counts against recall by design).",
+  "min_recall": 0.85,
+  "records": [
+    {"id": "doi-a-crossref", "connector_type": "crossref", "gold": "A", "title": "Deep residual learning", "identifiers": {"doi": "10.1109/CVPR.2016.90"}},
+    {"id": "doi-a-openalex", "connector_type": "openalex", "gold": "A", "title": "Deep Residual Learning for Image Recognition", "identifiers": {"doi": "https://doi.org/10.1109/cvpr.2016.90", "openalex": "https://openalex.org/W2194775991"}},
+    {"id": "doi-a-s2", "connector_type": "semantic_scholar", "gold": "A", "title": "Deep residual learning", "identifiers": {"openalex": "W2194775991", "semantic_scholar": "2c03df8b48bf3fa39054345bafabfeff15bfd11d"}},
+    {"id": "doi-b-only", "connector_type": "crossref", "gold": "B", "title": "A trial of aspirin", "identifiers": {"doi": "10.1056/NEJMoa000001"}},
+    {"id": "pm-c-pubmed", "connector_type": "pubmed", "gold": "C", "title": "Statin therapy outcomes", "identifiers": {"pmid": "31234567"}},
+    {"id": "pm-c-crossref", "connector_type": "crossref", "gold": "C", "title": "Statin therapy outcomes", "identifiers": {"doi": "10.1001/jama.2019.1", "pmid": "31234567"}},
+    {"id": "pm-c-europepmc", "connector_type": "openalex", "gold": "C", "title": "Statin Therapy Outcomes.", "identifiers": {"doi": "doi:10.1001/JAMA.2019.1", "pmcid": "PMC6543210"}},
+    {"id": "pm-c-pmc", "connector_type": "pubmed", "gold": "C", "title": "Statin therapy outcomes", "identifiers": {"pmcid": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6543210/"}},
+    {"id": "arxiv-d-v1", "connector_type": "arxiv", "gold": "D", "title": "Attention is all you need", "identifiers": {"arxiv": "1706.03762v1"}},
+    {"id": "arxiv-d-v5", "connector_type": "arxiv", "gold": "D", "title": "Attention Is All You Need", "identifiers": {"arxiv": "http://arxiv.org/abs/1706.03762v5"}},
+    {"id": "arxiv-d-s2", "connector_type": "semantic_scholar", "gold": "D", "title": "Attention is All you Need", "identifiers": {"arxiv": "1706.03762", "semantic_scholar": "204e3073870fae3d05bcbc2f6a8e263d9b72e776"}},
+    {"id": "title-e1", "connector_type": "crossref", "gold": "E1", "title": "Machine learning in medicine", "identifiers": {"doi": "10.1000/ml.med.1"}},
+    {"id": "title-e2", "connector_type": "crossref", "gold": "E2", "title": "Machine learning in medicine", "identifiers": {"doi": "10.1000/ml.med.2"}},
+    {"id": "preprint-f", "connector_type": "arxiv", "gold": "F", "title": "Scaling laws for neural language models", "identifiers": {"arxiv": "2001.08361v1"}},
+    {"id": "published-f", "connector_type": "crossref", "gold": "F", "title": "Scaling laws for neural language models", "identifiers": {"doi": "10.5555/scaling.2020"}},
+    {"id": "published-f-openalex", "connector_type": "openalex", "gold": "F", "title": "Scaling Laws for Neural Language Models", "identifiers": {"doi": "10.5555/SCALING.2020", "openalex": "W3001279689"}},
+    {"id": "arxiv-g-v1", "connector_type": "arxiv", "gold": "G", "title": "Different paper, similar id prefix", "identifiers": {"arxiv": "1706.03763v1"}},
+    {"id": "no-id-h", "connector_type": "crossref", "gold": "H", "title": "Untitled workshop abstract", "identifiers": {}},
+    {"id": "rag-local-a", "connector_type": "rag_store", "gold": "A", "title": "Deep residual learning (uploaded PDF)", "identifiers": {"doi": "10.1109/cvpr.2016.90", "rag_store": "doc-1"}},
+    {"id": "rag-local-d", "connector_type": "rag_store", "gold": "D", "title": "Attention (uploaded PDF)", "identifiers": {"arxiv": "1706.03762v5", "rag_store": "doc-2"}}
+  ],
+  "known_false_merges": [
+    ["title-e1", "title-e2"],
+    ["arxiv-d-v1", "arxiv-g-v1"],
+    ["doi-a-crossref", "doi-b-only"]
+  ]
+}

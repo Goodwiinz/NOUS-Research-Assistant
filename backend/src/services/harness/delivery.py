@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
-from src.models.chat_message import ChatMessage
+from src.models.chat_message import ChatMessage, MessageRole
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
 from src.models.integration_grant import IntegrationGrant
 from src.schemas.harness import BridgeCommand, BridgeEvent, Observation, ProducerEvent
@@ -25,7 +25,7 @@ from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
 from src.services.harness.runs import authorize_external_submission
 from src.services.integrations.context import IntegrationAccessDenied, _validate_grant
-from src.shared.enums import JobStatus
+from src.shared.enums import AgentOutboxStatus, JobStatus
 
 TERMINAL = {
     "completed": JobStatus.COMPLETED,
@@ -106,6 +106,35 @@ async def dispatch_pending(db: AsyncSession) -> int:
     """Lease accepted outbox intents into durable device commands (no network)."""
     if not settings.HARNESS_BRIDGE_ENABLED:
         return 0
+
+    async def terminalize(outbox: Any, run: Any, *, cancelled: bool) -> None:
+        """Close an accepted run that cannot be handed to the local process."""
+        outbox.status = AgentOutboxStatus.FAILED.value
+        outbox.updated_at = now()
+        if cancelled:
+            await finalize_submission(
+                db,
+                run_id=run.job_id,
+                status=JobStatus.CANCELLED,
+                organization_id=run.organization_id,
+                event_type=RunEventType.RUN_CANCELLED,
+                payload={"reason": "Cancelled before local execution started."},
+                provider="codex",
+            )
+            return
+        message = "Local Codex could not be started."
+        await finalize_submission(
+            db,
+            run_id=run.job_id,
+            status=JobStatus.FAILED,
+            organization_id=run.organization_id,
+            event_type=RunEventType.RUN_FAILED,
+            payload={"code": "harness_dispatch_failed", "message": message},
+            error_code="harness_dispatch_failed",
+            error=message,
+            provider="codex",
+        )
+
     try:
         rows = (
             await db.scalars(
@@ -123,7 +152,16 @@ async def dispatch_pending(db: AsyncSession) -> int:
         for raw_outbox in rows:
             outbox: Any = raw_outbox
             run, session = await _locked(db, str(outbox.run_id))
-            if JobStatus(run.status).is_terminal or run.cancel_requested_at is not None:
+            if JobStatus(run.status).is_terminal:
+                outbox.status = AgentOutboxStatus.FAILED.value
+                outbox.updated_at = now()
+                session.workspace_locked = False
+                continue
+            if (
+                run.cancel_requested_at is not None
+                or JobStatus(run.status) is JobStatus.STOPPING
+            ):
+                await terminalize(outbox, run, cancelled=True)
                 continue
             grant = await db.get(
                 IntegrationGrant, session.grant_id, populate_existing=True
@@ -132,9 +170,19 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 grant = await _validate_grant(db, grant)
                 await _authorize(db, grant_context(grant), run, session)
             except IntegrationAccessDenied:
+                await terminalize(outbox, run, cancelled=False)
                 continue
-            message: Any = await db.get(ChatMessage, run.user_message_id)
-            if message is None or not message.content:
+            message: Any = (
+                await db.get(ChatMessage, run.user_message_id)
+                if run.user_message_id is not None
+                else None
+            )
+            if (
+                message is None
+                or not isinstance(message.content, str)
+                or not message.content.strip()
+            ):
+                await terminalize(outbox, run, cancelled=False)
                 continue
             db.add(
                 HarnessCommand(
@@ -192,8 +240,14 @@ async def lease_commands(
         ).all()
         result = []
         for candidate in sessions:
-            run, session = await _locked(db, candidate.run_id)
-            await _authorize(db, context, run, session)
+            try:
+                run, session = await _locked(db, candidate.run_id)
+                await _authorize(db, context, run, session)
+            except IntegrationAccessDenied:
+                # One unauthorized session must not starve the device's others.
+                # Stay locked: releasing needs terminal evidence only the
+                # reconcile/projection path has.
+                continue
             session.grant_id = grant.id
             if (
                 run.cancel_requested_at
@@ -418,9 +472,20 @@ async def project_terminal(db: AsyncSession, run_id: str) -> int:
             _persist_assistant_message_safe,
         )
 
+        # A turn that fails or is interrupted before any assistant text leaves
+        # no deltas. ChatMessageResponse requires non-empty content, so an empty
+        # row would 500 every subsequent read of the thread (GET .../messages).
+        text = (
+            "".join(content)
+            or {
+                "failed": "External execution failed.",
+                "interrupted": "External execution was stopped.",
+                "completed": "External execution completed without output.",
+            }[state]
+        )
         assistant_id = await _persist_assistant_message_safe(
             thread_id=thread,
-            content="".join(content),
+            content=text,
             model_name="codex",
             tool_executions_out=None,
             stopped=state == "interrupted",
@@ -464,6 +529,28 @@ async def project_terminal(db: AsyncSession, run_id: str) -> int:
         receipt.canonical_seq = seq
     await db.commit()
     return seq
+
+
+async def has_assistant_projection(db: AsyncSession, run: Any) -> bool:
+    """Whether a Codex run's outcome is already an assistant transcript row.
+
+    ``project_terminal`` keys that row by ``client_message_id = run id``. It is
+    the only stable link: a failed projection leaves
+    ``AgentRun.assistant_message_id`` NULL. ``dispatch_pending`` closes a run the
+    local process never received without writing any row, so for that run the
+    terminal ledger event is the only record of its outcome. Read-only.
+    """
+    return (
+        await db.scalar(
+            select(ChatMessage.id)
+            .where(
+                ChatMessage.thread_id == run.thread_id,
+                ChatMessage.role == MessageRole.ASSISTANT,
+                ChatMessage.client_message_id == run.job_id,
+            )
+            .limit(1)
+        )
+    ) is not None
 
 
 async def reconcile_pending(db: AsyncSession) -> int:
@@ -529,7 +616,10 @@ async def lease_runs(
         result: dict[str, int] = {}
         for session in sessions:
             run: Any = await db.get(AgentRun, session.run_id, populate_existing=True)
-            await _authorize(db, context, run, session)
+            try:
+                await _authorize(db, context, run, session)
+            except IntegrationAccessDenied:
+                continue  # Skipped, still locked; see lease_commands.
             result[session.run_id] = session.generation
         await db.commit()
         return result

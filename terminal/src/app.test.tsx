@@ -6,11 +6,17 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
 import { render, cleanup } from "ink-testing-library";
+import { AssistantRuntimeProvider } from "@assistant-ui/react-ink";
+import {
+  MessageByIndexProvider,
+  useExternalStoreRuntime,
+} from "@assistant-ui/core/react";
 import type { RuntimeMessage } from "@nous/chat-runtime/types";
 import { saveConfig } from "../../frontend/cli/auth/store";
 import { streamReply, terminalText, type Approve } from "./adapter";
 import { App } from "./app";
 import { useTerminalSession } from "./session";
+import { Message } from "./ui";
 
 let configDir: string;
 const originalConfigDir = process.env.NOUS_CONFIG_DIR;
@@ -79,6 +85,55 @@ test("React resolves independently for the web and terminal", () => {
       createRequire(terminal.resolve(name))("react"),
       terminal("react"),
     );
+  }
+});
+
+test("a failed clipboard write never displays Copied", async () => {
+  const failures: string[] = [];
+  const messages = [
+    {
+      id: "clipboard-test",
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Clipboard test message" }],
+    },
+  ];
+  function Probe() {
+    const runtime = useExternalStoreRuntime({
+      messages,
+      convertMessage: (message) => message,
+      isRunning: false,
+      onNew: async () => {},
+    });
+    return (
+      <AssistantRuntimeProvider runtime={runtime}>
+        <MessageByIndexProvider index={0}>
+          <Message
+            index={0}
+            report={(promise) => {
+              void promise.catch((error) => failures.push(String(error)));
+            }}
+          />
+        </MessageByIndexProvider>
+      </AssistantRuntimeProvider>
+    );
+  }
+  const originalPath = process.env.PATH;
+  try {
+    const ui = render(<Probe />);
+    await until(() => !!ui.lastFrame()?.includes("[Copy]"), "Copy mounts");
+    // Prevent every native clipboard provider from launching in this process.
+    process.env.PATH = configDir;
+    ui.stdin.write("\t");
+    await delay(50);
+    ui.stdin.write("\r");
+    await until(() => failures.length === 1, "Clipboard failure is reported");
+    await delay(50);
+    assert.match(failures[0], /No clipboard provider found/);
+    assert.doesNotMatch(ui.lastFrame()!, /\[Copied\]/);
+    assert.match(ui.lastFrame()!, /\[Copy\]/);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
   }
 });
 
@@ -200,6 +255,103 @@ for (const approved of [true, false]) {
     ui.unmount();
   });
 }
+
+test("an approval decision typed as soon as the prompt renders is not lost", async () => {
+  // Regression for GOO-397: the composer unmounts and the approval prompt
+  // mounts in the same commit, so a focus-based input only becomes active a
+  // few commits later and keystrokes in that window were silently dropped.
+  const calls: string[] = [];
+  mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+    calls.push(String(url));
+    return calls.length === 1
+      ? response([
+          [
+            "confirmation",
+            {
+              thread_id: "thread-1",
+              confirmation: { tool_name: "create_note", tool_args: {} },
+            },
+          ],
+        ])
+      : response([["token", { content: "Note created" }], ["done", {}]]);
+  });
+  const ui = render(<App />);
+  await until(
+    () =>
+      ui.frames.length > 1 && (ui.lastFrame()?.includes("Ask NOUS") ?? false),
+    "Composer mounts",
+  );
+  ui.stdin.write("Find papers");
+  await until(
+    () => ui.lastFrame()?.includes("Find papers") ?? false,
+    "Input is visible",
+  );
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Approval required") ?? false,
+    "Approval is visible",
+  );
+  // No delay: type the decision in the very next tick after the prompt shows.
+  ui.stdin.write("yes");
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Note created") ?? false,
+    "Resumed response renders without waiting for focus",
+  );
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /\/agent\/stream\/confirm$/);
+  ui.unmount();
+});
+
+test("a pasted single-chunk decision submits once and shows no control characters", async () => {
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return calls.length === 1
+        ? response([
+            [
+              "confirmation",
+              {
+                thread_id: "thread-1",
+                confirmation: { tool_name: "create_note", tool_args: {} },
+              },
+            ],
+          ])
+        : response([["token", { content: "Request denied" }], ["done", {}]]);
+    },
+  );
+  const ui = render(<App />);
+  await until(
+    () =>
+      ui.frames.length > 1 && (ui.lastFrame()?.includes("Ask NOUS") ?? false),
+    "Composer mounts",
+  );
+  ui.stdin.write("Find papers");
+  await until(
+    () => ui.lastFrame()?.includes("Find papers") ?? false,
+    "Input is visible",
+  );
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Approval required") ?? false,
+    "Approval is visible",
+  );
+  // One chunk, as a terminal paste delivers it; a second Enter must not
+  // post a second decision.
+  ui.stdin.write("no\r");
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Request denied") ?? false,
+    "Resumed response renders from a single-chunk paste",
+  );
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].body, { thread_id: "thread-1", confirmed: false });
+  assert.doesNotMatch(ui.frames.join("\n"), /no\r/);
+  ui.unmount();
+});
 
 test("Ctrl+C during approval cancels without posting a decision", async () => {
   const fetch = mock.method(globalThis, "fetch", async () =>

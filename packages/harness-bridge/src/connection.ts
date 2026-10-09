@@ -102,6 +102,8 @@ export type Ack = {
   generation: number;
   canonicalSeq: number;
 };
+/** NOUS refused this run's events while the device grant stayed valid. */
+export type Rejection = Omit<Ack, "canonicalSeq"> & { code: "run_access_denied" };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const obj = (v: unknown): v is Record<string, any> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -185,10 +187,27 @@ export async function connectBridge(options: {
   journal: Journal;
   adapterFor: (workspaceId: string, runId: string) => HarnessAdapter;
   signal: AbortSignal;
+  // Test seam; production uses the defaults below.
+  timing?: { pollMs?: number; livenessMs?: number; connectMs?: number };
 }): Promise<void> {
+  const pollMs = options.timing?.pollMs ?? 5000;
+  // The server answers every poll, so silence for three poll periods means
+  // the peer is gone even if no close frame ever arrives (a backend restart
+  // left a half-open socket and the bridge sat idle forever). Undici's
+  // WebSocket has no idle or connect timeout of its own.
+  const livenessMs = options.timing?.livenessMs ?? pollMs * 3;
+  const connectMs = options.timing?.connectMs ?? 15_000;
   const url = new URL(options.url);
-  if (url.protocol !== "wss:" || url.username || url.password || url.search)
-    throw new Error("WSS without URL credentials required");
+  const loopbackWs =
+    url.protocol === "ws:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (
+    (url.protocol !== "wss:" && !loopbackWs) ||
+    url.username ||
+    url.password ||
+    url.search
+  )
+    throw new Error("WSS (or local loopback ws) without URL credentials required");
   // Node 24's builtin Undici WebSocket accepts a WebSocketInit with headers.
   const Socket = WebSocket as unknown as new (
     url: string,
@@ -212,24 +231,36 @@ export async function connectBridge(options: {
   };
   await new Promise<void>((resolve, reject) => {
     let interval: ReturnType<typeof setInterval> | undefined;
+    let lastFrameAt = Date.now();
     const finish = (error?: Error) => {
       if (interval) clearInterval(interval);
+      clearTimeout(connectTimer);
       options.signal.removeEventListener("abort", abort);
       socket.close();
       error ? reject(error) : resolve();
     };
     const abort = () => finish();
     options.signal.addEventListener("abort", abort, { once: true });
+    const connectTimer = setTimeout(
+      () => finish(new Error("bridge connect timeout")),
+      connectMs,
+    );
     socket.addEventListener("open", () => {
+      clearTimeout(connectTimer);
+      lastFrameAt = Date.now();
       socket.send(JSON.stringify({ poll: true, deviceId: options.deviceId }));
       interval = setInterval(() => {
+        if (Date.now() - lastFrameAt > livenessMs) {
+          finish(new Error("bridge liveness timeout"));
+          return;
+        }
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(
             JSON.stringify({ poll: true, deviceId: options.deviceId }),
           );
           sendPending();
         }
-      }, 5000);
+      }, pollMs);
       sendPending();
       chain = chain
         .then(async () => {
@@ -241,6 +272,7 @@ export async function connectBridge(options: {
         .catch(finish);
     });
     socket.addEventListener("message", (message) => {
+      lastFrameAt = Date.now();
       chain = chain
         .then(async () => {
           if (
@@ -252,6 +284,27 @@ export async function connectBridge(options: {
           if (value.ack) {
             journal.acknowledge(value.ack);
             sent.delete(`${value.ack.sourceId}/${value.ack.sourceSeq}`);
+            sendPending();
+            return;
+          }
+          if (value.reject) {
+            // NOUS refused this run's events while the grant stayed valid
+            // (backend/src/api/harness.py): final for that run; keep serving
+            // the device's other runs instead of reconnecting into it again.
+            // journal.reject() checks the run id against its own command, so
+            // the id logged is never raw server text. It returns false for a
+            // run already refused or finished: one notice per run.
+            if (journal.reject(value.reject))
+              // reject() releases the bridge's lock only once the run's
+              // terminal observation is journaled; mid-run the run keeps it.
+              // NOUS keeps its own lock unless the refused event was the
+              // replay of one it had stored.
+              console.error(
+                journal.holdsLock(value.reject.sourceId)
+                  ? `NOUS refused run ${value.reject.runId}: its output is no longer uploaded, and its folder stays reserved until you revoke this device's access at /integrations/devices and connect again, or run disconnect, connect and workspace add (either also stops the device's other runs).`
+                  : `NOUS refused run ${value.reject.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder. If NOUS still reports the folder busy, revoke this device's access at /integrations/devices and connect again, or run disconnect, connect and workspace add (either also stops the device's other runs).`,
+              );
+            sent.delete(`${value.reject.sourceId}/${value.reject.sourceSeq}`);
             sendPending();
             return;
           }
@@ -289,7 +342,10 @@ export async function connectBridge(options: {
             await journal.execute(c, a);
           }
           for (const c of journal.activeCommands()) {
-            if (journal.state(c.commandId) === "recovering")
+            const state = journal.state(c.commandId);
+            // A refused run is not recovered: reconcile only reads its turn
+            // back and re-arms its watchdog (Journal.reconcile).
+            if (state === "recovering" || state === "denied")
               await journal.reconcile(
                 c.commandId,
                 options.adapterFor(c.workspaceId, c.runId),

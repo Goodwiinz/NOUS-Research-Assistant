@@ -367,7 +367,8 @@ async def health_check():
 
 ### 1. File Upload Security
 ```python
-# Configure in src/middleware/file_upload_security.py
+# Enforced in src/services/documents/file_service.py (FileService.validate_file);
+# the former src/middleware/file_upload_security.py was dead code, deleted in I10.
 MAX_FILE_SIZE_MB = 50
 ALLOWED_MIME_TYPES = [
     "application/pdf",

@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import React from 'react';
-import { render, screen, type RenderResult } from '@testing-library/react';
+import { screen, type RenderResult } from '@testing-library/react';
+import { render } from '@/test/test-utils';
 
+vi.mock('@/services/artifactService', () => ({
+  artifactService: { listThreadArtifacts: vi.fn().mockResolvedValue([]) },
+}));
+
+import { artifactService } from '@/services/artifactService';
+import { useChatStore } from '@/store/chat-store';
 import { makeChatPageMessage } from '@/test/chatMessageFactory';
 import { ChatRuntimeProvider } from '../ChatRuntimeProvider';
 import { AuiMessageByIndex } from '../AuiMessage';
@@ -133,6 +140,78 @@ describe('AuiMessage error category', () => {
     expect(
       screen.queryByRole('button', { name: /retry/i })
     ).not.toBeInTheDocument();
+  });
+
+  it('names a computer bound to another chat and keeps Retry', () => {
+    // Retry re-sends with the composer's CURRENT computer, so it succeeds
+    // once the user picks another one or connects this one to the chat.
+    renderErrorMessage('device_bound_to_another_chat');
+    expect(
+      screen.getByText(
+        'This computer is bound to another chat — connect it to this chat or pick another computer.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it('keeps a late generated file reachable under a failed, id-less latest row', async () => {
+    useChatStore.setState({ currentThreadId: 't1' });
+    vi.mocked(artifactService.listThreadArtifacts).mockResolvedValueOnce([
+      {
+        version: {
+          artifactId: 'a1',
+          versionId: 'v1',
+          parentVersionId: null,
+          title: 'late.png',
+          mimeType: 'image/png',
+          byteSize: 7,
+          sha256: 'x',
+          createdAt: '2026-09-30T00:00:00Z',
+          producer: 'harness',
+          sourceIds: [],
+        },
+        reference: {
+          artifactId: 'a1',
+          versionId: 'v1',
+          runId: 'r1',
+          threadId: 't1',
+          messageId: null,
+        },
+      },
+    ]);
+    const messages = [
+      makeChatPageMessage({
+        id: 'u1',
+        role: 'user',
+        content: 'go',
+        timestamp: 1,
+      }),
+      {
+        ...makeChatPageMessage({
+          id: 'a1',
+          role: 'assistant',
+          content: '',
+          timestamp: 2,
+        }),
+        id: undefined,
+        error: {
+          message: 'This response failed to generate. Please try again.',
+        },
+      },
+    ];
+    render(
+      <ChatRuntimeProvider
+        messages={messages}
+        isRunning={false}
+        onSend={noop}
+        onCancel={noop}
+      >
+        <AuiMessageByIndex index={1} message={messages[1]} onRetry={noop} />
+      </ChatRuntimeProvider>
+    );
+    expect(
+      await screen.findByRole('button', { name: /Open late\.png/ })
+    ).toBeInTheDocument();
   });
 
   it('always renders the primary error message itself', () => {

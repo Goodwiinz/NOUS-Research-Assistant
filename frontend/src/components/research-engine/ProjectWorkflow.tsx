@@ -1,9 +1,17 @@
 'use client';
 
-import { useCallback, useState, type ReactElement } from 'react';
+import {
+  useCallback,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Trash2, Workflow } from 'lucide-react';
-import type { Project } from '@/services/projectService';
+import { DraftClaimsPanel } from '@/components/research/DraftClaimsPanel';
+import { useAuth } from '@/hooks/useAuth';
+import { projectService, type Project } from '@/services/projectService';
+import { useProjectStore } from '@/store/projectStore';
 import {
   assignProjectRole,
   createProject,
@@ -11,19 +19,79 @@ import {
   removeProjectRole,
   type ResearchProjectRole,
 } from '@/services/researchEngineService';
+import { AppraisalPanel } from './AppraisalPanel';
 import { BlueprintEditor } from './BlueprintEditor';
+import { CorpusPanel } from './CorpusPanel';
+import { EvidenceTablePanel } from './EvidenceTablePanel';
+import { SynthesisPanel } from './SynthesisPanel';
+import { JourneyRail } from './JourneyRail';
+import { PrismaFlowCard } from './PrismaFlowCard';
 import { ProtocolPanel } from './ProtocolPanel';
+import { ReportIdentityPanel } from './ReportIdentityPanel';
+import { ReviewVersionsPanel } from './ReviewVersionsPanel';
+import { ScreeningConflictsPanel } from './ScreeningConflictsPanel';
+import { ScreeningQueuePanel } from './ScreeningQueuePanel';
+import { SearchSchedulePanel } from './SearchSchedulePanel';
 
 interface ProjectWorkflowProps {
   project: Project;
+  /** Switches the project page tab (GOO-308 Extract/Write shortcuts). */
+  onOpenTab?: (tab: 'matrix' | 'drafts') => void;
+}
+
+/** One journey stage's anchor; the rail links to ``#journey-<key>``. */
+function Stage({
+  id,
+  title,
+  children,
+}: {
+  id: string;
+  title: string;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <section
+      id={`journey-${id}`}
+      aria-labelledby={`journey-${id}-title`}
+      className="scroll-mt-4 space-y-6"
+    >
+      <h2
+        id={`journey-${id}-title`}
+        className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+      >
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function OpenTab({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md border border-border px-3 py-1.5 text-sm text-foreground"
+    >
+      {label}
+    </button>
+  );
 }
 
 const ROLES: ResearchProjectRole[] = ['reviewer', 'adjudicator', 'supervisor'];
 
 export function ProjectWorkflow({
   project,
+  onOpenTab,
 }: ProjectWorkflowProps): ReactElement {
   const queryClient = useQueryClient();
+  const userId = useAuth().user?.id;
   const [enabledExtension, setEnabledExtension] = useState<{
     projectId: string;
     engineProjectId: string;
@@ -74,6 +142,23 @@ export function ProjectWorkflow({
         engineProjectId: extension.research_engine_project_id,
       });
       void queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      // The page renders the project from the project store; patch it from
+      // the create response so a remount keeps research_engine_project_id.
+      // No fetchProject: it would join a pre-create in-flight GET, and if the
+      // user already left for another project it would supersede that fetch.
+      // ponytail: a pre-create GET still in flight can overwrite this patch;
+      // a store-level request generation counter fixes that if it shows up.
+      useProjectStore.setState((state) =>
+        state.currentProject?.id === project.id
+          ? {
+              currentProject: {
+                ...state.currentProject,
+                research_engine_project_id:
+                  extension.research_engine_project_id,
+              },
+            }
+          : {}
+      );
     },
   });
 
@@ -83,6 +168,15 @@ export function ProjectWorkflow({
     enabled: Boolean(engineProjectId),
     retry: false,
   });
+  const currentDraft = useQuery({
+    queryKey: ['project', project.id, 'drafts', 'current'],
+    queryFn: () => projectService.getCurrentDraft(project.id),
+    enabled: Boolean(engineProjectId),
+    retry: false,
+  });
+  const myRoles = (roles.data ?? [])
+    .filter((assignment) => assignment.user_id === userId)
+    .map((assignment) => assignment.role);
 
   if (!engineProjectId) {
     return (
@@ -132,19 +226,85 @@ export function ProjectWorkflow({
           This archived project is read-only.
         </p>
       )}
-      <BlueprintEditor
-        key={project.id}
-        projectId={project.id}
-        readOnly={!canEdit}
-        approvedProtocolVersionId={approvedProtocolVersionId}
-        onBlueprintSaved={handleBlueprintSaved}
-      />
-      <ProtocolPanel
-        projectId={project.id}
-        blueprintId={blueprintId}
-        readOnly={!canEdit}
-        onApprovedVersionChange={handleApprovedProtocolChange}
-      />
+      <JourneyRail projectId={project.id} />
+      <Stage id="plan" title="Plan">
+        <BlueprintEditor
+          key={project.id}
+          projectId={project.id}
+          readOnly={!canEdit}
+          approvedProtocolVersionId={approvedProtocolVersionId}
+          onBlueprintSaved={handleBlueprintSaved}
+        />
+        <ProtocolPanel
+          projectId={project.id}
+          blueprintId={blueprintId}
+          readOnly={!canEdit}
+          onApprovedVersionChange={handleApprovedProtocolChange}
+        />
+      </Stage>
+      <Stage id="discover" title="Discover">
+        <ReportIdentityPanel projectId={project.id} readOnly={archived} />
+        <CorpusPanel projectId={project.id} readOnly={archived} />
+        <SearchSchedulePanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        <ReviewVersionsPanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+      </Stage>
+      <Stage id="select" title="Select">
+        <ScreeningQueuePanel
+          projectId={project.id}
+          approvedProtocolVersionId={approvedProtocolVersionId}
+          roles={roles.data ?? []}
+          readOnly={archived}
+          canEdit={canEdit}
+        />
+        <ScreeningConflictsPanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        <PrismaFlowCard projectId={project.id} />
+      </Stage>
+      <Stage id="extract" title="Extract">
+        <AppraisalPanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        <EvidenceTablePanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        <SynthesisPanel
+          projectId={project.id}
+          roles={roles.data ?? []}
+          readOnly={archived}
+        />
+        {onOpenTab && (
+          <OpenTab label="Open matrix" onClick={() => onOpenTab('matrix')} />
+        )}
+      </Stage>
+      <Stage id="write" title="Write">
+        {currentDraft.data && (
+          <DraftClaimsPanel
+            projectId={project.id}
+            draftId={currentDraft.data.id}
+            content={currentDraft.data.content}
+            roles={myRoles}
+            canEdit={canEdit}
+          />
+        )}
+        {onOpenTab && (
+          <OpenTab label="Open drafts" onClick={() => onOpenTab('drafts')} />
+        )}
+      </Stage>
       <ProjectRoles
         projectId={project.id}
         assignments={roles.data ?? []}

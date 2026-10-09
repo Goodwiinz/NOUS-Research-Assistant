@@ -6,7 +6,11 @@ from typing import Any, Dict, List, Optional
 import httpx
 from defusedxml import ElementTree as ET
 
-from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
+from src.services.research_engine.connectors.base import (
+    SearchTrace,
+    SourceConnector,
+    SourceDocument,
+)
 from src.services.research_engine.connectors.provider_http import get
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -41,13 +45,21 @@ def _publication_date(article: Any) -> str | None:
 class PubMedConnector(SourceConnector):
     """Connector for the PubMed/NCBI E-Utilities API."""
 
+    endpoint = ESEARCH_URL
+
     def __init__(self, api_key: Optional[str] = None) -> None:
         self.api_key = api_key
 
     async def search(
-        self, query: str, max_results: int = 50, **kwargs: Any
+        self,
+        query: str,
+        max_results: int = 50,
+        *,
+        search_trace: Optional[SearchTrace] = None,
+        **kwargs: Any,
     ) -> List[SourceDocument]:
         """Search PubMed: esearch for PMIDs, then efetch for full records."""
+        trace = search_trace
         max_results = min(max_results, MAX_RESULTS_LIMIT)
 
         base_params: Dict[str, Any] = {}
@@ -64,8 +76,14 @@ class PubMedConnector(SourceConnector):
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
+            if trace is not None:
+                await trace.begin_request(ESEARCH_URL, search_params)
             search_resp = await get(
-                client, ESEARCH_URL, provider="pubmed", params=search_params
+                client,
+                ESEARCH_URL,
+                provider="pubmed",
+                params=search_params,
+                search_trace=trace,
             )
             search_resp.raise_for_status()
 
@@ -80,6 +98,20 @@ class PubMedConnector(SourceConnector):
                 for el in root.findall(".//IdList/Id")
                 if el.text and _PMID_RE.match(el.text)
             ]
+            total_count = int(root.findtext(".//Count", default="0") or 0)
+
+            if trace is not None:
+                await trace.record_page(
+                    endpoint=ESEARCH_URL,
+                    params=search_params,
+                    response=search_resp,
+                    total_available=total_count,
+                    next_cursor=None,
+                    # No IDs means this response has no usable next page, even
+                    # if Count reports results that the IdList omitted.
+                    has_more=bool(pmids) and total_count > len(pmids),
+                    provider_count=len(pmids),
+                )
 
             if not pmids:
                 return []
@@ -92,12 +124,30 @@ class PubMedConnector(SourceConnector):
                 "retmode": "xml",
                 "rettype": "abstract",
             }
+            if trace is not None:
+                await trace.begin_request(EFETCH_URL, fetch_params)
             fetch_resp = await get(
-                client, EFETCH_URL, provider="pubmed", params=fetch_params
+                client,
+                EFETCH_URL,
+                provider="pubmed",
+                params=fetch_params,
+                search_trace=trace,
             )
             fetch_resp.raise_for_status()
 
-            return self._parse_articles(fetch_resp.text)
+            documents = self._parse_articles(fetch_resp.text)
+            if trace is not None:
+                await trace.record_page(
+                    endpoint=EFETCH_URL,
+                    params=fetch_params,
+                    response=fetch_resp,
+                    documents=documents,
+                    total_available=total_count,
+                    next_cursor=None,
+                    has_more=total_count > len(pmids),
+                    provider_count=len(pmids),
+                )
+            return documents
 
     def _parse_articles(self, xml_text: str) -> List[SourceDocument]:
         """Parse PubMed XML into SourceDocument list."""

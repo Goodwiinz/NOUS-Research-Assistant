@@ -56,7 +56,9 @@ export const DraftGenerationProgress: React.FC<
   useEffect(() => {
     if (
       status.started_at &&
-      !['completed', 'failed', 'cancelled'].includes(status.status)
+      !['completed', 'failed', 'cancelled', 'interrupted'].includes(
+        status.status
+      )
     ) {
       const startTime = new Date(status.started_at).getTime();
       const interval = setInterval(() => {
@@ -72,12 +74,15 @@ export const DraftGenerationProgress: React.FC<
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const getCurrentStepIndex = () => {
+  const getCurrentStepIndex = (): number => {
     return statusSteps.findIndex((s) => s.key === status.status);
   };
 
   const isCompleted = status.status === 'completed';
-  const isFailed = status.status === 'failed';
+  // An interrupted task (its process stopped) is terminal and renders as
+  // a failure: no further status update will arrive.
+  const isInterrupted = status.status === 'interrupted';
+  const isFailed = status.status === 'failed' || isInterrupted;
   const isCancelled = status.status === 'cancelled';
   const isRunning = !isCompleted && !isFailed && !isCancelled;
 
@@ -90,18 +95,18 @@ export const DraftGenerationProgress: React.FC<
           )}
           {isCompleted && <CheckCircle className="h-5 w-5 text-primary" />}
           {isFailed && <AlertCircle className="h-5 w-5 text-destructive" />}
-          {isCancelled && (
-            <XCircle className="h-5 w-5 text-muted-foreground" />
-          )}
+          {isCancelled && <XCircle className="h-5 w-5 text-muted-foreground" />}
           <div>
             <h3 className="font-medium text-foreground">
               {isCompleted
                 ? 'Draft generated'
-                : isFailed
-                  ? 'Generation failed'
-                  : isCancelled
-                    ? 'Generation cancelled'
-                    : 'Generating draft'}
+                : isInterrupted
+                  ? 'Generation interrupted'
+                  : isFailed
+                    ? 'Generation failed'
+                    : isCancelled
+                      ? 'Generation cancelled'
+                      : 'Generating draft'}
             </h3>
             <p className="text-xs text-muted-foreground">
               {status.current_step}

@@ -120,43 +120,16 @@ async def _cleanup_do_kb_data_sources_background(document_ids: List[str]) -> Non
 
 
 async def _cleanup_document_graph(document_id: str, organization_id: str) -> None:
-    """Best-effort removal of a deleted document's entity subgraph from Neo4j.
+    """Run service-owned graph cleanup in a session independent of the request.
 
-    The delete transaction soft-deletes the document's Postgres ``Entity`` rows
-    but historically never touched the mirrored graph in Neo4j, so a deleted
-    document's graph data orphaned there forever (audit D2). Entity nodes are
-    shared across documents (MERGE identity has no doc component), so the KG
-    service deletes reference-count style: this doc's relationships first
-    (``r.source_document_id``), then only entity nodes it created that are left
-    with no relationships at all — scoped to the org (property-based graph
-    tenancy). See ``KnowledgeGraphService.delete_document_graph``.
-
-    The KG service is synchronous (blocking Neo4j driver), so it's offloaded to a
-    worker thread to avoid stalling the event loop.
-
-    Failure-isolated: the KG call can raise when the neo4j circuit breaker is open
-    or the driver can't connect. Graph cleanup must never block or fail the user's
-    delete — the document is already gone from Postgres. There is no
-    ``neo4j_index_status`` column yet to record the resulting graph drift, so on
-    failure we only log a warning with the document id (follow-up: add a
-    per-document ``neo4j_index_status`` to make orphaned-graph drift sweepable,
-    per the audit plan).
+    Deletion already committed the cascade choice and pending retry marker.
+    Cleanup records failed/completed so provider outages remain recoverable.
     """
-    try:
-        from src.services.knowledge_graph.knowledge_graph_service import (
-            KnowledgeGraphService,
-        )
+    from src.core.database import AsyncSessionLocal
 
-        await asyncio.to_thread(
-            lambda: KnowledgeGraphService().delete_document_graph(
-                document_id, organization_id
-            )
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            "knowledge-graph cleanup on delete failed",
-            extra={"document_id": str(document_id)},
-            exc_info=True,
+    async with AsyncSessionLocal() as session:
+        await FileService(session).cleanup_deleted_document_graph(
+            document_id, organization_id
         )
 
 
@@ -169,7 +142,7 @@ async def _cleanup_document_graphs_background(
     so it must not touch the request's session. Every document in a bulk delete
     shares one org. Per-doc failure isolation comes from ``_cleanup_document_graph``
     (a neo4j outage on one doc must not skip the rest). See that helper for the
-    ``neo4j_index_status`` follow-up note.
+    durable retry behavior.
     """
     for document_id in document_ids:
         await _cleanup_document_graph(document_id, organization_id)
@@ -358,6 +331,7 @@ async def _run_duplicate_lookup(
                 }
             },
         },
+        400: {"description": "Invalid processing_status filter"},
         401: {"description": "Not authenticated - missing or invalid token"},
         403: {"description": "Not authorized to access this organization's documents"},
         500: {"description": "Internal server error"},
@@ -513,10 +487,13 @@ async def list_documents(
             ),
         )
 
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Failed to list documents", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list documents: {str(e)}",
+            detail="Failed to list documents",
         )
 
 
@@ -547,12 +524,8 @@ async def get_document(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     return DocumentDetailResponse(
         id=str(document.id),
@@ -620,80 +593,56 @@ async def delete_document(
         )
 
     try:
-        # Start transaction
-        from sqlalchemy import update
-
-        if cascade:
-            # Delete related entities
-            entity_update_stmt = (
-                update(Entity)
-                .where(Entity.document_id == document_id, Entity.is_deleted == False)
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
-            )
-            await db.execute(entity_update_stmt)
-
-            # Delete related processing jobs
-            job_update_stmt = (
-                update(ProcessingJob)
-                .where(
-                    ProcessingJob.document_id == document_id,
-                    ProcessingJob.is_deleted == False,
-                )
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
-            )
-            await db.execute(job_update_stmt)
-
-        # Soft delete document
-        document.soft_delete()
-
-        # Atomically revert organization storage usage
-        await db.execute(
-            Organization.storage_usage_update(
-                document.organization_id, -document.file_size_bytes
-            )
+        # Locks, cancels unfinished jobs, soft-deletes and releases quota once.
+        deleted = await file_service.soft_delete_documents(
+            organization.id, [document.id], cascade=cascade, user=current_user
         )
-
-        await db.commit()
-
-        # Best-effort physical delete AFTER the commit — deleting first meant a
-        # commit failure rolled back the row while the object was already gone
-        # (live row pointing at a missing file). A failure here leaves at worst
-        # a sweepable orphan object.
-        try:
-            file_service.delete_physical_file(document)
-        except Exception:
-            logger.warning(
-                "Soft-deleted document %s but failed to remove its storage object",
-                document.id,
-                exc_info=True,
-            )
-
-        # Remove the DO KB data source so the deleted doc stops surfacing in
-        # retrieval and no longer leaks storage (best-effort, never blocks).
-        await _cleanup_do_kb_data_source(db, document)
-
-        # Reap this document's graph from Neo4j (its relationships, then its
-        # now-orphaned entity nodes — nodes are shared across docs, so no blind
-        # DETACH DELETE) so the graph doesn't drift forever (audit D2). Gated on
-        # ``cascade`` to match the Postgres Entity soft-delete above;
-        # best-effort, runs after the commit like the DO KB cleanup and never
-        # blocks the delete.
-        if cascade:
-            await _cleanup_document_graph(document_id, str(organization.id))
-
-        return {
-            "message": "Document deleted successfully",
-            "document_id": str(document.id),
-            "cascade_deleted": cascade,
-            "file_size_freed": document.file_size_bytes,
-        }
-
-    except Exception as e:
-        await db.rollback()
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to delete document %s", document_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete document: {str(e)}",
+            detail="Failed to delete document",
         )
+    if not deleted:
+        # A concurrent delete won and already released the quota.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+
+    # Best-effort physical delete AFTER the commit — deleting first meant a
+    # commit failure rolled back the row while the object was already gone
+    # (live row pointing at a missing file). A failure here leaves at worst
+    # a sweepable orphan object.
+    try:
+        file_service.delete_physical_file(document)
+    except Exception:
+        logger.warning(
+            "Soft-deleted document %s but failed to remove its storage object",
+            document.id,
+            exc_info=True,
+        )
+
+    # Remove the DO KB data source so the deleted doc stops surfacing in
+    # retrieval and no longer leaks storage (best-effort, never blocks).
+    await _cleanup_do_kb_data_source(db, document)
+
+    # Reap this document's graph from Neo4j (its relationships, then its
+    # now-orphaned entity nodes — nodes are shared across docs, so no blind
+    # DETACH DELETE) so the graph doesn't drift forever (audit D2). Gated on
+    # ``cascade`` to match the Postgres Entity soft-delete above;
+    # best-effort, runs after the commit like the DO KB cleanup and never
+    # blocks the delete.
+    if cascade:
+        await _cleanup_document_graph(document_id, str(organization.id))
+
+    return {
+        "message": "Document deleted successfully",
+        "document_id": str(document.id),
+        "cascade_deleted": cascade,
+        "file_size_freed": document.file_size_bytes,
+    }
 
 
 @router.get("/{document_id}/entities", response_model=DocumentEntitiesResponse)
@@ -728,12 +677,8 @@ async def get_document_entities(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     try:
         # Build entities conditions
@@ -792,10 +737,11 @@ async def get_document_entities(
     except HTTPException:
         # Deliberate 4xx (e.g. unknown entity_type) — don't rewrap as a 500.
         raise
-    except Exception as e:
+    except Exception:
+        logger.error("Failed to get document entities", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get document entities: {str(e)}",
+            detail="Failed to get document entities",
         )
 
 
@@ -825,12 +771,8 @@ async def get_document_status(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     # Get latest processing job
     job_stmt = (
@@ -1129,10 +1071,11 @@ async def search_documents(
             },
         )
 
-    except Exception as e:
+    except Exception:
+        logger.error("Document search failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Document search failed: {str(e)}",
+            detail="Document search failed",
         )
 
 
@@ -1155,80 +1098,29 @@ async def bulk_delete_documents(
             detail="Bulk delete requires admin privileges",
         )
 
-    successful = []
-    failed = []
-    deleted_docs: List[Document] = []
-
-    from sqlalchemy import update
-
+    # Dedupe: a caller sending the same id twice must not double-count it in
+    # `successful` (or `successful_count` would over-report vs. the number of
+    # documents actually deleted).
+    requested_ids = list(dict.fromkeys(request.document_ids))
     try:
-        # Set-based instead of per-id: the old loop issued 3 queries per
-        # document (up to 300 round trips per request) inside one open
-        # transaction.
-        # Dedupe: a caller sending the same id twice must not double-count it
-        # in `successful` (or `successful_count` would over-report vs. the
-        # number of documents actually deleted).
-        requested_ids = list(dict.fromkeys(request.document_ids))
-
-        doc_stmt = select(Document).where(
-            Document.id.in_(requested_ids),
-            Document.organization_id == organization.id,
-            Document.is_deleted == False,
+        # Set-based, one transaction: locks, cancels unfinished jobs,
+        # soft-deletes and releases quota once per document.
+        deleted_docs = await file_service.soft_delete_documents(
+            organization.id, requested_ids, cascade=cascade
         )
-        doc_result = await db.execute(doc_stmt)
-        deleted_docs = list(doc_result.scalars().all())
-        found_ids = {str(d.id) for d in deleted_docs}
-        successful = [i for i in requested_ids if i in found_ids]
-        failed = [
-            {"document_id": i, "error": "Document not found"}
-            for i in requested_ids
-            if i not in found_ids
-        ]
-
-        if deleted_docs:
-            if cascade:
-                await db.execute(
-                    update(Entity)
-                    .where(
-                        Entity.document_id.in_(found_ids),
-                        Entity.is_deleted == False,
-                    )
-                    .values(is_deleted=True, deleted_at=datetime.utcnow())
-                )
-                await db.execute(
-                    update(ProcessingJob)
-                    .where(
-                        ProcessingJob.document_id.in_(found_ids),
-                        ProcessingJob.is_deleted == False,
-                    )
-                    .values(is_deleted=True, deleted_at=datetime.utcnow())
-                )
-
-            for document in deleted_docs:
-                document.soft_delete()
-
-            # One atomic quota revert for the whole batch (same org for all).
-            await db.execute(
-                Organization.storage_usage_update(
-                    organization.id,
-                    -sum(d.file_size_bytes or 0 for d in deleted_docs),
-                )
-            )
-    except Exception as e:
-        await db.rollback()
+    except Exception:
+        logger.exception("Failed to bulk delete documents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to bulk delete documents: {str(e)}",
+            detail="Failed to bulk delete documents",
         )
-
-    try:
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to commit bulk delete: {str(e)}",
-        )
+    found_ids = {str(d.id) for d in deleted_docs}
+    successful = [i for i in requested_ids if i in found_ids]
+    failed = [
+        {"document_id": i, "error": "Document not found"}
+        for i in requested_ids
+        if i not in found_ids
+    ]
 
     # Best-effort physical deletes AFTER the commit (see delete_document): only
     # documents whose soft-delete actually committed lose their objects, and a
@@ -1291,28 +1183,11 @@ async def reprocess_document(
     """
     validate_uuid(document_id, "document_id")
 
-    stmt = select(Document).where(
-        Document.id == document_id,
-        Document.organization_id == organization.id,
-        Document.is_deleted == False,
+    from src.services.documents.file_service import FileService
+
+    document = await FileService(db).lock_document_for_reprocessing(
+        document_id, organization.id, current_user
     )
-    result = await db.execute(stmt)
-    document = result.scalars().first()
-
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        )
-
-    # Check permissions
-    if (
-        document.uploaded_by_user_id != current_user.id
-        and not current_user.has_permission(UserRole.ADMIN)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Can only reprocess your own documents or require admin role",
-        )
 
     # Check if reprocessing is needed
     if document.processing_status == ProcessingStatus.COMPLETED and not force_reprocess:
@@ -1383,9 +1258,10 @@ async def reprocess_document(
             "job_id": str(processing_job.id),
         }
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
+        logger.error("Failed to queue document for reprocessing", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to queue document for reprocessing: {str(e)}",
+            detail="Failed to queue document for reprocessing",
         )

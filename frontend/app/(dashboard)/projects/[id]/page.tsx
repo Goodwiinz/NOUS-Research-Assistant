@@ -6,6 +6,8 @@
  * Drafts, Chat, Matrix, and Pipeline
  */
 
+import { captureAccountSession } from '@/lib/account-session';
+
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -28,6 +30,7 @@ import {
 import { ProjectHeader } from '@/components/research/ProjectHeader';
 import { DocumentList } from '@/components/research/DocumentList';
 import { ProjectKnowledgeTree } from '@/components/research/ProjectKnowledgeTree';
+import { ProjectArtifactsTab } from '@/components/research/ProjectArtifactsTab';
 import { ProjectSkillsTab } from '@/components/research/ProjectSkillsTab';
 import { ProjectWorkflow } from '@/components/research-engine/ProjectWorkflow';
 import { DraftGenerator } from '@/components/research/DraftGenerator';
@@ -81,6 +84,7 @@ type TabType =
   | 'pipeline'
   | 'workflow'
   | 'knowledge'
+  | 'files'
   | 'skills';
 
 const PROJECT_TABS: ReadonlySet<string> = new Set([
@@ -93,6 +97,7 @@ const PROJECT_TABS: ReadonlySet<string> = new Set([
   'pipeline',
   'workflow',
   'knowledge',
+  'files',
   'skills',
 ]);
 
@@ -723,6 +728,7 @@ export default function ProjectDetailPage() {
     { id: 'pipeline', label: 'Pipeline', icon: GitBranch },
     { id: 'workflow', label: 'Workflow', icon: Workflow },
     { id: 'knowledge', label: 'Knowledge', icon: Network },
+    { id: 'files', label: 'Files', icon: FileText },
   ];
 
   if (skillsCatalog.isSuccess) {
@@ -1082,6 +1088,7 @@ export default function ProjectDetailPage() {
                       loading={draftsLoading}
                       documentCount={projectDocuments.length}
                       onGenerate={async (config) => {
+                        const isCurrentAccount = captureAccountSession();
                         setDraftsLoading(true);
                         try {
                           const result = await projectService.generateDraft(
@@ -1093,6 +1100,7 @@ export default function ProjectDetailPage() {
                               includeAbstract: config.includeAbstract,
                             }
                           );
+                          if (!isCurrentAccount()) return;
                           setGenerationTaskId(result.task_id);
                           // Poll until terminal. Transient poll failures are
                           // retried with backoff (bounded) instead of killing
@@ -1102,18 +1110,23 @@ export default function ProjectDetailPage() {
                           const POLL_RETRY_LIMIT = 5;
                           let pollFailures = 0;
                           const pollStatus = async () => {
+                            if (!isCurrentAccount()) return;
                             try {
                               const status =
                                 await projectService.getGenerationStatus(
                                   projectId,
                                   result.task_id
                                 );
+                              if (!isCurrentAccount()) return;
                               pollFailures = 0;
                               setGenerationStatus(status);
                               if (
-                                !['completed', 'failed', 'cancelled'].includes(
-                                  status.status
-                                )
+                                ![
+                                  'completed',
+                                  'failed',
+                                  'cancelled',
+                                  'interrupted',
+                                ].includes(status.status)
                               ) {
                                 pollTimeoutRef.current = setTimeout(
                                   pollStatus,
@@ -1121,6 +1134,7 @@ export default function ProjectDetailPage() {
                                 );
                               }
                             } catch {
+                              if (!isCurrentAccount()) return;
                               pollFailures += 1;
                               if (pollFailures >= POLL_RETRY_LIMIT) {
                                 setGenerationStatus({
@@ -1130,6 +1144,8 @@ export default function ProjectDetailPage() {
                                   current_step:
                                     'Lost contact with the generation job after repeated errors.',
                                   started_at: new Date().toISOString(),
+                                  // Client-synthesized; not a server record.
+                                  state_source: 'cache',
                                 });
                                 return;
                               }
@@ -1141,6 +1157,7 @@ export default function ProjectDetailPage() {
                           };
                           void pollStatus();
                         } catch (err) {
+                          if (!isCurrentAccount()) return;
                           console.error('Generation failed:', err);
                           toast.error(
                             err instanceof Error
@@ -1148,7 +1165,7 @@ export default function ProjectDetailPage() {
                               : 'Failed to start draft generation'
                           );
                         } finally {
-                          setDraftsLoading(false);
+                          if (isCurrentAccount()) setDraftsLoading(false);
                         }
                       }}
                     />
@@ -1342,13 +1359,19 @@ export default function ProjectDetailPage() {
 
         {/* Research engine workflow uses the same canonical Collection ID. */}
         {activeTab === 'workflow' && currentProject && (
-          <ProjectWorkflow key={currentProject.id} project={currentProject} />
+          <ProjectWorkflow
+            key={currentProject.id}
+            project={currentProject}
+            onOpenTab={handleTabChange}
+          />
         )}
 
         {/* Knowledge Tab */}
         {activeTab === 'knowledge' && (
           <ProjectKnowledgeTree projectId={projectId} />
         )}
+
+        {activeTab === 'files' && <ProjectArtifactsTab projectId={projectId} />}
 
         {activeTab === 'skills' && <ProjectSkillsTab projectId={projectId} />}
       </div>

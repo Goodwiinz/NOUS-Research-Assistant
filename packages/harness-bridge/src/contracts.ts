@@ -25,7 +25,14 @@ export type SessionOptions = {
     writableRoots: string[];
   };
   // Trusted local composition only. Never deserialize this from bridge commands.
-  mcpConfig?: Record<string, { command: string; args: string[] }>;
+  mcpConfig?: Record<
+    string,
+    { command: string; args: string[]; tool_timeout_sec?: number }
+  >;
+  // Optional Codex model pinned by local configuration (NOUS_HARNESS_CODEX_MODEL).
+  // The pinned CLI may not support the user's global default model under their
+  // login, so the bridge can choose one that does. Never supplied by the browser.
+  model?: string;
 };
 type Position = { sessionId: string; turnId: string };
 export type AdapterEvent =

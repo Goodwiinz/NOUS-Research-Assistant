@@ -133,7 +133,7 @@ class TestVerifyDraftCitations:
             metadata_source="crossref",
         )
         llm, structured = _llm_mock(
-            _LLMVerdict(verdict="exact", evidence="Directly supported.")
+            _LLMVerdict(verdict="exact", quote="", evidence="Directly supported.")
         )
         service = CitationVerificationService(AsyncMock())
 
@@ -161,8 +161,10 @@ class TestVerifyDraftCitations:
             content_text="Long full text with more nuance. " * 50,
         )
         minor_then_exact = (
-            _LLMVerdict(verdict="minor", evidence="Abstract is vague."),
-            _LLMVerdict(verdict="exact", evidence="Full text confirms claim."),
+            _LLMVerdict(verdict="minor", quote="", evidence="Abstract is vague."),
+            _LLMVerdict(
+                verdict="exact", quote="", evidence="Full text confirms claim."
+            ),
         )
         llm, structured = _llm_mock(*minor_then_exact)
         service = CitationVerificationService(AsyncMock())
@@ -186,7 +188,9 @@ class TestVerifyDraftCitations:
             document_metadata={"doi": "10.1000/none-found"},
             content_text=None,
         )
-        llm, structured = _llm_mock(_LLMVerdict(verdict="exact", evidence="Matches."))
+        llm, structured = _llm_mock(
+            _LLMVerdict(verdict="exact", quote="", evidence="Matches.")
+        )
         service = CitationVerificationService(AsyncMock())
 
         with (
@@ -240,7 +244,9 @@ class TestVerifyDraftCitations:
 
     async def test_doc_without_identifiers_skips_identity_llm_only(self) -> None:
         document = _make_document()
-        llm, structured = _llm_mock(_LLMVerdict(verdict="exact", evidence="Supported."))
+        llm, structured = _llm_mock(
+            _LLMVerdict(verdict="exact", quote="", evidence="Supported.")
+        )
         service = CitationVerificationService(AsyncMock())
 
         with (
@@ -278,8 +284,10 @@ class TestVerifyDraftCitations:
             content_text=content_text,
         )
         minor_then_exact = (
-            _LLMVerdict(verdict="minor", evidence="Abstract is vague."),
-            _LLMVerdict(verdict="exact", evidence="Full text confirms claim."),
+            _LLMVerdict(verdict="minor", quote="", evidence="Abstract is vague."),
+            _LLMVerdict(
+                verdict="exact", quote="", evidence="Full text confirms claim."
+            ),
         )
         llm, structured = _llm_mock(*minor_then_exact)
         service = CitationVerificationService(AsyncMock())
@@ -305,7 +313,9 @@ class TestVerifyDraftCitations:
         content = " ".join(
             f"Claim about topic {i} [Doc {i}]." for i in range(1, len(documents) + 1)
         )
-        llm, structured = _llm_mock(_LLMVerdict(verdict="exact", evidence="Supported."))
+        llm, structured = _llm_mock(
+            _LLMVerdict(verdict="exact", quote="", evidence="Supported.")
+        )
         service = CitationVerificationService(AsyncMock())
 
         with patch(f"{_MODULE}.build_lightweight_llm", return_value=llm):
@@ -338,7 +348,9 @@ class TestVerifyDraftCitations:
     ) -> None:
         document = _make_document(content_text=None)
         llm, _ = _llm_mock(
-            _LLMVerdict(verdict="major", evidence="The source reports no such result.")
+            _LLMVerdict(
+                verdict="major", quote="", evidence="The source reports no such result."
+            )
         )
         service = CitationVerificationService(AsyncMock())
 
@@ -362,7 +374,7 @@ class TestVerifyDraftCitations:
             document_metadata={"retracted": True, "correction": "See corrigendum"}
         )
         llm, _ = _llm_mock(
-            _LLMVerdict(verdict="minor", evidence="The effect was smaller.")
+            _LLMVerdict(verdict="minor", quote="", evidence="The effect was smaller.")
         )
         service = CitationVerificationService(AsyncMock())
 
@@ -412,7 +424,9 @@ class TestVerifyDraftCitations:
 
     async def test_out_of_range_citation_makes_coverage_incomplete(self) -> None:
         service = CitationVerificationService(AsyncMock())
-        llm, _ = _llm_mock(_LLMVerdict(verdict="exact", evidence="Supported."))
+        llm, _ = _llm_mock(
+            _LLMVerdict(verdict="exact", quote="", evidence="Supported.")
+        )
         with patch(f"{_MODULE}.build_lightweight_llm", return_value=llm):
             result = await service.verify_draft_citations(
                 "Supported [Doc 1]. Fabricated [Doc 99].", [_make_document()]
@@ -450,7 +464,9 @@ class TestVerifyDraftCitations:
     async def test_claim_beyond_prompt_bound_is_unverified(self) -> None:
         service = CitationVerificationService(AsyncMock())
         llm, structured = _llm_mock(
-            _LLMVerdict(verdict="exact", evidence="Only the prefix was supported.")
+            _LLMVerdict(
+                verdict="exact", quote="", evidence="Only the prefix was supported."
+            )
         )
         with patch(f"{_MODULE}.build_lightweight_llm", return_value=llm):
             result = await service.verify_draft_citations(
@@ -520,7 +536,7 @@ class TestIdentityCorroborationThreshold:
             metadata_source="crossref",
         )
         llm, structured = _llm_mock(
-            _LLMVerdict(verdict="exact", evidence="Directly supported.")
+            _LLMVerdict(verdict="exact", quote="", evidence="Directly supported.")
         )
         service = CitationVerificationService(AsyncMock())
 
@@ -539,3 +555,74 @@ class TestIdentityCorroborationThreshold:
         entry = result["verdicts"][0]
         assert entry["identity"] == "match"
         assert entry["verdict"] == "exact"
+
+
+@pytest.mark.asyncio
+async def test_verifier_grounds_on_verbatim_quote_field() -> None:
+    """GOO-292: the ``quote`` field, not the reasoning, is the stored evidence.
+
+    Mutation check (2026-09-30): setting ``evidence = llm_verdict.evidence``
+    (ignoring ``quote``) in ``_verify_document`` makes this test fail. Restoring
+    the quote-first evidence makes it pass.
+    """
+    quote = "The Transformer relies entirely on self-attention mechanisms."
+    document = _make_document(
+        content_summary=None,
+        content_text=f"[Page 1]\nIntro text.\n[Page 4]\n{quote}",
+    )
+    llm, _ = _llm_mock(
+        _LLMVerdict(
+            verdict="exact",
+            quote=quote,
+            evidence="The excerpt explicitly supports the claim.",
+        )
+    )
+    service = CitationVerificationService(AsyncMock())
+    with patch(f"{_MODULE}.build_lightweight_llm", return_value=llm):
+        result = await service.verify_draft_citations(
+            "The Transformer uses only self-attention [Doc 1].", [document]
+        )
+
+    entry = result["verdicts"][0]
+    assert entry["evidence"] == quote
+    assert (entry["page_number"], entry["location"]) == (4, "Page 4")
+
+
+@pytest.mark.asyncio
+async def test_stored_evidence_is_the_matched_span_not_the_narrative() -> None:
+    """GOO-292: with only narrative evidence, store the located span alone.
+
+    Mutation check (2026-09-30): dropping ``evidence = grounded or evidence``
+    in ``_verify_document`` (storing the whole narrative) makes this test fail.
+    Restoring it makes it pass.
+    """
+    quote = "The Transformer relies entirely on self-attention mechanisms."
+    document = _make_document(
+        content_summary=None,
+        content_text=f"[Page 1]\nIntro text.\n[Page 4]\n{quote}",
+    )
+    llm, _ = _llm_mock(
+        _LLMVerdict(
+            verdict="exact",
+            evidence=f"The excerpt explicitly states: “{quote}” which fits.",
+        )
+    )
+    service = CitationVerificationService(AsyncMock())
+    with patch(f"{_MODULE}.build_lightweight_llm", return_value=llm):
+        result = await service.verify_draft_citations(
+            "The Transformer uses only self-attention [Doc 1].", [document]
+        )
+
+    entry = result["verdicts"][0]
+    assert entry["evidence"] == quote
+    assert entry["checks"]["support"]["evidence"] == quote
+    assert (entry["page_number"], entry["location"]) == (4, "Page 4")
+
+
+def test_llm_verdict_quote_defaults_to_empty() -> None:
+    """A model that omits ``quote`` must not fail validation (→ unverified).
+
+    Mutation check (2026-09-30): removing ``default=""`` from ``quote`` makes
+    this test fail with a ValidationError. Restoring it makes it pass.
+    """
+    assert _LLMVerdict(verdict="exact", evidence="Reasoning.").quote == ""

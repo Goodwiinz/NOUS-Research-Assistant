@@ -1,0 +1,50 @@
+{
+  "step": "A5-03-question-before-archive",
+  "as": "owner",
+  "at": "2026-09-29T10:17:29.517796+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/f40af11e-87a0-49a6-a715-714ef2298799/questions",
+    "body": {
+      "question": "eval-2026-09-29 control question before archive"
+    }
+  },
+  "status": 201,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "id": "0a512a6a-0f4b-4f72-9740-c6d8b955d74c",
+    "project_id": "f40af11e-87a0-49a6-a715-714ef2298799",
+    "current_version_id": "5b94fa4d-be33-4eb7-98f1-ae1e63e465b7",
+    "current_version": {
+      "id": "5b94fa4d-be33-4eb7-98f1-ae1e63e465b7",
+      "question_id": "0a512a6a-0f4b-4f72-9740-c6d8b955d74c",
+      "version": 1,
+      "parent_version_id": null,
+      "question": "eval-2026-09-29 control question before archive",
+      "hypothesis": null,
+      "scope": null,
+      "framework": {},
+      "content_hash": "e678f666e226aff2761313345f968c45c30c13a0e660ceacadf20a47c4a83be8",
+      "author_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+      "created_at": "2026-09-29T10:17:29.490578Z"
+    },
+    "versions": [
+      {
+        "id": "5b94fa4d-be33-4eb7-98f1-ae1e63e465b7",
+        "question_id": "0a512a6a-0f4b-4f72-9740-c6d8b955d74c",
+        "version": 1,
+        "parent_version_id": null,
+        "question": "eval-2026-09-29 control question before archive",
+        "hypothesis": null,
+        "scope": null,
+        "framework": {},
+        "content_hash": "e678f666e226aff2761313345f968c45c30c13a0e660ceacadf20a47c4a83be8",
+        "author_user_id": "87d4b23a-dc89-4c9a-817e-e9ca9e42fd2a",
+        "created_at": "2026-09-29T10:17:29.490578Z"
+      }
+    ],
+    "created_at": "2026-09-29T10:17:29.486233Z"
+  }
+}

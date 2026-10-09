@@ -587,12 +587,15 @@ class EncryptionService:
             "organization_profiles": org_profiles,
         }
 
-        # Get recent encryption operations
+        # Get recent encryption operations (GOO-406 E2: tenant-scoped when an
+        # organization is given; only platform operators reach the global view)
+        recent_query = self.db.query(EncryptionAuditLog)
+        if organization_id:
+            recent_query = recent_query.filter(
+                EncryptionAuditLog.organization_id == organization_id
+            )
         recent_operations = (
-            self.db.query(EncryptionAuditLog)
-            .order_by(EncryptionAuditLog.created_at.desc())
-            .limit(10)
-            .all()
+            recent_query.order_by(EncryptionAuditLog.created_at.desc()).limit(10).all()
         )
 
         status["recent_operations"] = [

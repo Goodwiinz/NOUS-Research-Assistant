@@ -1,6 +1,6 @@
 name: Release Dev
 
-# A green source commit produces a digest-pinned GitOps PR. GITHUB_TOKEN
+# A green full push run produces a digest-pinned GitOps PR. GITHUB_TOKEN
 # cannot bypass develop's required checks; auto-merge waits for those checks.
 # Propose values-aws.yaml only; DO values-dev.yaml stays frozen for rollback.
 on:
@@ -22,7 +22,10 @@ permissions:
 jobs:
   prepare:
     name: Check release source
+    # PR runs can use a lighter profile, including PRs whose head is develop.
+    # Only a protected-branch push proves the full source verification ran.
     if: >-
+      github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'develop' &&
       github.event.workflow_run.head_repository.full_name == github.repository
@@ -50,6 +53,23 @@ jobs:
           fi
           echo "needed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Verify release branch protection
+        if: steps.source.outputs.needed == 'true'
+        env:
+          # Reading branchProtectionRule needs administration:read, which the
+          # job token lacks; the release PAT has it.
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+          # Preserve GraphQL variables as literals instead of shell expressions.
+          GRAPHQL_QUERY: >-
+            query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }
+        run: |
+          OWNER="${GH_REPO%/*}"
+          REPO="${GH_REPO#*/}"
+          gh api graphql -f owner="$OWNER" -f name="$REPO" \
+            -f query="$GRAPHQL_QUERY" \
+            --jq '.data.repository.ref.branchProtectionRule' | python3 scripts/ci/check_release_protection.py
+
   build:
     name: Build tested image
     needs: prepare
@@ -67,12 +87,25 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
     steps:
       - name: Checkout develop
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: develop
+
+      - name: Verify release branch protection
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+          # Preserve GraphQL variables as literals instead of shell expressions.
+          GRAPHQL_QUERY: >-
+            query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: "refs/heads/develop") { branchProtectionRule { requiresStatusChecks requiresStrictStatusChecks requiredStatusChecks { context app { databaseId } } } } } }
+        run: |
+          OWNER="${GH_REPO%/*}"
+          REPO="${GH_REPO#*/}"
+          gh api graphql -f owner="$OWNER" -f name="$REPO" \
+            -f query="$GRAPHQL_QUERY" \
+            --jq '.data.repository.ref.branchProtectionRule' | python3 scripts/ci/check_release_protection.py
 
       - name: Install yq
         run: |
@@ -88,6 +121,9 @@ jobs:
       - name: Open checked GitOps pull request
         env:
           GH_TOKEN: ${{ github.token }}
+          # PRs created with GITHUB_TOKEN need workflow approval. Use this
+          # repo-scoped token only for PR creation so PR checks start normally.
+          PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           GH_REPO: ${{ github.repository }}
           SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
           DIGEST: ${{ needs.build.outputs.digest }}
@@ -115,8 +151,8 @@ jobs:
           fi
 
           # Validate the actual AWS candidate before requesting auto-merge.
-          # Helm Validate is also dispatched below, but is not a required
-          # repository check, so auto-merge alone would not wait for it.
+          # Helm Validate is not a required repository check, so auto-merge
+          # alone would not wait for it.
           CHART="infrastructure/helm/knowledge-graph-analytics"
           helm lint "$CHART" -f "$CHART/values.yaml" -f "$VALUES_FILE"
           helm template nous-dev-aws "$CHART" -f "$CHART/values.yaml" -f "$VALUES_FILE" >/dev/null
@@ -136,16 +172,24 @@ jobs:
             PROPOSAL_SHA="$(git rev-parse HEAD)"
             git push origin "HEAD:refs/heads/$BRANCH"
           fi
+          # The source freshness gate above ensures only the newest source
+          # retires older release proposals. Preserve this run's proposal.
+          SUPERSEDED_PRS="$(gh pr list --base develop --state open --limit 100 --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("codex/release-dev-")) | [.number, .headRefName] | @tsv')"
+          while IFS=$'\t' read -r number head; do
+            if [ -n "$number" ] && [ "$head" != "$BRANCH" ]; then
+              gh pr close "$number" --delete-branch --comment "Superseded by the proposal for ${SOURCE_SHA:0:7}."
+            fi
+          done <<< "$SUPERSEDED_PRS"
+
           PR_URL="$(gh pr list --base develop --head "$BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [ -z "$PR_TOKEN" ]; then
+            echo "::warning::RELEASE_PR_TOKEN is not set: approve this PR's workflow runs or it cannot merge."
+          fi
           if [ -z "$PR_URL" ]; then
             printf 'Deploy tested source %s at immutable digest %s.\n\nImage producer: %s\n\nAWS Helm values were validated before this proposal. Auto-merge waits for required checks; AWS Argo CD syncs the merged values from develop.\n' "$SOURCE_SHA" "$DIGEST" "$BUILD_URL" > "$RUNNER_TEMP/release-pr.md"
-            PR_URL="$(gh pr create --base develop --head "$BRANCH" --title "chore(gitops): deploy dev image ${SOURCE_SHA:0:7}" --body-file "$RUNNER_TEMP/release-pr.md")"
+            PR_URL="$(GH_TOKEN="${PR_TOKEN:-$GH_TOKEN}" gh pr create --base develop --head "$BRANCH" --title "chore(gitops): deploy dev image ${SOURCE_SHA:0:7}" --body-file "$RUNNER_TEMP/release-pr.md")"
           fi
-          # Token-created PR events need approval. Explicit dispatch runs the
-          # same checks at the proposal's exact head without another credential.
-          for workflow in test-pipeline.yml secret-scan.yml helm-validate.yml; do
-            gh workflow run "$workflow" --ref "$BRANCH"
-          done
           git fetch origin develop
           if [ "$(git rev-parse origin/develop)" != "$SOURCE_SHA" ]; then
             echo "develop moved; do not enable auto-merge for this stale proposal"

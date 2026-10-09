@@ -37,6 +37,7 @@ from typing import List
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
+from pydantic import ValidationError
 
 from src.services.agent._pii_redact import redact_pii
 from src.services.agent.error_recovery import (
@@ -51,6 +52,7 @@ from src.services.agent.identity_ledger import (
 from src.services.agent.observability import track_node_execution
 from src.services.agent.retrieval_provenance import merge_retrieved_contexts
 from src.services.agent.state import AgentState
+from src.services.agent.tool_deadline import tool_call_deadline_scope
 from src.services.agent.tool_registry import ToolPolicyTag, runtime_tool_descriptors
 from src.services.agent.tools import TOOL_REGISTRY
 
@@ -599,6 +601,15 @@ async def _execute_single_tool(
                 arguments=effective_args,
             )
             tool_args = effective_args
+        except ValidationError as exc:
+            # A mistyped argument is the model's to fix, not a broken turn
+            # (R8-B6). Same category and wording as execute_tool's check.
+            operation_error = {
+                "error": f"Invalid arguments for {tool_name}: {exc}",
+                "error_category": "invalid_tool_arguments",
+                "automatic_retry_allowed": True,
+                "retry_guidance": "Correct the arguments and call the tool again.",
+            }
         except (TypeError, ValueError) as exc:
             category = (
                 "legacy_operation_result_unavailable"
@@ -681,10 +692,13 @@ async def _execute_single_tool(
                 }
                 if operation_key is not None:
                     execute_kwargs["operation_key"] = operation_key
-                result = await asyncio.wait_for(
-                    tool_executor(**execute_kwargs),
-                    timeout=timeout,
-                )
+                # IN-2: a tool that must time out before this limit cancels it
+                # reads the deadline instead of restarting the clock at dispatch.
+                with tool_call_deadline_scope(timeout):
+                    result = await asyncio.wait_for(
+                        tool_executor(**execute_kwargs),
+                        timeout=timeout,
+                    )
                 if isinstance(result, dict) and "error" in result:
                     from langsmith import get_current_run_tree
 
@@ -751,8 +765,14 @@ async def _execute_single_tool(
                 # payload as a successful result and suppress a retry — a tool
                 # that returns {"error": <transient>} is retried on re-plan
                 # (retry_transient only retries raised exceptions, not returned
-                # payloads).
-                error_increment = 1 if tool_error.category != "transient" else 0
+                # payloads). A barrier replay of an earlier failure is not a
+                # fresh transient attempt, so it always counts (R8-B5).
+                error_increment = (
+                    1
+                    if tool_error.category != "transient"
+                    or result.get("replayed_from_operation")
+                    else 0
+                )
         except Exception as e:
             tool_error = classify_error(tool_name, e)
             logger.error(

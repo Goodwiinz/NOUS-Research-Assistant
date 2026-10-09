@@ -22,6 +22,11 @@ import {
 import { useResearchEngineStore } from '@/store/research-engine-store';
 import { APIErrorClass } from '@/types/api';
 import { RunView } from '../RunView';
+import { resetAccountSession } from '@/lib/account-session';
+
+// GOO-312: the reproducibility section owns its own query; tested apart.
+vi.mock('../RunReproducibility', () => ({ RunReproducibility: () => null }));
+vi.mock('../RunRerun', () => ({ RunRerun: () => null }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ back: vi.fn() }),
@@ -239,6 +244,35 @@ describe('RunView durable run state', () => {
     );
     vi.mocked(getPendingReview).mockResolvedValue({ pending: false });
     vi.mocked(resumeRun).mockResolvedValue(run());
+  });
+
+  it('aborts the account stream before buffered events can trigger new reads', async () => {
+    vi.mocked(getRun).mockResolvedValue(run());
+    vi.mocked(listSteps).mockResolvedValue([]);
+    let finishRead!: (value: { done: boolean; value: Uint8Array }) => void;
+    const read = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        })
+    );
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({ read, releaseLock: vi.fn() }) },
+    } as never);
+    render(<RunView runId={RUN_ID} />);
+    await waitFor(() => expect(read).toHaveBeenCalledOnce());
+    const signal = vi.mocked(fetch).mock.calls[0][1]?.signal;
+    await act(async () => {
+      resetAccountSession();
+      finishRead({
+        done: false,
+        value: new TextEncoder().encode('event: run_complete\ndata: {}\n\n'),
+      });
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(getRun).toHaveBeenCalledOnce();
+    expect(useResearchEngineStore.getState().activeRun?.status).toBe('running');
   });
 
   it('hydrates the run and persisted steps before opening the event stream', async () => {

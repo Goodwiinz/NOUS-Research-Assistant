@@ -8,7 +8,7 @@ import {
   redactValue,
   sanitizeError,
 } from './report.mjs';
-import { createSession } from './session.mjs';
+import { BrowserUnavailableError, createSession } from './session.mjs';
 import { registry as defaultRegistry } from './scenarios.mjs';
 
 const SUITES = new Set(['smoke', 'workflow', 'adversarial', 'all']);
@@ -200,6 +200,7 @@ function caseResult(scenario, status, details = {}) {
     callsModel: Boolean(scenario.callsModel),
     durationMs: details.durationMs ?? 0,
     requests: details.requests ?? [],
+    checkpoints: details.checkpoints ?? [],
   };
 }
 
@@ -322,6 +323,8 @@ export async function runCampaign(config, options = {}) {
         frontendSha: normalizedConfig.deploymentEvidence?.frontendSha ?? null,
         provenance: normalizedConfig.deploymentEvidence?.provenance ?? null,
       },
+      evidenceDir: normalizedConfig.evidenceDir ?? null,
+      artifacts: { videos: [], traces: [], checkpointCount: 0 },
     },
     cases: [],
     cleanup: { status: 'not-started', retained: [], errors: [] },
@@ -396,6 +399,9 @@ export async function runCampaign(config, options = {}) {
         continue;
       }
       const beforeRequests = session?.observations?.length ?? 0;
+      // Checkpoints taken before a failure stay on the case: they show where
+      // the journey broke.
+      const checkpoints = [];
       try {
         const evidence = {
           runId,
@@ -420,6 +426,14 @@ export async function runCampaign(config, options = {}) {
             }
             return modelTurns;
           },
+          checkpoint: async (name) => {
+            if (typeof session?.checkpoint !== 'function') {
+              throw new Error('Checkpoint requested but the session cannot take screenshots');
+            }
+            const item = await session.checkpoint(scenario.id, name);
+            checkpoints.push(item);
+            return item;
+          },
         };
         // Keep the older name available to scenarios and extensions while
         // making the ordering explicit: callers reserve the bounded budget
@@ -441,10 +455,14 @@ export async function runCampaign(config, options = {}) {
           reason: details.reason ?? (status === 'PASS' ? null : undefined),
           durationMs: Date.now() - started,
           requests: (session?.observations ?? []).slice(beforeRequests),
+          checkpoints: [...checkpoints],
         }));
       } catch (error) {
         const assertionEvidence = sanitizeAssertionEvidence(error?.evidence);
-        report.cases.push(caseResult(scenario, 'FAIL', {
+        // A missing or unlaunchable browser is a prerequisite, not a product
+        // failure: report it as BLOCKED so it never reads as a regression.
+        const blockedByEnvironment = error instanceof BrowserUnavailableError;
+        report.cases.push(caseResult(scenario, blockedByEnvironment ? 'BLOCKED' : 'FAIL', {
           reason: sanitizeError(error, normalizedConfig.secrets ?? []).message,
           evidence: [
             sanitizeError(error, normalizedConfig.secrets ?? []),
@@ -452,6 +470,7 @@ export async function runCampaign(config, options = {}) {
           ],
           durationMs: Date.now() - started,
           requests: (session?.observations ?? []).slice(beforeRequests),
+          checkpoints: [...checkpoints],
         }));
         if (error?.code === 'SCENARIO_TIMEOUT' || error?.timedOut === true) campaignHalted = true;
       }
@@ -482,6 +501,12 @@ export async function runCampaign(config, options = {}) {
           errors: [...(report.cleanup.errors ?? []), safe],
         };
       }
+      // Video paths are final only after close(); redactValue below covers them.
+      report.run.artifacts = {
+        videos: [...(session.artifacts?.videos ?? [])],
+        traces: [...(session.artifacts?.traces ?? [])],
+        checkpointCount: session.artifacts?.checkpoints?.length ?? 0,
+      };
     }
   }
 

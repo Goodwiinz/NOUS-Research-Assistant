@@ -45,7 +45,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
         self.sensitive_paths = {"/auth/login", "/auth/refresh", "/auth/change-password"}
 
         # Sensitive headers to mask
-        self.sensitive_headers = {"authorization", "cookie", "x-api-key", "password"}
+        self.sensitive_headers = {
+            "authorization",
+            "cookie",
+            "x-api-key",
+            "x-cli-poll-token",
+            "password",
+        }
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request and log audit event"""

@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from src.models.base import Base
 from src.models.collection import Collection
+from src.models.research_decision import ResearchDecisionEvent, ResearchDecisionStream
 from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.research_protocol import (
     ResearchProtocol,
@@ -19,6 +20,13 @@ from src.models.research_protocol import (
     ResearchQuestion,
     ResearchQuestionVersion,
 )
+from src.models.research_report import (
+    ResearchReport,
+    ResearchReportIdentifier,
+    ResearchReportObservation,
+    ResearchStudy,
+)
+from src.models.research_source import ResearchSource
 from src.models.workspace import Workspace, WorkspaceMember
 from src.services.research_engine.protocol_service import (
     canonical_hash,
@@ -52,7 +60,12 @@ _PROTOCOL_SNAPSHOT = {
 async def create_research_engine_tables(
     connection: Any, *engine_models: type[Any]
 ) -> None:
-    """Create canonical access, protocol, and requested engine tables in order."""
+    """Create canonical access, protocol, and requested engine tables in order.
+
+    The project decision ledger is always created. With ``ResearchSource`` the
+    report-identity tables come too, because completing a search step observes
+    each persisted source as a project report in the same transaction (GOO-299).
+    """
     await connection.exec_driver_sql(
         'CREATE TABLE "organizations" (id UUID PRIMARY KEY)'
     )
@@ -70,8 +83,17 @@ async def create_research_engine_tables(
         ResearchQuestionVersion,
         ResearchProtocol,
         ResearchProtocolVersion,
+        ResearchDecisionStream,
+        ResearchDecisionEvent,
         *engine_models,
     )
+    if ResearchSource in engine_models:
+        models += (
+            ResearchStudy,
+            ResearchReport,
+            ResearchReportIdentifier,
+            ResearchReportObservation,
+        )
     tables = list(dict.fromkeys(cast(Any, model).__table__ for model in models))
     await connection.run_sync(
         lambda sync_connection: Base.metadata.create_all(
@@ -90,8 +112,13 @@ async def seed_canonical_project_scope(
     additional_organization_ids: tuple[UUID, ...] = (),
     workspace_id: UUID | None = None,
     collection_id: UUID | None = None,
+    reviewer_ids: tuple[UUID, ...] = (),
 ) -> CanonicalProjectScope:
-    """Seed an owner workspace and Collection plus any fixture principals."""
+    """Seed an owner workspace and Collection plus fixture principals.
+
+    Also seeds REVIEWER assignments for ``reviewer_ids`` (reviewers must be
+    the owner or a member).
+    """
     workspace_id = workspace_id or uuid4()
     collection_id = collection_id or uuid4()
     organization_ids = dict.fromkeys((organization_id, *additional_organization_ids))
@@ -137,6 +164,24 @@ async def seed_canonical_project_scope(
                )"""),
         {"id": collection_id, "workspace_id": workspace_id},
     )
+    for reviewer_id in reviewer_ids:
+        # Role literal stays inline: asyncpg binds a varchar, which PostgreSQL
+        # will not implicitly cast to the researchprojectrole enum.
+        await executor.execute(
+            text("""INSERT INTO research_project_role_assignments (
+                       id, created_at, updated_at, is_deleted, deleted_at,
+                       collection_id, user_id, role, assigned_by_id
+                   ) VALUES (
+                       :id, now(), now(), false, NULL,
+                       :collection_id, :user_id, 'reviewer', :assigned_by_id
+                   )"""),
+            {
+                "id": uuid4(),
+                "collection_id": collection_id,
+                "user_id": reviewer_id,
+                "assigned_by_id": owner_id,
+            },
+        )
     return CanonicalProjectScope(workspace_id, collection_id)
 
 
@@ -149,6 +194,8 @@ async def seed_approved_protocol_binding(
     steps: list[dict[str, Any]],
     parameters: dict[str, Any],
     blueprint_version: int = 1,
+    snapshot: Mapping[str, Any] = _PROTOCOL_SNAPSHOT,
+    hypothesis: str | None = None,
 ) -> ApprovedProtocolBinding:
     """Bind an isolated run fixture to the exact approved blueprint plan."""
     question_id = uuid4()
@@ -165,14 +212,14 @@ async def seed_approved_protocol_binding(
         protocol_content(
             question_version_id,
             blueprint_id,
-            _PROTOCOL_SNAPSHOT,
+            snapshot,
             execution_plan,
         )
     )
     question_hash = canonical_hash(
         {
             "question": "Fixture research question",
-            "hypothesis": None,
+            "hypothesis": hypothesis,
             "scope": None,
             "framework": {},
             "canonicalization_version": "research-protocol-v1",
@@ -194,12 +241,13 @@ async def seed_approved_protocol_binding(
                    created_at
                ) VALUES (
                    :id, :question_id, 1, NULL, 'Fixture research question',
-                   NULL, NULL, CAST(:framework AS jsonb), :content_hash,
+                   :hypothesis, NULL, CAST(:framework AS jsonb), :content_hash,
                    :author_user_id, now()
                )"""),
         {
             "id": question_version_id,
             "question_id": question_id,
+            "hypothesis": hypothesis,
             "framework": json.dumps({}),
             "content_hash": question_hash,
             "author_user_id": author_id,
@@ -243,7 +291,7 @@ async def seed_approved_protocol_binding(
             "question_version_id": question_version_id,
             "blueprint_id": blueprint_id,
             "execution_plan": json.dumps(execution_plan),
-            "snapshot": json.dumps(_PROTOCOL_SNAPSHOT),
+            "snapshot": json.dumps(snapshot),
             "content_hash": content_hash,
             "author_user_id": author_id,
         },

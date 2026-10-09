@@ -2,23 +2,37 @@
 
 from __future__ import annotations
 
+import copy
+import csv
+import io
 import json
 import os
 import re
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
 
 from src.api.research_engine.runs import _build_providers
+from src.schemas.research_engine import ExportFormat
 from src.services.research_engine.connectors.base import SourceConnector, SourceDocument
 from src.services.research_engine.contracts import (
     canonical_json_sha256,
     canonical_stage_output_hash,
     merge_stage_output,
+)
+from src.services.research_engine.export_service import ExportService
+from src.services.research_engine.providers.base import (
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    ProviderConfig,
 )
 from src.services.research_engine.step_executor import StepExecutor
 
@@ -320,7 +334,13 @@ async def _run_current_model() -> tuple[dict[str, Any], dict[str, Any]]:
         "providers": ["openalex"],
         "limit_per_provider": 3,
         "notes": "Current configured-model evidence-quality evaluation",
-        "scope_confirmation": {"confirmed": True},
+        # The GOO-331 search guard compares the executed search against the
+        # confirmed providers and limit, so the confirmation must carry them.
+        "scope_confirmation": {
+            "confirmed": True,
+            "providers": ["openalex"],
+            "limit_per_provider": 3,
+        },
         "provider_manifest": [{"id": "openalex", "enabled": True}],
         "artifact_provenance": {
             "run_id": str(uuid.UUID(int=101)),
@@ -715,3 +735,296 @@ async def test_semantic_gate_rejects_false_claim_with_real_quote_and_self_grade(
         "contradictory_material_claims": 1,
         "semantic_entailment_gate": 0.0,
     }
+
+
+# ---------------------------------------------------------------------------
+# GOO-334: offline claim-provenance property over the eval evidence fixture
+# ---------------------------------------------------------------------------
+
+# The v1 verification contract's vocabulary for an explicitly unresolved claim
+# (``VerificationCheck.status``). The ticket's "unresolved/unsupported" maps to
+# these: anything that is not ``supported`` is an explicit unresolved state.
+_UNRESOLVED_CLAIM_STATUSES = frozenset({"unverified", "contradicted"})
+
+
+class _FixtureStageProvider(LLMProvider):
+    """Deterministic stage responder over the eval fixture's exact source text.
+
+    It answers every model stage of the canonical template from the record IDs
+    and texts in each production prompt, so the full six-stage pipeline (and
+    every server-side contract check between stages) runs without a network.
+    """
+
+    def __init__(self, verification_statuses: tuple[str, ...]) -> None:
+        super().__init__(
+            ProviderConfig(provider_type="fixture", model_id="claude-sonnet-4-6")
+        )
+        self.verification_statuses = verification_statuses
+
+    async def is_model_available(self) -> bool:
+        return True
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        stage_match = re.search(
+            r"stage_type=(screen|extract|synthesize|verify)",
+            request.system_prompt or "",
+        )
+        stage_type = stage_match.group(1) if stage_match else "unknown"
+        records = json.loads(request.prompt).get("records", [])
+        payload: dict[str, Any]
+        if stage_type == "screen":
+            payload = {
+                "screening": [
+                    {
+                        "source_id": record["source_id"],
+                        "part_id": record["part_id"],
+                        "included": True,
+                        "reason": "Matches the confirmed scope",
+                    }
+                    for record in records
+                ]
+            }
+        elif stage_type == "extract":
+            extracted = []
+            for record in records:
+                quote = str(record.get("text") or "").split(". ")[0].strip()
+                extracted.append(
+                    {
+                        "source_id": record["source_id"],
+                        "part_id": record["part_id"],
+                        "data": {
+                            "methodology": None,
+                            "findings": quote or None,
+                            "limitations": None,
+                        },
+                        "evidence": (
+                            [
+                                {
+                                    "pointer": "/findings",
+                                    "quote": quote,
+                                    "page_reference": None,
+                                }
+                            ]
+                            if quote
+                            else []
+                        ),
+                    }
+                )
+            payload = {"records": extracted}
+        elif stage_type == "synthesize":
+            evidence_ids = [
+                item["evidence_id"]
+                for record in records
+                for item in json.loads(record["text"])
+                if isinstance(item, dict) and item.get("evidence_id")
+            ]
+            payload = {
+                "sections": [
+                    {
+                        "heading": "Findings",
+                        "claims": [
+                            {
+                                "claim_text": (
+                                    f"Fixture finding grounded in {evidence_id}"
+                                ),
+                                "evidence": [
+                                    {
+                                        "evidence_id": evidence_id,
+                                        "relation": "supports",
+                                    }
+                                ],
+                            }
+                            for evidence_id in evidence_ids
+                        ],
+                    }
+                ]
+            }
+        elif stage_type == "verify":
+            checks = []
+            for record in records:
+                claim_id = json.loads(record["text"])["claim_id"]
+                ordinal = int(claim_id.lstrip("c")) - 1
+                status = self.verification_statuses[
+                    ordinal % len(self.verification_statuses)
+                ]
+                checks.append(
+                    {
+                        "claim_id": claim_id,
+                        "status": status,
+                        "reason": f"Fixture verifier marked the claim {status}",
+                    }
+                )
+            payload = {"checks": checks}
+        else:  # pragma: no cover - the six-stage template forbids this path
+            raise AssertionError(f"Unexpected fixture stage: {stage_type}")
+        return LLMResponse(
+            content=json.dumps(payload),
+            model_id="claude-sonnet-4-6",
+            model_version="fixture-goo-334",
+            input_tokens=10,
+            output_tokens=10,
+        )
+
+
+async def _run_fixture_pipeline(
+    *, limit_per_provider: int, verification_statuses: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    template = cast(
+        dict[str, Any], yaml.safe_load(_TEMPLATE_PATH.read_text(encoding="utf-8"))
+    )
+    context: dict[str, Any] = {
+        "contract_version": 1,
+        "research_question": (
+            "What does the controlled evidence say about treatment effects?"
+        ),
+        "inclusion_criteria": ["Reports a measured treatment effect"],
+        "exclusion_criteria": ["Has no evidentiary text"],
+        "providers": ["openalex"],
+        "limit_per_provider": limit_per_provider,
+        "notes": "Offline claim-provenance property (GOO-334)",
+        "scope_confirmation": {
+            "confirmed": True,
+            "providers": ["openalex"],
+            "limit_per_provider": limit_per_provider,
+        },
+        "provider_manifest": [{"id": "openalex", "enabled": True}],
+        "artifact_provenance": {
+            "run_id": str(uuid.UUID(int=201)),
+            "blueprint_id": str(uuid.UUID(int=202)),
+            "blueprint_version": 1,
+            "template_source": "daily_research_brief",
+            "template_contract_version": 1,
+            "stage_hashes": {},
+            "models": [{"model_id": "claude-sonnet-4-6"}],
+            "review_history": [],
+            "scope_confirmation": {"confirmed": True},
+            "provider_manifest": [{"id": "openalex", "enabled": True}],
+            "limitations": ["Controlled external evidence fixture"],
+        },
+    }
+    executor = StepExecutor(
+        providers={"claude-sonnet-4-6": _FixtureStageProvider(verification_statuses)},
+        connectors={"openalex": _EvalEvidenceConnector()},
+    )
+    outputs: list[dict[str, Any]] = []
+    for index, step in enumerate(template["steps"]):
+        result = await executor.execute(step, context)
+        outputs.append(result.output)
+        context = merge_stage_output(context, result.output, index)
+        context["artifact_provenance"]["stage_hashes"][str(index)] = (
+            canonical_stage_output_hash(result.output)
+        )
+    return outputs
+
+
+async def _export_persisted_fixture_run(
+    outputs: list[dict[str, Any]], export_format: ExportFormat
+) -> bytes:
+    """Serve the fixture run through the production export path."""
+
+    run_id = uuid.UUID(int=201)
+    run = SimpleNamespace(
+        id=run_id,
+        status="completed",
+        organization_id=None,
+        reproducibility_manifest={"final_status": "unverified"},
+        blueprint=SimpleNamespace(
+            id=uuid.UUID(int=202),
+            template_source="daily_research_brief",
+            steps=[],
+        ),
+        blueprint_version=1,
+        steps=[
+            SimpleNamespace(
+                step_index=index,
+                step_type=output["stage_type"],
+                output=copy.deepcopy(output),
+            )
+            for index, output in enumerate(outputs)
+        ],
+        reviews=[],
+        started_at=datetime(2026, 9, 28, 9, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 9, 28, 9, 5, tzinfo=timezone.utc),
+        created_at=datetime(2026, 9, 28, 8, 59, tzinfo=timezone.utc),
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = run
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=result)
+    artifact = await ExportService().export(
+        run_id, export_format, db, user_id=uuid.uuid4()
+    )
+    return artifact.content
+
+
+@pytest.mark.parametrize("limit_per_provider", [1, 2, 3])
+@pytest.mark.parametrize(
+    "verification_statuses",
+    [
+        ("supported",),
+        ("supported", "unverified"),
+        ("contradicted",),
+        ("unverified", "contradicted", "supported"),
+    ],
+    ids=["all-supported", "mixed", "all-contradicted", "rotating"],
+)
+async def test_every_exported_claim_resolves_to_a_source_span_or_unresolved_state(
+    limit_per_provider: int, verification_statuses: tuple[str, ...]
+) -> None:
+    """GOO-334: no exported claim lacks evidence unless it is explicitly unresolved.
+
+    For every fixture slice and verifier outcome, each claim in the JSON export
+    either cites evidence IDs that resolve to an exact quote inside its source's
+    text, or carries an explicit non-``supported`` verification status. The CSV
+    export carries no claim rows; it must still expose every evidence span a
+    JSON claim cites, so no exported claim loses its provenance across formats.
+    """
+
+    outputs = await _run_fixture_pipeline(
+        limit_per_provider=limit_per_provider,
+        verification_statuses=verification_statuses,
+    )
+    report = json.loads(await _export_persisted_fixture_run(outputs, ExportFormat.JSON))
+    csv_bytes = await _export_persisted_fixture_run(outputs, ExportFormat.CSV)
+    csv_rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
+
+    source_text = {
+        record["source_id"]: (record.get("full_text") or "")
+        + "\n"
+        + (record.get("abstract") or "")
+        for record in outputs[0]["source_records"]
+    }
+    exported_evidence = {item["evidence_id"]: item for item in report["evidence"]}
+    claims = report["claims"]
+    assert claims, "the fixture must produce at least one exported claim"
+
+    for claim in claims:
+        status = claim["verification_status"]
+        assert status in _UNRESOLVED_CLAIM_STATUSES | {"supported"}
+        if not claim["evidence_ids"]:
+            assert status in _UNRESOLVED_CLAIM_STATUSES, claim
+            continue
+        for evidence_id in claim["evidence_ids"]:
+            span = exported_evidence.get(evidence_id)
+            assert span is not None, f"{evidence_id} has no exported evidence record"
+            assert span["source_id"] in source_text
+            assert span["quote"] and span["quote"] in source_text[span["source_id"]]
+
+    csv_evidence: dict[str, dict[str, Any]] = {}
+    for row in csv_rows:
+        if row["record_type"] != "source" or not row["evidence"]:
+            continue
+        for item in json.loads(row["evidence"]):
+            csv_evidence[item["evidence_id"]] = {**item, "source_id": row["source_id"]}
+    for claim in claims:
+        for evidence_id in claim["evidence_ids"]:
+            assert evidence_id in csv_evidence, f"CSV export dropped {evidence_id}"
+            span = csv_evidence[evidence_id]
+            assert span["quote"] in source_text[span["source_id"]]
+
+    if set(verification_statuses) != {"supported"} and len(claims) >= len(
+        verification_statuses
+    ):
+        assert {
+            claim["verification_status"] for claim in claims
+        } & _UNRESOLVED_CLAIM_STATUSES

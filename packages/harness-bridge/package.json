@@ -17,12 +17,14 @@
     "./connection": "./src/connection.ts"
   },
   "scripts": {
-    "test": "node --experimental-sqlite --import tsx --test",
+    "test": "node --experimental-sqlite --import tsx --test --test-timeout=60000",
     "type-check": "tsc --noEmit",
     "start": "node --import tsx src/cli.ts"
   },
   "dependencies": {
-    "ajv": "8.20.0"
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "ajv": "8.20.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

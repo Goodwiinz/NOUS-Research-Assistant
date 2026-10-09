@@ -129,6 +129,7 @@ export function HarnessSelector({
   disabled = false,
 }: HarnessSelectorProps): ReactElement {
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [answers, setAnswers] = useState<
     Record<string, Record<string, string>>
   >({});
@@ -146,10 +147,15 @@ export function HarnessSelector({
   } = controller;
 
   const decide = async (requestId: string, allow: boolean): Promise<void> => {
+    setRequestError(null);
     setBusyRequestId(requestId);
     try {
       const decision: NativeDecision = { kind: 'decision', allow };
       await decideRequest(requestId, decision);
+    } catch {
+      setRequestError(
+        'Could not process this Codex request. Refresh the conversation before trying again.'
+      );
     } finally {
       setBusyRequestId(null);
     }
@@ -166,12 +172,17 @@ export function HarnessSelector({
       }
       exactAnswers[question.id] = [response[question.id].trim()];
     }
+    setRequestError(null);
     setBusyRequestId(requestId);
     try {
       await decideRequest(requestId, {
         kind: 'answers',
         answers: exactAnswers,
       });
+    } catch {
+      setRequestError(
+        'Could not send these answers. Refresh the conversation before trying again.'
+      );
     } finally {
       setBusyRequestId(null);
     }
@@ -218,15 +229,24 @@ export function HarnessSelector({
             aria-label="Paired computer"
             value={controller.deviceId ?? ''}
             disabled={disabled}
+            // Opening the picker refetches the list, so a computer connected
+            // since (a new device id) shows up without reloading the page.
+            onMouseDown={controller.refreshDevices}
+            onFocus={controller.refreshDevices}
             onChange={(event) => selectDevice(event.target.value || null)}
             className="h-8 max-w-36 rounded-md border border-(--nous-border-1) bg-(--nous-bg-1) px-2 text-xs text-(--nous-fg-1) focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
           >
             <option value="">Choose computer</option>
-            {devices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.label}
-              </option>
-            ))}
+            {devices.map((device) => {
+              const elsewhere = controller.isBoundToAnotherChat(device.id);
+              return (
+                <option key={device.id} value={device.id} disabled={elsewhere}>
+                  {elsewhere
+                    ? `${device.label} (bound to another chat)`
+                    : device.label}
+                </option>
+              );
+            })}
           </select>
           <label className="sr-only" htmlFor="harness-workspace">
             Project workspace
@@ -271,6 +291,11 @@ export function HarnessSelector({
           aria-label="Codex permission request"
         >
           <p className="text-sm font-medium">{requestTitle(request.method)}</p>
+          {requestError && (
+            <p className="mt-2 text-xs text-red-600" role="alert">
+              {requestError}
+            </p>
+          )}
           {requestTargetRows(request.method, request.target).length > 0 && (
             <dl className="mt-2 space-y-1 text-xs">
               {requestTargetRows(request.method, request.target).map(
@@ -315,14 +340,6 @@ export function HarnessSelector({
                   ) : null
               )}
               <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  disabled={busyRequestId === request.id}
-                  onClick={() => void decide(request.id, false)}
-                  className="rounded px-3 py-1 text-xs focus-visible:outline focus-visible:outline-2"
-                >
-                  Cancel request
-                </button>
                 <button
                   type="button"
                   disabled={busyRequestId === request.id}

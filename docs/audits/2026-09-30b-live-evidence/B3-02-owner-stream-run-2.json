@@ -1,0 +1,21 @@
+{
+  "step": "B3-02-owner-stream-run-2",
+  "as": "owner",
+  "at": "2026-09-30T21:01:35.775493+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/6bc5ccdb-1521-461d-aa44-fff52800f9db/stream",
+    "body": null
+  },
+  "status": 500,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Internal server error during tenant validation",
+      "status_code": 500,
+      "type": "internal_error"
+    }
+  }
+}

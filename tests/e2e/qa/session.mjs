@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { redactText, sanitizeError, sanitizeRequestObservation } from './report.mjs';
 
@@ -6,6 +8,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SAFE_PATH = /^\/(?:[^\s?#]|%[0-9a-f]{2})*(?:\?[^\s#]*)?$/i;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const MAX_SSE_BYTES = 2 * 1024 * 1024;
+// Checkpoint names come from docs/engineering/flows/*.md (`checkpoint: <name>`)
+// and become file names, so they are restricted to a safe lowercase slug.
+const CHECKPOINT_NAME = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 
 export class FixtureOwnershipError extends Error {
   constructor(kind, id) {
@@ -21,6 +26,15 @@ export class QASessionError extends Error {
     super(message);
     this.name = 'QASessionError';
     Object.assign(this, details);
+  }
+}
+
+// The local Playwright browser build is missing or cannot start. This is an
+// environment prerequisite, so the runner reports it as BLOCKED, never FAIL.
+export class BrowserUnavailableError extends QASessionError {
+  constructor(message, details = {}) {
+    super(message, details);
+    this.name = 'BrowserUnavailableError';
   }
 }
 
@@ -245,6 +259,9 @@ export class QASession {
     this.uncertainMutations = [];
     this.pendingStreams = new Map();
     this.uncertainStreams = [];
+    this.evidenceDir = config.evidenceDir ?? null;
+    this.artifacts = { videos: [], traces: [], checkpoints: [] };
+    this.tracingActive = false;
   }
 
   assertOperational({ internal = false } = {}) {
@@ -275,12 +292,29 @@ export class QASession {
     let context = null;
     let page = null;
     try {
-      browser = await chromium.launch({ headless: true });
+      try {
+        browser = await chromium.launch({ headless: true });
+      } catch (error) {
+        throw new BrowserUnavailableError(
+          `Playwright Chromium could not launch; run \`pnpm --dir tests/e2e exec playwright install chromium-headless-shell\` (${String(error?.message ?? error).split('\n')[0]})`
+        );
+      }
       this.assertOperational();
       const contextOptions = { baseURL: this.config.baseUrl };
       if (this.config.storageState) contextOptions.storageState = this.config.storageState;
+      if (this.evidenceDir) {
+        // Video must be configured when the context is created; every
+        // verification run records it so a reviewer can replay the journey.
+        await mkdir(join(this.evidenceDir, 'video'), { recursive: true, mode: 0o700 });
+        contextOptions.recordVideo = { dir: join(this.evidenceDir, 'video') };
+      }
       context = await browser.newContext(contextOptions);
       this.assertOperational();
+      // A credential login types the QA password and receives tokens; the
+      // trace must not record it, so credential runs start tracing in login()
+      // after the protected route is reached. Anonymous and storage-state
+      // sessions trace from the start (see startTracing for what remains).
+      if (!this.hasCredentials) await this.startTracing(context);
       page = await context.newPage();
       this.assertOperational();
       this.browser = browser;
@@ -296,6 +330,72 @@ export class QASession {
       }
       throw error;
     }
+  }
+
+  /**
+   * Full-page screenshot for a flow-chart checkpoint, written to
+   * <evidenceDir>/checkpoints/<scenario>--<name>.png. Returns the record the
+   * runner lists on the case.
+   */
+  async checkpoint(scenarioId, name) {
+    if (!CHECKPOINT_NAME.test(String(name))) {
+      throw new QASessionError(`Checkpoint name is invalid: ${redactText(String(name), this.secrets)}`);
+    }
+    if (!this.page) throw new QASessionError(`Checkpoint ${name} has no open page`);
+    const file = `${String(scenarioId).replace(/[^A-Za-z0-9.-]/g, '_')}--${name}.png`;
+    const item = { kind: 'checkpoint', name, file };
+    if (this.evidenceDir) {
+      const dir = join(this.evidenceDir, 'checkpoints');
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await this.page.screenshot({ path: join(dir, file), fullPage: true });
+    }
+    this.artifacts.checkpoints.push(item);
+    return item;
+  }
+
+  /**
+   * Playwright traces still carry session cookies and bearer tokens from
+   * network snapshots; trace files are secret-bearing and never published.
+   */
+  async startTracing(context = this.context) {
+    if (!this.evidenceDir || !context?.tracing || this.tracingActive) return;
+    await context.tracing.start({ screenshots: true, snapshots: true });
+    this.tracingActive = true;
+  }
+
+  /** Save the current trace segment: trace.zip, then trace-2.zip, ... */
+  async stopTracing(context = this.context) {
+    if (!this.tracingActive || !context?.tracing) return;
+    this.tracingActive = false;
+    const name = this.artifacts.traces.length === 0 ? 'trace.zip' : `trace-${this.artifacts.traces.length + 1}.zip`;
+    await context.tracing.stop({ path: join(this.evidenceDir, name) });
+    this.artifacts.traces.push(name);
+  }
+
+  /**
+   * Stop tracing and note the video file before a context closes. Shared by
+   * close() and quarantine() so a timed-out scenario still leaves a trace.
+   * Failures are returned as messages; evidence never masks the real result.
+   */
+  async collectBrowserEvidence(page, context) {
+    const errors = [];
+    if (this.tracingActive) {
+      try {
+        await this.stopTracing(context);
+      } catch (error) {
+        errors.push(`trace: ${sanitizeError(error, this.secrets).message}`);
+      }
+    }
+    try {
+      const video = page?.video?.();
+      if (video) {
+        const path = await video.path();
+        if (path && !this.artifacts.videos.includes(path)) this.artifacts.videos.push(path);
+      }
+    } catch (error) {
+      errors.push(`video: ${sanitizeError(error, this.secrets).message}`);
+    }
+    return errors;
   }
 
   assertTrustedBrowserUrl(value) {
@@ -334,8 +434,11 @@ export class QASession {
       if (/\/login(?:$|[?#])/.test(new URL(page.url()).pathname)) {
         throw new QASessionError('Storage state did not reach a protected route');
       }
+      await this.startTracing();
       return page;
     }
+    // Never record credential entry: pause any running trace segment.
+    await this.stopTracing();
     await this.goto('/login');
     // Verify the origin again immediately before entering credentials. A
     // compromised redirect must never receive owner credentials.
@@ -356,6 +459,7 @@ export class QASession {
     if (/\/login(?:$|[?#])/.test(new URL(page.url()).pathname)) {
       throw new QASessionError('Login did not complete on the configured target');
     }
+    await this.startTracing();
     return page;
   }
 
@@ -774,6 +878,9 @@ export class QASession {
         tokenPromise,
         new Promise((resolve) => setTimeout(resolve, Math.min(250, this.config.timeoutMs ?? 250))),
       ]);
+      for (const error of await this.collectBrowserEvidence(page, context)) {
+        this.quarantineErrors.push({ kind: 'browser evidence', error });
+      }
       for (const [label, resource] of [['browser context', context], ['browser', browser]]) {
         try {
           await resource?.close();
@@ -932,6 +1039,7 @@ export class QASession {
             thread: `/api/v2/threads/${encodeURIComponent(resource.id)}`,
             document: `/api/v1/documents/${encodeURIComponent(resource.id)}`,
             collection: `/api/v2/collections/${encodeURIComponent(resource.id)}`,
+            project: `/api/v1/projects/${encodeURIComponent(resource.id)}`,
           }[resource.kind];
           if (!path) throw new QASessionError(`No cleanup route for fixture kind ${resource.kind}`);
           await this.request(path, { method: 'DELETE', internal: true });
@@ -965,7 +1073,7 @@ export class QASession {
     if (this.closed) return;
     this.closed = true;
     this.abort();
-    const errors = [];
+    const errors = await this.collectBrowserEvidence(this.page, this.context);
     for (const [label, resource] of [['browser context', this.context], ['browser', this.browser]]) {
       try {
         await resource?.close();

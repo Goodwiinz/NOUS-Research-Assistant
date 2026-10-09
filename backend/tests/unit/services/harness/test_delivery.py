@@ -11,6 +11,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.core.config import settings
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.agent_run_event import AgentRunEvent
 from src.models.bridge_device import BridgeDevice
@@ -24,6 +25,7 @@ from src.services.agent.agent_submission_service import (
 )
 from src.services.harness.delivery import (
     dispatch_pending,
+    has_assistant_projection,
     ingest_bridge_event,
     lease_commands,
     reconcile_pending,
@@ -33,7 +35,7 @@ from src.services.integrations.context import (
     renew_grant,
     resolve_integration_context,
 )
-from src.shared.enums import JobStatus
+from src.shared.enums import AgentOutboxStatus, JobStatus
 from tests.unit.services.harness.test_runs import (  # noqa: F401
     DEVICE,
     LOCAL,
@@ -314,6 +316,144 @@ async def cancel(db: AsyncSession, run_id: str) -> None:
     await db.commit()
 
 
+async def test_queued_cancellation_before_dispatch_releases_workspace(
+    db: AsyncSession,
+    context: IntegrationContext,
+    external_run: Any,
+) -> None:
+    await cancel(db, str(external_run.id))
+
+    assert await dispatch_pending(db) == 0
+
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == str(external_run.id))
+    )
+    outbox = await db.scalar(
+        select(AgentOutbox).where(AgentOutbox.run_id == str(external_run.id))
+    )
+    terminal_event = await db.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == str(external_run.id))
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert run is not None and run.status == JobStatus.CANCELLED.value
+    assert session is not None and not session.workspace_locked
+    assert outbox is not None and outbox.status == AgentOutboxStatus.FAILED.value
+    assert terminal_event is not None and terminal_event.event_type == "run.cancelled"
+
+
+@pytest.mark.parametrize("failure", ["revoked_grant", "missing_message"])
+async def test_undeliverable_outbox_fails_run_and_releases_workspace(
+    db: AsyncSession,
+    context: IntegrationContext,
+    external_run: Any,
+    failure: str,
+) -> None:
+    run = await db.get(AgentRun, str(external_run.id))
+    assert run is not None
+    if failure == "revoked_grant":
+        grant = await db.get(IntegrationGrant, context.grant_id)
+        assert grant is not None
+        grant.revoked_at = datetime.now(timezone.utc)
+    else:
+        setattr(run, "user_message_id", None)
+    await db.commit()
+
+    assert await dispatch_pending(db) == 0
+
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == str(external_run.id))
+    )
+    outbox = await db.scalar(
+        select(AgentOutbox).where(AgentOutbox.run_id == str(external_run.id))
+    )
+    terminal_event = await db.scalar(
+        select(AgentRunEvent)
+        .where(AgentRunEvent.run_id == str(external_run.id))
+        .order_by(AgentRunEvent.seq.desc())
+    )
+    assert run is not None and run.status == JobStatus.FAILED.value
+    assert run.error_code == "harness_dispatch_failed"
+    assert session is not None and not session.workspace_locked
+    assert outbox is not None and outbox.status == AgentOutboxStatus.FAILED.value
+    assert terminal_event is not None and terminal_event.event_type == "run.failed"
+
+
+# resume_stream's stream-less Codex fallback (BR-2) replays a finished run only
+# when has_assistant_projection() is False. Mutation: make it return True; the
+# terminalized test fails. Make it return False, or key it on anything but the
+# run id (e.g. AgentRun.assistant_message_id, which a failed projection leaves
+# NULL); the projected test fails.
+@pytest.mark.parametrize("closure", ["cancelled", "revoked_grant", "missing_message"])
+async def test_run_closed_before_dispatch_has_no_assistant_projection(
+    db: AsyncSession,
+    context: IntegrationContext,
+    external_run: Any,
+    closure: str,
+) -> None:
+    """dispatch_pending.terminalize() writes the terminal ledger event but no
+    assistant row, so after a reload that event is the turn's only outcome."""
+    run = await db.get(AgentRun, str(external_run.id))
+    assert run is not None
+    if closure == "cancelled":
+        await cancel(db, str(external_run.id))
+    elif closure == "revoked_grant":
+        grant = await db.get(IntegrationGrant, context.grant_id)
+        assert grant is not None
+        grant.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+    else:
+        setattr(run, "user_message_id", None)
+        await db.commit()
+
+    assert await dispatch_pending(db) == 0
+
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    assert run is not None and JobStatus(run.status).is_terminal
+    assert not await has_assistant_projection(db, run)
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed", "interrupted"])
+async def test_projected_terminal_run_has_assistant_projection(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    from src.services.agent import agent_execution_service as execution
+
+    monkeypatch.setattr(
+        execution,
+        "AsyncSessionLocal",
+        async_sessionmaker(db.bind, expire_on_commit=False),
+    )
+    await running(db, context, command)
+    await ingest_bridge_event(
+        db,
+        context,
+        event(
+            command,
+            2,
+            body={
+                "kind": "observation",
+                "state": outcome,
+                "sessionId": "native",
+                "turnId": "turn",
+            },
+        ),
+    )
+
+    db.expire_all()
+    run = await db.get(AgentRun, str(command.runId))
+    assert run is not None and JobStatus(run.status).is_terminal
+    assert await has_assistant_projection(db, run)
+
+
 @pytest.mark.parametrize(
     "outcome,status", [("completed", "completed"), ("interrupted", "cancelled")]
 )
@@ -374,6 +514,43 @@ async def test_cancel_race_requires_terminal_and_projects(
         and run.assistant_message_id is not None
     )
     assert session is not None and not session.workspace_locked
+
+
+# Mutation: delivery.py:488 content=text -> content="".join(content).
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/services/harness/test_delivery.py -k failed_turn_without_output
+async def test_failed_turn_without_output_projects_non_empty_assistant_text(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn that fails before any delta must not persist an empty assistant
+    row: ChatMessageResponse requires content, so the thread would 500 on read."""
+    from src.services.agent import agent_execution_service as execution
+
+    persist = AsyncMock(return_value=str(uuid4()))
+    monkeypatch.setattr(execution, "_persist_assistant_message_safe", persist)
+    await running(db, context, command)
+    await ingest_bridge_event(
+        db,
+        context,
+        event(
+            command,
+            2,
+            body={
+                "kind": "observation",
+                "state": "failed",
+                "sessionId": "native",
+                "turnId": "turn",
+            },
+        ),
+    )
+    persist.assert_awaited_once()
+    assert persist.await_args.kwargs["content"] == "External execution failed."
+    db.expire_all()
+    run = await db.get(AgentRun, str(command.runId))
+    assert run is not None and run.status == "failed"
 
 
 async def test_projection_failure_retains_ownership_and_retries_after_restart(
@@ -683,3 +860,337 @@ async def test_lease_renewal_is_limited_to_authorized_run_scope(
     assert await lease_runs(db, scoped, DEVICE) == {
         str(command.runId): command.generation
     }
+
+
+# Mutation: delivery.py:243 and :597 remove each IntegrationAccessDenied catch.
+# Command: pytest -c backend/pytest.ini --no-cov -q
+# backend/tests/unit/services/harness/test_delivery.py -k poll_skips_session
+async def test_poll_skips_session_that_fails_authorization(
+    db: AsyncSession, context: IntegrationContext, command: Any
+) -> None:
+    from types import SimpleNamespace
+
+    from src.models.bridge_device import WorkspaceBinding
+    from src.models.thread import Thread
+    from src.services.agent.agent_submission_service import accept_submission
+    from src.services.harness.delivery import lease_runs
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
+
+    other_thread, other_workspace = uuid4(), uuid4()
+    db.add_all(
+        [
+            Thread(
+                id=other_thread,
+                conversation_id=CONVERSATION,
+                source_project_id=PROJECT,
+                title="stale",
+                created_by_id=USER,
+            ),
+            WorkspaceBinding(
+                device_id=DEVICE,
+                workspace_id=other_workspace,
+                project_id=PROJECT,
+                label="stale",
+            ),
+        ]
+    )
+    await db.commit()
+    stale = await accept_submission(
+        db,
+        current_user=SimpleNamespace(id=USER, organization_id=ORG),
+        request=request().model_copy(
+            update={"thread_id": str(other_thread), "workspace_id": other_workspace}
+        ),
+        thread=await db.get(Thread, other_thread),
+        integration_context=context,
+    )
+    # A UI flow dropping the thread's project makes its session unauthorizable.
+    await db.execute(
+        update(Thread).where(Thread.id == other_thread).values(source_project_id=None)
+    )
+    await db.execute(
+        update(HarnessCommand).values(lease_until=None, acknowledged=False)
+    )
+    await db.commit()
+    assert [c.runId for c in await lease_commands(db, context, DEVICE)] == [
+        command.runId
+    ]
+    assert await lease_runs(db, context, DEVICE) == {
+        str(command.runId): command.generation
+    }
+    assert stale.run_id not in await lease_runs(db, context, DEVICE)
+
+
+def _bridge_socket(frames: list[str]) -> Any:
+    """Fake bridge socket: feeds ``frames`` then disconnects; records replies."""
+    from types import SimpleNamespace
+
+    from fastapi import WebSocketDisconnect
+
+    class Socket:
+        url = SimpleNamespace(scheme="wss")
+        headers = {"x-nous-integration-grant": "opaque"}
+
+        def __init__(self) -> None:
+            self.sent: list[Any] = []
+            self.closed: list[dict[str, Any]] = []
+
+        async def accept(self, **kwargs: Any) -> None:
+            pass
+
+        async def receive_text(self) -> str:
+            if not frames:
+                raise WebSocketDisconnect()
+            return frames.pop(0)
+
+        async def send_json(self, value: Any) -> None:
+            self.sent.append(value)
+
+        async def close(self, **kwargs: Any) -> None:
+            self.closed.append(kwargs)
+
+    return Socket()
+
+
+def _serve_harness_socket(
+    monkeypatch: pytest.MonkeyPatch, db: AsyncSession, resolve: AsyncMock
+) -> Any:
+    from src.api import harness
+    from src.core.websocket_auth import WebSocketAuthenticator
+
+    monkeypatch.setattr(
+        harness,
+        "AsyncSessionLocal",
+        async_sessionmaker(db.bind, expire_on_commit=False),
+    )
+    monkeypatch.setattr(
+        WebSocketAuthenticator,
+        "authenticate",
+        AsyncMock(return_value={"sub": str(USER)}),
+    )
+    monkeypatch.setattr(harness, "resolve_integration_context", resolve)
+    return harness
+
+
+# BR-1. Mutation: backend/src/api/harness.py event branch — remove the
+# `except IntegrationAccessDenied:` around the ingest calls; this test then fails
+# with "one denied run closed the whole device socket".
+# Command: cd backend && python -m pytest tests/unit/services/harness/test_delivery.py
+#   -k "denied_run or grant_lost" -xvs
+async def test_socket_rejects_a_denied_run_event_and_keeps_serving_the_device(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from src.models.bridge_device import WorkspaceBinding
+    from src.models.thread import Thread
+    from src.services.agent.agent_submission_service import accept_submission
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
+
+    other_thread, other_workspace = uuid4(), uuid4()
+    db.add_all(
+        [
+            Thread(
+                id=other_thread,
+                conversation_id=CONVERSATION,
+                source_project_id=PROJECT,
+                title="deleted mid-run",
+                created_by_id=USER,
+            ),
+            WorkspaceBinding(
+                device_id=DEVICE,
+                workspace_id=other_workspace,
+                project_id=PROJECT,
+                label="other",
+            ),
+        ]
+    )
+    await db.commit()
+    denied = await accept_submission(
+        db,
+        current_user=SimpleNamespace(id=USER, organization_id=ORG),
+        request=request().model_copy(
+            update={"thread_id": str(other_thread), "workspace_id": other_workspace}
+        ),
+        thread=await db.get(Thread, other_thread),
+        integration_context=context,
+    )
+    assert await dispatch_pending(db) == 1
+    [denied_command] = await lease_commands(db, context, DEVICE)
+    assert str(denied_command.runId) == denied.run_id
+    # The user deletes that chat while its Codex turn is still producing output.
+    await db.execute(
+        update(Thread).where(Thread.id == other_thread).values(is_deleted=True)
+    )
+    await db.commit()
+
+    harness = _serve_harness_socket(monkeypatch, db, AsyncMock(return_value=context))
+    socket = _bridge_socket(
+        [event(denied_command).model_dump_json(), event(command).model_dump_json()]
+    )
+    await harness.connect(socket)
+
+    assert socket.closed == [], "one denied run closed the whole device socket"
+    assert socket.sent == [
+        {
+            "reject": {
+                "runId": str(denied_command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": denied_command.generation,
+                "code": "run_access_denied",
+            }
+        },
+        {
+            "ack": {
+                "runId": str(command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": command.generation,
+                "canonicalSeq": 2,
+            }
+        },
+    ]
+    # NOUS wrote nothing for the refused run; its workspace stays locked because
+    # releasing it needs terminal evidence (delivery.py lease_commands comment).
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(HarnessReceipt)
+            .where(HarnessReceipt.run_id == denied.run_id)
+        )
+        == 0
+    )
+    session = await db.scalar(
+        select(HarnessSession)
+        .where(HarnessSession.run_id == denied.run_id)
+        .execution_options(populate_existing=True)
+    )
+    assert session is not None and session.workspace_locked is True
+
+
+# Mutation: backend/src/api/harness.py — delete the `await _grant_context(db,
+# token, identity)` re-check inside the event branch's `except
+# IntegrationAccessDenied:`; this test then fails with "a revoked grant was
+# answered with a per-run reject". Command: see the BR-1 test above.
+async def test_socket_still_closes_when_grant_lost_mid_frame(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Connect and the frame check pass; a renewal then revokes this token, so the
+    # ingest's own grant check denies and the re-check must see the revocation.
+    resolve = AsyncMock(side_effect=[context, context, IntegrationAccessDenied()])
+    harness = _serve_harness_socket(monkeypatch, db, resolve)
+    monkeypatch.setattr(
+        harness, "ingest_bridge_event", AsyncMock(side_effect=IntegrationAccessDenied())
+    )
+    socket = _bridge_socket([event(command).model_dump_json()])
+    await harness.connect(socket)
+
+    assert socket.sent == [], "a revoked grant was answered with a per-run reject"
+    assert socket.closed == [{"code": 4403, "reason": "Bridge authorization denied"}]
+    # Connect, the frame check and the post-denial re-check: three resolves.
+    assert resolve.await_count == 3
+
+
+@pytest.mark.parametrize(
+    ("ingest", "body"),
+    [
+        (
+            "ingest_native_request",
+            {
+                "kind": "request",
+                "sessionId": "native-session",
+                "turnId": "native-turn",
+                "itemId": "item-1",
+                "requestId": 7,
+                "method": "item/commandExecution/requestApproval",
+                "params": {},
+            },
+        ),
+        (
+            "ingest_native_response_ack",
+            {"kind": "command_ack", "approvalRecordId": str(uuid4())},
+        ),
+    ],
+    ids=["native_request", "response_ack"],
+)
+async def test_socket_rejects_a_denied_run_native_frame_and_keeps_serving_the_device(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    ingest: str,
+    body: dict[str, Any],
+) -> None:
+    """The native-request and response-ack branches share the BR-1 reject."""
+    harness = _serve_harness_socket(monkeypatch, db, AsyncMock(return_value=context))
+    denied = AsyncMock(side_effect=IntegrationAccessDenied())
+    monkeypatch.setattr(harness, ingest, denied)
+    # The mock denies only the native ingest; frame 2 just proves the socket serves on.
+    socket = _bridge_socket(
+        [event(command, body=body).model_dump_json(), event(command).model_dump_json()]
+    )
+    await harness.connect(socket)
+
+    denied.assert_awaited_once()
+    assert socket.closed == [], "one denied native frame closed the device socket"
+    assert socket.sent == [
+        {
+            "reject": {
+                "runId": str(command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": command.generation,
+                "code": "run_access_denied",
+            }
+        },
+        {
+            "ack": {
+                "runId": str(command.runId),
+                "sourceId": "stable-source",
+                "sourceSeq": 1,
+                "generation": command.generation,
+                "canonicalSeq": 2,
+            }
+        },
+    ]
+
+
+async def test_chat_bound_grant_leases_only_runs_in_its_chat(
+    db: AsyncSession, context: IntegrationContext, external_run: Any
+) -> None:
+    """A device connected with --chat runs harness work only in that chat."""
+    from src.models.thread import Thread
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT
+
+    other_chat = uuid4()
+    db.add(
+        Thread(
+            id=other_chat,
+            conversation_id=CONVERSATION,
+            source_project_id=PROJECT,
+            title="other chat",
+            created_by_id=USER,
+        )
+    )
+    await db.commit()
+    assert await dispatch_pending(db) == 1  # the run lives in THREAD
+
+    async def bind(thread_id: Any) -> IntegrationContext:
+        await db.execute(
+            update(IntegrationGrant)
+            .where(IntegrationGrant.id == context.grant_id)
+            .values(thread_id=thread_id)
+        )
+        await db.commit()
+        return context.model_copy(update={"thread_id": thread_id})
+
+    assert await lease_commands(db, await bind(other_chat), DEVICE) == []
+    leased = await lease_commands(db, await bind(THREAD), DEVICE)
+    assert [c.runId for c in leased] == [external_run.id]

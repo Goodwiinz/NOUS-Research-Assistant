@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, rename } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { record } from "./rpc.ts";
@@ -7,6 +7,9 @@ import { record } from "./rpc.ts";
 export type IntegrationCredentials = {
   accessToken: string;
   grantToken: string;
+  // Present on connections made since grant renewal; see grants.ts.
+  grantId?: string;
+  renewedAt?: number;
 };
 export function integrationHeaders(
   credentials: IntegrationCredentials,
@@ -100,6 +103,35 @@ export class CredentialStore {
     const credentialHandle = randomUUID();
     await this.writeLocal(credentialHandle, credentials);
     return credentialHandle;
+  }
+  /** Names of stored files starting with `prefix` (without `.json`), sorted. */
+  async listLocal(prefix: string): Promise<string[]> {
+    if (!/^[a-zA-Z0-9-]*$/.test(prefix)) throw new Error("invalid storage prefix");
+    await this.ready();
+    return (await readdir(this.directory))
+      .filter((file) => file.startsWith(prefix) && file.endsWith(".json"))
+      .map((file) => file.slice(0, -".json".length))
+      .filter((name) => /^[a-zA-Z0-9-]+$/.test(name))
+      .sort();
+  }
+  /** Delete one stored file; a missing file is already gone. */
+  async removeLocal(name: string): Promise<void> {
+    await this.ready();
+    try {
+      await unlink(this.path(name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  /** Replace stored credentials under the same handle (atomic rename). */
+  async update(
+    credentialHandle: string,
+    credentials: IntegrationCredentials,
+  ): Promise<void> {
+    if (!validHandle.test(credentialHandle))
+      throw new Error("invalid credential handle");
+    this.validate(credentials);
+    await this.writeLocal(credentialHandle, credentials);
   }
   async load(credentialHandle: string): Promise<IntegrationCredentials> {
     if (!validHandle.test(credentialHandle))

@@ -165,10 +165,18 @@ export class CodexAdapter implements HarnessAdapter {
           !string(config.command) ||
           !Array.isArray(config.args) ||
           !config.args.every((a) => typeof a === "string") ||
-          Object.keys(config).some((k) => !["command", "args"].includes(k))
+          (config.tool_timeout_sec !== undefined &&
+            (!Number.isInteger(config.tool_timeout_sec) ||
+              config.tool_timeout_sec < 1 ||
+              config.tool_timeout_sec > 600)) ||
+          Object.keys(config).some(
+            (k) => !["command", "args", "tool_timeout_sec"].includes(k),
+          )
         )
           throw new Error("invalid local MCP configuration");
       }
+    if (value.model !== undefined && !/^[a-zA-Z0-9._-]{1,64}$/.test(value.model))
+      throw new Error("invalid local Codex model name");
     return structuredClone({
       ...value,
       cwd,
@@ -202,7 +210,15 @@ export class CodexAdapter implements HarnessAdapter {
       reply.sandbox.networkAccess !== false ||
       reply.sandbox.excludeTmpdirEnvVar !== true ||
       reply.sandbox.excludeSlashTmp !== true ||
-      !sameRoots(reply.sandbox.writableRoots, options.policy.writableRoots)
+      // Codex 0.153.4 reports only the *extra* writable roots; cwd is always
+      // writable under workspaceWrite and is omitted from the reply. Compare
+      // with cwd added so an exact-cwd policy is accepted and any widening
+      // beyond the policy is still refused.
+      !Array.isArray(reply.sandbox.writableRoots) ||
+      !sameRoots(
+        [...reply.sandbox.writableRoots, options.cwd],
+        options.policy.writableRoots,
+      )
     )
       throw new Error("policy mismatch: effective Codex permissions");
     if (
@@ -231,6 +247,7 @@ export class CodexAdapter implements HarnessAdapter {
         },
       };
       if (local.mcpConfig) config.mcp_servers = local.mcpConfig;
+      if (local.model) config.model = local.model;
       const reply = await this.rpc!.call(
         id ? "thread/resume" : "thread/start",
         {

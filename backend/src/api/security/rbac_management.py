@@ -3,6 +3,7 @@ RBAC management API endpoints
 Provides role and permission management for fine-grained access control
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,8 @@ from src.models.permission import (
 )
 from src.models.user import User
 from src.services.security.rbac_service import RBACService, get_rbac_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rbac", tags=["RBAC Management"])
 
@@ -137,6 +140,14 @@ class PermissionCategoryResponse(BaseModel):
 # Helper functions
 
 
+def _delegation_denied() -> HTTPException:
+    """403 for GOO-406: the role exceeds the caller's own authority."""
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Cannot delegate a role that exceeds your own permissions or priority",
+    )
+
+
 def get_current_user_role():
     """Get current user role from RBAC service"""
     try:
@@ -181,7 +192,7 @@ async def get_permissions(
 
         return [PermissionResponse(**perm.to_dict()) for perm in permissions]
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve permissions",
@@ -198,7 +209,7 @@ async def get_permission_categories(
         categories = rbac_service.get_permission_categories()
         return [PermissionCategoryResponse(**cat) for cat in categories]
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve permission categories",
@@ -227,15 +238,24 @@ async def create_role(
             description=role_data.description,
             permission_names=role_data.permission_names,
             priority=role_data.priority,
+            created_by=get_current_user_id(),
         )
 
         # Refresh role with permissions
         rbac_service.db.refresh(role)
         return RoleResponse(**role.to_dict())
 
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except HTTPException:
+        raise
+    except PermissionDeniedException:
+        raise _delegation_denied()
+    except ConfigurationException:
+        logger.warning("Invalid RBAC configuration request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid RBAC configuration request",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create role",
@@ -268,7 +288,7 @@ async def get_roles(
 
         return [RoleResponse(**role.to_dict()) for role in roles]
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve roles",
@@ -300,7 +320,7 @@ async def get_role(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve role",
@@ -339,6 +359,20 @@ async def update_role(
         update_data = role_data.dict(exclude_unset=True)
         permission_names = update_data.pop("permission_names", None)
 
+        # GOO-406 (A4): the caller must out-rank the role both as it is now and
+        # as it will be after the edit (no editing or inflating a higher role).
+        current_user_id = get_current_user_id()
+        current_names = [p.name for p in role.permissions if p.is_active]
+        rbac_service.assert_caller_can_delegate(
+            current_user_id, organization_id, current_names, role.priority
+        )
+        rbac_service.assert_caller_can_delegate(
+            current_user_id,
+            organization_id,
+            permission_names if permission_names is not None else current_names,
+            update_data.get("priority", role.priority),
+        )
+
         for field, value in update_data.items():
             if hasattr(role, field):
                 setattr(role, field, value)
@@ -362,7 +396,10 @@ async def update_role(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except PermissionDeniedException:
+        rbac_service.db.rollback()
+        raise _delegation_denied()
+    except Exception:
         rbac_service.db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -418,7 +455,7 @@ async def delete_role(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         rbac_service.db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -455,9 +492,17 @@ async def assign_role_to_user(
         rbac_service.db.refresh(assignment)
         return RoleAssignmentResponse(**assignment.to_dict())
 
-    except ConfigurationException as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as e:
+    except HTTPException:
+        raise
+    except PermissionDeniedException:
+        raise _delegation_denied()
+    except ConfigurationException:
+        logger.warning("Invalid RBAC configuration request", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid RBAC configuration request",
+        )
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to assign role to user",
@@ -478,7 +523,10 @@ async def revoke_role_from_user(
         organization_id = get_current_tenant_id()
 
         success = rbac_service.revoke_role_from_user(
-            user_id=user_id, role_id=role_id, organization_id=organization_id
+            user_id=user_id,
+            role_id=role_id,
+            organization_id=organization_id,
+            revoked_by=get_current_user_id(),
         )
 
         if not success:
@@ -489,7 +537,9 @@ async def revoke_role_from_user(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except PermissionDeniedException:
+        raise _delegation_denied()
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revoke role from user",
@@ -516,7 +566,7 @@ async def get_user_permissions(
             roles=[RoleResponse(**role.to_dict()) for role in roles],
         )
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user permissions",
@@ -550,7 +600,7 @@ async def get_current_user_permissions(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve current user permissions",
@@ -586,7 +636,7 @@ async def get_users_with_role(
 
         return user_data
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users for role",
@@ -620,7 +670,7 @@ async def initialize_rbac_system(
             "organization_id": organization_id,
         }
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to initialize RBAC system",
@@ -651,7 +701,7 @@ async def cleanup_expired_assignments(
             "expired_assignments_removed": expired_count,
         }
 
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cleanup expired assignments",

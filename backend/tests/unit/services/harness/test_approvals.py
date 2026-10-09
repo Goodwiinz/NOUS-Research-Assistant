@@ -22,14 +22,17 @@ from src.services.harness.approvals import (
     NativeRequestConflict,
     ingest_native_request,
     ingest_native_response_ack,
+    native_request_context,
     resolve_native_request,
 )
 from tests.unit.services.harness.test_delivery import (
     DEVICE,
     LOCAL,
+    USER,
     context,
     db,
     external_run,
+    lease_commands,
 )
 
 pytestmark = pytest.mark.unit
@@ -54,7 +57,7 @@ async def live_command(
     assert session is not None
     run = await db.get(AgentRun, str(external_run.id))
     assert run is not None
-    run.status = "running"
+    setattr(run, "status", "running")
     session.provider_session_id = "native-session"
     session.provider_turn_id = "native-turn"
     session.observation = "running"
@@ -104,7 +107,9 @@ async def challenge(
         },
     }
     event = BridgeEvent.model_validate(values)
-    return await ingest_native_request(db, context, event)
+    request_id, canonical_seq = await ingest_native_request(db, context, event)
+    assert canonical_seq >= 1
+    return request_id
 
 
 async def test_duplicate_decision_rejected(
@@ -187,8 +192,11 @@ async def test_same_item_can_have_distinct_typed_callback_ids(
             },
         },
     }
-    other = await ingest_native_request(db, context, BridgeEvent.model_validate(values))
+    other, canonical_seq = await ingest_native_request(
+        db, context, BridgeEvent.model_validate(values)
+    )
     assert other != challenge
+    assert canonical_seq > 1
     first = await db.get(HarnessNativeRequest, challenge)
     second = await db.get(HarnessNativeRequest, other)
     assert first is not None and second is not None
@@ -229,6 +237,25 @@ async def test_wrong_actor_cannot_decide(
     wrong_owner = context.model_copy(update={"user_id": uuid4()})
     with pytest.raises(PermissionError):
         await resolve_native_request(db, wrong_owner, challenge, NativeDecision.allow())
+
+
+async def test_native_decision_context_uses_current_session_grant_scope(
+    db: AsyncSession,
+    context: IntegrationContext,
+    challenge: UUID,
+) -> None:
+    # A device poll rotates the session to its project-scoped grant. Building
+    # an approval context from the run row would invent a run scope and make
+    # every subsequent decision fail the exact-grant check.
+    await lease_commands(db, context, DEVICE)
+    decision_context = await native_request_context(db, challenge, USER)
+    assert decision_context.grant_id == context.grant_id
+    assert decision_context.thread_id == context.thread_id
+    assert decision_context.run_id == context.run_id
+
+    await resolve_native_request(
+        db, decision_context, challenge, NativeDecision.allow()
+    )
 
 
 async def test_unknown_native_request_kind_rejected(
@@ -321,9 +348,10 @@ async def test_workspace_local_file_approval_remains_supported(
             },
         },
     }
-    request_id = await ingest_native_request(
+    request_id, canonical_seq = await ingest_native_request(
         db, context, BridgeEvent.model_validate(values)
     )
+    assert canonical_seq >= 1
     request = await db.get(HarnessNativeRequest, request_id)
     assert request is not None
     assert request.method == "item/fileChange/requestApproval"

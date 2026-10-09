@@ -193,6 +193,15 @@ def _frame_for_event(event: Any, *, run_id: UUID) -> str | None:
             "error": "Codex stopped.",
             "category": "cancelled",
         }
+    elif kind is RunEventType.ARTIFACT_VERSION_CREATED:
+        # IDs only; the client refetches artifact metadata through Query.
+        artifact_id, version_id = payload.get("artifact_id"), payload.get("version_id")
+        if not artifact_id or not version_id:
+            return None
+        event_type, data = AgentStreamEvent.ARTIFACT, {
+            "artifact_id": artifact_id,
+            "version_id": version_id,
+        }
     else:
         return None
     from src.api.agent.streaming import _format_sse_event
@@ -229,7 +238,7 @@ async def stream_harness_run(
             frame = _frame_for_event(event, run_id=run_id)
             if frame is not None:
                 yield frame
-            if RunEventType(event.event_type) in TERMINAL_RUN_EVENTS:
+            if RunEventType(str(event.event_type)) in TERMINAL_RUN_EVENTS:
                 return
         if await request.is_disconnected():
             return

@@ -47,19 +47,22 @@ race, and the loser re-reads the winner.
 
 **Single writer.** ``uq_agent_runs_active_thread`` makes "one non-terminal run
 per thread" a database invariant. A new submission rejects while another run
-is queued, running, stopping, or recovering. A parked ``awaiting_confirmation`` run is safe
-to abandon because no graph invocation is active; it is cancelled atomically
-with accepting the fresh turn, then the producer/new-turn path clears any
-stale checkpoint after claiming the replacement.
+is queued, running, stopping, or recovering. A parked ``awaiting_confirmation``
+run is safe to abandon because no graph invocation is active, but only its own
+user may abandon it: that user's fresh turn cancels it atomically with
+accepting the new one, then the producer/new-turn path clears any stale
+checkpoint after claiming the replacement. Any other workspace member gets
+``ActiveRunConflict`` (R8-C2) — the same rule as the owner-only Stop route.
 
 **Tenancy.** ``organization_id`` is nullable (org-less users exist), compared
 null-safely, and NEVER stringified — ``str(None) == "None"`` has merged tenants
 in this codebase before. The one query keyed by thread rather than org
-(``_ensure_thread_idle``) is scoped by construction: its ``thread_id`` comes
-from ``_resolve_thread``, which joins ``Workspace.owner_id == current_user.id``,
-so the thread — and therefore every run correlated to it — is already
-ownership-verified. Same reasoning as ``run_event_store.has_terminal_event``,
-which is keyed only by a server-generated run id.
+(``_ensure_thread_idle``) reads a thread that ``_resolve_thread`` already
+verified the submitter can edit. Threads are membership-scoped, so runs on a
+shared thread can belong to other members (possibly in other organizations):
+the lookup only decides idle-or-conflict and never acts on another user's run.
+``run_event_store.has_terminal_event`` is keyed only by a server-generated run
+id for the same reason.
 """
 
 from __future__ import annotations
@@ -67,10 +70,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, Optional, TypeVar, cast
 from uuid import UUID, uuid4
 
 from asyncpg.exceptions import ConnectionDoesNotExistError
@@ -80,6 +83,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
+from src.models.agent_run_event import AgentRunEvent
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.thread import Thread
 from src.schemas.integration_context import IntegrationContext
@@ -413,12 +417,13 @@ def _decrement_message_count(tombstoned: int) -> Any:
     return case((remaining < 0, 0), else_=remaining)
 
 
-async def _ensure_thread_idle(db: AsyncSession, *, thread_id: UUID) -> None:
-    """Reject active work; retire an abandoned HITL pause. Does NOT commit.
+async def _ensure_thread_idle(
+    db: AsyncSession, *, thread_id: UUID, user_id: Any
+) -> None:
+    """Reject active work; retire the submitter's own HITL pause. Does NOT commit.
 
-    Tenant scope: see the module docstring — ``thread_id`` comes from an
-    ownership-verified thread, so every run correlated to it belongs to the
-    submitting user by construction.
+    A shared thread's active run may belong to another member. Only the run's
+    own user may supersede it (see the module docstring); anyone else conflicts.
     """
     active = (
         await db.execute(
@@ -430,7 +435,10 @@ async def _ensure_thread_idle(db: AsyncSession, *, thread_id: UUID) -> None:
     ).scalar_one_or_none()
     if active is None:
         return
-    if active.status == JobStatus.AWAITING_CONFIRMATION.value:
+    if (
+        active.status == JobStatus.AWAITING_CONFIRMATION.value
+        and active.user_id == _coerce_uuid(user_id)
+    ):
         abandoned = await abandon_awaiting_submission(
             db,
             thread_id=thread_id,
@@ -594,6 +602,26 @@ async def request_run_cancellation(
         status=current_status,
         claimed=False,
     )
+
+
+_T = TypeVar("_T")
+
+
+async def commit_cancellation(db: AsyncSession, claim: Awaitable[_T]) -> _T:
+    """Own a Stop route's one transaction: await the claim, then commit.
+
+    ``request_run_cancellation`` and ``abandon_awaiting_submission`` never
+    commit, so the claim and its ledger event share one transaction. This is
+    that transaction's boundary; any failure rolls the session back and
+    re-raises, which keeps commit/rollback out of the router.
+    """
+    try:
+        result = await claim
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return result
 
 
 async def fail_queued_submission(
@@ -809,7 +837,9 @@ async def accept_submission(
     job_id = str(uuid4())
     try:
         try:
-            await _ensure_thread_idle(db, thread_id=thread_uuid)
+            await _ensure_thread_idle(
+                db, thread_id=thread_uuid, user_id=current_user.id
+            )
         except ActiveRunConflict:
             if idempotency_key is not None:
                 existing = await _find_by_idempotency_key(
@@ -1056,6 +1086,40 @@ _FINALIZE_ATTEMPTS = 2
 _FINALIZE_RETRY_BACKOFF_S = 0.2
 
 
+async def _finalize_already_landed(
+    db: AsyncSession,
+    *,
+    run_id: str,
+    status: JobStatus,
+    event_type: Optional[RunEventType],
+    provider: str,
+) -> bool:
+    """True when the run already holds exactly the requested finalization."""
+    current = (
+        await db.execute(
+            select(AgentRun.status).where(
+                AgentRun.job_id == run_id,
+                AgentRun.execution_provider == provider,
+            )
+        )
+    ).scalar_one_or_none()
+    if current != status.value:
+        return False
+    if event_type is None:
+        return True
+    recorded = (
+        await db.execute(
+            select(AgentRunEvent.id)
+            .where(
+                AgentRunEvent.run_id == run_id,
+                AgentRunEvent.event_type == event_type.value,
+            )
+            .limit(1)
+        )
+    ).first()
+    return recorded is not None
+
+
 async def finalize_submission(
     db: AsyncSession,
     *,
@@ -1157,8 +1221,22 @@ async def finalize_submission(
                 # The guarded UPDATE is the ownership/race decision. A
                 # stopping or terminal row is already owned by another
                 # terminalizer; there is no event to append from this call.
+                # Exception (R8-C3): on a lost-connection retry the first
+                # attempt's COMMIT may have landed before its ack was lost —
+                # recognise our own write instead of reporting a lost race.
+                landed = (
+                    attempt > 0
+                    and transition_result is not None
+                    and await _finalize_already_landed(
+                        db,
+                        run_id=run_id,
+                        status=status,
+                        event_type=event_type,
+                        provider=provider,
+                    )
+                )
                 await db.commit()
-                return False
+                return landed
             if event_type is not None:
                 try:
                     await append_event(

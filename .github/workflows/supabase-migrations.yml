@@ -1,0 +1,57 @@
+name: Supabase Migrations
+
+# Nothing else applies supabase/migrations/: Argo CD deploys images, the deploy
+# init container runs Alembic, and release-dev.yml never touches Supabase.
+# #1661 merged on 2026-09-23 and production stayed exposed until a hand apply
+# on 2026-09-29. Merging a migration to develop now applies it.
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "supabase/migrations/**"
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-migrations
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    name: Apply Supabase migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A dispatch runs the chosen branch's migrations; only develop's are merged.
+    # ponytail: guards mistakes, not a boundary. Any branch with write access
+    # can read a repository secret; a protected environment would close that.
+    if: github.ref == 'refs/heads/develop'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Pinned release tarball with a verified sha256 (from the release's
+      # checksums.txt), not an npm install resolved at run time.
+      - name: Install Supabase CLI
+        env:
+          CLI_VERSION: 2.118.0
+          CLI_SHA256: f6089a86fb9d9221c958193a277338daddd6822f706929943812fa32e106c86d
+        run: |
+          curl -fsSLo cli.tgz "https://github.com/supabase/cli/releases/download/v${CLI_VERSION}/supabase_${CLI_VERSION}_linux_amd64.tar.gz"
+          echo "${CLI_SHA256}  cli.tgz" | sha256sum -c -
+          sudo tar -xzf cli.tgz -C /usr/local/bin supabase supabase-go
+
+      # ponytail: runs at merge, before Argo CD deploys the image and Alembic
+      # migrates. A Supabase migration that needs a table Alembic creates in
+      # the same change fails here; re-run via workflow_dispatch after deploy.
+      - name: Push pending migrations
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error::SUPABASE_DB_URL is not set; merged Supabase migrations are NOT applied."
+            exit 1
+          fi
+          # db push applies nothing and exits non-zero when the repo and the
+          # hosted history disagree, e.g. a hand apply recorded another version.
+          supabase db push --db-url "$SUPABASE_DB_URL" --yes

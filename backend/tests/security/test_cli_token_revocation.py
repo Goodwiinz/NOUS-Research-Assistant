@@ -137,13 +137,47 @@ async def test_missing_issued_at_is_not_revoked() -> None:
 @pytest.mark.asyncio
 async def test_revoke_writes_cutoff_with_ttl() -> None:
     client = AsyncMock()
-    client.set = AsyncMock()
+    client.eval = AsyncMock(return_value=1)
     with patch.object(ctr, "_get_redis", AsyncMock(return_value=client)):
         await ctr.revoke_user_cli_tokens("user-1")
-    client.set.assert_awaited_once()
-    args, kwargs = client.set.call_args
-    assert args[0] == "cli_revoked_before:user-1"
-    assert kwargs.get("ex") == ctr._TTL_SECONDS
+    client.eval.assert_awaited_once()
+    args = client.eval.call_args.args
+    assert args[1:3] == (1, "cli_revoked_before:user-1")
+    assert args[4] == ctr._TTL_SECONDS
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_legacy_revoke_remains_best_effort_on_write_failure() -> None:
+    client = AsyncMock()
+    client.eval.side_effect = RuntimeError("redis unavailable")
+    with patch.object(ctr, "_get_redis", AsyncMock(return_value=client)):
+        await ctr.revoke_user_cli_tokens("user-1")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_strict_revoke_persists_same_second_cutoff_across_clients() -> None:
+    # Different API client objects share only the Redis value, not local state.
+    issued_at = datetime.now(timezone.utc).replace(microsecond=0)
+    first, second = AsyncMock(), AsyncMock()
+    first.eval.return_value = 1
+    clock = type("Clock", (), {"now": staticmethod(lambda _tz: issued_at)})
+    with (
+        patch.object(ctr, "_get_redis", AsyncMock(return_value=first)),
+        patch.object(ctr, "datetime", clock),
+    ):
+        await ctr.revoke_user_cli_tokens("user-1", require_success=True)
+    _, _, key, cutoff, _ = first.eval.call_args.args
+    assert key == "cli_revoked_before:user-1"
+    assert cutoff == _epoch(issued_at) + 1
+    second.get.return_value = str(cutoff)
+    with patch.object(ctr, "_get_redis", AsyncMock(return_value=second)):
+        assert await ctr.is_cli_token_revoked("user-1", issued_at)
+        assert not await ctr.is_cli_token_revoked(
+            "user-1", issued_at + timedelta(seconds=1)
+        )
+        second.get.assert_awaited_with(key)
 
 
 @pytest.mark.unit

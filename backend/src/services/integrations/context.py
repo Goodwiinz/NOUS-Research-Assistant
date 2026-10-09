@@ -3,13 +3,15 @@
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from secrets import token_urlsafe
-from typing import Any, Iterable, cast
+from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import ColumnElement, and_, exists, false, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
+from src.core.cli_token_revocation import revoke_user_cli_tokens
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.collection import Collection
@@ -22,6 +24,7 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import (
     STANDARD_SCOPES,
     DeviceCreate,
+    DeviceListItemDTO,
     GrantRequestCreate,
     GrantRequestDTO,
     GrantRequestStatus,
@@ -33,6 +36,21 @@ from src.schemas.integration_context import (
 
 class IntegrationAccessDenied(PermissionError):
     """Opaque denial: do not reveal foreign objects or credentials."""
+
+
+class DeviceBoundToAnotherChat(IntegrationAccessDenied):
+    """The device's run consent for this project authorizes other chats only
+    (Plan 06 slice 2).
+
+    Still an IntegrationAccessDenied, so every caller that maps denials keeps
+    doing so. Only the chat stream names the cause, and only to the device's
+    owner: validate_binding has already checked the device is theirs.
+    """
+
+    client_message: ClassVar[str] = (
+        "This computer is bound to another chat — connect it to this chat or "
+        "pick another computer."
+    )
 
 
 class IntegrationConflict(Exception):
@@ -47,33 +65,137 @@ def live(value: datetime) -> bool:
     return value.replace(tzinfo=timezone.utc) > now()
 
 
-def check_scopes(scopes: Iterable[str]) -> None:
-    if not scopes or not set(scopes) <= STANDARD_SCOPES:
+# A grant never carries a library scope without the gateway scope the
+# /integrations/tools router requires, nor a write without its read.
+_SCOPE_REQUIRES = {
+    "library:read": frozenset({"tools:read"}),
+    "library:write": frozenset({"library:read", "tools:write"}),
+}
+# Harness runs, artifact publication, chat handoffs and selected memories stay
+# bound to one Collection. A handoff also needs a chat, which a workspace grant
+# cannot have; the memories a user selects are stored per consent of one
+# project, and read_selected_context takes its project from the grant.
+_PROJECT_ONLY_SCOPES = frozenset(
+    {
+        "harness:execute",
+        "artifacts:publish",
+        "handoff:read",
+        "handoff:write",
+        "context:read",
+    }
+)
+
+
+def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> None:
+    held = set(scopes)
+    if not held or not held <= STANDARD_SCOPES:
         raise IntegrationAccessDenied()
+    if any(
+        not needed <= held for scope, needed in _SCOPE_REQUIRES.items() if scope in held
+    ):
+        raise IntegrationAccessDenied()
+    if workspace_bound and held & _PROJECT_ONLY_SCOPES:
+        raise IntegrationAccessDenied()
+
+
+def _legacy_workspace_in_org(organization_id: UUID) -> ColumnElement[bool]:
+    """A workspace without organization metadata belongs to its owner's.
+
+    ``workspaces.organization_id`` is nullable and legacy rows carry NULL.
+    Research-engine access (``project_access.py``) coalesces such a row to its
+    owner's organization; every integration check must agree with it. The
+    owner is aliased so an enclosing query that joins ``users`` cannot
+    correlate this subquery onto its own row.
+    """
+    owner = aliased(User)
+    return and_(
+        Workspace.organization_id.is_(None),
+        exists().where(
+            owner.id == Workspace.owner_id,
+            owner.organization_id == organization_id,
+        ),
+    )
+
+
+def workspace_in_org(organization_id: UUID | None) -> ColumnElement[bool]:
+    """``Workspace`` belongs to ``organization_id``, legacy NULL rows included.
+
+    The organization predicate for integration data queries that join
+    ``Workspace`` (grant checks use ``_workspace_organization_admits``).
+    Never compare ``Workspace.organization_id`` directly
+    (rule c of test_integration_boundaries.py): 2c3d56d82 taught two checks
+    the legacy rule and missed three (WG-2). A missing organization admits
+    nothing: ``== None`` would compile to ``IS NULL`` and match every legacy row.
+    """
+    if organization_id is None:
+        return false()
+    return or_(
+        Workspace.organization_id == organization_id,
+        _legacy_workspace_in_org(organization_id),
+    )
+
+
+async def workspace_organization_id(
+    db: AsyncSession, workspace: Workspace
+) -> UUID | None:
+    """The organization ``workspace_in_org`` places ``workspace`` in: its own,
+    or for a legacy workspace without one, its owner's (None when neither
+    has one). For callers that need the value, such as the browser handoff
+    card."""
+    if workspace.organization_id is not None:
+        return cast(UUID, workspace.organization_id)
+    owner_org = await db.scalar(
+        select(User.organization_id).where(User.id == workspace.owner_id)
+    )
+    return cast("UUID | None", owner_org)
+
+
+def _workspace_organization_admits(
+    organization_id: UUID | None,
+) -> ColumnElement[bool]:
+    """The organization rule of ``authorized_project`` and
+    ``authorized_workspace``: a live owning organization (an explicit member
+    from another organization keeps access), or a legacy workspace whose
+    owner is in the caller's organization. A missing organization admits
+    nothing. The owning organization is aliased for the same reason as the
+    owner in ``_legacy_workspace_in_org``."""
+    if organization_id is None:
+        return false()
+    owning = aliased(Organization)
+    return or_(
+        exists().where(
+            owning.id == Workspace.organization_id,
+            owning.is_deleted.is_(False),
+            owning.is_active.is_(True),
+        ),
+        _legacy_workspace_in_org(organization_id),
+    )
 
 
 async def authorized_project(
     db: AsyncSession, user_id: UUID, organization_id: UUID, project_id: UUID
 ) -> Row[Any]:
-    member = exists().where(
-        WorkspaceMember.workspace_id == Workspace.id,
-        WorkspaceMember.user_id == user_id,
-        WorkspaceMember.is_deleted.is_(False),
-    )
     row = (
         await db.execute(
             select(Collection.id, Collection.name, Workspace.id.label("workspace_id"))
             .join(Workspace, Collection.workspace_id == Workspace.id)
             .where(
                 Collection.id == project_id,
-                Collection.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                or_(Workspace.owner_id == user_id, member),
-                exists().where(
-                    Organization.id == Workspace.organization_id,
-                    Organization.is_deleted.is_(False),
-                    Organization.is_active.is_(True),
+                # Owner or live member. Keep the Collection predicate inline
+                # for test_project_service_soft_delete's authorization sweep.
+                Collection.is_deleted.is_(False),
+                or_(
+                    Workspace.owner_id == user_id,
+                    exists().where(
+                        WorkspaceMember.workspace_id == Workspace.id,
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.is_deleted.is_(False),
+                    ),
                 ),
+                # Legacy workspaces without organization metadata inherit the
+                # owner's organization, matching research-engine access.
+                _workspace_organization_admits(organization_id),
                 exists().where(
                     User.id == user_id,
                     User.organization_id == organization_id,
@@ -91,6 +213,78 @@ async def authorized_project(
     if row is None:
         raise IntegrationAccessDenied()
     return row
+
+
+async def authorized_workspace(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, workspace_id: UUID
+) -> Row[Any]:
+    """The workspace if the user owns it or is a live member, under the same
+    rules as ``authorized_project``: a public workspace alone is not access,
+    and the owning organization, the user and the user's organization are live."""
+    member = exists().where(
+        WorkspaceMember.workspace_id == Workspace.id,
+        WorkspaceMember.user_id == user_id,
+        WorkspaceMember.is_deleted.is_(False),
+    )
+    row = (
+        await db.execute(
+            select(Workspace.id, Workspace.name).where(
+                Workspace.id == workspace_id,
+                Workspace.is_deleted.is_(False),
+                or_(Workspace.owner_id == user_id, member),
+                _workspace_organization_admits(organization_id),
+                exists().where(
+                    User.id == user_id,
+                    User.organization_id == organization_id,
+                    User.is_active.is_(True),
+                    User.is_deleted.is_(False),
+                ),
+                exists().where(
+                    Organization.id == organization_id,
+                    Organization.is_deleted.is_(False),
+                    Organization.is_active.is_(True),
+                ),
+            )
+        )
+    ).first()
+    if row is None:
+        raise IntegrationAccessDenied()
+    return row
+
+
+async def authorized_scope_filter(
+    db: AsyncSession, context: IntegrationContext
+) -> ColumnElement[bool]:
+    """The grant's scope as a condition on ``Collection``, after the same
+    per-call access re-check as ``authorized_scope``.
+
+    Filter by it where the ids ``authorized_scope`` returns would only be bound
+    back into a statement. A workspace can hold more live Collections than one
+    statement may bind (asyncpg refuses more than 32,767 parameters, and the
+    collection routes put no cap on a workspace), so an ``IN`` list of its ids
+    is an outage waiting for that many folders. The condition does not exclude
+    soft-deleted Collections or Workspaces: the caller's statement must.
+    """
+    if context.project_id is not None:
+        await authorized_project(
+            db, context.user_id, context.organization_id, context.project_id
+        )
+        return Collection.id == context.project_id
+    if context.workspace_id is None:
+        raise IntegrationAccessDenied()
+    await authorized_workspace(
+        db, context.user_id, context.organization_id, context.workspace_id
+    )
+    return Collection.workspace_id == context.workspace_id
+
+
+async def authorized_scope(db: AsyncSession, context: IntegrationContext) -> set[UUID]:
+    """Collection ids the grant may touch; re-checked on every call."""
+    scope = await authorized_scope_filter(db, context)
+    rows = await db.execute(
+        select(Collection.id).where(scope, Collection.is_deleted.is_(False))
+    )
+    return {UUID(str(value)) for value in rows.scalars().all()}
 
 
 async def owned_device(
@@ -117,12 +311,21 @@ async def validate_binding(
     *,
     user_id: UUID,
     organization_id: UUID,
-    project_id: UUID,
+    project_id: UUID | None,
+    workspace_id: UUID | None = None,
     thread_id: UUID | None = None,
     run_id: UUID | str | None = None,
     device_id: UUID | None = None,
 ) -> None:
-    await authorized_project(db, user_id, organization_id, project_id)
+    if project_id is not None and workspace_id is None:
+        await authorized_project(db, user_id, organization_id, project_id)
+    elif workspace_id is not None and project_id is None:
+        await authorized_workspace(db, user_id, organization_id, workspace_id)
+        # A workspace has no single project for a chat or a run to belong to.
+        if thread_id is not None or run_id is not None:
+            raise IntegrationAccessDenied()
+    else:
+        raise IntegrationAccessDenied()
     if device_id is not None:
         await owned_device(db, device_id, user_id, organization_id)
     if thread_id is not None:
@@ -135,8 +338,19 @@ async def validate_binding(
                 Thread.is_deleted.is_(False),
                 Conversation.is_deleted.is_(False),
                 Workspace.is_deleted.is_(False),
-                Workspace.owner_id == user_id,
-                Workspace.organization_id == organization_id,
+                or_(
+                    Workspace.owner_id == user_id,
+                    exists().where(
+                        WorkspaceMember.workspace_id == Workspace.id,
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.is_deleted.is_(False),
+                    ),
+                ),
+                # The chat's workspace is in the grant's organization, by the
+                # same legacy rule as authorized_project: a legacy NULL-org
+                # workspace whose owner is in another organization is refused
+                # here, matching web access.
+                workspace_in_org(organization_id),
                 Thread.source_project_id == project_id,
             )
         )
@@ -160,7 +374,8 @@ def _new_grant(
     *,
     user_id: UUID,
     organization_id: UUID,
-    project_id: UUID,
+    project_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     scopes: Iterable[str],
     thread_id: UUID | None = None,
     run_id: UUID | str | None = None,
@@ -173,6 +388,7 @@ def _new_grant(
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
+        workspace_id=workspace_id,
         scopes=sorted(scopes),
         thread_id=thread_id,
         run_id=str(run_id) if run_id else None,
@@ -190,47 +406,71 @@ async def mint_integration_grant(
     *,
     user_id: UUID,
     organization_id: UUID,
-    project_id: UUID,
+    project_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     scopes: frozenset[str],
     thread_id: UUID | None = None,
     run_id: UUID | None = None,
     device_id: UUID | None = None,
 ) -> IssuedGrant:
     """Trusted internal API. External issuance must use the consent exchange."""
-    check_scopes(scopes)
+    check_scopes(scopes, workspace_bound=workspace_id is not None)
     await validate_binding(
         db,
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
+        workspace_id=workspace_id,
         thread_id=thread_id,
         run_id=run_id,
         device_id=device_id,
     )
     request_id = None
     if device_id is not None:
-        consents = await db.scalars(
-            select(IntegrationGrantRequest)
-            .where(
-                IntegrationGrantRequest.user_id == user_id,
-                IntegrationGrantRequest.organization_id == organization_id,
-                IntegrationGrantRequest.project_id == project_id,
-                IntegrationGrantRequest.device_id == device_id,
-                IntegrationGrantRequest.status == "consumed",
-                IntegrationGrantRequest.consent_revoked_at.is_(None),
-                IntegrationGrantRequest.is_deleted.is_(False),
+        consents = (
+            await db.scalars(
+                select(IntegrationGrantRequest)
+                .where(
+                    IntegrationGrantRequest.user_id == user_id,
+                    IntegrationGrantRequest.organization_id == organization_id,
+                    IntegrationGrantRequest.project_id == project_id,
+                    IntegrationGrantRequest.workspace_id == workspace_id,
+                    IntegrationGrantRequest.device_id == device_id,
+                    IntegrationGrantRequest.status == "consumed",
+                    IntegrationGrantRequest.consent_revoked_at.is_(None),
+                    IntegrationGrantRequest.is_deleted.is_(False),
+                )
+                .execution_options(populate_existing=True)
             )
-            .execution_options(populate_existing=True)
-        )
-        request_id = next(
-            (consent.id for consent in consents if scopes <= set(consent.scopes)), None
-        )
-        if request_id is None:
+        ).all()
+        # A chat-bound consent authorizes only its chat; a project-wide
+        # consent (thread_id NULL) authorizes any chat in the project.
+        matching_consents = [
+            consent
+            for consent in consents
+            if scopes <= set(consent.scopes) and consent.thread_id in (None, thread_id)
+        ]
+        # A device may have more than one consumed consent lineage. Selecting
+        # the first database row is nondeterministic and can mint run authority
+        # that the currently paired bridge credential cannot renew. Fail closed
+        # until the owner leaves one unambiguous active consent for this device.
+        if len(matching_consents) != 1:
+            # Name the one cause the owner can fix from the chat: a consent
+            # with enough scopes exists but is bound to another chat. No
+            # consent, too few scopes or two lineages stay opaque.
+            if not matching_consents and any(
+                scopes <= set(consent.scopes)
+                and consent.thread_id not in (None, thread_id)
+                for consent in consents
+            ):
+                raise DeviceBoundToAnotherChat()
             raise IntegrationAccessDenied()
+        request_id = matching_consents[0].id
     grant, issued = _new_grant(
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
+        workspace_id=workspace_id,
         scopes=scopes,
         thread_id=thread_id,
         run_id=run_id,
@@ -252,12 +492,13 @@ async def _validate_grant(
         or not live(grant.expires_at)
     ):
         raise IntegrationAccessDenied()
-    check_scopes(grant.scopes)
+    check_scopes(grant.scopes, workspace_bound=grant.workspace_id is not None)
     await validate_binding(
         db,
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
         thread_id=grant.thread_id,
         run_id=grant.run_id,
         device_id=grant.device_id,
@@ -271,6 +512,7 @@ async def _validate_grant(
                 IntegrationGrantRequest.user_id == grant.user_id,
                 IntegrationGrantRequest.organization_id == grant.organization_id,
                 IntegrationGrantRequest.project_id == grant.project_id,
+                IntegrationGrantRequest.workspace_id == grant.workspace_id,
                 IntegrationGrantRequest.device_id == grant.device_id,
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
                 IntegrationGrantRequest.is_deleted.is_(False),
@@ -284,8 +526,16 @@ async def _validate_grant(
 
 
 async def resolve_integration_context(
-    db: AsyncSession, token: str, *, required_scope: str
+    db: AsyncSession, token: str, *, required_scope: str | tuple[str, ...]
 ) -> IntegrationContext:
+    """The live grant behind ``token`` as a context, if it holds the scope.
+
+    ``required_scope`` is the scope the route needs, or a tuple of scopes any
+    one of which admits the grant: for a route whose service then checks the
+    scope of each operation itself (the action routes). An empty tuple admits
+    nothing.
+    """
+    accepted = (required_scope,) if isinstance(required_scope, str) else required_scope
     if not token.startswith("nous_ig_") or len(token) != 51:
         raise IntegrationAccessDenied()
     grant = await db.scalar(
@@ -294,19 +544,27 @@ async def resolve_integration_context(
         .execution_options(populate_existing=True)
     )
     grant = await _validate_grant(db, grant)
-    if required_scope not in grant.scopes:
+    if not set(accepted) & set(grant.scopes):
         raise IntegrationAccessDenied()
     return IntegrationContext(
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
         thread_id=grant.thread_id,
         run_id=UUID(grant.run_id) if grant.run_id else None,
         grant_id=grant.id,
+        consent_id=grant.request_id,
+        scopes=frozenset(grant.scopes),
     )
 
 
-async def revoke_integration_grant(db: AsyncSession, grant_id: UUID) -> None:
+async def revoke_integration_grant(
+    db: AsyncSession, grant_id: UUID, *, end_cli_sessions: bool = False
+) -> None:
+    """Revoke a grant and its consent. ``end_cli_sessions`` (set when the CLI
+    disconnects itself) also moves the owner's CLI revoked-before cutoff,
+    because CLI JWTs carry no device id."""
     grant = await db.scalar(
         select(IntegrationGrant)
         .where(IntegrationGrant.id == grant_id)
@@ -326,26 +584,34 @@ async def revoke_integration_grant(db: AsyncSession, grant_id: UUID) -> None:
                 .where(IntegrationGrantRequest.id == grant.request_id)
                 .values(consent_revoked_at=now())
             )
+    user_id = grant.user_id if grant is not None else None
     await db.commit()
+    if end_cli_sessions and user_id is not None:
+        # After the commit, never inside it: best-effort and never raises.
+        await revoke_user_cli_tokens(str(user_id))
 
 
 async def create_request(
     db: AsyncSession, user: Any, data: GrantRequestCreate
 ) -> GrantRequestDTO:
-    check_scopes(data.scopes)
+    check_scopes(data.scopes, workspace_bound=data.workspace_id is not None)
     await validate_binding(
         db,
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=data.project_id,
+        workspace_id=data.workspace_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
     )
     request = IntegrationGrantRequest(
         id=uuid4(),
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=data.project_id,
+        workspace_id=data.workspace_id,
         device_id=data.device_id,
+        thread_id=data.thread_id,
         scopes=sorted(data.scopes),
         status="pending",
         expires_at=now() + timedelta(minutes=10),
@@ -375,30 +641,52 @@ async def owned_request(
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=request.project_id,
+        workspace_id=request.workspace_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
     )
     return cast(IntegrationGrantRequest, request)
 
 
 async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantRequestDTO:
     request = await owned_request(db, user, request_id)
-    project = await authorized_project(
-        db, user.id, user.organization_id, request.project_id
-    )
+    project_label = workspace_label = None
+    if request.project_id is not None:
+        project = await authorized_project(
+            db, user.id, user.organization_id, request.project_id
+        )
+        project_label = project.name
+    elif request.workspace_id is not None:
+        workspace = await authorized_workspace(
+            db, user.id, user.organization_id, request.workspace_id
+        )
+        workspace_label = workspace.name
     device = await owned_device(db, request.device_id, user.id, user.organization_id)
     status = request.status
     if status in {"pending", "approved"} and not live(request.expires_at):
         status = "expired"
+    thread_label = None
+    if request.thread_id is not None:
+        title = await db.scalar(
+            select(Thread.title).where(
+                Thread.id == request.thread_id, Thread.is_deleted.is_(False)
+            )
+        )
+        thread_label = title or "Untitled chat"
     return GrantRequestDTO(
         id=request.id,
         status=cast(GrantRequestStatus, status),
         expires_at=request.expires_at,
         approval_url=f"/integrations/approve?request_id={request.id}",
         project_id=request.project_id,
+        workspace_id=request.workspace_id,
         device_id=request.device_id,
         scopes=set(request.scopes),
-        project_label=project.name,
+        project_label=project_label,
+        workspace_label=workspace_label,
         device_label=device.label,
+        thread_id=request.thread_id,
+        thread_label=thread_label,
     )
 
 
@@ -449,7 +737,9 @@ async def exchange_request(
         user_id=user.id,
         organization_id=user.organization_id,
         project_id=request.project_id,
+        workspace_id=request.workspace_id,
         device_id=request.device_id,
+        thread_id=request.thread_id,
         scopes=request.scopes,
         request_id=request.id,
     )
@@ -495,6 +785,7 @@ async def renew_grant(db: AsyncSession, user: Any, grant_id: UUID) -> IssuedGran
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
         device_id=grant.device_id,
         scopes=grant.scopes,
         thread_id=grant.thread_id,
@@ -520,19 +811,52 @@ async def register_device(
     return device
 
 
-async def list_devices(db: AsyncSession, user: Any) -> list[BridgeDevice]:
-    return list(
-        (
-            await db.scalars(
-                select(BridgeDevice).where(
-                    BridgeDevice.user_id == user.id,
-                    BridgeDevice.organization_id == user.organization_id,
-                    BridgeDevice.revoked_at.is_(None),
-                    BridgeDevice.is_deleted.is_(False),
-                )
+async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
+    devices = (
+        await db.scalars(
+            select(BridgeDevice).where(
+                BridgeDevice.user_id == user.id,
+                BridgeDevice.organization_id == user.organization_id,
+                BridgeDevice.revoked_at.is_(None),
+                BridgeDevice.is_deleted.is_(False),
             )
-        ).all()
-    )
+        )
+    ).all()
+    if not devices:
+        return []
+    # The consents a Codex mint could use: consumed and not revoked, exactly
+    # as mint_integration_grant filters them.
+    consents = (
+        await db.scalars(
+            select(IntegrationGrantRequest).where(
+                IntegrationGrantRequest.user_id == user.id,
+                IntegrationGrantRequest.organization_id == user.organization_id,
+                IntegrationGrantRequest.device_id.in_([d.id for d in devices]),
+                IntegrationGrantRequest.status == "consumed",
+                IntegrationGrantRequest.consent_revoked_at.is_(None),
+                IntegrationGrantRequest.is_deleted.is_(False),
+            )
+        )
+    ).all()
+    run_chats: dict[UUID, list[UUID | None]] = {d.id: [] for d in devices}
+    for consent in consents:
+        if "harness:execute" in (consent.scopes or []):
+            run_chats[consent.device_id].append(consent.thread_id)
+    return [
+        DeviceListItemDTO(
+            id=device.id,
+            label=device.label,
+            bound_thread_ids=(
+                []
+                if None in run_chats[device.id]
+                else sorted(
+                    {chat for chat in run_chats[device.id] if chat is not None},
+                    key=str,
+                )
+            ),
+        )
+        for device in devices
+    ]
 
 
 async def bind_workspace(

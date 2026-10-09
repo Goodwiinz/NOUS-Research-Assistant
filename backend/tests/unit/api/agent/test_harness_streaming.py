@@ -53,6 +53,11 @@ async def test_external_stream_replays_persisted_events_and_stops_on_terminal(
         ),
         SimpleNamespace(
             seq=5,
+            event_type=RunEventType.ARTIFACT_VERSION_CREATED.value,
+            payload={"artifact_id": "artifact-a", "version_id": "version-a"},
+        ),
+        SimpleNamespace(
+            seq=6,
             event_type=RunEventType.RUN_COMPLETED.value,
             payload={"assistant_message_id": "message-a"},
         ),
@@ -77,7 +82,12 @@ async def test_external_stream_replays_persisted_events_and_stops_on_terminal(
     assert "event: token" in frames[0]
     assert 'data: {"content": "persisted answer"}' in frames[0]
     assert "id: 4" in frames[0]
-    assert "event: done" in frames[1]
+    assert "event: artifact" in frames[1]
+    assert '"artifact_id": "artifact-a"' in frames[1]
+    assert '"version_id": "version-a"' in frames[1]
+    assert "id: 5" in frames[1]
+    assert "event: done" in frames[2]
+    assert "id: 6" in frames[2]
     assert "id: 5" in frames[1]
     assert reads == [(str(run_id), 3)]
 

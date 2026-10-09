@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.core.database import get_db
@@ -20,14 +20,25 @@ from src.services.research_engine.export_service import (
     ExportArtifact,
     ResearchExportError,
 )
+from src.services.research_engine.project_access import ResearchAction
 
 
 def _runs_module() -> Any:
     return import_module("src.api.research_engine.runs")
 
 
+@pytest.fixture(autouse=True)
+def export_access(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Stand in for require_run; ACL semantics are proven in the PG suite."""
+    access = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    monkeypatch.setattr(_runs_module(), "require_run", access)
+    return access
+
+
 @pytest.fixture
-def export_client(test_app: FastAPI) -> Iterator[tuple[TestClient, Any, AsyncMock]]:
+def export_client(
+    test_app: FastAPI, test_auth_headers: dict[str, str]
+) -> Iterator[tuple[TestClient, Any, AsyncMock]]:
     user = SimpleNamespace(
         id=uuid4(), organization_id=uuid4(), email="owner@example.test"
     )
@@ -42,7 +53,9 @@ def export_client(test_app: FastAPI) -> Iterator[tuple[TestClient, Any, AsyncMoc
     original_lifespan = test_app.router.lifespan_context
     test_app.router.lifespan_context = _no_lifespan
     try:
-        with TestClient(test_app, raise_server_exceptions=False) as client:
+        with TestClient(
+            test_app, headers=test_auth_headers, raise_server_exceptions=False
+        ) as client:
             yield client, user, db
     finally:
         test_app.router.lifespan_context = original_lifespan
@@ -60,11 +73,12 @@ def export_client(test_app: FastAPI) -> Iterator[tuple[TestClient, Any, AsyncMoc
 )
 def test_owned_completed_run_downloads_each_format_with_safe_headers(
     export_client: tuple[TestClient, Any, AsyncMock],
+    export_access: AsyncMock,
     format_name: str,
     media_type: str,
     suffix: str,
 ) -> None:
-    """The route must pass authenticated owner identity and safe filenames."""
+    """The route must pass authenticated caller identity and safe filenames."""
     client, user, db = export_client
     run_id = uuid4()
     artifact = ExportArtifact(
@@ -87,8 +101,11 @@ def test_owned_completed_run_downloads_each_format_with_safe_headers(
     )
     export.assert_awaited_once()
     assert export.await_args is not None
-    assert export.await_args.args[:3] == (run_id, user.id, format_name)
-    assert export.await_args.args[3] is db
+    assert export.await_args.args[:2] == (run_id, format_name)
+    assert export.await_args.args[2] is db
+    assert len(export.await_args.args) == 3
+    assert export.await_args.kwargs == {"user_id": user.id}
+    export_access.assert_awaited_once_with(db, run_id, user.id, ResearchAction.VIEW)
     assert "question" not in response.headers["content-disposition"].lower()
 
 
@@ -181,3 +198,23 @@ def test_invalid_export_format_is_rejected_by_schema(
     response = client.get(f"/api/v1/research-engine/runs/{uuid4()}/export?format=pdf")
 
     assert response.status_code == 422
+
+
+def test_export_denies_before_loading_artifact_when_access_fails(
+    export_client: tuple[TestClient, Any, AsyncMock],
+    export_access: AsyncMock,
+) -> None:
+    """GOO-404: ResearchProject.owner_id alone must never authorize a download."""
+    client, _user, _db = export_client
+    export_access.side_effect = HTTPException(
+        status_code=404, detail="Project not found"
+    )
+    export = AsyncMock()
+
+    with patch.object(_runs_module().ExportService, "export", export):
+        response = client.get(
+            f"/api/v1/research-engine/runs/{uuid4()}/export?format=json"
+        )
+
+    assert response.status_code == 404
+    export.assert_not_awaited()

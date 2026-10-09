@@ -26,6 +26,7 @@ import {
 } from '@/services/projectService';
 import { useDraftReviews } from '@/hooks/useDraftReviews';
 import { DraftReviewSummary } from '@/components/research/DraftReviewSummary';
+import { DraftClaimsPanel } from '@/components/research/DraftClaimsPanel';
 
 interface DraftStepProps {
   projectId: string;
@@ -155,6 +156,9 @@ export const DraftStep: React.FC<DraftStepProps> = ({
       {!generationTaskId && (
         <>
           {latestReview && <DraftReviewSummary review={latestReview} />}
+          {currentDraft && (
+            <DraftClaimsPanel projectId={projectId} draftId={currentDraft.id} />
+          )}
           <div
             className={`grid gap-4 ${chatOpen ? 'grid-cols-1 lg:grid-cols-3' : 'grid-cols-1'}`}
           >
@@ -186,9 +190,12 @@ export const DraftStep: React.FC<DraftStepProps> = ({
                               );
                             setGenerationStatus(status);
                             if (
-                              !['completed', 'failed', 'cancelled'].includes(
-                                status.status
-                              )
+                              ![
+                                'completed',
+                                'failed',
+                                'cancelled',
+                                'interrupted',
+                              ].includes(status.status)
                             ) {
                               setTimeout(pollStatus, 1000);
                             } else {
@@ -215,6 +222,7 @@ export const DraftStep: React.FC<DraftStepProps> = ({
                   {currentDraft ? (
                     <DraftViewer
                       draft={currentDraft}
+                      projectId={projectId}
                       versions={draftVersions.map((v) => ({
                         version: v.version,
                         created_at: v.created_at,

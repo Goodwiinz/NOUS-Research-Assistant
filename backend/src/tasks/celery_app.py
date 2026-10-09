@@ -7,8 +7,10 @@ All task modules should import celery_app from this module:
 
 import logging
 import ssl
+from typing import Any
 
 from celery import Celery
+from celery.signals import worker_process_init
 
 from src.core.config import settings
 
@@ -40,6 +42,10 @@ celery_app = Celery(
         "src.tasks.reconcile_tasks",
         "src.tasks.reconcile_jobs",
         "src.tasks.research_run_tasks",
+        "src.tasks.artifact_tasks",
+        "src.tasks.integration_action_tasks",
+        "src.tasks.deposit_tasks",
+        "src.tasks.search_update_tasks",
     ],
 )
 
@@ -118,12 +124,46 @@ celery_app.conf.update(
         "src.tasks.agent_run_tasks.run_agent_job": {
             "queue": "agent_runs",
         },
+        "src.tasks.artifact_tasks.drain_artifacts": {"queue": "agent_runs"},
+        "src.tasks.artifact_tasks.sweep_artifact_uploads": {"queue": "agent_runs"},
+        "src.tasks.deposit_tasks.drain_deposits": {"queue": "agent_runs"},
+        "src.tasks.search_update_tasks.tick": {"queue": "celery"},
+        "src.tasks.integration_action_tasks.drain_integration_actions": {
+            "queue": "agent_runs"
+        },
+        "src.tasks.integration_action_tasks.sweep_stale_actions": {
+            "queue": "agent_runs"
+        },
     },
     # Audit P1.4 sweepers (flag-gated at runtime by SWEEPERS_ENABLED; the
     # tasks self-skip when disabled). Task modules merge additional entries
     # via conf.beat_schedule.update(...) — this assignment runs first, at
     # celery_app import time, so nothing is clobbered.
     beat_schedule={
+        "drain-artifacts": {
+            "task": "src.tasks.artifact_tasks.drain_artifacts",
+            "schedule": 2.0,
+        },
+        "drain-deposits": {  # GOO-318: one phase per queued deposit
+            "task": "src.tasks.deposit_tasks.drain_deposits",
+            "schedule": 10.0,
+        },
+        "search-updates-tick": {  # GOO-319: claim and run due search fires
+            "task": "src.tasks.search_update_tasks.tick",
+            "schedule": 60.0,
+        },
+        "sweep-artifact-uploads": {
+            "task": "src.tasks.artifact_tasks.sweep_artifact_uploads",
+            "schedule": 60.0,
+        },
+        "drain-integration-actions": {
+            "task": "src.tasks.integration_action_tasks.drain_integration_actions",
+            "schedule": 2.0,
+        },
+        "sweep-stale-integration-actions": {
+            "task": "src.tasks.integration_action_tasks.sweep_stale_actions",
+            "schedule": 60.0,
+        },
         "dispatch-harness": {
             "task": "src.tasks.harness_dispatch.dispatch_harness",
             "schedule": 5.0,
@@ -164,6 +204,10 @@ celery_app.conf.update(
             "task": "src.tasks.research_run_tasks.sweep_stale_research_runs",
             "schedule": 1800.0,  # every 30 min; stale threshold is 2h
         },
+        "sweep-expired-reruns": {  # GOO-313: expired rerun leases
+            "task": "src.tasks.research_run_tasks.sweep_expired_reruns",
+            "schedule": 60.0,
+        },
         "reconcile-lost-processing-jobs": {
             "task": "src.tasks.reconcile_jobs.reconcile_lost_processing_jobs",
             "schedule": 600.0,  # every 10 min
@@ -176,3 +220,19 @@ celery_app.conf.update(
 )
 
 logger.info(f"Celery app configured with broker: {settings.REDIS_URL[:20]}...")
+
+
+@worker_process_init.connect
+def _configure_langsmith_in_worker(**_kwargs: Any) -> None:
+    """Apply the LangSmith hide-IO guard in each worker child (R8-C8).
+
+    The API process does this at startup; without it here, a non-agent task
+    could trace (and build the shared client) before any agent turn ran
+    ``configure_langsmith``.
+    """
+    try:
+        from src.services.agent.observability import configure_langsmith
+
+        configure_langsmith()
+    except Exception:
+        logger.warning("LangSmith configuration failed in worker", exc_info=True)

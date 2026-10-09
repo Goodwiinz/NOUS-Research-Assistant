@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import timezone
+from typing import Any
 from uuid import UUID
 
 from fastapi import (
@@ -17,12 +18,19 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.integrations.auth import require_interactive_user
+from src.core.config import settings
 from src.core.database import AsyncSessionLocal, get_db
 from src.core.dependencies import get_current_user
 from src.core.websocket_auth import WebSocketAuthenticator, WebSocketAuthError
 from src.models.integration_grant import IntegrationGrant
 from src.models.user import User
-from src.schemas.harness import BridgeEvent, NativeRequestDTO
+from src.schemas.harness import (
+    BridgeEvent,
+    NativeRequest,
+    NativeRequestDTO,
+    NativeResponseAck,
+)
+from src.schemas.integration_context import IntegrationContext
 from src.services.harness.approvals import (
     NativeDecision,
     NativeRequestConflict,
@@ -52,7 +60,7 @@ async def read_native_request(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     try:
-        request = await get_native_request(db, request_id, user.id)
+        request = await get_native_request(db, request_id, UUID(str(user.id)))
     except IntegrationAccessDenied as error:
         raise HTTPException(404, "Native request not found") from error
     return {
@@ -75,13 +83,13 @@ async def decide_native_request(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     try:
-        display = await get_native_request(db, request_id, user.id)
+        display = await get_native_request(db, request_id, UUID(str(user.id)))
         if (
             decision.target_hash is None
             or decision.target_hash != display["target_hash"]
         ):
             raise NativeRequestConflict("Displayed native target changed")
-        context = await native_request_context(db, request_id, user.id)
+        context = await native_request_context(db, request_id, UUID(str(user.id)))
         if context.organization_id != user.organization_id:
             raise IntegrationAccessDenied()
         await resolve_native_request(db, context, request_id, decision)
@@ -92,19 +100,36 @@ async def decide_native_request(
     return Response(status_code=204)
 
 
+async def _grant_context(
+    db: AsyncSession, token: str, identity: dict[str, Any]
+) -> IntegrationContext:
+    """This socket's grant-level authority; any denial here closes it (4403)."""
+    context = await resolve_integration_context(
+        db, token, required_scope="harness:execute"
+    )
+    # Harness runs stay bound to one Collection; refuse a workspace grant.
+    if context.project_id is None or str(context.user_id) != str(identity.get("sub")):
+        raise IntegrationAccessDenied()
+    return context
+
+
 @router.websocket("/connect")
 async def connect(websocket: WebSocket) -> None:
     try:
-        if websocket.url.scheme != "wss":
+        # Loopback-only exception for a local dev backend (no TLS); mirrors the
+        # bridge CLI, which also allows plain ws only to localhost.
+        client = getattr(websocket, "client", None)
+        loopback = (
+            settings.ENVIRONMENT in {"development", "local"}
+            and client is not None
+            and client.host in ("127.0.0.1", "::1")
+        )
+        if websocket.url.scheme != "wss" and not loopback:
             raise IntegrationAccessDenied()
         identity = await WebSocketAuthenticator.authenticate(websocket)
         token = websocket.headers.get("x-nous-integration-grant", "")
         async with AsyncSessionLocal() as db:
-            context = await resolve_integration_context(
-                db, token, required_scope="harness:execute"
-            )
-            if str(context.user_id) != str(identity.get("sub")):
-                raise IntegrationAccessDenied()
+            await _grant_context(db, token, identity)
         await websocket.accept(
             subprotocol=WebSocketAuthenticator.get_subprotocol_response(websocket)
         )
@@ -116,11 +141,7 @@ async def connect(websocket: WebSocket) -> None:
             # Recheck access JWT and database grant on every action, including polls.
             identity = await WebSocketAuthenticator.authenticate(websocket)
             async with AsyncSessionLocal() as db:
-                context = await resolve_integration_context(
-                    db, token, required_scope="harness:execute"
-                )
-                if str(context.user_id) != str(identity.get("sub")):
-                    raise IntegrationAccessDenied()
+                context = await _grant_context(db, token, identity)
                 if (
                     isinstance(value, dict)
                     and set(value) == {"poll", "deviceId"}
@@ -153,15 +174,54 @@ async def connect(websocket: WebSocket) -> None:
                         )
                 else:
                     event = BridgeEvent.model_validate(value)
-                    if getattr(event.body, "kind", None) == "request":
-                        request_id = await ingest_native_request(db, context, event)
-                        seq = 0
-                    elif getattr(event.body, "kind", None) == "command_ack":
-                        request_id = event.body.approvalRecordId
-                        seq = await ingest_native_response_ack(db, context, event)
-                    else:
-                        request_id = None
-                        seq = await ingest_bridge_event(db, context, event)
+                    try:
+                        if isinstance(event.body, NativeRequest):
+                            request_id, seq = await ingest_native_request(
+                                db, context, event
+                            )
+                        elif isinstance(event.body, NativeResponseAck):
+                            request_id = event.body.approvalRecordId
+                            seq = await ingest_native_response_ack(db, context, event)
+                        else:
+                            request_id = None
+                            seq = await ingest_bridge_event(db, context, event)
+                    except IntegrationAccessDenied:
+                        # The grant passed this frame's check, so the denial is
+                        # about this run: its chat was deleted or linked to
+                        # another project, its folder binding was removed, it
+                        # belongs to a superseded consent, or, for a new native
+                        # request, the session's recorded grant was renewed and
+                        # has not yet been re-leased. The same exception
+                        # also refuses a malformed or mismatched frame: an
+                        # unknown run or commandId, a missing approval record,
+                        # and, for a producer event or observation, a commandId
+                        # of another run or generation, a deviceId, workspaceId
+                        # or generation mismatch, or a ProducerEvent under a
+                        # non-start command. So "run_access_denied" does not
+                        # only mean access was lost. Authorization runs before
+                        # the receipt lookup, so a replay of an event NOUS
+                        # already stored can be refused too: a reject does not
+                        # mean NOUS stored nothing for that run.
+                        #
+                        # Refuse the event and keep serving the device's other
+                        # runs; a close starved them, because the bridge re-sends
+                        # its oldest event first on every reconnect (BR-1). A
+                        # renewal can revoke this socket's token mid-frame, so
+                        # re-check the grant first: losing it still closes the
+                        # socket with 4403.
+                        await _grant_context(db, token, identity)
+                        await websocket.send_json(
+                            {
+                                "reject": {
+                                    "runId": str(event.runId),
+                                    "sourceId": event.sourceId,
+                                    "sourceSeq": event.sourceSeq,
+                                    "generation": event.generation,
+                                    "code": "run_access_denied",
+                                }
+                            }
+                        )
+                        continue
                     await websocket.send_json(
                         {
                             "ack": {

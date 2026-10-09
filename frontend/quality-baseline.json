@@ -7,8 +7,6 @@
     "src/components/layout/Sidebar.tsx",
     "src/components/monitoring/PerformanceMetricsDashboard.tsx",
     "src/components/monitoring/SystemOverviewDashboard.tsx",
-    "src/components/search/QueryRewriter.tsx",
-    "src/components/search/ResultAggregator.tsx",
     "src/components/ui/enhanced-new-chat-dialog.tsx",
     "src/components/ui/shadcn-io/**/*",
     "src/hooks/useAnalyticsTracking.ts",
@@ -23,8 +21,8 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 116,
-    "warnings": 2003,
+    "errors": 98,
+    "warnings": 1878,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,
@@ -34,12 +32,8 @@
         "errors": 0,
         "warnings": 1
       },
-      "app/(auth)/login/page.tsx": {
-        "errors": 1,
-        "warnings": 0
-      },
       "app/(auth)/register/page.tsx": {
-        "errors": 1,
+        "errors": 0,
         "warnings": 5
       },
       "app/(auth)/reset-password/page.tsx": {
@@ -582,10 +576,6 @@
         "errors": 0,
         "warnings": 4
       },
-      "src/components/citations/CitationEditModal.tsx": {
-        "errors": 1,
-        "warnings": 7
-      },
       "src/components/citations/CitationErrorBoundary.tsx": {
         "errors": 0,
         "warnings": 3
@@ -709,14 +699,6 @@
       "src/components/documents/DocumentCard.tsx": {
         "errors": 0,
         "warnings": 9
-      },
-      "src/components/documents/DocumentLibrary.tsx": {
-        "errors": 0,
-        "warnings": 11
-      },
-      "src/components/documents/DocumentMetadataEditor.tsx": {
-        "errors": 1,
-        "warnings": 5
       },
       "src/components/documents/DocumentMetadataTab.tsx": {
         "errors": 0,
@@ -1083,12 +1065,12 @@
         "warnings": 1
       },
       "src/components/research-engine/ResearchDashboard.tsx": {
-        "errors": 1,
+        "errors": 0,
         "warnings": 2
       },
       "src/components/research-engine/RunView.tsx": {
         "errors": 0,
-        "warnings": 4
+        "warnings": 0
       },
       "src/components/research-engine/SourceSelector.tsx": {
         "errors": 0,
@@ -1120,7 +1102,7 @@
       },
       "src/components/research/CellCitation.tsx": {
         "errors": 0,
-        "warnings": 1
+        "warnings": 0
       },
       "src/components/research/ColumnEditor.tsx": {
         "errors": 0,
@@ -1150,17 +1132,13 @@
         "errors": 0,
         "warnings": 1
       },
-      "src/components/research/DraftViewer.tsx": {
-        "errors": 3,
-        "warnings": 0
-      },
       "src/components/research/ExtractionMatrix.tsx": {
-        "errors": 1,
+        "errors": 0,
         "warnings": 11
       },
       "src/components/research/LinkThreadModal.tsx": {
-        "errors": 2,
-        "warnings": 7
+        "errors": 0,
+        "warnings": 4
       },
       "src/components/research/NoteEditor.tsx": {
         "errors": 1,
@@ -1237,46 +1215,6 @@
       "src/components/research/WriterToolbar.tsx": {
         "errors": 0,
         "warnings": 1
-      },
-      "src/components/search/__tests__/ResultsPanel.test.tsx": {
-        "errors": 0,
-        "warnings": 1
-      },
-      "src/components/search/HybridSearchOrchestrator.tsx": {
-        "errors": 1,
-        "warnings": 8
-      },
-      "src/components/search/QueryIntentDetector.tsx": {
-        "errors": 1,
-        "warnings": 8
-      },
-      "src/components/search/QueryPerformanceMonitor.tsx": {
-        "errors": 1,
-        "warnings": 11
-      },
-      "src/components/search/QueryProcessor.tsx": {
-        "errors": 2,
-        "warnings": 9
-      },
-      "src/components/search/QueryRewriter.tsx": {
-        "errors": 1,
-        "warnings": 10
-      },
-      "src/components/search/ResultAggregator.tsx": {
-        "errors": 1,
-        "warnings": 25
-      },
-      "src/components/search/ResultsPanel.tsx": {
-        "errors": 1,
-        "warnings": 4
-      },
-      "src/components/search/SearchInterface.tsx": {
-        "errors": 1,
-        "warnings": 14
-      },
-      "src/components/search/ThreadMessageSearch.tsx": {
-        "errors": 1,
-        "warnings": 8
       },
       "src/components/security/SecurityComplianceChecker.tsx": {
         "errors": 0,
@@ -1454,13 +1392,9 @@
         "errors": 0,
         "warnings": 2
       },
-      "src/hooks/chat/useChatSession.ts": {
-        "errors": 5,
-        "warnings": 1
-      },
       "src/hooks/chat/useChatStreaming.ts": {
         "errors": 0,
-        "warnings": 9
+        "warnings": 8
       },
       "src/hooks/upload/useDocumentUpload.stories.tsx": {
         "errors": 0,
@@ -1578,10 +1512,6 @@
         "errors": 0,
         "warnings": 1
       },
-      "src/services/__tests__/workspaceService.cache.test.ts": {
-        "errors": 2,
-        "warnings": 2
-      },
       "src/services/analytics/analyticsApi.ts": {
         "errors": 0,
         "warnings": 19
@@ -1597,10 +1527,6 @@
       "src/services/analyticsService.ts": {
         "errors": 0,
         "warnings": 20
-      },
-      "src/services/api-client.ts": {
-        "errors": 0,
-        "warnings": 1
       },
       "src/services/citationService.ts": {
         "errors": 0,
@@ -1881,9 +1807,9 @@
     }
   },
   "coverage": {
-    "lines": 19.36,
-    "statements": 19.36,
-    "functions": 52.19,
-    "branches": 76.3
+    "lines": 47.6,
+    "statements": 47.6,
+    "functions": 62.38,
+    "branches": 79.24
   }
 }

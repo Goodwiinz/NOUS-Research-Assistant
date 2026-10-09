@@ -112,20 +112,24 @@ async def export_thread(
             "PDF renderer unavailable",
             thread_id=thread_id,
             error_type=type(exc).__name__,
+            exc_info=True,
         )
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(
+            status_code=503, detail="PDF export is currently unavailable"
+        )
     except PDFExportConversionError as exc:
         logger.error(
             "PDF conversion failed",
             thread_id=thread_id,
             error_type=type(exc).__name__,
+            exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="PDF export failed")
     except ValueError as e:
         logger.warning(
             "Export failed - thread not found", thread_id=thread_id, error=str(e)
         )
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail="Thread not found")
     except Exception as e:
         logger.error("Export failed", thread_id=thread_id, error=str(e))
         raise HTTPException(status_code=500, detail="Export failed")
@@ -181,17 +185,22 @@ async def export_thread_stream(
             "PDF renderer unavailable",
             thread_id=thread_id,
             error_type=type(exc).__name__,
+            exc_info=True,
         )
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(
+            status_code=503, detail="PDF export is currently unavailable"
+        )
     except PDFExportConversionError as exc:
         logger.error(
             "PDF conversion failed",
             thread_id=thread_id,
             error_type=type(exc).__name__,
+            exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=str(exc))
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail="PDF export failed")
+    except ValueError:
+        logger.warning("Streaming export failed - thread not found", exc_info=True)
+        raise HTTPException(status_code=404, detail="Thread not found")
     except Exception as e:
         logger.error("Streaming export failed", thread_id=thread_id, error=str(e))
         raise HTTPException(status_code=500, detail="Export failed")
@@ -255,16 +264,21 @@ async def export_batch(
         logger.warning(
             "PDF renderer unavailable",
             error_type=type(exc).__name__,
+            exc_info=True,
         )
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(
+            status_code=503, detail="PDF export is currently unavailable"
+        )
     except PDFExportConversionError as exc:
         logger.error(
             "PDF conversion failed",
             error_type=type(exc).__name__,
+            exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=str(exc))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail="PDF export failed")
+    except ValueError:
+        logger.warning("Invalid batch export request", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid export request")
     except Exception as e:
         logger.error("Batch export failed", error=str(e))
         raise HTTPException(status_code=500, detail="Batch export failed")

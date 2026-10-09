@@ -24,6 +24,7 @@ as-is.
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # Add backend to path
@@ -48,8 +49,9 @@ os.environ["SECRET_KEY"] = "test-secret-key-for-integration-tests"
 os.environ["OPENAI_API_KEY"] = "test-openai-key"
 os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
 
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
 
 # Initialize encryption with a test key so encrypted model fields work
 os.environ.setdefault(
@@ -58,7 +60,11 @@ os.environ.setdefault(
     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 )
 try:
-    from src.core.encryption import EncryptionKeyType, get_key_manager, initialize_encryption
+    from src.core.encryption import (
+        EncryptionKeyType,
+        get_key_manager,
+        initialize_encryption,
+    )
 
     initialize_encryption()
     key_manager = get_key_manager()
@@ -77,36 +83,62 @@ except Exception:
 # all of the async fixtures below.
 # ----------------------------------------------------------------------------
 
-import pytest_asyncio
 from uuid import uuid4
 
+import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.main import app
 from src.core.database import get_db
+from src.main import app
 from src.models import (
     Base,
+    ChatMessage,
+    Collection,
+    Conversation,
+    MessageRole,
     Organization,
+    ProjectThread,
+    ProjectThreadLinkType,
     StorageTier,
+    Thread,
     User,
     UserRole,
     Workspace,
     WorkspaceRole,
-    Collection,
-    Conversation,
-    Thread,
-    ChatMessage,
-    MessageRole,
-    ProjectThread,
-    ProjectThreadLinkType,
 )
+
+# ============================================================================
+# Shared metadata DDL isolation
+# ============================================================================
+
+# On PostgreSQL, ``Base.metadata.create_all`` (and ``drop_all``) emit cyclic
+# foreign keys with ``AddConstraint``/``DropConstraint``, which set
+# ``_create_rule`` on the shared constraint objects for the rest of the
+# process. Every later ``CREATE TABLE`` then leaves those foreign keys out, so
+# a bounded schema built with ``Table.create()`` silently has none. Models never
+# set the rule themselves; FKs on models imported after this point start as None.
+_PRISTINE_FK_CREATE_RULES = {
+    constraint: constraint._create_rule
+    for table in Base.metadata.tables.values()
+    for constraint in table.foreign_key_constraints
+}
+
+
+@pytest.fixture(autouse=True)
+def _restore_shared_foreign_key_ddl():
+    """Undo another test's full-metadata DDL edits to the shared FK objects."""
+    yield
+    for table in Base.metadata.tables.values():
+        for constraint in table.foreign_key_constraints:
+            constraint._create_rule = _PRISTINE_FK_CREATE_RULES.get(constraint)
 
 
 # ============================================================================
 # External Service Auto-Mocking
 # ============================================================================
+
 
 @pytest.fixture(autouse=True)
 def mock_external_services(request):
@@ -197,6 +229,7 @@ def mock_celery_task():
 try:
     from testcontainers.postgres import PostgresContainer
     from testcontainers.redis import RedisContainer
+
     TESTCONTAINERS_AVAILABLE = True
 except ImportError:
     TESTCONTAINERS_AVAILABLE = False
@@ -221,7 +254,9 @@ def postgres_container():
     Requires: pip install testcontainers[postgres]
     """
     if not TESTCONTAINERS_AVAILABLE:
-        pytest.skip("testcontainers not installed - run: pip install testcontainers[postgres]")
+        pytest.skip(
+            "testcontainers not installed - run: pip install testcontainers[postgres]"
+        )
 
     with PostgresContainer("postgres:15-alpine") as postgres:
         yield {
@@ -251,7 +286,9 @@ def redis_container():
     Requires: pip install testcontainers[redis]
     """
     if not TESTCONTAINERS_AVAILABLE:
-        pytest.skip("testcontainers not installed - run: pip install testcontainers[redis]")
+        pytest.skip(
+            "testcontainers not installed - run: pip install testcontainers[redis]"
+        )
 
     with RedisContainer("redis:7-alpine") as redis:
         host = redis.get_container_host_ip()
@@ -279,9 +316,10 @@ def postgres_session(postgres_container):
     # Import and create all tables
     # IMPORTANT: Import all models to ensure SQLAlchemy can resolve relationships
     try:
-        from src.models import Base
         # Import ab_testing models to resolve User -> Experiment relationship
         from src.models import ab_testing  # noqa: F401
+        from src.models import Base
+
         Base.metadata.create_all(engine)
     except ImportError:
         pass  # Models may not be available
@@ -296,8 +334,9 @@ def postgres_session(postgres_container):
         session.close()
         # Clean up tables after test
         try:
-            from src.models import Base
             from src.models import ab_testing  # noqa: F401
+            from src.models import Base
+
             Base.metadata.drop_all(engine)
         except ImportError:
             pass
@@ -358,6 +397,7 @@ async def async_redis_client(redis_container):
 
 try:
     import greenlet  # noqa: F401
+
     GREENLET_AVAILABLE = True
 except ImportError:
     GREENLET_AVAILABLE = False
@@ -366,6 +406,7 @@ except ImportError:
 # ----------------------------------------------------------------------------
 # Database Setup
 # ----------------------------------------------------------------------------
+
 
 @pytest_asyncio.fixture(scope="function")
 async def test_db():
@@ -384,9 +425,7 @@ async def test_db():
         await conn.run_sync(Base.metadata.create_all)
 
     # Create async session
-    async_session = sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
         yield session
@@ -398,9 +437,51 @@ async def test_db():
     await engine.dispose()
 
 
+@pytest.fixture(scope="function")
+def tenant_gate_headers(test_db, test_user, monkeypatch):
+    """Authenticate requests through the REAL MultiTenancyMiddleware (PR #1722).
+
+    The fail-closed tenancy gate verifies the Bearer JWT and resolves the user
+    in its OWN ``AsyncSessionLocal`` session, independent of the ``get_db``
+    override. Point that session factory at this test's in-memory engine (the
+    one holding ``test_user``) and return a real signed token for
+    ``test_user``. The middleware logic itself is untouched: an unknown,
+    inactive or unauthenticated caller still gets 401, a lookup failure 500.
+    """
+    from jose import jwt
+
+    from src.core.config import settings
+    from src.middleware import multi_tenancy
+
+    # Real offline HS256 verification, same pattern as
+    # tests/unit/middleware/test_multi_tenancy_merge_contract.py::signed_token.
+    secret = "integration-tenant-gate-signing-key-not-for-production"
+    monkeypatch.setattr(settings, "SUPABASE_JWT_SECRET", secret)
+    monkeypatch.setattr(settings, "SUPABASE_JWT_ISSUER", "")
+    monkeypatch.setattr(
+        multi_tenancy,
+        "AsyncSessionLocal",
+        sessionmaker(test_db.bind, class_=AsyncSession, expire_on_commit=False),
+    )
+    token = jwt.encode(
+        {
+            "sub": str(test_user.id),
+            "aud": "authenticated",
+            "app_metadata": {},
+            # verify_token requires exp (audit I21).
+            "exp": int(time.time()) + 3600,
+        },
+        secret,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
 @pytest_asyncio.fixture(scope="function")
-async def async_client(test_db, test_user):
-    """Create async HTTP client with test database override."""
+async def async_client(test_db, test_user, tenant_gate_headers):
+    """Create async HTTP client with test database override, authenticated
+    as ``test_user`` through the tenancy gate."""
+
     async def override_get_db():
         yield test_db
 
@@ -417,7 +498,9 @@ async def async_client(test_db, test_user):
     app.dependency_overrides[user_mgmt_get_current_user] = override_get_current_user
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://localhost", headers=tenant_gate_headers
+    ) as client:
         yield client
 
     app.dependency_overrides.clear()
@@ -426,6 +509,7 @@ async def async_client(test_db, test_user):
 # ----------------------------------------------------------------------------
 # Model Fixtures
 # ----------------------------------------------------------------------------
+
 
 @pytest_asyncio.fixture(scope="function")
 async def test_organization(test_db: AsyncSession):
@@ -527,7 +611,9 @@ async def test_project(test_db: AsyncSession, test_workspace: Workspace):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_conversation(test_db: AsyncSession, test_workspace: Workspace, test_user: User):
+async def test_conversation(
+    test_db: AsyncSession, test_workspace: Workspace, test_user: User
+):
     """Create a test conversation."""
     conversation = Conversation(
         id=uuid4(),
@@ -542,7 +628,9 @@ async def test_conversation(test_db: AsyncSession, test_workspace: Workspace, te
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_thread(test_db: AsyncSession, test_conversation: Conversation, test_user: User):
+async def test_thread(
+    test_db: AsyncSession, test_conversation: Conversation, test_user: User
+):
     """Create a test thread."""
     thread = Thread(
         id=uuid4(),
@@ -562,7 +650,7 @@ async def test_project_thread(
     test_db: AsyncSession,
     test_project: Collection,
     test_thread: Thread,
-    test_user: User
+    test_user: User,
 ):
     """Create a test project-thread link."""
     project_thread = ProjectThread(

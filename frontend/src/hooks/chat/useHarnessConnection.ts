@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { agentChatService } from '@/services/agentChatService';
 import { harnessService } from '@/services/harnessService';
 import type {
@@ -60,8 +60,43 @@ function readSelection(key: string): HarnessSelection {
   }
 }
 
+function hasStoredSelection(key: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(key) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function isTerminal(type: string): boolean {
   return type === 'done' || type === 'error' || type === 'confirmation';
+}
+
+/** Shown in the composer and in the chat bubble for the server's
+ * `device_bound_to_another_chat` error category. */
+export const BOUND_TO_ANOTHER_CHAT_MESSAGE =
+  'This computer is bound to another chat — connect it to this chat or pick another computer.';
+
+/** Query key prefix of the paired-computer list; the user id follows. */
+const DEVICES_QUERY_KEY = ['harness', 'devices'] as const;
+
+/**
+ * A computer whose every run consent is bound to other chats (Plan 06 slice 2)
+ * cannot run Codex in this one: the server refuses to mint for it. A draft
+ * (threadId null) is a new chat, so it is another chat too. Data missing from
+ * an older backend never blocks.
+ */
+function boundToAnotherChat(
+  device: HarnessDevice,
+  threadId: string | null
+): boolean {
+  const bound: unknown = device.bound_thread_ids;
+  return (
+    Array.isArray(bound) &&
+    bound.length > 0 &&
+    (threadId === null || !bound.includes(threadId))
+  );
 }
 
 export interface HarnessConnectionController extends HarnessSelection {
@@ -76,9 +111,20 @@ export interface HarnessConnectionController extends HarnessSelection {
   selectProvider(provider: HarnessProvider): void;
   selectDevice(deviceId: string | null): void;
   selectWorkspace(workspaceId: string | null): void;
-  receive(event: { type: string; runId?: string; detail?: string }): void;
-  markConnectionLost(): void;
-  loadApproval(requestId: string): Promise<NativeRequestView>;
+  /** True when this computer can only run Codex in other chats. */
+  isBoundToAnotherChat(deviceId: string): boolean;
+  /** Refetch the paired computers, e.g. when the picker opens: each
+   * `nous-harness connect` registers a new device id. */
+  refreshDevices(): void;
+  receive(
+    event: { type: string; runId?: string; detail?: string },
+    targetThreadId?: string | null
+  ): void;
+  markConnectionLost(targetThreadId?: string | null): void;
+  loadApproval(
+    requestId: string,
+    targetThreadId?: string | null
+  ): Promise<NativeRequestView>;
   decideRequest(requestId: string, decision: NativeDecision): Promise<void>;
   stop(): Promise<void>;
 }
@@ -93,6 +139,8 @@ export function useHarnessConnection(
   const userId = useAuthStore((state) => state.user?.id ?? null);
   const queryClient = useQueryClient();
   const key = selectionKey(userId, threadId);
+  const draftKey = selectionKey(userId, null);
+  const previousThreadId = useRef(threadId);
   const [selections, setSelections] = useState<
     Record<string, HarnessSelection>
   >(() => ({ [key]: readSelection(key) }));
@@ -104,22 +152,50 @@ export function useHarnessConnection(
   const { connectionState, runId, pendingRequests } = runtime;
 
   useEffect(() => {
+    if (
+      previousThreadId.current === null &&
+      threadId !== null &&
+      !hasStoredSelection(key)
+    ) {
+      const draftSelection = selections[draftKey] ?? readSelection(draftKey);
+      setSelections((current) =>
+        current[key] ? current : { ...current, [key]: draftSelection }
+      );
+    }
+    previousThreadId.current = threadId;
+  }, [draftKey, key, selections, threadId]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(key, JSON.stringify(selection));
   }, [key, selection]);
 
   const patchRuntime = useCallback(
-    (patch: Partial<HarnessRuntimeState>) => {
+    (
+      patch:
+        | Partial<HarnessRuntimeState>
+        | ((current: HarnessRuntimeState) => Partial<HarnessRuntimeState>),
+      targetThreadId?: string | null
+    ) => {
+      const targetKey = selectionKey(
+        userId,
+        targetThreadId === undefined ? threadId : targetThreadId
+      );
       setRuntimeByKey((current) => ({
         ...current,
-        [key]: { ...(current[key] ?? EMPTY_RUNTIME_STATE), ...patch },
+        [targetKey]: {
+          ...(current[targetKey] ?? EMPTY_RUNTIME_STATE),
+          ...(typeof patch === 'function'
+            ? patch(current[targetKey] ?? EMPTY_RUNTIME_STATE)
+            : patch),
+        },
       }));
     },
-    [key]
+    [threadId, userId]
   );
 
   const devicesQuery = useQuery({
-    queryKey: ['harness', 'devices', userId],
+    queryKey: [...DEVICES_QUERY_KEY, userId],
     queryFn: () => harnessService.listDevices(),
     enabled: Boolean(userId && selection.executionProvider === 'codex'),
     staleTime: 30_000,
@@ -128,9 +204,7 @@ export function useHarnessConnection(
     queryKey: ['harness', 'workspaces', userId, selection.deviceId],
     queryFn: () => harnessService.listWorkspaces(selection.deviceId!),
     enabled: Boolean(
-      userId &&
-        selection.executionProvider === 'codex' &&
-        selection.deviceId
+      userId && selection.executionProvider === 'codex' && selection.deviceId
     ),
     staleTime: 30_000,
   });
@@ -154,16 +228,28 @@ export function useHarnessConnection(
     },
   });
 
+  const refreshDevices = useCallback(() => {
+    // cancelRefetch: false joins a fetch already in flight, so the mousedown
+    // and focus of one click fetch once.
+    void queryClient.invalidateQueries(
+      { queryKey: [...DEVICES_QUERY_KEY, userId] },
+      { cancelRefetch: false }
+    );
+  }, [queryClient, userId]);
+
   const updateSelection = useCallback(
     (next: Partial<HarnessSelection>) =>
       setSelections((current) => ({
         ...current,
         [key]: { ...(current[key] ?? selection), ...next },
       })),
-    [key, selection]
+    [key, selection, setSelections]
   );
   const receive = useCallback(
-    (event: { type: string; runId?: string; detail?: string }) => {
+    (
+      event: { type: string; runId?: string; detail?: string },
+      targetThreadId?: string | null
+    ) => {
       const patch: Partial<HarnessRuntimeState> = {};
       if (event.runId) patch.runId = event.runId;
       if (
@@ -183,27 +269,35 @@ export function useHarnessConnection(
         patch.connectionState = 'idle';
         patch.runId = null;
       }
-      patchRuntime(patch);
+      patchRuntime(patch, targetThreadId);
     },
     [patchRuntime]
   );
-  const markConnectionLost = useCallback(() => {
-    patchRuntime({ connectionState: 'lost' });
-  }, [patchRuntime]);
+  const markConnectionLost = useCallback(
+    (targetThreadId?: string | null) => {
+      patchRuntime({ connectionState: 'lost' }, targetThreadId);
+    },
+    [patchRuntime]
+  );
   const loadApproval = useCallback(
-    async (requestId: string) => {
+    async (requestId: string, targetThreadId?: string | null) => {
       const request = await harnessService.readRequest(requestId);
       if (!request.consumed && !request.expired) {
-        patchRuntime({
-          pendingRequests: [
-            ...runtime.pendingRequests.filter((item) => item.id !== request.id),
-            request,
-          ],
-        });
+        patchRuntime(
+          (current) => ({
+            pendingRequests: [
+              ...current.pendingRequests.filter(
+                (item) => item.id !== request.id
+              ),
+              request,
+            ],
+          }),
+          targetThreadId
+        );
       }
       return request;
     },
-    [patchRuntime, runtime.pendingRequests]
+    [patchRuntime]
   );
   const decideRequest = useCallback(
     async (requestId: string, decision: NativeDecision) => {
@@ -217,13 +311,13 @@ export function useHarnessConnection(
         requestId,
         decision: { ...decision, targetHash: current.targetHash },
       });
-      patchRuntime({
-        pendingRequests: runtime.pendingRequests.filter(
+      patchRuntime((current) => ({
+        pendingRequests: current.pendingRequests.filter(
           (request) => request.id !== requestId
         ),
-      });
+      }));
     },
-    [decisionMutation, patchRuntime, runtime.pendingRequests]
+    [decisionMutation, patchRuntime]
   );
   const stop = useCallback(async () => {
     if (!threadId || !runId) return;
@@ -231,7 +325,7 @@ export function useHarnessConnection(
     await stopMutation.mutateAsync();
   }, [patchRuntime, runId, stopMutation, threadId]);
 
-  const deviceExists = devicesQuery.data?.some(
+  const selectedDevice = devicesQuery.data?.find(
     (device) => device.id === selection.deviceId
   );
   const workspaceExists = workspacesQuery.data?.some(
@@ -244,13 +338,15 @@ export function useHarnessConnection(
         ? 'Sign in to connect Codex.'
         : !devicesQuery.data?.length
           ? 'Pair this computer with NOUS before using Codex.'
-          : !selection.deviceId || !deviceExists
+          : !selection.deviceId || !selectedDevice
             ? 'Choose a paired computer.'
-            : !workspacesQuery.data?.length
-              ? 'Bind a project workspace to this computer.'
-              : !selection.workspaceId || !workspaceExists
-                ? 'Choose a bound project workspace.'
-                : null;
+            : boundToAnotherChat(selectedDevice, threadId)
+              ? BOUND_TO_ANOTHER_CHAT_MESSAGE
+              : !workspacesQuery.data?.length
+                ? 'Bind a project workspace to this computer.'
+                : !selection.workspaceId || !workspaceExists
+                  ? 'Choose a bound project workspace.'
+                  : null;
   const blocked =
     connectionState === 'lost' ||
     connectionState === 'reconciling' ||
@@ -285,6 +381,11 @@ export function useHarnessConnection(
         updateSelection({ deviceId, workspaceId: null }),
       selectWorkspace: (workspaceId: string | null) =>
         updateSelection({ workspaceId }),
+      isBoundToAnotherChat: (deviceId: string) => {
+        const device = devicesQuery.data?.find((item) => item.id === deviceId);
+        return device !== undefined && boundToAnotherChat(device, threadId);
+      },
+      refreshDevices,
       receive,
       markConnectionLost,
       loadApproval,
@@ -301,10 +402,12 @@ export function useHarnessConnection(
       markConnectionLost,
       pendingRequests,
       receive,
+      refreshDevices,
       runId,
       selection,
       statusLabel,
       stop,
+      threadId,
       updateSelection,
       workspacesQuery.data,
     ]
