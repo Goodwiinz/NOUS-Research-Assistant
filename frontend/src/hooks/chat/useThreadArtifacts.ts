@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import {
   artifactService,
+  type ArtifactCapabilities,
   type ArtifactVersion,
   type ProjectArtifact,
   type ThreadArtifact,
@@ -161,6 +162,18 @@ export function useArtifactContent(
     enabled: Boolean(scope && versionId && enabled),
     staleTime: Infinity,
     gcTime: 0,
+    retry: false,
+  });
+}
+
+/** Existing server flags are authoritative; callers require exact true. */
+export function useArtifactCapabilities(): UseQueryResult<ArtifactCapabilities> {
+  const scope = useArtifactScope();
+  return useQuery({
+    queryKey: ['artifact-capabilities', scope],
+    queryFn: ({ signal }) => artifactService.capabilities(signal),
+    enabled: Boolean(scope),
+    staleTime: 30_000,
     retry: false,
   });
 }

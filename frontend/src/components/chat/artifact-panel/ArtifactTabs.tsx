@@ -13,14 +13,30 @@ export function ArtifactTabs(): ReactElement | null {
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const selectAndFocus = (versionId: string): void => {
     select(versionId);
-    buttons.current.get(versionId)?.focus();
+    if (useArtifactPanelStore.getState().activeVersionId === versionId)
+      buttons.current.get(versionId)?.focus();
   };
   const closeAndFocus = (versionId: string): void => {
     const index = tabs.findIndex((tab) => tab.versionId === versionId);
     close(versionId);
     const remaining = useArtifactPanelStore.getState().tabs;
-    const next = remaining[Math.min(index, remaining.length - 1)];
+    const selected = useArtifactPanelStore.getState().activeVersionId;
+    const next =
+      active === versionId
+        ? remaining[Math.min(index, remaining.length - 1)]
+        : remaining.find((tab) => tab.versionId === selected);
     if (next) selectAndFocus(next.versionId);
+    else {
+      const opener = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-artifact-version]')
+      ).find((node) => node.dataset.artifactVersion === versionId);
+      (
+        opener ??
+        document.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Message"]'
+        )
+      )?.focus();
+    }
   };
   const onKeyDown = (event: KeyboardEvent, index: number): void => {
     let target: number;

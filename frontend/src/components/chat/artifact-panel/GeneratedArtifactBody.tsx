@@ -12,7 +12,8 @@ import {
   type Artifact,
 } from '@/store/artifactPanelStore';
 
-import { ArtifactPreview, formatBytes } from './ArtifactPreview';
+import { ArtifactFileView } from './ArtifactFileView';
+import { formatBytes } from './ArtifactPreview';
 
 type GeneratedArtifact = Extract<Artifact, { kind: 'generated' }>;
 
@@ -118,7 +119,7 @@ export function GeneratedArtifactBody({
         {downloadFailed && <span role="alert">Download failed.</span>}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        <ArtifactPreview version={selected} />
+        <ArtifactFileView version={selected} />
       </div>
     </div>
   );

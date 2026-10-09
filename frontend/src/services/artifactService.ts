@@ -1,5 +1,7 @@
 import { api } from '@/services/api-client';
 import type {
+  ApiArtifactCapabilities,
+  ApiArtifactEditRequest,
   ApiArtifactReference,
   ApiArtifactVersion,
   ApiProjectArtifact,
@@ -91,7 +93,44 @@ export function artifactVersionContentPath(versionId: string): string {
   return `/artifacts/versions/${encodeURIComponent(versionId)}/content`;
 }
 
+export interface ArtifactCapabilities {
+  editingEnabled: boolean;
+  previewEnabled: boolean;
+}
+export interface ArtifactEdit {
+  expectedParentVersionId: string;
+  publicationId: string;
+  text: string;
+}
+
 export const artifactService = {
+  async capabilities(signal?: AbortSignal): Promise<ArtifactCapabilities> {
+    const dto = await api.get<ApiArtifactCapabilities>(
+      '/artifacts/capabilities',
+      { signal }
+    );
+    return {
+      editingEnabled: dto.editing_enabled === true,
+      previewEnabled: dto.preview_enabled === true,
+    };
+  },
+  async editVersion(
+    artifactId: string,
+    edit: ArtifactEdit
+  ): Promise<ArtifactVersion> {
+    const body: ApiArtifactEditRequest = {
+      expected_parent_version_id: edit.expectedParentVersionId,
+      publication_id: edit.publicationId,
+      text: edit.text,
+    };
+    return toArtifactVersion(
+      await api.post<ApiArtifactVersion>(
+        `/artifacts/${encodeURIComponent(artifactId)}/edits`,
+        body,
+        { retries: 0 }
+      )
+    );
+  },
   async listThreadArtifacts(
     threadId: string,
     signal?: AbortSignal

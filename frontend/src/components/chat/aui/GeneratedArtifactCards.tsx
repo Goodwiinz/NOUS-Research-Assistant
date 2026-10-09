@@ -92,6 +92,7 @@ export function GeneratedArtifactCards({
       {items.map((item) => (
         <button
           key={item.version.versionId}
+          data-artifact-version={item.version.versionId}
           type="button"
           onClick={() => open(item)}
           className="flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-sm hover:bg-muted"

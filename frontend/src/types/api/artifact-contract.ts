@@ -11,3 +11,8 @@ export type ApiArtifactReference =
 export type ApiThreadArtifact = components['schemas']['ThreadArtifactDTO'];
 export type ApiArtifactProvenance = components['schemas']['ArtifactProvenance'];
 export type ApiProjectArtifact = components['schemas']['ProjectArtifactDTO'];
+
+export type ApiArtifactCapabilities =
+  components['schemas']['ArtifactCapabilitiesDTO'];
+export type ApiArtifactEditRequest =
+  components['schemas']['EditArtifactVersionRequest'];

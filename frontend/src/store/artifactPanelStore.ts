@@ -36,6 +36,8 @@ export interface OpenArtifactOptions {
 export type GeneratedArtifact = Extract<Artifact, { kind: 'generated' }>;
 
 interface ArtifactPanelState {
+  navigationGuard: (() => boolean) | null;
+  setNavigationGuard: (guard: (() => boolean) | null) => void;
   scope: string | null;
   tabs: GeneratedArtifact[];
   activeVersionId: string | null;
@@ -63,6 +65,8 @@ interface ArtifactPanelState {
  * ledger for why that discipline exists).
  */
 export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
+  navigationGuard: null,
+  setNavigationGuard: (navigationGuard) => set({ navigationGuard }),
   scope: null,
   tabs: [],
   activeVersionId: null,
@@ -74,6 +78,7 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
     if (scope !== get().scope) {
       set({
         scope,
+        navigationGuard: null,
         tabs: [],
         activeVersionId: null,
         artifact: null,
@@ -85,13 +90,25 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
 
   selectTab: (versionId) => {
     const artifact = get().tabs.find((tab) => tab.versionId === versionId);
-    if (artifact) set({ artifact, activeVersionId: versionId, isOpen: true });
+    if (
+      artifact &&
+      (get().activeVersionId === versionId ||
+        !get().navigationGuard ||
+        get().navigationGuard?.())
+    )
+      set({ artifact, activeVersionId: versionId, isOpen: true });
   },
 
   closeTab: (versionId) => {
     const state = get();
     const index = state.tabs.findIndex((tab) => tab.versionId === versionId);
     if (index < 0) return;
+    if (
+      state.activeVersionId === versionId &&
+      state.navigationGuard &&
+      !state.navigationGuard()
+    )
+      return;
     const tabs = state.tabs.filter((tab) => tab.versionId !== versionId);
     if (state.activeVersionId !== versionId) {
       set({ tabs });
@@ -108,8 +125,15 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
 
   openArtifact: (artifact, opts) => {
     if (opts && 'scope' in opts && opts.scope !== get().scope) return;
-    const { pinned, isOpen } = get();
+    const { pinned, isOpen, navigationGuard, activeVersionId } = get();
     if (opts?.source === 'agent' && pinned && isOpen) return;
+    if (
+      navigationGuard &&
+      (artifact.kind !== 'generated' ||
+        artifact.versionId !== activeVersionId) &&
+      !navigationGuard()
+    )
+      return;
     if (artifact.kind === 'generated') {
       const tabs = get().tabs;
       set({
@@ -127,7 +151,10 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
     }
   },
 
-  closePanel: () => set({ isOpen: false }),
+  closePanel: () => {
+    if (!get().navigationGuard || get().navigationGuard?.())
+      set({ isOpen: false });
+  },
 
   reopenPanel: () => {
     if (get().artifact) set({ isOpen: true });
@@ -137,6 +164,7 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
 
   reset: () =>
     set({
+      navigationGuard: null,
       scope: null,
       tabs: [],
       activeVersionId: null,
