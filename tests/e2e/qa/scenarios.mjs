@@ -256,7 +256,9 @@ async function assertAssistantContains(page, text, label, timeoutMs = 10_000) {
 
 async function sendFromComposer(page, content) {
   await messageComposer(page).fill(content);
-  await page.getByRole('button', { name: 'Send message' }).click();
+  // The /chat composer's Send button has no aria-label; its accessible name
+  // is its visible text.
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
 }
 
 const DENY_SETTLE_MS = 10_000;

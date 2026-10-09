@@ -73,7 +73,7 @@ scenario must take with `evidence.checkpoint('<name>')`. Names are
 
 ```sh
 scripts/verify/boot_local.sh start        # local backend + frontend, waits for health
-pnpm qa:nous --features login,chat-send-stream-reload --allow-writes \
+pnpm qa:nous --features login,chat-send-stream-reload --allow-writes --timeout-ms 180000 \
   --base-url http://127.0.0.1:3000 --api-url http://127.0.0.1:8000/api/v1 \
   --evidence-dir .verify-artifacts/<run-id> \
   --evidence-record docs/testing/evidence/verify-<feature>-<YYYYMMDD>

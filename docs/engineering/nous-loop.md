@@ -291,7 +291,7 @@ selection; an exit of `2` with "No mapped feature changed" records
 
 ```bash
 scripts/verify/boot_local.sh start
-pnpm qa:nous --changed-from origin/develop --allow-writes \
+pnpm qa:nous --changed-from origin/develop --allow-writes --timeout-ms 180000 \
   --base-url http://127.0.0.1:3000 --api-url http://127.0.0.1:8000/api/v1 \
   --evidence-record docs/testing/evidence/verify-<first-feature>-<YYYYMMDD>
 scripts/verify/boot_local.sh stop
