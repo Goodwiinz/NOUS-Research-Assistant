@@ -247,6 +247,10 @@ def test_two_account_postgres_search_step_requires_executed_tests(
         "backend/tests/integration/two_account/test_search_isolation_postgres.py"
         in step["run"]
     )
+    # Q-P3: the search-vector repair suite rides the same no-skip lane.
+    assert (
+        "backend/tests/integration/test_search_vector_repair_postgres.py" in step["run"]
+    )
 
     results = tmp_path / "test-results"
     results.mkdir()
