@@ -726,12 +726,21 @@ const scenarios = [
     mode: 'live',
     async run(session, evidence) {
       const fixture = await makeThread(session, evidence, 'export');
+      const body = `${evidence.fixturePrefix} export marker`;
       await session.request('/api/v2/messages', {
-        target: 'backend', method: 'POST', json: { thread_id: fixture.threadId, content: `${evidence.fixturePrefix} export marker`, client_message_id: randomUUID() },
+        target: 'backend', method: 'POST', json: { thread_id: fixture.threadId, role: 'user', content: body, client_message_id: randomUUID() },
       });
       const response = await session.request(`/api/v1/export/thread/${fixture.threadId}?format=markdown`, { target: 'backend', method: 'POST' });
-      assertThat(response.text.includes(evidence.fixturePrefix), 'Markdown export omitted the owned marker');
-      return { assertion: 'Markdown export contains the exact owned fixture marker', evidence: [{ contentType: response.headers.get('content-type') }] };
+      const text = String(response.text ?? '');
+      // export_service.py MARKDOWN_TEMPLATE opens with `# {{ thread.title }}`,
+      // which carries the fixture prefix even when the export has zero
+      // messages. Only the seeded body under its `## {{ message.role | title }}`
+      // heading proves the message itself was exported.
+      assertThat(text.includes(body), 'Markdown export omitted the seeded message body');
+      const roleHeading = text.search(/^## User$/m);
+      assertThat(roleHeading >= 0, 'Markdown export rendered no User role heading for the seeded message');
+      assertThat(roleHeading < text.indexOf(body), 'Markdown export rendered the seeded body before its User role heading');
+      return { assertion: 'Markdown export renders the seeded message body under its User role heading', evidence: [{ contentType: response.headers.get('content-type') }] };
     },
   },
   {

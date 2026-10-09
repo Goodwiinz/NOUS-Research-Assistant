@@ -1361,6 +1361,45 @@ test('exact answer oracle accepts only bounded markdown or punctuation around th
   );
 });
 
+function fakeExportSession(exportText) {
+  let nextId = 1;
+  const id = () => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
+  return {
+    login: async () => {},
+    registerFixture: () => {},
+    request: async (path, options = {}) => {
+      if (path.startsWith('/api/v1/export/thread/')) {
+        return { status: 200, headers: new Headers({ 'content-type': 'text/markdown' }), text: exportText(), data: null };
+      }
+      if (options.method === 'POST') return { status: 201, data: { id: id() } };
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+}
+
+test('markdown export is not proven by the thread title alone (Q-C1)', async () => {
+  const scenario = registry.find((item) => item.id === 'workflow.export-markdown');
+  assert.ok(scenario, 'export scenario must remain registered');
+  const evidence = { fixturePrefix: 'NOUS QA t1' };
+  // backend/src/services/research/export_service.py MARKDOWN_TEMPLATE opens with
+  // `# {{ thread.title }}` (which carries the fixture prefix) and renders each
+  // message as `## {{ message.role | title }}` followed by its content. An
+  // export with zero messages still contains the prefix in its title line.
+  const titleOnly = fakeExportSession(() => [
+    '# NOUS QA t1 export', '', '**Status**: active', '**Messages**: 0', '', '---', '', '---', '*Exported on 2026-10-09*', '',
+  ].join('\n'));
+  await assert.rejects(scenario.run(titleOnly, evidence), /seeded message body/);
+
+  const bodyWithoutRole = fakeExportSession(() => '# NOUS QA t1 export\n\nNOUS QA t1 export marker\n');
+  await assert.rejects(scenario.run(bodyWithoutRole, evidence), /User role heading/);
+
+  const rendered = fakeExportSession(() => [
+    '# NOUS QA t1 export', '', '**Messages**: 1', '', '---', '', '## User', '*2026-10-09*', '', 'NOUS QA t1 export marker', '', '---', '',
+  ].join('\n'));
+  const result = await scenario.run(rendered, evidence);
+  assert.match(result.assertion, /User role heading/);
+});
+
 test('idempotency oracle rejects a duplicate persisted row even when IDs are echoed', () => {
   const row = { client_message_id: 'cmid-1', content: 'exact content' };
   assert.throws(() => assertIdempotentMessage({
