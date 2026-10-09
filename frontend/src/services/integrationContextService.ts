@@ -23,7 +23,7 @@ export const integrationContextService = {
       ...(skillVersionIds !== undefined
         ? { skill_version_ids: skillVersionIds }
         : {}),
-      ...(refreshSkills ? { refresh_skills: true } : {}),
+      refresh_skills: refreshSkills,
     };
     return api.put<ApiContextOptions>('/integrations/context/selection', body);
   },
