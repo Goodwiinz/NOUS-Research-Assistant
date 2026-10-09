@@ -212,3 +212,12 @@ Closes: A9, A12, R2.
 
 - No browser rendering in this plan. Each PR body must list what was not visually verified (contrast, breakpoints, sheet backdrop).
 - The 8 barrel-exported components never rendered on /chat (`RAGToggle`, `CitationPanel`, `CitationPreview`, `ChatSettings`, `ChatAnalytics`, `ModelLoadingProgress`, `SearchComposer`, `ui/agent-plan`) are untouched.
+
+## Amendment (2026-10-09)
+
+Added when this plan was committed (PR #1958). The tasks above are kept as
+written; these notes correct them and point to the current code.
+
+- Task 2, Step 2: unquoted parentheses are shell syntax, so
+  `ls frontend/app/(dashboard)/documents` fails before `ls` runs. Quote the
+  path: `ls 'frontend/app/(dashboard)/documents'`.
