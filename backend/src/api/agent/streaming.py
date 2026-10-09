@@ -3507,15 +3507,24 @@ async def stream_confirm_event_generator(
             # Relinquish before yielding/awaiting: a released or superseded
             # approval is no longer ours to cancel on transport shutdown.
             durable_claimed = False
-            with contextlib.suppress(Exception):
-                await db.rollback()
-                await release_confirmation_claim(
-                    db,
-                    str(active_run.job_id),
-                    approval_id=request_body.approval_id,
-                    organization_id=getattr(current_user, "organization_id", None),
-                    user_id=current_user.id,
-                )
+            release_run_id = str(active_run.job_id)
+
+            async def release_durable_claim() -> None:
+                with contextlib.suppress(Exception):
+                    await db.rollback()
+                    await release_confirmation_claim(
+                        db,
+                        release_run_id,
+                        approval_id=request_body.approval_id,
+                        organization_id=getattr(current_user, "organization_id", None),
+                        user_id=current_user.id,
+                    )
+
+            # A disconnect must not abandon the release mid-commit: cleanup no
+            # longer owns the run, so an unfinished release would strand it.
+            await _run_interrupted_cleanup(
+                release_durable_claim, propagate_cancellation=True
+            )
 
     disconnect_canceller = _cancel_current_task_on_disconnect(request)
     try:

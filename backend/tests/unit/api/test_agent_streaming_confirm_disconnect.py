@@ -499,6 +499,44 @@ async def test_postclaim_snapshot_change_releases_without_cancelling_new_approva
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+async def test_postclaim_release_commit_survives_cancellation(
+    confirm_lifecycle, monkeypatch, cancellation
+):
+    from src.api.agent import streaming
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    changed = SimpleNamespace(
+        values=ctx.snapshot.values,
+        tasks=ctx.snapshot.tasks,
+        config={"configurable": {"checkpoint_id": "newer-checkpoint"}},
+    )
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, changed]
+    committed = asyncio.Event()
+    release_ack = asyncio.Event()
+
+    async def release_claim(*args, **kwargs):
+        # The release is in flight; it commits only if its caller keeps going.
+        committed.set()
+        await release_ack.wait()
+        ctx.run.status = JobStatus.AWAITING_CONFIRMATION
+        return True
+
+    monkeypatch.setattr(streaming, "release_confirmation_claim", release_claim)
+    frames = await _cancel_while_commit_returns(
+        ctx, committed, release_ack, cancellation
+    )
+
+    assert (
+        ctx.run.status == JobStatus.AWAITING_CONFIRMATION
+    ), "released claim was abandoned mid-commit, leaving RUNNING with no owner"
+    ctx.finalize.assert_not_awaited()
+    ctx.graph.astream_events.assert_not_called()
+    assert not frames, "cancelled release still emitted a response"
+
+
+@pytest.mark.asyncio
 async def test_claimed_confirm_close_still_cancels_and_persists_partial(
     confirm_lifecycle,
 ):

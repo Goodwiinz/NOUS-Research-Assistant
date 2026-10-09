@@ -43,13 +43,18 @@ The OpenAPI compatibility gate requires the reviewed
 
 ## Validation
 
-- `tests/unit/agent/test_confirmation_service.py`: deterministic replay,
+- `backend/tests/unit/agent/test_confirmation_service.py`: deterministic replay,
   binding changes, legacy/foreign checkpoints, and two real sequential
   LangGraph interrupts in the same node.
-- `tests/unit/agent/test_agent_run_service.py`: owner and receipt predicates,
+- `backend/tests/unit/agent/test_agent_run_service.py`: owner and receipt predicates,
   nested approval claims, fenced release, and receipt preservation through
   insert recovery (active-thread conflict and missing-thread FK).
-- `tests/integration/test_agent_approval_conformance.py`: both native
+- `backend/tests/unit/services/test_agent_cancellation.py`: a Stop accepted
+  between the `/confirm` claim and the deferred job's first read is
+  acknowledged as CANCELLED by the receipt owner and ignored by a stale task.
+- `backend/tests/unit/api/test_agent_streaming_confirm_disconnect.py`: a
+  post-claim release finishes its commit even when the client disconnects.
+- `backend/tests/integration/test_agent_approval_conformance.py`: both native
   adapters against PostgreSQL run rows and `AsyncPostgresSaver`, competing
   decisions, cold replay, stale cards/tasks, and delayed release. It uses
   generated schemas and drops them on exit; it does not call a model provider.
@@ -64,7 +69,7 @@ ORCHESTRATION_TEST_DATABASE_URL=postgresql:///postgres \
 ```
 
 Receipt-service doubles in unrelated persistence/tracing unit tests are
-explicitly imported from `tests/utils/agent_approval.py`. Identity conformance
+explicitly imported from `backend/tests/utils/agent_approval.py`. Identity conformance
 tests use the real service and checkpoint state.
 
 Mutation verification on 2026-10-02 (source restored byte-for-byte after each):
@@ -92,3 +97,34 @@ approval error failed this regression; restoring it passed again:
 python -m pytest -q tests/unit/api/test_agent_streaming_confirm_disconnect.py \
   -k postclaim_snapshot
 ```
+
+### Amendment 2026-10-09
+
+Status: verified locally on top of merge `1ea0c6dc0`, which brought in #1841 at
+`d6cee461e`. The 2026-10-02 record above predates that merge and its line
+numbers have moved. The ownership release it cites as `streaming.py:3478` is
+now the `durable_claimed = False` in `release_pre_execution_claim`. Run every
+command in this section from `backend/`.
+
+Two transitions were added. Each was mutated independently and the source
+restored byte-for-byte afterwards:
+
+- A deferred job whose own receipt finds the run STOPPING acknowledges the Stop
+  as CANCELLED (`agent_execution_service.py:2906`). Deleting the branch failed
+  the `own-approval` case. Dropping its receipt condition failed the
+  `foreign-approval` case, because a stale task acknowledged another approval's
+  run:
+
+  ```sh
+  python -m pytest -q tests/unit/services/test_agent_cancellation.py \
+    -k stop_before_resume
+  ```
+
+- The post-claim release runs inside `_run_interrupted_cleanup`
+  (`streaming.py:3525`). Awaiting `release_durable_claim()` directly failed
+  both cancellation styles, leaving the run RUNNING with no owner:
+
+  ```sh
+  python -m pytest -q tests/unit/api/test_agent_streaming_confirm_disconnect.py \
+    -k postclaim_release
+  ```
