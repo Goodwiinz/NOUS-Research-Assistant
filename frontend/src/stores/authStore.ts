@@ -5,6 +5,7 @@ import { clearWorkspaceServiceCache } from '@/services/workspaceService';
 import { getAppQueryClient } from '@/lib/query-client';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { resetAccountSession } from '@/lib/account-session';
+import { discardForeignChatAuthRecovery } from '@/hooks/chat/chatAuthRecovery';
 import { useChatStore } from '@/store/chat-store';
 import { useAgentChatStore } from '@/store/agentChatStore';
 import { useProjectStore } from '@/store/projectStore';
@@ -167,6 +168,9 @@ function settleMissingSession(): void {
 }
 
 function observeIdentity(userId: string): void {
+  // A rejected session keeps its staged chat draft for the same user's
+  // re-login, so clearSession() cannot drop it; any other identity must.
+  discardForeignChatAuthRecovery(userId);
   const previousId = useAuthStore.getState().user?.id ?? sessionUserId;
   if (previousId !== userId) {
     authRevision += 1;
