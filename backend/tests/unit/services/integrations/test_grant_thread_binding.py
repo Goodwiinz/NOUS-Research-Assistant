@@ -38,10 +38,12 @@ from src.schemas.integration_context import (
 from src.services.artifacts import service as artifacts
 from src.services.artifacts.storage import MemoryArtifactStorage
 from src.services.integrations.context import (
+    DeviceBoundToAnotherChat,
     IntegrationAccessDenied,
     create_request,
     decide_request,
     exchange_request,
+    list_devices,
     mint_integration_grant,
     register_device,
     renew_grant,
@@ -62,6 +64,8 @@ FOREIGN_THREADS = {
 SCOPES = {"tools:read", "artifacts:publish"}
 CONTENT = b"handoff\n"
 OWNER = SimpleNamespace(id=USER, organization_id=ORG)
+# A run consent: what create_chat_context mints for a Codex turn.
+RUN = {"harness:execute", "tools:read"}
 
 
 def _user(user_id: UUID, email: str) -> dict[str, str]:
@@ -339,3 +343,134 @@ async def test_workspace_member_can_bind_a_project_chat(db: AsyncSession) -> Non
     await db.commit()
     request = await _request(db, THREAD, member)
     assert request.thread_id == THREAD
+
+
+# DECISION B-1: a chat in a NULL-organization workspace belongs to the owner's
+# organization, exactly as its projects do. Mutation: restore validate_binding's
+# old loose chat check `or_(Workspace.organization_id.is_(None),
+# Workspace.organization_id == organization_id)` in place of
+# workspace_in_org(organization_id), and the last _request is admitted.
+async def test_chat_in_legacy_workspace_follows_owner_org(db: AsyncSession) -> None:
+    chat = FOREIGN_THREADS["other_owner_thread"]  # OTHER_WORKSPACE, source PROJECT
+    await db.execute(
+        insert(WorkspaceMember).values(
+            workspace_id=OTHER_WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+        )
+    )
+    await db.commit()
+    assert (await _request(db, chat)).thread_id == chat
+    other_org = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=other_org, name="Other", storage_limit_bytes=10**6
+        )
+    )
+    await db.execute(
+        update(Workspace)
+        .where(Workspace.id == OTHER_WORKSPACE)
+        .values(organization_id=None)
+    )
+    await db.execute(
+        update(User).where(User.id == OTHER_USER).values(organization_id=other_org)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):  # admitted before B-1
+        await _request(db, chat)
+
+
+async def _consent(
+    db: AsyncSession, device_id: UUID, thread_id: UUID | None, scopes: set[str]
+) -> UUID:
+    """A consumed consent of OWNER for PROJECT on an existing device."""
+    request = await create_request(
+        db,
+        OWNER,
+        GrantRequestCreate(
+            project_id=PROJECT, device_id=device_id, scopes=scopes, thread_id=thread_id
+        ),
+    )
+    await decide_request(db, OWNER, request.id, approved=True)
+    await exchange_request(db, OWNER, request.id)
+    return request.id
+
+
+# AD-3: the composer lists, per computer, the only chats it can run Codex in.
+async def test_device_list_names_the_only_chats_a_computer_runs_in(
+    db: AsyncSession,
+) -> None:
+    devices: dict[str, UUID] = {}
+    for label in ("Chat", "Project", "Mixed", "Tools", "Revoked"):
+        devices[label] = (
+            await register_device(db, OWNER, DeviceCreate(label=label))
+        ).id
+    # Two chats, consented out of order and one of them twice: each listed once,
+    # in a stable order.
+    chats = sorted((THREAD, UNTITLED_THREAD), key=str)
+    for chat in (chats[1], chats[0], chats[1]):
+        await _consent(db, devices["Chat"], chat, RUN)
+    await _consent(db, devices["Project"], None, RUN)
+    # One project-wide run consent lifts the restriction its chat-bound sibling
+    # would impose: the mint accepts it in any chat of the project.
+    await _consent(db, devices["Mixed"], THREAD, RUN)
+    await _consent(db, devices["Mixed"], None, RUN)
+    await _consent(db, devices["Tools"], THREAD, SCOPES)  # no harness:execute
+    revoked = await _consent(db, devices["Revoked"], THREAD, RUN)
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == revoked)
+        .values(consent_revoked_at=func.now())
+    )
+    await db.commit()
+    listed = {d.label: d.bound_thread_ids for d in await list_devices(db, OWNER)}
+    assert listed == {
+        "Chat": chats,
+        "Project": [],
+        "Mixed": [],
+        "Tools": [],
+        "Revoked": [],
+    }
+
+
+async def _mint_run(
+    db: AsyncSession, device_id: UUID, thread_id: UUID, scopes: set[str]
+) -> Any:
+    return await mint_integration_grant(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=PROJECT,
+        scopes=frozenset(scopes),
+        thread_id=thread_id,
+        device_id=device_id,
+    )
+
+
+# AD-3: the one mint denial the owner can fix from the chat names its cause.
+async def test_a_device_bound_to_another_chat_says_so(db: AsyncSession) -> None:
+    device = await register_device(db, OWNER, DeviceCreate(label="Laptop"))
+    await _consent(db, device.id, THREAD, RUN)
+    with pytest.raises(DeviceBoundToAnotherChat):
+        await _mint_run(db, device.id, UNTITLED_THREAD, {"harness:execute"})
+    assert await _mint_run(db, device.id, THREAD, {"harness:execute"})
+
+
+@pytest.mark.parametrize(
+    "case", ["no-consent", "scope-short-elsewhere", "two-lineages"]
+)
+async def test_every_other_mint_denial_stays_opaque(
+    db: AsyncSession, case: str
+) -> None:
+    device = await register_device(db, OWNER, DeviceCreate(label="Laptop"))
+    if case == "scope-short-elsewhere":
+        # Bound to another chat AND lacking the scope: not fixable by
+        # connecting this chat with the same scopes, so it stays generic.
+        await _consent(db, device.id, UNTITLED_THREAD, SCOPES)
+    elif case == "two-lineages":
+        # Ambiguous here; a consent bound to another chat does not make the
+        # binding the cause.
+        await _consent(db, device.id, None, RUN)
+        await _consent(db, device.id, None, RUN)
+        await _consent(db, device.id, UNTITLED_THREAD, RUN)
+    with pytest.raises(IntegrationAccessDenied) as denied:
+        await _mint_run(db, device.id, THREAD, {"harness:execute"})
+    assert type(denied.value) is IntegrationAccessDenied

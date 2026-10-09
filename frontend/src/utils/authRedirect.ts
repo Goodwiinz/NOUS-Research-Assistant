@@ -19,7 +19,19 @@ export function getSafeAuthRedirect(
       return fallback;
     }
 
-    return `${url.pathname}${url.search}${url.hash}`;
+    const path = `${url.pathname}${url.search}${url.hash}`;
+
+    // SECURITY (GOO-402): the origin check above runs on the parsed URL, but
+    // WHATWG dot-segment removal can collapse a same-origin input such as
+    // `/.//evil.com`, `/%2e//evil.com` or `/a/..//evil.com` to the pathname
+    // `//evil.com`. Callers re-resolve the returned string (router.push,
+    // `new URL(path, origin)`), which treats a leading `//` (or `/\`) as
+    // protocol-relative and leaves the origin. Reject any such result.
+    if (/^[/\\]{2}/.test(path)) {
+      return fallback;
+    }
+
+    return path;
   } catch {
     return fallback;
   }

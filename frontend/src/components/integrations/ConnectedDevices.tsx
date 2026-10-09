@@ -1,17 +1,33 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useState, type ReactElement } from 'react';
 
+import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { useAuth } from '@/hooks/useAuth';
+import { scopeSummary } from '@/lib/integrations/scopeLabels';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
+import type { ApiConnectionConsent } from '@/types/api/integration-connections-contract';
 
-const SCOPE_TEXT: Record<string, string> = {
-  'harness:execute': 'run coding sessions',
-  'tools:read': 'read project documents',
-  'tools:write': 'request notes (you approve each one)',
-  'context:read': 'read memories you chose to share',
-  'artifacts:publish': 'publish files to chats',
+// A consent reaches one project, or every project of one workspace (Plan 07).
+const consentTarget = (consent: ApiConnectionConsent): string =>
+  consent.kind === 'workspace'
+    ? `Workspace ${consent.workspace_label ?? ''} (${consent.workspace_id ?? ''}), every project in it`
+    : `${consent.project_label ?? ''} (${consent.project_id ?? ''})`;
+
+// Names a consent apart from its siblings in control labels: two consents of
+// one device for the same project differ only by the chat they are bound to.
+// Truthiness, not `!== null`: a backend older than this page omits thread_id.
+const consentName = (consent: ApiConnectionConsent): string => {
+  const target =
+    consent.kind === 'workspace'
+      ? `workspace ${consent.workspace_label ?? ''}`
+      : (consent.project_label ?? '');
+  if (!consent.thread_id) return target;
+  return consent.thread_label
+    ? `${target}, only from chat ${consent.thread_label}`
+    : `${target}, only from a chat that is no longer available`;
 };
 
 /**
@@ -89,9 +105,13 @@ export function ConnectedDevices(): ReactElement {
               <div className="space-y-2 rounded border p-3">
                 <p>
                   Disconnect {device.device_label} ({device.device_id})? This
-                  revokes its project access and ends all existing CLI sign-ins
-                  for your account. Other devices keep their integration project
-                  access. Sign in to the CLI again to continue using it.
+                  revokes its access and ends all existing CLI sign-ins for your
+                  account, so every other connected device also stops working
+                  until you run nous-harness connect on it again. Each reconnect
+                  adds a new device here. Revoke the old device&apos;s access
+                  rather than disconnecting the old device, which would end
+                  every CLI sign-in again; the old device then stays listed with
+                  no access.
                 </p>
                 <button
                   type="button"
@@ -120,22 +140,44 @@ export function ConnectedDevices(): ReactElement {
                     key={consent.request_id}
                     className="flex items-start justify-between gap-3"
                   >
-                    <div>
-                      <p>
-                        {consent.project_label} ({consent.project_id})
-                      </p>
+                    <div className="space-y-1">
+                      <p>{consentTarget(consent)}</p>
+                      {consent.thread_id && (
+                        <p className="text-sm">
+                          Only from chat:{' '}
+                          {consent.thread_label ? (
+                            <Link
+                              href={getSelectedThreadUrl(consent.thread_id)}
+                              className="underline"
+                            >
+                              {consent.thread_label}
+                            </Link>
+                          ) : (
+                            'a chat that is no longer available'
+                          )}
+                        </p>
+                      )}
                       <p className="text-sm text-muted-foreground">
-                        {consent.scopes
-                          .map((scope) => SCOPE_TEXT[scope] ?? scope)
-                          .join(', ')}
+                        {consent.scopes.map(scopeSummary).join(', ')}
                       </p>
+                      {consent.scopes.includes('context:read') && (
+                        <p className="text-sm">
+                          <Link
+                            href={`/integrations/context/${encodeURIComponent(consent.request_id)}`}
+                            className="underline"
+                          >
+                            Choose shared memories
+                            <span className="sr-only">{` for ${consentName(consent)}`}</span>
+                          </Link>
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"
                       disabled={busy}
                       onClick={() => revokeConsent.mutate(consent.request_id)}
                       className="rounded border px-3 py-1 text-sm disabled:opacity-50"
-                      aria-label={`Revoke ${device.device_label} access to ${consent.project_label}`}
+                      aria-label={`Revoke ${device.device_label} (${device.device_id}) access to ${consentName(consent)}`}
                     >
                       Revoke
                     </button>

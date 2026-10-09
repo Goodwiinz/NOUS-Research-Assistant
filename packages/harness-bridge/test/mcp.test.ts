@@ -67,7 +67,7 @@ function consentFetch(calls: { url: string; body: any }[]): typeof fetch {
     calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
     let data: object;
     if (url.endsWith("/cli-auth/start"))
-      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l" };
+      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l", verification_code: "ABCD-1234" };
     else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
     else if (url.endsWith("/integrations/devices")) data = { id: DEVICE };
     else if (url.endsWith("/grant-requests"))
@@ -275,7 +275,7 @@ test("connect --tools requests and persists tools:read; plain connect does not",
     calls.push({ url, body: init.body ? JSON.parse(init.body) : undefined });
     let data: object;
     if (url.endsWith("/cli-auth/start"))
-      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l" };
+      data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l", verification_code: "ABCD-1234" };
     else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
     else if (url.endsWith("/integrations/devices"))
       data = { id: "22222222-2222-4222-8222-222222222222" };
@@ -324,7 +324,7 @@ test("connect --tools requests and persists tools:read; plain connect does not",
     assert.deepEqual(withTools.body.scopes, ["harness:execute", "tools:read"]);
     const state = JSON.parse(readFileSync(join(dir, "tools", "connection.json"), "utf8"));
     assert.deepEqual(state.scopes, ["harness:execute", "tools:read"]);
-    assert.ok(await mcpInstallCommand(join(dir, "tools")));
+    assert.ok(await mcpInstallCommand(join(dir, "tools"), { announce: () => {} }));
 
     calls.length = 0;
     await connect({ ...base, stateDir: join(dir, "plain") });
@@ -405,7 +405,7 @@ test("connect --workspace --library requests a workspace binding and the library
     assert.equal(messages.at(-1), `Connected to workspace ${WORKSPACE}.`);
     // The standalone MCP command knows the grant can write the library and is bound to no folder.
     // tools:write brings --actions as on a project: NOUS refuses a workspace grant only a note.
-    const install = await mcpInstallCommand(dir);
+    const install = await mcpInstallCommand(dir, { announce: () => {} });
     assert.equal(install.includes("'--actions'"), true);
     assert.equal(install.includes("'--library'"), true);
     assert.equal(install.includes("'--root'"), false);
@@ -631,7 +631,7 @@ test("the nous-harness CLI parses --workspace and --library into the consent req
       requests.push({ path, body: raw ? JSON.parse(raw) : undefined });
       let data: object = { status: "approved" };
       if (path.endsWith("/cli-auth/start"))
-        data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l" };
+        data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l", verification_code: "ABCD-1234" };
       else if (path.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
       else if (path.endsWith("/integrations/devices")) data = { id: DEVICE };
       else if (path.endsWith("/grant-requests"))

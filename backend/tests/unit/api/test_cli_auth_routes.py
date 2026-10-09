@@ -35,12 +35,14 @@ def test_cli_auth_start_returns_session_and_browser_url(client: TestClient) -> N
     assert body["session_id"]
     assert body["verification_code"]
     assert "/cli-auth?" in body["browser_url"]
-    # Regression (audit I22): the verification code must ride in the fragment,
-    # which browsers never send to servers, proxies or Referer.
+    # Regression (GOO-403, RFC 8628 §5.4): the link must not carry the code
+    # anywhere (query or fragment). The user types the code their own terminal
+    # printed, so a link someone else sends cannot be approved in one click.
     parts = urlsplit(body["browser_url"])
     assert parse_qs(parts.query) == {"session_id": [body["session_id"]]}
-    assert body["verification_code"] not in parts.query
-    assert parse_qs(parts.fragment) == {"code": [body["verification_code"]]}
+    assert parts.fragment == ""
+    assert body["verification_code"] not in body["browser_url"]
+    assert body["verification_code"].replace("-", "") not in body["browser_url"]
     assert body["poll_token"]
     assert body["poll_interval_seconds"] == 2
 

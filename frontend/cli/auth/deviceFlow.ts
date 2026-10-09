@@ -19,6 +19,7 @@ export async function startCliAuth(): Promise<{
   session_id: string;
   poll_token: string;
   browser_url: string;
+  verification_code: string;
   poll_interval_seconds: number;
 }> {
   const res = await fetch(`${BACKEND_URL}/cli-auth/start`, { method: 'POST' });
@@ -51,6 +52,15 @@ export async function pollForApproval(
     if (data.status === 'expired') {
       throw new Error('Login session expired. Run ./nous login again.');
     }
+    if (data.status === 'denied') {
+      throw new Error('Login request denied. Run ./nous login again.');
+    }
+    if (data.status === 'cancelled') {
+      throw new Error('Login cancelled. Run ./nous login again.');
+    }
+    if (data.status !== 'pending') {
+      throw new Error('Unexpected login status. Run ./nous login again.');
+    }
 
     const delay = intervalMs ?? 2000;
     if (delay > 0) await new Promise((r) => setTimeout(r, delay));
@@ -58,7 +68,15 @@ export async function pollForApproval(
 }
 
 export async function login(): Promise<void> {
-  const { session_id, poll_token, browser_url } = await startCliAuth();
+  const { session_id, poll_token, browser_url, verification_code } =
+    await startCliAuth();
+
+  // GOO-403: the link no longer carries the code. The user types it on the
+  // approval page, which proves the person approving can see this terminal.
+  console.log(`\nYour sign-in code: ${verification_code}`);
+  console.log(
+    'Type this code on the browser page. Only approve a request you started here.'
+  );
 
   const { default: open } = await import('open');
   await open(browser_url);

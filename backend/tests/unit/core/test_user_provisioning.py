@@ -11,6 +11,27 @@ We drive the race deterministically with a mock ``AsyncSession`` whose
 committing first would) and whose ``execute()`` then returns the row the
 "other" request created. A real SQLite session can't reproduce this reliably —
 it serializes writers, so the unique-violation window never opens.
+
+GOO-405 mutation evidence (run from ``backend/``):
+
+* Guard at ``src/core/user_provisioning.py:236``: the user-race refetch.
+  Replacing its assignment with ``user = None`` made
+  ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_race_refetches_concurrently_created_user``
+  fail because the returned user was ``None`` instead of the concurrent row.
+* Guard at ``src/core/user_provisioning.py:238``: warn only when the ID
+  refetch finds no subject row. Replacing the condition with ``if False`` made
+  ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_email_conflict_warns_with_user_id_and_never_resolves_by_email``
+  fail because the required warning was absent. Replacing it with ``if True``
+  made ``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_user_id_race_does_not_warn``
+  fail because a benign same-subject race emitted a warning.
+* Each mutation was restored in ``finally``; the source bytes matched before
+  and after the runs. The same focused commands pass on the restored source.
+
+Provider-client construction failure is an operational outage, not an
+unconfirmed identity. The typed failure at
+``src/core/user_provisioning.py:80`` is covered by
+``python -m pytest -q tests/unit/core/test_user_provisioning.py::test_missing_supabase_admin_client_is_a_provider_outage``; returning None
+instead makes the test fail because no retryable error is raised.
 """
 
 from __future__ import annotations
@@ -24,7 +45,11 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from src.core.security import TokenData, _extract_supabase_token_data
-from src.core.user_provisioning import ensure_user_and_org
+from src.core.user_provisioning import (
+    SupabaseEmailLookupError,
+    ensure_user_and_org,
+    get_verified_supabase_email,
+)
 from src.models.organization import Organization
 from src.models.user import User, UserRole
 
@@ -61,6 +86,14 @@ def _session(*, execute_results, flush_side_effects):
 def _token(user_id="user-1", email="user@example.com", organization_id=None, **extra):
     return TokenData(
         user_id=user_id, email=email, organization_id=organization_id, **extra
+    )
+
+
+@pytest.fixture(autouse=True)
+def confirmed_provider_email(monkeypatch):
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "a.two@example.com",
     )
 
 
@@ -103,10 +136,72 @@ async def test_happy_path_creates_org_and_user_with_org_id():
     assert isinstance(user, User)
     assert user.id == "user-1"
     assert user.organization_id == "org-42"
-    db.rollback.assert_not_called()
+    db.rollback.assert_awaited_once()
     # Two objects added (org, then user), two flushes.
     assert db.add.call_count == 2
     assert db.flush.await_count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_first_login_uses_current_confirmed_provider_email(monkeypatch):
+    db = _session(execute_results=[None, None], flush_side_effects=[None, None])
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: "current@example.com",
+    )
+
+    user = await ensure_user_and_org(
+        db, _token(email="stale@example.com", organization_id="org-42")
+    )
+
+    assert user.email == "current@example.com"
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_first_login_fails_closed_when_provider_email_is_unavailable(monkeypatch):
+    db = _session(execute_results=[None], flush_side_effects=[])
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email",
+        lambda _user_id: None,
+    )
+
+    result = await ensure_user_and_org(db, _token(email="stale@example.com"))
+
+    assert result is None
+    db.add.assert_not_called()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_first_login_provider_outage_is_not_an_unconfirmed_identity(monkeypatch):
+    db = _session(execute_results=[None], flush_side_effects=[])
+
+    def provider_outage(_user_id: str) -> None:
+        raise SupabaseEmailLookupError("provider unavailable")
+
+    monkeypatch.setattr(
+        "src.core.user_provisioning.get_verified_supabase_email", provider_outage
+    )
+
+    with pytest.raises(SupabaseEmailLookupError):
+        await ensure_user_and_org(db, _token(email="stale@example.com"))
+
+    db.add.assert_not_called()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.unit
+def test_missing_supabase_admin_client_is_a_provider_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("src.core.supabase_client.get_supabase_client", lambda: None)
+
+    with pytest.raises(SupabaseEmailLookupError):
+        get_verified_supabase_email("subject-1")
 
 
 @pytest.mark.unit
@@ -125,7 +220,7 @@ async def test_happy_path_creates_per_user_org_without_org_id():
     added_org = db.add.call_args_list[0].args[0]
     assert isinstance(added_org, Organization)
     assert added_org.name == "user-user-1 Organization"
-    db.rollback.assert_not_called()
+    db.rollback.assert_awaited_once()
 
 
 def _fake_db_with_org_table():
@@ -274,7 +369,7 @@ async def test_org_race_refetches_concurrently_created_org():
 
     assert isinstance(user, User)
     assert user.organization_id == "org-42"  # from the refetched org
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
 
 
 @pytest.mark.unit
@@ -292,7 +387,7 @@ async def test_org_less_fallback_org_race_refetches_by_name():
 
     assert isinstance(user, User)
     assert user.organization_id == "org-default"
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
 
 
 @pytest.mark.unit
@@ -311,7 +406,65 @@ async def test_user_race_refetches_concurrently_created_user():
     result = await ensure_user_and_org(db, _token(organization_id="org-42"))
 
     assert result is concurrent_user
-    db.rollback.assert_awaited_once()
+    assert db.rollback.await_count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_user_email_conflict_warns_with_user_id_and_never_resolves_by_email(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """GOO-405 hardening: the user INSERT conflicts, but no row with our own id
+    exists. In practice another row already holds this verified address in
+    ``users.email``.
+
+    Provisioning must (a) return None, which the caller turns into a 401,
+    (b) log a WARNING naming the user id but NOT the email, and (c) never
+    look the user up by email. Adopting the conflicting row would turn email
+    squatting into account takeover.
+    """
+    db = _session(
+        execute_results=[None, None, None],
+        #                 ^user  ^org  ^refetch-by-id finds nothing
+        flush_side_effects=[None, _integrity_error()],
+    )
+    token = _token(
+        user_id="victim-id", email="victim@example.com", organization_id="org-42"
+    )
+
+    with caplog.at_level("WARNING", logger="src.core.user_provisioning"):
+        result = await ensure_user_and_org(db, token)
+
+    assert result is None
+    assert db.rollback.await_count == 2
+    # Exactly user lookup, org lookup, and ONE refetch, and that refetch is by id.
+    assert db.execute.await_count == 3
+    refetch_where = str(db.execute.await_args_list[2].args[0]).split("WHERE", 1)[1]
+    assert "users.id" in refetch_where
+    assert "users.email" not in refetch_where
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "victim-id" in message
+    assert "victim@example.com" not in message
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_user_id_race_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    """The benign same-subject race (refetch by id succeeds) stays quiet."""
+    concurrent_user = SimpleNamespace(id="user-1", organization_id="org-42")
+    db = _session(
+        execute_results=[None, None, concurrent_user],
+        flush_side_effects=[None, _integrity_error()],
+    )
+
+    with caplog.at_level("WARNING", logger="src.core.user_provisioning"):
+        result = await ensure_user_and_org(db, _token(organization_id="org-42"))
+
+    assert result is concurrent_user
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 
 @pytest.mark.unit
@@ -345,8 +498,8 @@ async def test_simultaneous_provisioning_converges_on_one_user():
 
     assert winner.id == winner_user_id
     assert loser.id == winner_user_id  # loser converged on the winner's row
-    loser_db.rollback.assert_awaited_once()
-    winner_db.rollback.assert_not_called()
+    assert loser_db.rollback.await_count == 2
+    winner_db.rollback.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

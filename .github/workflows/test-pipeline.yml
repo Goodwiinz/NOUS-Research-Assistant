@@ -76,6 +76,10 @@ jobs:
     needs: ci-plan
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history: the feature-map shrink-only check reads the map at
+          # merge-base(base, HEAD), which a shallow clone cannot resolve.
+          fetch-depth: 0
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -83,6 +87,23 @@ jobs:
         run: pip install pytest pytest-cov PyYAML
       - name: Directory docs lint
         run: python3 scripts/docs/check_dir_docs.py
+      - name: Feature map (nous-verify upkeep)
+        env:
+          # Live base BRANCH, not the creation-time-frozen base.sha — same
+          # resolution as the frontend quality ratchet.
+          PR_BASE_REF: ${{ github.base_ref || '' }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before || '' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'develop' }}
+        run: |
+          ZEROS="0000000000000000000000000000000000000000"
+          if [ -n "$PR_BASE_REF" ]; then
+            BASE="origin/${PR_BASE_REF}"
+          elif [ -n "$GITHUB_EVENT_BEFORE" ] && [ "$GITHUB_EVENT_BEFORE" != "$ZEROS" ]; then
+            BASE="$GITHUB_EVENT_BEFORE"
+          else
+            BASE="origin/${DEFAULT_BRANCH}"
+          fi
+          python3 scripts/ci/check_feature_map.py --base "$BASE"
       - name: Script and NOUS instruction contracts
         run: |
           python3 -m pytest tests/unit/scripts/ \
@@ -92,6 +113,7 @@ jobs:
           python3 -m pytest backend/tests/unit/ci/test_ci_scope.py \
             backend/tests/unit/ci/test_release_gate.py \
             backend/tests/unit/ci/test_release_workflow.py \
+            backend/tests/unit/ci/test_check_feature_map.py \
             --noconftest -c /dev/null -q -p no:cacheprovider --no-cov
 
   # ==========================================================================
@@ -774,6 +796,10 @@ jobs:
         run: |
           pnpm --filter @nous/harness-bridge type-check
           pnpm --filter @nous/harness-bridge test
+      - name: Check NOUS QA runner (node:test)
+        # tests/e2e/qa (pnpm qa:nous) and its nous-verify selection/evidence
+        # code have no other CI coverage; the suites need no browser.
+        run: node --test ../tests/unit/scripts/nous-qa.test.mjs ../tests/unit/scripts/nous-verify.test.mjs
       # Blocking ratchet: global coverage may never fall below the floors
       # committed in frontend/quality-baseline.json ("coverage" key).
       # Raising or lowering a floor is an intentional, reviewed JSON edit.
@@ -856,9 +882,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-test-
             ${{ runner.os }}-pip-
+      - name: Install PDF renderer system libraries
+        # WeasyPrint (backend/requirements.txt) loads pango at runtime. The
+        # X4 PDF-export isolation tests render real PDFs (GOO-400). Same
+        # packages as backend/docker/Dockerfile.prod.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core
       - name: Install dependencies
         run: |
           pip install --build-constraint backend/constraints-ci.txt -r backend/requirements.txt
+      - name: Verify the PDF renderer
+        run: |
+          python -c 'from weasyprint import HTML; pdf = HTML(string="<h1>PDF smoke</h1>").write_pdf(); assert pdf.startswith(b"%PDF-"), pdf[:8]; print("weasyprint pdf_bytes=%d" % len(pdf))'
       - name: Run integration tests
         run: |
           mkdir -p test-results
@@ -905,11 +942,16 @@ jobs:
           # Enroll the artifact FK-order regression independently of other
           # optional orchestration suites.
           ARTIFACT_PUBLISH_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # Enroll only the Daily Brief disabled-flag rollback regression; the
+          # lifecycle tests in the same module read ORCHESTRATION_TEST_DATABASE_URL.
+          DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
           # Lifecycle fixtures own a schema and queue in these throwaway services.
           INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           INGESTION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
           CLI_REVOCATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # X4 PDF-export tests fail instead of skipping without the renderer.
+          PDF_EXPORT_TEST_REQUIRE_RENDERER: "1"
       - name: Run ingestion recovery PostgreSQL tests
         if: matrix.shard == 1
         # These integration-marked tests live outside the sharded directory.
@@ -947,6 +989,46 @@ jobs:
         with:
           name: ingestion-recovery-results
           path: test-results/ingestion-recovery.xml
+          retention-days: 7
+      - name: Run two-account PostgreSQL search isolation tests
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        # Matrix row S2 (GOO-399). The sharded run above has no
+        # TWO_ACCOUNT_PG_TEST_DATABASE_URL, so this suite skips there. Run it
+        # once against the job's postgres service and reject a green run in
+        # which any test skipped. A strict xfail is a matrix-tracked finding,
+        # not a skip; it fails pytest itself if it starts passing.
+        run: |
+          mkdir -p test-results
+          pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
+            -c backend/pytest.ini -m integration \
+            --junitxml=test-results/two-account-pg-search.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("test-results/two-account-pg-search.xml").findall(".//testcase")
+
+
+          def not_executed(case):
+              skipped = case.find("skipped")
+              if skipped is not None and skipped.get("type") != "pytest.xfail":
+                  return True
+              return case.find("failure") is not None or case.find("error") is not None
+
+
+          if not cases or any(not_executed(case) for case in cases):
+              raise SystemExit("Two-account PostgreSQL search tests must execute without skips")
+          print(f"Two-account PostgreSQL search: {len(cases)} tests executed without skips")
+          PY
+        env:
+          ENVIRONMENT: testing
+          TWO_ACCOUNT_PG_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+      - name: Save two-account PostgreSQL search results
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: two-account-pg-search-results
+          path: test-results/two-account-pg-search.xml
           retention-days: 7
       - name: Upload coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5

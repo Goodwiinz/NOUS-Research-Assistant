@@ -331,6 +331,7 @@ async def _run_duplicate_lookup(
                 }
             },
         },
+        400: {"description": "Invalid processing_status filter"},
         401: {"description": "Not authenticated - missing or invalid token"},
         403: {"description": "Not authorized to access this organization's documents"},
         500: {"description": "Internal server error"},
@@ -486,6 +487,8 @@ async def list_documents(
             ),
         )
 
+    except HTTPException:
+        raise
     except Exception:
         logger.error("Failed to list documents", exc_info=True)
         raise HTTPException(
@@ -521,12 +524,8 @@ async def get_document(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     return DocumentDetailResponse(
         id=str(document.id),
@@ -678,12 +677,8 @@ async def get_document_entities(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     try:
         # Build entities conditions
@@ -776,12 +771,8 @@ async def get_document_status(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
 
-    # Check permissions
-    if not document.is_public and not current_user.has_permission(UserRole.USER):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
+    # The org + not-deleted query above is the whole read boundary: documents
+    # are organization-shared and is_public is a label only (GOO-410).
 
     # Get latest processing job
     job_stmt = (

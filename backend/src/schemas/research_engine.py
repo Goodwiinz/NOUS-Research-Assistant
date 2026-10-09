@@ -1836,7 +1836,7 @@ class ReviewValidationVocabulary(BaseModel):
 
 
 class PendingReviewResponse(BaseModel):
-    """Owned pending review state, optionally including bounded stage output."""
+    """Pending review state for a run the caller can view, with bounded stage output."""
 
     model_config = ConfigDict(extra="forbid")
 

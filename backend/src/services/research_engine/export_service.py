@@ -30,6 +30,9 @@ from src.services.research_engine.observability import (
     research_observability,
     safely_observe,
 )
+from src.services.research_engine.project_access import (
+    accessible_research_collection_ids_query,
+)
 from src.services.research_engine.report_rendering import (
     build_report,
     render_csv,
@@ -58,7 +61,7 @@ class ExportArtifact:
 
 
 class ResearchExportError(RuntimeError):
-    """Stable, content-free error returned by the owned export route."""
+    """Stable, content-free error returned by the run export route."""
 
     def __init__(self, *, status_code: int, code: str, message: str) -> None:
         super().__init__(message)
@@ -79,11 +82,17 @@ class ExportService:
     async def export(
         self,
         run_id: UUID,
-        owner_id: UUID,
         format: ExportFormat | str,
         db: AsyncSession,
+        *,
+        user_id: UUID,
     ) -> ExportArtifact:
-        """Return an owner-scoped, deterministic artifact for a terminal run."""
+        """Return a deterministic artifact for a terminal run.
+
+        The route uses ``require_run(..., VIEW)`` for canonical errors. This
+        query rechecks caller access in the snapshot that loads the artifact,
+        so a revocation committed after the route gate cannot expose it.
+        """
         export_format = ExportFormat(format)
         statement = (
             select(ResearchRun)
@@ -98,7 +107,12 @@ class ExportService:
             )
             .where(
                 cast(Any, ResearchRun.id) == run_id,
-                cast(Any, ResearchProject.owner_id) == owner_id,
+                cast(Any, ResearchRun.is_deleted).is_(False),
+                cast(Any, ResearchBlueprint.is_deleted).is_(False),
+                cast(Any, ResearchProject.is_deleted).is_(False),
+                ResearchProject.collection_id.in_(
+                    accessible_research_collection_ids_query(user_id)
+                ),
             )
             .options(
                 selectinload(ResearchRun.blueprint),

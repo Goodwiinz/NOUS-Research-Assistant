@@ -120,6 +120,16 @@ def test_integration_job_enables_real_redis_cli_revocation_regression() -> None:
     assert "job.services.redis.ports['6379']" in env["REDIS_URL"]
 
 
+def test_integration_job_enrolls_daily_brief_rollback_regression() -> None:
+    job = _integration_job()
+    step = next(
+        step for step in job["steps"] if step.get("name") == "Run integration tests"
+    )
+    env = step["env"]
+    assert env.get("DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL") == env["DATABASE_URL"]
+    assert "job.services.postgres.ports['5432']" in env["DATABASE_URL"]
+
+
 @pytest.mark.parametrize(
     ("case_xml", "pytest_exit", "accepted"),
     [
@@ -157,6 +167,66 @@ def test_recovery_postgres_step_requires_executed_tests(
     results = tmp_path / "test-results"
     results.mkdir()
     (results / "ingestion-recovery.xml").write_text(
+        f"<testsuites><testsuite>{case_xml}</testsuite></testsuites>"
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pytest_stub = bin_dir / "pytest"
+    pytest_stub.write_text(f"#!/bin/sh\nexit {pytest_exit}\n")
+    pytest_stub.chmod(0o755)
+    (bin_dir / "python").symlink_to(sys.executable)
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+
+
+_XFAIL = "<skipped type='pytest.xfail' message='tracked finding'/>"
+
+
+@pytest.mark.parametrize(
+    ("case_xml", "pytest_exit", "accepted"),
+    [
+        ("<testcase name='passed'/>", 0, True),
+        (f"<testcase name='passed'/><testcase name='x'>{_XFAIL}</testcase>", 0, True),
+        ("<testcase name='skipped'><skipped type='pytest.skip'/></testcase>", 0, False),
+        ("<testcase name='skipped'><skipped/></testcase>", 0, False),
+        ("", 0, False),
+        ("<testcase name='failed'><failure/></testcase>", 0, False),
+        ("<testcase name='error'><error/></testcase>", 0, False),
+        ("<testcase name='passed'/>", 1, False),
+    ],
+)
+def test_two_account_postgres_search_step_requires_executed_tests(
+    tmp_path: Path, case_xml: str, pytest_exit: int, accepted: bool
+) -> None:
+    """Matrix row S2 (GOO-399): the suite skips without its database URL, so
+    the step must reject an all-skipped or partly skipped green run."""
+    job = _integration_job()
+    step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Run two-account PostgreSQL search isolation tests"
+    )
+    assert "matrix.shard == 1" in step["if"]
+    assert (
+        "job.services.postgres.ports['5432']"
+        in step["env"]["TWO_ACCOUNT_PG_TEST_DATABASE_URL"]
+    )
+    assert (
+        "backend/tests/integration/two_account/test_search_isolation_postgres.py"
+        in step["run"]
+    )
+
+    results = tmp_path / "test-results"
+    results.mkdir()
+    (results / "two-account-pg-search.xml").write_text(
         f"<testsuites><testsuite>{case_xml}</testsuite></testsuites>"
     )
     bin_dir = tmp_path / "bin"

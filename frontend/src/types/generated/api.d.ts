@@ -2783,6 +2783,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cli-auth/session/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cli Auth Session Info
+         * @description Requester details for the approval page. Never returns the code.
+         */
+        get: operations["get_cli_auth_session_info_api_v1_cli_auth_session__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cli-auth/start": {
         parameters: {
             query?: never;
@@ -4089,7 +4109,7 @@ export interface paths {
         put?: never;
         /**
          * Post Disconnect Device
-         * @description Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound. Other devices' integration grants remain active. Returns 503 without committing device revocation if the shared CLI cutoff fails.
+         * @description Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound, so every other connected device fails its next request until `nous-harness connect` runs on it again; that registers a new device and consent and leaves the old ones listed until revoked. Revoke the old consent rather than disconnecting the old device, which would end every CLI sign-in again; the old device then stays listed with no access. To remove one device's access without ending every sign-in, revoke its consents with POST /api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 without committing device revocation if the shared CLI cutoff fails.
          */
         post: operations["post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post"];
         delete?: never;
@@ -8121,7 +8141,7 @@ export interface paths {
         };
         /**
          * Export Run
-         * @description Download an owner-scoped artifact for a completed research run.
+         * @description Download the artifact for a completed research run the caller can view.
          */
         get: operations["export_run_api_v1_research_engine_runs__run_id__export_get"];
         put?: never;
@@ -8270,7 +8290,7 @@ export interface paths {
         };
         /**
          * Get Pending Review
-         * @description Return the current owned review gate and its bounded persisted output.
+         * @description Return the current review gate for a run the caller can view.
          */
         get: operations["get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get"];
         put?: never;
@@ -8293,6 +8313,8 @@ export interface paths {
         /**
          * Submit Review
          * @description Append one review bound to the current persisted stage envelope.
+         *
+         *     Requires current project membership and the REVIEWER role.
          */
         post: operations["submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post"];
         delete?: never;
@@ -12091,6 +12113,34 @@ export interface components {
             priority: string | null;
         };
         /**
+         * BehaviorReportRequest
+         * @description Body for POST /api/v1/analytics/behavior/reports/generate.
+         *
+         *     ``user_id`` (optional) adds a per-user section to the org report; the route
+         *     rejects it unless the target user belongs to the caller's organization.
+         *     Unknown keys are ignored (pydantic default) for backward compatibility with
+         *     the previous untyped ``Dict[str, Any]`` body.
+         */
+        BehaviorReportRequest: {
+            /**
+             * Days Back
+             * @description Days of history to analyze
+             * @default 30
+             */
+            days_back: number;
+            /**
+             * Report Type
+             * @description Label echoed back in the report
+             * @default organization
+             */
+            report_type: string;
+            /**
+             * User Id
+             * @description Target user (must be in the caller's organization)
+             */
+            user_id?: string | null;
+        };
+        /**
          * BenchmarkRequest
          * @description Request for search quality benchmark
          */
@@ -12469,6 +12519,30 @@ export interface components {
             session_id: string;
             /** Verification Code */
             verification_code: string;
+        };
+        /**
+         * CLIAuthSessionInfo
+         * @description What the approving browser may see about a pending CLI sign-in.
+         *
+         *     Never carries the verification code or poll token. The user must read the
+         *     code from their own terminal (RFC 8628 §5.4 remote-phishing defence).
+         */
+        CLIAuthSessionInfo: {
+            /** Expires At */
+            expires_at: string;
+            /** Requester Ip */
+            requester_ip?: string | null;
+            /** Requester User Agent */
+            requester_user_agent?: string | null;
+            /** Session Id */
+            session_id: string;
+            /** Started At */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "approved" | "denied" | "expired";
         };
         /**
          * CandidateCreate
@@ -13892,12 +13966,14 @@ export interface components {
             /** Approved At */
             approved_at?: string | null;
             /**
-             * Project Id
-             * Format: uuid
+             * Kind
+             * @enum {string}
              */
-            project_id: string;
+            kind: "project" | "workspace";
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /**
              * Request Id
              * Format: uuid
@@ -13907,6 +13983,14 @@ export interface components {
             scopes: string[];
             /** Status */
             status: string;
+            /** Thread Id */
+            thread_id: string | null;
+            /** Thread Label */
+            thread_label: string | null;
+            /** Workspace Id */
+            workspace_id: string | null;
+            /** Workspace Label */
+            workspace_label: string | null;
         };
         /**
          * ConnectorCapabilityResponse
@@ -14792,6 +14876,21 @@ export interface components {
         };
         /** DeviceDTO */
         DeviceDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * DeviceListItemDTO
+         * @description A paired computer as the chat composer lists it.
+         */
+        DeviceListItemDTO: {
+            /** Bound Thread Ids */
+            bound_thread_ids: string[];
             /**
              * Id
              * Format: uuid
@@ -18177,7 +18276,7 @@ export interface components {
         };
         /**
          * PendingReviewResponse
-         * @description Owned pending review state, optionally including bounded stage output.
+         * @description Pending review state for a run the caller can view, with bounded stage output.
          */
         PendingReviewResponse: {
             accepted_review?: components["schemas"]["StageReviewResponse"] | null;
@@ -25546,9 +25645,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["BehaviorReportRequest"];
             };
         };
         responses: {
@@ -28893,6 +28990,58 @@ export interface operations {
                     };
                 };
             };
+            /** @description Verification code does not match */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A browser session is required to approve */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CLI auth session not found or no longer pending */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cli_auth_session_info_api_v1_cli_auth_session__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CLIAuthSessionInfo"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -29268,6 +29417,13 @@ export interface operations {
                      */
                     "application/json": components["schemas"]["DocumentListResponse"];
                 };
+            };
+            /** @description Invalid processing_status filter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not authenticated - missing or invalid token */
             401: {
@@ -31291,7 +31447,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeviceDTO"][];
+                    "application/json": components["schemas"]["DeviceListItemDTO"][];
                 };
             };
         };

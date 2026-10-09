@@ -22,6 +22,8 @@ import { CodexAdapter } from "../src/adapters/codex.ts";
 import { CredentialStore, integrationHeaders } from "../src/credentials.ts";
 import { connect, addWorkspace } from "../src/cli.ts";
 import type { SessionOptions } from "../src/contracts.ts";
+import { MCP_TOOL_TIMEOUT_SEC } from "../src/mcp/client.ts";
+import { buildManagedMcpConfig } from "../src/mcp/config.ts";
 
 // Wire shapes captured from `codex-cli 0.153.4 app-server generate-ts`.
 const fixture = String.raw`
@@ -334,6 +336,7 @@ test("connect exchanges CLI-owned grant; workspace sends only opaque IDs and lab
         session_id: "login",
         poll_token: "poll-secret",
         browser_url: "https://nous.test/login",
+        verification_code: "ABCD-1234",
       };
     else if (url.includes("/cli-auth/status/"))
       data = { status: "approved", token: "cli-secret" };
@@ -408,6 +411,7 @@ test("denied browser consent never exchanges or stores credentials", async (t) =
               session_id: "s",
               poll_token: "p",
               browser_url: "https://nous.test",
+              verification_code: "ABCD-1234",
             }
           : { status: "denied" },
       ),
@@ -597,6 +601,33 @@ test("start/resume propagate local MCP and restrictive turn settings only", asyn
   assert.equal(call.params.approvalsReviewer, "user");
   ac.abort();
   await consume;
+});
+
+test("a local MCP tool timeout reaches Codex; a malformed one is refused", async (t) => {
+  const { adapter, options } = setup(t);
+  for (const bad of [0, -1, 1.5, 601, "150"]) {
+    options.mcpConfig = { nous: { command: "nous-mcp", args: [], tool_timeout_sec: bad as number } };
+    await assert.rejects(adapter.resumeSession("s", options), /invalid local MCP configuration/);
+  }
+  // The bounds 1 and 600 are accepted, and so is the real managed entry: raising
+  // MCP_TOOL_TIMEOUT_SEC past the validator's cap fails here.
+  const managed = buildManagedMcpConfig({
+    apiOrigin: "https://nous.example",
+    credentialHandle: randomUUID(),
+    stateDir: tmpdir(),
+  }).nous!;
+  assert.equal(managed.tool_timeout_sec, MCP_TOOL_TIMEOUT_SEC);
+  for (const nous of [
+    { command: "nous-mcp", args: [], tool_timeout_sec: 1 },
+    { command: "nous-mcp", args: [], tool_timeout_sec: 600 },
+    managed,
+  ]) {
+    const run = setup(t); // One open session per adapter.
+    run.options.mcpConfig = { nous };
+    await run.adapter.resumeSession("s", run.options);
+    const resume: any = run.server.calls("thread/resume")[0];
+    assert.deepEqual(resume.params.config.mcp_servers.nous, nous);
+  }
 });
 
 test("denies network and temporary-root policy widening", async (t) => {

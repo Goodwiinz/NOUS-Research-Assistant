@@ -21,13 +21,13 @@ import {
   type QueueEntry,
 } from "./handoffs/queue.ts";
 import { record } from "./rpc.ts";
-import { apiBase, type McpSession } from "./mcp/client.ts";
+import { apiBase, MCP_TOOL_TIMEOUT_SEC, type McpSession } from "./mcp/client.ts";
 import {
   buildManagedMcpConfig,
   standaloneInstallCommand,
 } from "./mcp/config.ts";
 import { runStdioMcp } from "./mcp/stdio.ts";
-import type { SessionOptions } from "./contracts.ts";
+import type { HarnessAdapter, SessionOptions } from "./contracts.ts";
 
 // Harness sessions need one project; a workspace grant cannot hold harness:execute.
 const WORKSPACE_MCP_ONLY =
@@ -230,8 +230,23 @@ export async function connect(
     scopes.every((scope) => previous.scopes?.includes(scope)) &&
     (await grantIsLive(store, previous.credentialHandle, base, fetchFn))
   ) {
+    // Reuse never narrows a grant (the documented superset rule): name any
+    // stored scope this command did not ask for, and how to drop it (BR-3).
+    const retained = (previous.scopes ?? []).filter((scope) => !scopes.includes(scope));
     announce(
-      `Reusing binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.`,
+      `Reusing binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.` +
+        (retained.length
+          ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also ${
+              // Only a project connection runs Codex on the device and has
+              // registered folders to lose; a workspace one only serves tools.
+              projectId !== undefined
+                ? "stops the device's runs"
+                : "cuts this device's NOUS tools until it reconnects"
+            }), revoke this device's access at /integrations/devices, or run nous-harness disconnect, then connect again` +
+            (projectId !== undefined
+              ? "; after disconnect, register its folders again with nous-harness workspace add."
+              : ".")
+          : ""),
     );
     return { deviceId: previous.deviceId, credentialHandle: previous.credentialHandle };
   }
@@ -242,7 +257,18 @@ export async function connect(
     typeof login.browser_url !== "string"
   )
     throw new Error("invalid CLI login response");
-  announce(`Authorize CLI login in your browser: ${login.browser_url}`);
+  // GOO-403: the link no longer carries the code; the user must type it on the
+  // approval page, so a login response without a printable code is unusable.
+  // The format check also keeps server-supplied text from injecting terminal
+  // control sequences.
+  if (
+    typeof login.verification_code !== "string" ||
+    !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(login.verification_code)
+  )
+    throw new Error("invalid CLI login response");
+  announce(
+    `Authorize CLI login in your browser: ${login.browser_url}\nType this code on that page: ${login.verification_code}`,
+  );
   const auth = await poll(
     () =>
       request(
@@ -479,6 +505,26 @@ export async function addWorkspace(
   );
   return { workspaceId, root };
 }
+/** One local reconciliation pass over the locked runs, without the network. */
+export async function reconcileLocal(
+  journal: Journal,
+  adapterFor: (workspaceId: string, runId: string) => HarnessAdapter,
+): Promise<void> {
+  for (const c of journal.activeCommands()) {
+    const state = journal.state(c.commandId);
+    // A refused run is not recovered: reconcile only reads its turn back and
+    // re-arms its watchdog (Journal.reconcile).
+    if (state === "recovering" || state === "denied")
+      try {
+        await journal.reconcile(
+          c.commandId,
+          adapterFor(c.workspaceId, c.runId),
+        );
+      } catch {
+        journal.quarantine(c.commandId);
+      }
+  }
+}
 export async function runBridge(
   stateDir: string,
   signal: AbortSignal,
@@ -532,17 +578,7 @@ export async function runBridge(
     while (!signal.aborted) {
       // Local native evidence and the expiry watchdog must work even while the
       // network is unavailable or authentication cannot open a new connection.
-      for (const c of journal.activeCommands()) {
-        if (journal.state(c.commandId) === "recovering")
-          try {
-            await journal.reconcile(
-              c.commandId,
-              adapterFor(c.workspaceId, c.runId),
-            );
-          } catch {
-            journal.quarantine(c.commandId);
-          }
-      }
+      await reconcileLocal(journal, adapterFor);
       try {
         await connectBridge({
           url: url.href,
@@ -658,12 +694,13 @@ export async function mcpInstallCommand(
   if (!state.scopes?.includes("tools:read"))
     throw new Error("reconnect with --tools to authorize NOUS tools");
   // Publication binds one registered root, chosen explicitly when ambiguous.
+  const publish = state.scopes.includes("artifacts:publish");
   let root: string | undefined;
-  if (!state.scopes.includes("artifacts:publish") && options.root !== undefined)
+  if (!publish && options.root !== undefined)
     throw new Error(
       "--root requires artifacts:publish; reconnect with nous-harness connect --tools --publish",
     );
-  if (state.scopes.includes("artifacts:publish")) {
+  if (publish) {
     const roots = state.workspaces.map((w) => w.root);
     if (options.root !== undefined) {
       // Registered roots are stored realpath'd (e.g. /tmp -> /private/tmp).
@@ -676,13 +713,24 @@ export async function mcpInstallCommand(
       throw new Error(
         `several workspaces are registered; pass --root with one of: ${roots.join(", ")}`,
       );
-    (options.announce ?? console.error)(
+  }
+  // Build first: a bad stored API URL or state path throws here, before any
+  // hint points at a command that is never shown.
+  const command = standaloneInstallCommand(mcpSession(stateDir, state, root));
+  const announce = options.announce ?? console.error;
+  // RT-2: this package never edits ~/.codex/config.toml, so say what to add,
+  // once the command is certain. The publish line stays last: artifacts.test.ts
+  // reads it.
+  announce(
+    `After you run the command below, add tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC} under [mcp_servers.nous] in ~/.codex/config.toml: Codex stops waiting for an MCP tool after 60 s by default, and NOUS's arXiv tools can take up to 125 s.`,
+  );
+  if (publish)
+    announce(
       root
         ? `artifacts_publish will publish from ${root}`
         : "no workspace registered; artifacts_publish will not be offered",
     );
-  }
-  return standaloneInstallCommand(mcpSession(stateDir, state, root));
+  return command;
 }
 /** Offline summary of the local binding, grant expiry and handoff queue. */
 export async function status(options: {
@@ -879,7 +927,7 @@ const help = `Usage: nous-harness connect --api https://host/api/v1 (--project U
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions.
   connect --library (needs --tools and --write) also requests library:read and library:write.
-  connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow.
+  connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, revoke this device's access at /integrations/devices (or disconnect), then connect.
   nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.
   nous-harness handoff show    Print the bound chat's latest handoff.
   nous-harness handoff save --file handoff.json [--parent N]    Journal the handoff locally, then save it; --parent sets expected_parent_version (default null, the first handoff).

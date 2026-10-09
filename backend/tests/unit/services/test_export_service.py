@@ -130,7 +130,7 @@ def _mock_db_for_manifest(run):
 
 
 # ---------------------------------------------------------------------------
-# Tests: owner-scoped export artifacts
+# Tests: export artifacts (query rechecks canonical caller access)
 # ---------------------------------------------------------------------------
 
 
@@ -142,7 +142,7 @@ async def test_owned_export_returns_stable_not_found_error() -> None:
     db.execute.return_value = result
 
     with pytest.raises(ResearchExportError) as raised:
-        await ExportService().export(uuid4(), uuid4(), ExportFormat.JSON, db)
+        await ExportService().export(uuid4(), ExportFormat.JSON, db, user_id=uuid4())
 
     assert raised.value.status_code == 404
     assert raised.value.detail() == {
@@ -160,10 +160,33 @@ async def test_owned_export_rejects_non_completed_run() -> None:
     db.execute.return_value = result
 
     with pytest.raises(ResearchExportError) as raised:
-        await ExportService().export(run.id, uuid4(), ExportFormat.MARKDOWN, db)
+        await ExportService().export(run.id, ExportFormat.MARKDOWN, db, user_id=uuid4())
 
     assert raised.value.status_code == 409
     assert raised.value.code == "run_not_completed"
+
+
+@pytest.mark.asyncio
+async def test_export_loads_live_run_with_canonical_caller_scope() -> None:
+    """GOO-404: the artifact query must recheck live canonical access."""
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    db.execute.return_value = result
+
+    with pytest.raises(ResearchExportError):
+        await ExportService().export(uuid4(), ExportFormat.JSON, db, user_id=uuid4())
+
+    statement = db.execute.await_args.args[0]
+    sql = str(statement.compile())
+    assert "research_projects.owner_id" not in sql
+    assert "research_runs.is_deleted" in sql
+    assert "research_blueprints.is_deleted" in sql
+    assert "research_projects.is_deleted" in sql
+    assert "collections.is_deleted" in sql
+    assert "workspaces.is_deleted" in sql
+    assert "workspace_members.is_deleted" in sql
+    assert "IS NOT DISTINCT FROM" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +767,9 @@ async def test_export_service_json_has_complete_daily_brief_provenance() -> None
         run.steps.append(step)
     db = _mock_db_for_run(run)
 
-    artifact = await ExportService().export(run.id, uuid4(), ExportFormat.JSON, db)
+    artifact = await ExportService().export(
+        run.id, ExportFormat.JSON, db, user_id=uuid4()
+    )
     payload = json.loads(artifact.content)
 
     assert artifact.media_type == "application/json"
@@ -891,7 +916,7 @@ async def test_csv_keeps_accepted_and_rejected_extraction_audit_rows() -> None:
     run.steps = [search, extract]
 
     artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
     rows = list(csv.DictReader(io.StringIO(artifact.content.decode("utf-8"))))
 
@@ -908,13 +933,13 @@ async def test_legacy_completed_export_is_readable_but_never_approved_daily_brie
     run, _step, _source = _make_run(status="completed")
 
     json_artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+        run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
     )
     markdown_artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.MARKDOWN, _mock_db_for_run(run)
+        run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
     )
     csv_artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
 
     assert json.loads(json_artifact.content)["final_status"] == "unverified"
@@ -930,20 +955,17 @@ async def test_no_evidence_has_audit_exports_but_no_markdown_brief() -> None:
     run.blueprint.template_source = "daily_research_brief"
 
     json_artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+        run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
     )
     csv_artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
 
     assert json.loads(json_artifact.content)["final_status"] == "no_evidence"
     assert b"no_evidence" in csv_artifact.content
     with pytest.raises(ResearchExportError) as error:
         await ExportService().export(
-            run.id,
-            uuid4(),
-            ExportFormat.MARKDOWN,
-            _mock_db_for_run(run),
+            run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
         )
     assert error.value.code == "brief_not_available_no_evidence"
 
@@ -1060,7 +1082,7 @@ async def test_markdown_download_uses_exact_persisted_approved_artifact_bytes(
     observer = ResearchObservability()
 
     artifact = await ExportService(observer=observer).export(
-        run.id, uuid4(), ExportFormat.MARKDOWN, _mock_db_for_run(run)
+        run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
     )
 
     assert artifact.content[: len(expected)] == expected
@@ -1116,7 +1138,7 @@ async def test_export_reconstruction_gap_returns_stable_content_free_error() -> 
 
     with pytest.raises(ResearchExportError) as raised:
         await ExportService(observer=observer).export(
-            run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+            run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
         )
 
     assert raised.value.status_code == 500
@@ -1180,10 +1202,7 @@ async def test_exporters_reject_malformed_contiguous_persisted_output(
     with pytest.raises(ResearchExportError) as raised:
         if exporter == "v1":
             await service.export(
-                run.id,
-                uuid4(),
-                ExportFormat.JSON,
-                _mock_db_for_run(run),
+                run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
             )
         else:
             await service.export_json(run.id, _mock_db_for_run(run))
@@ -1255,10 +1274,7 @@ async def test_exporters_validate_canonical_looking_persisted_outputs(
     async def export() -> object:
         if exporter == "v1":
             return await service.export(
-                run.id,
-                uuid4(),
-                ExportFormat.JSON,
-                _mock_db_for_run(run),
+                run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
             )
         return await service.export_json(run.id, _mock_db_for_run(run))
 
@@ -1293,14 +1309,14 @@ async def test_verified_daily_export_requires_all_durable_trust_evidence(
 
     if missing == "terminal_status":
         artifact = await ExportService().export(
-            run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+            run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
         )
         payload = json.loads(artifact.content)
         assert payload["final_status"] == "unverified"
     else:
         with pytest.raises(ResearchExportError) as raised:
             await ExportService().export(
-                run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+                run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
             )
         assert raised.value.code == "verified_artifact_attestation_invalid"
 
@@ -1340,10 +1356,7 @@ async def test_verified_markdown_requires_exact_canonical_persisted_bytes(
 
     with pytest.raises(ResearchExportError) as raised:
         await ExportService().export(
-            run.id,
-            uuid4(),
-            ExportFormat.MARKDOWN,
-            _mock_db_for_run(run),
+            run.id, ExportFormat.MARKDOWN, _mock_db_for_run(run), user_id=uuid4()
         )
     assert raised.value.code == "verified_artifact_attestation_invalid"
 
@@ -1356,7 +1369,7 @@ async def test_verified_json_wraps_immutable_report_with_complete_approval_audit
     original_report = copy.deepcopy(run.steps[-1].output["exported"])
 
     artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+        run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
     )
     payload = json.loads(artifact.content)
 
@@ -1391,7 +1404,7 @@ async def test_verified_download_fails_closed_on_missing_or_wrong_attestation(
 
     with pytest.raises(ResearchExportError) as raised:
         await ExportService().export(
-            run.id, uuid4(), ExportFormat.JSON, _mock_db_for_run(run)
+            run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
         )
 
     assert raised.value.code == "verified_artifact_attestation_invalid"
@@ -1402,7 +1415,7 @@ async def test_verified_csv_exposes_complete_review_and_final_attestation() -> N
     run = _trusted_daily_export_run()
 
     artifact = await ExportService().export(
-        run.id, uuid4(), ExportFormat.CSV, _mock_db_for_run(run)
+        run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
     )
     rows = list(csv.DictReader(io.StringIO(artifact.content.decode("utf-8"))))
 
@@ -1490,7 +1503,7 @@ async def test_csv_review_projection_is_order_independent_and_extraction_owned()
         run.steps = [search, extract]
         run.reviews = review_rows
         return await ExportService().export(
-            run.id, uuid4(), ExportFormat.CSV, _mock_db_for_run(run)
+            run.id, ExportFormat.CSV, _mock_db_for_run(run), user_id=uuid4()
         )
 
     forward = await rendered(reviews)
@@ -1564,3 +1577,312 @@ async def test_post_resume_export_has_complete_deterministic_provenance() -> Non
     assert "## Limitations" in result.output["markdown"]
     assert "## Provenance" in result.output["markdown"]
     assert all(item["stage_type"] != "export" for item in report["stages"])
+
+
+# ---------------------------------------------------------------------------
+# GOO-334: hash stability, tenant-identifier isolation, mandatory final gate
+#
+# Mutation checks (docs/engineering/testing.md), each run with the focused
+# command `pytest -q backend/tests/unit/services/test_export_service.py -k <name>`:
+# - hash stability: remove `sorted(...)` from `ExportService._review_audit`
+#   (export_service.py, `if audit: return sorted(audit, ...)`) -> the reloaded
+#   run's reversed review rows change the JSON/Markdown/CSV bytes.
+# - tenant isolation: add `"owner_id"`/`"organization_id"` from the review row
+#   to the `_review_audit` projection -> every format leaks the tenant keys.
+# - final gate: drop any one predicate of the `final_reviews` filter in
+#   `ExportService._is_trusted_verified_daily_brief` (`review_kind == "final"`,
+#   `decision == "approve"`, `step_index == export step`, `output_hash ==
+#   current export output hash`) or relax `len(final_reviews) != 1` -> the
+#   matching corrupted row below is released as a verified artifact.
+# ---------------------------------------------------------------------------
+
+
+def _stage_reviews_for(run: MagicMock) -> list[SimpleNamespace]:
+    """Earlier-gate approvals carried alongside the final approval row."""
+
+    source_id = "11111111-1111-4111-8111-111111111111"
+    return [
+        SimpleNamespace(
+            id=uuid4(),
+            reviewer_id=uuid4(),
+            owner_id=uuid4(),
+            organization_id=uuid4(),
+            step_index=0,
+            stage_type="screen",
+            review_kind="screening",
+            output_hash="a" * 64,
+            decision="approve",
+            decision_payload={
+                "items": [
+                    {"source_id": source_id, "part_id": "p0001", "decision": "include"}
+                ]
+            },
+            note="screened",
+            created_at=datetime(2026, 9, 27, 10, 1, tzinfo=timezone.utc),
+        ),
+        SimpleNamespace(
+            id=uuid4(),
+            reviewer_id=uuid4(),
+            owner_id=uuid4(),
+            organization_id=uuid4(),
+            step_index=0,
+            stage_type="extract",
+            review_kind="extraction",
+            output_hash="b" * 64,
+            decision="approve",
+            decision_payload={
+                "items": [
+                    {"source_id": source_id, "part_id": "p0001", "decision": "accept"}
+                ]
+            },
+            note="extracted",
+            created_at=datetime(2026, 9, 27, 10, 2, tzinfo=timezone.utc),
+        ),
+        # A later approval of a re-run extraction output, so the review history
+        # holds two same-kind rows whose order must come from the audit sort.
+        SimpleNamespace(
+            id=uuid4(),
+            reviewer_id=uuid4(),
+            owner_id=uuid4(),
+            organization_id=uuid4(),
+            step_index=0,
+            stage_type="extract",
+            review_kind="extraction",
+            output_hash="c" * 64,
+            decision="approve",
+            decision_payload={
+                "items": [
+                    {
+                        "source_id": source_id,
+                        "part_id": "p0001",
+                        "decision": "reject",
+                        "reason": "superseded",
+                    }
+                ]
+            },
+            note="re-extracted",
+            created_at=datetime(2026, 9, 27, 10, 3, tzinfo=timezone.utc),
+        ),
+    ]
+
+
+def _attestation_hashes(export_format: ExportFormat, content: bytes) -> list[str]:
+    if export_format is ExportFormat.JSON:
+        return [json.loads(content)["final_approval_attestation"]["attestation_hash"]]
+    if export_format is ExportFormat.MARKDOWN:
+        audit = content.decode("utf-8").split("```json\n", 1)[1].split("\n```", 1)[0]
+        return [json.loads(audit)["final_approval_attestation"]["attestation_hash"]]
+    rows = csv.DictReader(io.StringIO(content.decode("utf-8")))
+    return [
+        row["attestation_hash"]
+        for row in rows
+        if row["record_type"] == "final_attestation"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trusted", [True, False], ids=["verified", "unverified"])
+async def test_reexporting_same_persisted_run_is_byte_identical(trusted: bool) -> None:
+    """GOO-334: two exports of one persisted run produce identical bytes.
+
+    The second export reloads the review relationship in reverse order, which
+    PostgreSQL may legitimately return because the relationship has no ORDER BY.
+    """
+
+    run = _trusted_daily_export_run(markdown="# EXACT APPROVED ARTIFACT\n")
+    run.reviews = [*_stage_reviews_for(run), *run.reviews]
+    if not trusted:
+        # The unverified path rebuilds CSV audit rows from the persisted
+        # extraction, so give it search and extract history to project.
+        run.reproducibility_manifest["final_status"] = "unverified"
+        context, _verification = _daily_brief_context()
+        search = _make_step(run.id, 0, step_type="search")
+        search.output = {
+            "contract_version": 1,
+            "stage_type": "search",
+            "usage": {"model_calls": 0, "total_tokens": 0, "batches": []},
+            "source_records": context["source_records"],
+            "coverage": context["coverage"],
+            "selected_sources": ["openalex"],
+        }
+        extract = _make_step(run.id, 1, step_type="extract")
+        extract.output = {
+            "contract_version": 1,
+            "stage_type": "extract",
+            "usage": {"model_calls": 1, "total_tokens": 2, "batches": []},
+            "extractions": context["extractions"],
+            "processing_coverage": {},
+        }
+        verify_step, export_step = run.steps
+        verify_step.step_index, export_step.step_index = 2, 3
+        run.steps = [search, extract, verify_step, export_step]
+    expected_attestation = run.reproducibility_manifest["final_approval_attestation"][
+        "attestation_hash"
+    ]
+
+    first: dict[ExportFormat, bytes] = {}
+    second: dict[ExportFormat, bytes] = {}
+    for export_format in (ExportFormat.MARKDOWN, ExportFormat.JSON, ExportFormat.CSV):
+        first[export_format] = (
+            await ExportService().export(
+                run.id, export_format, _mock_db_for_run(run), user_id=uuid4()
+            )
+        ).content
+    original_reviews = list(run.reviews)
+    run.reviews = list(reversed(original_reviews))
+    for export_format in (ExportFormat.MARKDOWN, ExportFormat.JSON, ExportFormat.CSV):
+        second[export_format] = (
+            await ExportService().export(
+                run.id, export_format, _mock_db_for_run(run), user_id=uuid4()
+            )
+        ).content
+
+    for export_format in first:
+        assert first[export_format] == second[export_format], export_format
+        assert hashlib.sha256(first[export_format]).hexdigest() == (
+            hashlib.sha256(second[export_format]).hexdigest()
+        )
+    if trusted:
+        for export_format in first:
+            assert _attestation_hashes(export_format, first[export_format]) == [
+                expected_attestation
+            ]
+            assert _attestation_hashes(
+                export_format, first[export_format]
+            ) == _attestation_hashes(export_format, second[export_format])
+    else:
+        assert b"final_approval_attestation" not in first[ExportFormat.JSON]
+        assert b"final_attestation" not in first[ExportFormat.CSV]
+    # Exporting never mutates the persisted run it reads.
+    assert run.reviews == list(reversed(original_reviews))
+    assert run.reproducibility_manifest["final_approval_attestation"][
+        "attestation_hash"
+    ] == (expected_attestation)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trusted", [True, False], ids=["verified", "unverified"])
+@pytest.mark.parametrize(
+    "export_format",
+    [ExportFormat.MARKDOWN, ExportFormat.JSON, ExportFormat.CSV],
+    ids=["markdown", "json", "csv"],
+)
+async def test_exports_never_carry_owner_or_organization_identifiers(
+    trusted: bool, export_format: ExportFormat
+) -> None:
+    """GOO-334: exports carry reviewer evidence but no tenant identifiers.
+
+    Review rows persist ``owner_id`` and ``organization_id`` (the canonical
+    project authority that authorized the write). Neither the keys nor the
+    values may reach an artifact. ``review_id``/``reviewer_id`` are required
+    approval evidence bound by the attestation hash and must stay.
+    """
+
+    run = _trusted_daily_export_run()
+    owner_id = uuid4()
+    organization_id = uuid4()
+    run.organization_id = organization_id
+    run.owner_id = owner_id
+    run.blueprint.owner_id = owner_id
+    run.blueprint.organization_id = organization_id
+    stage_reviews = _stage_reviews_for(run)
+    for review in [*stage_reviews, *run.reviews]:
+        review.owner_id = owner_id
+        review.organization_id = organization_id
+    run.reviews = [*stage_reviews, *run.reviews]
+    if not trusted:
+        run.reproducibility_manifest["final_status"] = "unverified"
+
+    content = (
+        await ExportService().export(
+            run.id, export_format, _mock_db_for_run(run), user_id=uuid4()
+        )
+    ).content
+
+    for forbidden in (
+        b"owner_id",
+        b"organization_id",
+        str(owner_id).encode(),
+        str(organization_id).encode(),
+        owner_id.hex.encode(),
+        organization_id.hex.encode(),
+    ):
+        assert forbidden not in content, forbidden
+    if trusted:
+        final_review = run.reviews[-1]
+        assert str(final_review.id).encode() in content
+        assert str(final_review.reviewer_id).encode() in content
+        assert b"reviewer_id" in content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "declined",
+        "non_final_kind",
+        "stale_output_hash",
+        "wrong_step",
+        "duplicate_approval",
+    ],
+)
+async def test_verified_export_requires_one_final_approval_on_current_output(
+    corruption: str,
+) -> None:
+    """GOO-334: the final gate is mandatory for any releasable export.
+
+    Each case keeps a self-consistent attestation re-signed from the corrupted
+    row, so only the final-review predicate itself can refuse the release.
+    """
+
+    run = _trusted_daily_export_run()
+    review = run.reviews[0]
+    if corruption == "declined":
+        review.decision = "decline"
+    elif corruption == "non_final_kind":
+        review.review_kind = "extraction"
+    elif corruption == "stale_output_hash":
+        review.output_hash = "f" * 64
+    elif corruption == "wrong_step":
+        review.step_index = 0
+    else:
+        run.reviews.append(
+            SimpleNamespace(**{**vars(review), "id": uuid4(), "note": "duplicate"})
+        )
+    unsigned = {
+        "schema_version": 1,
+        "review_id": str(review.id),
+        "reviewer_id": str(review.reviewer_id),
+        "reviewed_at": review.created_at.isoformat(),
+        "decision": review.decision,
+        "review_kind": review.review_kind,
+        "step_index": int(review.step_index),
+        "output_hash": review.output_hash,
+        "report_hash": run.steps[-1].output["report_hash"],
+        "verification_output_hash": run.steps[-1].output["verification_output_hash"],
+    }
+    run.reproducibility_manifest["final_approval_attestation"] = {
+        **unsigned,
+        "attestation_hash": canonical_json_sha256(unsigned),
+    }
+
+    for export_format in (ExportFormat.MARKDOWN, ExportFormat.JSON, ExportFormat.CSV):
+        with pytest.raises(ResearchExportError) as raised:
+            await ExportService().export(
+                run.id, export_format, _mock_db_for_run(run), user_id=uuid4()
+            )
+        assert raised.value.status_code == 409
+        assert raised.value.code == "verified_artifact_attestation_invalid"
+
+    # Without a verified terminal claim the same run still exports, but only as
+    # an unverified artifact that carries no approval attestation.
+    run.reproducibility_manifest["final_status"] = "unverified"
+    payload = json.loads(
+        (
+            await ExportService().export(
+                run.id, ExportFormat.JSON, _mock_db_for_run(run), user_id=uuid4()
+            )
+        ).content
+    )
+    assert payload["final_status"] == "unverified"
+    assert "final_approval_attestation" not in payload

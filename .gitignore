@@ -81,6 +81,10 @@ pids/
 *.seed
 *.pid.lock
 
+# nous-verify binaries (PNG/webm/trace) and NOUS QA private reports
+.verify-artifacts/
+.nous-qa-reports/
+
 # Coverage directory used by tools like istanbul
 coverage/
 coverage.xml
@@ -202,13 +206,14 @@ actions-runner/
 .auto-claude/
 .claude/
 **/.claude/
-# Exception: the /nous-loop command is sanitized, repo-shared tooling
+# Exception: the /nous-loop and /nous-verify commands are sanitized, repo-shared tooling
 # (restored after the #969 purge; everything else in .claude/ stays out).
 !.claude/
 .claude/*
 !.claude/commands/
 .claude/commands/*
 !.claude/commands/nous-loop.md
+!.claude/commands/nous-verify.md
 serena_repo/
 .serena/
 .opencode/

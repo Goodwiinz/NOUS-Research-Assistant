@@ -20,6 +20,73 @@ Original certification source: `efd76079be75fdbba9eef4215c1c831d829cacb4`
 
 Disposition: **CERTIFICATION COMPLETE — NOT READY TO ENABLE**
 
+## 2026-10-08 release-evidence refresh
+
+This amendment refreshes the GOO-336 acceptance evidence and the GOO-337
+release evidence. It ran on `develop` `9c90ed8d3249f15931ba1a5d372dbd30b811f436`,
+which is the gitops proposal for backend image
+`ed6809a5fa360d1594794e166679efc1d4127a94`. Runs were local, plus
+unauthenticated `GET` requests to the public dev endpoints. Nothing was
+pushed, deployed or changed in any cluster, and no flag was changed. The
+command transcripts are in
+[the release evidence record](evidence/daily-research-brief-release-20261008/README.md).
+It adds to the record below and leaves the historical text unchanged. After an
+independent review, a follow-up on the same base enrolled the disabled-flag
+PostgreSQL test in CI, extended it to step history and review state with a
+positive control, and made the claim-coverage test assert visibility; the
+evidence record's "Review follow-up" section has those commands.
+
+**Correction to the source default.** The 2026-09-28 enablement amendment below
+says that `DAILY_RESEARCH_BRIEF_ENABLED` defaults to `true`, and GOO-337's
+release boundary repeats it. Both statements are stale. GOO-338 (#1834,
+`22f3f6ebc`, 2026-10-02, approved by the release owner) restored the code
+default to `False` in `backend/src/core/config.py`. The only live environment
+is AWS dev: Argo CD application `nous-dev-aws` tracks `develop`, with API
+`https://dev-api.goodwiinz.tech` and frontend `https://goodwiinz.tech`. It opts
+in explicitly with `DAILY_RESEARCH_BRIEF_ENABLED: "true"` in
+`infrastructure/helm/knowledge-graph-analytics/values-aws.yaml`, and the
+celery worker and beat inherit that through `backend.env`. Staging and
+production were retired on 2026-04-29 (#442), so this refresh treats
+"production" in GOO-337 as this dev lane. That is a proposed interpretation,
+not a settled scope: the release owner must confirm it before any GOO-337
+production item (configuration, deployment and migration verification,
+rollback rehearsal) is closed on dev-only evidence. The certification
+sections that say the source default is `false` are accurate again.
+
+| Gate                                              | Status  | Evidence |
+| ------------------------------------------------- | ------- | -------- |
+| Full `frontend validate`                          | FAILED  | Fails at lint with 89 errors and 1,823 warnings (was 113 / 1,961). The 20 frontend files changed by #1716 that ESLint covers have 0 errors and 4 warnings. Type-check passes, and full Vitest passes 374 files / 2,846 tests on the branch. |
+| Disabled-state runtime control                    | PASS    | Ran green on local PostgreSQL 14.23; no CI run of it has been observed yet. Four existing unit tests cover list, detail, create, start and the default. The new PostgreSQL test proves that, with the flag false, a completed run's detail, manifest, step history (`/steps`), review state (`/reviews/pending`) and Markdown, JSON and CSV exports return 200, while a start from its blueprint returns 404. A flag-on control sends the same start and gets 422 at scope validation, so the 404 comes from the kill switch, not from access. Seven source mutations turned it RED. The `Run integration tests` CI step now enrolls this one test through `DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL` on `postgres:15`; its CI result counts only once the Integration Tests job passes on the exact head. |
+| Review overlays and export metadata               | PASS    | Screening, extraction, final and results tests pass. A new final-review test proves the claim-coverage block is present at the final decision: its "Claim coverage and checks" disclosure is visible but collapsed by default, and once opened the claim checks are visible beside an enabled approve button. Two mutations turned it RED. |
+| PostgreSQL lifecycle integration                  | FAILED  | 4 failed, 1 passed on `9c90ed8d3`. It passed 5/5 at `1b3ee4d50` and broke at #1720 (`ad6f47b16`). Since #1899 the search stage fails with "Completed step hash does not match its persisted envelope". These lifecycle tests read only `ORCHESTRATION_TEST_DATABASE_URL`, which CI's integration step leaves unset, so they still skip in CI. |
+| Browser → Next → FastAPI → PostgreSQL             | NOT RUN | The ports are configurable (`BASE_URL`, `DAILY_BRIEF_E2E_PORT`). Outside CI, however, Playwright's `reuseExistingServer` can attach to another agent's dev server on this shared machine. The spec also drives the same `create_e2e_app` lifecycle, which already fails at search on this head. No CI job runs `frontend/e2e/research-engine/daily-research-brief.spec.ts`. |
+| Deployed revision (declared)                      | PASS    | `values-aws.yaml` pins image `ed6809a5f` (`sha256:833d07f4…3a89`). It contains #1716, GOO-338 and Alembic revisions `daily_brief_reviews_20260927` and `merge_research_heads_20260928`, with single head `hb03_workspace_grants`. The rendered backend, worker, beat, migration Job and synthetic CronJob all carry the flag as `true`. |
+| Live API matches the deployed revision            | PASS    | The live `/openapi.json` is canonically identical to `backend/openapi.json` at `ed6809a5f` and lists all Daily Brief routes. `/health` returns 200. Unauthenticated probes return 401 for real and nonexistent paths alike, so they do not prove the mount. |
+| Live pod env and migration Job status             | BLOCKED | `kubectl` needs an interactive `aws login` (the session had expired). |
+| Authenticated Safety                              | BLOCKED | `SAFETY_API_KEY` absent. |
+| Current configured-model eval                     | BLOCKED | `ANTHROPIC_API_KEY` and `DAILY_BRIEF_CITATION_THRESHOLD` absent. The prerequisite and fixed-corpus suite gives 13 passed, 1 skipped. |
+| Authenticated live acceptance                     | NOT RUN | Needs the owner's sign-in. |
+| Rollback rehearsal on dev                         | NOT RUN | Needs an owner-authorized flag change. |
+| Owner-only access inspection                      | NOT RUN | Needs the owner's sign-in and a second account. |
+
+Release consequence: the deployed dev image contains the search-stage
+regression, and the flag is on there. On this head a new Daily Brief run is
+expected to fail at its search stage. That was reproduced locally with the
+production route and engine code against PostgreSQL, but it has not been
+observed live, because authenticated acceptance is NOT RUN. Until it is fixed,
+the owner can apply the disable-first rollback below, under which existing runs
+stay readable and exportable, or accept the known failure on dev. This refresh
+changed no configuration.
+
+The kill switch gates template discovery and `start_run` only. A run created
+before the flag flips can still be streamed and resumed. That matches
+"refuses starting a new Daily run" below, but a rollback does not stop
+in-flight work.
+
+The ship gate stays closed. The rows above take the place of the gate-ledger
+rows for current `develop`. The earlier PostgreSQL, browser, migration and
+performance PASS results stay bound to the sources they ran on.
+
 ## 2026-09-28 user-authorized source-default enablement amendment
 
 After the certification above, the user explicitly authorized repository
