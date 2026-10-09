@@ -122,7 +122,7 @@ function clearUserScopedClientState(): void {
   resetAccountSession();
   useChatStore.getState().reset();
   useAgentChatStore.getState().reset();
-  useProjectStore.getState().reset();
+  // MUTATION M1 (BS3): useProjectStore.getState().reset();
   useProjectChatStore.getState().reset();
   usePipelineStore.getState().reset();
   useCitationStore.getState().clearCitations();
@@ -170,7 +170,7 @@ function settleMissingSession(): void {
 function observeIdentity(userId: string): void {
   // A rejected session keeps its staged chat draft for the same user's
   // re-login, so clearSession() cannot drop it; any other identity must.
-  discardForeignChatAuthRecovery(userId);
+  // MUTATION M3 (BS5): discardForeignChatAuthRecovery(userId);
   const previousId = useAuthStore.getState().user?.id ?? sessionUserId;
   if (previousId !== userId) {
     authRevision += 1;
