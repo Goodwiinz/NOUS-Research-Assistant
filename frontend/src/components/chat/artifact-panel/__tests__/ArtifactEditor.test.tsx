@@ -500,14 +500,12 @@ it('a deferred picker result for A never steers B or clears its new draft', asyn
   );
   act(() => useChatStore.setState({ currentThreadId: 'B' }));
   act(() =>
-    useArtifactPanelStore
-      .getState()
-      .openArtifact({
-        kind: 'generated',
-        artifactId: 'a1',
-        versionId: 'v1',
-        title: 'memo.txt',
-      })
+    useArtifactPanelStore.getState().openArtifact({
+      kind: 'generated',
+      artifactId: 'a1',
+      versionId: 'v1',
+      title: 'memo.txt',
+    })
   );
   await user.click(
     await screen.findByRole('button', { name: 'Edit', exact: true })
@@ -518,4 +516,43 @@ it('a deferred picker result for A never steers B or clears its new draft', asyn
   await act(async () => finish({} as NonNullable<LinkResult>));
   expect(useChatStore.getState().currentThreadId).toBe('B');
   expect(screen.getByLabelText('Edit file contents')).toHaveValue('B draft');
+});
+
+it('an approved deferred picker write retires even a clean open editor', async () => {
+  let finish!: (value: null) => void;
+  const link = vi.fn(
+    () =>
+      new Promise<null>((resolve) => {
+        finish = resolve;
+      })
+  );
+  useProjectChatStore.setState({ linkThreadToProject: link });
+  useProjectStore.setState({
+    projects: [{ id: 'p2', name: 'Other project' }] as ReturnType<
+      typeof useProjectStore.getState
+    >['projects'],
+    loading: false,
+    fetchProjects: vi.fn().mockResolvedValue(undefined),
+  });
+  const confirm = vi.spyOn(window, 'confirm');
+  const { user } = render(<NavigationHarness />);
+  await user.click(
+    await screen.findByRole('button', { name: 'Edit', exact: true })
+  );
+  expect(await screen.findByLabelText('Edit file contents')).toHaveValue(
+    'seed'
+  );
+  await user.click(screen.getByRole('button', { name: 'Bind project' }));
+  await user.click(
+    await screen.findByRole('button', { name: 'Other project' })
+  );
+  expect(confirm).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('Edit file contents')).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Edit', exact: true })
+  ).toBeDisabled();
+  await act(async () => finish(null));
+  expect(
+    screen.getByRole('button', { name: 'Edit', exact: true })
+  ).toBeEnabled();
 });

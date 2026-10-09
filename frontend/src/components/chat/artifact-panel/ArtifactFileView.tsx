@@ -139,8 +139,8 @@ function ArtifactEditor({
   const dirty = initial !== null && text !== initial;
   useEffect(() => {
     const guard = (): boolean => {
-      if (!dirty) return true;
       if (
+        dirty &&
         !window.confirm(
           'Discard your unsaved changes? Choose Cancel to keep editing or copy your changes first.'
         )
