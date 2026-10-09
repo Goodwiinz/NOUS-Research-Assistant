@@ -964,6 +964,46 @@ jobs:
           name: ingestion-recovery-results
           path: test-results/ingestion-recovery.xml
           retention-days: 7
+      - name: Run two-account PostgreSQL search isolation tests
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        # Matrix row S2 (GOO-399). The sharded run above has no
+        # TWO_ACCOUNT_PG_TEST_DATABASE_URL, so this suite skips there. Run it
+        # once against the job's postgres service and reject a green run in
+        # which any test skipped. A strict xfail is a matrix-tracked finding,
+        # not a skip; it fails pytest itself if it starts passing.
+        run: |
+          mkdir -p test-results
+          pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
+            -c backend/pytest.ini -m integration \
+            --junitxml=test-results/two-account-pg-search.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("test-results/two-account-pg-search.xml").findall(".//testcase")
+
+
+          def not_executed(case):
+              skipped = case.find("skipped")
+              if skipped is not None and skipped.get("type") != "pytest.xfail":
+                  return True
+              return case.find("failure") is not None or case.find("error") is not None
+
+
+          if not cases or any(not_executed(case) for case in cases):
+              raise SystemExit("Two-account PostgreSQL search tests must execute without skips")
+          print(f"Two-account PostgreSQL search: {len(cases)} tests executed without skips")
+          PY
+        env:
+          ENVIRONMENT: testing
+          TWO_ACCOUNT_PG_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+      - name: Save two-account PostgreSQL search results
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: two-account-pg-search-results
+          path: test-results/two-account-pg-search.xml
+          retention-days: 7
       - name: Upload coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:

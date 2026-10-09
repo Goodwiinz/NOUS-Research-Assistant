@@ -404,7 +404,7 @@ def get_search_suggestions(
         # all users, and within an org showed all members' titles regardless of
         # membership.
         suggestion_sql = """
-            SELECT DISTINCT t.title
+            SELECT t.title
             FROM threads t
             JOIN conversations c ON t.conversation_id = c.id
             JOIN workspaces w ON c.workspace_id = w.id
@@ -434,7 +434,12 @@ def get_search_suggestions(
             suggestion_sql += " AND w.id = :workspace_id"
             params["workspace_id"] = str(workspace_id)
 
-        suggestion_sql += " ORDER BY t.last_message_at DESC LIMIT :limit"
+        # GOO-399: one row per title, most recent first. PostgreSQL rejects
+        # SELECT DISTINCT with an ORDER BY column outside the select list, so
+        # the previous form answered 500 on every call.
+        suggestion_sql += (
+            " GROUP BY t.title ORDER BY MAX(t.last_message_at) DESC LIMIT :limit"
+        )
         params["limit"] = limit
 
         result = db.execute(text(suggestion_sql), params)

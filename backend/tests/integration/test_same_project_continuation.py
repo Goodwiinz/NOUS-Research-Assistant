@@ -39,6 +39,10 @@ after each:
   declare no ``relationship()``, so the unit of work inserted
   ``artifact_lifecycle_outbox`` before ``artifact_versions`` and PostgreSQL
   refused the foreign key. SQLite unit tests do not enforce it.
+* restoring ``Workspace.organization_id == organization_id`` in
+  ``services/integrations/handoffs.py::_live_chain`` (the code before WG-2c)
+  makes ``[legacy-null-org]`` FAIL at step 3's card GET (``404 == 200``)
+  while ``[org]`` passes (2026-10-08, local PostgreSQL 14.23).
 """
 
 from __future__ import annotations
@@ -224,7 +228,9 @@ async def _seed(
                     id=ids.workspace,
                     name="w",
                     owner_id=ids.owner,
-                    organization_id=ids.org,
+                    # WG-2: a legacy workspace carries no organization and is
+                    # its owner's.
+                    organization_id=None if ids.legacy else ids.org,
                 )
             ],
             [
@@ -571,8 +577,9 @@ async def _journey(
     assert _same(ahead.json()["latest"], winner)
 
 
+@pytest.mark.parametrize("legacy", [False, True], ids=["org", "legacy-null-org"])
 async def test_second_session_continues_the_same_project_chat(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, legacy: bool
 ) -> None:
     # `or ""` keeps dsn a `str` without leaning on pytest.skip being NoReturn.
     dsn = os.getenv("ORCHESTRATION_TEST_DATABASE_URL") or ""
@@ -609,6 +616,7 @@ async def test_second_session_continues_the_same_project_chat(
             conversation=uuid.uuid4(),
             thread=uuid.uuid4(),
             documents=[uuid.uuid4(), uuid.uuid4()],
+            legacy=legacy,
         )
         factory = async_sessionmaker(engine, expire_on_commit=False)
         await _seed(factory, ids)

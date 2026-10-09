@@ -51,6 +51,7 @@ from src.services.integrations.context import (
     IntegrationAccessDenied,
     authorized_scope,
     authorized_scope_filter,
+    workspace_in_org,
 )
 from src.services.search.fulltext_search_service import fulltext_search_service
 
@@ -468,7 +469,8 @@ def _live_project_documents(project_id: UUID, organization_id: UUID) -> Any:
             Collection.id == project_id,
             Collection.is_deleted == False,  # noqa: E712
             Workspace.is_deleted == False,  # noqa: E712
-            Workspace.organization_id == organization_id,
+            # A legacy workspace (organization_id NULL) is its owner's.
+            workspace_in_org(organization_id),
             CollectionDocument.is_deleted == False,  # noqa: E712
             Document.organization_id == organization_id,
             Document.is_deleted == False,  # noqa: E712
