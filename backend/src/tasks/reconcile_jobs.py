@@ -114,6 +114,11 @@ def reconcile_lost_processing_jobs() -> Mapping[str, object]:
                 )
                 if not ended:
                     db.rollback()
+                    logger.info(
+                        "reconcile_lost_processing_jobs: job %s changed since "
+                        "selection; give-up skipped",
+                        job_id,
+                    )
                     summary["skipped"] += 1
                     continue
                 logger.warning(

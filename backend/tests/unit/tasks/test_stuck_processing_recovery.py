@@ -416,7 +416,7 @@ def test_reconciler_give_up_fails_document_with_job(lost: SimpleNamespace) -> No
 
 
 def test_reconciler_give_up_keeps_a_job_claimed_after_selection(
-    lost: SimpleNamespace,
+    lost: SimpleNamespace, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Verifier V4 race: a worker claims the job between the reconciler's
     unlocked SELECT and its give-up; the bare UPDATE ... WHERE id overwrote
@@ -429,13 +429,17 @@ def test_reconciler_give_up_keeps_a_job_claimed_after_selection(
 
     engine, hook = _after_candidates(lost, claim)
     try:
-        assert rj.reconcile_lost_processing_jobs() == {
-            "reenqueued": 0,
-            "failed": 0,
-            "skipped": 1,
-        }
+        with caplog.at_level("INFO", logger=rj.__name__):
+            assert rj.reconcile_lost_processing_jobs() == {
+                "reenqueued": 0,
+                "failed": 0,
+                "skipped": 1,
+            }
     finally:
         event.remove(engine, "after_cursor_execute", hook)
+    assert f"job {lost.job_id} changed since selection; give-up skipped" in (
+        caplog.text
+    )
     with lost.Session() as db:
         job = db.get(ProcessingJob, lost.job_id)
         assert (job.status, job.celery_task_id) == (JobStatus.RUNNING, "task-A")
