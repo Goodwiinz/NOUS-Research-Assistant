@@ -1,7 +1,7 @@
 # Flow: login
 
 States: empty → loading → error | done. Scenarios: `smoke.login-availability`
-(form), `workflow.login-authenticated` (landing, added with the runner work).
+(form) and `workflow.login-authenticated` (landing).
 
 ```mermaid
 flowchart TD

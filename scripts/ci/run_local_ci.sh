@@ -421,6 +421,7 @@ fi
 if [ "$DO_FRONTEND" -eq 1 ]; then
   step "Frontend type-check + quality ratchet (blocking) + full lint (advisory)"
   ( cd frontend && pnpm run type-check ); check $? "pnpm type-check"
+  node --test tests/unit/scripts/nous-qa.test.mjs tests/unit/scripts/nous-verify.test.mjs; check $? "nous-qa node tests"
 
   # Keep one full ESLint JSON run as the input to the same blocking ratchets
   # used by .github/workflows/test-pipeline.yml. ESLint returns nonzero when

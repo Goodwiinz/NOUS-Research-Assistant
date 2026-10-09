@@ -18,6 +18,8 @@ onto them.
   mandatory independent review is unavailable, return `ready-for-human`.
 - Use `/loop` or `ScheduleWakeup` only when the user explicitly requested a
   recurring loop; one `/nous-loop` invocation otherwise means one tick.
+- For step 7b, run `/nous-verify` (`.claude/commands/nous-verify.md`); its
+  `BLOCKED` or `NOT RUN` result for a touched feature means `ready-for-human`.
 - Respect the interactive permission classifier. If it prevents an authorized
   remote mutation, return `ready-for-human` with the exact handoff.
 
