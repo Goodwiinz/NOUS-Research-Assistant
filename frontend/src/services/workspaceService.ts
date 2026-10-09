@@ -69,20 +69,44 @@ interface CachedWorkspaceRecord {
   workspace: ApiWorkspace;
 }
 
+// Storage can be denied outright (SecurityError) or refuse writes (quota).
+// The cache is an optimisation and the clear sequence must never stall on
+// it, so every access below is guarded like lib/client-owner.ts.
+function cacheStorage(): Storage | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function removeStorageKeys(keys: readonly string[]): void {
+  const storage = cacheStorage();
+  if (!storage) return;
+  for (const key of keys) {
+    try {
+      storage.removeItem(key);
+    } catch {
+      // Best effort: a record that cannot be removed is still never used by
+      // another account, because every reader checks the owner first.
+    }
+  }
+}
+
 function removeCachedWorkspace(): void {
-  if (typeof window === 'undefined') return;
-  localStorage.removeItem(WS_CACHE_KEY);
-  for (const key of LEGACY_WS_CACHE_KEYS) localStorage.removeItem(key);
+  removeStorageKeys([WS_CACHE_KEY, ...LEGACY_WS_CACHE_KEYS]);
 }
 
 function readCachedWorkspace(
   ownerUserId: string,
   now = Date.now()
 ): ApiWorkspace | null {
-  if (typeof window === 'undefined') return null;
-  const raw = localStorage.getItem(WS_CACHE_KEY);
-  if (!raw) return null;
+  const storage = cacheStorage();
+  if (!storage) return null;
   try {
+    const raw = storage.getItem(WS_CACHE_KEY);
+    if (!raw) return null;
     const record = JSON.parse(raw) as Partial<CachedWorkspaceRecord> | null;
     const owned =
       !!record &&
@@ -97,7 +121,7 @@ function readCachedWorkspace(
       return workspace;
     }
   } catch {
-    // Corrupted JSON is removed with the other rejects below.
+    // Unreadable or corrupted: treated like a foreign record below.
   }
   removeCachedWorkspace();
   return null;
@@ -107,15 +131,21 @@ function writeCachedWorkspace(
   ownerUserId: string,
   workspace: ApiWorkspace
 ): void {
-  if (typeof window === 'undefined') return;
+  const storage = cacheStorage();
+  if (!storage) return;
   const record: CachedWorkspaceRecord = {
     version: WS_CACHE_VERSION,
     ownerUserId,
     cachedAt: Date.now(),
     workspace,
   };
-  localStorage.setItem(WS_CACHE_KEY, JSON.stringify(record));
-  for (const key of LEGACY_WS_CACHE_KEYS) localStorage.removeItem(key);
+  try {
+    storage.setItem(WS_CACHE_KEY, JSON.stringify(record));
+  } catch {
+    // Quota or policy: the next load lists workspaces again.
+    return;
+  }
+  removeStorageKeys(LEGACY_WS_CACHE_KEYS);
 }
 
 // Collapses concurrent getOrCreateDefaultWorkspace callers onto one promise.
@@ -149,9 +179,7 @@ const _defaultConversationInFlight = new Map<
 export function clearWorkspaceServiceCache(): void {
   cacheGeneration += 1;
   removeCachedWorkspace();
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('chat-storage');
-  }
+  removeStorageKeys(['chat-storage']);
   _defaultWorkspaceInFlight = null;
   _defaultConversationInFlight.clear();
 }

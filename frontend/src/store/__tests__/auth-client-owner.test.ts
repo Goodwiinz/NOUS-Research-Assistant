@@ -367,12 +367,14 @@ describe('client caches across page loads', () => {
 
     expectCachesCleared();
     expect(tab.useAuthStore.getState().user).toBeNull();
-    expect(localStorage.getItem(CLIENT_OWNER_STORAGE_KEY)).toBe('B');
+    // The switch drops the stamp; only B's verified profile re-stamps it.
+    expect(localStorage.getItem(CLIENT_OWNER_STORAGE_KEY)).toBeNull();
     // Drain the profile fetch the event scheduled, so this tab's module
     // graph cannot keep clearing storage underneath the next test.
     await vi.waitFor(() =>
       expect(tab.useAuthStore.getState().user?.id).toBe('B')
     );
+    expect(localStorage.getItem(CLIENT_OWNER_STORAGE_KEY)).toBe('B');
   });
 });
 

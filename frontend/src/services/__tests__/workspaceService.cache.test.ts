@@ -222,6 +222,47 @@ describe('workspaceService default workspace cache', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('tolerates a storage that refuses removals', async () => {
+    // clearWorkspaceServiceCache runs inside the account-change sequence;
+    // a SecurityError here must not abort the steps after it.
+    const { workspaceService, clearWorkspaceServiceCache } =
+      await loadService();
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Storage access denied', 'SecurityError');
+    });
+    vi.spyOn(workspaceService, 'listWorkspaces').mockResolvedValue([
+      liveWorkspace as Workspace,
+    ]);
+
+    expect(() => clearWorkspaceServiceCache()).not.toThrow();
+    await expect(
+      workspaceService.getOrCreateDefaultWorkspace('user-B')
+    ).resolves.toEqual(liveWorkspace);
+  });
+
+  it('tolerates a storage that refuses reads and writes', async () => {
+    const { workspaceService } = await loadService();
+    localStorage.setItem(
+      'default-workspace-object',
+      stampedRecord('user-A', cachedWorkspace)
+    );
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Storage access denied', 'SecurityError');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+    const getWorkspaceSpy = vi.spyOn(workspaceService, 'getWorkspace');
+    vi.spyOn(workspaceService, 'listWorkspaces').mockResolvedValue([
+      liveWorkspace as Workspace,
+    ]);
+
+    await expect(
+      workspaceService.getOrCreateDefaultWorkspace('user-A')
+    ).resolves.toEqual(liveWorkspace);
+    expect(getWorkspaceSpy).not.toHaveBeenCalled();
+  });
+
   it('leaves the client owner stamp to the auth store', async () => {
     // authStore reads the stamp, compares, clears, then re-stamps. A cache
     // clear that also dropped the stamp would be harmless there, but it must
