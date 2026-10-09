@@ -59,6 +59,10 @@ def test_sensitive_terraform_and_local_secret_artifacts_are_not_tracked() -> Non
         # after the #969 purge with a scoped !.claude/commands/nous-loop.md
         # gitignore exception.
         ".claude/commands/nous-loop.md",
+        # /nous-verify user-level verification command (nous-loop step 7b) —
+        # workflow doc only, with its own scoped
+        # !.claude/commands/nous-verify.md gitignore exception.
+        ".claude/commands/nous-verify.md",
     }
 
     forbidden_tracked = [

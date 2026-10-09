@@ -1,8 +1,9 @@
 # Flow: chat send, stream, reload persists
 
-States: empty → streaming → done | error. Scenario:
-`workflow.reload-persistence` (today it seeds the message through the API; the
-composer send path is added with the runner work).
+States: empty → streaming → done | error. Scenarios:
+`workflow.chat-send-stream-reload` (composer send, stream, reload; takes the
+checkpoints below) and `workflow.reload-persistence` (seeds the message
+through the API, then reloads).
 
 ```mermaid
 flowchart TD

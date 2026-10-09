@@ -1,7 +1,7 @@
 version: 1
 features:
   - id: login
-    status: planned
+    status: covered
     surfaces:
       web: ["/login"]
       api: []
@@ -10,13 +10,13 @@ features:
     pass_criteria:
       - "The login form renders #email, #password and one submit button."
       - "Valid credentials leave /login and land on a protected route."
-    scenarios: [smoke.login-availability]
+    scenarios: [smoke.login-availability, workflow.login-authenticated]
     owns:
       - "frontend/app/(auth)/login/**"
       - "frontend/src/components/auth/**"
       - "frontend/src/lib/supabase/**"
   - id: chat-send-stream-reload
-    status: planned
+    status: covered
     surfaces:
       web: ["/chat", "/chat?thread=<id>"]
       api: ["POST /api/v1/agent/stream", "GET /api/v2/threads/{id}/messages"]
@@ -26,7 +26,7 @@ features:
       - "A message typed in the composer appears as a user transcript row."
       - "An assistant row streams and reaches a terminal state."
       - "After reload both rows are still rendered and the API lists the user message."
-    scenarios: [workflow.reload-persistence]
+    scenarios: [workflow.reload-persistence, workflow.chat-send-stream-reload]
     owns:
       - "frontend/app/(dashboard)/chat/**"
       - "frontend/src/components/chat/**"
@@ -38,7 +38,7 @@ features:
       - "backend/src/services/agent/agent_submission_service.py"
       - "backend/src/services/agent/run_event_store.py"
   - id: hitl-approve-deny
-    status: planned
+    status: covered
     surfaces:
       web: ["/chat?thread=<id>"]
       api: ["POST /api/v1/agent/stream/confirm", "POST /api/v1/agent/confirm/{job_id}"]
@@ -48,14 +48,14 @@ features:
       - "A destructive tool call pauses the run and shows the 'Approval needed' dialog."
       - "Approve resumes the run and the tool's effect exists afterwards."
       - "Deny ends the run without the effect and the transcript says so."
-    scenarios: []
+    scenarios: [workflow.project-creation-via-chat, workflow.hitl-deny]
     owns:
       - "frontend/src/components/chat/aui/HitlApprovalToolUI.tsx"
       - "frontend/src/components/chat/aui/hitlConstants.ts"
       - "backend/src/services/agent/_nodes_tools.py"
       - "backend/src/services/agent/_builders.py"
   - id: document-upload
-    status: planned
+    status: covered
     surfaces:
       web: ["/documents", "/documents/<id>", "/documents/upload"]
       api: ["POST /api/v1/files/upload", "GET /api/v1/documents/{id}"]
@@ -63,14 +63,14 @@ features:
     states: [empty, loading, done, error]
     pass_criteria:
       - "Uploading a supported file returns an owned document id and filename."
-      - "The document detail page renders that filename as its title."
+      - "The document detail page renders the uploaded document's title as its heading."
     scenarios: [workflow.document-upload-and-attachment]
     owns:
       - "frontend/app/(dashboard)/documents/**"
       - "frontend/src/components/documents/**"
       - "backend/src/api/documents/**"
   - id: project-creation-via-chat
-    status: planned
+    status: covered
     surfaces:
       web: ["/chat?thread=<id>", "/projects/<id>"]
       api: ["GET /api/v1/projects", "DELETE /api/v1/projects/{id}"]
@@ -79,7 +79,7 @@ features:
     pass_criteria:
       - "Asking the agent to create a named project triggers the approval dialog."
       - "After Approve the project exists in GET /api/v1/projects?search=<name> and /projects/<id> renders it."
-    scenarios: []
+    scenarios: [workflow.project-creation-via-chat]
     owns:
       - "frontend/app/(dashboard)/projects/**"
       - "backend/src/api/research/projects.py"

@@ -122,8 +122,8 @@ test('latest alert locator scopes transport failures to the newest alert', () =>
   assert.equal(lastCalled, true);
 });
 
-test('rejects a credential-bearing target URL before a campaign can start', () => {
-  assert.throws(
+test('rejects a credential-bearing target URL before a campaign can start', async () => {
+  await assert.rejects(
     () => parseArgs(['--base-url', 'https://qa-user:qa-password@example.test']),
     /credential|userinfo|URL/i
   );
@@ -156,8 +156,8 @@ test('unknown credential-looking flags do not echo their values', async () => {
   assert.doesNotMatch(diagnostics[0], /sentinel-password/);
 });
 
-test('reproduction command redacts environment secrets', () => {
-  const config = parseArgs(
+test('reproduction command redacts environment secrets', async () => {
+  const config = await parseArgs(
     ['--output-dir', '/tmp/report-sentinel-password'],
     {
       NOUS_QA_BASE_URL: 'http://127.0.0.1:3000',
@@ -640,7 +640,7 @@ test('deployment evidence is validated and target-bound', async () => {
     })
   );
   try {
-    const config = parseArgs([
+    const config = await parseArgs([
       '--base-url',
       'https://qa.example.test',
       '--expected-backend-sha',
@@ -665,7 +665,7 @@ test('backend deployment evidence may bind to the explicitly configured API orig
     provenance: 'operator fixture',
   }));
   try {
-    const config = parseArgs([
+    const config = await parseArgs([
       '--base-url', 'https://qa.example.test',
       '--api-url', 'https://api.qa.example.test/api/v1',
       '--expected-backend-sha', 'a'.repeat(40),
@@ -687,7 +687,7 @@ test('deployment evidence cannot bind to a different frontend origin', async () 
     provenance: 'operator fixture',
   }));
   try {
-    assert.throws(() => parseArgs([
+    await assert.rejects(() => parseArgs([
       '--base-url', 'https://frontend.qa.example.test',
       '--api-url', 'https://backend.qa.example.test/api/v1',
       '--deployment-evidence', path,
@@ -1222,8 +1222,8 @@ test('non-success response bodies stay out of session errors', async () => {
   }
 });
 
-test('report retains local source commit and dirty state when supplied', () => {
-  const config = parseArgs([], {
+test('report retains local source commit and dirty state when supplied', async () => {
+  const config = await parseArgs([], {
     NOUS_QA_BASE_URL: 'http://127.0.0.1:3000',
     NOUS_QA_SOURCE_SHA: 'f'.repeat(40),
     NOUS_QA_SOURCE_DIRTY: 'dirty',

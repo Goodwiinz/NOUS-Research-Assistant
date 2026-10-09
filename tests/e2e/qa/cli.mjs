@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+import { writeEvidenceRecord } from './evidence.mjs';
+import { featuresForChangedPaths, loadFeatureMap, scenariosForFeatures } from './feature-map.mjs';
 import { redactText, writeReports } from './report.mjs';
 import { exitCodeForReport, runCampaign } from './runner.mjs';
 import { listScenarios } from './scenarios.mjs';
@@ -67,6 +69,29 @@ export function observeSourceIdentity(env = process.env) {
     dirty,
     provenance,
   };
+}
+
+const GIT_REF = /^[A-Za-z0-9_][A-Za-z0-9_./~^-]{0,127}$/;
+
+/**
+ * Paths changed on this branch since `ref` (merge-base diff) plus untracked
+ * files. A git failure is a configuration error: an empty list would be
+ * misreported as "no mapped feature changed".
+ */
+function defaultChangedPaths(ref) {
+  const run = (args) => {
+    const result = spawnSync('git', args, {
+      cwd: TOOL_REPO_ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 15_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) throw new CLIConfigError(`git ${args[0]} failed for --changed-from ${ref}`);
+    return result.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  };
+  const paths = [...run(['diff', '--name-only', `${ref}...HEAD`]), ...run(['ls-files', '--others', '--exclude-standard'])];
+  return [...new Set(paths)];
 }
 
 function diagnosticMessage(error, env = process.env) {
@@ -146,6 +171,14 @@ function readDeploymentEvidence(path, _baseUrl, apiUrl) {
   };
 }
 
+// Values of these flags are local paths; the command is written into reports
+// and the committed evidence README, so they are replaced with [path].
+const PATH_FLAGS = new Set(['--output-dir', '--storage-state', '--deployment-evidence', '--evidence-dir', '--evidence-record']);
+
+function displayArgv(argv) {
+  return argv.map((arg, index) => (index > 0 && PATH_FLAGS.has(argv[index - 1]) ? '[path]' : arg));
+}
+
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -166,11 +199,15 @@ function usage() {
     '  --deployment-evidence FILE     validated operator-observed deployment JSON',
     '  --timeout-ms N                 per-scenario timeout (1..300000)',
     '  --max-turns N                  model turn bound (1..50, default 12)',
+    '  --features ID[,ID]             select scenarios for feature-map ids (repeatable; runs as --suite all)',
+    '  --changed-from REF             select features whose owned paths changed since REF (exit 2 if none)',
+    '  --evidence-dir DIR             checkpoint PNG/video/trace directory (default .verify-artifacts/<run-id>)',
+    '  --evidence-record DIR          also write the committed evidence README to DIR',
     '  --help                         show this help',
   ].join('\n');
 }
 
-export function parseArgs(argv = [], env = process.env) {
+export async function parseArgs(argv = [], env = process.env, dependencies = {}) {
   if (!Array.isArray(argv)) throw new CLIConfigError('argv must be an array');
   let listOnly = false;
   let baseUrl = env.NOUS_QA_BASE_URL ?? 'http://127.0.0.1:3000';
@@ -185,6 +222,11 @@ export function parseArgs(argv = [], env = process.env) {
   let maxTurns = 12;
   const selectedIds = [];
   let help = false;
+  const featureIds = [];
+  let explicitSuite = null;
+  let changedFrom = null;
+  let evidenceDir = env.NOUS_QA_EVIDENCE_DIR ?? null;
+  let evidenceRecordDir = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -194,7 +236,7 @@ export function parseArgs(argv = [], env = process.env) {
     if (arg === '--help' || arg === '-h') { help = true; continue; }
     if (arg === '--base-url') { baseUrl = valueAfter(argv, index++, arg); continue; }
     if (arg === '--api-url') { apiUrl = valueAfter(argv, index++, arg); continue; }
-    if (arg === '--suite') { suite = valueAfter(argv, index++, arg); continue; }
+    if (arg === '--suite') { suite = valueAfter(argv, index++, arg); explicitSuite = suite; continue; }
     if (arg === '--scenario' || arg === '--select') { selectedIds.push(valueAfter(argv, index++, arg)); continue; }
     if (arg === '--output-dir') { outputDir = valueAfter(argv, index++, arg); continue; }
     if (arg === '--storage-state') { storageState = valueAfter(argv, index++, arg); continue; }
@@ -202,7 +244,37 @@ export function parseArgs(argv = [], env = process.env) {
     if (arg === '--deployment-evidence') { deploymentEvidencePath = valueAfter(argv, index++, arg); continue; }
     if (arg === '--timeout-ms') { timeoutMs = integer(valueAfter(argv, index++, arg), arg, 1, 300_000); continue; }
     if (arg === '--max-turns') { maxTurns = integer(valueAfter(argv, index++, arg), arg, 1, 50); continue; }
+    if (arg === '--features') {
+      featureIds.push(...valueAfter(argv, index++, arg).split(',').map((value) => value.trim()).filter(Boolean));
+      continue;
+    }
+    if (arg === '--changed-from') { changedFrom = valueAfter(argv, index++, arg); continue; }
+    if (arg === '--evidence-dir') { evidenceDir = valueAfter(argv, index++, arg); continue; }
+    if (arg === '--evidence-record') { evidenceRecordDir = valueAfter(argv, index++, arg); continue; }
     throw new CLIConfigError(`Unknown argument: ${arg}`);
+  }
+  let features = [];
+  if (featureIds.length || changedFrom !== null) {
+    if (explicitSuite !== null && explicitSuite !== 'all') {
+      throw new CLIConfigError('--features/--changed-from select across suites; drop --suite or use --suite all');
+    }
+    if (changedFrom !== null && !GIT_REF.test(changedFrom)) throw new CLIConfigError('--changed-from must be a git ref');
+    const mapPath = resolve(env.NOUS_QA_FEATURE_MAP ?? join(TOOL_REPO_ROOT, 'docs/engineering/feature-map.yaml'));
+    let map;
+    try { map = await loadFeatureMap(mapPath); } catch (error) { throw new CLIConfigError(`Cannot read feature map: ${error?.message ?? error}`); }
+    features = [...new Set(featureIds)];
+    if (changedFrom !== null) {
+      const changed = await (dependencies.changedPaths ?? defaultChangedPaths)(changedFrom);
+      for (const id of featuresForChangedPaths(map, changed)) if (!features.includes(id)) features.push(id);
+      if (features.length === 0) throw new CLIConfigError(`No mapped feature changed since ${changedFrom}`);
+    }
+    let ids;
+    try { ids = scenariosForFeatures(map, features); } catch (error) { throw new CLIConfigError(error.message); }
+    // The runner rejects ids outside the chosen suite; feature selection
+    // spans suites, so it always runs as `all`.
+    suite = 'all';
+    for (const id of ids) if (!selectedIds.includes(id)) selectedIds.push(id);
+    if (selectedIds.length === 0) throw new CLIConfigError('Selected features map no scenario yet');
   }
   if (!SUITES.has(suite)) throw new CLIConfigError(`Unknown suite: ${suite}`);
   baseUrl = validateTargetUrl(baseUrl, '--base-url');
@@ -219,7 +291,7 @@ export function parseArgs(argv = [], env = process.env) {
   const deploymentEvidence = deploymentEvidencePath ? readDeploymentEvidence(deploymentEvidencePath, baseUrl, apiUrl) : null;
   const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`;
   const reportDir = resolve(outputDir ?? `.nous-qa-reports/${runId}`);
-  const command = redactText(['pnpm', 'qa:nous', ...argv].map(shellQuote).join(' '), secrets);
+  const command = redactText(['pnpm', 'qa:nous', ...displayArgv(argv)].map(shellQuote).join(' '), secrets);
   return {
     listOnly,
     help,
@@ -240,13 +312,16 @@ export function parseArgs(argv = [], env = process.env) {
     runId,
     command,
     sourceIdentity: observeSourceIdentity(env),
+    features,
+    evidenceDir: resolve(evidenceDir ?? `.verify-artifacts/${runId}`),
+    evidenceRecordDir: evidenceRecordDir ? resolve(evidenceRecordDir) : null,
   };
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env, dependencies = {}) {
   let config;
   try {
-    config = parseArgs(argv, env);
+    config = await parseArgs(argv, env, dependencies);
   } catch (error) {
     console.error(`nous-qa: ${diagnosticMessage(error, env)}`);
     return 2;
@@ -256,7 +331,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, depe
     return 0;
   }
   if (config.listOnly) {
-    console.log(JSON.stringify(listScenarios(config.suite).map((scenario) => ({
+    // With --scenario/--features/--changed-from this is a dry run of the
+    // selection; without them it lists the whole suite.
+    const selected = new Set(config.selectedIds);
+    const listed = listScenarios(config.suite).filter((scenario) => selected.size === 0 || selected.has(scenario.id));
+    console.log(JSON.stringify(listed.map((scenario) => ({
       id: scenario.id,
       title: scenario.title,
       suite: scenario.suite,
@@ -274,6 +353,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, depe
     console.log(`NOUS QA ${report.run.id}: ${report.summary.passed} passed, ${report.summary.failed} failed, ${report.summary.blocked} blocked, ${report.summary.skipped} skipped`);
     console.log(`JSON: ${redactText(paths.jsonPath, config.secrets)}`);
     console.log(`HTML: ${redactText(paths.htmlPath, config.secrets)}`);
+    if (config.evidenceRecordDir) {
+      // The report is already redacted by runCampaign; the README only uses it.
+      const readme = await writeEvidenceRecord(report, config.evidenceRecordDir);
+      console.log(`Evidence: ${redactText(readme, config.secrets)}`);
+    }
     return exitCodeForReport(report);
   } catch (error) {
     const message = config

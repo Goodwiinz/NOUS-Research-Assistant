@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -34,3 +36,20 @@ def test_nested_virtualenv_symlink_is_ignored(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".verify-artifacts/run/trace.zip",
+        ".verify-artifacts/run/checkpoints/smoke.login-availability--login.form.png",
+        ".nous-qa-reports/x/nous-qa-report.json",
+    ],
+)
+def test_verification_binaries_are_ignored(path: str) -> None:
+    result = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--no-index", path],
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    assert result.returncode == 0, path
