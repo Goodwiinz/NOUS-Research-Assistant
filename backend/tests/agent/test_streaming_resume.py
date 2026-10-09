@@ -958,10 +958,16 @@ def test_resume_matching_stream_param_replays(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # BR-2: a stream-less resume (the frontend cold-load probe) must not replay a
-# finished Codex run; it is already in the transcript. Mutation: execute.py
-# resume_stream — drop the `not JobStatus(...).is_terminal` clause of the
-# stream-less Codex fallback; the parametrized test then fails with
-# "a finished Codex run was handed to the replay path".
+# finished Codex run whose outcome is already an assistant transcript row.
+# Mutation: execute.py resume_stream — drop the `not JobStatus(...).is_terminal`
+# clause of the stream-less Codex fallback; the parametrized test then fails
+# with "a finished Codex run was handed to the replay path".
+#
+# A finished run with NO assistant row (dispatch_pending.terminalize() closed it
+# before the local process started) must still replay: its terminal event is
+# the turn's only visible outcome. Mutation: drop the
+# `or not await has_assistant_projection(...)` clause; the missing-row test
+# then gets 204 instead of 200.
 # ---------------------------------------------------------------------------
 
 
@@ -999,12 +1005,16 @@ def _fake_harness_stream(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
-def test_streamless_resume_does_not_replay_a_finished_codex_run(
+def test_streamless_resume_does_not_replay_a_finished_codex_run_in_the_transcript(
     monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
     from src.api.agent import harness_streaming
+    from src.services.harness import delivery
 
     _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        delivery, "has_assistant_projection", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(
         execute_mod, "get_active_run_for_thread", AsyncMock(return_value=None)
     )
@@ -1026,6 +1036,37 @@ def test_streamless_resume_does_not_replay_a_finished_codex_run(
     resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
 
     assert resp.status_code == 204
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_streamless_resume_replays_a_finished_codex_run_missing_from_the_transcript(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    """dispatch_pending.terminalize() fails a run it could not hand to the local
+    process, or cancels one stopped before dispatch, without writing an
+    assistant row. After a reload the cold-load probe is the only way the user
+    sees that outcome, so the fallback must still replay the run from seq 0."""
+    from src.services.harness import delivery
+
+    run = _codex_run(status)
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod, "get_active_run_for_thread", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod, "get_latest_run_for_thread", AsyncMock(return_value=run)
+    )
+    projected = AsyncMock(return_value=False)
+    monkeypatch.setattr(delivery, "has_assistant_projection", projected)
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 200
+    assert "event: status" in resp.text
+    assert cursors == [0]
+    assert projected.await_args is not None
+    assert projected.await_args.args[1] is run
 
 
 def test_streamless_resume_still_attaches_to_an_active_codex_run(

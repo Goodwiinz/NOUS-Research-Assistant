@@ -25,6 +25,7 @@ from src.services.agent.agent_submission_service import (
 )
 from src.services.harness.delivery import (
     dispatch_pending,
+    has_assistant_projection,
     ingest_bridge_event,
     lease_commands,
     reconcile_pending,
@@ -379,6 +380,78 @@ async def test_undeliverable_outbox_fails_run_and_releases_workspace(
     assert session is not None and not session.workspace_locked
     assert outbox is not None and outbox.status == AgentOutboxStatus.FAILED.value
     assert terminal_event is not None and terminal_event.event_type == "run.failed"
+
+
+# resume_stream's stream-less Codex fallback (BR-2) replays a finished run only
+# when has_assistant_projection() is False. Mutation: make it return True; the
+# terminalized test fails. Make it return False, or key it on anything but the
+# run id (e.g. AgentRun.assistant_message_id, which a failed projection leaves
+# NULL); the projected test fails.
+@pytest.mark.parametrize("closure", ["cancelled", "revoked_grant", "missing_message"])
+async def test_run_closed_before_dispatch_has_no_assistant_projection(
+    db: AsyncSession,
+    context: IntegrationContext,
+    external_run: Any,
+    closure: str,
+) -> None:
+    """dispatch_pending.terminalize() writes the terminal ledger event but no
+    assistant row, so after a reload that event is the turn's only outcome."""
+    run = await db.get(AgentRun, str(external_run.id))
+    assert run is not None
+    if closure == "cancelled":
+        await cancel(db, str(external_run.id))
+    elif closure == "revoked_grant":
+        grant = await db.get(IntegrationGrant, context.grant_id)
+        assert grant is not None
+        grant.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+    else:
+        setattr(run, "user_message_id", None)
+        await db.commit()
+
+    assert await dispatch_pending(db) == 0
+
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    assert run is not None and JobStatus(run.status).is_terminal
+    assert not await has_assistant_projection(db, run)
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed", "interrupted"])
+async def test_projected_terminal_run_has_assistant_projection(
+    db: AsyncSession,
+    context: IntegrationContext,
+    command: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    from src.services.agent import agent_execution_service as execution
+
+    monkeypatch.setattr(
+        execution,
+        "AsyncSessionLocal",
+        async_sessionmaker(db.bind, expire_on_commit=False),
+    )
+    await running(db, context, command)
+    await ingest_bridge_event(
+        db,
+        context,
+        event(
+            command,
+            2,
+            body={
+                "kind": "observation",
+                "state": outcome,
+                "sessionId": "native",
+                "turnId": "turn",
+            },
+        ),
+    )
+
+    db.expire_all()
+    run = await db.get(AgentRun, str(command.runId))
+    assert run is not None and JobStatus(run.status).is_terminal
+    assert await has_assistant_projection(db, run)
 
 
 @pytest.mark.parametrize(
