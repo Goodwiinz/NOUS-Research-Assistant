@@ -7465,6 +7465,43 @@
             },
             "title": "Selected Memory Ids",
             "type": "array"
+          },
+          "selected_skill_version_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Selected Skill Version Ids",
+            "type": "array"
+          },
+          "skill_snapshot_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Snapshot Expires At"
+          },
+          "skill_snapshot_status": {
+            "default": "none",
+            "enum": [
+              "none",
+              "ready",
+              "unavailable"
+            ],
+            "title": "Skill Snapshot Status",
+            "type": "string"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillOption"
+            },
+            "title": "Skills",
+            "type": "array"
           }
         },
         "required": [
@@ -7489,10 +7526,31 @@
             "title": "Memory Ids",
             "type": "array"
           },
+          "refresh_skills": {
+            "default": false,
+            "title": "Refresh Skills",
+            "type": "boolean"
+          },
           "request_id": {
             "format": "uuid",
             "title": "Request Id",
             "type": "string"
+          },
+          "skill_version_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Version Ids"
           }
         },
         "required": [
@@ -26675,6 +26733,22 @@
         "title": "SecurityIncidentResponse",
         "type": "object"
       },
+      "SelectedSkillLoad": {
+        "additionalProperties": false,
+        "properties": {
+          "skill_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Skill Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skill_name"
+        ],
+        "title": "SelectedSkillLoad",
+        "type": "object"
+      },
       "SkillDiffResponse": {
         "properties": {
           "diff": {
@@ -26711,6 +26785,40 @@
           "document_text"
         ],
         "title": "SkillDocumentRequest",
+        "type": "object"
+      },
+      "SkillOption": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version_id",
+          "name",
+          "description",
+          "version",
+          "content_hash"
+        ],
+        "title": "SkillOption",
         "type": "object"
       },
       "SkillResponse": {
@@ -43717,6 +43825,53 @@
           }
         ],
         "summary": "Put Context Selection",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/context/skills/load": {
+      "post": {
+        "operationId": "post_selected_skill_api_v1_integrations_context_skills_load_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectedSkillLoad"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Selected Skill",
         "tags": [
           "integrations",
           "integrations"

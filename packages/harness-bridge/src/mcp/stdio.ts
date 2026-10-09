@@ -2,7 +2,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ActionHttpClient } from "../actions/client.ts";
 import { actionStatusTool, requestActionTool } from "../actions/mcp.ts";
 import { ArtifactHttpClient } from "../artifacts/client.ts";
-import { ContextHttpClient, readSelectedContextTool } from "../context/mcp.ts";
+import { ContextHttpClient, readSelectedContextTool, loadSelectedSkillTool } from "../context/mcp.ts";
 import { artifactsPublishTool, unavailablePublishTool } from "../artifacts/mcp.ts";
 import { createArtifactPublisher } from "../artifacts/publisher.ts";
 import { grantedRoot } from "../artifacts/snapshot.ts";
@@ -65,10 +65,10 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
       saveHandoffTool(new HandoffQueue(store, handoffs), () => localBinding(store, session.credentialHandle)),
     );
   }
-  if (session.context)
-    local.push(
-      readSelectedContextTool(new ContextHttpClient(session.apiOrigin, credentials, keeper.fetch)),
-    );
+  if (session.context) {
+    const context = new ContextHttpClient(session.apiOrigin, credentials, keeper.fetch);
+    local.push(readSelectedContextTool(context), loadSelectedSkillTool(context));
+  }
   const server = createNousMcpServer(
     new CapabilityClient(session.apiOrigin, credentials, keeper.fetch),
     local,

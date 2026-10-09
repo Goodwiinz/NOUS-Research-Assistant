@@ -239,13 +239,17 @@ async def create_runtime_snapshot(
     project_id: UUID | str | None,
     thread_id: UUID | str | None = None,
     job_id: str | None = None,
+    selected_skill_version_ids: list[UUID] | None = None,
+    commit: bool = True,
 ) -> RuntimeSnapshot:
     """Persist and return a frozen catalog, or the safe empty fallback.
 
     A missing/invalid/unauthorized project, disabled rollout flags, or any
     database persistence failure all degrade to ordinary tools.  In no case
     does this function return an in-memory skill catalog that was not first
-    committed to the durable snapshot row.
+    committed to the durable snapshot row. Explicit selected version ids narrow
+    the catalog for browser-consented integrations; None preserves native defaults.
+    commit=False joins the caller's transaction and propagates persistence errors.
     """
     settings = get_settings()
     skill_runtime = (
@@ -289,6 +293,11 @@ async def create_runtime_snapshot(
             if skill_runtime and scoped_project_id is not None
             else []
         )
+        if selected_skill_version_ids is not None:
+            chosen = {str(value) for value in selected_skill_version_ids}
+            catalog = [item for item in catalog if item["version_id"] in chosen]
+            if {item["version_id"] for item in catalog} != chosen:
+                raise ValueError("Selected skill versions are unavailable")
         conditions = {"project_skill_catalog"} if skill_runtime and catalog else set()
         tool_names = TOOL_REGISTRY.available_descriptor_names(conditions=conditions)
         expires_at = datetime.now(timezone.utc) + timedelta(
@@ -311,8 +320,13 @@ async def create_runtime_snapshot(
             expires_at=expires_at,
         )
         session.add(row)
-        await session.commit()
+        if commit:
+            await session.commit()
+        else:
+            await session.flush()
     except Exception:
+        if not commit:
+            raise
         # A catalog that never reached durable storage must never be supplied
         # to the graph; queued and HITL paths would be unable to reproduce it.
         await session.rollback()
@@ -509,6 +523,7 @@ async def load_project_skill_from_snapshot(
     user_id: UUID | str | None,
     project_id: UUID | str | None,
     skill_name: str,
+    commit: bool = True,
 ) -> dict[str, Any]:
     """Load one exact, frozen instruction document from a durable snapshot.
 
@@ -530,7 +545,10 @@ async def load_project_skill_from_snapshot(
         )
 
     snapshot = await session.get(
-        AgentRuntimeSnapshot, snapshot_uuid, with_for_update=True
+        AgentRuntimeSnapshot,
+        snapshot_uuid,
+        with_for_update=True,
+        populate_existing=True,
     )
     now = datetime.now(timezone.utc)
     if (
@@ -632,8 +650,13 @@ async def load_project_skill_from_snapshot(
     if prior is None:
         snapshot.loaded_skill_versions = [*prior_loads, record]
         try:
-            await session.commit()
+            if commit:
+                await session.commit()
+            else:
+                await session.flush()
         except Exception:
+            if not commit:
+                raise
             await session.rollback()
             logger.warning("failed to record loaded project skill", exc_info=True)
             return _snapshot_error(

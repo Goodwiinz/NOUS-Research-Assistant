@@ -149,3 +149,72 @@ describe('ContextSelection', () => {
     );
   });
 });
+
+it('shares only checked skill versions and preserves the memory selection', async () => {
+  const data = {
+    ...options(['m1']),
+    skills: [
+      {
+        version_id: 'v1',
+        name: 'review',
+        version: 1,
+        description: 'Review rubric',
+        content_hash: 'a'.repeat(64),
+      },
+    ],
+    selected_skill_version_ids: [],
+    skill_snapshot_status: 'none' as const,
+  };
+  vi.mocked(integrationContextService.options).mockResolvedValue(data);
+  vi.mocked(integrationContextService.save).mockResolvedValue({
+    ...data,
+    selected_skill_version_ids: ['v1'],
+    skill_snapshot_status: 'ready',
+  });
+  const { user } = render(<ContextSelection requestId={REQUEST} />);
+  const skill = await screen.findByRole('checkbox', { name: /review.*v1/ });
+  expect(skill).not.toBeChecked();
+  await user.click(skill);
+  await user.click(screen.getByRole('button', { name: 'Save selection' }));
+  expect(integrationContextService.save).toHaveBeenCalledWith(
+    REQUEST,
+    ['m1'],
+    ['v1'],
+    false
+  );
+});
+
+it('offers an explicit refresh when the frozen skills expired', async () => {
+  const data = {
+    ...options(['m1']),
+    skills: [
+      {
+        version_id: 'v1',
+        name: 'review',
+        version: 1,
+        description: 'Review rubric',
+        content_hash: 'a'.repeat(64),
+      },
+    ],
+    selected_skill_version_ids: ['v1'],
+    skill_snapshot_status: 'unavailable' as const,
+  };
+  vi.mocked(integrationContextService.options).mockResolvedValue(data);
+  vi.mocked(integrationContextService.save).mockResolvedValue({
+    ...data,
+    skill_snapshot_status: 'ready',
+  });
+  const { user } = render(<ContextSelection requestId={REQUEST} />);
+  expect(
+    await screen.findByText(/Frozen skills are unavailable/)
+  ).toBeInTheDocument();
+  await user.click(
+    screen.getByRole('button', { name: 'Refresh selected skills' })
+  );
+  expect(integrationContextService.save).toHaveBeenCalledWith(
+    REQUEST,
+    ['m1'],
+    ['v1'],
+    true
+  );
+});
