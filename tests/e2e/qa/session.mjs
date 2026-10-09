@@ -29,6 +29,15 @@ export class QASessionError extends Error {
   }
 }
 
+// The local Playwright browser build is missing or cannot start. This is an
+// environment prerequisite, so the runner reports it as BLOCKED, never FAIL.
+export class BrowserUnavailableError extends QASessionError {
+  constructor(message, details = {}) {
+    super(message, details);
+    this.name = 'BrowserUnavailableError';
+  }
+}
+
 export class HttpError extends QASessionError {
   constructor(message, details = {}) {
     super(message, details);
@@ -283,7 +292,13 @@ export class QASession {
     let context = null;
     let page = null;
     try {
-      browser = await chromium.launch({ headless: true });
+      try {
+        browser = await chromium.launch({ headless: true });
+      } catch (error) {
+        throw new BrowserUnavailableError(
+          `Playwright Chromium could not launch; run \`pnpm --dir tests/e2e exec playwright install chromium-headless-shell\` (${String(error?.message ?? error).split('\n')[0]})`
+        );
+      }
       this.assertOperational();
       const contextOptions = { baseURL: this.config.baseUrl };
       if (this.config.storageState) contextOptions.storageState = this.config.storageState;

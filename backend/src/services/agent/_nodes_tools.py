@@ -52,6 +52,7 @@ from src.services.agent.identity_ledger import (
 from src.services.agent.observability import track_node_execution
 from src.services.agent.retrieval_provenance import merge_retrieved_contexts
 from src.services.agent.state import AgentState
+from src.services.agent.tool_deadline import tool_call_deadline_scope
 from src.services.agent.tool_registry import ToolPolicyTag, runtime_tool_descriptors
 from src.services.agent.tools import TOOL_REGISTRY
 
@@ -691,10 +692,13 @@ async def _execute_single_tool(
                 }
                 if operation_key is not None:
                     execute_kwargs["operation_key"] = operation_key
-                result = await asyncio.wait_for(
-                    tool_executor(**execute_kwargs),
-                    timeout=timeout,
-                )
+                # IN-2: a tool that must time out before this limit cancels it
+                # reads the deadline instead of restarting the clock at dispatch.
+                with tool_call_deadline_scope(timeout):
+                    result = await asyncio.wait_for(
+                        tool_executor(**execute_kwargs),
+                        timeout=timeout,
+                    )
                 if isinstance(result, dict) and "error" in result:
                     from langsmith import get_current_run_tree
 

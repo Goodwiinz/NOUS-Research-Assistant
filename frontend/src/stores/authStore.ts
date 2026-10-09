@@ -10,6 +10,7 @@ import {
 } from '@/lib/client-owner';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { resetAccountSession } from '@/lib/account-session';
+import { discardForeignChatAuthRecovery } from '@/hooks/chat/chatAuthRecovery';
 import { useChatStore } from '@/store/chat-store';
 import { useAgentChatStore } from '@/store/agentChatStore';
 import { useProjectStore } from '@/store/projectStore';
@@ -209,6 +210,9 @@ function settleMissingSession(): void {
 }
 
 function observeIdentity(userId: string): void {
+  // A rejected session keeps its staged chat draft for the same user's
+  // re-login, so clearSession() cannot drop it; any other identity must.
+  discardForeignChatAuthRecovery(userId);
   // In-memory identity answers first: a tab still holding A must clear on
   // B's event even when another tab already re-stamped the shared storage as
   // B. Only a fresh load, where memory knows nothing, consults the persisted

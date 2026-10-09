@@ -12,6 +12,11 @@ import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { useResearchEngineStore } from '@/store/research-engine-store';
 import { useNotificationStore } from '@/store/notificationStore';
 import { setAppQueryClient } from '@/lib/query-client';
+import {
+  CHAT_AUTH_RECOVERY_STORAGE_KEY,
+  markChatAuthRecoveryReady,
+  stageChatAuthRecovery,
+} from '@/hooks/chat/chatAuthRecovery';
 import { api } from '@/services/api-client';
 import { projectService } from '@/services/projectService';
 import { projectChatService } from '@/services/projectChatService';
@@ -375,6 +380,58 @@ describe('private account lifetime', () => {
     await expect(login).rejects.toMatchObject({ name: 'SignInSupersededError' });
     expect(useAuthStore.getState().user).toBeNull();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  describe('chat auth-recovery draft', () => {
+    beforeEach(() => {
+      sessionStorage.removeItem(CHAT_AUTH_RECOVERY_STORAGE_KEY);
+    });
+
+    // GOO-354 mutation proof: delete the discardForeignChatAuthRecovery call in
+    // observeIdentity (frontend/src/stores/authStore.ts) and the 'signIn' and
+    // 'SIGNED_IN' cases fail; restore it and they pass. Focused command:
+    // pnpm --dir frontend exec vitest run src/store/__tests__/auth-account-isolation.test.ts -t "chat draft"
+    it.each(['signIn', 'SIGNED_IN'])(
+      "a rejected A chat draft does not survive B's %s",
+      async (transition) => {
+        stageChatAuthRecovery({
+          attemptId: 'A-attempt',
+          ownerUserId: 'A',
+          threadId: 'A-only-thread',
+          prompt: 'A-only-prompt',
+        });
+        markChatAuthRecoveryReady('A-attempt');
+        useAuthStore.getState().invalidateRejectedSession('A');
+        // The rejection itself keeps A's draft for A's own re-login.
+        expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toContain(
+          'A-only-prompt'
+        );
+
+        transportIdentity('B');
+        if (transition === 'signIn')
+          await useAuthStore.getState().signIn('b@example.invalid', 'pw');
+        else auth.listener!('SIGNED_IN', session('B'));
+
+        expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+      }
+    );
+
+    it("keeps A's rejected chat draft for A's own re-login", async () => {
+      stageChatAuthRecovery({
+        attemptId: 'A-attempt',
+        ownerUserId: 'A',
+        threadId: 'A-only-thread',
+        prompt: 'A-only-prompt',
+      });
+      markChatAuthRecoveryReady('A-attempt');
+      useAuthStore.getState().invalidateRejectedSession('A');
+
+      await useAuthStore.getState().signIn('a@example.invalid', 'pw');
+
+      expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toContain(
+        'A-only-prompt'
+      );
+    });
   });
 
   it('a late rejected-session notification for A preserves B', async () => {

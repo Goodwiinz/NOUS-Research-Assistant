@@ -8,7 +8,7 @@ import {
   redactValue,
   sanitizeError,
 } from './report.mjs';
-import { createSession } from './session.mjs';
+import { BrowserUnavailableError, createSession } from './session.mjs';
 import { registry as defaultRegistry } from './scenarios.mjs';
 
 const SUITES = new Set(['smoke', 'workflow', 'adversarial', 'all']);
@@ -459,7 +459,10 @@ export async function runCampaign(config, options = {}) {
         }));
       } catch (error) {
         const assertionEvidence = sanitizeAssertionEvidence(error?.evidence);
-        report.cases.push(caseResult(scenario, 'FAIL', {
+        // A missing or unlaunchable browser is a prerequisite, not a product
+        // failure: report it as BLOCKED so it never reads as a regression.
+        const blockedByEnvironment = error instanceof BrowserUnavailableError;
+        report.cases.push(caseResult(scenario, blockedByEnvironment ? 'BLOCKED' : 'FAIL', {
           reason: sanitizeError(error, normalizedConfig.secrets ?? []).message,
           evidence: [
             sanitizeError(error, normalizedConfig.secrets ?? []),

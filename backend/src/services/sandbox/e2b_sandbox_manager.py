@@ -78,6 +78,41 @@ MAX_EXECUTION_TIMEOUT = 300  # 5 minutes
 # Maximum number of code executions per agent graph run
 MAX_EXECUTIONS_PER_RUN = 5
 
+# IN-2: the agent runs execute_code in its SLOW tool tier
+# (_nodes_tools._SLOW_TOOL_TIMEOUT_SECONDS = 120). One tool call's optional
+# package install and its cell share this budget, each followed by at most
+# one probe, so the sandbox's own limit fires before the agent's outer
+# wait_for, whose cancellation kills the box and its variables. The outer
+# limit starts before execute_tool resolves the user and claims the
+# durable-operation row, so the budget is also cut to end
+# AGENT_CELL_HEADROOM_SECONDS before that limit (tool_deadline). Only creating
+# a box is outside the budget: creation installs DEFAULT_PACKAGES (up to
+# MAX_EXECUTION_TIMEOUT) and may queue behind other threads' creations, so the
+# outer limit can still cancel that call. The box it kills is new and holds no
+# earlier variables; a cached box is returned without taking the lock. Also
+# outside the budget: killing a box after a failed probe (up to
+# SANDBOX_KILL_TIMEOUT_SECONDS) and recording the result. The outer limit can
+# end either one's wait but not the kill itself, and recording runs after the
+# cell has ended.
+AGENT_CELL_TIMEOUT_SECONDS = 90
+
+# After our limit closes the /execute stream, the code-interpreter server
+# interrupts the kernel (e2b-dev/code-interpreter#237), which keeps variables.
+# A kernel that still cannot run a no-op within this window is unhealthy.
+POST_TIMEOUT_PROBE_SECONDS = 10
+# How long before the agent's outer limit the budget must end: one probe, 1 s
+# because the cell timeout is rounded up to whole seconds, and 4 s for
+# execute_tool to record the result (complete_operation) inside that limit.
+# 90 + 15 <= 120, so a call whose setup is quick still gets the full budget.
+AGENT_CELL_HEADROOM_SECONDS = POST_TIMEOUT_PROBE_SECONDS + 5
+# A probe queued before the interrupt lands can hang, or come back aborted
+# (ipykernel ``stop_on_error``), so the window is spent in short attempts.
+_PROBE_ATTEMPT_SECONDS = 2.5
+_PROBE_RETRY_PAUSE_SECONDS = 0.25
+_PROBE_ABORTED_ERROR = "ExecutionAborted"
+# ``language`` comes from the model; an unknown one gets the Python no-op.
+_KERNEL_PROBE_CODES = {"python": "1", "bash": "true", "sh": "true"}
+
 
 # GOO-312: one-shot isolated execution for the research ``analyze`` step.
 ISOLATED_WORKDIR = "/work"
@@ -134,6 +169,24 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Every kill runs on a box that has already left the cache, so a kill that a
+# caller's cancellation abandoned would never be retried (IN-2). Each kill is
+# its own task, held here so it is not garbage-collected once its caller is
+# gone.
+SANDBOX_KILL_TIMEOUT_SECONDS = 60
+_PENDING_KILLS: set["asyncio.Task[None]"] = set()
+
+
+async def _bounded_kill(thread_id: str, sandbox: Any) -> None:
+    try:
+        await asyncio.wait_for(sandbox.kill(), timeout=SANDBOX_KILL_TIMEOUT_SECONDS)
+        logger.info("Sandbox cleaned up for thread %s", thread_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to kill sandbox for %s: %s", thread_id, type(exc).__name__
+        )
+
+
 class SandboxManager:
     """Manages E2B sandbox lifecycle with per-thread statefulness."""
 
@@ -155,6 +208,12 @@ class SandboxManager:
             raise RuntimeError(
                 "E2B is not configured. Set E2B_API_KEY environment variable."
             )
+
+        # A cached box never queues behind another thread's creation (IN-2).
+        cached = self._sandboxes.get(thread_id)
+        if cached is not None:
+            self._last_used[thread_id] = time.monotonic()
+            return cached
 
         async with self._lock:
             if thread_id in self._sandboxes:
@@ -259,12 +318,30 @@ class SandboxManager:
             )
 
         except (asyncio.TimeoutError, E2BTimeoutException):
+            # IN-2: keep the session when the interrupted kernel answers; kill
+            # only a box whose kernel is still busy (remote code not stopped).
+            kept = sandbox is not None and await self._kernel_answers(
+                thread_id, sandbox, language
+            )
             if sandbox is not None:
+                logger.info(
+                    "Execution timed out for thread %s; %s sandbox",
+                    thread_id,
+                    "keeping" if kept else "resetting",
+                )
+            if sandbox is not None and not kept:
                 await self._discard_sandbox(thread_id, sandbox)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return ExecutionResult(
                 stdout="",
-                stderr=f"Execution timed out after {timeout}s.",
+                stderr=(
+                    f"Execution timed out after {timeout}s and was interrupted, "
+                    "so the cell may have partly run. Variables from earlier "
+                    "cells are still available."
+                    if kept
+                    else f"Execution timed out after {timeout}s. The sandbox was "
+                    "reset, so earlier variables are gone."
+                ),
                 exit_code=124,
                 execution_time_ms=elapsed_ms,
                 error="timeout",
@@ -289,7 +366,7 @@ class SandboxManager:
             )
 
     async def install_packages(
-        self, thread_id: str, packages: List[str]
+        self, thread_id: str, packages: List[str], timeout: int = MAX_EXECUTION_TIMEOUT
     ) -> ExecutionResult:
         """Install additional packages in the thread's sandbox."""
         safe_packages = [
@@ -311,7 +388,7 @@ class SandboxManager:
             f"print(result.stdout); "
             f"print(result.stderr) if result.stderr else None"
         )
-        return await self.execute(thread_id, install_code)
+        return await self.execute(thread_id, install_code, timeout=timeout)
 
     async def run_isolated(
         self, spec: IsolatedSpec, restore: Optional[RestoreSpec] = None
@@ -436,14 +513,15 @@ class SandboxManager:
                 logger.warning("Isolated sandbox kill failed: %s", type(exc).__name__)
 
     async def _kill_sandbox(self, thread_id: str, sandbox: Any) -> None:
-        """Bound provider cleanup even after execution cancellation."""
-        try:
-            await asyncio.wait_for(sandbox.kill(), timeout=60)
-            logger.info("Sandbox cleaned up for thread %s", thread_id)
-        except Exception as exc:
-            logger.warning(
-                "Failed to kill sandbox for %s: %s", thread_id, type(exc).__name__
-            )
+        """Kill a box that has left the cache, within SANDBOX_KILL_TIMEOUT_SECONDS.
+
+        Cancelling the caller does not cancel the kill: nothing else could
+        retry it, so remote code would run on until the box expires (IN-2).
+        """
+        kill = asyncio.create_task(_bounded_kill(thread_id, sandbox))
+        _PENDING_KILLS.add(kill)
+        kill.add_done_callback(_PENDING_KILLS.discard)
+        await asyncio.shield(kill)
 
     async def _discard_sandbox(self, thread_id: str, sandbox: Any) -> None:
         """Evict this exact box without replenishing the execution budget."""
@@ -453,6 +531,65 @@ class SandboxManager:
         if self._sandboxes.get(thread_id) is sandbox:
             self._sandboxes.pop(thread_id)
         await self._kill_sandbox(thread_id, sandbox)
+
+    async def _kernel_answers(
+        self, thread_id: str, sandbox: Any, language: str
+    ) -> bool:
+        """Whether the kernel runs a no-op within POST_TIMEOUT_PROBE_SECONDS
+        after our timeout (IN-2).
+
+        Attempts that hang, hit the SDK's timeout or come back aborted are
+        retried until the window ends; any other failure is final. Not charged
+        to the execution budget. A run cancelled while probing still kills the
+        box, as every cancellation does (#1864).
+        """
+        code = _KERNEL_PROBE_CODES.get(
+            str(language).strip().lower(), _KERNEL_PROBE_CODES["python"]
+        )
+        loop = asyncio.get_running_loop()
+        # Python 3.11's wait_for can swallow the window's cancellation when an
+        # attempt finishes in the same loop iteration, so the loop also stops
+        # on its own deadline and never gives an attempt time past it.
+        deadline = loop.time() + POST_TIMEOUT_PROBE_SECONDS
+        try:
+            async with asyncio.timeout(POST_TIMEOUT_PROBE_SECONDS):
+                while (left := deadline - loop.time()) > 0:
+                    attempt = min(_PROBE_ATTEMPT_SECONDS, left)
+                    try:
+                        probe = await asyncio.wait_for(
+                            sandbox.run_code(code, language=language, timeout=attempt),
+                            timeout=attempt,
+                        )
+                    except (asyncio.TimeoutError, E2BTimeoutException):
+                        probe = None  # the interrupt may not have landed yet
+                    if probe is not None:
+                        if not probe.error:
+                            return True
+                        name = getattr(probe.error, "name", None)
+                        if name != _PROBE_ABORTED_ERROR:
+                            logger.warning(
+                                "Kernel probe failed for thread %s: %s",
+                                thread_id,
+                                name or type(probe.error).__name__,
+                            )
+                            return False
+                    await asyncio.sleep(_PROBE_RETRY_PAUSE_SECONDS)
+        except asyncio.CancelledError:
+            await self._discard_sandbox(thread_id, sandbox)
+            raise
+        except TimeoutError:
+            pass  # the window's timer fired first; logged below
+        except Exception as exc:
+            logger.warning(
+                "Kernel probe failed for thread %s: %s", thread_id, type(exc).__name__
+            )
+            return False
+        logger.warning(
+            "Kernel probe for thread %s got no answer within %ss",
+            thread_id,
+            POST_TIMEOUT_PROBE_SECONDS,
+        )
+        return False
 
     async def cleanup(self, thread_id: str) -> None:
         """Kill and remove sandbox for a thread."""

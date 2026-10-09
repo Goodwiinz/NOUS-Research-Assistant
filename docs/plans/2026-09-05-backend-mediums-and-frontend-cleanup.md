@@ -148,3 +148,21 @@ Closes the A12 residual from #1608.
 - R6-H3 (initial Alembic migration is `pass`): needs a real from-empty migration for ~49 tables; separate planned effort, not a fix PR.
 - Frontend sending `client_message_id` on REST create (follow-up to Task 4).
 - Browser verification of any of this; each PR body says so.
+
+## Amendment (2026-10-09)
+
+Added when this plan was committed (PR #1958). The tasks above are kept as
+written; these notes correct them and point to the current code.
+
+- Task 2: step 1(b) expects `"error": "truncated"`, but step 2 emits
+  `partial_error` so the classifier does not count a partial result as a
+  failure. Read 1(b) as `"partial_error": "truncated"`; the shipped code does
+  this (`backend/src/services/agent/tools_impl.py`, `payload["partial_error"]`).
+- Task 4: `backend/src/services/chat_service.py` does not exist.
+  `create_message` is in `backend/src/services/threads/chat_service.py`.
+- Task 5: writing the receipt after dispatch, and only logging a failed write,
+  leaves the duplicate-side-effect window open: a replay finds no receipt and
+  runs the tool again. The claim must be durable before dispatch, and an
+  ambiguous post-dispatch failure must stay `unknown`, not succeed. The shipped
+  design does this: `backend/src/services/agent/tool_operations.py` records
+  `claimed`, `dispatched`, `completed` and `unknown` states.

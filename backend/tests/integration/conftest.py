@@ -110,6 +110,32 @@ from src.models import (
 )
 
 # ============================================================================
+# Shared metadata DDL isolation
+# ============================================================================
+
+# On PostgreSQL, ``Base.metadata.create_all`` (and ``drop_all``) emit cyclic
+# foreign keys with ``AddConstraint``/``DropConstraint``, which set
+# ``_create_rule`` on the shared constraint objects for the rest of the
+# process. Every later ``CREATE TABLE`` then leaves those foreign keys out, so
+# a bounded schema built with ``Table.create()`` silently has none. Models never
+# set the rule themselves; FKs on models imported after this point start as None.
+_PRISTINE_FK_CREATE_RULES = {
+    constraint: constraint._create_rule
+    for table in Base.metadata.tables.values()
+    for constraint in table.foreign_key_constraints
+}
+
+
+@pytest.fixture(autouse=True)
+def _restore_shared_foreign_key_ddl():
+    """Undo another test's full-metadata DDL edits to the shared FK objects."""
+    yield
+    for table in Base.metadata.tables.values():
+        for constraint in table.foreign_key_constraints:
+            constraint._create_rule = _PRISTINE_FK_CREATE_RULES.get(constraint)
+
+
+# ============================================================================
 # External Service Auto-Mocking
 # ============================================================================
 

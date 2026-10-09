@@ -143,7 +143,7 @@ Copy out with `kubectl cp`. Save as `docs/audits/2026-09-29-goo-294-backfill-dry
 
 **Step 3:** `... --apply` then `... --require-resolved` → exit 0. Save both outputs alongside the dry-run file. Commit the audit files.
 
-**Step 4:** Authenticated journey (login `allocs16@gmail.com`, memory `feedback_app_login`) through Chrome: open one project → sources → run → matrix → draft; then hit a foreign project id, an archived project and a soft-deleted one on `/research-engine/projects/{id}`, `/blueprints`, `/runs`, `/steps`. Record the four status codes. Screenshot the single-project view (no duplicate cards).
+**Step 4:** Authenticated journey (the dev owner account; login in memory `feedback_app_login`) through Chrome: open one project → sources → run → matrix → draft; then hit a foreign project id, an archived project and a soft-deleted one on `/research-engine/projects/{id}`, `/blueprints`, `/runs`, `/steps`. Record the four status codes. Screenshot the single-project view (no duplicate cards).
 
 **Step 5:** Comment on GOO-294 with SHA, backfill counts, denial codes, screenshot; move to Done.
 
@@ -214,3 +214,21 @@ Copy out with `kubectl cp`. Save as `docs/audits/2026-09-29-goo-294-backfill-dry
 ### Task 10: Linear bookkeeping
 
 For each ticket: attach the audit file path, CI job URL, deployed SHA; tick the remaining acceptance boxes in the description; set status Done. GOO-293 stays In Review until Task 8 finishes. Don't restate merged evidence already in the descriptions.
+
+## Amendment (2026-10-09)
+
+Added when this plan was committed (PR #1958). The tasks above are kept as
+written; these notes correct them and point to the current code.
+
+- Task 4, Step 4: the account's personal email address was replaced with a
+  role label before publication.
+- Task 1: `agent_runs` has no `id` column. Its primary key is the string
+  `job_id` (`backend/src/models/agent_run.py:61`), so the test SQL must insert,
+  delete and query `job_id`.
+- Task 7, Step 1: `git ls-tree` lists only the top-level entry without `-r`.
+  Use `git ls-tree -r --name-only origin/develop -- backend/tests/integration | grep -i review`.
+- Task 9, Step 1: `GET pulls/{n}/comments` returns individual review comments,
+  not threads or their resolved state. List unresolved threads through
+  GraphQL (`reviewThreads { nodes { id isResolved } }`), as
+  `docs/superpowers/plans/2026-08-27-nous-plan-2b-github-reconciliation.md`
+  does for `unresolved_review_threads`.
