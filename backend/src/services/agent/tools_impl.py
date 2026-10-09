@@ -5109,23 +5109,95 @@ async def _tool_execute_code(
     if not thread_id:
         return {"error": "Code execution requires a conversation thread."}
 
-    from src.services.sandbox.e2b_sandbox_manager import get_sandbox_manager
+    from src.services.agent.tool_deadline import tool_call_deadline
+    from src.services.sandbox.e2b_sandbox_manager import (
+        AGENT_CELL_HEADROOM_SECONDS,
+        AGENT_CELL_TIMEOUT_SECONDS,
+        get_sandbox_manager,
+    )
 
     manager = get_sandbox_manager()
 
     if not manager.is_available:
         return {"error": "Code execution is not available. E2B_API_KEY not configured."}
 
+    # IN-2: package install and the cell share one budget below the agent's
+    # SLOW tool limit, so the sandbox interrupts an over-long cell itself and
+    # keeps the session instead of the outer limit cancelling the call. That
+    # limit started before the user lookup and operation claim, so the budget
+    # ends at the earlier of AGENT_CELL_TIMEOUT_SECONDS from here or
+    # AGENT_CELL_HEADROOM_SECONDS (a probe, rounding, and time to record the
+    # result) before that limit.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + AGENT_CELL_TIMEOUT_SECONDS
+    outer_deadline = tool_call_deadline()
+    if outer_deadline is not None:
+        cutoff = outer_deadline - AGENT_CELL_HEADROOM_SECONDS
+        if cutoff - loop.time() < 1:
+            # Even the manager's 1 s minimum could outlast the outer limit,
+            # whose cancellation kills the box. Nothing ran or was spent.
+            # error_recovery's TOOL_ERROR_HINTS classifies this as transient
+            # with the same suggestion; the durable-operation barrier replays
+            # this result to an identical call later in the same turn.
+            return {
+                "status": "error",
+                "stdout": "",
+                "stderr": (
+                    "This call used its time limit before the code could "
+                    "start, so the code was not run."
+                ),
+                "exit_code": 124,
+                "execution_time_ms": 0,
+                "description": description,
+                "error": "sandbox_budget_exhausted",
+                "suggestion": (
+                    "Nothing ran because setup used this call's time limit. "
+                    "Run the code again in a later turn; repeating the "
+                    "identical call in this turn returns this result again."
+                ),
+            }
+        deadline = min(deadline, cutoff)
+
+    def budget_left() -> int:
+        return max(
+            1, min(AGENT_CELL_TIMEOUT_SECONDS, math.ceil(deadline - loop.time()))
+        )
+
     # Install extra packages if requested
+    install_warning: Optional[str] = None
     if packages:
-        install_result = await manager.install_packages(thread_id, packages)
+        install_result = await manager.install_packages(
+            thread_id, packages, timeout=budget_left()
+        )
+        if install_result.error == "timeout" or deadline - loop.time() < 1:
+            # The install used the budget. Running the cell on the manager's
+            # 1 s minimum would burn an execution and report the install's
+            # timeout as the code's own; the install's stderr says whether
+            # the box was kept or reset.
+            stderr = (
+                "Installing packages used this call's time budget, so the code "
+                "was not run. Install the packages in a separate call (for "
+                'example with code="pass"), then run the code without packages.'
+            )
+            if install_result.stderr:
+                stderr += f" Package install: {install_result.stderr}"
+            return {
+                "status": "error",
+                "stdout": install_result.stdout,
+                "stderr": stderr,
+                "exit_code": install_result.exit_code or 124,
+                "execution_time_ms": install_result.execution_time_ms,
+                "description": description,
+                "error": "package_install_timeout",
+            }
         if install_result.error:
             logger.warning(f"Package install warning: {install_result.stderr}")
+            install_warning = f"Package install failed ({install_result.error})."
+            if install_result.stderr:
+                install_warning += f" {install_result.stderr}"
 
     result = await manager.execute(
-        thread_id=thread_id,
-        code=code,
-        language=language,
+        thread_id=thread_id, code=code, language=language, timeout=budget_left()
     )
 
     response: Dict[str, Any] = {
@@ -5150,6 +5222,9 @@ async def _tool_execute_code(
 
     if result.results:
         response["outputs"] = result.results
+
+    if install_warning:
+        response["warning"] = install_warning
 
     return response
 

@@ -823,8 +823,15 @@ TOOL_REGISTRY = ToolRegistry(
             intents=frozenset({AgentIntent.RESEARCH}),
             subgraphs=frozenset({AgentSubgraph.RESEARCH}),
             subgraph_positions=((AgentSubgraph.RESEARCH, 9),),
+            # SLOW (IN-2): the sandbox interrupts a cell after
+            # AGENT_CELL_TIMEOUT_SECONDS and keeps the box; the 30 s default
+            # tier cancelled the call first, and cancellation kills the box.
             policy_tags=frozenset(
-                {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
+                {
+                    ToolPolicyTag.DESTRUCTIVE,
+                    ToolPolicyTag.NO_OUTER_RETRY,
+                    ToolPolicyTag.SLOW,
+                }
             ),
             effect_mode=ToolEffectMode.EXTERNAL,
         ),
