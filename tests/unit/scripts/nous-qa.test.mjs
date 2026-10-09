@@ -1958,6 +1958,19 @@ test('rendered text pattern strips markdown and tolerates collapsed or dropped l
   assert.throws(() => renderedTextPattern('```\n```'), /no renderable text/);
 });
 
+test('rendered text pattern for a one-word stop requires the word to stand alone (Q-I4)', () => {
+  const single = renderedTextPattern('**1**\n');
+  assert.match('1', single);
+  assert.match('You stopped 1', single);
+  assert.doesNotMatch('10', single, 'a one-token stop must not match a longer number');
+  assert.doesNotMatch('12:30', single);
+  assert.doesNotMatch('11 12', single);
+  // A words bound below two never reduces a multi-word answer to one token.
+  const two = renderedTextPattern('1\n2\n3', 1);
+  assert.match('1 2', two);
+  assert.doesNotMatch('10 20', two);
+});
+
 test('idempotency oracle rejects a duplicate persisted row even when IDs are echoed', () => {
   const row = { client_message_id: 'cmid-1', content: 'exact content' };
   assert.throws(() => assertIdempotentMessage({

@@ -120,7 +120,9 @@ export function assertIdempotentMessage({ firstId, secondId, messages, clientMes
  * Pattern for a model answer as the transcript renders it: code fences,
  * inline code, headings, list markers and emphasis removed, then the first
  * few words joined by optional whitespace, because the renderer may collapse
- * or drop the line breaks between them. Raw markdown would not match.
+ * or drop the line breaks between them. Raw markdown would not match. A
+ * single-word answer (a stop that landed after one token) must stand alone
+ * in the row: "1" matches "1" but not "10" or "12:30".
  */
 export function renderedTextPattern(markdown, words = 8) {
   const plain = String(markdown ?? '')
@@ -131,9 +133,11 @@ export function renderedTextPattern(markdown, words = 8) {
     .replace(/[*_~]+/g, '')
     .split(/\s+/)
     .filter(Boolean)
-    .slice(0, words);
+    .slice(0, Math.max(2, words));
   assertThat(plain.length > 0, 'Model answer has no renderable text to match');
-  return new RegExp(plain.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s*'));
+  const escaped = plain.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (escaped.length === 1) return new RegExp(`(?:^|\\s)${escaped[0]}(?:\\s|$)`);
+  return new RegExp(escaped.join('\\s*'));
 }
 
 function threadUrl(threadId) {
