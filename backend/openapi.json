@@ -1961,12 +1961,6 @@
               }
             ],
             "title": "Current Version Id"
-          },
-          "message": {
-            "const": "Artifact publication conflict",
-            "default": "Artifact publication conflict",
-            "title": "Message",
-            "type": "string"
           }
         },
         "required": [
@@ -1975,14 +1969,44 @@
         "title": "ArtifactEditConflictDetail",
         "type": "object"
       },
-      "ArtifactEditConflictResponse": {
+      "ArtifactEditConflictError": {
         "properties": {
-          "detail": {
+          "details": {
             "$ref": "#/components/schemas/ArtifactEditConflictDetail"
+          },
+          "message": {
+            "const": "Artifact publication conflict",
+            "default": "Artifact publication conflict",
+            "title": "Message",
+            "type": "string"
+          },
+          "status_code": {
+            "const": 409,
+            "default": 409,
+            "title": "Status Code",
+            "type": "integer"
+          },
+          "type": {
+            "const": "http_error",
+            "default": "http_error",
+            "title": "Type",
+            "type": "string"
           }
         },
         "required": [
-          "detail"
+          "details"
+        ],
+        "title": "ArtifactEditConflictError",
+        "type": "object"
+      },
+      "ArtifactEditConflictResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ArtifactEditConflictError"
+          }
+        },
+        "required": [
+          "error"
         ],
         "title": "ArtifactEditConflictResponse",
         "type": "object"

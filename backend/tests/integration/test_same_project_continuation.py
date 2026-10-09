@@ -493,6 +493,69 @@ async def _editing_is_conflict_safe(
             version_id=original.version_id,
         )
         assert content == b"report\n"
+    winner = next(item for item in outcomes if isinstance(item, ArtifactVersionDTO))
+    await _identical_edit_is_replay_safe(factory, context, winner, monkeypatch)
+
+
+async def _identical_edit_is_replay_safe(
+    factory: async_sessionmaker[AsyncSession],
+    context: IntegrationContext,
+    parent: ArtifactVersionDTO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow identical upload resumes only after the winning edit commits."""
+    storage = artifact_service.get_artifact_storage()
+    real_put = storage.put
+    first_started, published = asyncio.Event(), asyncio.Event()
+    calls = 0
+    publication_id = uuid.uuid4()
+
+    async def paused_put(key: str, content: bytes, mime_type: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await asyncio.wait_for(published.wait(), timeout=10)
+        await real_put(key, content, mime_type)
+
+    async def edit() -> ArtifactVersionDTO:
+        async with factory() as db:
+            return await edit_version(
+                db,
+                user_id=context.user_id,
+                organization_id=context.organization_id,
+                artifact_id=parent.artifact_id,
+                expected_parent_version_id=parent.version_id,
+                publication_id=publication_id,
+                text="identical PostgreSQL edit",
+            )
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(storage, "put", paused_put)
+        slow = asyncio.create_task(edit())
+        await asyncio.wait_for(first_started.wait(), timeout=10)
+        try:
+            winner = await asyncio.wait_for(edit(), timeout=10)
+        finally:
+            published.set()
+        replay = await asyncio.wait_for(slow, timeout=10)
+    assert replay.version_id == winner.version_id
+    async with factory() as db:
+        content, _, _ = await artifact_service.read_version_content(
+            db,
+            user_id=context.user_id,
+            organization_id=context.organization_id,
+            version_id=winner.version_id,
+        )
+        assert content == b"identical PostgreSQL edit"
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(ArtifactVersion)
+                .where(ArtifactVersion.artifact_id == parent.artifact_id)
+            )
+            == 3
+        )
 
 
 async def _journey(

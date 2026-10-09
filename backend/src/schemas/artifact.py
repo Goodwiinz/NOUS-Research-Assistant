@@ -121,9 +121,15 @@ class ArtifactCapabilitiesDTO(BaseModel):
 
 
 class ArtifactEditConflictDetail(BaseModel):
-    message: Literal["Artifact publication conflict"] = "Artifact publication conflict"
     current_version_id: UUID | None
 
 
+class ArtifactEditConflictError(BaseModel):
+    message: Literal["Artifact publication conflict"] = "Artifact publication conflict"
+    status_code: Literal[409] = 409
+    type: Literal["http_error"] = "http_error"
+    details: ArtifactEditConflictDetail
+
+
 class ArtifactEditConflictResponse(BaseModel):
-    detail: ArtifactEditConflictDetail
+    error: ArtifactEditConflictError

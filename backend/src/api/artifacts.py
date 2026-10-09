@@ -5,6 +5,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.integrations.auth import (
@@ -21,6 +22,7 @@ from src.schemas.artifact import (
     ArtifactConflict,
     ArtifactDigestMismatch,
     ArtifactEditConflictDetail,
+    ArtifactEditConflictError,
     ArtifactEditConflictResponse,
     ArtifactError,
     ArtifactNotFound,
@@ -243,7 +245,7 @@ async def edit_artifact(
     request: EditArtifactVersionRequest,
     user: User = Depends(require_interactive_user),
     db: AsyncSession = Depends(get_db),
-) -> ArtifactVersionDTO:
+) -> ArtifactVersionDTO | JSONResponse:
     if not settings.ARTIFACT_EDITING_ENABLED:
         raise HTTPException(503, "Artifact editing is disabled")
     user_id, organization_id = _identity(user)
@@ -256,11 +258,19 @@ async def edit_artifact(
             **request.model_dump(),
         )
     except ArtifactConflict as error:
-        raise HTTPException(
-            409,
-            ArtifactEditConflictDetail(
-                current_version_id=error.current_version_id
+        # Return the typed canonical envelope directly: the global exception
+        # handler otherwise puts a dictionary inside error.message and loses
+        # the details contract used by the browser's shared error parser.
+        return JSONResponse(
+            status_code=409,
+            content=ArtifactEditConflictResponse(
+                error=ArtifactEditConflictError(
+                    details=ArtifactEditConflictDetail(
+                        current_version_id=error.current_version_id
+                    )
+                )
             ).model_dump(mode="json"),
-        ) from error
+            headers={"Cache-Control": "private, no-store"},
+        )
     except ArtifactError as error:
         raise _http(error) from error
