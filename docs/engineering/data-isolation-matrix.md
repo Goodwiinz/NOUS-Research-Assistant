@@ -11,12 +11,53 @@ docstring) and [backend.md](backend.md).
 
 Two different scopes, never mixed. **Documents, files, citations and document
 search are organization-scoped**: any user in the document's organization can
-read it, nobody outside can, and `is_public` does not cross organizations.
+read it, nobody outside can, and `is_public` does not cross organizations. A
+document's `is_public` flag is a label and a list/search filter only: it grants
+nothing across organizations and hides nothing inside one, so a colleague's
+private document and its citations read the same as a public one (see the
+GOO-410 decision below). Uploader-only rules apply to mutations (delete,
+metadata edit, reprocess), never to reads.
 **Workspaces, conversations, threads and messages are membership-scoped**:
 owner, active member, or `is_public` workspace (visible to every
 authenticated user, cross-organization by design). Organization co-location
 grants no workspace access. A soft-deleted ancestor revokes every descendant.
 Denials answer 404 or an empty list (never 403), so ids cannot be probed.
+
+### Decision (GOO-410, 2026-10-08)
+
+Documents are **organization-shared**. The evidence: `backend/AGENTS.md`
+("Document, content-hash deduplication, and search-suggestion access is
+organization scoped"); the policy paragraph above; the
+`backend/src/services/threads/workspace_access.py` module docstring; row D2
+(same-org colleague C reads B's private document: 200 by design); and the
+2026-10-07 security audit, which rejected candidate A2 (same-org read of a
+private document through `/citations/extract`) because org-wide read is the
+platform norm. GOO-410 / GOO-398 removed the contradicting uploader-or-public
+rule from the citation reads (`_document_is_accessible` /
+`_document_access_clause` in `backend/src/api/research/citations.py`) and from
+adding a document to a project and from the unused `can_access_document`
+dependency (`backend/src/core/dependencies.py`), deleted the never-firing
+private checks in `backend/src/api/documents/documents.py`, and scoped the
+project bibliography (`GET /api/v1/projects/{id}/bibliography`) to the
+caller's organization like the other project reads (rows CI4, CI6 and
+PD1-PD4).
+
+Evidence revision: rows CI4, CI6 and PD1-PD4 were marked pass from local runs
+of `backend/tests/integration/two_account` on branch commit `5d958e51d`
+(base `develop` `9c90ed8d3`). They were re-run green after `develop`
+(including GOO-400's CI5/X4 rows) was merged in at `235725cc1`: the
+two-account and citation suites gave 164 passed. The producer of record is
+the PR's Integration Tests job on its final head.
+
+Making documents private to their uploader would be a separate product
+change, not a fix. It would need the read boundary changed on the documents
+list and detail routes (`GET /api/v1/documents` and its `/{id}` reads:
+detail, `/entities`, `/status`, `/figures`, `/tables`, `/integrity-score`),
+the files read and download routes (`GET /api/v1/files/`,
+`/{id}`, `/{id}/download`, `/{id}/content`, `/{id}/metadata`), and search
+(`POST /api/v1/documents/search`, `/api/v1/search/*`, `/api/v2/search/*`,
+suggestions), followed by the citation, project and agent-tool reads that
+mirror them.
 
 ## Accounts and seed
 
@@ -70,12 +111,13 @@ once it has); **not covered** = no automated check yet.
 | D3 | C → `b-doc` after soft delete | same routes + lists + search | 404 / absent | pass |
 | S1 | A | `GET /api/v1/documents`, `GET /api/v1/files/?search=`, `POST /api/v1/documents/search` (incl. `page=2&size=1`) | only `a-doc`; `total == 1` | pass |
 | S1+ | C | `POST /api/v1/documents/search` | finds org-b rows (positive control) | pass |
-| CI1 | A → `b-cit` (foreign private) | `GET /api/v1/citations/{id}`, `POST /api/v1/citations/export` | 404 / no title or quote | pass |
+| CI1 | A → `b-cit` (foreign private) | `GET /api/v1/citations/{id}`, list + `total`, `POST /api/v1/citations/export` | 404 / absent / export 404, no title or quote | pass |
 | CI1+ | A → `a-cit` | `GET /api/v1/citations/{id}` | 200 | pass |
 | CI2 | A → `b-pub-cit` (foreign `is_public`) | detail, list + `total`, export | 404 / absent / `total == 1` | pass (GOO-349) |
 | CI3 | A → `a-old-org-cit` (A uploaded it in org-b) | detail, list + `total`, export | 404 / absent | pass (GOO-349) |
-| CI4 | C → `b-cit` (same org, private) | citation reads | Today: denied (uploader-or-public rule, stricter than D2). GOO-349 decides the intended rule. | not covered |
+| CI4 | C → `b-cit` (same org, private) | detail, list + `total`, export | 200 with the quote / all three org-b citations listed, `total == 3` / exported (organization-shared, like D2) | pass (GOO-398) |
 | CI5 | C (invited member of `b`) → `b-proj`; A (org-a, also invited); C after B removes them | `POST /api/v1/citations/export` with `project_id` (document-metadata fallback), bibtex/ieee/apa/mla | C: only `c-proj-doc`, one BibTeX entry, no title, quote, DOI or arXiv id of `a-proj-doc`/`c-gone-doc` or their citations; with only those two links left, 404. A and removed C: 404, no canary | pass (GOO-400) |
+| CI6 | B, C → `b-cit` after `b-doc` is soft-deleted | detail, list + `total`, export | 404 / absent, `total == 2` / export 404 | pass (GOO-398) |
 | S2 | A | `POST /api/v1/search/`, `/search/hybrid`, `/api/v2/search/*`, suggestions | org/membership-scoped | pending CI (GOO-399): rows S2a–S2m below passed locally on PostgreSQL 14; they flip to pass when the Integration Tests step "Run two-account PostgreSQL search isolation tests" passes on the PR head |
 
 ### Search on PostgreSQL (`test_search_isolation_postgres.py`)
@@ -126,6 +168,22 @@ Not covered here: the other `/api/v1/search` routes (`/indexes`,
 placeholders that return no data), `GET /api/v2/search/health`,
 `/api/v1/search-quality/*`, `/api/v1/knowledge-graph/*`, and the Neo4j entity
 scope itself, which needs a graph database.
+
+### Project documents and bibliography (`test_project_document_isolation.py`)
+
+The file seeds `a-project` in workspace `a` and `b-project` in workspace `b`.
+Workspace membership may cross organizations, so a project can hold a
+foreign-org document: an org-a editor of `b` can link an org-a document
+through `POST /api/v2/collections/{id}/documents`, which accepts any
+document of the caller's own organization.
+
+| Row | Caller → target | Surface | Expected | Status |
+| --- | --- | --- | --- | --- |
+| PD1 | A → `b-doc`, `b-pub-doc`, `a-old-org-doc` | `POST /api/v1/projects/{a-project}/documents` | 404, no title/content, no link row | pass (GOO-410) |
+| PD1+ | C (editor of `b`) → `b-doc` (same org, private) | `POST /api/v1/projects/{b-project}/documents` | 201, linked (organization-shared, like D2) | pass (GOO-410) |
+| PD2 | B, C → `b-doc` after soft delete | same route on `b-project` | 404, no link row | pass (GOO-410) |
+| PD3 | B → `b-project` holding `b-doc` and A's org-a `a-doc` (linked by A as an editor of `b`) | `GET /api/v1/projects/{id}/bibliography`, citation rows | `b-cit` only, `citation_count == 1`, no `a-cit`/`a-doc` text; A gets 404 | pass (GOO-410) |
+| PD4 | B → same project with `b-cit` soft-deleted, then with `b-doc` soft-deleted | same route, document-metadata fallback | `b-doc` metadata only, then nothing; never `a-doc` | pass (GOO-410) |
 
 ### Chat and exports (`test_chat_isolation.py`)
 

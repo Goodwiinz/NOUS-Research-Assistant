@@ -10,20 +10,18 @@ def main() -> int:
     try:
         rule = json.load(sys.stdin)
         checks = rule.get("requiredStatusChecks", [])
-        valid = (
-            rule.get("requiresStatusChecks") is True
-            and rule.get("requiresStrictStatusChecks") is True
-            and any(
-                check.get("context") == "Release Gate"
-                and (check.get("app") or {}).get("databaseId") == 15368
-                for check in checks
-            )
+        # Strict checks are not required: release-dev waits for a successful full
+        # Test Pipeline push run on the develop SHA, which tests the merged result.
+        valid = rule.get("requiresStatusChecks") is True and any(
+            check.get("context") == "Release Gate"
+            and (check.get("app") or {}).get("databaseId") == 15368
+            for check in checks
         )
     except (ValueError, AttributeError, TypeError):
         valid = False
     if not valid:
         print(
-            "::error::develop must require an up-to-date Release Gate from GitHub Actions before automatic release promotion.",
+            "::error::develop must require the Release Gate check from GitHub Actions before automatic release promotion.",
             file=sys.stderr,
         )
         return 1
