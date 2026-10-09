@@ -235,7 +235,10 @@ async def test_live_leased_row_belongs_to_its_worker(session_factory):
         status="running",
         updated_at=STALE,
         lease_owner="celery:other",
-        lease_expires_at=NOW + timedelta(minutes=5),
+        # From the clock at run time, not the import-time NOW: the sweeper
+        # compares against the real clock, and a full xdist run can start
+        # this test more than 5 minutes after collection.
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     p1, p2, p3 = _sweep(session_factory)
     with p1, p2, p3:

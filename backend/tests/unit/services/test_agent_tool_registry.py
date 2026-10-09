@@ -533,6 +533,7 @@ class TestProductionToolRegistryParity:
             "revise_draft",
             "compare_documents",
             "search_arxiv",
+            "execute_code",
         }
         assert {
             descriptor.name
