@@ -1361,15 +1361,25 @@ async def test_reopen_requires_fresh_observations_from_both(db: AsyncSession) ->
     assert item.reveal_state == "hidden"
     assert item.resolution is not None and item.resolution.basis == "reopened"
     assert (reopened.counts.revealed, reopened.counts.conflicts) == (0, 0)
+    assert item.observation is None
+    assert (reopened.counts.screened, reopened.counts.remaining) == (0, 3)
     again = await _vote(
         db, dual, "r", report, "k3", "exclude", supersedes_observation_id=first.id
     )
     assert again.resolution is None  # r2's old input is not fresh
+    own = await screening_service.my_queue(
+        db, _reviewer(project), dual.queue.id, project.reviewer
+    )
+    assert own.items[0].observation is not None
+    assert own.items[0].observation.id == again.id
+    assert (own.counts.screened, own.counts.remaining) == (1, 2)
     mine = await screening_service.my_queue(
         db, _reviewer(project), dual.queue.id, project.reviewer2
     )
     # r's new observation is not an input yet: hidden from r2.
     assert str(again.id) not in mine.model_dump_json()
+    assert mine.items[0].observation is None
+    assert (mine.counts.screened, mine.counts.remaining) == (0, 3)
     fresh = await _vote(
         db, dual, "r2", report, "k4", "exclude", supersedes_observation_id=second.id
     )
@@ -1378,6 +1388,10 @@ async def test_reopen_requires_fresh_observations_from_both(db: AsyncSession) ->
     assert fresh.resolution.input_observation_ids == sorted(
         [again.id, fresh.id], key=str
     )
+    resolved = await screening_service.my_queue(
+        db, _reviewer(project), dual.queue.id, project.reviewer
+    )
+    assert (resolved.counts.screened, resolved.counts.remaining) == (1, 2)
     assert await _count(db, ScreeningResolution) == 3
     history = await screening_service.history(
         db, _supervisor(project), dual.queue.id, project.supervisor
