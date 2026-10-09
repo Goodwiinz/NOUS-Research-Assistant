@@ -23,6 +23,7 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.agent.agent_submission_service import finalize_submission
 from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
+from src.services.harness.prompt_context import build_harness_prompt, prompt_is_current
 from src.services.harness.runs import (
     authorize_external_submission,
     cancel_undelivered_start,
@@ -186,25 +187,28 @@ async def dispatch_pending(db: AsyncSession) -> int:
             except IntegrationAccessDenied:
                 await terminalize(outbox, run, cancelled=False)
                 continue
-            message: Any = (
-                await db.get(ChatMessage, run.user_message_id)
-                if run.user_message_id is not None
-                else None
-            )
-            if (
-                message is None
-                or not isinstance(message.content, str)
-                or not message.content.strip()
-            ):
+            try:
+                prompt = await build_harness_prompt(db, run_id=run.job_id)
+            except IntegrationAccessDenied:
                 await terminalize(outbox, run, cancelled=False)
                 continue
+            run.run_metadata = {
+                **(run.run_metadata or {}),
+                "harness_prompt": {
+                    "source_message_ids": [
+                        str(value) for value in prompt.source_message_ids
+                    ],
+                    "source_digest": prompt.source_digest,
+                    "history_truncated": prompt.history_truncated,
+                },
+            }
             db.add(
                 HarnessCommand(
                     id=uuid4(),
                     run_id=run.job_id,
                     generation=session.generation,
                     kind="start",
-                    body={"kind": "start", "input": message.content},
+                    body={"kind": "start", "input": prompt.input},
                     expires_at=grant.expires_at,
                 )
             )
@@ -318,6 +322,16 @@ async def lease_commands(
                     not settings.HARNESS_BRIDGE_ENABLED or run.cancel_requested_at
                 ):
                     continue
+                if command.kind == "start" and command.lease_until is None:
+                    try:
+                        valid = await prompt_is_current(
+                            db, run_id=run.job_id, body=command.body
+                        )
+                    except IntegrationAccessDenied:
+                        valid = False
+                    if not valid:
+                        await cancel_undelivered_start(db, run_id=run.job_id)
+                        continue
                 # Expiry renewal does not change a native-action identity.
                 command.expires_at = grant.expires_at
                 command.lease_until = min(
