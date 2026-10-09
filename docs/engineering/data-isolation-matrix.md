@@ -221,16 +221,27 @@ fails X4 there. Anywhere else X4 skips and names the reason.
 
 ### Browser account switching (GOO-354)
 
-`tests/e2e/tests/account-switch-isolation.spec.ts`: four Chromium smoke cases
-sign in as seeded account A, switch to B in the same browser, and check chat,
-agent panel, project, and search canaries. One holds an A search response across
-sign-out; another rejects an A chat stream before B signs in. The chat case
-also checks the selected thread in `localStorage`. The tests intercept synthetic
-agent, project, and search responses while real credentials exercise sign-in.
-Client store clearing is GOO-350 (PR #1854), with chat request lifetime
-handling in PR #1776. Real two-JWT Data API probes and a deployed browser run
-are still pending; a passing source or PR test does not prove deployed
-isolation.
+`tests/e2e/tests/account-switch-isolation.spec.ts` runs five Chromium smoke
+cases. Each signs in as seeded account A, switches to B in the same browser,
+and checks that an A canary never reaches B. Agent, project, and search
+responses are synthetic (intercepted); sign-in uses real credentials.
+
+| Row | Switch | Checks | Guard | Status |
+| --- | --- | --- | --- | --- |
+| BS1 | same tab | chat transcript; the selected thread and canary in `localStorage` | client store clearing, GOO-350 (PR #1854) | pass |
+| BS2 | same tab | agent panel | client store clearing, GOO-350 | pass |
+| BS3 | same tab | `/research` never renders A's project, checked by a MutationObserver that sees a one-render flash | `useProjectStore` reset in `clearUserScopedClientState` | pending CI |
+| BS4 | second tab signs A out and B in; `/search` stays mounted | A's earlier answer and a held A response never show for B | `AuthProvider` `key: accountRevision` remount; the account abort signal | pending CI |
+| BS5 | A's chat stream is rejected, then B signs in | the canary is absent from the page, `localStorage`, and the `sessionStorage` chat recovery draft | `observeIdentity` discards a draft owned by another account | pending CI |
+
+BS5 found a leak: B's chat route never reopens A's thread, so nothing consumed
+or removed A's staged prompt, and it stayed in B's `sessionStorage` for up to
+15 minutes. The unit counterpart is
+`frontend/src/store/__tests__/auth-account-isolation.test.ts` ("chat
+draft"). Each pending row lists, beside its test, the mutation that must turn
+it red. Chat request lifetime handling is PR #1776. Real two-JWT Data API
+probes and a deployed browser run are still pending; a passing source or PR
+test does not prove deployed isolation.
 
 ## Commands
 
