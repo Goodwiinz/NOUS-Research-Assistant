@@ -639,6 +639,21 @@ class HybridSearchService:
         """Execute knowledge graph search"""
         start_time = time.time()
 
+        # GOO-399: fail closed like the full-text arm (GOO-351). With no
+        # organization search_entities gets no scope at all and its query
+        # spans every tenant's entities.
+        if not organization_id:
+            logger.warning(
+                "Knowledge graph search rejected: missing organization scope"
+            )
+            return SearchSourceResult(
+                source_type=SearchSourceType.KNOWLEDGE_GRAPH,
+                results=[],
+                search_time_ms=0,
+                total_available=0,
+                success=True,
+            )
+
         try:
             # Import and use knowledge graph service. Must import the
             # *submodule* attribute, not the package: `from
@@ -1239,12 +1254,20 @@ class HybridSearchService:
         old double-hasattr collected nothing and hybrid suggestions were
         permanently empty (R2-L25). Titles are normalized the same way the
         fulltext suggestion query normalizes them.
+
+        GOO-399: graph hits are skipped. Their "title" is an entity name, not
+        a document title, and nothing re-checks them against PostgreSQL;
+        fusion only lets them corroborate a document another source returned,
+        so they must not reach the response through suggestions either.
         """
         import re as _re
 
         suggestions: List[str] = []
         for source_result in source_results.values():
-            if not source_result.success:
+            if (
+                not source_result.success
+                or source_result.source_type == SearchSourceType.KNOWLEDGE_GRAPH
+            ):
                 continue
             for result in source_result.results[:5]:
                 title = ""
