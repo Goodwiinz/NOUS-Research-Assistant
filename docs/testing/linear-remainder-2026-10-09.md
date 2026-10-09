@@ -187,7 +187,9 @@ pass (`/tmp/rag-root-hosted-review-green.log`).
 Filtering out the active sidebar conversation retires its numeric reveal target
 and cancels any queued frame; subsequent row measurements cannot scroll to a
 different conversation. All 28 sidebar cases pass, including frame/measurement
-regression proof (`/tmp/rag-sidebar-filter-reveal-focused.log`).
+regression proof (`/tmp/rag-sidebar-filter-reveal-focused.log`); the fresh full
+frontend suite passes 378 files and 2,918 tests
+(`/tmp/rag-sidebar-filter-reveal-all.log`).
 
 The selected-skills PR also revokes external catalog readiness after a selected
 skill or version is deleted; browser reselection can remove it while retaining
@@ -195,3 +197,9 @@ other valid frozen versions. Its final affected matrix passes 76 checks includin
 two real PostgreSQL checks; independent review passes all 37 selected-skill cases.
 The final local CI wrapper passes, including the single-head check, targeted
 migration probe and empty-database upgrade.
+
+The pinned oasdiff 1.23.0 comparison against the develop snapshot reports zero
+ERR-level breaks and one nonblocking warning for correcting the old optional
+`detail` property (`/tmp/rag-root-422-current-compat.log`). The wire response
+already uses the application error envelope; no exception-handler behavior or
+breaking-change bypass label was added.
