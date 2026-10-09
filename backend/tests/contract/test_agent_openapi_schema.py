@@ -33,9 +33,13 @@ def test_execute_request_schema_matches_runtime_constraints() -> None:
 def test_stream_confirm_uses_the_same_thread_id_contract() -> None:
     thread_schema = StreamConfirmRequest.model_json_schema()["properties"]["thread_id"]
     assert thread_schema["pattern"] == UUID_STRICT_PATTERN
-    assert StreamConfirmRequest(thread_id=str(uuid4()), confirmed=True)
+    assert StreamConfirmRequest(
+        thread_id=str(uuid4()), confirmed=True, approval_id="a" * 64
+    )
     with pytest.raises(ValidationError):
-        StreamConfirmRequest(thread_id="not-a-uuid", confirmed=True)
+        StreamConfirmRequest(
+            thread_id="not-a-uuid", confirmed=True, approval_id="a" * 64
+        )
 
 
 def test_stream_success_responses_are_declared_as_sse() -> None:

@@ -137,13 +137,21 @@ class _FakeGraphWithInterruptedRoot:
         if self.aget_state_calls == 1:
             return SimpleNamespace(values={}, tasks=())
         interrupt = SimpleNamespace(
+            id="test-interrupt",
             value={
                 "pending_tools": ["create_project"],
                 "tools": [{"name": "create_project", "args": {}}],
-            }
+            },
         )
         task = SimpleNamespace(interrupts=[interrupt])
-        return SimpleNamespace(values=self.interrupted_values, tasks=[task])
+        return SimpleNamespace(
+            values={
+                **self.interrupted_values,
+                "user_id": config["configurable"]["user_id"],
+            },
+            tasks=[task],
+            config={"configurable": {"checkpoint_id": "saved-interrupt"}},
+        )
 
 
 @pytest.mark.asyncio

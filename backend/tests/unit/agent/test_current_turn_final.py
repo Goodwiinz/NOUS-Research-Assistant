@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
+
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 
 pytestmark = pytest.mark.unit
 
@@ -394,15 +397,18 @@ async def test_queued_initial_approval_pause_uses_durable_publication() -> None:
     class PendingGraph(_ResultGraph):
         async def aget_state(self, _config: dict[str, Any]) -> Any:
             return SimpleNamespace(
+                values={"user_id": str(user.id)},
+                config={"configurable": {"checkpoint_id": "saved-interrupt"}},
                 tasks=[
                     SimpleNamespace(
                         interrupts=[
                             SimpleNamespace(
-                                value={"tool_name": "create_note", "args": {}}
+                                id="test-interrupt",
+                                value={"tool_name": "create_note", "args": {}},
                             )
                         ]
                     )
-                ]
+                ],
             )
 
     with service._jobs_lock:
@@ -423,6 +429,7 @@ async def test_queued_initial_approval_pause_uses_durable_publication() -> None:
     job = _get_job(job_id)
     assert job is not None
     assert job["status"] == JobStatus.AWAITING_CONFIRMATION.value
+    assert len(job["confirmation"].pop("approval_id")) == 64
     assert job["confirmation"] == {"tool_name": "create_note", "args": {}}
     assert len(decisions) == 1
     assert decisions[0].effective_status is JobStatus.AWAITING_CONFIRMATION
@@ -451,11 +458,17 @@ async def test_approval_pause_republishes_the_sanitized_request() -> None:
     class PendingGraph(_ResultGraph):
         async def aget_state(self, _config: dict[str, Any]) -> Any:
             return SimpleNamespace(
+                values={"user_id": str(user.id)},
+                config={"configurable": {"checkpoint_id": "saved-interrupt"}},
                 tasks=[
                     SimpleNamespace(
-                        interrupts=[SimpleNamespace(value={"tool_name": "create_note"})]
+                        interrupts=[
+                            SimpleNamespace(
+                                id="test-interrupt", value={"tool_name": "create_note"}
+                            )
+                        ]
                     )
-                ]
+                ],
             )
 
     with service._jobs_lock:
@@ -607,7 +620,20 @@ async def _invoke_runner_with_fake_graph(
             "src.services.agent.runtime_snapshot.resume_runtime_config_fields",
             return_value={},
         ),
-        patch.object(service, "get_run", AsyncMock(return_value=None)),
+        patch.object(
+            service,
+            "get_run",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    job_id=job_id,
+                    thread_id=None,
+                    status="running",
+                    run_metadata={"approval_id": "a" * 64},
+                    user_message_id=None,
+                    client_message_id=None,
+                )
+            ),
+        ),
         patch(
             "src.services.agent.agent_run_service.is_run_cancellation_requested",
             no_cancel,
@@ -617,7 +643,7 @@ async def _invoke_runner_with_fake_graph(
         if runner == "initial":
             await service._run_agent_graph(job_id, request, user)
         else:
-            await service._resume_agent_graph(job_id, True, user)
+            await service._resume_agent_graph(job_id, True, user, approval_id="a" * 64)
     return decisions
 
 

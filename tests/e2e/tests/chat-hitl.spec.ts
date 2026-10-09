@@ -25,6 +25,7 @@ const TOOL_NAME = "ingest_arxiv_papers";
 const TOOL_LABEL = "Ingest arXiv papers";
 const APPROVED_MARKER = "hitl-approved";
 const DENIED_MARKER = "hitl-denied";
+const APPROVAL_ID = "0123456789abcdef".repeat(4);
 
 function sseFrame(event: string, data: Record<string, unknown>): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -48,6 +49,7 @@ async function installHitlMocks(page: Page): Promise<void> {
       body: sseFrame("confirmation", {
         thread_id: threadId,
         confirmation: {
+          approval_id: APPROVAL_ID,
           tool_name: TOOL_NAME,
           tool_args: { paper_id: "2501.00001" },
         },
@@ -56,7 +58,9 @@ async function installHitlMocks(page: Page): Promise<void> {
   });
 
   await page.route(CONFIRM_URL, async (route: Route) => {
-    const confirmed = Boolean(route.request().postDataJSON()?.confirmed);
+    const body = route.request().postDataJSON();
+    expect(body?.approval_id).toBe(APPROVAL_ID);
+    const confirmed = Boolean(body?.confirmed);
     const marker = confirmed ? APPROVED_MARKER : DENIED_MARKER;
     await route.fulfill({
       status: 200,

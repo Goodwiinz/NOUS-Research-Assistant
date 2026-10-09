@@ -52,13 +52,17 @@ describe('agentChatService.streamConfirm nested-confirmation contract', () => {
     global.fetch = realFetch;
   });
 
-  const confirmRequest = { thread_id: 't-1', confirmed: true };
+  const confirmRequest = {
+    thread_id: 't-1',
+    confirmed: true,
+    approval_id: 'a'.repeat(64),
+  };
 
   it('dispatches a nested confirmation event to onConfirmation and does not call onDone', async () => {
     // Backend returns after emitting the nested confirmation — no done frame.
     global.fetch = fetchWith([
       'event: token\ndata: {"content":"ok, ingested."}\n\n',
-      'event: confirmation\ndata: {"thread_id":"t-1","confirmation":{"tools":[{"name":"create_note"}],"message":"Create note?"}}\n\n',
+      `event: confirmation\ndata: ${JSON.stringify({ thread_id: 't-1', confirmation: { approval_id: 'b'.repeat(64), tools: [{ name: 'create_note' }], message: 'Create note?' } })}\n\n`,
     ]);
     const tokens: string[] = [];
     const onConfirmation = vi.fn();
@@ -77,4 +81,23 @@ describe('agentChatService.streamConfirm nested-confirmation contract', () => {
     );
     expect(onDone).not.toHaveBeenCalled();
   });
+  it.each([undefined, 'not-a-receipt'])(
+    'rejects an expired card before displaying it (%s)',
+    async (approvalId) => {
+      global.fetch = fetchWith([
+        `event: confirmation\ndata: ${JSON.stringify({ thread_id: 't-1', confirmation: { approval_id: approvalId } })}\n\n`,
+      ]);
+      const onConfirmation = vi.fn();
+      const onError = vi.fn();
+      await agentChatService.streamConfirm(confirmRequest, {
+        onConfirmation,
+        onError,
+      });
+      expect(onConfirmation).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        'This approval has expired. Please start a new request.',
+        'conflict'
+      );
+    }
+  );
 });

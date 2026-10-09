@@ -703,6 +703,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       streamMessageMock.mockImplementation(
         async (_request: unknown, callbacks: StreamCallbacks) => {
           callbacks.onConfirmation?.('agent-thread-A', {
+            approval_id: 'a'.repeat(64),
             tool_name: 'create_project_note',
             tool_args: { title: 'Private note' },
           });
@@ -789,6 +790,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
           callbacks: StreamCallbacks
         ) => {
           callbacks.onConfirmation?.('agent-thread-A', {
+            approval_id: 'a'.repeat(64),
             tool_name: 'create_project_note',
             tool_args: { title: 'Private note' },
           });
@@ -1568,6 +1570,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
         }
       ) => {
         callbacks.onConfirmation?.(threadId, {
+          approval_id: 'a'.repeat(64),
           tool_name: 'create_project_note',
           tool_args: { title: 'Private note' },
         });
@@ -1626,6 +1629,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
           }
         ) => {
           callbacks.onConfirmation?.(threadId, {
+            approval_id: 'a'.repeat(64),
             tool_name: 'create_project_note',
             tool_args: { title: 'Private note' },
           });
@@ -1704,6 +1708,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
         }
       ) => {
         callbacks.onConfirmation?.(threadId, {
+          approval_id: 'a'.repeat(64),
           tool_name: 'create_project_note',
           tool_args: { title: 'Private note' },
         });

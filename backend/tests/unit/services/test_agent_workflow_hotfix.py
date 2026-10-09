@@ -11,6 +11,8 @@ from uuid import uuid4
 import pytest
 from langgraph.errors import GraphInterrupt
 
+from tests.utils.agent_approval import isolated_claimed_confirmation  # noqa: F401
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_job_status import stub_durable_status_projection
 
 pytestmark = pytest.mark.asyncio
@@ -132,7 +134,7 @@ class TestHitlCheckpointOwnership:
                 side_effect=lambda: _session_cm(db),
             ),
         ):
-            await _resume_agent_graph(job_id, True, current_user)
+            await _resume_agent_graph(job_id, True, current_user, approval_id="a" * 64)
 
         mock_graph.ainvoke.assert_not_called()
         job = _get_job(job_id)
@@ -144,7 +146,7 @@ class TestHitlCheckpointOwnership:
 class TestStreamingGraphInterrupt:
     """Bug 2 — GraphInterrupt handler must not KeyError on empty config."""
 
-    async def test_graph_interrupt_before_config_populated_emits_confirmation(self):
+    async def test_graph_interrupt_without_saved_identity_fails_closed(self):
         from src.api.agent.execute import AgentExecuteRequest
         from src.api.agent.streaming import stream_event_generator
 
@@ -209,8 +211,10 @@ class TestStreamingGraphInterrupt:
                 )
             ]
 
-        assert any("event: confirmation" in e for e in events)
-        assert not any("event: error" in e for e in events)
+        assert not any("event: confirmation" in e for e in events)
+        assert any(
+            "event: error" in e and "checkpoint_unavailable" in e for e in events
+        )
 
 
 class TestBackgroundTimeout:

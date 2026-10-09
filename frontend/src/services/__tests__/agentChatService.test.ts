@@ -224,13 +224,17 @@ describe('agentChatService.streamMessage SSE parsing', () => {
 
   it('forwards a parked confirmation run id when resuming', async () => {
     global.fetch = fetchWith([
-      'event: confirmation\ndata: {"thread_id":"thread-1","confirmation":{},"run_id":"run-1"}\n\n',
+      `event: confirmation\ndata: ${JSON.stringify({ thread_id: 'thread-1', confirmation: { approval_id: 'a'.repeat(64) }, run_id: 'run-1' })}\n\n`,
     ]);
     const onConfirmation = vi.fn();
 
     await agentChatService.streamMessage(request, { onConfirmation });
 
-    expect(onConfirmation).toHaveBeenCalledWith('thread-1', {}, 'run-1');
+    expect(onConfirmation).toHaveBeenCalledWith(
+      'thread-1',
+      { approval_id: 'a'.repeat(64) },
+      'run-1'
+    );
   });
 
   it('defaults missing token counts to zero on the usage event', async () => {
@@ -457,7 +461,11 @@ describe('agentChatService.streamConfirm SSE parsing', () => {
     global.fetch = realFetch;
   });
 
-  const confirmRequest = { thread_id: 'thread-1', confirmed: true };
+  const confirmRequest = {
+    thread_id: 'thread-1',
+    confirmed: true,
+    approval_id: 'a'.repeat(64),
+  };
 
   it('forwards per-turn token usage to onUsage on the confirm path', async () => {
     global.fetch = fetchWith([
