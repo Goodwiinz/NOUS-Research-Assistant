@@ -71,7 +71,7 @@ async def pg(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
     engine = create_async_engine(
         dsn, connect_args={"server_settings": {"search_path": schema}}
     )
-    models = [
+    models: list[Any] = [
         Organization,
         User,
         Workspace,
