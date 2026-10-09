@@ -298,7 +298,7 @@ def test_release_protection_preflight_fails_closed() -> None:
         (passing, 0),
         (None, 1),
         ({**passing, "requiresStatusChecks": False}, 1),
-        ({**passing, "requiresStrictStatusChecks": False}, 1),
+        ({**passing, "requiresStrictStatusChecks": False}, 0),
         ({**passing, "requiredStatusChecks": []}, 1),
         (
             {

@@ -36,6 +36,7 @@ from src.schemas.chat import (
 )
 from src.schemas.integration_handoff import HandoffDTO
 from src.services.integrations import handoffs
+from src.services.integrations.context import workspace_organization_id
 from src.services.threads import thread_service, workspace_access
 
 from .dependencies import _get_thread_or_404
@@ -369,11 +370,15 @@ async def get_thread_handoff(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
     # Scope by the chat's own workspace org: an authorized member or viewer
-    # may belong to another organization.
-    latest = await handoffs.read_latest_for_thread(
-        db,
-        organization_id=thread.conversation.workspace.organization_id,
-        thread_id=thread_id,
+    # may belong to another organization. A legacy workspace without one is
+    # its owner's (workspace_in_org).
+    organization_id = await workspace_organization_id(db, thread.conversation.workspace)
+    latest = (
+        await handoffs.read_latest_for_thread(
+            db, organization_id=organization_id, thread_id=thread_id
+        )
+        if organization_id is not None
+        else None
     )
     if latest is None:
         raise HTTPException(status_code=404, detail="No handoff for this chat")

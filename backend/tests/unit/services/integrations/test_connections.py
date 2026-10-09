@@ -14,10 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from src.core import cli_token_revocation as ctr
 from src.models.bridge_device import BridgeDevice
 from src.models.collection import Collection
+from src.models.conversation import Conversation
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
+from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
+from src.schemas.integration_connections import ConnectionConsent
 from src.services.integrations.connections import (
     ConnectionNotFound,
     disconnect_device,
@@ -34,7 +37,11 @@ USER, OTHER_USER, ORG, WORKSPACE, PROJECT, OTHER_PROJECT = (uuid4() for _ in ran
 LAPTOP, DESKTOP = uuid4(), uuid4()
 CONSENT_A, CONSENT_B, CONSENT_DESKTOP, CONSENT_DENIED = (uuid4() for _ in range(4))
 SOON = datetime.now(timezone.utc) + timedelta(hours=1)
-TOKENS = {name: "nous_ig_" + name.ljust(43, "x") for name in ("a", "a2", "b", "d")}
+TOKENS = {name: "nous_ig_" + name.ljust(43, "x") for name in ("a", "a2", "b", "d", "w")}
+# A consumed Plan 07 workspace consent on the desktop (`workspace_consent`).
+CONSENT_WORKSPACE = uuid4()
+CONVERSATION, CHAT = uuid4(), uuid4()
+LIBRARY = ["library:read", "tools:read"]
 
 
 @pytest.fixture(autouse=True)
@@ -122,6 +129,8 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         Workspace,
         WorkspaceMember,
         Collection,
+        Conversation,
+        Thread,
         BridgeDevice,
         IntegrationGrantRequest,
         IntegrationGrant,
@@ -133,6 +142,72 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         await _seed(session)
         yield session
     await engine.dispose()
+
+
+@pytest.fixture
+async def workspace_consent(db: AsyncSession) -> None:
+    """CONSENT_WORKSPACE: every live project of WORKSPACE, with its grant."""
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=CONSENT_WORKSPACE,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            device_id=DESKTOP,
+            scopes=LIBRARY,
+            status="consumed",
+            expires_at=SOON,
+        )
+    )
+    await db.execute(
+        insert(IntegrationGrant).values(
+            id=uuid4(),
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            device_id=DESKTOP,
+            request_id=CONSENT_WORKSPACE,
+            scopes=LIBRARY,
+            token_hash=sha256(TOKENS["w"].encode()).hexdigest(),
+            expires_at=SOON,
+            consented_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+
+
+@pytest.fixture
+async def chat_bound(db: AsyncSession) -> None:
+    """CONSENT_A is bound to CHAT, a chat of PROJECT (Plan 06 slice 2)."""
+    await db.execute(
+        insert(Conversation).values(
+            id=CONVERSATION, workspace_id=WORKSPACE, title="C", created_by_id=USER
+        )
+    )
+    await db.execute(
+        insert(Thread).values(
+            id=CHAT,
+            conversation_id=CONVERSATION,
+            created_by_id=USER,
+            source_project_id=PROJECT,
+            title="Literature review",
+        )
+    )
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == CONSENT_A)
+        .values(thread_id=CHAT)
+    )
+    await db.commit()
+
+
+async def _consents(db: AsyncSession, device_id: UUID) -> dict[UUID, ConnectionConsent]:
+    devices = await list_connections(db, await _user(db))
+    device = next((d for d in devices if d.device_id == device_id), None)
+    assert device is not None
+    return {c.request_id: c for c in device.consents}
 
 
 async def _user(db: AsyncSession, user_id: UUID = USER) -> User:
@@ -306,3 +381,78 @@ async def test_failed_cli_revocation_rolls_back_device_and_grants(
     assert device is not None and device.revoked_at is None
     assert consent is not None and consent.consent_revoked_at is None
     assert all([await _works(db, t) for t in ("a", "a2", "b", "d")])
+
+
+# DV-1: a workspace consent (Plan 07) was labelled through authorized_project
+# with project_id None and silently dropped.
+async def test_lists_a_workspace_consent_with_its_workspace(
+    db: AsyncSession, workspace_consent: None
+) -> None:
+    consents = await _consents(db, DESKTOP)
+    assert set(consents) == {CONSENT_DESKTOP, CONSENT_WORKSPACE}
+    listed = consents[CONSENT_WORKSPACE]
+    assert listed.kind == "workspace"
+    assert (listed.workspace_id, listed.workspace_label) == (WORKSPACE, "Workspace")
+    assert (listed.project_id, listed.project_label) == (None, None)
+    assert listed.scopes == LIBRARY
+    project = consents[CONSENT_DESKTOP]
+    assert project.kind == "project"
+    assert (project.project_label, project.workspace_id) == ("Thesis", None)
+
+
+async def test_revoking_a_workspace_consent_stops_only_it(
+    db: AsyncSession, workspace_consent: None
+) -> None:
+    assert CONSENT_WORKSPACE in await _consents(db, DESKTOP)
+    assert await _works(db, "w") and await _works(db, "d")
+    await revoke_consent(db, await _user(db), CONSENT_WORKSPACE)
+    assert not await _works(db, "w")
+    assert await _works(db, "d")
+    assert set(await _consents(db, DESKTOP)) == {CONSENT_DESKTOP}
+
+
+async def test_a_workspace_consent_is_hidden_once_its_workspace_is_gone(
+    db: AsyncSession, workspace_consent: None
+) -> None:
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
+    )
+    await db.commit()
+    assert await _consents(db, DESKTOP) == {}
+
+
+# AD-3: a chat-bound device works only from its chat; say which one.
+async def test_a_chat_bound_consent_names_its_chat(
+    db: AsyncSession, chat_bound: None
+) -> None:
+    consents = await _consents(db, LAPTOP)
+    bound, unbound = consents[CONSENT_A], consents[CONSENT_B]
+    assert (bound.thread_id, bound.thread_label) == (CHAT, "Literature review")
+    assert (unbound.thread_id, unbound.thread_label) == (None, None)
+
+
+@pytest.mark.parametrize("change", ["deleted", "moved"])
+async def test_a_consent_whose_chat_is_gone_stays_listed_without_a_label(
+    db: AsyncSession, chat_bound: None, change: str
+) -> None:
+    # It can no longer mint (validate_binding refuses the chat) but stays
+    # listed, so the owner can still revoke it (DECISION C-1).
+    values: dict[str, Any] = (
+        {"is_deleted": True}
+        if change == "deleted"
+        else {"source_project_id": OTHER_PROJECT}
+    )
+    await db.execute(update(Thread).where(Thread.id == CHAT).values(**values))
+    await db.commit()
+    listed = (await _consents(db, LAPTOP))[CONSENT_A]
+    assert (listed.thread_id, listed.thread_label) == (CHAT, None)
+
+
+async def test_an_untitled_bound_chat_is_labelled_untitled_chat(
+    db: AsyncSession, chat_bound: None
+) -> None:
+    # Thread.title is nullable; the label falls back like the approval page.
+    await db.execute(update(Thread).where(Thread.id == CHAT).values(title=None))
+    await db.commit()
+    listed = (await _consents(db, LAPTOP))[CONSENT_A]
+    assert (listed.thread_id, listed.thread_label) == (CHAT, "Untitled chat")

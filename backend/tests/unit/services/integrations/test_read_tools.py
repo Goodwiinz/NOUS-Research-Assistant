@@ -256,6 +256,53 @@ async def test_list_injects_grant_project(
     assert result.source_refs == [{"document_id": str(DOC_IN_PROJECT)}]
 
 
+# WG-2b: a legacy workspace (organization_id NULL) is its owner's, so every
+# project read must agree with list_project_documents, which already
+# coalesces (project_access.py). Mutation: restore
+# `Workspace.organization_id == organization_id` in _live_project_documents
+# and the search below finds nothing.
+async def test_legacy_workspace_documents_are_searchable(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(organization_id=None)
+    )
+    await db.commit()
+    listed = await invoke_read(db, context, _invocation("list_project_documents"))
+    assert listed.source_refs == [{"document_id": str(DOC_IN_PROJECT)}]
+    found = await invoke_read(
+        db, context, _invocation("search_documents", query="retrieval")
+    )
+    assert found.is_error is False
+    assert [doc["id"] for doc in found.content[0]["documents"]] == [str(DOC_IN_PROJECT)]
+
+
+async def test_a_legacy_workspace_follows_its_owner_out_of_the_org(
+    db: AsyncSession,
+) -> None:
+    # The negative that keeps the predicate: deleting it instead of fixing it
+    # would still pass the test above. The document keeps ORG, so only the
+    # workspace rule can hide it.
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(organization_id=None)
+    )
+    elsewhere = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=elsewhere, name="Elsewhere", storage_limit_bytes=1000000
+        )
+    )
+    await db.commit()
+    rows = await db.scalars(read_tools._live_project_documents(PROJECT, ORG))
+    assert [d.id for d in rows.all()] == [DOC_IN_PROJECT]
+    await db.execute(
+        update(User).where(User.id == USER).values(organization_id=elsewhere)
+    )
+    await db.commit()
+    rows = await db.scalars(read_tools._live_project_documents(PROJECT, ORG))
+    assert rows.all() == []
+
+
 @pytest.mark.parametrize(
     "document_ids,rejected_as_argument",
     [
