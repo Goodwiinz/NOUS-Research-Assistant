@@ -15850,6 +15850,16 @@ export interface components {
          */
         ExecutionMode: "deterministic" | "exploratory";
         /**
+         * ExecutionValidationError
+         * @description Polling request validation or an unsupported provider selection.
+         */
+        ExecutionValidationError: {
+            /** Detail */
+            detail: string | {
+                [key: string]: unknown;
+            }[];
+        };
+        /**
          * ExportError
          * @description Error response for export failures.
          */
@@ -24965,13 +24975,13 @@ export interface operations {
                     "application/json": components["schemas"]["JobStartResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Invalid request or Local Codex selection; Local Codex requires /api/v1/agent/stream. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ExecutionValidationError"];
                 };
             };
         };

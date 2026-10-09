@@ -11597,6 +11597,31 @@
         "title": "ExecutionMode",
         "type": "string"
       },
+      "ExecutionValidationError": {
+        "description": "Polling request validation or an unsupported provider selection.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ExecutionValidationError",
+        "type": "object"
+      },
       "ExportError": {
         "description": "Error response for export failures.",
         "properties": {
@@ -32823,11 +32848,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ExecutionValidationError"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid request or Local Codex selection; Local Codex requires /api/v1/agent/stream."
           }
         },
         "security": [

@@ -449,7 +449,22 @@ async def _celery_dispatch(
     return "dispatched", job_id
 
 
-@router.post("/execute", response_model=JobStartResponse)
+class ExecutionValidationError(BaseModel):
+    """Polling request validation or an unsupported provider selection."""
+
+    detail: str | list[dict[str, Any]]
+
+
+@router.post(
+    "/execute",
+    response_model=JobStartResponse,
+    responses={
+        422: {
+            "model": ExecutionValidationError,
+            "description": "Invalid request or Local Codex selection; Local Codex requires /api/v1/agent/stream.",
+        }
+    },
+)
 async def execute_agent(
     request: AgentExecuteRequest,
     background_tasks: BackgroundTasks,
@@ -467,6 +482,10 @@ async def execute_agent(
     await _enforce_rate_limit(
         _agent_rate_limiter, str(current_user.id), _AGENT_TURN_PREFIX
     )
+    if request.execution_provider == "codex":
+        raise HTTPException(
+            status_code=422, detail="Local Codex requires /api/v1/agent/stream."
+        )
     logger.info(
         "Agent execute request",
         extra={
