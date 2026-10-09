@@ -2893,12 +2893,28 @@ async def _resume_agent_graph(
                 durable_run = None
             # BackgroundTasks may start after another producer has advanced
             # the run. Such a task owns nothing and must not fail/re-park it.
-            if (
-                durable_run is None
-                or getattr(durable_run, "status", None) != JobStatus.RUNNING.value
-                or (getattr(durable_run, "run_metadata", None) or {}).get("approval_id")
-                != approval_id
-            ):
+            # The status write path has no receipt predicate, so this receipt
+            # match is the only proof that a terminal publish targets our claim.
+            owns_approval = (
+                durable_run is not None
+                and (getattr(durable_run, "run_metadata", None) or {}).get(
+                    "approval_id"
+                )
+                == approval_id
+            )
+            run_status = getattr(durable_run, "status", None)
+            if owns_approval and run_status == JobStatus.STOPPING.value:
+                # A Stop accepted after /confirm claimed this approval but
+                # before this task started still leaves the CANCELLED ACK to
+                # the claiming producer; nobody else will write it.
+                confirmation_claim_owned = True
+                await _publish_producer_status(
+                    job_id,
+                    {"status": JobStatus.CANCELLED, "error": "resume cancelled"},
+                    current_user,
+                )
+                return
+            if not owns_approval or run_status != JobStatus.RUNNING.value:
                 return
             confirmation_claim_owned = True
             # L1 first, then Redis: in Celery dispatch mode (or behind a

@@ -412,6 +412,47 @@ async def test_resumed_cancel_interrupts_graph() -> None:
         assert [write["status"] for write in terminal_writes] == ["cancelled"]
 
 
+@pytest.mark.parametrize(
+    ("approval_id", "expected_writes"),
+    [("a" * 64, ["cancelled"]), ("b" * 64, [])],
+    ids=["own-approval", "foreign-approval"],
+)
+async def test_stop_before_resume_start_is_acknowledged_by_owner(
+    approval_id: str, expected_writes: list[str]
+) -> None:
+    """A Stop between /confirm's claim and task start still needs this ACK.
+
+    /confirm commits AWAITING->RUNNING for this receipt, then schedules the
+    resume. A Stop accepted before the task's first read moves the row to
+    STOPPING and leaves the CANCELLED acknowledgement to the producer. A task
+    holding another approval's receipt owns nothing and must not touch it.
+    """
+    graph = _BlockedGraph(resume=True, owner_id="user-cancel-test")
+    terminal_writes: list[dict[str, Any]] = []
+    sessions: list[Any] = []
+
+    def stopping_run(job_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            **{
+                **vars(claimed_run(job_id)),
+                "status": "stopping",
+                "cancel_requested_at": datetime.now(timezone.utc),
+                "run_metadata": {"approval_id": approval_id},
+            }
+        )
+
+    async def check(_db: Any, *_scope: Any) -> bool:
+        return True
+
+    async with _start_test_runner(
+        "resume", graph, [check], terminal_writes, sessions, durable_run=stopping_run
+    ) as (task, _main_db, _job_id, _user):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert graph.started.is_set() is False
+    assert [write["status"] for write in terminal_writes] == expected_writes
+
+
 async def test_cancel_race_emits_one_terminal() -> None:
     """If cancellation commits as ainvoke returns, the final marker read
     prevents completion and writes exactly one cancelled outcome."""
@@ -646,6 +687,7 @@ async def _start_test_runner(
     checkers: list[Callable[..., Any]],
     terminal_writes: list[dict[str, Any]],
     sessions: list[Any],
+    durable_run: Callable[[str], Any] = claimed_run,
 ) -> AsyncIterator[tuple[asyncio.Task[None], Any, str, Any]]:
     from src.api.agent.execute import AgentExecuteRequest
     from src.services.agent import agent_execution_service as service
@@ -737,7 +779,7 @@ async def _start_test_runner(
             "src.services.agent.runtime_snapshot.resume_runtime_config_fields",
             return_value={},
         ),
-        patch.object(service, "get_run", AsyncMock(return_value=claimed_run(job_id))),
+        patch.object(service, "get_run", AsyncMock(return_value=durable_run(job_id))),
         patch.object(
             agent_run_service, "is_run_cancellation_requested", cancellation_check
         ),
