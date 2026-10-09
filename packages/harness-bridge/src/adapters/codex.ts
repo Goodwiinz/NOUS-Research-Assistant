@@ -165,7 +165,13 @@ export class CodexAdapter implements HarnessAdapter {
           !string(config.command) ||
           !Array.isArray(config.args) ||
           !config.args.every((a) => typeof a === "string") ||
-          Object.keys(config).some((k) => !["command", "args"].includes(k))
+          (config.tool_timeout_sec !== undefined &&
+            (!Number.isInteger(config.tool_timeout_sec) ||
+              config.tool_timeout_sec < 1 ||
+              config.tool_timeout_sec > 600)) ||
+          Object.keys(config).some(
+            (k) => !["command", "args", "tool_timeout_sec"].includes(k),
+          )
         )
           throw new Error("invalid local MCP configuration");
       }

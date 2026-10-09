@@ -26,7 +26,11 @@ from src.schemas.integration_handoff import (
     HandoffDTO,
     HandoffInvalid,
 )
-from src.services.integrations.context import IntegrationAccessDenied, validate_binding
+from src.services.integrations.context import (
+    IntegrationAccessDenied,
+    validate_binding,
+    workspace_in_org,
+)
 
 __all__ = [
     "HandoffConflict",
@@ -73,7 +77,8 @@ def _live_chain(
             Thread.is_deleted.is_(False),
             Conversation.is_deleted.is_(False),
             Workspace.is_deleted.is_(False),
-            Workspace.organization_id == organization_id,
+            # A legacy workspace (organization_id NULL) is its owner's.
+            workspace_in_org(organization_id),
         )
     )
 
@@ -203,9 +208,10 @@ async def read_latest_for_thread(
     db: AsyncSession, *, organization_id: UUID, thread_id: UUID
 ) -> HandoffDTO | None:
     """Browser path; the caller has already authorized the thread, and
-    ``organization_id`` is the thread workspace's org (not the viewer's, who
-    may be a member from another org). Only the chain of the thread's current
-    project is shown."""
+    ``organization_id`` is the org of the thread's workspace as
+    ``workspace_organization_id`` gives it (a legacy workspace's is its
+    owner's), not the viewer's, who may be a member from another org. Only
+    the chain of the thread's current project is shown."""
     row = await db.scalar(
         _live_chain(organization_id, thread_id)
         .where(IntegrationHandoff.project_id == Thread.source_project_id)

@@ -299,3 +299,51 @@ def test_browser_route_scopes_by_the_chats_workspace_org(
         response = client.get(f"/api/v2/threads/{THREAD}/handoff")
     assert response.status_code == 200
     assert state["read_orgs"] == [thread_org]
+
+
+# The legacy workspace owner's organization, distinct from the caller's ORG so
+# a fallback to current_user.organization_id cannot pass for the owner's.
+OWNER_ORG = uuid4()
+
+
+class _OwnerOrgSession:
+    """Answers the one query workspace_organization_id makes for a legacy
+    workspace: the owner's organization, or None when the owner has none."""
+
+    def __init__(self, owner_org: UUID | None) -> None:
+        self.owner_org = owner_org
+
+    async def scalar(self, _statement: Any) -> UUID | None:
+        return self.owner_org
+
+
+@pytest.mark.parametrize(
+    ("owner_org", "status", "read_orgs"),
+    [(OWNER_ORG, 200, [OWNER_ORG]), (None, 404, [])],
+    ids=["owner-has-org", "owner-has-none"],
+)
+def test_browser_route_reads_a_legacy_workspace_under_its_owners_org(
+    app: FastAPI,
+    state: dict[str, Any],
+    owner_org: UUID | None,
+    status: int,
+    read_orgs: list[UUID],
+) -> None:
+    """WG-2c: a workspace with no organization is its owner's, never NULL
+    and never the caller's."""
+    state["thread"] = SimpleNamespace(
+        conversation=SimpleNamespace(
+            workspace=SimpleNamespace(organization_id=None, owner_id=USER)
+        )
+    )
+
+    async def owner_db() -> AsyncIterator[Any]:
+        yield _OwnerOrgSession(owner_org)
+
+    app.dependency_overrides[get_db] = owner_db
+    with TestClient(app) as client:
+        response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+    assert response.status_code == status
+    if status == 404:
+        assert response.json() == {"detail": "No handoff for this chat"}
+    assert state["read_orgs"] == read_orgs

@@ -102,6 +102,8 @@ export type Ack = {
   generation: number;
   canonicalSeq: number;
 };
+/** NOUS refused this run's events while the device grant stayed valid. */
+export type Rejection = Omit<Ack, "canonicalSeq"> & { code: "run_access_denied" };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const obj = (v: unknown): v is Record<string, any> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -285,6 +287,27 @@ export async function connectBridge(options: {
             sendPending();
             return;
           }
+          if (value.reject) {
+            // NOUS refused this run's events while the grant stayed valid
+            // (backend/src/api/harness.py): final for that run; keep serving
+            // the device's other runs instead of reconnecting into it again.
+            // journal.reject() checks the run id against its own command, so
+            // the id logged is never raw server text. It returns false for a
+            // run already refused or finished: one notice per run.
+            if (journal.reject(value.reject))
+              // reject() releases the bridge's lock only once the run's
+              // terminal observation is journaled; mid-run the run keeps it.
+              // NOUS keeps its own lock unless the refused event was the
+              // replay of one it had stored.
+              console.error(
+                journal.holdsLock(value.reject.sourceId)
+                  ? `NOUS refused run ${value.reject.runId}: its output is no longer uploaded, and its folder stays reserved until you revoke this device's access at /integrations/devices and connect again, or run disconnect, connect and workspace add (either also stops the device's other runs).`
+                  : `NOUS refused run ${value.reject.runId}: its output is no longer uploaded. The run had already finished on this device, so the bridge released its folder. If NOUS still reports the folder busy, revoke this device's access at /integrations/devices and connect again, or run disconnect, connect and workspace add (either also stops the device's other runs).`,
+              );
+            sent.delete(`${value.reject.sourceId}/${value.reject.sourceSeq}`);
+            sendPending();
+            return;
+          }
           if (
             !obj(value) ||
             !Array.isArray(value.commands) ||
@@ -319,7 +342,10 @@ export async function connectBridge(options: {
             await journal.execute(c, a);
           }
           for (const c of journal.activeCommands()) {
-            if (journal.state(c.commandId) === "recovering")
+            const state = journal.state(c.commandId);
+            // A refused run is not recovered: reconcile only reads its turn
+            // back and re-arms its watchdog (Journal.reconcile).
+            if (state === "recovering" || state === "denied")
               await journal.reconcile(
                 c.commandId,
                 options.adapterFor(c.workspaceId, c.runId),
