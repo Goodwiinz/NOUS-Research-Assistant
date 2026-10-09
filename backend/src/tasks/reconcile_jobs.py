@@ -35,6 +35,7 @@ from typing import Mapping
 from src.core.database import SessionLocal
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.tasks.celery_app import celery_app
+from src.tasks.processing_lifecycle import end_processing_job
 
 logger = logging.getLogger(__name__)
 
@@ -91,21 +92,36 @@ def reconcile_lost_processing_jobs() -> Mapping[str, object]:
         )
 
         for job in lost_jobs:
+            job_id = job.id
             job_type = job.job_type.value if job.job_type else "unknown"
             attempts = job.retry_count or 0
 
             if attempts >= max_attempts:
+                # IN-1: lock Document -> job and re-check that this is still
+                # the never-dispatched PENDING row selected above (a worker may
+                # have claimed it since), then fail the job and its document
+                # together. A bare UPDATE overwrote a fresh claim with FAILED.
+                ended = end_processing_job(
+                    db,
+                    job_id,
+                    message=(
+                        f"Lost job: post-commit dispatch never reached a worker "
+                        f"after {max_attempts} reconcile attempts"
+                    ),
+                    error_type="LostJobReconcileGaveUp",
+                    expected_statuses=(JobStatus.PENDING,),
+                    expected_task_ids=(None,),
+                )
+                if not ended:
+                    db.rollback()
+                    summary["skipped"] += 1
+                    continue
                 logger.warning(
-                    "reconcile_lost_processing_jobs: giving up on job %s "
-                    "(type=%s) after %s re-enqueue attempts — marking FAILED",
-                    job.id,
+                    "reconcile_lost_processing_jobs: gave up on job %s "
+                    "(type=%s) after %s re-enqueue attempts — marked FAILED",
+                    job_id,
                     job_type,
                     max_attempts,
-                )
-                job.fail_job(
-                    f"Lost job: post-commit dispatch never reached a worker "
-                    f"after {max_attempts} reconcile attempts",
-                    error_type="LostJobReconcileGaveUp",
                 )
                 summary["failed"] += 1
                 db.commit()

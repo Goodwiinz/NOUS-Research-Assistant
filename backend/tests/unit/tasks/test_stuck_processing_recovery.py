@@ -21,6 +21,7 @@ from src.models.document import Document, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.tasks import processing_tasks as pt
+from src.tasks import reconcile_jobs as rj
 from tests.unit.tasks.test_ingestion_stage_guard_postgres import _ingestion
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
@@ -371,3 +372,147 @@ def test_disabled_sweep_does_not_open_database(
 
     monkeypatch.setattr(pt, "SessionLocal", unexpected_session)
     assert pt.sweep_stuck_processing_jobs() == {"skipped": "sweepers-disabled"}
+
+
+@pytest.fixture
+def lost(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
+    """An upload job re-enqueued three times without a worker ever claiming it
+    (PENDING, no Celery task id), with its PENDING document."""
+    with _ingestion() as env:
+        with env.Session() as db:
+            job = db.get(ProcessingJob, env.job_id)
+            job.status = JobStatus.PENDING
+            job.retry_count = 3
+            job.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            db.commit()
+        monkeypatch.setattr(rj, "SessionLocal", env.Session)
+        monkeypatch.setattr(
+            "src.core.config.get_settings",
+            lambda: SimpleNamespace(
+                LOST_JOB_RECONCILER_ENABLED=True,
+                LOST_JOB_RECONCILE_AFTER_MINUTES=10,
+                LOST_JOB_RECONCILE_MAX_ATTEMPTS=3,
+                LOST_JOB_RECONCILE_MAX_PER_RUN=100,
+            ),
+        )
+        yield env
+
+
+def test_reconciler_give_up_fails_document_with_job(lost: SimpleNamespace) -> None:
+    """IN-1 path A: the give-up failed only the job, leaving the document
+    PENDING forever (re-upload 409, no UI retry)."""
+    assert rj.reconcile_lost_processing_jobs() == {
+        "reenqueued": 0,
+        "failed": 1,
+        "skipped": 0,
+    }
+    with lost.Session() as db:
+        job = db.get(ProcessingJob, lost.job_id)
+        document = db.get(Document, lost.doc_id)
+        assert job.status == JobStatus.FAILED
+        assert job.error_type == "LostJobReconcileGaveUp"
+        assert document.processing_status == ProcessingStatus.FAILED
+        assert document.processing_error == job.error_message
+
+
+def test_reconciler_give_up_keeps_a_job_claimed_after_selection(
+    lost: SimpleNamespace,
+) -> None:
+    """Verifier V4 race: a worker claims the job between the reconciler's
+    unlocked SELECT and its give-up; the bare UPDATE ... WHERE id overwrote
+    RUNNING with FAILED and the worker then stopped at its next stage guard."""
+
+    def claim(db: Any) -> None:
+        db.get(ProcessingJob, lost.job_id).start_job(
+            worker_id="worker-A", celery_task_id="task-A"
+        )
+
+    engine, hook = _after_candidates(lost, claim)
+    try:
+        assert rj.reconcile_lost_processing_jobs() == {
+            "reenqueued": 0,
+            "failed": 0,
+            "skipped": 1,
+        }
+    finally:
+        event.remove(engine, "after_cursor_execute", hook)
+    with lost.Session() as db:
+        job = db.get(ProcessingJob, lost.job_id)
+        assert (job.status, job.celery_task_id) == (JobStatus.RUNNING, "task-A")
+        assert (
+            db.get(Document, lost.doc_id).processing_status == ProcessingStatus.PENDING
+        )
+
+
+def test_reconciler_give_up_keeps_a_job_the_sweep_ended_after_selection(
+    lost: SimpleNamespace,
+) -> None:
+    """The stuck sweep also selects PENDING jobs and leaves the Celery task id
+    NULL, so only the locked status re-check stops the give-up from failing
+    the job a second time over the sweep's outcome."""
+
+    def sweep(db: Any) -> None:
+        db.get(ProcessingJob, lost.job_id).fail_job("swept", error_type="StuckJobSweep")
+        db.get(Document, lost.doc_id).update_processing_status(
+            ProcessingStatus.FAILED, "swept"
+        )
+
+    engine, hook = _after_candidates(lost, sweep)
+    try:
+        assert rj.reconcile_lost_processing_jobs() == {
+            "reenqueued": 0,
+            "failed": 0,
+            "skipped": 1,
+        }
+    finally:
+        event.remove(engine, "after_cursor_execute", hook)
+    with lost.Session() as db:
+        job = db.get(ProcessingJob, lost.job_id)
+        assert (job.status, job.error_type) == (JobStatus.FAILED, "StuckJobSweep")
+        assert db.get(Document, lost.doc_id).processing_error == "swept"
+
+
+def test_reconciler_give_up_holds_document_then_job_locks(
+    lost: SimpleNamespace,
+) -> None:
+    engine = lost.Session.kw["bind"]
+    locks: list[str] = []
+    probes: list[str] = []
+
+    def probe(
+        connection: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if "FOR UPDATE" in statement:
+            if "FROM documents" in statement:
+                locks.append("document")
+            elif "FROM processing_jobs" in statement:
+                locks.append("job")
+        if not statement.startswith("UPDATE ") or probes:
+            return
+        for model, row_id in [
+            (Document, lost.doc_id),
+            (ProcessingJob, lost.job_id),
+        ]:
+            with lost.Session() as other:
+                with pytest.raises(OperationalError) as raised:
+                    other.execute(
+                        select(model.id)
+                        .where(model.id == row_id)
+                        .with_for_update(nowait=True)
+                    )
+                assert getattr(raised.value.orig, "pgcode", None) == "55P03"
+                probes.append(model.__name__)
+                other.rollback()
+
+    event.listen(engine, "before_cursor_execute", probe)
+    try:
+        assert rj.reconcile_lost_processing_jobs()["failed"] == 1
+    finally:
+        event.remove(engine, "before_cursor_execute", probe)
+    assert locks[:2] == ["document", "job"]
+    assert probes == ["Document", "ProcessingJob"]
