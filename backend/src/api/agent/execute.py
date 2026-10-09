@@ -39,6 +39,7 @@ from sqlalchemy.orm import selectinload
 from src.core.database import get_db
 from src.core.dependencies import get_current_user, require_admin
 from src.core.rate_limit import create_rate_limiter
+from src.core.security import TokenData, get_current_user_token
 from src.models.chat_message import ChatMessage
 from src.models.user import User
 from src.services.agent import stream_buffer as _stream_buffer
@@ -885,6 +886,7 @@ async def stream_agent(
     request: Request,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    token: TokenData = Depends(get_current_user_token),
 ):
     """Stream agent responses via Server-Sent Events.
 
@@ -894,6 +896,11 @@ async def stream_agent(
     trace, usage, heartbeat, status, confirmation, done, error. The terminal
     frames are done, error, or confirmation.
     """
+    if request_body.execution_provider == "codex" and (
+        token.is_cli or "x-nous-integration-grant" in request.headers
+    ):
+        raise HTTPException(403, "Interactive browser authentication required")
+
     # Stamp the accepted-latency SLI clock on handler entry. Rate limiting,
     # body parsing, and StreamingResponse setup all cost the client wall time
     # before the generator builds its emitter, so starting the clock there

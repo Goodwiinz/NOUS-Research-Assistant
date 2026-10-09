@@ -88,6 +88,7 @@ def app_with_overrides(mock_user_a):
     """Create a FastAPI app with the agent router and dependency overrides."""
     from src.core.database import get_db
     from src.core.dependencies import get_current_user
+    from src.core.security import TokenData, get_current_user_token
 
     app = FastAPI()
     app.include_router(router)
@@ -99,6 +100,11 @@ def app_with_overrides(mock_user_a):
         return _make_mock_db()
 
     app.dependency_overrides[get_current_user] = override_get_current_user
+    # /stream also resolves the raw token for the Codex authority gate; a
+    # browser-provenance TokenData keeps these NOUS turns on the normal path.
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=str(mock_user_a.id)
+    )
     app.dependency_overrides[get_db] = override_get_db
 
     return app
