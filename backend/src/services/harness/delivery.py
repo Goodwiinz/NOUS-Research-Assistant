@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
-from src.models.chat_message import ChatMessage
+from src.models.chat_message import ChatMessage, MessageRole
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
 from src.models.integration_grant import IntegrationGrant
 from src.schemas.harness import BridgeCommand, BridgeEvent, Observation, ProducerEvent
@@ -529,6 +529,28 @@ async def project_terminal(db: AsyncSession, run_id: str) -> int:
         receipt.canonical_seq = seq
     await db.commit()
     return seq
+
+
+async def has_assistant_projection(db: AsyncSession, run: Any) -> bool:
+    """Whether a Codex run's outcome is already an assistant transcript row.
+
+    ``project_terminal`` keys that row by ``client_message_id = run id``. It is
+    the only stable link: a failed projection leaves
+    ``AgentRun.assistant_message_id`` NULL. ``dispatch_pending`` closes a run the
+    local process never received without writing any row, so for that run the
+    terminal ledger event is the only record of its outcome. Read-only.
+    """
+    return (
+        await db.scalar(
+            select(ChatMessage.id)
+            .where(
+                ChatMessage.thread_id == run.thread_id,
+                ChatMessage.role == MessageRole.ASSISTANT,
+                ChatMessage.client_message_id == run.job_id,
+            )
+            .limit(1)
+        )
+    ) is not None
 
 
 async def reconcile_pending(db: AsyncSession) -> int:

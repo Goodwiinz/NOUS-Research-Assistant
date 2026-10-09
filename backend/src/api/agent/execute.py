@@ -1394,7 +1394,23 @@ async def resume_stream(
                     and getattr(latest_run_for_resume, "execution_provider", "nous")
                     == "codex"
                 ):
-                    external_run = latest_run_for_resume
+                    from src.services.harness.delivery import has_assistant_projection
+
+                    # Without a stream id the caller is the cold-load probe, or a
+                    # resume that never learned the run id (its transport dropped
+                    # before the `accepted` frame). A finished Codex run whose
+                    # outcome is an assistant row is already in the transcript;
+                    # replaying its ledger from seq 0 re-streamed old answers and
+                    # re-added "failed to generate" bubbles (BR-2). A finished
+                    # run with no such row (dispatch failed, or it was cancelled
+                    # before dispatch) still replays: its terminal event is the
+                    # turn's only visible outcome. A named stream still replays
+                    # a just-finished run in the branch above.
+                    finished = JobStatus(latest_run_for_resume.status).is_terminal
+                    if not finished or not await has_assistant_projection(
+                        db, latest_run_for_resume
+                    ):
+                        external_run = latest_run_for_resume
         if external_run is not None:
             from src.api.agent.harness_streaming import (
                 context_for_accepted_run,
