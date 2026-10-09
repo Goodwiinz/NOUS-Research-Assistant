@@ -670,6 +670,19 @@ def test_catalog_lists_plan07_tools_without_identity_args() -> None:
     assert by_name["get_document_content"]["required"] == ["document_id"]
 
 
+def test_retrieve_passages_says_it_is_document_level() -> None:
+    # RT-6: one excerpt per document and every indexed word required, so a
+    # model neither expects every passage nor sends a whole question. Stop
+    # words and one-letter words are not indexed (PR #1946 review).
+    description = {tool.name: tool.description for tool in list_read_tools()}[
+        "retrieve_passages"
+    ]
+    assert "best-matching documents, at most top_k" in description
+    assert "one short excerpt" in description
+    assert "every stemmed query word" in description
+    assert "ignoring English stop words and one-letter words" in description
+
+
 async def test_search_arxiv_is_dispatched_with_clamped_results(
     db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -751,6 +764,212 @@ async def test_external_tool_crash_never_leaks_exception_text(
     )
     assert result.is_error is True
     assert "sk-secret" not in json.dumps(result.content)
+
+
+def _external_row(source: str, index: int) -> dict[str, Any]:
+    # About the size of a real connector row (verifier V5 measured ~723 B).
+    return {
+        "id": f"{source}-{index}",
+        "title": "t" * 120,
+        "source": source,
+        "url": f"https://example.test/{source}/{index}",
+        "content": "c" * 300,
+        "authors": [f"Author {n}" for n in range(5)],
+        "published_date": "2026-01-01",
+        "document_type": "article",
+    }
+
+
+@pytest.mark.parametrize("max_results", [20, 5])
+async def test_external_search_caps_results_in_total_across_connectors(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    max_results: int,
+) -> None:
+    # No connector or domain: the registry tool searches every keyless
+    # connector (8) and applies max_results to each one (RT-4).
+    sources = [f"connector{n}" for n in range(8)]
+    rows = [_external_row(s, i) for s in sources for i in range(max_results)]
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(
+            return_value={
+                "query": "insulin",
+                "total_results": len(rows),
+                "results": rows,
+                "connectors_searched": sources,
+            }
+        ),
+    )
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "search_external_database", query="insulin", max_results=max_results
+        ),
+    )
+    assert result.is_error is False
+    payload = result.content[0]
+    assert len(payload["results"]) == max_results
+    assert payload["truncated"] is True
+    assert payload["total_results"] == 8 * max_results  # what was found
+    # Round-robin: every connector is represented while the cap allows.
+    assert {row["source"] for row in payload["results"]} == set(sources[:max_results])
+    assert len(result.source_refs) == max_results
+
+
+async def test_external_search_cap_round_robins_uneven_connectors(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Connectors return 1, 6 and 2 rows, plus one row with no source: a
+    # connector that runs out drops out of later rounds instead of failing.
+    rows = (
+        [_external_row("a", 0)]
+        + [_external_row("b", i) for i in range(6)]
+        + [_external_row("c", i) for i in range(2)]
+        + [{**_external_row("none", 0), "source": None}]
+    )
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(return_value={"total_results": len(rows), "results": rows}),
+    )
+    result = await invoke_read(
+        db, context, _invocation("search_external_database", query="q", max_results=7)
+    )
+    assert result.is_error is False
+    payload = result.content[0]
+    assert [row["id"] for row in payload["results"]] == [
+        "a-0",
+        "b-0",
+        "c-0",
+        "none-0",
+        "b-1",
+        "c-1",
+        "b-2",
+    ]
+    assert payload["truncated"] is True
+    assert payload["total_results"] == 10
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "hint", "valid"),
+    [
+        (
+            "search_external_database",
+            {"query": "p53", "domain": "biology"},
+            "valid_domains",
+            "biomedical",
+        ),
+        (
+            "search_external_database",
+            {"query": "p53", "connector": "no-such-db"},
+            "available_connectors",
+            "pubmed",
+        ),
+        (
+            "list_external_databases",
+            {"domain": "biology"},
+            "valid_domains",
+            "biomedical",
+        ),
+    ],
+    ids=["bad-domain", "unknown-connector", "list-bad-domain"],
+)
+async def test_external_argument_mistakes_return_the_valid_values(
+    db: AsyncSession,
+    context: IntegrationContext,
+    tool: str,
+    arguments: dict[str, Any],
+    hint: str,
+    valid: str,
+) -> None:
+    result = await invoke_read(db, context, _invocation(tool, **arguments))
+    assert result.is_error is True
+    payload = result.content[0]
+    assert payload["error"] == "invalid_arguments"
+    assert valid in payload[hint]
+    # Only the public registry list: never the message text.
+    assert set(payload) == {"error", hint}
+    assert result.source_refs == []
+
+
+async def test_rejected_connector_filters_are_an_argument_error(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "search_external_database",
+            query="p53",
+            connector="pubmed",
+            filters={"no_such_filter": "x"},
+        ),
+    )
+    assert result.content == [
+        {
+            "error": "invalid_arguments",
+            "error_category": "unsupported_connector_filter",
+        }
+    ]
+
+
+async def test_unlisted_error_category_is_an_upstream_error(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only the two filter categories are caller mistakes; any other category
+    # is an outage and leaves the gateway without its message or category.
+    monkeypatch.setattr(
+        read_tools,
+        "_tool_search_external_database",
+        AsyncMock(
+            return_value={"error": "boom", "error_category": "connector_crashed"}
+        ),
+    )
+    result = await invoke_read(
+        db, context, _invocation("search_external_database", query="p53")
+    )
+    assert result.is_error is True
+    assert result.content == [{"error": "upstream_unavailable"}]
+    assert result.source_refs == []
+
+
+@pytest.mark.parametrize(
+    ("tool", "upstream", "arguments", "expected"),
+    [
+        (
+            "search_external_database",
+            "_tool_search_external_database",
+            {"query": "p53", "connector": "PubMed", "domain": " Biomedical "},
+            {"connector": "pubmed", "domain": "biomedical"},
+        ),
+        (
+            "list_external_databases",
+            "_tool_list_external_databases",
+            {"domain": "Biomedical"},
+            {"domain": "biomedical"},
+        ),
+    ],
+    ids=["search", "list"],
+)
+async def test_connector_and_domain_names_match_case_insensitively(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    upstream: str,
+    arguments: dict[str, Any],
+    expected: dict[str, str],
+) -> None:
+    registry = AsyncMock(return_value={"results": []})
+    monkeypatch.setattr(read_tools, upstream, registry)
+    await invoke_read(db, context, _invocation(tool, **arguments))
+    assert registry.await_args is not None
+    sent = registry.await_args.args[0]
+    assert {key: sent[key] for key in expected} == expected
 
 
 async def _set_content(db: AsyncSession, document_id: UUID, text_: str) -> None:

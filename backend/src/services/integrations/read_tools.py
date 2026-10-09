@@ -162,9 +162,14 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         "tools:read",
     ),
     "retrieve_passages": (
-        "Full-text passage retrieval over the granted project's documents "
-        "(PostgreSQL ranking; works without a semantic knowledge base). "
-        "Omit document_ids to search the whole project.",
+        "Full-text search over the granted project's documents (PostgreSQL "
+        "ranking; works without a semantic knowledge base). Returns the "
+        "best-matching documents, at most top_k, each with one short excerpt "
+        "(up to three matching sentences, the title included), not every "
+        "matching passage. A document matches only when it contains every "
+        "stemmed query word, ignoring English stop words and one-letter "
+        "words, so pass a few key terms rather than a question. Omit "
+        "document_ids to search the whole project.",
         {
             "type": "object",
             "properties": {
@@ -983,13 +988,68 @@ async def _get_researcher(
     )
 
 
+# Connector and domain names are lower-case registry keys; models capitalise
+# them ("PubMed", "Biomedical").
+_REGISTRY_NAME_ARGUMENTS = ("connector", "domain")
+# A caller mistake the registry tools report as a payload. Only these public
+# registry lists and fixed categories leave the gateway, never the message,
+# which can quote a connector's exception text.
+_ARGUMENT_HINTS = ("available_connectors", "valid_domains")
+_ARGUMENT_ERROR_CATEGORIES = frozenset(
+    {"invalid_connector_filter", "unsupported_connector_filter"}
+)
+
+
+def _argument_error(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """``invalid_arguments`` with the valid values, when the caller erred."""
+    hints: dict[str, Any] = {
+        key: payload[key]
+        for key in _ARGUMENT_HINTS
+        if isinstance(payload.get(key), list)
+    }
+    if payload.get("error_category") in _ARGUMENT_ERROR_CATEGORIES:
+        hints["error_category"] = payload["error_category"]
+    return {"error": "invalid_arguments", **hints} if hints else None
+
+
+def _cap_external_results(payload: dict[str, Any], cap: int) -> dict[str, Any]:
+    """At most ``cap`` results in total, taken round-robin across connectors.
+
+    The registry tool applies max_results to each connector it searches, so a
+    search of every keyless connector returned up to 8x the cap and the whole
+    call failed as result_too_large (audit RT-4). total_results keeps the
+    number found.
+    """
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) <= cap:
+        return payload
+    by_source: dict[str, list[Any]] = {}
+    for row in results:
+        source = str(row.get("source")) if isinstance(row, dict) else ""
+        by_source.setdefault(source, []).append(row)
+    kept: list[Any] = []
+    depth = 0
+    while len(kept) < cap:
+        layer = [rows[depth] for rows in by_source.values() if depth < len(rows)]
+        if not layer:
+            break
+        kept.extend(layer[: cap - len(kept)])
+        depth += 1
+    return {**payload, "results": kept, "truncated": True}
+
+
 async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Dispatch a tool that takes no identity; upstream detail never leaves.
 
     Agent tools report failures as payloads (``error`` text naming env vars,
-    connector exceptions, ...) as well as by raising; both are normalised.
+    connector exceptions, ...) as well as by raising; both are normalised. A
+    caller mistake (unknown connector, invalid domain, rejected filters) is
+    ``invalid_arguments`` with the valid values, not an outage (audit RT-5).
     """
     args = dict(arguments)
+    for key in _REGISTRY_NAME_ARGUMENTS:
+        if isinstance(args.get(key), str):
+            args[key] = args[key].strip().lower()
     try:
         if name == "search_arxiv":
             args["max_results"] = _clamp(
@@ -1011,8 +1071,13 @@ async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         logger.warning("%s failed", name, exc_info=True)
         return {"error": "upstream_unavailable"}
     if payload.get("error") or payload.get("is_error"):
+        mistake = _argument_error(payload)
+        if mistake is not None:
+            return mistake
         logger.warning("%s returned an error payload: %s", name, payload.get("error"))
         return {"error": "upstream_unavailable"}
+    if name == "search_external_database":
+        return _cap_external_results(payload, args["max_results"])
     return payload
 
 
