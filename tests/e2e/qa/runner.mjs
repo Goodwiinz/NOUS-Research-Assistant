@@ -436,9 +436,11 @@ export async function runCampaign(config, options = {}) {
     }
     for (const scenario of scenarios) {
       const started = Date.now();
-      if (sessionRetired) {
+      if (sessionRetired && !sessionReplacementFailure) {
         // The previous scenario timed out. Its session stays quarantined so a
         // late action cannot run; the remaining scenarios get a fresh one.
+        // The factory is tried once: after a failure every remaining case
+        // fails with that reason rather than retrying per case.
         try {
           session = await openSession();
           sessionRetired = false;

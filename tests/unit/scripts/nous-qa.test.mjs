@@ -465,9 +465,11 @@ test('scenario timeout awaits bounded session cleanup', async () => {
  */
 function timeoutSessionFactory({ cleanupFor = () => ({ status: 'complete', retained: [], errors: [] }), failOpen = () => false } = {}) {
   const sessions = [];
+  const attempts = { count: 0 };
   const factory = async () => {
+    attempts.count += 1;
     const index = sessions.length + 1;
-    if (failOpen(index)) throw new Error(`browser pool exhausted for session ${index}`);
+    if (failOpen(attempts.count)) throw new Error(`browser pool exhausted for session ${index}`);
     const session = {
       index,
       quarantined: false,
@@ -491,7 +493,7 @@ function timeoutSessionFactory({ cleanupFor = () => ({ status: 'complete', retai
     sessions.push(session);
     return session;
   };
-  return { sessions, factory };
+  return { sessions, attempts, factory };
 }
 
 function timeoutRegistry(record) {
@@ -582,20 +584,31 @@ test('a quarantined session whose cleanup completes keeps the campaign cleanup c
   assert.equal(exitCodeForReport(report), 1, 'the timed-out case is still a failure');
 });
 
-test('when no fresh session can be opened after a timeout the remaining cases fail and never reuse the quarantined session (Q-I8)', async () => {
+test('when no fresh session can be opened after a timeout the remaining cases fail once, without retrying the factory (Q-I8)', async () => {
   const record = {};
-  const { sessions, factory } = timeoutSessionFactory({ failOpen: (index) => index > 1 });
+  // Attempt 2 fails; a retry on attempt 3 would succeed. The runner must not
+  // retry: a late success would otherwise be opened and never used while the
+  // remaining cases still fail with the stale reason.
+  const { sessions, attempts, factory } = timeoutSessionFactory({ failOpen: (attempt) => attempt === 2 });
+  const registry = [
+    ...timeoutRegistry(record),
+    { id: 'third', title: 'Third', suite: 'smoke', prerequisites: [], run: async (session) => { record.thirdCaseSession = session; return { assertion: 'ran' }; } },
+  ];
   const report = await runCampaign(
     { ...TIMEOUT_CONFIG, runId: 'run-timeout-no-replacement' },
-    { registry: timeoutRegistry(record), sessionFactory: factory }
+    { registry, sessionFactory: factory }
   );
   await new Promise((resolve) => setTimeout(resolve, 75));
+  assert.equal(attempts.count, 2, 'the factory is tried once after the timeout, never again');
   assert.equal(sessions.length, 1);
   assert.equal(record.laterCaseSession, undefined);
+  assert.equal(record.thirdCaseSession, undefined);
   assert.equal(report.cases[0].status, 'FAIL');
-  assert.equal(report.cases[1].status, 'FAIL');
-  assert.match(report.cases[1].reason, /fresh session could not be opened/i);
-  assert.match(report.cases[1].reason, /browser pool exhausted/);
+  for (const index of [1, 2]) {
+    assert.equal(report.cases[index].status, 'FAIL');
+    assert.match(report.cases[index].reason, /fresh session could not be opened/i);
+    assert.match(report.cases[index].reason, /browser pool exhausted/);
+  }
   assert.equal(sessions[0].cleanedUp, true);
   assert.equal(report.cleanup.contexts, 1);
 });
