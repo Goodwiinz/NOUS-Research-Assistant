@@ -490,11 +490,21 @@ def search_health_check(
         # Check if GIN indexes exist. Only the index name is surfaced below —
         # not indexdef (the raw DDL) — since the auth gate above narrows who
         # can call this, not what a caller who legitimately can should see.
+        # pg_indexes renders the access method in lower case ("USING gin"),
+        # so the match must be case-insensitive (Q-P3: `LIKE '%GIN%'` never
+        # matched and this endpoint reported index_count 0 on a healthy DB).
+        # An INVALID index (an interrupted CONCURRENTLY build) serves no
+        # query, so it must not count as healthy either.
         index_check_sql = """
-            SELECT indexname, indexdef
-            FROM pg_indexes
-            WHERE tablename IN ('threads', 'chat_messages')
-                AND indexdef LIKE '%GIN%'
+            SELECT x.indexname, x.indexdef
+            FROM pg_indexes x
+            JOIN pg_class c
+                ON c.relname = x.indexname
+                AND c.relnamespace = x.schemaname::regnamespace
+            JOIN pg_index i ON i.indexrelid = c.oid
+            WHERE x.tablename IN ('threads', 'chat_messages')
+                AND i.indisvalid
+                AND x.indexdef ILIKE '%USING gin%'
         """
 
         result = db.execute(text(index_check_sql))

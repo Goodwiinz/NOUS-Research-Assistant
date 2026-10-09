@@ -999,9 +999,14 @@ jobs:
         # once against the job's postgres service and reject a green run in
         # which any test skipped. A strict xfail is a matrix-tracked finding,
         # not a skip; it fails pytest itself if it starts passing.
+        # The search-vector repair suite (Q-P3) shares the lane: it builds
+        # scratch databases with the real alembic chain (CREATE DATABASE needs
+        # the service's superuser) and guards the thread/message full-text
+        # objects and /api/v2/search/health on a migration-built schema.
         run: |
           mkdir -p test-results
           pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
+            backend/tests/integration/test_search_vector_repair_postgres.py \
             -c backend/pytest.ini -m integration \
             --junitxml=test-results/two-account-pg-search.xml -q -ra
           python - <<'PY'
