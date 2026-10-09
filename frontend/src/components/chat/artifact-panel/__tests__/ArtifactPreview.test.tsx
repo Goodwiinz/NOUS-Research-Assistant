@@ -4,7 +4,11 @@ import { act, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/artifactService', () => ({
-  artifactService: { fetchVersionBlob: vi.fn(), downloadVersion: vi.fn() },
+  artifactService: {
+    fetchVersionBlob: vi.fn(),
+    downloadVersion: vi.fn(),
+    capabilities: vi.fn(),
+  },
 }));
 
 import {
@@ -102,6 +106,10 @@ describe('ArtifactPreview', () => {
 });
 
 beforeEach(() => {
+  vi.mocked(artifactService.capabilities).mockResolvedValue({
+    editingEnabled: false,
+    previewEnabled: false,
+  });
   useAuthStore.setState({
     user: { id: 'actor', organization_id: 'org' } as User,
     isAuthenticated: true,
@@ -207,3 +215,40 @@ it('shows an authenticated PDF blob in a sandbox and revokes it on teardown', as
 });
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('keeps HTML escaped and interactive preview absent when capability is off', async () => {
+  vi.mocked(artifactService.capabilities).mockResolvedValue({
+    editingEnabled: false,
+    previewEnabled: false,
+  });
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+    new Blob(['<button>calculator</button>'])
+  );
+  render(<ArtifactPreview version={{ ...base, mimeType: 'text/html' }} />);
+  expect(
+    await screen.findByText('<button>calculator</button>')
+  ).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Run HTML preview' })).toBeNull();
+  expect(screen.queryByTitle('Interactive HTML preview')).toBeNull();
+});
+it('requires explicit opt-in with capability on, and preserves source below the isolated frame', async () => {
+  vi.mocked(artifactService.capabilities).mockResolvedValue({
+    editingEnabled: false,
+    previewEnabled: true,
+  });
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+    new Blob(['<button>calculator</button>'])
+  );
+  const { user } = render(
+    <ArtifactPreview version={{ ...base, mimeType: 'text/html' }} />
+  );
+  await screen.findByText('<button>calculator</button>');
+  const run = await screen.findByRole('button', { name: 'Run HTML preview' });
+  expect(screen.queryByTitle('Interactive HTML preview')).toBeNull();
+  await user.click(run);
+  expect(screen.getByTitle('Interactive HTML preview')).toHaveAttribute(
+    'sandbox',
+    'allow-scripts'
+  );
+  expect(screen.getByText('<button>calculator</button>')).toBeInTheDocument();
+});

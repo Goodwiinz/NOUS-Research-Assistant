@@ -275,31 +275,67 @@ it('retains the typed safe conflict identity even if latest metadata cannot load
 });
 
 it('an account A save resolving after account B opens preserves B cache, tabs and edit buffer', async () => {
-  let finish!: (v:ArtifactVersion)=>void;
-  vi.mocked(artifactService.editVersion).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
-  vi.mocked(artifactService.fetchVersionBlob).mockImplementation(async(id)=>new Blob([id==='b1'?'B seed':'seed'],{type:'text/plain'}));
-  const bVersion={...version,artifactId:'b-artifact',versionId:'b1'};
-  const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
-  const wrapper=({children}:{children:ReactNode})=><QueryClientProvider client={client}>{children}</QueryClientProvider>;
-  function Harness():import('react').ReactElement|null {
+  let finish!: (v: ArtifactVersion) => void;
+  vi.mocked(artifactService.editVersion).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+  );
+  vi.mocked(artifactService.fetchVersionBlob).mockImplementation(
+    async (id) =>
+      new Blob([id === 'b1' ? 'B seed' : 'seed'], { type: 'text/plain' })
+  );
+  const bVersion = { ...version, artifactId: 'b-artifact', versionId: 'b1' };
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  function Harness(): import('react').ReactElement | null {
     useArtifactPanelScope();
-    const artifact=useArtifactPanelStore(s=>s.artifact);
-    return artifact?.kind==='generated'?<ArtifactFileView version={artifact.versionId==='b1'?bVersion:version}/>:null;
+    const artifact = useArtifactPanelStore((s) => s.artifact);
+    return artifact?.kind === 'generated' ? (
+      <ArtifactFileView
+        version={artifact.versionId === 'b1' ? bVersion : version}
+      />
+    ) : null;
   }
-  const {user}=render(<Harness/>,{wrapper});
-  await user.click(await screen.findByRole('button',{name:'Edit'}));
+  const { user } = render(<Harness />, { wrapper });
+  await user.click(await screen.findByRole('button', { name: 'Edit' }));
   await screen.findByLabelText('Edit file contents');
-  fireEvent.change(screen.getByLabelText('Edit file contents'),{target:{value:'A draft'}});
-  await user.click(screen.getByRole('button',{name:'Save new version'}));
-  act(()=>useAuthStore.setState({user:{id:'u2',organization_id:'o2'} as User}));
-  act(()=>useArtifactPanelStore.getState().openArtifact({kind:'generated',artifactId:'b-artifact',versionId:'b1',title:'B file'}));
-  await user.click(await screen.findByRole('button',{name:'Edit'}));
+  fireEvent.change(screen.getByLabelText('Edit file contents'), {
+    target: { value: 'A draft' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Save new version' }));
+  act(() =>
+    useAuthStore.setState({ user: { id: 'u2', organization_id: 'o2' } as User })
+  );
+  act(() =>
+    useArtifactPanelStore
+      .getState()
+      .openArtifact({
+        kind: 'generated',
+        artifactId: 'b-artifact',
+        versionId: 'b1',
+        title: 'B file',
+      })
+  );
+  await user.click(await screen.findByRole('button', { name: 'Edit' }));
   await screen.findByLabelText('Edit file contents');
-  fireEvent.change(screen.getByLabelText('Edit file contents'),{target:{value:'B draft'}});
-  const bKey=['artifact','b-artifact','versions',useArtifactPanelStore.getState().scope];
-  client.setQueryData(bKey,[bVersion]);
-  const bTabs=useArtifactPanelStore.getState().tabs;
-  await act(async()=>finish({...version,versionId:'a2'}));
+  fireEvent.change(screen.getByLabelText('Edit file contents'), {
+    target: { value: 'B draft' },
+  });
+  const bKey = [
+    'artifact',
+    'b-artifact',
+    'versions',
+    useArtifactPanelStore.getState().scope,
+  ];
+  client.setQueryData(bKey, [bVersion]);
+  const bTabs = useArtifactPanelStore.getState().tabs;
+  await act(async () => finish({ ...version, versionId: 'a2' }));
   expect(client.getQueryData(bKey)).toEqual([bVersion]);
   expect(useArtifactPanelStore.getState().tabs).toEqual(bTabs);
   expect(useArtifactPanelStore.getState().activeVersionId).toBe('b1');

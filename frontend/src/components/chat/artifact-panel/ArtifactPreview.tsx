@@ -3,12 +3,17 @@
 import React, { useEffect, useState, type ReactElement } from 'react';
 
 import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
-import { useArtifactContent } from '@/hooks/chat/useThreadArtifacts';
+import {
+  useArtifactCapabilities,
+  useArtifactContent,
+} from '@/hooks/chat/useThreadArtifacts';
 import { useArtifactScope } from '@/hooks/chat/useArtifactScope';
 import {
   artifactService,
   type ArtifactVersion,
 } from '@/services/artifactService';
+
+import { InteractiveHtmlPreview } from './InteractiveHtmlPreview';
 
 import {
   CsvArtifactPreview,
@@ -64,7 +69,7 @@ type LoadState =
 /**
  * Read-only preview of one committed version. Bytes are fetched with auth;
  * Markdown renders through ChatMarkdown (no raw HTML), everything else is
- * escaped text or an image. HTML is never executed here (Task 5 sandboxes it).
+ * escaped text or an image. HTML execution requires an explicit sandbox opt-in.
  */
 export function ArtifactPreview({
   version,
@@ -204,6 +209,8 @@ export function ArtifactPreview({
       </div>
     );
   }
+  if (kind === 'html')
+    return <HtmlArtifactPreview key={key} text={state.text} />;
   if (kind === 'csv') return <CsvArtifactPreview text={state.text} />;
   if (kind === 'json') return <JsonArtifactPreview text={state.text} />;
   if (kind === 'markdown') {
@@ -235,4 +242,28 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function HtmlArtifactPreview({ text }: { text: string }): ReactElement {
+  const capabilities = useArtifactCapabilities();
+  const [running, setRunning] = useState(false);
+  return (
+    <>
+      {capabilities.data?.previewEnabled === true &&
+        (running ? (
+          <InteractiveHtmlPreview source={text} />
+        ) : (
+          <button
+            type="button"
+            className="m-3 rounded-md border px-3 py-2 text-sm"
+            onClick={() => setRunning(true)}
+          >
+            Run HTML preview
+          </button>
+        ))}
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words p-4 text-sm">
+        {text}
+      </pre>
+    </>
+  );
 }
