@@ -22,7 +22,8 @@ import { workspaceService } from '@/services/workspaceService';
 import type { ChatStore } from './chat/types';
 import { initialState } from './chat/initialState';
 import {
-  abortAllNewestPageRequests,
+  captureChatSession,
+  resetChatSession,
   setActiveAbortController,
 } from './chat/requestCoordinator';
 import { createSelectionSlice } from './chat/slices/selectionSlice';
@@ -61,16 +62,18 @@ export const useChatStore = create<ChatStore>()(
       },
 
       reset: () => {
-        abortAllNewestPageRequests();
+        resetChatSession();
         set(initialState);
       },
 
       initializeDefaultWorkspace: async () => {
+        const isCurrentSession = captureChatSession();
         try {
           console.log('[ChatStore] Initializing default workspace...');
           const { currentWorkspaceId } = get();
           const workspace =
             await workspaceService.getOrCreateDefaultWorkspace();
+          if (!isCurrentSession()) return;
 
           // Keep local workspace list in sync with bootstrap result.
           set((state) => {
@@ -101,12 +104,14 @@ export const useChatStore = create<ChatStore>()(
           // Set current workspace and wait for its conversation load so
           // bootstrap callers do not have to issue the same read again.
           await get().setCurrentWorkspace(workspace.id);
+          if (!isCurrentSession()) return;
 
           // Reset retry counter on successful initialization
           set((s) => {
             s.reinitRetryCount = 0;
           });
         } catch (error) {
+          if (!isCurrentSession()) return;
           console.error(
             '[ChatStore] Error initializing default workspace:',
             error
@@ -141,6 +146,11 @@ export const useChatStore = create<ChatStore>()(
 // ============================================================================
 
 export type { MessageFreshness, RefreshExpectation } from './chat/types';
+export {
+  captureChatSession,
+  onChatSessionReset,
+  getChatSessionSignal,
+} from './chat/requestCoordinator';
 
 // ============================================================================
 // Selectors (compatibility re-exports)

@@ -5,6 +5,8 @@ every test file exactly once, or a test silently stops running in CI.
 """
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import cast
@@ -106,6 +108,143 @@ def test_cli_prints_one_path_per_line_and_rejects_bad_input(
 def _integration_job() -> dict:
     workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     return cast(dict, workflow["jobs"]["integration-tests"])
+
+
+def test_integration_job_enables_real_redis_cli_revocation_regression() -> None:
+    job = _integration_job()
+    step = next(
+        step for step in job["steps"] if step.get("name") == "Run integration tests"
+    )
+    env = step["env"]
+    assert env.get("CLI_REVOCATION_TEST_REDIS_URL") == env["REDIS_URL"]
+    assert "job.services.redis.ports['6379']" in env["REDIS_URL"]
+
+
+def test_integration_job_enrolls_daily_brief_rollback_regression() -> None:
+    job = _integration_job()
+    step = next(
+        step for step in job["steps"] if step.get("name") == "Run integration tests"
+    )
+    env = step["env"]
+    assert env.get("DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL") == env["DATABASE_URL"]
+    assert "job.services.postgres.ports['5432']" in env["DATABASE_URL"]
+
+
+@pytest.mark.parametrize(
+    ("case_xml", "pytest_exit", "accepted"),
+    [
+        ("<testcase name='passed'/>", 0, True),
+        ("<testcase name='skipped'><skipped/></testcase>", 0, False),
+        ("", 0, False),
+        ("<testcase name='failed'><failure/></testcase>", 0, False),
+        ("<testcase name='error'><error/></testcase>", 0, False),
+        ("<testcase name='passed'/>", 1, False),
+    ],
+)
+def test_recovery_postgres_step_requires_executed_tests(
+    tmp_path: Path, case_xml: str, pytest_exit: int, accepted: bool
+) -> None:
+    job = _integration_job()
+    step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Run ingestion recovery PostgreSQL tests"
+    )
+    assert step["if"] == "matrix.shard == 1"
+    assert (
+        "job.services.postgres.ports['5432']"
+        in step["env"]["ORCHESTRATION_TEST_DATABASE_URL"]
+    )
+    for module in (
+        "test_stuck_processing_recovery.py",
+        "test_stuck_recovery_terminal_retry.py",
+        "test_ingestion_stage_guard_postgres.py",
+    ):
+        assert f"backend/tests/unit/tasks/{module}" in step["run"]
+
+    # Execute the actual workflow shell against pytest's possible outcomes.
+    # In particular, pytest exits zero when every selected test skips.
+    results = tmp_path / "test-results"
+    results.mkdir()
+    (results / "ingestion-recovery.xml").write_text(
+        f"<testsuites><testsuite>{case_xml}</testsuite></testsuites>"
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pytest_stub = bin_dir / "pytest"
+    pytest_stub.write_text(f"#!/bin/sh\nexit {pytest_exit}\n")
+    pytest_stub.chmod(0o755)
+    (bin_dir / "python").symlink_to(sys.executable)
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+
+
+_XFAIL = "<skipped type='pytest.xfail' message='tracked finding'/>"
+
+
+@pytest.mark.parametrize(
+    ("case_xml", "pytest_exit", "accepted"),
+    [
+        ("<testcase name='passed'/>", 0, True),
+        (f"<testcase name='passed'/><testcase name='x'>{_XFAIL}</testcase>", 0, True),
+        ("<testcase name='skipped'><skipped type='pytest.skip'/></testcase>", 0, False),
+        ("<testcase name='skipped'><skipped/></testcase>", 0, False),
+        ("", 0, False),
+        ("<testcase name='failed'><failure/></testcase>", 0, False),
+        ("<testcase name='error'><error/></testcase>", 0, False),
+        ("<testcase name='passed'/>", 1, False),
+    ],
+)
+def test_two_account_postgres_search_step_requires_executed_tests(
+    tmp_path: Path, case_xml: str, pytest_exit: int, accepted: bool
+) -> None:
+    """Matrix row S2 (GOO-399): the suite skips without its database URL, so
+    the step must reject an all-skipped or partly skipped green run."""
+    job = _integration_job()
+    step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Run two-account PostgreSQL search isolation tests"
+    )
+    assert "matrix.shard == 1" in step["if"]
+    assert (
+        "job.services.postgres.ports['5432']"
+        in step["env"]["TWO_ACCOUNT_PG_TEST_DATABASE_URL"]
+    )
+    assert (
+        "backend/tests/integration/two_account/test_search_isolation_postgres.py"
+        in step["run"]
+    )
+
+    results = tmp_path / "test-results"
+    results.mkdir()
+    (results / "two-account-pg-search.xml").write_text(
+        f"<testsuites><testsuite>{case_xml}</testsuite></testsuites>"
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pytest_stub = bin_dir / "pytest"
+    pytest_stub.write_text(f"#!/bin/sh\nexit {pytest_exit}\n")
+    pytest_stub.chmod(0o755)
+    (bin_dir / "python").symlink_to(sys.executable)
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
 
 
 def test_integration_job_is_a_sharded_matrix_that_fails_closed() -> None:

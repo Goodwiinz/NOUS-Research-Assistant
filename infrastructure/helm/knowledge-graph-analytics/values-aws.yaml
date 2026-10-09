@@ -61,9 +61,9 @@ backend:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
     repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
-    tag: "d763c1031c25e933a4f7258c2c1f1075d963ca29"
-    digest: "sha256:83b26a72f237d241b3c75c351202f6cf178fd6e975151c960291635562b2147e"
-    sourceSha: "d763c1031c25e933a4f7258c2c1f1075d963ca29"
+    tag: "a0d4c6b3d6a81352b870450a5bc74708ca6843c9"
+    digest: "sha256:91ba8332ef16b3de3744d35cb64a337b18132a64b76351cace3bf3675975c16a"
+    sourceSha: "a0d4c6b3d6a81352b870450a5bc74708ca6843c9"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -176,6 +176,10 @@ backend:
       value: "true"
     # GOO-338: default-off in code; dev opts in explicitly.
     - name: DAILY_RESEARCH_BRIEF_ENABLED
+      value: "true"
+    # GOO-319: default-off in code; dev opts in explicitly. The celery worker
+    # runs the tick and reads this merged backend.env.
+    - name: SEARCH_UPDATES_ENABLED
       value: "true"
     - name: PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS
       value: "30"
@@ -390,7 +394,7 @@ keda:
     databaseIndex: "0"
 syntheticTraffic:
   enabled: true
-  suspend: true
+  suspend: false
   schedule: "*/20 * * * *"
   args: ["--rotate"]
   activeDeadlineSeconds: 900

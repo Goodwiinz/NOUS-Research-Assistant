@@ -856,9 +856,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-test-
             ${{ runner.os }}-pip-
+      - name: Install PDF renderer system libraries
+        # WeasyPrint (backend/requirements.txt) loads pango at runtime. The
+        # X4 PDF-export isolation tests render real PDFs (GOO-400). Same
+        # packages as backend/docker/Dockerfile.prod.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core
       - name: Install dependencies
         run: |
           pip install --build-constraint backend/constraints-ci.txt -r backend/requirements.txt
+      - name: Verify the PDF renderer
+        run: |
+          python -c 'from weasyprint import HTML; pdf = HTML(string="<h1>PDF smoke</h1>").write_pdf(); assert pdf.startswith(b"%PDF-"), pdf[:8]; print("weasyprint pdf_bytes=%d" % len(pdf))'
       - name: Run integration tests
         run: |
           mkdir -p test-results
@@ -867,6 +878,12 @@ jobs:
           if [ -z "$files" ]; then
             echo "No integration test files in this shard - skipping"
             exit 0
+          fi
+
+          if printf '%s\n' "$files" | grep -Fxq 'backend/tests/integration/test_ingestion_lifecycle_postgres.py'; then
+            # Match the production image's model without changing dependencies.
+            pip install --no-deps \
+              https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
           fi
 
           set +e
@@ -893,7 +910,100 @@ jobs:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ strategy.job-total }}
           DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # Enable the enrolled tool-operation suite without activating other
+          # optional orchestration suites that have separate prerequisites.
+          AGENT_TOOL_OPERATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # Enroll the artifact FK-order regression independently of other
+          # optional orchestration suites.
+          ARTIFACT_PUBLISH_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # Enroll only the Daily Brief disabled-flag rollback regression; the
+          # lifecycle tests in the same module read ORCHESTRATION_TEST_DATABASE_URL.
+          DAILY_BRIEF_ROLLBACK_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # Lifecycle fixtures own a schema and queue in these throwaway services.
+          INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          INGESTION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          CLI_REVOCATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # X4 PDF-export tests fail instead of skipping without the renderer.
+          PDF_EXPORT_TEST_REQUIRE_RENDERER: "1"
+      - name: Run ingestion recovery PostgreSQL tests
+        if: matrix.shard == 1
+        # These integration-marked tests live outside the sharded directory.
+        # Give them a real database once, and reject a green all-skipped run.
+        run: |
+          mkdir -p test-results
+          pytest backend/tests/unit/tasks/test_stuck_processing_recovery.py \
+            backend/tests/unit/tasks/test_stuck_recovery_terminal_retry.py \
+            backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py \
+            -c backend/pytest.ini -m integration \
+            --junitxml=test-results/ingestion-recovery.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("test-results/ingestion-recovery.xml").findall(".//testcase")
+          if not cases or any(
+              case.find(outcome) is not None
+              for case in cases
+              for outcome in ("skipped", "failure", "error")
+          ):
+              raise SystemExit("Recovery PostgreSQL tests must execute without skips")
+          print(f"PostgreSQL recovery: {len(cases)} tests executed without skips")
+          PY
+        env:
+          ENVIRONMENT: testing
+          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          DATABASE_URL: "sqlite:///:memory:"
+          ASYNC_DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          AZURE_OPENAI_CHAT_ENDPOINT: "https://example.invalid"
+          AZURE_OPENAI_CHAT_API_KEY: "test-key-not-real"
+      - name: Save ingestion recovery test results
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ingestion-recovery-results
+          path: test-results/ingestion-recovery.xml
+          retention-days: 7
+      - name: Run two-account PostgreSQL search isolation tests
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        # Matrix row S2 (GOO-399). The sharded run above has no
+        # TWO_ACCOUNT_PG_TEST_DATABASE_URL, so this suite skips there. Run it
+        # once against the job's postgres service and reject a green run in
+        # which any test skipped. A strict xfail is a matrix-tracked finding,
+        # not a skip; it fails pytest itself if it starts passing.
+        run: |
+          mkdir -p test-results
+          pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
+            -c backend/pytest.ini -m integration \
+            --junitxml=test-results/two-account-pg-search.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("test-results/two-account-pg-search.xml").findall(".//testcase")
+
+
+          def not_executed(case):
+              skipped = case.find("skipped")
+              if skipped is not None and skipped.get("type") != "pytest.xfail":
+                  return True
+              return case.find("failure") is not None or case.find("error") is not None
+
+
+          if not cases or any(not_executed(case) for case in cases):
+              raise SystemExit("Two-account PostgreSQL search tests must execute without skips")
+          print(f"Two-account PostgreSQL search: {len(cases)} tests executed without skips")
+          PY
+        env:
+          ENVIRONMENT: testing
+          TWO_ACCOUNT_PG_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+      - name: Save two-account PostgreSQL search results
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: two-account-pg-search-results
+          path: test-results/two-account-pg-search.xml
+          retention-days: 7
       - name: Upload coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:

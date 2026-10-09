@@ -50,6 +50,9 @@ from src.services.artifacts.service import (
     store_upload,
 )
 from src.services.artifacts.storage import MemoryArtifactStorage
+from tests.utils.artifact_publication import publish_content as _published
+from tests.utils.artifact_publication import publish_request as _publish
+from tests.utils.artifact_publication import reserve_request as _reserve
 
 pytestmark = pytest.mark.unit
 USER, OTHER_USER, ORG, OTHER_ORG, PROJECT, OTHER_PROJECT, WORKSPACE, OTHER_WORKSPACE = (
@@ -191,39 +194,6 @@ def context() -> IntegrationContext:
     )
 
 
-def _reserve(
-    publication_id: UUID | None = None, **overrides: Any
-) -> ReserveArtifactUploadRequest:
-    return ReserveArtifactUploadRequest(
-        publication_id=publication_id or uuid4(),
-        byte_size=overrides.pop("byte_size", len(CONTENT)),
-        mime_type=overrides.pop("mime_type", "text/markdown"),
-        sha256=overrides.pop("sha256", DIGEST),
-    )
-
-
-def _publish(
-    reserve: ReserveArtifactUploadRequest, upload_id: UUID, **overrides: Any
-) -> PublishVersionRequest:
-    return PublishVersionRequest(
-        publication_id=reserve.publication_id,
-        upload_id=upload_id,
-        title=overrides.pop("title", "report.md"),
-        provenance=overrides.pop("provenance", ArtifactProvenance(producer="harness")),
-        **overrides,
-    )
-
-
-async def _published(
-    db: AsyncSession, context: IntegrationContext, **overrides: Any
-) -> tuple[PublishVersionRequest, ArtifactVersionDTO]:
-    reserve = _reserve()
-    upload = await reserve_upload(db, context, reserve)
-    await store_upload(db, context, upload.upload_id, CONTENT)
-    request = _publish(reserve, upload.upload_id, **overrides)
-    return request, await publish_version(db, context, request)
-
-
 async def test_finalize_is_idempotent_after_terminal(
     db: AsyncSession, context: IntegrationContext
 ) -> None:
@@ -277,6 +247,7 @@ async def test_digest_and_size_mismatch_never_store(
         "deleted_project",
         "deleted_workspace",
         "foreign_actor",
+        "workspace_grant",
     ],
 )
 async def test_publication_denials(
@@ -321,6 +292,15 @@ async def test_publication_denials(
         await db.commit()
     elif case == "foreign_actor":
         context = context.model_copy(update={"user_id": OTHER_USER})
+    elif case == "workspace_grant":
+        # The owner's own workspace: publication stays bound to one Collection.
+        context = IntegrationContext(
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            workspace_id=WORKSPACE,
+            grant_id=context.grant_id,
+        )
     with pytest.raises(expected):
         await reserve_upload(db, context, request)
     assert (

@@ -11,7 +11,7 @@ from typing import Any, Dict
 from uuid import uuid4
 
 from celery import Task, current_app
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, tuple_
 
 from src.core.config import settings
 from src.core.database import SessionLocal, get_db
@@ -25,7 +25,7 @@ from src.models.graph import (
 from src.models.graph import EntityType as GraphEntityType
 from src.models.graph import ExtractionMethod as GraphExtractionMethod
 from src.models.graph import RelationshipType as GraphRelationshipType
-from src.models.processing import JobStatus, ProcessingJob
+from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.services.documents.satellite_state import begin_write, finish_write
 from src.services.knowledge_graph.knowledge_graph_service import knowledge_graph_service
 from src.services.processing.llm_entity_extraction import LLMEntityExtractionService
@@ -1314,8 +1314,11 @@ def kg_merge_entities_job(self, job_id: str):
                     # read/DETACH DELETE any entity by id across tenants, and a
                     # re-pointed edge created without organization_id lands
                     # org-less, regressing edge-level tenancy.
+                    # strict: an outage reading the edge set must fail the group,
+                    # not read as "no edges" — delete_entity below DETACH DELETEs
+                    # the duplicate together with all of its edges.
                     relationships = knowledge_graph_service.get_relationships(
-                        duplicate_id, organization_id=job_org_id
+                        duplicate_id, organization_id=job_org_id, strict=True
                     )
                     for rel in relationships:
                         create_request = CreateRelationshipRequest(
@@ -1344,17 +1347,11 @@ def kg_merge_entities_job(self, job_id: str):
                             source_document_id=rel.source_document_id,
                             organization_id=job_org_id,
                         )
-                        try:
-                            knowledge_graph_service.create_relationship(create_request)
-                        except Exception as rel_error:
-                            # Duplicate-relationship inserts are expected while
-                            # re-pointing edges onto the primary; log at debug so
-                            # a genuine create failure isn't fully invisible.
-                            logger.debug(
-                                "Skipped relationship insert during entity merge: %s",
-                                rel_error,
-                                exc_info=True,
-                            )
+                        # create_relationship MERGEs, so a duplicate edge is not
+                        # an error. Any raise is a genuine failure to re-point:
+                        # let it fail the group (outer except) so the duplicate
+                        # below is kept instead of DETACH DELETEd with that edge.
+                        knowledge_graph_service.create_relationship(create_request)
 
                     # delete_entity swallows Neo4j errors and returns False (and
                     # also returns False when the node is already gone). The
@@ -1438,10 +1435,11 @@ def sweep_stuck_processing_jobs() -> dict:
     ``PROCESSING_JOB_STUCK_AFTER_SECONDS`` (default 30 min, ≥3× the max legal
     task runtime) is definitively stuck and is marked FAILED with an explicit
     sweep message. Conservative by design: mark-failed only, never re-enqueue
-    (the task may have partially executed). Known edge: with acks_late a
-    QUEUED row swept during an extreme (>30 min) broker backlog can still be
-    picked up later — its start_job/complete writes simply overwrite the
-    sweep, so the job self-heals; the sweep is logged either way.
+    (the task may have partially executed). Terminal failures reject late
+    delivery through the replay guard; recovery requires an explicit retry.
+    Ingestion jobs and their still-active documents fail in one transaction,
+    unless another active ingestion owns the document. Locks follow the
+    document-then-job order used by deletion and worker stage commits.
 
     Flag-gated by SWEEPERS_ENABLED (values-controllable kill switch).
     """
@@ -1453,14 +1451,17 @@ def sweep_stuck_processing_jobs() -> dict:
         return {"skipped": "sweepers-disabled"}
 
     threshold_seconds = settings_local.PROCESSING_JOB_STUCK_AFTER_SECONDS
-    # Naive-UTC cutoff matches this model's BaseModel timestamps
-    # (default/onupdate=datetime.utcnow) and cleanup_old_jobs' convention.
-    cutoff = datetime.utcnow() - timedelta(seconds=threshold_seconds)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=threshold_seconds)
 
     db = SessionLocal()
     try:
-        stuck_jobs = (
-            db.query(ProcessingJob)
+        candidates = (
+            db.query(
+                ProcessingJob.id,
+                ProcessingJob.document_id,
+                ProcessingJob.organization_id,
+                ProcessingJob.job_type,
+            )
             .filter(
                 ProcessingJob.status.in_(_NON_TERMINAL_PROCESSING_STATUSES),
                 ProcessingJob.updated_at < cutoff,
@@ -1469,8 +1470,76 @@ def sweep_stuck_processing_jobs() -> dict:
             .limit(200)
             .all()
         )
+        if not candidates:
+            db.commit()
+            return {"swept": 0}
 
-        for job in stuck_jobs:
+        # Lock the entire document batch before any jobs, including competing
+        # attempts, so a bulk delete cannot deadlock with this batch. The first
+        # query only discovered candidates; all mutation decisions use fresh,
+        # locked rows below.
+        document_keys = {
+            (row.document_id, row.organization_id)
+            for row in candidates
+            if row.job_type == JobType.DOCUMENT_INGESTION and row.document_id
+        }
+        documents = {}
+        if document_keys:
+            documents = {
+                (document.id, document.organization_id): document
+                for document in db.query(Document)
+                .filter(
+                    tuple_(Document.id, Document.organization_id).in_(document_keys)
+                )
+                .order_by(Document.id)
+                .populate_existing()
+                .autoflush(False)
+                .with_for_update()
+                .all()
+            }
+        candidate_ids = {row.id: row for row in candidates}
+        job_scope = ProcessingJob.id.in_(candidate_ids)
+        if documents:
+            job_scope = or_(
+                job_scope,
+                and_(
+                    tuple_(
+                        ProcessingJob.document_id, ProcessingJob.organization_id
+                    ).in_(documents),
+                    ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                    ProcessingJob.is_deleted == False,
+                ),
+            )
+        # Existing terminal siblings can retry using only their job lock.
+        # Lock them too so ownership cannot change between decision and commit.
+        locked_jobs = (
+            db.query(ProcessingJob)
+            .filter(job_scope)
+            .order_by(ProcessingJob.id)
+            .populate_existing()
+            .autoflush(False)
+            .with_for_update()
+            .all()
+        )
+        swept = 0
+        for job in locked_jobs:
+            candidate = candidate_ids.get(job.id)
+            if (
+                candidate is None
+                or job.is_deleted
+                or job.status not in _NON_TERMINAL_PROCESSING_STATUSES
+                or job.updated_at is None
+                or (
+                    job.updated_at
+                    if job.updated_at.tzinfo
+                    else job.updated_at.replace(tzinfo=timezone.utc)
+                )
+                >= cutoff
+                or job.organization_id != candidate.organization_id
+                or job.document_id != candidate.document_id
+                or job.job_type != candidate.job_type
+            ):
+                continue
             prior_status = job.status.value if job.status else "unknown"
             last_update = job.updated_at.isoformat() if job.updated_at else "unknown"
             logger.warning(
@@ -1489,8 +1558,34 @@ def sweep_stuck_processing_jobs() -> dict:
                 error_type="StuckJobSweep",
             )
 
+            document = documents.get((job.document_id, job.organization_id))
+            if (
+                job.job_type == JobType.DOCUMENT_INGESTION
+                and document is not None
+                and not document.is_deleted
+                and document.processing_status
+                in (
+                    ProcessingStatus.PENDING,
+                    ProcessingStatus.PROCESSING,
+                    ProcessingStatus.RETRYING,
+                )
+                and not any(
+                    other.id != job.id
+                    and other.document_id == document.id
+                    and other.organization_id == document.organization_id
+                    and other.job_type == JobType.DOCUMENT_INGESTION
+                    and not other.is_deleted
+                    and other.status in _NON_TERMINAL_PROCESSING_STATUSES
+                    for other in locked_jobs
+                )
+            ):
+                document.update_processing_status(
+                    ProcessingStatus.FAILED, job.error_message
+                )
+            swept += 1
+
         db.commit()
-        result = {"swept": len(stuck_jobs)}
+        result = {"swept": swept}
         logger.info("sweep_stuck_processing_jobs: %s", result)
         return result
     except Exception as e:

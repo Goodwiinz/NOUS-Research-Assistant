@@ -50,9 +50,9 @@ export NOUS_CONFIG_DIR="$HOME/.config/nous"
 What happens:
 
 1. CLI calls `POST /cli-auth/start` and gets a session + browser URL.
-2. Your default browser opens a consent page on `dev-api.goodwiinz.tech`.
-3. You sign in and click **Approve**.
-4. CLI polls `/cli-auth/status/{session_id}` until it flips to `approved`.
+2. Your default browser opens the consent page on the configured NOUS frontend.
+3. You sign in, check the request details (IP, device, start time), type the code printed in your terminal, and click **Approve**. The link never contains the code. If someone sends you a sign-in link or a code, do not approve it.
+4. CLI polls `/cli-auth/status/{session_id}` (poll token in the `X-CLI-Poll-Token` header, never the URL) until it flips to `approved`.
 5. Token, email, org ID, and expiry are written to `~/.nous/config.json`.
 
 If the browser doesn't open automatically, the URL is printed — paste it manually.

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, FolderOpen, Loader2, Plus, Sparkles } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { listProjects, listTemplates } from '@/services/researchEngineService';
+import { captureAccountSession } from '@/lib/account-session';
 import {
   useResearchEngineStore,
   type ResearchProject,
@@ -24,31 +25,29 @@ export function ResearchDashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const fetchProjects = useCallback(async () => {
+    const isCurrentAccount = captureAccountSession();
     setLoading(true);
     setError(null);
     try {
       const res = (await listProjects()) as ResearchProject[];
+      if (!isCurrentAccount()) return;
       setProjects(res ?? []);
     } catch (err) {
+      if (!isCurrentAccount()) return;
       setError(err instanceof Error ? err.message : 'Failed to load projects');
     } finally {
-      setLoading(false);
+      if (isCurrentAccount()) setLoading(false);
     }
   }, [setProjects, setLoading, setError]);
 
-  const fetchTemplates = useCallback(async () => {
-    try {
-      const res = (await listTemplates()) as Template[];
-      setTemplates(res ?? []);
-    } catch {
-      // Templates are non-critical; silently ignore
-    }
-  }, []);
-
   useEffect(() => {
-    fetchProjects();
-    fetchTemplates();
-  }, [fetchProjects, fetchTemplates]);
+    void fetchProjects();
+    // Templates are public, non-critical reference data.
+    void listTemplates().then(
+      (res) => setTemplates((res ?? []) as Template[]),
+      () => {}
+    );
+  }, [fetchProjects]);
 
   return (
     <div>

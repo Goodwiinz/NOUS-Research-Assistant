@@ -74,6 +74,7 @@ from src.services.agent.state import (
     THREAD_PERSISTENCE_EPHEMERAL,
 )
 from src.services.agent.trace_metadata import TraceSource, build_trace_metadata
+from src.services.integrations.context import DeviceBoundToAnotherChat
 from src.shared.enums import (
     TERMINAL_STREAM_EVENTS,
     AgentErrorCategory,
@@ -284,15 +285,33 @@ _CONFIRM_NOT_FOUND_CATEGORY = AgentErrorCategory.INVALID_REQUEST
 
 
 def _stream_failure_category(exc: BaseException) -> AgentErrorCategory:
-    """Category for the /stream catch-all: `invalid_request` for the
-    missing-user-message rejection, otherwise the generic classification."""
+    """Category for the /stream catch-all: a named category for the
+    failures a user can act on (missing user message, concurrent writer,
+    unknown thread, a device bound to another chat); anything else goes to
+    ``classify_agent_error``, which returns ``internal`` unless it recognises
+    a cancellation, timeout, rate limit or model error."""
     if isinstance(exc, ValueError) and _NO_USER_MESSAGE_SENTINEL in str(exc):
         return AgentErrorCategory.INVALID_REQUEST
     if isinstance(exc, ActiveRunConflict):
         return AgentErrorCategory.CONFLICT
     if isinstance(exc, AgentThreadResolutionError):
         return AgentErrorCategory.INVALID_REQUEST
+    if isinstance(exc, DeviceBoundToAnotherChat):
+        return AgentErrorCategory.DEVICE_BOUND_TO_ANOTHER_CHAT
     return classify_agent_error(exc)
+
+
+def _stream_failure_message(exc: BaseException) -> BaseException | str:
+    """Wire message for the /stream catch-all: a safe literal for the
+    failures a user can act on, otherwise the exception itself, which
+    ``error_frame_payload`` turns into the generic client-safe message."""
+    if isinstance(exc, ActiveRunConflict):
+        return "A response is already in progress for this thread."
+    if isinstance(exc, AgentThreadResolutionError):
+        return _CONFIRM_NOT_FOUND_MESSAGE
+    if isinstance(exc, DeviceBoundToAnotherChat):
+        return DeviceBoundToAnotherChat.client_message
+    return exc
 
 
 def _request_trace_id(request: Any) -> str:
@@ -1647,24 +1666,44 @@ async def _request_disconnected(request: Any) -> bool:
     return bool(signal and signal.is_set()) or await request.is_disconnected()
 
 
-async def _run_interrupted_cleanup(cleanup: Any) -> None:
-    """Finish durable cleanup outside the request's cancelled AnyIO scope."""
+async def _run_interrupted_cleanup(
+    cleanup: Any, *, propagate_cancellation: bool = False
+) -> None:
+    """Finish a durable operation outside the request's cancelled AnyIO scope.
+
+    Live ownership transitions must finish both the commit and its local
+    ownership update before propagating cancellation to the cleanup handler.
+    Cleanup callers keep the default and re-raise their original exception.
+    """
 
     async def shielded_cleanup() -> None:
         with CancelScope(shield=True):
             await cleanup()
 
     cleanup_task = asyncio.create_task(shielded_cleanup())
+    cancellation_exc: Optional[asyncio.CancelledError] = None
     while not cleanup_task.done():
         try:
             await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError:
-            continue
+        except asyncio.CancelledError as exc:
+            if cancellation_exc is None:
+                cancellation_exc = exc
+        except Exception:
+            # Retrieve the child failure below without losing a cancellation
+            # already delivered to a live ownership transition.
+            break
     # The outer cancellation can arrive on the same turn that the shielded
     # child finishes. In that case the loop observes ``done()`` after catching
     # CancelledError and would otherwise return without retrieving the child
     # exception, making a failed durable ACK look successful.
-    cleanup_task.result()
+    try:
+        cleanup_task.result()
+    except BaseException as exc:
+        if propagate_cancellation and cancellation_exc is not None:
+            raise cancellation_exc from exc
+        raise
+    if propagate_cancellation and cancellation_exc is not None:
+        raise cancellation_exc
 
 
 async def _run_cancel_cleanup(
@@ -3315,15 +3354,7 @@ async def stream_event_generator(
             with contextlib.suppress(Exception):
                 await persist_partial_stop()
         category = _stream_failure_category(e)
-        wire_error: BaseException | str = (
-            "A response is already in progress for this thread."
-            if isinstance(e, ActiveRunConflict)
-            else (
-                _CONFIRM_NOT_FOUND_MESSAGE
-                if isinstance(e, AgentThreadResolutionError)
-                else e
-            )
-        )
+        wire_error = _stream_failure_message(e)
         if terminal_frame_sent:
             # Audit S2-M3: a terminal already went out — ERROR after it
             # corrupts the client state machine, and an absorbing FAILED
@@ -3785,12 +3816,20 @@ async def stream_confirm_event_generator(
             # The durable branch above returned on a missing run. Keep this
             # invariant explicit for both runtime readers and static analysis.
             assert active_run is not None
-            durable_claimed = await claim_awaiting_run_for_confirmation(
-                db,
-                str(active_run.job_id),
-                approval_id=request_body.approval_id,
-                organization_id=getattr(current_user, "organization_id", None),
-                user_id=current_user.id,
+            claim_run_id = str(active_run.job_id)
+
+            async def claim_confirmation_run() -> None:
+                nonlocal durable_claimed
+                durable_claimed = await claim_awaiting_run_for_confirmation(
+                    db,
+                    claim_run_id,
+                    approval_id=request_body.approval_id,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+
+            await _run_interrupted_cleanup(
+                claim_confirmation_run, propagate_cancellation=True
             )
             if not durable_claimed:
                 if claim_is_local and confirm_claim_key:
@@ -4283,7 +4322,10 @@ async def stream_confirm_event_generator(
             # between the poll above and the guarded AWAITING transition; when
             # that happens this resumed producer must own the cancellation ACK
             # rather than leave STOPPING with no worker behind it.
-            try:
+            parked: Optional[bool] = None
+
+            async def park_confirmation_run() -> None:
+                nonlocal parked, durable_claimed
                 parked = await _finalize_run_id(
                     db,
                     str(active_run.job_id) if active_run is not None else None,
@@ -4294,6 +4336,13 @@ async def stream_confirm_event_generator(
                         "progress_steps": emitter.progress_steps,
                         "reasoning_summary": reasoning_summary or None,
                     },
+                )
+                if parked is True:
+                    durable_claimed = False
+
+            try:
+                await _run_interrupted_cleanup(
+                    park_confirmation_run, propagate_cancellation=True
                 )
             except Exception:
                 parked = None
@@ -4312,9 +4361,8 @@ async def stream_confirm_event_generator(
                     durable_claimed = False
                     await emitter.finish()
                 return
-            # This producer has parked. Transport cleanup no longer owns the
-            # run, even if disconnect interrupts publication of the next card.
-            durable_claimed = False
+            # Successful parking released ownership inside the shielded commit.
+            # An unknown/failed park still belongs to this producer's cleanup.
             confirmation_payload = {
                 "thread_id": request_body.thread_id,
                 "confirmation": confirmation_details,
@@ -4503,17 +4551,27 @@ async def stream_confirm_event_generator(
         if await durable_stop_requested():
             await cancel_confirm_stream(reason="user_requested")
             return
-        finalized = await _finalize_run_id(
-            db,
-            str(active_run.job_id) if active_run is not None else None,
-            current_user,
-            status=JobStatus.COMPLETED,
-            event_type=RunEventType.RUN_COMPLETED,
-            payload=(
-                {"assistant_message_id": persisted_assistant_id}
-                if persisted_assistant_id
-                else {}
-            ),
+        finalized = False
+
+        async def complete_confirmation_run() -> None:
+            nonlocal finalized, durable_claimed
+            finalized = await _finalize_run_id(
+                db,
+                str(active_run.job_id) if active_run is not None else None,
+                current_user,
+                status=JobStatus.COMPLETED,
+                event_type=RunEventType.RUN_COMPLETED,
+                payload=(
+                    {"assistant_message_id": persisted_assistant_id}
+                    if persisted_assistant_id
+                    else {}
+                ),
+            )
+            if finalized is True:
+                durable_claimed = False
+
+        await _run_interrupted_cleanup(
+            complete_confirmation_run, propagate_cancellation=True
         )
         if finalized is False:
             if await durable_stop_requested():
@@ -4522,8 +4580,7 @@ async def stream_confirm_event_generator(
                 durable_claimed = False
                 await emitter.finish()
             return
-        # Completion is committed before emit() can suspend or be cancelled.
-        durable_claimed = False
+        # Completion and ownership release precede cancellation or publication.
         frame = await emitter.emit(AgentStreamEvent.DONE, done_payload)
         terminal_frame_sent = True
         if not client_disconnected:

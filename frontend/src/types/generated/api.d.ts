@@ -1338,6 +1338,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifacts/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Project Artifacts */
+        get: operations["project_artifacts_api_v1_artifacts_projects__project_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/artifacts/threads/{thread_id}": {
         parameters: {
             query?: never;
@@ -2766,6 +2783,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cli-auth/session/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cli Auth Session Info
+         * @description Requester details for the approval page. Never returns the code.
+         */
+        get: operations["get_cli_auth_session_info_api_v1_cli_auth_session__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cli-auth/start": {
         parameters: {
             query?: never;
@@ -3975,6 +4012,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Connections */
+        get: operations["get_connections_api_v1_integrations_connections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Selected Context */
+        get: operations["get_selected_context_api_v1_integrations_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/context/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Context Options */
+        get: operations["get_context_options_api_v1_integrations_context_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/context/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Context Selection */
+        put: operations["put_context_selection_api_v1_integrations_context_selection_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices": {
         parameters: {
             query?: never;
@@ -3987,6 +4092,26 @@ export interface paths {
         put?: never;
         /** Create Device */
         post: operations["create_device_api_v1_integrations_devices_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/devices/{device_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Disconnect Device
+         * @description Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound, so every other connected device fails its next request until `nous-harness connect` runs on it again; that registers a new device and consent and leaves the old ones listed until revoked. Revoke the old consent rather than disconnecting the old device, which would end every CLI sign-in again; the old device then stays listed with no access. To remove one device's access without ending every sign-in, revoke its consents with POST /api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 without committing device revocation if the shared CLI cutoff fails.
+         */
+        post: operations["post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4079,6 +4204,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/grant-requests/{request_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Revoke Consent */
+        post: operations["post_revoke_consent_api_v1_integrations_grant_requests__request_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/grants/{grant_id}": {
         parameters: {
             query?: never;
@@ -4107,6 +4249,40 @@ export interface paths {
         put?: never;
         /** Renew Grant */
         post: operations["renew_grant_api_v1_integrations_grants__grant_id__renew_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/handoffs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save Handoff */
+        post: operations["save_handoff_api_v1_integrations_handoffs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/handoffs/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Latest Handoff */
+        get: operations["read_latest_handoff_api_v1_integrations_handoffs_latest_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7965,7 +8141,7 @@ export interface paths {
         };
         /**
          * Export Run
-         * @description Download an owner-scoped artifact for a completed research run.
+         * @description Download the artifact for a completed research run the caller can view.
          */
         get: operations["export_run_api_v1_research_engine_runs__run_id__export_get"];
         put?: never;
@@ -8114,7 +8290,7 @@ export interface paths {
         };
         /**
          * Get Pending Review
-         * @description Return the current owned review gate and its bounded persisted output.
+         * @description Return the current review gate for a run the caller can view.
          */
         get: operations["get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get"];
         put?: never;
@@ -8137,6 +8313,8 @@ export interface paths {
         /**
          * Submit Review
          * @description Append one review bound to the current persisted stage envelope.
+         *
+         *     Requires current project membership and the REVIEWER role.
          */
         post: operations["submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post"];
         delete?: never;
@@ -10195,6 +10373,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/threads/{thread_id}/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Thread Handoff
+         * @description Latest harness handoff left in this chat (standalone route).
+         */
+        get: operations["get_thread_handoff_api_v2_threads__thread_id__handoff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/threads/{thread_id}/messages": {
         parameters: {
             query?: never;
@@ -10924,6 +11122,10 @@ export interface components {
          * @description What the interactive owner sees before deciding: the exact stored target.
          */
         ActionReview: {
+            /** Arguments */
+            arguments: {
+                [key: string]: unknown;
+            };
             /** Content */
             content: string;
             /** Decided At */
@@ -10937,13 +11139,10 @@ export interface components {
             last_error?: string | null;
             /** Project Available */
             project_available: boolean;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /**
              * Requested At
              * Format: date-time
@@ -10955,12 +11154,18 @@ export interface components {
              * @enum {string}
              */
             state: "awaiting_approval" | "approved" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+            /** Summary */
+            summary: string;
             /** Tags */
             tags: string[];
             /** Title */
             title: string;
             /** Tool Name */
             tool_name: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Workspace Label */
+            workspace_label?: string | null;
         };
         /** ActionStatus */
         ActionStatus: {
@@ -11908,6 +12113,34 @@ export interface components {
             priority: string | null;
         };
         /**
+         * BehaviorReportRequest
+         * @description Body for POST /api/v1/analytics/behavior/reports/generate.
+         *
+         *     ``user_id`` (optional) adds a per-user section to the org report; the route
+         *     rejects it unless the target user belongs to the caller's organization.
+         *     Unknown keys are ignored (pydantic default) for backward compatibility with
+         *     the previous untyped ``Dict[str, Any]`` body.
+         */
+        BehaviorReportRequest: {
+            /**
+             * Days Back
+             * @description Days of history to analyze
+             * @default 30
+             */
+            days_back: number;
+            /**
+             * Report Type
+             * @description Label echoed back in the report
+             * @default organization
+             */
+            report_type: string;
+            /**
+             * User Id
+             * @description Target user (must be in the caller's organization)
+             */
+            user_id?: string | null;
+        };
+        /**
          * BenchmarkRequest
          * @description Request for search quality benchmark
          */
@@ -12286,6 +12519,30 @@ export interface components {
             session_id: string;
             /** Verification Code */
             verification_code: string;
+        };
+        /**
+         * CLIAuthSessionInfo
+         * @description What the approving browser may see about a pending CLI sign-in.
+         *
+         *     Never carries the verification code or poll token. The user must read the
+         *     code from their own terminal (RFC 8628 §5.4 remote-phishing defence).
+         */
+        CLIAuthSessionInfo: {
+            /** Expires At */
+            expires_at: string;
+            /** Requester Ip */
+            requester_ip?: string | null;
+            /** Requester User Agent */
+            requester_user_agent?: string | null;
+            /** Session Id */
+            session_id: string;
+            /** Started At */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "approved" | "denied" | "expired";
         };
         /**
          * CandidateCreate
@@ -13689,6 +13946,54 @@ export interface components {
              */
             confirmed: boolean;
         };
+        /** ConnectedDevice */
+        ConnectedDevice: {
+            /**
+             * Connected At
+             * Format: date-time
+             */
+            connected_at: string;
+            /** Consents */
+            consents: components["schemas"]["ConnectionConsent"][];
+            /**
+             * Device Id
+             * Format: uuid
+             */
+            device_id: string;
+            /** Device Label */
+            device_label: string;
+        };
+        /** ConnectionConsent */
+        ConnectionConsent: {
+            /** Approved At */
+            approved_at?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "project" | "workspace";
+            /** Project Id */
+            project_id: string | null;
+            /** Project Label */
+            project_label: string | null;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Scopes */
+            scopes: string[];
+            /** Status */
+            status: string;
+            /** Thread Id */
+            thread_id: string | null;
+            /** Thread Label */
+            thread_label: string | null;
+            /** Workspace Id */
+            workspace_id: string | null;
+            /** Workspace Label */
+            workspace_label: string | null;
+        };
         /**
          * ConnectorCapabilityResponse
          * @description Non-sensitive connector metadata returned to setup clients.
@@ -13739,6 +14044,38 @@ export interface components {
          * @enum {string}
          */
         ConsensusLevel: "strong_agreement" | "moderate_agreement" | "mixed" | "low_agreement" | "insufficient_data";
+        /**
+         * ContextOptions
+         * @description What the owner can share with one connected device, and what is shared.
+         */
+        ContextOptions: {
+            /** Memories */
+            memories: components["schemas"]["MemoryOption"][];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Label */
+            project_label: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Selected Memory Ids */
+            selected_memory_ids: string[];
+        };
+        /** ContextSelectionUpdate */
+        ContextSelectionUpdate: {
+            /** Memory Ids */
+            memory_ids: string[];
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+        };
         /**
          * ContradictionCreate
          * @description ``opened`` names a table version, a field and 2+ of its cell values;
@@ -14541,6 +14878,21 @@ export interface components {
         };
         /** DeviceDTO */
         DeviceDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * DeviceListItemDTO
+         * @description A paired computer as the chat composer lists it.
+         */
+        DeviceListItemDTO: {
+            /** Bound Thread Ids */
+            bound_thread_ids: string[];
             /**
              * Id
              * Format: uuid
@@ -16290,15 +16642,14 @@ export interface components {
              * Format: uuid
              */
             device_id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id?: string | null;
             /** Scopes */
             scopes: string[];
             /** Thread Id */
             thread_id?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
@@ -16321,13 +16672,10 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id: string | null;
             /** Project Label */
-            project_label: string;
+            project_label: string | null;
             /** Scopes */
             scopes: string[];
             /**
@@ -16339,6 +16687,10 @@ export interface components {
             thread_id?: string | null;
             /** Thread Label */
             thread_label?: string | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
+            /** Workspace Label */
+            workspace_label?: string | null;
         };
         /**
          * GraphAnalytics
@@ -16681,6 +17033,90 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HandoffConflictBody
+         * @description The single 409 envelope; ``latest`` is None when no version exists or
+         *     the conflicting writer could not be re-read.
+         */
+        HandoffConflictBody: {
+            /** Detail */
+            detail: string;
+            latest: components["schemas"]["HandoffDTO"] | null;
+        };
+        /** HandoffCreate */
+        HandoffCreate: {
+            /** Decisions */
+            decisions?: string[];
+            /** Expected Parent Version */
+            expected_parent_version: number | null;
+            /** Goal */
+            goal: string;
+            /**
+             * Handoff Id
+             * Format: uuid
+             */
+            handoff_id: string;
+            /** Harness Name */
+            harness_name: string;
+            /** Harness Session Id */
+            harness_session_id?: string | null;
+            /** Remaining */
+            remaining?: string[];
+            /** Results */
+            results?: components["schemas"]["HandoffResult"][];
+        };
+        /** HandoffDTO */
+        HandoffDTO: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decisions */
+            decisions: string[];
+            /** Goal */
+            goal: string;
+            /**
+             * Handoff Id
+             * Format: uuid
+             */
+            handoff_id: string;
+            /** Harness Name */
+            harness_name: string;
+            /** Harness Session Id */
+            harness_session_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Remaining */
+            remaining: string[];
+            /** Results */
+            results: components["schemas"]["HandoffResult"][];
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            /** Version */
+            version: number;
+        };
+        /** HandoffResult */
+        HandoffResult: {
+            /**
+             * Artifact Version Id
+             * Format: uuid
+             */
+            artifact_version_id: string;
+            /** Summary */
+            summary: string;
         };
         /** IdentityEventResponse */
         IdentityEventResponse: {
@@ -17258,6 +17694,23 @@ export interface components {
             /** Sha256 */
             sha256: string;
         };
+        /** MemoryOption */
+        MemoryOption: {
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Source */
+            source: string;
+        };
         /** MergeJobEntityRef */
         MergeJobEntityRef: {
             /** Id */
@@ -17825,7 +18278,7 @@ export interface components {
         };
         /**
          * PendingReviewResponse
-         * @description Owned pending review state, optionally including bounded stage output.
+         * @description Pending review state for a run the caller can view, with bounded stage output.
          */
         PendingReviewResponse: {
             accepted_review?: components["schemas"]["StageReviewResponse"] | null;
@@ -18105,6 +18558,26 @@ export interface components {
             first_name?: string | null;
             /** Last Name */
             last_name?: string | null;
+        };
+        /** ProjectArtifactDTO */
+        ProjectArtifactDTO: {
+            /**
+             * Artifact Id
+             * Format: uuid
+             */
+            artifact_id: string;
+            current_version: components["schemas"]["ArtifactVersionDTO"];
+            /** Kind */
+            kind: string;
+            /** Thread Id */
+            thread_id: string | null;
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /**
          * ProjectDetailResponse
@@ -25176,9 +25649,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["BehaviorReportRequest"];
             };
         };
         responses: {
@@ -26503,6 +26974,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_artifacts_api_v1_artifacts_projects__project_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectArtifactDTO"][];
                 };
             };
             /** @description Validation Error */
@@ -28492,6 +28994,58 @@ export interface operations {
                     };
                 };
             };
+            /** @description Verification code does not match */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A browser session is required to approve */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CLI auth session not found or no longer pending */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_cli_auth_session_info_api_v1_cli_auth_session__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CLIAuthSessionInfo"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -28527,10 +29081,13 @@ export interface operations {
     };
     get_cli_auth_status_api_v1_cli_auth_status__session_id__get: {
         parameters: {
-            query: {
-                poll_token: string;
+            query?: {
+                /** @description Deprecated: send the X-CLI-Poll-Token header instead. */
+                poll_token?: string | null;
             };
-            header?: never;
+            header?: {
+                "X-CLI-Poll-Token"?: string | null;
+            };
             path: {
                 session_id: string;
             };
@@ -28864,6 +29421,13 @@ export interface operations {
                      */
                     "application/json": components["schemas"]["DocumentListResponse"];
                 };
+            };
+            /** @description Invalid processing_status filter */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not authenticated - missing or invalid token */
             401: {
@@ -30768,6 +31332,110 @@ export interface operations {
             };
         };
     };
+    get_connections_api_v1_integrations_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectedDevice"][];
+                };
+            };
+        };
+    };
+    get_selected_context_api_v1_integrations_context_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolResult"];
+                };
+            };
+        };
+    };
+    get_context_options_api_v1_integrations_context_options_get: {
+        parameters: {
+            query: {
+                request_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_context_selection_api_v1_integrations_context_selection_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextSelectionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_devices_api_v1_integrations_devices_get: {
         parameters: {
             query?: never;
@@ -30783,7 +31451,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeviceDTO"][];
+                    "application/json": components["schemas"]["DeviceListItemDTO"][];
                 };
             };
         };
@@ -30818,6 +31486,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Revocation unavailable; retry disconnect */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -31017,6 +31721,35 @@ export interface operations {
             };
         };
     };
+    post_revoke_consent_api_v1_integrations_grant_requests__request_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_grant_api_v1_integrations_grants__grant_id__delete: {
         parameters: {
             query?: never;
@@ -31073,6 +31806,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_handoff_api_v1_integrations_handoffs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HandoffCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"];
+                };
+            };
+            /** @description Merge with latest */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffConflictBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_latest_handoff_api_v1_integrations_handoffs_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"];
                 };
             };
         };
@@ -42478,6 +43273,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_thread_handoff_api_v2_threads__thread_id__handoff_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"];
                 };
             };
             /** @description Validation Error */

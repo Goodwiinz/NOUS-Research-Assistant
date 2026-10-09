@@ -106,10 +106,6 @@
     "coderabbit": {
       "enabled": true,
       "apiKeyEnv": "CODERABBIT_API_KEY"
-    },
-    "serena": {
-      "enabled": true,
-      "mcpServer": "plugin:serena:serena"
     }
   },
 

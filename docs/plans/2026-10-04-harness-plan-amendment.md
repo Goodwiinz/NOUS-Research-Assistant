@@ -70,6 +70,142 @@ Branch each migration-bearing slice only after the previous one has merged and
 two migrations that each passed CI against their own base forked the chain
 once both landed. The rule now lives in [gotchas](../engineering/gotchas.md).
 
+## 2026-10-05: Plan 06, same-project harness continuation
+
+A standalone Codex session can now continue another session's work in the
+same NOUS project and chat. The plan is
+[`2026-10-05-same-project-harness-continuation.md`](2026-10-05-same-project-harness-continuation.md).
+It adds to the order above and replaces nothing in it.
+
+| Slice | Scope | PR / branch | Migration |
+| --- | --- | --- | --- |
+| 1 | Project artifact list `GET /api/v1/artifacts/projects/{id}`, `list_project_artifacts` read tool, project Files tab | #1879 (`feat/project-artifact-discovery`) | none |
+| 2 | Chat binding on consent (`thread_id`), carried to grants and publication | #1882 (`feat/plan06-slice2`) | `hb05_grant_request_thread` |
+| 3 | Versioned chat handoffs: `integration_handoffs`, integration and thread routes, MCP tools | #1885 (`feat/plan06-slice3`) | `hb06_integration_handoffs` |
+| 4 | Bridge: binding reuse, `status`, handoff CLI and offline queue | #1886 (`feat/plan06-slice4`) | none |
+| 5 | PostgreSQL acceptance journey, live-proof runbook Phase 3, this section, `publish_version` flush-order fix | PR TBD (`feat/plan06-slice5`) | none |
+
+Decisions as applied:
+
+- **D1, publication is explicit.** Files reach NOUS only through
+  `artifacts_publish` or the CLI. Nothing uploads automatically, and no Codex
+  hooks are wired in v1.
+- **D2, `--chat` on `connect`.** `nous-harness connect --project <id> --chat <thread>`
+  binds the consent, and every grant renewed from it, to one existing chat.
+  The approval page shows the chat title. Creating a chat from the CLI is out
+  of v1.
+- **D3, a handoff is not an LLM summary.** It is structured data the harness
+  writes (goal, decisions, remaining, results that name artifact version ids,
+  harness session). Plan 04 is unaffected.
+- **D4, Slice 2 went ahead without waiting for #1784.** `hb05` was parented on
+  the head of the day. Whichever of #1784 and Slice 2 merges second must
+  re-parent its migration, following the serial-migration rule above.
+- **D5, conflicts answer 409 with the latest version.** A stale or
+  ahead-of-chain `expected_parent_version` gets 409 plus the latest handoff.
+  The caller merges and retries; rejected content is never stored. A replayed
+  `handoff_id` with the same body returns the stored version.
+
+Evidence: the Slice 5 journey
+(`backend/tests/integration/test_same_project_continuation.py`) passed on a
+local PostgreSQL 14 on 2026-10-05. It is skipped in hosted CI, so hosted is
+NOT RUN. Live proof is runbook Phase 3
+([`docs/testing/harness-live-proof.md`](../testing/harness-live-proof.md)),
+NOT RUN.
+
+## 2026-10-06: Plan 07, NOUS MCP alphaXiv parity
+
+The harness bridge's MCP server gets the job coverage of alphaXiv's MCP (find
+and read papers, look up researchers, curate a library) over NOUS data, under
+the existing grant and consent model. The plan is
+[`2026-10-05-nous-mcp-alphaxiv-parity.md`](2026-10-05-nous-mcp-alphaxiv-parity.md)
+and the approved design is
+[`2026-10-05-nous-mcp-alphaxiv-parity-design.md`](2026-10-05-nous-mcp-alphaxiv-parity-design.md).
+Both are dated records; the live contract is
+[`harness-bridge.md`](../engineering/harness-bridge.md). This section adds to
+the order above and replaces nothing in it. **Checked against:** `origin/develop`
+at `c04521730`, 2026-10-06.
+
+| Slice | Scope | PR / branch | Migration |
+| --- | --- | --- | --- |
+| 1 | Workspace-scoped grants, `library:read` and `library:write` scopes, `list_library`, `connect --workspace` and `--library`, consent-page labels | PR TBD (`feat/plan07-s1-workspace-grant-v2`, rebuilt from `feat/plan07-s1-workspace-grant`) | `hb03_workspace_grants` |
+| 2 | Read tools: arXiv full text, ingested paper content, passage retrieval | #1883, merged | none |
+| 3 | Library writes; reversible actions run inline under `library:write` | PR TBD (`feat/plan07-s3-library-actions`), depends on Slice 1 | none |
+| 4 | Researcher tools over knowledge-graph PERSON entities | #1887, merged | none |
+| 5 | `discover_papers` composite | not opened: eval-gated, and closed as not needed if the primitives pass the eval | none |
+
+Slice 1 carries the plan's only migration, so the serial-migration rule above
+applies to it. #1784 (`ic01_integration_context`) merged after the Slice 1
+branch was cut, and it also revises `hb06_integration_handoffs`, as
+`hb03_workspace_grants` did. Before the Slice 1 PR opens, merge fresh
+`origin/develop` and point `hb03_workspace_grants` at the head
+`check_alembic.py` prints there (`ic01_integration_context` on 2026-10-06).
+Update every place that names its parent: the migration, its test
+(`backend/tests/unit/test_workspace_grants_migration.py`), Gate 0a in
+[`harness-live-proof.md`](../testing/harness-live-proof.md) and the migration
+test paragraph in [`harness-bridge.md`](../engineering/harness-bridge.md).
+Two heads fail the blocking `migration-check`. **Done 2026-10-06** on
+`feat/plan07-s1-workspace-grant-v2` after merging `origin/develop` at
+`664cee348`: `hb03_workspace_grants` now revises `ic01_integration_context`, all
+four places name it, and `check_alembic.py` prints the single head
+`hb03_workspace_grants`. Re-check the parent against the head of `develop` once
+more if another migration merges before the PR does.
+
+Slice 1 also needs the **`api-breaking-approved`** label on its PR. A workspace
+request or action has no project, so four response properties widen from
+`string` to `string | null`: `project_id` and `project_label` of
+`GrantRequestDTO` (`POST /integrations/grant-requests`,
+`GET /integrations/grant-requests/{request_id}` and
+`POST /integrations/grant-requests/{request_id}/decision`) and of `ActionReview`
+(`GET /integrations/actions/{invocation_id}/review`). oasdiff 1.23.0, the
+version CI pins (tarball checked against the release's `checksums.txt`), run on
+the branch's `backend/openapi.json` against the one at its merge base with
+`origin/develop` (`f52735690`) reports eight ERR-level
+`response-property-list-of-types-widened` changes, one per property and
+operation, and nothing else. Without the label the `openapi-contract` job fails
+on them. This is the use [`api-contracts.md`](../engineering/api-contracts.md#escape-hatch)
+allows, a deliberate contract change with its consumers updated in the same PR:
+the approve page (`frontend/app/(dashboard)/integrations/approve/page.tsx`) and
+`IntegrationActionApproval.tsx` show the workspace when there is no project,
+`frontend/src/types/generated/api.d.ts` is regenerated, and `nous-harness` reads
+only `id` and `approval_url` of these responses. Say so in the PR body.
+`scripts/ci/run_local_ci.sh` checks the generated files for drift but does not
+run oasdiff, so a green local run does not show the break. The label skips the
+whole gate, so run oasdiff by hand again after any later contract change and
+expect these eight and no more.
+
+**Amended 2026-10-06, after merging `origin/develop` at `664cee348` (#1784):**
+`context:read` and `read_selected_context` are project-only. `context:read`
+joins the scopes a workspace grant is refused (`_PROJECT_ONLY_SCOPES`),
+`connect --workspace` refuses `--context`, and `read_selected_context` stays out
+of the read-tool catalog because `GET /integrations/context` takes its project
+from the grant. [`harness-bridge.md`](../engineering/harness-bridge.md) is the
+contract. The merge added nothing to this slice's contract delta: a structural
+comparison of `backend/openapi.json` with `origin/develop`'s shows the same four
+widened response properties, the new optional `workspace_id` and
+`workspace_label` fields, and `GrantRequestCreate.project_id` no longer
+required. oasdiff itself is **NOT RUN** here (not installed), so run it as above
+before the label is applied.
+
+**Amended 2026-10-07, for Slice 3, checked on `feat/plan07-s3-library-actions`
+at `fad8034f2`:** Slice 1 opened as #1901 (`feat/plan07-s1-workspace-grant-v2`,
+labelled `api-breaking-approved`, not merged). Slice 3 is stacked on it at
+`fb6de7990`, carries no migration and applies the plan's six review amendments;
+[`harness-bridge.md`](../engineering/harness-bridge.md#library-actions) is the
+contract for what it does. Its only contract change is additive: `ActionReview`
+(`GET /integrations/actions/{invocation_id}/review`) gains the required response
+properties `summary` and `arguments`, and both generated files are regenerated.
+oasdiff 1.23.0, the version CI pins (darwin tarball checked against the
+release's `checksums.txt`), reports two `response-required-property-added` INFO
+changes and nothing at WARN or ERR from Slice 1's `backend/openapi.json`
+(`fb6de7990`) to Slice 3's, and from the merge base with `origin/develop`
+(`61e9f016d`) only Slice 1's eight ERR widenings. The CI gate compares against
+the PR's base branch, so a Slice 3 PR needs the label only while Slice 1's
+changes are part of its diff. The Slice 4 row above is inaccurate: #1887
+(`a41d4cd63`) reads the author lists of the documents in the grant's project,
+not knowledge-graph PERSON entities, which cannot be restricted to a project;
+[`harness-bridge.md`](../engineering/harness-bridge.md#nous-read-tools-over-mcp)
+is the contract.
+
 ## Not verified here
 
 - Whether the running dev pod has the skill flags on.

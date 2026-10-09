@@ -22,6 +22,8 @@ import { CodexAdapter } from "../src/adapters/codex.ts";
 import { CredentialStore, integrationHeaders } from "../src/credentials.ts";
 import { connect, addWorkspace } from "../src/cli.ts";
 import type { SessionOptions } from "../src/contracts.ts";
+import { MCP_TOOL_TIMEOUT_SEC } from "../src/mcp/client.ts";
+import { buildManagedMcpConfig } from "../src/mcp/config.ts";
 
 // Wire shapes captured from `codex-cli 0.153.4 app-server generate-ts`.
 const fixture = String.raw`
@@ -153,6 +155,37 @@ for (const operation of ["start", "resume"])
       },
     );
   }
+// Mutation: src/adapters/codex.ts:213 remove the implicit cwd; :244 omit model.
+// Command: pnpm --dir packages/harness-bridge exec node --experimental-sqlite
+// --import tsx --test test/codex.test.ts
+test("accepts a reply that omits cwd from writableRoots (real 0.153.4)", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.replyToStart({
+    sandbox: {
+      type: "workspaceWrite",
+      writableRoots: [],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    },
+  });
+  const session = await adapter.startSession(options);
+  assert.equal(session.id, "s");
+});
+test("pins a locally configured model in thread/start config", async (t) => {
+  const { server, adapter, options } = setup(t);
+  await adapter.startSession({ ...options, model: "gpt-6-astra" });
+  const call: any = server.calls("thread/start")[0];
+  assert.equal(call.params.config.model, "gpt-6-astra");
+});
+test("rejects a malformed local model name", async (t) => {
+  const { server, adapter, options } = setup(t);
+  await assert.rejects(
+    adapter.startSession({ ...options, model: "bad model/name" }),
+    /invalid local Codex model name/,
+  );
+  assert.equal(server.calls("thread/start").length, 0);
+});
 test("exact pinned version only", async (t) => {
   const { server, adapter } = setup(t);
   server.configure({ version: "0.153.5" });
@@ -303,6 +336,7 @@ test("connect exchanges CLI-owned grant; workspace sends only opaque IDs and lab
         session_id: "login",
         poll_token: "poll-secret",
         browser_url: "https://nous.test/login",
+        verification_code: "ABCD-1234",
       };
     else if (url.includes("/cli-auth/status/"))
       data = { status: "approved", token: "cli-secret" };
@@ -352,6 +386,9 @@ test("connect exchanges CLI-owned grant; workspace sends only opaque IDs and lab
     project_id: project,
   });
   assert.equal(registration.headers.Authorization, "Bearer cli-secret");
+  const statusPoll = calls.find((c) => c.url.includes("/cli-auth/status/"))!;
+  assert.ok(!statusPoll.url.includes("poll-secret"));
+  assert.equal(statusPoll.headers["X-CLI-Poll-Token"], "poll-secret");
   assert.equal(calls.filter((c) => c.url.endsWith("/workspaces")).length, 1);
   assert.ok(!JSON.stringify(calls.map((c) => c.body)).includes(dir));
   assert.ok(!announcements.join("").includes("secret"));
@@ -374,6 +411,7 @@ test("denied browser consent never exchanges or stores credentials", async (t) =
               session_id: "s",
               poll_token: "p",
               browser_url: "https://nous.test",
+              verification_code: "ABCD-1234",
             }
           : { status: "denied" },
       ),
@@ -563,6 +601,33 @@ test("start/resume propagate local MCP and restrictive turn settings only", asyn
   assert.equal(call.params.approvalsReviewer, "user");
   ac.abort();
   await consume;
+});
+
+test("a local MCP tool timeout reaches Codex; a malformed one is refused", async (t) => {
+  const { adapter, options } = setup(t);
+  for (const bad of [0, -1, 1.5, 601, "150"]) {
+    options.mcpConfig = { nous: { command: "nous-mcp", args: [], tool_timeout_sec: bad as number } };
+    await assert.rejects(adapter.resumeSession("s", options), /invalid local MCP configuration/);
+  }
+  // The bounds 1 and 600 are accepted, and so is the real managed entry: raising
+  // MCP_TOOL_TIMEOUT_SEC past the validator's cap fails here.
+  const managed = buildManagedMcpConfig({
+    apiOrigin: "https://nous.example",
+    credentialHandle: randomUUID(),
+    stateDir: tmpdir(),
+  }).nous!;
+  assert.equal(managed.tool_timeout_sec, MCP_TOOL_TIMEOUT_SEC);
+  for (const nous of [
+    { command: "nous-mcp", args: [], tool_timeout_sec: 1 },
+    { command: "nous-mcp", args: [], tool_timeout_sec: 600 },
+    managed,
+  ]) {
+    const run = setup(t); // One open session per adapter.
+    run.options.mcpConfig = { nous };
+    await run.adapter.resumeSession("s", run.options);
+    const resume: any = run.server.calls("thread/resume")[0];
+    assert.deepEqual(resume.params.config.mcp_servers.nous, nous);
+  }
 });
 
 test("denies network and temporary-root policy widening", async (t) => {
@@ -933,3 +998,28 @@ test("unconfirmed app-server exit fails closed when termination signals cannot b
   await pending;
   assert.doesNotThrow(() => process.kill(child.pid!, 0));
 });
+
+
+// Mutation: src/cli.ts request() must not interpolate the HTTP response body.
+// Command: pnpm --dir packages/harness-bridge exec node --experimental-sqlite
+// --import tsx --test --test-name-pattern="request errors" test/codex.test.ts
+for (const body of ["<html>echoed-credential</html>", '{"detail":"echoed-credential"}'])
+  test("request errors omit arbitrary backend bodies: " + body, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "nous-error-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    await assert.rejects(
+      connect({
+        stateDir: dir,
+        apiUrl: "https://nous.test/api/v1",
+        projectId: "11111111-1111-4111-8111-111111111111",
+        label: "Laptop",
+        fetchFn: (async () => new Response(body, { status: 500 })) as typeof fetch,
+        announce: () => {},
+      }),
+      (error: Error) => {
+        assert.match(error.message, /NOUS request failed \(500\).*cli-auth\/start/);
+        assert.ok(!error.message.includes("echoed-credential"));
+        return true;
+      },
+    );
+  });

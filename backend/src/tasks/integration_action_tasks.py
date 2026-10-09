@@ -3,6 +3,13 @@
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
 
+# A drain stops starting rows DRAIN_BUDGET (240 s) into its run, and starts an
+# ingest only while its DETACHED_TIMEOUT (120 s) still fits (both in
+# services/agent/tool_actions.py). These limits sit above that budget, so
+# Celery never cuts short an ingest the drain had time for.
+_DRAIN_SOFT_TIME_LIMIT_SECONDS = 300
+_DRAIN_TIME_LIMIT_SECONDS = 360
+
 
 async def _drain() -> int:
     from src.core.database import AsyncSessionLocal
@@ -20,7 +27,11 @@ async def _sweep() -> int:
         return await sweep_stale_actions(db)
 
 
-@celery_app.task(name="src.tasks.integration_action_tasks.drain_integration_actions")
+@celery_app.task(
+    name="src.tasks.integration_action_tasks.drain_integration_actions",
+    soft_time_limit=_DRAIN_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=_DRAIN_TIME_LIMIT_SECONDS,
+)
 def drain_integration_actions() -> int:
     return run_async(_drain())
 

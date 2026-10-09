@@ -288,8 +288,16 @@ def check() -> None:
             assert requests[0]["model"] == "gpt-5.6-luna", requests
             command("/edit 1", "Edit message")
             send("\x15")
+            request_count = len(requests)
             command("edited hi", "Handoff succeeded")
             wait_saved("thread_id", "branch-3")
+            # Redraws can repeat the old reply before the fork sends its request.
+            # Mutation proof: delay after terminal/src/session.ts:292, then run
+            # python3 terminal/tests/migration-smoke.py; omitting this wait fails.
+            deadline = time.monotonic() + 5
+            while len(requests) == request_count and time.monotonic() < deadline:
+                drain()
+            assert len(requests) > request_count, requests
             assert requests[-1]["thread_id"] == "branch-3", requests
             assert requests[-1]["messages"][-1]["content"] == "edited hi", requests
             assert len(requests[-1]["messages"]) == 1, requests

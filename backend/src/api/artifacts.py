@@ -23,6 +23,7 @@ from src.schemas.artifact import (
     ArtifactTooLarge,
     ArtifactUploadDTO,
     ArtifactVersionDTO,
+    ProjectArtifactDTO,
     PublishVersionRequest,
     ReserveArtifactUploadRequest,
     ThreadArtifactDTO,
@@ -30,6 +31,7 @@ from src.schemas.artifact import (
 from src.schemas.integration_context import IntegrationContext
 from src.services.artifacts.service import (
     MAX_ARTIFACT_BYTES,
+    list_project_artifacts,
     list_thread_artifacts,
     list_versions,
     publish_version,
@@ -39,7 +41,20 @@ from src.services.artifacts.service import (
 )
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
-_PUBLISH = Depends(require_integration_context("artifacts:publish"))
+
+
+async def _project_bound(
+    context: IntegrationContext = Depends(
+        require_integration_context("artifacts:publish")
+    ),
+) -> IntegrationContext:
+    """Publication stays bound to one Collection; a workspace grant is refused."""
+    if context.project_id is None:
+        raise HTTPException(403, "Integration access denied")
+    return context
+
+
+_PUBLISH = Depends(_project_bound)
 _STATUS: dict[type[ArtifactError], tuple[int, str]] = {
     ArtifactNotFound: (404, "Artifact not found"),
     ArtifactAccessDenied: (403, "Integration access denied"),
@@ -124,6 +139,21 @@ async def thread_artifacts(
     return await list_thread_artifacts(
         db, user_id=user_id, organization_id=organization_id, thread_id=thread_id
     )
+
+
+@router.get("/projects/{project_id}", response_model=list[ProjectArtifactDTO])
+async def project_artifacts(
+    project_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProjectArtifactDTO]:
+    user_id, organization_id = _identity(user)
+    try:
+        return await list_project_artifacts(
+            db, user_id=user_id, organization_id=organization_id, project_id=project_id
+        )
+    except ArtifactError as error:
+        raise _http(error) from error
 
 
 @router.get("/{artifact_id}/versions", response_model=list[ArtifactVersionDTO])

@@ -192,6 +192,11 @@
       "ActionReview": {
         "description": "What the interactive owner sees before deciding: the exact stored target.",
         "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
           "content": {
             "title": "Content",
             "type": "string"
@@ -229,13 +234,27 @@
             "type": "boolean"
           },
           "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "project_label": {
-            "title": "Project Label",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Label"
           },
           "requested_at": {
             "format": "date-time",
@@ -264,6 +283,10 @@
             "title": "State",
             "type": "string"
           },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
           "tags": {
             "items": {
               "type": "string"
@@ -278,12 +301,37 @@
           "tool_name": {
             "title": "Tool Name",
             "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "workspace_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Label"
           }
         },
         "required": [
           "invocation_id",
           "state",
           "tool_name",
+          "summary",
+          "arguments",
           "project_id",
           "project_label",
           "project_available",
@@ -2694,6 +2742,41 @@
         "title": "BatchProcessingRequest",
         "type": "object"
       },
+      "BehaviorReportRequest": {
+        "description": "Body for POST /api/v1/analytics/behavior/reports/generate.\n\n``user_id`` (optional) adds a per-user section to the org report; the route\nrejects it unless the target user belongs to the caller's organization.\nUnknown keys are ignored (pydantic default) for backward compatibility with\nthe previous untyped ``Dict[str, Any]`` body.",
+        "properties": {
+          "days_back": {
+            "default": 30,
+            "description": "Days of history to analyze",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Days Back",
+            "type": "integer"
+          },
+          "report_type": {
+            "default": "organization",
+            "description": "Label echoed back in the report",
+            "maxLength": 64,
+            "title": "Report Type",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Target user (must be in the caller's organization)",
+            "title": "User Id"
+          }
+        },
+        "title": "BehaviorReportRequest",
+        "type": "object"
+      },
       "BenchmarkRequest": {
         "description": "Request for search quality benchmark",
         "properties": {
@@ -3515,6 +3598,63 @@
           "verification_code"
         ],
         "title": "CLIAuthApproveRequest",
+        "type": "object"
+      },
+      "CLIAuthSessionInfo": {
+        "description": "What the approving browser may see about a pending CLI sign-in.\n\nNever carries the verification code or poll token. The user must read the\ncode from their own terminal (RFC 8628 §5.4 remote-phishing defence).",
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "requester_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requester Ip"
+          },
+          "requester_user_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requester User Agent"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "status",
+          "started_at",
+          "expires_at"
+        ],
+        "title": "CLIAuthSessionInfo",
         "type": "object"
       },
       "CandidateCreate": {
@@ -7024,6 +7164,162 @@
         "title": "ConfirmationRequest",
         "type": "object"
       },
+      "ConnectedDevice": {
+        "properties": {
+          "connected_at": {
+            "format": "date-time",
+            "title": "Connected At",
+            "type": "string"
+          },
+          "consents": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionConsent"
+            },
+            "title": "Consents",
+            "type": "array"
+          },
+          "device_id": {
+            "format": "uuid",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_label": {
+            "title": "Device Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "device_label",
+          "connected_at",
+          "consents"
+        ],
+        "title": "ConnectedDevice",
+        "type": "object"
+      },
+      "ConnectionConsent": {
+        "properties": {
+          "approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "workspace"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "project_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Label"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "thread_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Label"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "workspace_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Label"
+          }
+        },
+        "required": [
+          "request_id",
+          "kind",
+          "project_id",
+          "project_label",
+          "workspace_id",
+          "workspace_label",
+          "thread_id",
+          "thread_label",
+          "scopes",
+          "status"
+        ],
+        "title": "ConnectionConsent",
+        "type": "object"
+      },
       "ConnectorCapabilityResponse": {
         "additionalProperties": false,
         "description": "Non-sensitive connector metadata returned to setup clients.",
@@ -7143,6 +7439,74 @@
         ],
         "title": "ConsensusLevel",
         "type": "string"
+      },
+      "ContextOptions": {
+        "description": "What the owner can share with one connected device, and what is shared.",
+        "properties": {
+          "memories": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryOption"
+            },
+            "title": "Memories",
+            "type": "array"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_label": {
+            "title": "Project Label",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "selected_memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Selected Memory Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "project_id",
+          "project_label",
+          "memories",
+          "selected_memory_ids"
+        ],
+        "title": "ContextOptions",
+        "type": "object"
+      },
+      "ContextSelectionUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "memory_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 25,
+            "title": "Memory Ids",
+            "type": "array"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "memory_ids"
+        ],
+        "title": "ContextSelectionUpdate",
+        "type": "object"
       },
       "ContradictionCreate": {
         "additionalProperties": false,
@@ -8943,6 +9307,38 @@
           "id"
         ],
         "title": "DeviceDTO",
+        "type": "object"
+      },
+      "DeviceListItemDTO": {
+        "additionalProperties": false,
+        "description": "A paired computer as the chat composer lists it.",
+        "properties": {
+          "bound_thread_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Bound Thread Ids",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "id",
+          "bound_thread_ids"
+        ],
+        "title": "DeviceListItemDTO",
         "type": "object"
       },
       "DiffHunk": {
@@ -13094,9 +13490,16 @@
             "type": "string"
           },
           "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "scopes": {
             "items": {
@@ -13117,10 +13520,21 @@
               }
             ],
             "title": "Thread Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "required": [
-          "project_id",
           "device_id",
           "scopes"
         ],
@@ -13153,13 +13567,27 @@
             "type": "string"
           },
           "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "project_label": {
-            "title": "Project Label",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Label"
           },
           "scopes": {
             "items": {
@@ -13202,6 +13630,29 @@
               }
             ],
             "title": "Thread Label"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "workspace_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Label"
           }
         },
         "required": [
@@ -13754,6 +14205,225 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HandoffConflictBody": {
+        "description": "The single 409 envelope; ``latest`` is None when no version exists or\nthe conflicting writer could not be re-read.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HandoffDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "detail",
+          "latest"
+        ],
+        "title": "HandoffConflictBody",
+        "type": "object"
+      },
+      "HandoffCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "decisions": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Decisions",
+            "type": "array"
+          },
+          "expected_parent_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Version"
+          },
+          "goal": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "handoff_id": {
+            "format": "uuid",
+            "title": "Handoff Id",
+            "type": "string"
+          },
+          "harness_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Harness Name",
+            "type": "string"
+          },
+          "harness_session_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Session Id"
+          },
+          "remaining": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Remaining",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/HandoffResult"
+            },
+            "maxItems": 50,
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "handoff_id",
+          "expected_parent_version",
+          "goal",
+          "harness_name"
+        ],
+        "title": "HandoffCreate",
+        "type": "object"
+      },
+      "HandoffDTO": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decisions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "handoff_id": {
+            "format": "uuid",
+            "title": "Handoff Id",
+            "type": "string"
+          },
+          "harness_name": {
+            "title": "Harness Name",
+            "type": "string"
+          },
+          "harness_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Session Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "remaining": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Remaining",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/HandoffResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "thread_id": {
+            "format": "uuid",
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "thread_id",
+          "project_id",
+          "version",
+          "handoff_id",
+          "goal",
+          "decisions",
+          "remaining",
+          "results",
+          "harness_name",
+          "harness_session_id",
+          "created_at"
+        ],
+        "title": "HandoffDTO",
+        "type": "object"
+      },
+      "HandoffResult": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_version_id": {
+            "format": "uuid",
+            "title": "Artifact Version Id",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_version_id",
+          "summary"
+        ],
+        "title": "HandoffResult",
         "type": "object"
       },
       "IdentityEventResponse": {
@@ -15031,6 +15701,36 @@
           "ok"
         ],
         "title": "MemberCheck",
+        "type": "object"
+      },
+      "MemoryOption": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "source",
+          "created_at"
+        ],
+        "title": "MemoryOption",
         "type": "object"
       },
       "MergeJobEntityRef": {
@@ -16427,7 +17127,7 @@
       },
       "PendingReviewResponse": {
         "additionalProperties": false,
-        "description": "Owned pending review state, optionally including bounded stage output.",
+        "description": "Pending review state for a run the caller can view, with bounded stage output.",
         "properties": {
           "accepted_review": {
             "anyOf": [
@@ -17232,6 +17932,53 @@
           }
         },
         "title": "ProfileUpdate",
+        "type": "object"
+      },
+      "ProjectArtifactDTO": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "current_version": {
+            "$ref": "#/components/schemas/ArtifactVersionDTO"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "title",
+          "kind",
+          "current_version",
+          "thread_id",
+          "updated_at"
+        ],
+        "title": "ProjectArtifactDTO",
         "type": "object"
       },
       "ProjectDetailResponse": {
@@ -33151,9 +33898,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Report Request",
-                "type": "object"
+                "$ref": "#/components/schemas/BehaviorReportRequest"
               }
             }
           },
@@ -35432,6 +36177,58 @@
         "summary": "Get Api Key Usage",
         "tags": [
           "api-keys"
+        ]
+      }
+    },
+    "/api/v1/artifacts/projects/{project_id}": {
+      "get": {
+        "operationId": "project_artifacts_api_v1_artifacts_projects__project_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectArtifactDTO"
+                  },
+                  "title": "Response Project Artifacts Api V1 Artifacts Projects  Project Id  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Project Artifacts",
+        "tags": [
+          "artifacts"
         ]
       }
     },
@@ -38744,6 +39541,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Verification code does not match"
+          },
+          "403": {
+            "description": "A browser session is required to approve"
+          },
+          "404": {
+            "description": "CLI auth session not found or no longer pending"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -38761,6 +39567,54 @@
           }
         ],
         "summary": "Approve Cli Auth",
+        "tags": [
+          "cli-auth"
+        ]
+      }
+    },
+    "/api/v1/cli-auth/session/{session_id}": {
+      "get": {
+        "description": "Requester details for the approval page. Never returns the code.",
+        "operationId": "get_cli_auth_session_info_api_v1_cli_auth_session__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CLIAuthSessionInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Cli Auth Session Info",
         "tags": [
           "cli-auth"
         ]
@@ -38803,12 +39657,37 @@
             }
           },
           {
+            "description": "Deprecated: send the X-CLI-Poll-Token header instead.",
             "in": "query",
             "name": "poll_token",
-            "required": true,
+            "required": false,
             "schema": {
-              "title": "Poll Token",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated: send the X-CLI-Poll-Token header instead.",
+              "title": "Poll Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CLI-Poll-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cli-Poll-Token"
             }
           }
         ],
@@ -39454,6 +40333,9 @@
               }
             },
             "description": "Successfully retrieved documents"
+          },
+          "400": {
+            "description": "Invalid processing_status filter"
           },
           "401": {
             "description": "Not authenticated - missing or invalid token"
@@ -42699,6 +43581,160 @@
         ]
       }
     },
+    "/api/v1/integrations/connections": {
+      "get": {
+        "operationId": "get_connections_api_v1_integrations_connections_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectedDevice"
+                  },
+                  "title": "Response Get Connections Api V1 Integrations Connections Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Connections",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/context": {
+      "get": {
+        "operationId": "get_selected_context_api_v1_integrations_context_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Selected Context",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/context/options": {
+      "get": {
+        "operationId": "get_context_options_api_v1_integrations_context_options_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Context Options",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/context/selection": {
+      "put": {
+        "operationId": "put_context_selection_api_v1_integrations_context_selection_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextSelectionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Context Selection",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/devices": {
       "get": {
         "operationId": "get_devices_api_v1_integrations_devices_get",
@@ -42708,7 +43744,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/DeviceDTO"
+                    "$ref": "#/components/schemas/DeviceListItemDTO"
                   },
                   "title": "Response Get Devices Api V1 Integrations Devices Get",
                   "type": "array"
@@ -42769,6 +43805,52 @@
         ],
         "summary": "Create Device",
         "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/devices/{device_id}/revoke": {
+      "post": {
+        "description": "Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound, so every other connected device fails its next request until `nous-harness connect` runs on it again; that registers a new device and consent and leaves the old ones listed until revoked. Revoke the old consent rather than disconnecting the old device, which would end every CLI sign-in again; the old device then stays listed with no access. To remove one device's access without ending every sign-in, revoke its consents with POST /api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 without committing device revocation if the shared CLI cutoff fails.",
+        "operationId": "post_disconnect_device_api_v1_integrations_devices__device_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Revocation unavailable; retry disconnect"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Disconnect Device",
+        "tags": [
+          "integrations",
           "integrations"
         ]
       }
@@ -43081,6 +44163,48 @@
         ]
       }
     },
+    "/api/v1/integrations/grant-requests/{request_id}/revoke": {
+      "post": {
+        "operationId": "post_revoke_consent_api_v1_integrations_grant_requests__request_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Revoke Consent",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/grants/{grant_id}": {
       "delete": {
         "operationId": "delete_grant_api_v1_integrations_grants__grant_id__delete",
@@ -43166,6 +44290,90 @@
         ],
         "summary": "Renew Grant",
         "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/handoffs": {
+      "post": {
+        "operationId": "save_handoff_api_v1_integrations_handoffs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffConflictBody"
+                }
+              }
+            },
+            "description": "Merge with latest"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Handoff",
+        "tags": [
+          "integrations",
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/handoffs/latest": {
+      "get": {
+        "operationId": "read_latest_handoff_api_v1_integrations_handoffs_latest_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Latest Handoff",
+        "tags": [
+          "integrations",
           "integrations"
         ]
       }
@@ -56334,7 +57542,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/export": {
       "get": {
-        "description": "Download an owner-scoped artifact for a completed research run.",
+        "description": "Download the artifact for a completed research run the caller can view.",
         "operationId": "export_run_api_v1_research_engine_runs__run_id__export_get",
         "parameters": [
           {
@@ -56799,7 +58007,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/reviews/pending": {
       "get": {
-        "description": "Return the current owned review gate and its bounded persisted output.",
+        "description": "Return the current review gate for a run the caller can view.",
         "operationId": "get_pending_review_api_v1_research_engine_runs__run_id__reviews_pending_get",
         "parameters": [
           {
@@ -56848,7 +58056,7 @@
     },
     "/api/v1/research-engine/runs/{run_id}/reviews/{step_index}": {
       "post": {
-        "description": "Append one review bound to the current persisted stage envelope.",
+        "description": "Append one review bound to the current persisted stage envelope.\n\nRequires current project membership and the REVIEWER role.",
         "operationId": "submit_review_api_v1_research_engine_runs__run_id__reviews__step_index__post",
         "parameters": [
           {
@@ -62979,6 +64187,55 @@
         "summary": "Get Thread Context",
         "tags": [
           "Threads"
+        ]
+      }
+    },
+    "/api/v2/threads/{thread_id}/handoff": {
+      "get": {
+        "description": "Latest harness handoff left in this chat (standalone route).",
+        "operationId": "get_thread_handoff_api_v2_threads__thread_id__handoff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Thread Handoff",
+        "tags": [
+          "workspaces-flat"
         ]
       }
     },

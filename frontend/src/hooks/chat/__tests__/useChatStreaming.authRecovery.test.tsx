@@ -30,6 +30,7 @@ import {
 import { useChatStore } from '@/store/chat-store';
 import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { useAuthStore } from '@/stores/authStore';
+import { AuthProvider } from '@/hooks/useAuth';
 
 const THREAD_ID = 'thread-A';
 const THREAD_B_ID = 'thread-B';
@@ -179,7 +180,10 @@ function makeParams(
   };
 }
 
-async function renderRoutedChat(onUnmount: () => void = () => {}): Promise<{
+async function renderRoutedChat(
+  onUnmount: () => void = () => {},
+  withAuthBoundary = false
+): Promise<{
   routed: ReturnType<typeof render>;
   getStreaming: () => UseChatStreamingReturn;
   useChatStreaming: typeof import('@/hooks/chat/useChatStreaming').useChatStreaming;
@@ -220,7 +224,9 @@ async function renderRoutedChat(onUnmount: () => void = () => {}): Promise<{
     }, []);
     return route.startsWith('/login')
       ? createElement('div', { 'data-testid': 'login-route' })
-      : createElement(ChatRoute);
+      : withAuthBoundary
+        ? createElement(AuthProvider, null, createElement(ChatRoute))
+        : createElement(ChatRoute);
   }
 
   const routed = render(createElement(RoutedHarness), { wrapper });
@@ -400,117 +406,291 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     });
   });
 
-  it('survives a real SIGNED_OUT route unmount and restores without resending', async () => {
-    const order: string[] = [];
-    let stateAtNavigation: Record<string, unknown> | null = null;
-    useActualStreamMessage = true;
-    replaceMock.mockImplementation((path: string) => {
-      if (path.startsWith('/login')) {
-        stateAtNavigation = storedRecovery();
-        expect(stateAtNavigation?.state).toBe('ready');
-        order.push('ready');
+  it.each(['send', 'confirmation'] as const)(
+    'discards late %s callbacks after account invalidation',
+    async (mode) => {
+      const pending = deferred<void>();
+      let callbacks!: StreamCallbacks;
+      let signal!: AbortSignal;
+      const captureStream = (
+        _request: unknown,
+        handlers: StreamCallbacks,
+        abortSignal: AbortSignal
+      ): Promise<void> => {
+        callbacks = handlers;
+        signal = abortSignal;
+        return pending.promise;
+      };
+      streamMessageMock.mockImplementation(captureStream);
+      streamConfirmMock.mockImplementation(captureStream);
+      if (mode === 'confirmation') {
+        resumeStreamMock.mockImplementation(
+          async (threadId: string, _seq: number, handlers: StreamCallbacks) => {
+            handlers.onConfirmation?.(threadId, {
+              tool_name: 'create_project_note',
+              tool_args: { title: 'Private note' },
+            });
+            return { status: 'resumed' };
+          }
+        );
       }
-      routeTransition?.(path);
-    });
-    refreshSessionMock.mockImplementation(async () => {
-      // The service's marker runs synchronously immediately before refresh.
-      order.push('retry-marked');
-      authListener?.('SIGNED_OUT', null);
-      expect(useAuthStore.getState().isAuthenticated).toBe(false);
-      order.push('auth-cleared');
-      return { data: { session: null }, error: new Error('refresh rejected') };
-    });
-    getSessionMock
-      .mockResolvedValueOnce({
-        data: { session: { access_token: 'token-A' } },
-      })
-      .mockResolvedValueOnce({ data: { session: null } });
-    const fetchMock = vi.fn(
-      async (_url: string | URL | Request, init?: RequestInit) => {
-        if (fetchMock.mock.calls.length === 1) {
-          order.push('armed');
-          expect(storedRecovery()?.state).toBe('armed');
-          return {
-            ok: false,
-            status: 401,
-          } as Response;
-        }
-        return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            'abort',
-            () => {
-              order.push('abort');
-              reject(new DOMException('aborted', 'AbortError'));
-            },
-            { once: true }
-          );
+      const setMessages = vi.fn();
+      const { useChatStreaming } =
+        await import('@/hooks/chat/useChatStreaming');
+      const { result } = renderHook(
+        () => useChatStreaming(makeParams(setMessages)),
+        { wrapper }
+      );
+      if (mode === 'confirmation')
+        await waitFor(() =>
+          expect(result.current.pendingConfirmation).not.toBeNull()
+        );
+      let submitted!: Promise<void>;
+      await act(async () => {
+        submitted =
+          mode === 'send'
+            ? result.current.handleSubmit('Private prompt')
+            : result.current.handleConfirmation(true);
+        await Promise.resolve();
+      });
+      expect(signal).toBeDefined();
+      act(() => useAuthStore.getState().invalidateRejectedSession(USER_A.id));
+      expect(signal.aborted).toBe(true);
+      setMessages.mockClear();
+      await act(async () => {
+        callbacks.onToken?.('Private late answer');
+        callbacks.onToolStart?.(
+          'search_documents',
+          { query: 'Private late query' },
+          'private-tool'
+        );
+        expect(useChatStore.getState().streamingSteps).toEqual([]);
+        callbacks.onConfirmation?.(THREAD_ID, {
+          tool_name: 'create_project_note',
+          tool_args: { title: 'Private late note' },
         });
-      }
-    );
-    global.fetch = fetchMock as typeof fetch;
+        callbacks.onDone?.({ assistant_message_id: 'private-answer' });
+        pending.resolve();
+        await submitted;
+      });
+      expect(result.current.pendingConfirmation).toBeNull();
+      expect(setMessages).not.toHaveBeenCalled();
+      expect(useChatStore.getState()).toMatchObject({
+        messages: {},
+        streamingContent: '',
+        isStreaming: false,
+        currentThreadId: null,
+      });
+      expect(useAgentActivityStore.getState().runs).toEqual({});
+    }
+  );
 
-    const { routed, getStreaming, useChatStreaming } = await renderRoutedChat(
-      () => {
-        order.push('unmount');
-      }
-    );
-    replaceMock.mockClear();
-    pushMock.mockClear();
-    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
-
-    let submit!: Promise<void>;
-    await act(async () => {
-      submit = getStreaming().handleSubmit('keep this private prompt');
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(replaceMock).toHaveBeenCalledTimes(1));
-    await act(async () => {
-      await submit;
-    });
-
-    expect(order).toEqual([
-      'armed',
-      'retry-marked',
-      'auth-cleared',
-      'ready',
-      'unmount',
-      'abort',
-    ]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(refreshSessionMock).toHaveBeenCalledTimes(1);
-    expect(actualServiceErrorMock).not.toHaveBeenCalled();
-    expect(timerSpy.mock.calls.some(([, delay]) => delay === 1_500)).toBe(true);
-    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 1_600)));
-    expect(pushMock).not.toHaveBeenCalled();
-    expect(stateAtNavigation).toEqual(
-      expect.objectContaining({
-        ownerUserId: 'user-A',
-        threadId: THREAD_ID,
-        prompt: 'keep this private prompt',
-        state: 'ready',
-      })
-    );
-    const recoveryUrl = replaceMock.mock.calls[0][0] as string;
-    expect(recoveryUrl).not.toContain('keep%20this');
-    expect(recoveryUrl).toContain('reauth=chat');
-    expect(recoveryUrl).toContain('draft=saved');
-    expect(recoveryUrl).toContain(
-      `next=${encodeURIComponent(`/chat?thread=${THREAD_ID}`)}`
-    );
-    routed.unmount();
-
-    act(() => {
-      useAuthStore.setState({ user: USER_A, isAuthenticated: true });
-    });
-    const restored = renderHook(() => useChatStreaming(makeParams()), {
+  it('cannot release B submit state when A terminal reconciliation finishes', async () => {
+    const reconciliation = deferred<boolean>();
+    const bStream = deferred<void>();
+    const refresh = vi.fn(() => reconciliation.promise);
+    useChatStore.setState({ refreshMessages: refresh });
+    streamMessageMock
+      .mockImplementationOnce(
+        async (_request: unknown, callbacks: StreamCallbacks) => {
+          callbacks.onError?.('A transport error');
+        }
+      )
+      .mockReturnValueOnce(bStream.promise);
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const { result } = renderHook(() => useChatStreaming(makeParams()), {
       wrapper,
     });
-    await waitFor(() =>
-      expect(restored.result.current.input).toBe('keep this private prompt')
-    );
-    expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    let old!: Promise<void>;
+    await act(async () => {
+      old = result.current.handleSubmit('A prompt');
+    });
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    act(() => {
+      useAuthStore.getState().invalidateRejectedSession(USER_A.id);
+      useAuthStore.setState({ user: USER_B, isAuthenticated: true });
+      useChatStore.setState({ currentThreadId: THREAD_B_ID });
+    });
+    let current!: Promise<void>;
+    await act(async () => {
+      current = result.current.handleSubmit('B prompt');
+    });
+    expect(result.current.isLoading).toBe(true);
+    await act(async () => {
+      reconciliation.resolve(true);
+      await old;
+    });
+    expect(result.current.isLoading).toBe(true);
+    expect(useChatStore.getState().streamingThreadId).toBe(THREAD_B_ID);
+    await act(async () => {
+      bStream.resolve();
+      await current;
+    });
   });
+
+  it('ignores A replay-gap callbacks and resume completion after account replacement', async () => {
+    const resumed = deferred<{ status: string }>();
+    let gap!: (first: number, expected: number) => void;
+    resumeStreamMock.mockImplementation(
+      (_id: string, _seq: number, callbacks: { onReplayGap: typeof gap }) => {
+        gap = callbacks.onReplayGap;
+        return resumed.promise;
+      }
+    );
+    useAgentActivityStore.getState().startRun(THREAD_ID, 'A', 'A-only-task');
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    renderHook(() => useChatStreaming(makeParams()), { wrapper });
+    await waitFor(() => expect(gap).toBeDefined());
+    act(() => {
+      useAuthStore.getState().invalidateRejectedSession(USER_A.id);
+      useAuthStore.setState({ user: USER_B, isAuthenticated: true });
+      useAgentActivityStore.getState().startRun(THREAD_ID, 'B', 'B task');
+    });
+    await act(async () => {
+      gap(5, 1);
+      resumed.resolve({ status: 'idle' });
+    });
+    expect(useChatStore.getState().messageFreshness[THREAD_ID]).toBeUndefined();
+    expect(useAgentActivityStore.getState().runs[THREAD_ID].state).toBe(
+      'running'
+    );
+  });
+
+  it.each([false, true])(
+    'survives a real SIGNED_OUT route unmount and restores without resending (AuthProvider=%s)',
+    async (withAuthBoundary) => {
+      if (withAuthBoundary)
+        useAuthStore.setState({
+          initialize: vi.fn().mockResolvedValue(undefined),
+        });
+      const order: string[] = [];
+      let stateAtNavigation: Record<string, unknown> | null = null;
+      useActualStreamMessage = true;
+      replaceMock.mockImplementation((path: string) => {
+        if (path.startsWith('/login')) {
+          stateAtNavigation = storedRecovery();
+          expect(stateAtNavigation?.state).toBe('ready');
+          order.push('ready');
+        }
+        routeTransition?.(path);
+      });
+      refreshSessionMock.mockImplementation(async () => {
+        // The service's marker runs synchronously immediately before refresh.
+        order.push('retry-marked');
+        authListener?.('SIGNED_OUT', null);
+        expect(useAuthStore.getState().isAuthenticated).toBe(false);
+        order.push('auth-cleared');
+        return {
+          data: { session: null },
+          error: new Error('refresh rejected'),
+        };
+      });
+      getSessionMock
+        .mockResolvedValueOnce({
+          data: { session: { access_token: 'token-A' } },
+        })
+        .mockResolvedValueOnce({ data: { session: null } });
+      const fetchMock = vi.fn(
+        async (_url: string | URL | Request, init?: RequestInit) => {
+          if (fetchMock.mock.calls.length === 1) {
+            order.push('armed');
+            expect(storedRecovery()?.state).toBe('armed');
+            return {
+              ok: false,
+              status: 401,
+            } as Response;
+          }
+          return new Promise<Response>((_resolve, reject) => {
+            if (init?.signal?.aborted) {
+              order.push('abort');
+              reject(new DOMException('aborted', 'AbortError'));
+              return;
+            }
+            init?.signal?.addEventListener(
+              'abort',
+              () => {
+                order.push('abort');
+                reject(new DOMException('aborted', 'AbortError'));
+              },
+              { once: true }
+            );
+          });
+        }
+      );
+      global.fetch = fetchMock as typeof fetch;
+
+      const { routed, getStreaming, useChatStreaming } = await renderRoutedChat(
+        () => {
+          order.push('unmount');
+        },
+        withAuthBoundary
+      );
+      replaceMock.mockClear();
+      pushMock.mockClear();
+      const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+
+      let submit!: Promise<void>;
+      await act(async () => {
+        submit = getStreaming().handleSubmit('keep this private prompt');
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(replaceMock).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await submit;
+      });
+
+      expect(order).toEqual([
+        'armed',
+        'retry-marked',
+        'auth-cleared',
+        'ready',
+        'unmount',
+        ...(withAuthBoundary ? ['unmount'] : []),
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(refreshSessionMock).toHaveBeenCalledTimes(1);
+      expect(actualServiceErrorMock).not.toHaveBeenCalled();
+      if (!withAuthBoundary) {
+        expect(timerSpy.mock.calls.some(([, delay]) => delay === 1_500)).toBe(
+          true
+        );
+      }
+      await act(
+        () => new Promise<void>((resolve) => setTimeout(resolve, 1_600))
+      );
+      expect(pushMock).not.toHaveBeenCalled();
+      expect(stateAtNavigation).toEqual(
+        expect.objectContaining({
+          ownerUserId: 'user-A',
+          threadId: THREAD_ID,
+          prompt: 'keep this private prompt',
+          state: 'ready',
+        })
+      );
+      const recoveryUrl = replaceMock.mock.calls[0][0] as string;
+      expect(recoveryUrl).not.toContain('keep%20this');
+      expect(recoveryUrl).toContain('reauth=chat');
+      expect(recoveryUrl).toContain('draft=saved');
+      expect(recoveryUrl).toContain(
+        `next=${encodeURIComponent(`/chat?thread=${THREAD_ID}`)}`
+      );
+      routed.unmount();
+
+      act(() => {
+        useAuthStore.setState({ user: USER_A, isAuthenticated: true });
+        // The returning route resolves its thread again after auth cleared it.
+        useChatStore.setState({ currentThreadId: THREAD_ID });
+      });
+      const restored = renderHook(() => useChatStreaming(makeParams()), {
+        wrapper,
+      });
+      await waitFor(() =>
+        expect(restored.result.current.input).toBe('keep this private prompt')
+      );
+      expect(sessionStorage.getItem(CHAT_AUTH_RECOVERY_STORAGE_KEY)).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it.each([
     { confirmed: true, successfulReason: 'confirmation-approved' },
@@ -547,6 +727,11 @@ describe('useChatStreaming exhausted-auth recovery', () => {
             return { ok: false, status: 401 } as Response;
           }
           return new Promise<Response>((_resolve, reject) => {
+            if (init?.signal?.aborted) {
+              retryWasAborted = true;
+              reject(new DOMException('aborted', 'AbortError'));
+              return;
+            }
             init?.signal?.addEventListener(
               'abort',
               () => {
@@ -585,8 +770,9 @@ describe('useChatStreaming exhausted-auth recovery', () => {
         await confirmation;
       });
 
-      expect(retryWasAborted).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // Cancellation now stops before the second fetch can acquire credentials.
+      expect(retryWasAborted).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(refreshSpy).not.toHaveBeenCalledWith(
         THREAD_ID,
         expect.objectContaining({
@@ -595,9 +781,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
           }),
         })
       );
-      expect(useAgentActivityStore.getState().runs[THREAD_ID]?.state).toBe(
-        'error'
-      );
+      expect(useAgentActivityStore.getState().runs[THREAD_ID]).toBeUndefined();
 
       resumeStreamMock.mockImplementation(
         async (
@@ -615,6 +799,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       );
       act(() => {
         useAuthStore.setState({ user: USER_A, isAuthenticated: true });
+        useChatStore.setState({ currentThreadId: THREAD_ID });
       });
       const restored = renderHook(() => useChatStreaming(makeParams()), {
         wrapper,
@@ -631,7 +816,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       );
       expect(streamMessageMock).toHaveBeenCalledTimes(1);
       expect(streamConfirmMock).not.toHaveBeenCalled();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       restored.unmount();
       routed.unmount();
     }
@@ -1090,7 +1275,7 @@ describe('useChatStreaming exhausted-auth recovery', () => {
       await Promise.resolve();
     });
 
-    expect(storedRecovery()?.state).toBe('armed');
+    expect(storedRecovery()).toBeNull();
     expect(replaceMock).not.toHaveBeenCalled();
     expect(actualServiceErrorMock).not.toHaveBeenCalled();
 
@@ -1264,7 +1449,9 @@ describe('useChatStreaming exhausted-auth recovery', () => {
     streamMessageMock.mockImplementation(
       (_request: unknown, _callbacks: StreamCallbacks, signal: AbortSignal) =>
         new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => resolve(), { once: true });
+          if (signal.aborted) resolve();
+          else
+            signal.addEventListener('abort', () => resolve(), { once: true });
         })
     );
     const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
@@ -1534,7 +1721,9 @@ describe('useChatStreaming exhausted-auth recovery', () => {
         callbacks.onAuthRefreshSuccess?.();
         authListener?.('SIGNED_OUT', null);
         return new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => resolve(), { once: true });
+          if (signal.aborted) resolve();
+          else
+            signal.addEventListener('abort', () => resolve(), { once: true });
         });
       }
     );

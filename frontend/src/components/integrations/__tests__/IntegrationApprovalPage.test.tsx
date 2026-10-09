@@ -28,6 +28,16 @@ const request = {
   device_label: 'Laptop',
 };
 
+// A workspace request carries no project: the API sends null for both.
+const workspaceRequest = {
+  ...request,
+  project_id: null,
+  project_label: null,
+  workspace_id: 'workspace-1',
+  workspace_label: 'Reading group',
+  scopes: ['tools:read', 'library:read', 'library:write'],
+};
+
 describe('IntegrationApprovalPage', () => {
   it('shows the chat a request is bound to', async () => {
     mockGet.mockResolvedValue({
@@ -51,5 +61,46 @@ describe('IntegrationApprovalPage', () => {
     render(<IntegrationApprovalPage />);
     expect(await screen.findByText('Thesis (project-1)')).toBeInTheDocument();
     expect(screen.queryByText('Chat')).not.toBeInTheDocument();
+  });
+
+  it('shows the workspace a request is bound to instead of a project', async () => {
+    mockGet.mockResolvedValue(workspaceRequest);
+    render(<IntegrationApprovalPage />);
+    expect(await screen.findByText('Workspace')).toBeInTheDocument();
+    expect(screen.getByText('Reading group (workspace-1)')).toBeInTheDocument();
+    expect(screen.queryByText('Project')).not.toBeInTheDocument();
+  });
+
+  it('shows a project request as a project, not a workspace', async () => {
+    mockGet.mockResolvedValue(request);
+    render(<IntegrationApprovalPage />);
+    expect(await screen.findByText('Project')).toBeInTheDocument();
+    expect(screen.getByText('Thesis (project-1)')).toBeInTheDocument();
+    expect(screen.queryByText('Workspace')).not.toBeInTheDocument();
+  });
+
+  it('explains library:write and still shows every raw scope', async () => {
+    mockGet.mockResolvedValue(workspaceRequest);
+    render(<IntegrationApprovalPage />);
+    expect(
+      await screen.findByText(/without asking each time/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Deleting folders and ingesting papers still require/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/change the title and tags of a paper/)
+    ).toBeInTheDocument();
+    for (const scope of workspaceRequest.scopes) {
+      expect(screen.getByText(scope, { selector: 'code' })).toBeInTheDocument();
+    }
+  });
+
+  it('shows a scope it has no label for by its raw name', async () => {
+    mockGet.mockResolvedValue({ ...request, scopes: ['weird:scope'] });
+    render(<IntegrationApprovalPage />);
+    expect(
+      await screen.findByText('weird:scope', { selector: 'code' })
+    ).toBeInTheDocument();
   });
 });

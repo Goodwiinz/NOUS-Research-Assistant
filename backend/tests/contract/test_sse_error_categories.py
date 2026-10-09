@@ -51,6 +51,7 @@ _EXPECTED_CATEGORY_VALUES = [
     "invalid_request",
     "conflict",
     "internal",
+    "device_bound_to_another_chat",
 ]
 
 

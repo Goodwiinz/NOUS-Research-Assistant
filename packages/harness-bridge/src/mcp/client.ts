@@ -19,8 +19,16 @@ export type McpSession = {
   stateDir: string;
   // Absolute registered output root; enables artifacts_publish when present.
   outputRoot?: string;
-  // Grant carries tools:write; enables request_action / get_action_status.
+  // Grant carries context:read; enables read_selected_context.
+  context?: boolean;
+  // Grant carries tools:write (either binding); enables request_action /
+  // get_action_status.
   actions?: boolean;
+  // Grant carries handoff:read/handoff:write; enables get/save_nous_handoff.
+  handoff?: boolean;
+  // Grant carries library:write (which needs tools:write); also enables
+  // request_action / get_action_status.
+  library?: boolean;
 };
 export const REAUTH_MESSAGE =
   "NOUS session expired or revoked; reconnect this device (nous-harness connect --tools)";
@@ -34,6 +42,23 @@ export class ReauthenticationRequired extends Error {
 }
 /** Stable tool-level errors (403/422/503); never retried. */
 export class ToolRequestRejected extends Error {}
+/** NOUS bounds search_arxiv at 120 s and get_arxiv_paper_content at 125 s (a
+ * 120 s budget plus a 5 s outer guard; backend read_tools.py); every other read
+ * keeps a short bound so a hung call does not block Codex for minutes. */
+export const READ_TIMEOUT_MS = 30_000;
+export const SLOW_READ_TIMEOUT_MS = 135_000;
+const SLOW_READ_TOOLS = new Set(["search_arxiv", "get_arxiv_paper_content"]);
+/** Codex's own per-call MCP limit (60 s by default) must outlast the client. */
+export const MCP_TOOL_TIMEOUT_SEC = 150;
+/** The stable tool error NOUS itself returns when a tool's budget runs out. */
+const UPSTREAM_TIMEOUT: ToolResult = {
+  content: [{ error: "upstream_timeout" }],
+  is_error: true,
+  source_refs: [],
+};
+class RequestTimedOut extends Error {}
+const timedOut = (error: unknown) =>
+  error instanceof Error && error.name === "TimeoutError";
 
 /** HTTPS only, except the explicit development loopback; no embedded credentials. */
 export function apiBase(value: string): string {
@@ -115,14 +140,20 @@ export class CapabilityClient {
   private readonly base: string;
   private readonly headers: Record<string, string>;
   private readonly fetchFn: typeof fetch;
+  private readonly readMs: number;
+  private readonly slowReadMs: number;
   constructor(
     apiOrigin: string,
     credentials: IntegrationCredentials,
     fetchFn: typeof fetch = fetch,
+    // Test seam; production uses READ_TIMEOUT_MS / SLOW_READ_TIMEOUT_MS.
+    timing: { readMs?: number; slowReadMs?: number } = {},
   ) {
     this.base = apiBase(apiOrigin);
     this.headers = integrationHeaders(credentials);
     this.fetchFn = fetchFn;
+    this.readMs = timing.readMs ?? READ_TIMEOUT_MS;
+    this.slowReadMs = timing.slowReadMs ?? SLOW_READ_TIMEOUT_MS;
   }
   async listTools(): Promise<ToolDescriptor[]> {
     const data = await this.request("/integrations/tools");
@@ -134,11 +165,24 @@ export class CapabilityClient {
     }));
   }
   async invokeRead(invocation: ToolInvocation): Promise<ToolResult> {
-    const data = await this.request("/integrations/tools/read", {
-      tool_name: invocation.tool_name,
-      arguments: invocation.arguments ?? {},
-      invocation_id: invocation.invocation_id,
-    });
+    let data: unknown;
+    try {
+      data = await this.request(
+        "/integrations/tools/read",
+        {
+          tool_name: invocation.tool_name,
+          arguments: invocation.arguments ?? {},
+          invocation_id: invocation.invocation_id,
+        },
+        SLOW_READ_TOOLS.has(invocation.tool_name) ? this.slowReadMs : this.readMs,
+      );
+    } catch (error) {
+      // The same stable tool error NOUS returns when its own budget runs out,
+      // so the model gets a result it can act on, not a JSON-RPC failure.
+      if (error instanceof RequestTimedOut)
+        return structuredClone(UPSTREAM_TIMEOUT);
+      throw error;
+    }
     if (
       typeof data !== "object" ||
       data === null ||
@@ -149,7 +193,11 @@ export class CapabilityClient {
       throw new Error("invalid NOUS tool result");
     return data as ToolResult;
   }
-  private async request(path: string, body?: object): Promise<unknown> {
+  private async request(
+    path: string,
+    body?: object,
+    timeoutMs: number = this.readMs,
+  ): Promise<unknown> {
     const url = this.base + path;
     let response: Response;
     try {
@@ -161,9 +209,13 @@ export class CapabilityClient {
           ...(body ? { "Content-Type": "application/json" } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
+      if (timedOut(error)) {
+        console.error(`NOUS request to ${url} timed out after ${timeoutMs / 1000} s`);
+        throw new RequestTimedOut(`NOUS request to ${url} timed out`);
+      }
       // undici hides ECONNREFUSED/ENOTFOUND/TLS reasons in `cause`.
       const cause =
         error instanceof Error && error.cause instanceof Error
@@ -178,7 +230,11 @@ export class CapabilityClient {
     await throwForStatus(response);
     try {
       return await response.json();
-    } catch {
+    } catch (error) {
+      if (timedOut(error)) {
+        console.error(`NOUS request to ${url} timed out after ${timeoutMs / 1000} s`);
+        throw new RequestTimedOut(`NOUS request to ${url} timed out`);
+      }
       throw new Error("invalid NOUS response");
     }
   }

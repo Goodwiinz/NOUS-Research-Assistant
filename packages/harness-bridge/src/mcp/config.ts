@@ -1,7 +1,7 @@
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SessionOptions } from "../contracts.ts";
-import type { McpSession } from "./client.ts";
+import { MCP_TOOL_TIMEOUT_SEC, type McpSession } from "./client.ts";
 
 const cliPath = fileURLToPath(new URL("../cli.ts", import.meta.url));
 
@@ -25,14 +25,25 @@ function mcpArgs(session: McpSession): string[] {
     "--session",
     session.credentialHandle,
     ...(session.outputRoot ? ["--root", session.outputRoot] : []),
+    ...(session.context ? ["--context"] : []),
     ...(session.actions ? ["--actions"] : []),
+    ...(session.handoff ? ["--handoff"] : []),
+    ...(session.library ? ["--library"] : []),
   ];
 }
 /** Session-scoped Codex MCP configuration; only opaque handles reach argv. */
 export function buildManagedMcpConfig(
   session: McpSession,
 ): NonNullable<SessionOptions["mcpConfig"]> {
-  return { nous: { command: process.execPath, args: mcpArgs(session) } };
+  // Codex stops waiting for an MCP tool after 60 s unless told otherwise; NOUS's
+  // arXiv tools may take up to 125 s (RT-2).
+  return {
+    nous: {
+      command: process.execPath,
+      args: mcpArgs(session),
+      tool_timeout_sec: MCP_TOOL_TIMEOUT_SEC,
+    },
+  };
 }
 /** Printed for the user to run; this package never edits global Codex config. */
 export function standaloneInstallCommand(session: McpSession): string {

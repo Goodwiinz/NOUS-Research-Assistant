@@ -1,3 +1,5 @@
+import { getAccountSignal } from '@/lib/account-session';
+import { composeAbortSignals } from '@/lib/abort-signals';
 import { api } from '@/services/api-client';
 import { createClient } from '@/lib/supabase/client';
 import { getPublicApiBaseUrl } from '@/utils/publicEndpoints';
@@ -282,16 +284,20 @@ async function fetchStreamWithAuthRetry(
   onAuthRefreshSuccess?: () => void
 ): Promise<Response> {
   const open = async (forceRefresh: boolean): Promise<Response> => {
+    init.signal?.throwIfAborted();
     const headers = new Headers(await getStreamAuthHeaders({ forceRefresh }));
+    init.signal?.throwIfAborted();
     for (const [key, value] of Object.entries(extraHeaders)) {
       headers.set(key, value);
     }
     return fetch(url, { ...init, headers });
   };
   const response = await open(false);
+  init.signal?.throwIfAborted();
   if (response.status !== 401) return response;
   onAuthRefreshAttempt?.();
   const retriedResponse = await open(true);
+  init.signal?.throwIfAborted();
   if (retriedResponse.ok) onAuthRefreshSuccess?.();
   return retriedResponse;
 }
@@ -316,7 +322,7 @@ export class StreamStalledError extends Error {
 async function consumeSse(
   response: Response,
   callbacks: AgentStreamCallbacks,
-  options: { silenceTimeoutMs?: number } = {}
+  options: { silenceTimeoutMs?: number; signal?: AbortSignal } = {}
 ): Promise<boolean> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -325,6 +331,7 @@ async function consumeSse(
   let terminalSeen = false;
 
   const dispatchData = (ev: string, dataLine: string): void => {
+    if (options.signal?.aborted) return;
     try {
       const data = JSON.parse(dataLine.slice(6));
       if (TERMINAL_STREAM_EVENTS.has(ev as AgentStreamEvent)) {
@@ -499,7 +506,9 @@ async function consumeSse(
 
   try {
     while (true) {
+      options.signal?.throwIfAborted();
       const { done, value } = await readWithWatchdog();
+      options.signal?.throwIfAborted();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -507,6 +516,7 @@ async function consumeSse(
       buffer = lines.pop() || '';
 
       for (const rawLine of lines) {
+        options.signal?.throwIfAborted();
         const line = rawLine.trim();
         if (!line) {
           eventType = '';
@@ -718,8 +728,10 @@ class AgentChatService {
   }
 
   private async waitForCancellationAck(jobId: string): Promise<void> {
+    const signal = getAccountSignal();
     let lastError: unknown;
     for (let attempt = 0; attempt < CANCEL_ACK_MAX_POLLS; attempt += 1) {
+      signal.throwIfAborted();
       let job: Awaited<ReturnType<AgentChatService['pollJob']>> | undefined;
       try {
         job = await this.pollJob(jobId);
@@ -729,6 +741,7 @@ class AgentChatService {
         // surface the failure instead of claiming that Stop completed.
         lastError = error;
       }
+      signal.throwIfAborted();
       if (job?.status === 'cancelled') return;
       if (job && isTerminalJobStatus(job.status)) {
         throw new Error(
@@ -765,58 +778,68 @@ class AgentChatService {
     callbacks: AgentStreamCallbacks,
     signal?: AbortSignal
   ): Promise<void> {
-    // AgentExecuteRequest rejects >50 messages (422, non-retriable in the
-    // UI), and callers send the full displayed history plus the new turn.
-    // Keep the newest tail: the server treats its checkpoint as the context
-    // source of truth and only requires the latest user turn.
-    const cappedRequest = {
-      ...request,
-      messages: request.messages.slice(-MAX_REQUEST_MESSAGES),
-    };
-
-    let response: Response;
+    const combined = composeAbortSignals([
+      getAccountSignal(),
+      ...(signal ? [signal] : []),
+    ]);
+    signal = combined.signal;
     try {
-      response = await fetchStreamWithAuthRetry(
-        agentStreamUrl('stream'),
-        {
-          method: 'POST',
-          body: JSON.stringify(cappedRequest),
-          signal,
-        },
-        {},
-        callbacks.onAuthRefreshAttempt,
-        callbacks.onAuthRefreshSuccess
-      );
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      throw err;
-    }
+      // AgentExecuteRequest rejects >50 messages (422, non-retriable in the
+      // UI), and callers send the full displayed history plus the new turn.
+      // Keep the newest tail: the server treats its checkpoint as the context
+      // source of truth and only requires the latest user turn.
+      const cappedRequest = {
+        ...request,
+        messages: request.messages.slice(-MAX_REQUEST_MESSAGES),
+      };
 
-    if (!response.ok || !response.body) {
-      const backendMessage = await readErrorBody(response);
-      callbacks.onError?.(
-        backendMessage
-          ? `Stream failed (${response.status}): ${backendMessage}`
-          : `Stream failed: ${response.status}`,
-        httpFailureCategory(response.status),
-        httpLocalFailure(response.status)
-      );
-      return;
-    }
-    const badContentType = nonSseContentType(response);
-    if (badContentType) {
-      callbacks.onError?.(
-        `Stream failed: expected an event stream but got "${badContentType}"`
-      );
-      return;
-    }
-
-    const terminalSeen = await consumeSse(response, callbacks);
-    if (!terminalSeen && !signal?.aborted) {
-      if (request.execution_provider === 'codex') {
-        callbacks.onConnectionLost?.();
+      let response: Response;
+      try {
+        response = await fetchStreamWithAuthRetry(
+          agentStreamUrl('stream'),
+          {
+            method: 'POST',
+            body: JSON.stringify(cappedRequest),
+            signal,
+          },
+          {},
+          callbacks.onAuthRefreshAttempt,
+          callbacks.onAuthRefreshSuccess
+        );
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        throw err;
       }
-      callbacks.onError?.(INCOMPLETE_STREAM_ERROR);
+
+      if (!response.ok || !response.body) {
+        const backendMessage = await readErrorBody(response);
+        signal.throwIfAborted();
+        callbacks.onError?.(
+          backendMessage
+            ? `Stream failed (${response.status}): ${backendMessage}`
+            : `Stream failed: ${response.status}`,
+          httpFailureCategory(response.status),
+          httpLocalFailure(response.status)
+        );
+        return;
+      }
+      const badContentType = nonSseContentType(response);
+      if (badContentType) {
+        callbacks.onError?.(
+          `Stream failed: expected an event stream but got "${badContentType}"`
+        );
+        return;
+      }
+
+      const terminalSeen = await consumeSse(response, callbacks, { signal });
+      if (!terminalSeen && !signal?.aborted) {
+        if (request.execution_provider === 'codex') {
+          callbacks.onConnectionLost?.();
+        }
+        callbacks.onError?.(INCOMPLETE_STREAM_ERROR);
+      }
+    } finally {
+      combined.cleanup();
     }
   }
 
@@ -834,84 +857,96 @@ class AgentChatService {
     signal?: AbortSignal,
     streamId?: string
   ): Promise<AgentResumeResult> {
-    const base = getPublicApiBaseUrl('/api/v1').replace(/\/$/, '');
-    // `stream` pins the cursor to the run it was read from — the backend
-    // answers 204 instead of replaying a newer run's frames against it.
-    const streamParam = streamId
-      ? `&stream=${encodeURIComponent(streamId)}`
-      : '';
-    const url = `${base}/agent/stream/resume/${encodeURIComponent(
-      threadId
-    )}?after=${afterSeq}${streamParam}`;
-    let response: Response;
+    const combined = composeAbortSignals([
+      getAccountSignal(),
+      ...(signal ? [signal] : []),
+    ]);
+    signal = combined.signal;
     try {
-      response = await fetchStreamWithAuthRetry(
-        url,
-        { method: 'GET', signal },
-        { 'Last-Event-ID': String(afterSeq) }
-      );
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return { status: 'aborted' };
-      }
-      return {
-        status: 'failed',
-        error: err instanceof Error ? err.message : 'Stream resume failed',
-      };
-    }
-
-    if (response.status === 204) {
-      return { status: 'idle' };
-    }
-    if (!response.ok || !response.body) {
-      const backendMessage = await readErrorBody(response);
-      return {
-        status: 'failed',
-        error: backendMessage
-          ? `Stream resume failed (${response.status}): ${backendMessage}`
-          : `Stream resume failed: ${response.status}`,
-      };
-    }
-    const badContentType = nonSseContentType(response);
-    if (badContentType) {
-      return {
-        status: 'failed',
-        error: `Stream resume failed: expected an event stream but got "${badContentType}"`,
-      };
-    }
-
-    // The backend replays from the earliest frame it still holds when the
-    // cursor has fallen out of its ring buffer, so a resumed turn could rebuild
-    // its content from a partial replay and commit a silently truncated answer.
-    // Watch the first replayed seq and tell the caller when that happened.
-    let sawFirstSeq = false;
-    const gapAwareCallbacks: AgentStreamCallbacks = {
-      ...callbacks,
-      onSeq: (seq: number) => {
-        if (!sawFirstSeq) {
-          sawFirstSeq = true;
-          if (seq > afterSeq + 1) {
-            callbacks.onReplayGap?.(seq, afterSeq + 1);
-          }
+      const base = getPublicApiBaseUrl('/api/v1').replace(/\/$/, '');
+      // `stream` pins the cursor to the run it was read from — the backend
+      // answers 204 instead of replaying a newer run's frames against it.
+      const streamParam = streamId
+        ? `&stream=${encodeURIComponent(streamId)}`
+        : '';
+      const url = `${base}/agent/stream/resume/${encodeURIComponent(
+        threadId
+      )}?after=${afterSeq}${streamParam}`;
+      let response: Response;
+      try {
+        response = await fetchStreamWithAuthRetry(
+          url,
+          { method: 'GET', signal },
+          { 'Last-Event-ID': String(afterSeq) }
+        );
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return { status: 'aborted' };
         }
-        callbacks.onSeq?.(seq);
-      },
-    };
-
-    try {
-      const terminalSeen = await consumeSse(response, gapAwareCallbacks);
-      if (!terminalSeen) {
-        if (signal?.aborted) return { status: 'aborted' };
-        return { status: 'failed', error: INCOMPLETE_STREAM_ERROR };
+        return {
+          status: 'failed',
+          error: err instanceof Error ? err.message : 'Stream resume failed',
+        };
       }
-    } catch (err) {
-      return {
-        status: 'failed',
-        error: err instanceof Error ? err.message : 'Stream resume failed',
+
+      if (response.status === 204) {
+        return { status: 'idle' };
+      }
+      if (!response.ok || !response.body) {
+        const backendMessage = await readErrorBody(response);
+        signal.throwIfAborted();
+        return {
+          status: 'failed',
+          error: backendMessage
+            ? `Stream resume failed (${response.status}): ${backendMessage}`
+            : `Stream resume failed: ${response.status}`,
+        };
+      }
+      const badContentType = nonSseContentType(response);
+      if (badContentType) {
+        return {
+          status: 'failed',
+          error: `Stream resume failed: expected an event stream but got "${badContentType}"`,
+        };
+      }
+
+      // The backend replays from the earliest frame it still holds when the
+      // cursor has fallen out of its ring buffer, so a resumed turn could rebuild
+      // its content from a partial replay and commit a silently truncated answer.
+      // Watch the first replayed seq and tell the caller when that happened.
+      let sawFirstSeq = false;
+      const gapAwareCallbacks: AgentStreamCallbacks = {
+        ...callbacks,
+        onSeq: (seq: number) => {
+          if (!sawFirstSeq) {
+            sawFirstSeq = true;
+            if (seq > afterSeq + 1) {
+              callbacks.onReplayGap?.(seq, afterSeq + 1);
+            }
+          }
+          callbacks.onSeq?.(seq);
+        },
       };
+
+      try {
+        const terminalSeen = await consumeSse(response, gapAwareCallbacks, {
+          signal,
+        });
+        if (!terminalSeen) {
+          if (signal?.aborted) return { status: 'aborted' };
+          return { status: 'failed', error: INCOMPLETE_STREAM_ERROR };
+        }
+      } catch (err) {
+        return {
+          status: 'failed',
+          error: err instanceof Error ? err.message : 'Stream resume failed',
+        };
+      }
+      if (signal?.aborted) return { status: 'aborted' };
+      return { status: 'resumed' };
+    } finally {
+      combined.cleanup();
     }
-    if (signal?.aborted) return { status: 'aborted' };
-    return { status: 'resumed' };
   }
 
   async streamConfirm(
@@ -922,55 +957,68 @@ class AgentChatService {
     if (!/^[a-f0-9]{64}$/.test(request.approval_id)) {
       throw new Error('This approval has expired. Please start a new request.');
     }
-    let response: Response;
+    const combined = composeAbortSignals([
+      getAccountSignal(),
+      ...(signal ? [signal] : []),
+    ]);
+    signal = combined.signal;
     try {
-      response = await fetchStreamWithAuthRetry(
-        agentStreamUrl('stream/confirm'),
-        {
-          method: 'POST',
-          body: JSON.stringify(request),
-          signal,
-        },
-        {},
-        callbacks.onAuthRefreshAttempt,
-        callbacks.onAuthRefreshSuccess
-      );
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      throw err;
-    }
+      let response: Response;
+      try {
+        response = await fetchStreamWithAuthRetry(
+          agentStreamUrl('stream/confirm'),
+          {
+            method: 'POST',
+            body: JSON.stringify(request),
+            signal,
+          },
+          {},
+          callbacks.onAuthRefreshAttempt,
+          callbacks.onAuthRefreshSuccess
+        );
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        throw err;
+      }
 
-    if (!response.ok || !response.body) {
-      const backendMessage = await readErrorBody(response);
-      callbacks.onError?.(
-        backendMessage
-          ? `Stream confirm failed (${response.status}): ${backendMessage}`
-          : `Stream confirm failed: ${response.status}`,
-        httpFailureCategory(response.status),
-        httpLocalFailure(response.status)
-      );
-      return;
-    }
-    const confirmBadContentType = nonSseContentType(response);
-    if (confirmBadContentType) {
-      callbacks.onError?.(
-        `Stream confirm failed: expected an event stream but got "${confirmBadContentType}"`
-      );
-      return;
-    }
+      if (!response.ok || !response.body) {
+        const backendMessage = await readErrorBody(response);
+        signal.throwIfAborted();
+        callbacks.onError?.(
+          backendMessage
+            ? `Stream confirm failed (${response.status}): ${backendMessage}`
+            : `Stream confirm failed: ${response.status}`,
+          httpFailureCategory(response.status),
+          httpLocalFailure(response.status)
+        );
+        return;
+      }
+      const confirmBadContentType = nonSseContentType(response);
+      if (confirmBadContentType) {
+        callbacks.onError?.(
+          `Stream confirm failed: expected an event stream but got "${confirmBadContentType}"`
+        );
+        return;
+      }
 
-    const terminalSeen = await consumeSse(response, callbacks);
-    if (!terminalSeen && !signal?.aborted) {
-      callbacks.onError?.(INCOMPLETE_STREAM_ERROR);
+      const terminalSeen = await consumeSse(response, callbacks, { signal });
+      if (!terminalSeen && !signal?.aborted) {
+        callbacks.onError?.(INCOMPLETE_STREAM_ERROR);
+      }
+    } finally {
+      combined.cleanup();
     }
   }
 
   async cancelPendingConfirmation(threadId: string): Promise<void> {
+    const signal = getAccountSignal();
     const headers = await getStreamAuthHeaders();
+    signal.throwIfAborted();
     const response = await fetch(
       agentStreamUrl(`stream/cancel/${encodeURIComponent(threadId)}`),
-      { method: 'POST', headers }
+      { method: 'POST', headers, signal }
     );
+    signal.throwIfAborted();
     if (!response.ok) {
       const backendMessage = await readErrorBody(response);
       throw new Error(
@@ -985,12 +1033,15 @@ class AgentChatService {
     threadId: string,
     expectedRunId?: string
   ): Promise<void> {
+    const signal = getAccountSignal();
     const headers = await getStreamAuthHeaders();
+    signal.throwIfAborted();
     const response = await fetch(
       agentStreamUrl(`stream/cancel/${encodeURIComponent(threadId)}`),
       {
         method: 'POST',
         headers,
+        signal,
         // An explicit JSON body distinguishes normal-run Stop from the
         // legacy no-body parked-confirmation cancellation. The run id is
         // optional only for the pre-accepted race; when present it fences a
@@ -1000,6 +1051,7 @@ class AgentChatService {
         ),
       }
     );
+    signal.throwIfAborted();
     if (!response.ok) {
       const backendMessage = await readErrorBody(response);
       throw new Error(
@@ -1016,16 +1068,21 @@ class AgentChatService {
   async startDurableRun(
     request: AgentExecuteRequest
   ): Promise<{ runId: string }> {
+    const signal = getAccountSignal();
     const res = await fetch('/api/trigger/agent/execute', {
+      signal,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
+    signal.throwIfAborted();
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Failed to start durable run: ${text}`);
     }
-    return res.json();
+    const data = await res.json();
+    signal.throwIfAborted();
+    return data;
   }
 
   async getDurableRunStatus(runId: string): Promise<{
@@ -1035,14 +1092,19 @@ class AgentChatService {
     output: Record<string, unknown> | null;
     error: string | null;
   }> {
+    const signal = getAccountSignal();
     const res = await fetch(
-      `/api/trigger/agent/runs/${encodeURIComponent(runId)}`
+      `/api/trigger/agent/runs/${encodeURIComponent(runId)}`,
+      { signal }
     );
+    signal.throwIfAborted();
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Failed to get run status: ${text}`);
     }
-    return res.json();
+    const data = await res.json();
+    signal.throwIfAborted();
+    return data;
   }
 
   async completeDurableConfirmation(
@@ -1050,14 +1112,17 @@ class AgentChatService {
     tokenId: string,
     confirmed: boolean
   ): Promise<void> {
+    const signal = getAccountSignal();
     const res = await fetch(
       `/api/trigger/agent/runs/${encodeURIComponent(runId)}/confirm`,
       {
+        signal,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tokenId, confirmed }),
       }
     );
+    signal.throwIfAborted();
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Failed to confirm: ${text}`);
