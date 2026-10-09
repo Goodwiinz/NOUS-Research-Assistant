@@ -1,3 +1,9 @@
+vi.mock('../PdfArtifactPreview', () => ({
+  MAX_PDF_PREVIEW_BYTES: 2 * 1024 * 1024,
+  PdfArtifactPreview: ({ blob }: { blob: Blob }) => (
+    <p data-testid="pdf-renderer">{blob.size}</p>
+  ),
+}));
 import { useAuthStore } from '@/stores/authStore';
 import type { User } from '@/types/auth';
 import { act, screen, waitFor } from '@testing-library/react';
@@ -190,28 +196,36 @@ it('checks actual response byte size before text decoding or object URL allocati
   await screen.findByText(/File exceeds the inline preview limit/);
   expect(text).not.toHaveBeenCalled();
 });
-it('shows an authenticated PDF blob in a sandbox and revokes it on teardown', async () => {
-  const create = vi.fn(() => 'blob:pdf');
-  const revoke = vi.fn();
+it('passes authenticated bounded PDF bytes to the canvas renderer without a plugin frame or blob URL', async () => {
+  const create = vi.fn();
   vi.stubGlobal(
     'URL',
     class extends URL {
       static createObjectURL = create;
-      static revokeObjectURL = revoke;
+      static revokeObjectURL = vi.fn();
     }
   );
   vi.mocked(artifactService.fetchVersionBlob).mockResolvedValueOnce(
     new Blob(['%PDF-1.7'], { type: 'application/pdf' })
   );
-  const { unmount } = render(
+  render(
     <ArtifactPreview version={{ ...base, mimeType: 'application/pdf' }} />
   );
-  const frame = await screen.findByTitle('PDF preview');
-  expect(frame).toHaveAttribute('src', 'blob:pdf');
-  expect(frame).toHaveAttribute('sandbox', '');
-  expect(create).toHaveBeenCalledTimes(1);
-  unmount();
-  expect(revoke).toHaveBeenCalledWith('blob:pdf');
+  await screen.findByTestId('pdf-renderer');
+  expect(screen.queryByTitle('PDF preview')).toBeNull();
+  expect(create).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole('button', { name: `Download ${base.title}` })
+  ).toBeVisible();
+});
+it('PDF source metadata above2MiB falls back to download', () => {
+  expect(
+    previewKindFor({
+      ...base,
+      mimeType: 'application/pdf',
+      byteSize: 2 * 1024 * 1024 + 1,
+    })
+  ).toBe('download');
 });
 
 afterEach(() => {

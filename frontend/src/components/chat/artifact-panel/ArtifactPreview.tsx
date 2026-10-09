@@ -14,6 +14,10 @@ import {
 } from '@/services/artifactService';
 
 import { InteractiveHtmlPreview } from './InteractiveHtmlPreview';
+import {
+  PdfArtifactPreview,
+  MAX_PDF_PREVIEW_BYTES,
+} from './PdfArtifactPreview';
 
 import {
   CsvArtifactPreview,
@@ -39,13 +43,11 @@ const NO_REMOTE_IMAGES: React.ComponentProps<
 
 export function previewKindFor(version: ArtifactVersion): PreviewKind {
   const mime = version.mimeType.toLowerCase().split(';')[0].trim();
-  if (
-    mime === 'image/png' ||
-    mime === 'image/jpeg' ||
-    mime === 'application/pdf'
-  ) {
+  if (mime === 'application/pdf')
+    return version.byteSize <= MAX_PDF_PREVIEW_BYTES ? 'pdf' : 'download';
+  if (mime === 'image/png' || mime === 'image/jpeg') {
     if (version.byteSize > MAX_BINARY_PREVIEW_BYTES) return 'download';
-    return mime === 'application/pdf' ? 'pdf' : 'image';
+    return 'image';
   }
   if (version.byteSize > MAX_TEXT_PREVIEW_BYTES) return 'download';
   if (mime === 'text/markdown') return 'markdown';
@@ -64,7 +66,8 @@ type LoadState =
   | { key: string; status: 'error' }
   | { key: string; status: 'too-large' }
   | { key: string; status: 'text'; text: string }
-  | { key: string; status: 'image'; objectUrl: string };
+  | { key: string; status: 'image'; objectUrl: string }
+  | { key: string; status: 'pdf'; blob: Blob };
 
 /**
  * Read-only preview of one committed version. Bytes are fetched with auth;
@@ -99,12 +102,16 @@ export function ArtifactPreview({
     const prepare = async (): Promise<void> => {
       if (
         blob.size >
-        (kind === 'image' || kind === 'pdf'
+        (kind === 'image'
           ? MAX_BINARY_PREVIEW_BYTES
-          : MAX_TEXT_PREVIEW_BYTES)
+          : kind === 'pdf'
+            ? MAX_PDF_PREVIEW_BYTES
+            : MAX_TEXT_PREVIEW_BYTES)
       ) {
         setLoaded({ key, status: 'too-large' });
-      } else if (kind === 'image' || kind === 'pdf') {
+      } else if (kind === 'pdf') {
+        setLoaded({ key, status: 'pdf', blob });
+      } else if (kind === 'image') {
         objectUrl = window.URL.createObjectURL(
           new Blob([blob], { type: version.mimeType })
         );
@@ -187,15 +194,19 @@ export function ArtifactPreview({
       </div>
     );
   }
-  if (state.status === 'image' && kind === 'pdf')
+  if (state.status === 'pdf')
     return (
-      <iframe
-        title="PDF preview"
-        src={state.objectUrl}
-        sandbox=""
-        referrerPolicy="no-referrer"
-        className="h-[70vh] w-full border-0"
-      />
+      <div className="p-4">
+        <PdfArtifactPreview key={key} blob={state.blob} title={version.title} />
+        <button
+          type="button"
+          className="mt-3 rounded-md border px-3 py-2 text-sm"
+          onClick={download}
+        >
+          Download {version.title}
+        </button>
+        {downloadFailed && <p role="alert">Download failed.</p>}
+      </div>
     );
   if (state.status === 'image') {
     return (
