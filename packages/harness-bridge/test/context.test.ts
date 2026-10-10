@@ -122,3 +122,22 @@ test("stdio wires every scoped NOUS client through the renewing grant keeper", a
   );
   for (const [, name, args] of clients) assert.match(args, /,\s*keeper\.fetch\s*$/, `${name} must use keeper.fetch`);
 });
+
+test("load_selected_skill sends only a name and returns frozen provenance", async () => {
+  const { loadSelectedSkillTool } = await import("../src/context/mcp.ts");
+  const requests: { path: string; body: unknown }[] = [];
+  const fetchFn: typeof fetch = async (input, init) => {
+    requests.push({ path: String(input), body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify({
+      content: [{ name: "review", version_id: "frozen-v1", instructions: "Use rubric" }],
+      is_error: false,
+      source_refs: [{ version_id: "frozen-v1", content_hash: "a".repeat(64) }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const tool = loadSelectedSkillTool(new ContextHttpClient("http://127.0.0.1:1234/api/v1", credentials, fetchFn));
+  const result = await tool.call({ skill_name: "review" });
+  assert.match(result.text, /frozen-v1/);
+  assert.deepEqual(requests, [{ path: "http://127.0.0.1:1234/api/v1/integrations/context/skills/load", body: { skill_name: "review" } }]);
+  await assert.rejects(tool.call({ skill_name: "review", snapshot_id: "foreign" }), ToolRequestRejected);
+  assert.equal(requests.length, 1);
+});

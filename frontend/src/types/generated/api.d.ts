@@ -4080,6 +4080,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/context/skills/load": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Selected Skill */
+        post: operations["post_selected_skill_api_v1_integrations_context_skills_load_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices": {
         parameters: {
             query?: never;
@@ -14063,16 +14080,35 @@ export interface components {
             request_id: string;
             /** Selected Memory Ids */
             selected_memory_ids: string[];
+            /** Selected Skill Version Ids */
+            selected_skill_version_ids?: string[];
+            /** Skill Snapshot Expires At */
+            skill_snapshot_expires_at?: string | null;
+            /**
+             * Skill Snapshot Status
+             * @default none
+             * @enum {string}
+             */
+            skill_snapshot_status: "none" | "ready" | "unavailable";
+            /** Skills */
+            skills?: components["schemas"]["SkillOption"][];
         };
         /** ContextSelectionUpdate */
         ContextSelectionUpdate: {
             /** Memory Ids */
             memory_ids: string[];
             /**
+             * Refresh Skills
+             * @default false
+             */
+            refresh_skills: boolean;
+            /**
              * Request Id
              * Format: uuid
              */
             request_id: string;
+            /** Skill Version Ids */
+            skill_version_ids?: string[] | null;
         };
         /**
          * ContradictionCreate
@@ -22357,6 +22393,11 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
+        /** SelectedSkillLoad */
+        SelectedSkillLoad: {
+            /** Skill Name */
+            skill_name: string;
+        };
         /** SkillDiffResponse */
         SkillDiffResponse: {
             /** Diff */
@@ -22370,6 +22411,22 @@ export interface components {
         SkillDocumentRequest: {
             /** Document Text */
             document_text: string;
+        };
+        /** SkillOption */
+        SkillOption: {
+            /** Content Hash */
+            content_hash: string;
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: number;
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
         };
         /** SkillResponse */
         SkillResponse: {
@@ -31450,6 +31507,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContextOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_selected_skill_api_v1_integrations_context_skills_load_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectedSkillLoad"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolResult"];
                 };
             };
             /** @description Validation Error */

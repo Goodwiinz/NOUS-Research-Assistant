@@ -33,3 +33,17 @@ class IntegrationContextSelection(BaseModel):
     )
     # Ordered memory ids as strings; revalidated against the project on every read.
     memory_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+    # Browser-selected immutable versions; a renewed token keeps this consent anchor.
+    skill_version_ids: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list, server_default="[]"
+    )
+    runtime_snapshot_id: Mapped[UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey(
+            "agent_runtime_snapshots.id",
+            name="fk_context_selection_runtime_snapshot",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
