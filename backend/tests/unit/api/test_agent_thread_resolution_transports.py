@@ -137,7 +137,9 @@ async def test_stream_confirm_checks_current_edit_access_before_checkpoint_resum
     frames = [
         frame
         async for frame in streaming.stream_confirm_event_generator(
-            StreamConfirmRequest(thread_id=str(uuid4()), confirmed=True),
+            StreamConfirmRequest(
+                thread_id=str(uuid4()), confirmed=True, approval_id="a" * 64
+            ),
             _request(),
             user,
         )

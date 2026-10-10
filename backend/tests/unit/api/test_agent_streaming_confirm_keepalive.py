@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+
 
 @pytest.fixture(autouse=True)
 def _allow_durable_confirm():
@@ -281,7 +283,9 @@ async def test_confirm_stream_emits_heartbeat_from_keepalive():
 
     graph = _SilentThenDoneGraph()
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="t-1", confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id="t-1", confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (

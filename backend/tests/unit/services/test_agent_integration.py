@@ -13,6 +13,9 @@ from uuid import uuid4
 
 import pytest
 
+from tests.utils.agent_approval import isolated_claimed_confirmation  # noqa: F401
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+
 pytestmark = pytest.mark.asyncio
 
 from fastapi import FastAPI
@@ -182,7 +185,7 @@ class TestJobOwnershipEndpoints:
 
         response = client.post(
             f"/api/v1/agent/confirm/{job_id}",
-            json={"confirmed": True},
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
         assert response.status_code == 404
 
@@ -205,7 +208,7 @@ class TestJobOwnershipEndpoints:
         ):
             response = client.post(
                 f"/api/v1/agent/confirm/{job_id}",
-                json={"confirmed": True},
+                json={"approval_id": "a" * 64, "confirmed": True},
             )
         assert response.status_code == 200
         assert response.json()["status"] == "running"
@@ -224,7 +227,7 @@ class TestJobOwnershipEndpoints:
 
         response = client.post(
             f"/api/v1/agent/confirm/{job_id}",
-            json={"confirmed": True},
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
         assert response.status_code == 409
 
@@ -407,7 +410,7 @@ class TestResumePersistence:
             mock_graph.aget_state = AsyncMock(return_value=None)
             mock_compile.return_value = mock_graph
 
-            await _resume_agent_graph(job_id, True, user)
+            await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
         mock_persist_assistant.assert_awaited_once()
         assert (
@@ -480,7 +483,7 @@ class TestResumePersistence:
             mock_graph.aget_state = AsyncMock(return_value=None)
             mock_compile.return_value = mock_graph
 
-            await _resume_agent_graph(job_id, True, user)
+            await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
         config = mock_graph.ainvoke.call_args.kwargs["config"]
         assert config["configurable"]["thread_id"] == thread_id
@@ -549,7 +552,7 @@ class TestResumePersistence:
             mock_graph.aget_state = AsyncMock(return_value=None)
             mock_compile.return_value = mock_graph
 
-            await _resume_agent_graph(job_id, True, user)
+            await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
         job = _get_job(job_id)
         assert job["status"] == "completed"
@@ -689,7 +692,7 @@ class TestSSEStreamPersistence:
         from langchain_core.messages import AIMessage, HumanMessage
 
         thread_id = str(uuid4())
-        payload = {"thread_id": thread_id, "confirmed": True}
+        payload = {"thread_id": thread_id, "confirmed": True, "approval_id": "a" * 64}
 
         async def _empty_events():
             if False:
@@ -788,6 +791,7 @@ class TestSSEStreamPersistence:
         mock_claim.assert_awaited_once()
         assert mock_claim.await_args.args[1] == "run-1"
         assert mock_claim.await_args.kwargs == {
+            "approval_id": "a" * 64,
             "organization_id": mock_user_a.organization_id,
             "user_id": mock_user_a.id,
         }
@@ -795,7 +799,7 @@ class TestSSEStreamPersistence:
     def test_stream_confirm_rejects_snapshot_without_user_id(self, client):
         """SSE /stream/confirm must not resume legacy ownerless checkpoints."""
         thread_id = str(uuid4())
-        payload = {"thread_id": thread_id, "confirmed": True}
+        payload = {"thread_id": thread_id, "confirmed": True, "approval_id": "a" * 64}
 
         snapshot = SimpleNamespace(
             values={

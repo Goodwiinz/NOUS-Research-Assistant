@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_stream import make_stream_request
 from tests.utils.agent_thread_access import editable_thread_getter
 
@@ -162,7 +163,9 @@ async def test_stream_confirm_event_generator_bootstraps_langsmith_before_compil
     # event), so True would cancel the resumed run before the `done` frame.
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     body = SimpleNamespace(
-        thread_id="11111111-1111-4111-8111-111111111623", confirmed=True
+        thread_id="11111111-1111-4111-8111-111111111623",
+        confirmed=True,
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 

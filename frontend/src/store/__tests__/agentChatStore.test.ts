@@ -792,6 +792,7 @@ describe('agentChatStore', () => {
             threadId: 'thread-A',
             assistantMessageId: 'a-assistant',
             jobId: 'job-a',
+            approvalId: 'a'.repeat(64),
             tools: [{ name: 'create_project_note', args: {} }],
             message: 'Confirm?',
           },
@@ -816,7 +817,7 @@ describe('agentChatStore', () => {
       await useAgentChatStore.getState().confirmAction('thread-A', true);
 
       expect(agentChatService.streamConfirm).toHaveBeenCalledWith(
-        { thread_id: 'job-a', confirmed: true },
+        { thread_id: 'job-a', confirmed: true, approval_id: 'a'.repeat(64) },
         expect.any(Object),
         expect.any(AbortSignal)
       );

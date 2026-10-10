@@ -155,6 +155,16 @@ async def dispatch_pending(db: AsyncSession) -> int:
         ).all()
         count = 0
         for run_id in rows:
+            # Claim run, then outbox (the Stop/lease order), skipping either
+            # row while another dispatcher or Stop holds it: one held run
+            # must not stall the rest of the batch.
+            claimed = await db.scalar(
+                select(AgentRun.job_id)
+                .where(AgentRun.job_id == run_id)
+                .with_for_update(skip_locked=True)
+            )
+            if claimed is None:
+                continue
             run, session = await _locked(db, str(run_id))
             outbox: Any = await db.scalar(
                 select(AgentOutbox)
@@ -163,7 +173,7 @@ async def dispatch_pending(db: AsyncSession) -> int:
                     AgentOutbox.kind == "harness.execute",
                     AgentOutbox.status == "pending",
                 )
-                .with_for_update()
+                .with_for_update(skip_locked=True)
             )
             if outbox is None:
                 continue

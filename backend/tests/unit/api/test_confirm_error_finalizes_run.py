@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_thread_access import editable_thread_getter
 
 THREAD_ID = "11111111-1111-4111-8111-111111111625"
@@ -65,7 +66,9 @@ async def _run_confirm(graph: _FakeGraph) -> "tuple[list, AsyncMock]":
     import src.api.agent.streaming as streaming_mod
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=THREAD_ID, confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
     active_run = SimpleNamespace(
         job_id="run-abc-123", user_message_id=None, client_message_id=None

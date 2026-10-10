@@ -1,8 +1,9 @@
 r"""Real-Postgres evidence that harness dispatch skips a row another worker holds.
 
-Guard under test: the ``AgentOutbox`` select in
-``services/harness/delivery.py::dispatch_pending``, which locks its rows with
-``.with_for_update(skip_locked=True)`` (line 148 at ``ce0df5d0a``).
+Guards under test: the per-run ``AgentRun`` claim and ``AgentOutbox`` select in
+``services/harness/delivery.py::dispatch_pending``, which lock their rows with
+``.with_for_update(skip_locked=True)``. The run is claimed first to keep the
+Stop/lease lock order (run, then outbox).
 
 Focused command, from the repository root (``PY`` and the throwaway PostgreSQL
 come from Gate 0 of ``docs/testing/harness-live-proof.md``)::
@@ -11,11 +12,13 @@ come from Gate 0 of ``docs/testing/harness-live-proof.md``)::
     ENVIRONMENT=testing PYTHONPATH=backend "$PY" -m pytest -c backend/pytest.ini -q \
     backend/tests/integration/test_harness_dispatch_postgres.py
 
-Mutation verification (2026-10-04, local PostgreSQL 14): replacing
+Mutation verification (2026-10-04, local PostgreSQL 14; re-run 2026-10-10,
+PostgreSQL 16, after the per-run claim): replacing
 ``.with_for_update(skip_locked=True)`` on the ``AgentOutbox`` select in
-``services/harness/delivery.py::dispatch_pending`` with ``.with_for_update()``,
-or deleting it, makes the worker wait on the held row and this test FAIL with
-TimeoutError. Restore the source after each mutation.
+``services/harness/delivery.py::dispatch_pending`` with ``.with_for_update()``
+makes the worker wait on the held row and the ``[outbox]`` case FAIL with
+TimeoutError; doing the same to the ``AgentRun`` claim fails the ``[run]``
+case. Restore the source after each mutation.
 """
 
 from __future__ import annotations
@@ -88,8 +91,9 @@ def _async_dsn(dsn: str) -> str:
     return dsn
 
 
+@pytest.mark.parametrize("held_model", [AgentOutbox, AgentRun], ids=["outbox", "run"])
 async def test_dispatch_skips_outbox_row_locked_by_another_worker(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, held_model: Any
 ) -> None:
     # `or ""` keeps dsn a `str` without leaning on pytest.skip being NoReturn:
     # the Lint Backend job has no pytest installed, so there skip() is Any.
@@ -191,8 +195,9 @@ async def test_dispatch_skips_outbox_row_locked_by_another_worker(
             )
 
         async with factory() as holder, factory() as worker:
-            # Another worker holds the pending outbox row in an open transaction.
-            held = await holder.scalar(select(AgentOutbox).with_for_update().limit(1))
+            # Another worker (or Stop) holds the pending run's outbox or run
+            # row in an open transaction.
+            held = await holder.scalar(select(held_model).with_for_update().limit(1))
             assert held is not None
             assert await asyncio.wait_for(dispatch_pending(worker), timeout=5) == 0
             await holder.rollback()

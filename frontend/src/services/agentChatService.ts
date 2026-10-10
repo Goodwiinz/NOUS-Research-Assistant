@@ -412,6 +412,16 @@ async function consumeSse(
           );
           break;
         case 'confirmation':
+          if (
+            typeof data.confirmation?.approval_id !== 'string' ||
+            !/^[a-f0-9]{64}$/.test(data.confirmation.approval_id)
+          ) {
+            callbacks.onError?.(
+              'This approval has expired. Please start a new request.',
+              'conflict'
+            );
+            break;
+          }
           if (typeof data.run_id === 'string' && data.run_id) {
             callbacks.onConfirmation?.(
               data.thread_id,
@@ -697,25 +707,23 @@ class AgentChatService {
     return api.post<{ job_id: string }>('/agent/execute', request);
   }
 
-  async pollJob(jobId: string): Promise<{
-    status: AgentJobStatus;
-    result?: AgentExecuteResponse;
-    tool_executions?: Array<{
-      id: string;
-      tool_name: string;
-      tool_display_name: string;
-      args: Record<string, unknown>;
-      status: string;
-      result?: unknown;
-      error?: string;
-      duration_ms?: number;
-    }>;
-    error?: string;
-    confirmation?: {
-      tools?: Array<{ name: string; args: Record<string, unknown> }>;
-      message?: string;
-    };
-  }> {
+  async pollJob(jobId: string): Promise<
+    Omit<
+      components['schemas']['JobStatusResponse'],
+      'status' | 'result' | 'tool_executions' | 'confirmation'
+    > & {
+      status: AgentJobStatus;
+      // Narrow the generated JSON passthroughs to their native job payloads.
+      result?: AgentExecuteResponse | null;
+      tool_executions?: AgentExecuteResponse['tool_executions'] | null;
+      // Pre-upgrade jobs can still be polled, but have no usable receipt.
+      confirmation?: {
+        approval_id?: components['schemas']['ConfirmationRequest']['approval_id'];
+        tools?: Array<{ name: string; args: Record<string, unknown> }>;
+        message?: string;
+      } | null;
+    }
+  > {
     return api.get(`/agent/jobs/${encodeURIComponent(jobId)}`);
   }
 
@@ -752,11 +760,17 @@ class AgentChatService {
 
   async confirmAction(
     jobId: string,
-    confirmed: boolean
+    confirmed: boolean,
+    approvalId: string
   ): Promise<{ status: string; job_id: string }> {
-    return api.post(`/agent/confirm/${encodeURIComponent(jobId)}`, {
+    if (!/^[a-f0-9]{64}$/.test(approvalId)) {
+      throw new Error('This approval has expired. Please start a new request.');
+    }
+    const request: components['schemas']['ConfirmationRequest'] = {
       confirmed,
-    });
+      approval_id: approvalId,
+    };
+    return api.post(`/agent/confirm/${encodeURIComponent(jobId)}`, request);
   }
 
   async streamMessage(
@@ -940,6 +954,9 @@ class AgentChatService {
     callbacks: AgentStreamCallbacks,
     signal?: AbortSignal
   ): Promise<void> {
+    if (!/^[a-f0-9]{64}$/.test(request.approval_id)) {
+      throw new Error('This approval has expired. Please start a new request.');
+    }
     const combined = composeAbortSignals([
       getAccountSignal(),
       ...(signal ? [signal] : []),
