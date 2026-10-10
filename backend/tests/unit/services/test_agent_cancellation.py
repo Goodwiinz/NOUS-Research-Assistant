@@ -499,7 +499,7 @@ async def test_transient_stop_poll_error_does_not_fail_the_turn() -> None:
     """
     from sqlalchemy.exc import OperationalError
 
-    graph = _SlowFinishingGraph()
+    graph = _GatedFinishingGraph()
     terminal_writes: list[dict[str, Any]] = []
     sessions: list[Any] = []
     calls = 0
@@ -509,16 +509,23 @@ async def test_transient_stop_poll_error_does_not_fail_the_turn() -> None:
         calls += 1
         if calls == 2:  # first monitor poll; the pre-start check is call 1
             raise OperationalError("SELECT agent_runs", {}, Exception("blip"))
+        if calls == 3:
+            # The monitor survived the blip and polled again while the graph
+            # was still running; only now may the turn finish.
+            graph.release.set()
         return False
 
     async with _start_test_runner(
         "initial", graph, [check], terminal_writes, sessions
     ) as (task, _main_db, _job_id, _user):
-        await asyncio.wait_for(task, timeout=2)
+        # Hang guard only: the ordering above is event-driven, so a passing
+        # run never depends on wall time (a 2 s budget flaked under xdist +
+        # coverage when a worker stalled, Test Pipeline run 38033218734).
+        await asyncio.wait_for(task, timeout=30)
 
     assert [write["status"] for write in terminal_writes] == ["completed"]
     assert graph.finished is True
-    assert calls > 2, "the monitor must keep polling after one failed read"
+    assert calls >= 4, "monitor poll after the blip, then the post-return read"
 
 
 async def test_persistent_stop_poll_errors_still_fail_the_turn() -> None:
@@ -611,16 +618,18 @@ async def test_thread_reresolution_db_error_fails_the_run() -> None:
     assert job["error"] == "The request could not be completed. Please retry."
 
 
-class _SlowFinishingGraph:
-    """Finishes after enough wall time for the monitor to poll repeatedly."""
+class _GatedFinishingGraph:
+    """Finishes only once the test sets ``release``, not after a wall-clock
+    sleep, so the monitor's poll order is the same under any CPU load."""
 
     def __init__(self) -> None:
+        self.release = asyncio.Event()
         self.finished = False
 
     async def ainvoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         from langchain_core.messages import AIMessage, HumanMessage
 
-        await asyncio.sleep(0.1)
+        await self.release.wait()
         self.finished = True
         return {
             "messages": [
