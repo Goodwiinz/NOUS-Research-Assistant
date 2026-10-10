@@ -195,6 +195,7 @@ for (const approved of [true, false]) {
                 {
                   thread_id: "thread-1",
                   confirmation: {
+                    approval_id: "a".repeat(64),
                     tool_name: "create_note",
                     tool_args: { title: "Review me" },
                   },
@@ -251,6 +252,7 @@ for (const approved of [true, false]) {
     assert.deepEqual(calls[1].body, {
       thread_id: "thread-1",
       confirmed: approved,
+      approval_id: "a".repeat(64),
     });
     assert.doesNotMatch(ui.lastFrame()!, /Approval required/);
     await delay(60);
@@ -278,7 +280,11 @@ test("an approval decision typed as soon as the prompt renders is not lost", asy
             "confirmation",
             {
               thread_id: "thread-1",
-              confirmation: { tool_name: "create_note", tool_args: {} },
+              confirmation: {
+                approval_id: "a".repeat(64),
+                tool_name: "create_note",
+                tool_args: {},
+              },
             },
           ],
         ])
@@ -325,7 +331,11 @@ test("a pasted single-chunk decision submits once and shows no control character
               "confirmation",
               {
                 thread_id: "thread-1",
-                confirmation: { tool_name: "create_note", tool_args: {} },
+                confirmation: {
+                  approval_id: "a".repeat(64),
+                  tool_name: "create_note",
+                  tool_args: {},
+                },
               },
             ],
           ])
@@ -357,7 +367,11 @@ test("a pasted single-chunk decision submits once and shows no control character
     "Resumed response renders from a single-chunk paste",
   );
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1].body, { thread_id: "thread-1", confirmed: false });
+  assert.deepEqual(calls[1].body, {
+    thread_id: "thread-1",
+    confirmed: false,
+    approval_id: "a".repeat(64),
+  });
   assert.doesNotMatch(ui.frames.join("\n"), /no\r/);
   ui.unmount();
 });
@@ -367,7 +381,13 @@ test("Ctrl+C during approval cancels without posting a decision", async () => {
     response([
       [
         "confirmation",
-        { thread_id: "thread-1", confirmation: { tool_name: "create_note" } },
+        {
+          thread_id: "thread-1",
+          confirmation: {
+            approval_id: "a".repeat(64),
+            tool_name: "create_note",
+          },
+        },
       ],
     ]),
   );
@@ -466,13 +486,77 @@ test("Ctrl+C aborts an active HTTP stream and leaves the composer usable", async
   ui.unmount();
 });
 
+test("nested approvals echo their own server receipts", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (_url: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      if (bodies.length <= 2) {
+        return response([
+          [
+            "confirmation",
+            {
+              thread_id: "thread-1",
+              confirmation: {
+                tool_name: "create_note",
+                approval_id: (bodies.length === 1 ? "a" : "b").repeat(64),
+              },
+            },
+          ],
+        ]);
+      }
+      return response([
+        ["token", { content: "Second action denied" }],
+        ["done", {}],
+      ]);
+    },
+  );
+  const decisions = [true, false];
+  await collect(run(async () => decisions.shift()!));
+  assert.deepEqual(bodies.slice(1), [
+    { thread_id: "thread-1", confirmed: true, approval_id: "a".repeat(64) },
+    { thread_id: "thread-1", confirmed: false, approval_id: "b".repeat(64) },
+  ]);
+});
+
+test("legacy approval cards expire before asking for a decision", async () => {
+  const fetch = mock.method(globalThis, "fetch", async () =>
+    response([
+      [
+        "confirmation",
+        { thread_id: "thread-1", confirmation: { tool_name: "create_note" } },
+      ],
+    ]),
+  );
+  let asked = false;
+  await assert.rejects(
+    collect(
+      run(async () => {
+        asked = true;
+        return true;
+      }),
+    ),
+    /approval has expired/,
+  );
+  assert.equal(asked, false);
+  assert.equal(fetch.mock.callCount(), 1);
+});
+
 test("an uncertain approval response is never posted again", async () => {
   const fetch = mock.method(globalThis, "fetch", async () => {
     if (fetch.mock.callCount() === 0)
       return response([
         [
           "confirmation",
-          { thread_id: "thread-1", confirmation: { tool_name: "create_note" } },
+          {
+            thread_id: "thread-1",
+            confirmation: {
+              approval_id: "a".repeat(64),
+              tool_name: "create_note",
+            },
+          },
         ],
       ]);
     throw new Error("Connection lost after posting");
@@ -530,7 +614,7 @@ test("a queued turn waits for approval and the preceding response to finish", as
   assert.equal(paths.length, 1);
   first.enqueue(
     new TextEncoder().encode(
-      'event: confirmation\ndata: {"thread_id":"thread-1","confirmation":{"tool_name":"create_note"}}\n\n',
+      `event: confirmation\ndata: ${JSON.stringify({ thread_id: "thread-1", confirmation: { approval_id: "a".repeat(64), tool_name: "create_note" } })}\n\n`,
     ),
   );
   first.close();
@@ -570,7 +654,10 @@ test("an earlier approval cannot authorize a later gate", async () => {
             "confirmation",
             {
               thread_id: "thread-1",
-              confirmation: { tool_name: "create_note" },
+              confirmation: {
+                approval_id: "a".repeat(64),
+                tool_name: "create_note",
+              },
             },
           ],
         ])

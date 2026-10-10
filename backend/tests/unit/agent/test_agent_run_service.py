@@ -134,6 +134,58 @@ async def test_upsert_rejects_a_second_active_run_for_the_thread(session_factory
             )
 
 
+@pytest.mark.parametrize("failure", ["active_thread", "missing_thread"])
+async def test_insert_recovery_preserves_approval_receipt(
+    session_factory: Any, failure: str
+) -> None:
+    job_id = _job_id()
+    thread_id = uuid.uuid4()
+    receipt = "a" * 64
+
+    class FailedFirstInsert:
+        def __init__(self, db: Any) -> None:
+            self._db = db
+            self._failed = False
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._db, name)
+
+        async def commit(self) -> None:
+            # The initial zero-row UPDATE commits too; fail only the INSERT.
+            if self._db.new and not self._failed:
+                self._failed = True
+                cause = (
+                    Exception("UNIQUE constraint failed: agent_runs.thread_id")
+                    if failure == "active_thread"
+                    else _ThreadForeignKeyViolation()
+                )
+                raise IntegrityError("INSERT", {}, cause)
+            await self._db.commit()
+
+    async with session_factory() as db:
+        await svc.upsert_run(
+            FailedFirstInsert(db),
+            job_id=job_id,
+            status=JobStatus.AWAITING_CONFIRMATION,
+            organization_id=ORG_A,
+            user_id=USER_A,
+            thread_id=str(thread_id),
+            run_metadata={"approval_id": receipt},
+        )
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert run is not None
+        assert run.run_metadata == {"approval_id": receipt}
+        assert run.thread_id == (thread_id if failure == "active_thread" else None)
+        assert await svc.claim_awaiting_run_for_confirmation(
+            verify,
+            job_id,
+            approval_id=receipt,
+            organization_id=ORG_A,
+            user_id=USER_A,
+        )
+
+
 async def test_upsert_normalizes_legacy_error_alias(session_factory):
     """A pre-collapse writer's "error" is stored as canonical "failed"."""
     job_id = _job_id()
@@ -621,6 +673,7 @@ async def test_confirmation_claim_races_cancellation_on_durable_status(session_f
             db,
             job_id=job_id,
             status=JobStatus.AWAITING_CONFIRMATION,
+            run_metadata={"approval_id": "a" * 64},
             organization_id=ORG_A,
             user_id=USER_A,
         )
@@ -628,12 +681,14 @@ async def test_confirmation_claim_races_cancellation_on_durable_status(session_f
         assert await svc.claim_awaiting_run_for_confirmation(
             db,
             job_id,
+            approval_id="a" * 64,
             organization_id=ORG_A,
             user_id=USER_A,
         )
         assert not await svc.claim_awaiting_run_for_confirmation(
             db,
             job_id,
+            approval_id="a" * 64,
             organization_id=ORG_A,
             user_id=USER_A,
         )
@@ -641,11 +696,53 @@ async def test_confirmation_claim_races_cancellation_on_durable_status(session_f
         assert await svc.release_confirmation_claim(
             db,
             job_id,
+            approval_id="a" * 64,
             organization_id=ORG_A,
             user_id=USER_A,
         )
         run = await svc.get_run(db, job_id, organization_id=ORG_A, user_id=USER_A)
         assert run is not None and run.status == JobStatus.AWAITING_CONFIRMATION.value
+
+
+async def test_stale_claim_and_release_cannot_change_a_newer_approval(session_factory):
+    job_id = _job_id()
+    async with session_factory() as db:
+
+        async def park(receipt):
+            await svc.upsert_run(
+                db,
+                job_id=job_id,
+                status=JobStatus.AWAITING_CONFIRMATION,
+                organization_id=ORG_A,
+                user_id=USER_A,
+                run_metadata={"approval_id": receipt},
+            )
+
+        async def claim(receipt, *, user_id=USER_A):
+            return await svc.claim_awaiting_run_for_confirmation(
+                db,
+                job_id,
+                approval_id=receipt,
+                organization_id=ORG_A,
+                user_id=user_id,
+            )
+
+        await park("a" * 64)
+        assert not await claim("a" * 64, user_id=USER_B)
+        assert await claim("a" * 64)
+        await park("b" * 64)
+        assert not await claim("a" * 64)
+        assert await claim("b" * 64)
+        assert not await svc.release_confirmation_claim(
+            db,
+            job_id,
+            approval_id="a" * 64,
+            organization_id=ORG_A,
+            user_id=USER_A,
+        )
+        run = await svc.get_run(db, job_id, organization_id=ORG_A, user_id=USER_A)
+        assert run.status == JobStatus.RUNNING.value
+        assert run.run_metadata["approval_id"] == "b" * 64
 
 
 async def test_get_active_run_for_thread_is_tenant_scoped_and_non_terminal(

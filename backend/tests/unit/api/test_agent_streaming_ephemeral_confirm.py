@@ -11,6 +11,7 @@ import pytest
 
 from src.api.agent import streaming
 from src.services.agent.agent_execution_service import AgentThreadResolutionError
+from src.services.agent.confirmation_service import ApprovalExpired, pending_approval
 from tests.utils.agent_stream import frames_of_type
 
 pytestmark = pytest.mark.unit
@@ -39,7 +40,13 @@ def _snapshot(
     if thread_persistence is not None:
         values["thread_persistence"] = thread_persistence
     tasks = (
-        (SimpleNamespace(interrupts=(SimpleNamespace(value={"message": "Approve?"}),)),)
+        (
+            SimpleNamespace(
+                interrupts=(
+                    SimpleNamespace(id="test-interrupt", value={"message": "Approve?"}),
+                )
+            ),
+        )
         if pending
         else ()
     )
@@ -57,9 +64,7 @@ class _EphemeralConfirmGraph:
         self.resumed = False
 
     async def aget_state(self, _config: Any) -> SimpleNamespace:
-        return (
-            self._snapshots.pop(0) if len(self._snapshots) > 1 else self._snapshots[0]
-        )
+        return self._snapshots[1 if self.resumed else 0]
 
     async def astream_events(
         self, *_args: Any, **_kwargs: Any
@@ -76,10 +81,20 @@ class _EphemeralConfirmGraph:
 async def _run_confirm(
     graph: _EphemeralConfirmGraph, *, claim_winner: bool = True
 ) -> list[str]:
+    try:
+        approval = pending_approval(
+            graph._snapshots[0],
+            thread_id=CHECKPOINT_THREAD_ID,
+            run_id=None,
+            user_id="user-1",
+        )
+    except ApprovalExpired:
+        approval = None
     body = SimpleNamespace(
         thread_id=CHECKPOINT_THREAD_ID,
         confirmed=True,
         model="gpt-5",
+        approval_id=approval.approval_id if approval else "a" * 64,
     )
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     current_user = Mock(id="user-1", organization_id="org-1")

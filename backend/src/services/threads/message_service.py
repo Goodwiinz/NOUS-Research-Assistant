@@ -38,6 +38,7 @@ from uuid import UUID
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from src.models.chat_message import ChatMessage
 from src.models.citation import Citation
@@ -168,6 +169,15 @@ async def list_messages(
         )
         messages = list((await db.execute(stmt)).scalars().all())
         has_more = (offset + len(messages)) < total
+
+    for message in messages:
+        # The page query loads no ``thread`` relationship. Attach the one the
+        # access funnel above already resolved (same identity-map object: no
+        # extra query, no dirty state) so presenters can read the viewer's
+        # workspace trust from the row — a lazy load there would raise
+        # MissingGreenlet under AsyncSession and fail closed to the public
+        # tool-trace projection even for the thread's owner.
+        set_committed_value(message, "thread", thread)
 
     return messages, total, has_more
 

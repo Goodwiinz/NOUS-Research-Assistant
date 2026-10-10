@@ -185,7 +185,7 @@ describe('HTTP-level failures synthesize a client-derived category', () => {
     global.fetch = fetchFailing(429);
     const onError = vi.fn();
     await agentChatService.streamConfirm(
-      { thread_id: 't1', confirmed: true },
+      { thread_id: 't1', confirmed: true, approval_id: 'a'.repeat(64) },
       { onError }
     );
     expect(onError.mock.calls[0][1]).toBe('rate_limited');

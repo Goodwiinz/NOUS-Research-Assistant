@@ -23,12 +23,14 @@ from __future__ import annotations
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
 
@@ -183,10 +185,19 @@ async def test_resume_agent_graph_commits_before_ainvoke() -> None:
         ),
         patch(
             "src.services.agent.agent_execution_service.get_run",
-            new=AsyncMock(return_value=None),
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    job_id=job_id,
+                    thread_id=None,
+                    status="running",
+                    run_metadata={"approval_id": "a" * 64},
+                    user_message_id=None,
+                    client_message_id=None,
+                )
+            ),
         ),
     ):
-        await _resume_agent_graph(job_id, True, user)
+        await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
     assert "commit" in events, (
         "db.commit() was never called before the resume's graph.ainvoke() — "

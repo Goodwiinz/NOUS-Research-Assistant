@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import HTTPException
 
+from src.services.agent.confirmation_service import pending_approval
 from tests.utils.agent_stream import sse_data, sse_event_name, sse_seq
 
 _CONFIRMATION = {
@@ -30,12 +31,17 @@ _CONFIRMATION = {
 
 
 def _snapshot_with_interrupt(
-    value: dict, *, user_id: Optional[str] = None
+    value: dict, *, user_id: Optional[str] = "user-1"
 ) -> SimpleNamespace:
     """A checkpoint snapshot parked on a single ``interrupt()``."""
     return SimpleNamespace(
+        config={"configurable": {"checkpoint_id": "saved-interrupt"}},
         values={} if user_id is None else {"user_id": user_id},
-        tasks=(SimpleNamespace(interrupts=(SimpleNamespace(value=value),)),),
+        tasks=(
+            SimpleNamespace(
+                interrupts=(SimpleNamespace(id="test-interrupt", value=value),)
+            ),
+        ),
     )
 
 
@@ -78,6 +84,7 @@ async def test_resume_confirmation_frame_carries_envelope() -> None:
     payload = sse_data(frame)
     # The original payload survives the envelope.
     assert payload["thread_id"] == thread_id
+    assert len(payload["confirmation"].pop("approval_id")) == 64
     assert payload["confirmation"] == _CONFIRMATION
 
     # Envelope fields — same set every live-stream frame carries.
@@ -137,7 +144,18 @@ async def test_resume_confirmation_carries_durable_run_id_after_reload() -> None
             "get_active_run_for_thread",
             new=AsyncMock(
                 return_value=SimpleNamespace(
-                    job_id=run_id, status=JobStatus.AWAITING_CONFIRMATION.value
+                    job_id=run_id,
+                    status=JobStatus.AWAITING_CONFIRMATION.value,
+                    run_metadata={
+                        "approval_id": pending_approval(
+                            _snapshot_with_interrupt(
+                                _CONFIRMATION, user_id=current_user.id
+                            ),
+                            thread_id=thread_id,
+                            run_id=run_id,
+                            user_id=current_user.id,
+                        ).approval_id
+                    },
                 )
             ),
         ),

@@ -29,7 +29,11 @@ def _snapshot_with_interrupt(value: dict) -> SimpleNamespace:
             "messages": [],
             "tool_executions": [],
         },
-        tasks=(SimpleNamespace(interrupts=(SimpleNamespace(value=value),)),),
+        tasks=(
+            SimpleNamespace(
+                interrupts=(SimpleNamespace(id="test-interrupt", value=value),)
+            ),
+        ),
         config={"configurable": {"checkpoint_id": f"ckpt-{id(value)}"}},
     )
 
@@ -305,6 +309,7 @@ async def test_confirm_park_failure_after_nested_confirmation_stays_clean(
         confirmed=True,
         model="",
         attachment_ids=None,
+        approval_id="a" * 64,
     )
     current_user = Mock(id="user-1", organization_id="org-1")
 
@@ -327,6 +332,14 @@ async def test_confirm_park_failure_after_nested_confirmation_stays_clean(
         ainvoke = AsyncMock(return_value={})
 
     graph = _Graph()
+    from src.services.agent.confirmation_service import pending_approval
+
+    body.approval_id = pending_approval(
+        graph.snapshot,
+        thread_id=body.thread_id,
+        run_id="run-1",
+        user_id=current_user.id,
+    ).approval_id
     finalize_statuses: list[Any] = []
 
     async def exploding_finalize_id(*args: Any, **kwargs: Any) -> None:

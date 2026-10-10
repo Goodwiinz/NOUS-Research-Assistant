@@ -32,7 +32,6 @@ from src.services.agent._errors import (
     classify_agent_error,
     client_safe_error,
     error_frame_payload,
-    extract_interrupt_confirmation,
 )
 from src.services.agent._pii_redact import redact_pii, redact_tool_args
 from src.services.agent.agent_execution_service import (
@@ -61,6 +60,11 @@ from src.services.agent.agent_submission_service import (
     fail_queued_submission,
     finalize_submission,
     mark_submission_dispatched,
+)
+from src.services.agent.confirmation_service import (
+    ApprovalExpired,
+    pending_confirmation,
+    require_approval,
 )
 from src.services.agent.job_store import process_local_confirmation_coordination_allowed
 from src.services.agent.observability import AgentStreamSLOTracker, record_token_usage
@@ -2958,16 +2962,14 @@ async def stream_event_generator(
                 if acceptance is not None and await durable_stop_requested():
                     await cancel_current_stream(reason="user_requested")
                     return
-                # Extract confirmation details from the interrupt
-                confirmation_details = {}
-                for task in pending_tasks:
-                    for intr in getattr(task, "interrupts", []):
-                        confirmation_details = getattr(intr, "value", {})
-                        break
-                    if confirmation_details:
-                        break
-
                 thread_id = config["configurable"]["thread_id"]
+                confirmation_details = pending_confirmation(
+                    final_snapshot,
+                    thread_id=thread_id,
+                    run_id=acceptance.run_id if acceptance is not None else None,
+                    user_id=current_user.id,
+                )
+                assert confirmation_details is not None
                 # Park the durable run before publishing the confirmation. A
                 # Stop request can claim RUNNING -> STOPPING between the poll
                 # above and this write; a guarded park then returns False. In
@@ -2981,6 +2983,7 @@ async def stream_event_generator(
                         current_user,
                         status=JobStatus.AWAITING_CONFIRMATION,
                         run_metadata={
+                            "approval_id": confirmation_details["approval_id"],
                             "progress_steps": emitter.progress_steps,
                             "reasoning_summary": reasoning_summary or None,
                         },
@@ -3220,10 +3223,10 @@ async def stream_event_generator(
         await _run_interrupted_cleanup(cancel_current_stream)
         raise cancellation_exc
 
-    except GraphInterrupt as exc:
+    except GraphInterrupt:
         # Graph hit an interrupt mid-stream (HITL confirmation needed).
         # Verify the checkpoint was persisted before telling the CLI to confirm.
-        confirmation_details = extract_interrupt_confirmation(exc)
+        confirmation_details = None
         thread_id = (config.get("configurable") or {}).get(
             "thread_id"
         ) or stream_thread_id
@@ -3232,8 +3235,15 @@ async def stream_event_generator(
         try:
             if graph is not None:
                 verify_snapshot = await graph.aget_state(config)
+                confirmation_details = pending_confirmation(
+                    verify_snapshot,
+                    thread_id=thread_id,
+                    run_id=acceptance.run_id if acceptance is not None else None,
+                    user_id=current_user.id,
+                )
                 checkpoint_ok = bool(
-                    verify_snapshot
+                    confirmation_details
+                    and verify_snapshot
                     and verify_snapshot.values
                     and any(
                         getattr(t, "interrupts", None)
@@ -3284,6 +3294,7 @@ async def stream_event_generator(
             await emitter.finish()
             return
 
+        assert confirmation_details is not None
         # Park before publishing the confirmation. If a concurrent Stop has
         # already claimed STOPPING, the guarded update returns False and this
         # producer must publish the cancellation ACK instead of exiting with a
@@ -3295,6 +3306,7 @@ async def stream_event_generator(
                 current_user,
                 status=JobStatus.AWAITING_CONFIRMATION,
                 run_metadata={
+                    "approval_id": confirmation_details["approval_id"],
                     "progress_steps": emitter.progress_steps,
                     "reasoning_summary": reasoning_summary or None,
                 },
@@ -3478,6 +3490,42 @@ async def stream_confirm_event_generator(
     # it to link the cancelled run to its stopped partial row, and that handler
     # can fire before the try body has run.
     persisted_assistant_id: Optional[str] = None
+
+    async def release_pre_execution_claim() -> None:
+        nonlocal durable_claimed, claim_is_local, claim_is_redis
+        if claim_is_local and confirm_claim_key:
+            claim_is_local = False
+            with contextlib.suppress(Exception):
+                _release_local_confirm_claim(confirm_claim_key)
+        if claim_is_redis and confirm_claim_key:
+            from src.core.caching import _release_lock
+
+            claim_is_redis = False
+            with contextlib.suppress(Exception):
+                await _release_lock(redis_client, confirm_claim_key)
+        if durable_claimed and active_run is not None:
+            # Relinquish before yielding/awaiting: a released or superseded
+            # approval is no longer ours to cancel on transport shutdown.
+            durable_claimed = False
+            release_run_id = str(active_run.job_id)
+
+            async def release_durable_claim() -> None:
+                with contextlib.suppress(Exception):
+                    await db.rollback()
+                    await release_confirmation_claim(
+                        db,
+                        release_run_id,
+                        approval_id=request_body.approval_id,
+                        organization_id=getattr(current_user, "organization_id", None),
+                        user_id=current_user.id,
+                    )
+
+            # A disconnect must not abandon the release mid-commit: cleanup no
+            # longer owns the run, so an unfinished release would strand it.
+            await _run_interrupted_cleanup(
+                release_durable_claim, propagate_cancellation=True
+            )
+
     disconnect_canceller = _cancel_current_task_on_disconnect(request)
     try:
         _bootstrap_langsmith()
@@ -3629,6 +3677,21 @@ async def stream_confirm_event_generator(
                 )
                 return
 
+        try:
+            approval = require_approval(
+                current_snapshot,
+                approval_id=request_body.approval_id,
+                thread_id=request_body.thread_id,
+                run_id=str(active_run.job_id) if active_run is not None else None,
+                user_id=current_user.id,
+            )
+        except ApprovalExpired as exc:
+            yield await emitter.emit(
+                AgentStreamEvent.ERROR,
+                error_frame_payload(str(exc), AgentErrorCategory.CONFLICT),
+            )
+            return
+
         run_metadata = getattr(active_run, "run_metadata", None)
         emitter.seed_progress(
             run_metadata.get("progress_steps")
@@ -3769,6 +3832,7 @@ async def stream_confirm_event_generator(
                 durable_claimed = await claim_awaiting_run_for_confirmation(
                     db,
                     claim_run_id,
+                    approval_id=request_body.approval_id,
                     organization_id=getattr(current_user, "organization_id", None),
                     user_id=current_user.id,
                 )
@@ -3858,9 +3922,26 @@ async def stream_confirm_event_generator(
             thread_id=request_body.thread_id,
             job_id=(str(active_run.job_id) if active_run is not None else None),
         )
+        # Re-read after taking ownership: dispatch must still target the
+        # approved saved interrupt, including the threadless path.
+        try:
+            approval = require_approval(
+                await graph.aget_state(snapshot_config),
+                approval_id=request_body.approval_id,
+                thread_id=request_body.thread_id,
+                run_id=str(active_run.job_id) if active_run is not None else None,
+                user_id=current_user.id,
+            )
+        except ApprovalExpired as exc:
+            await release_pre_execution_claim()
+            yield await emitter.emit(
+                AgentStreamEvent.ERROR,
+                error_frame_payload(str(exc), AgentErrorCategory.CONFLICT),
+            )
+            return
         resume_input = Command(
             **({"update": runtime_state_update} if runtime_state_update else {}),
-            resume={"confirmed": request_body.confirmed},
+            resume=approval.resume(request_body.confirmed),
         )
 
         emitter.set_context(route="graph")
@@ -4239,13 +4320,13 @@ async def stream_confirm_event_generator(
             if await durable_stop_requested():
                 await cancel_confirm_stream(reason="user_requested")
                 return
-            confirmation_details = {}
-            for task in pending_tasks:
-                for intr in getattr(task, "interrupts", []):
-                    confirmation_details = getattr(intr, "value", {})
-                    break
-                if confirmation_details:
-                    break
+            confirmation_details = pending_confirmation(
+                final_snapshot,
+                thread_id=request_body.thread_id,
+                run_id=str(active_run.job_id) if active_run is not None else None,
+                user_id=current_user.id,
+            )
+            assert confirmation_details is not None
             # Park before publishing a nested confirmation. A Stop can win
             # between the poll above and the guarded AWAITING transition; when
             # that happens this resumed producer must own the cancellation ACK
@@ -4260,6 +4341,7 @@ async def stream_confirm_event_generator(
                     current_user,
                     status=JobStatus.AWAITING_CONFIRMATION,
                     run_metadata={
+                        "approval_id": confirmation_details["approval_id"],
                         "progress_steps": emitter.progress_steps,
                         "reasoning_summary": reasoning_summary or None,
                     },
@@ -4570,26 +4652,8 @@ async def stream_confirm_event_generator(
         # event — release the claim so a legit retry is not locked out for
         # the full TTL. Once events_started is True the resume may have run
         # a destructive tool already, so the claim is left for TTL cleanup.
-        if confirm_claim_key and not events_started:
-            # Both domains may be held (local always, Redis on top —
-            # R2-H4 review follow-up): release each independently.
-            if claim_is_local:
-                with contextlib.suppress(Exception):
-                    _release_local_confirm_claim(confirm_claim_key)
-            if claim_is_redis:
-                from src.core.caching import _release_lock
-
-                with contextlib.suppress(Exception):
-                    await _release_lock(redis_client, confirm_claim_key)
-        if durable_claimed and not events_started and active_run is not None:
-            with contextlib.suppress(Exception):
-                await db.rollback()
-                await release_confirmation_claim(
-                    db,
-                    str(active_run.job_id),
-                    organization_id=getattr(current_user, "organization_id", None),
-                    user_id=current_user.id,
-                )
+        if not events_started:
+            await release_pre_execution_claim()
         # Persist whatever was streamed before the failure (stopped=True) so the
         # partial answer survives a reload. Covers both the disconnected drain
         # dying (e.g. the 300s timeout) and an error while the client is still

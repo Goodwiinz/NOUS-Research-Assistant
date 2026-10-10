@@ -109,7 +109,8 @@ export function fromServer(message: Message): TerminalMessage[] {
       contexts: message.citations,
       toolExecutions: (message.tool_executions ?? []).map((tool, index) => ({
         id: String(tool.id ?? index),
-        tool: String(tool.tool_name ?? tool.tool ?? "tool"),
+        // The server projection drops entries without a string tool_name.
+        tool: tool.tool_name,
         label: String(tool.tool_display_name ?? tool.tool_name ?? "Tool"),
         status: tool.status === "error" ? "error" : "done",
         args:

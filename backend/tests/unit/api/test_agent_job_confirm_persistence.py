@@ -21,6 +21,7 @@ from uuid import uuid4
 import pytest
 from langchain_core.messages import AIMessage
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_thread_access import editable_thread_getter
 
 
@@ -188,6 +189,8 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid() -> Non
 
     thread_row = SimpleNamespace(id=thread_id, conversation_id=conversation_id)
     durable_run = SimpleNamespace(
+        status="running",
+        run_metadata={"approval_id": "a" * 64},
         job_id=job_id,
         thread_id=thread_id,
         client_message_id="original-user-turn-cmid",
@@ -278,7 +281,7 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid() -> Non
             new=Mock(),
         ),
     ):
-        await _resume_agent_graph(job_id, True, user)
+        await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
     # (a) The user row is NEVER re-persisted on the confirm path — it was
     #     already written up-front by the initial /execute run.
@@ -313,7 +316,7 @@ async def test_job_confirm_persists_assistant_only_with_checkpoint_cmid() -> Non
     resume_call = graph.ainvoke.await_args
     assert resume_call is not None
     resume_input = resume_call.args[0]
-    assert resume_input.resume == {"confirmed": True}
+    assert resume_input.resume == {"test-interrupt": {"confirmed": True}}
     assert resume_input.update["runtime_tool_names"] == list(
         TOOL_REGISTRY.available_descriptor_names()
     )
