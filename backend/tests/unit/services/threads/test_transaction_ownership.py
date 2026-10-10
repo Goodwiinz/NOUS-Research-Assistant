@@ -149,6 +149,10 @@ LEAF_TXN: Dict[str, Dict[str, FrozenSet[str]]] = {
     "workspace_access": {
         # Read-only access funnel: no persistence op owns a transaction.
         "user_can_access_workspace": frozenset(),
+        # Pure trust resolution over already-loaded rows (no session use).
+        "workspace_trust": frozenset(),
+        "thread_viewer_is_trusted": frozenset(),
+        "message_viewer_is_trusted": frozenset(),
         "member_or_owner_workspace_clause": frozenset(),
         "get_workspace": frozenset(),
         "get_conversation": frozenset(),

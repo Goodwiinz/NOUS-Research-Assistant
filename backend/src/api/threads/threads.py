@@ -35,7 +35,8 @@ from src.schemas.chat import (  # Thread schemas; Bulk thread schemas; Message s
     ThreadResponse,
     ThreadUpdate,
 )
-from src.services.agent._pii_redact import public_tool_execution_activity
+from src.services.agent._pii_redact import tool_executions_for_viewer
+from src.services.threads import workspace_access
 from src.services.threads.chat_service import ChatService, get_chat_service
 from src.services.threads.thread_event_service import thread_event_service
 
@@ -418,8 +419,9 @@ async def get_thread(
 
     messages = []
     if include_messages and thread.messages:
+        trusted = workspace_access.thread_viewer_is_trusted(thread, current_user.id)
         messages = [
-            _format_message_response(m)
+            _format_message_response(m, trusted=trusted)
             for m in thread.messages
             # ``superseded_by_message_id`` is set: an edit-and-resend replaced
             # this turn. The relationship load has no row filter, so both
@@ -763,7 +765,10 @@ async def create_message(
     except Exception as e:
         logger.error(f"Failed to broadcast message_created event: {e}")
 
-    return _format_message_response(message)
+    return _format_message_response(
+        message,
+        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
+    )
 
 
 @router.get("/{thread_id}/messages", response_model=ChatMessageListResponse)
@@ -803,7 +808,13 @@ async def list_messages(
     has_more = (offset + len(messages)) < total
 
     return ChatMessageListResponse(
-        messages=[_format_message_response(m) for m in messages],
+        messages=[
+            _format_message_response(
+                m,
+                trusted=workspace_access.message_viewer_is_trusted(m, current_user.id),
+            )
+            for m in messages
+        ],
         total=total,
         page=page,
         limit=limit,
@@ -837,7 +848,10 @@ async def get_message(
             detail="Message not found in this thread",
         )
 
-    return _format_message_response(message)
+    return _format_message_response(
+        message,
+        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
+    )
 
 
 @router.patch("/{thread_id}/messages/{message_id}", response_model=ChatMessageResponse)
@@ -872,7 +886,10 @@ async def update_message_feedback(
         )
 
     await db.commit()
-    return _format_message_response(message)
+    return _format_message_response(
+        message,
+        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
+    )
 
 
 @router.delete(
@@ -972,8 +989,14 @@ async def _build_bulk_response(
     )
 
 
-def _format_message_response(message) -> ChatMessageResponse:
-    """Format a ChatMessage model to ChatMessageResponse schema"""
+def _format_message_response(message, *, trusted: bool = False) -> ChatMessageResponse:
+    """Format a ChatMessage model to ChatMessageResponse schema.
+
+    ``trusted`` (workspace owner/member, resolved by the route from
+    ``workspace_access.thread_viewer_is_trusted`` / ``message_viewer_is_trusted``)
+    selects the tool-trace projection; the default fails closed to the public
+    activity-only view, so a caller that forgets to resolve it leaks nothing.
+    """
     citations = []
     if message.citations:
         citations = [
@@ -1044,7 +1067,11 @@ def _format_message_response(message) -> ChatMessageResponse:
         latency_ms=message.latency_ms,
         ttft_ms=message.ttft_ms,
         stopped=message.stopped,
-        tool_executions=public_tool_execution_activity(message.tool_executions),
+        # Serve-time projection of persisted tool traces, by viewer trust (see
+        # execute.py get_thread_messages — same finding, same funnel).
+        tool_executions=tool_executions_for_viewer(
+            message.tool_executions, trusted=trusted
+        ),
         plan=message.plan,
         plan_reasoning=message.plan_reasoning,
         reasoning_summary=message.reasoning_summary,

@@ -371,13 +371,28 @@ class MessageAttachmentResponse(BaseModel):
 
 
 class ToolExecutionActivityResponse(BaseModel):
-    """Display-safe summary of a persisted agent tool execution."""
+    """Persisted agent tool execution as served to a thread reader.
+
+    One DTO serves both viewer tiers. The activity fields are always present.
+    The trace fields below are populated ONLY for trusted viewers (workspace
+    owner or member, resolved server-side by ``workspace_access``); a viewer
+    whose only access is the workspace's ``is_public`` flag never receives a
+    value for them (``tool_executions_for_viewer`` omits the keys, so they
+    serialize as null).
+    """
 
     id: Optional[str] = Field(None, max_length=128)
     tool_name: str = Field(..., max_length=128)
     tool_display_name: Optional[str] = Field(None, max_length=200)
     status: Optional[str] = Field(None, max_length=32)
     duration_ms: Optional[int] = Field(None, ge=0)
+    # Trusted viewers only: PII-redacted tool arguments.
+    args: Optional[Dict[str, Any]] = None
+    # Trusted viewers only: raw tool result (the owner's UI rebuilds activity
+    # summaries and Draft Task cards from it on reload).
+    result: Optional[Any] = None
+    # Trusted viewers only: tool error text.
+    error: Optional[str] = None
 
 
 class ChatMessageResponse(ChatMessageBase, TimestampMixin):
@@ -402,8 +417,9 @@ class ChatMessageResponse(ChatMessageBase, TimestampMixin):
     tool_call_id: Optional[str] = None
     feedback_rating: Optional[int] = None
     feedback_text: Optional[str] = None
-    # Display-safe agent activity. Raw persisted args, results, errors, and
-    # unknown fields are deliberately excluded from general workspace APIs.
+    # Agent activity for this turn. Trace fields (redacted args, result,
+    # error) are served only to workspace owners/members; public-only viewers
+    # get the activity fields alone. Unknown persisted keys never pass.
     tool_executions: Optional[List[ToolExecutionActivityResponse]] = None
     # Per-turn agent provenance (JSONB passthrough). plan: planner steps
     # [{step, description, tool, args_hint, depends_on}]; token_usage:

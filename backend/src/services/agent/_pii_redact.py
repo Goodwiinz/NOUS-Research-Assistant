@@ -139,13 +139,16 @@ def redact_tool_executions(entries: Any) -> Any:
     ]
 
 
-def public_tool_execution_activity(entries: Any) -> list[dict[str, Any]] | None:
-    """Project persisted tool traces onto the display-safe public activity DTO.
+def _project_tool_executions(
+    entries: Any, *, trusted: bool
+) -> list[dict[str, Any]] | None:
+    """Allowlist projection shared by both viewer tiers (see callers below).
 
-    General workspace APIs can be read under public-workspace access rules, so
-    they must never expose raw arguments, results, errors, or unknown fields.
-    Invalid legacy entries are ignored rather than reflected or allowed to
-    break a message response.
+    Malformed entries (non-list payload, non-dict entry, missing/non-string
+    ``tool_name``) are dropped for every viewer rather than reflected or
+    allowed to 500 a message response. ``trusted`` adds the trace fields —
+    ``args`` (PII-redacted, as ``redact_tool_executions`` always did), raw
+    ``result`` and ``error`` — and nothing else: unknown keys never pass.
     """
     if entries is None:
         return None
@@ -166,9 +169,46 @@ def public_tool_execution_activity(entries: Any) -> list[dict[str, Any]] | None:
         duration_ms = entry.get("duration_ms")
         if isinstance(duration_ms, int) and not isinstance(duration_ms, bool):
             item["duration_ms"] = max(0, duration_ms)
+
+        if trusted:
+            args = redact_tool_args(entry.get("args"))
+            item["args"] = args if isinstance(args, dict) else None
+            item["result"] = entry.get("result")
+            error = entry.get("error")
+            item["error"] = (
+                error if error is None or isinstance(error, str) else str(error)
+            )
         activity.append(item)
 
     return activity
+
+
+def public_tool_execution_activity(entries: Any) -> list[dict[str, Any]] | None:
+    """Project persisted tool traces onto the display-safe public activity DTO.
+
+    General workspace APIs can be read under public-workspace access rules, so
+    they must never expose raw arguments, results, errors, or unknown fields.
+    Invalid legacy entries are ignored rather than reflected or allowed to
+    break a message response.
+    """
+    return _project_tool_executions(entries, trusted=False)
+
+
+def tool_executions_for_viewer(
+    entries: Any, *, trusted: bool
+) -> list[dict[str, Any]] | None:
+    """The one serve-time funnel for persisted ``tool_executions``.
+
+    ``trusted`` is resolved server-side from the workspace access grant
+    (``workspace_access.thread_viewer_is_trusted`` /
+    ``message_viewer_is_trusted``: owner or member), never from a client flag.
+    Trusted viewers get what they always did — PII-redacted ``args`` plus raw
+    ``result``/``error`` — because the owner's UI rebuilds the activity strip
+    and Draft Task cards from them on reload. A viewer whose only grant is the
+    workspace's ``is_public`` flag, or any caller whose trust could not be
+    resolved, gets ``public_tool_execution_activity`` — never args/result/error.
+    """
+    return _project_tool_executions(entries, trusted=bool(trusted))
 
 
 __all__ = [
@@ -177,4 +217,5 @@ __all__ = [
     "redact_pii",
     "redact_tool_args",
     "redact_tool_executions",
+    "tool_executions_for_viewer",
 ]

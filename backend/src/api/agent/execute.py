@@ -42,8 +42,12 @@ from src.core.rate_limit import create_rate_limiter
 from src.core.security import TokenData, get_current_user_token
 from src.models.chat_message import ChatMessage
 from src.models.user import User
+from src.schemas.chat import ToolExecutionActivityResponse
 from src.services.agent import stream_buffer as _stream_buffer
-from src.services.agent._pii_redact import redact_tool_executions
+from src.services.agent._pii_redact import (
+    redact_tool_executions,
+    tool_executions_for_viewer,
+)
 from src.services.agent.agent_execution_service import (
     MAX_JOBS,
     AgentThreadResolutionError,
@@ -1571,7 +1575,9 @@ class MessageResponse(BaseModel):
     tool_name: Optional[str] = None
     tool_call_id: Optional[str] = None
     citations: Optional[List[Dict[str, Any]]] = None
-    tool_executions: Optional[List[Dict[str, Any]]] = None
+    # Same viewer-tiered DTO as the workspace message routes: trace fields
+    # (args/result/error) only for the workspace owner/member.
+    tool_executions: Optional[List[ToolExecutionActivityResponse]] = None
     # Per-turn agent provenance (assistant rows only; None for legacy rows).
     plan: Optional[List[Dict[str, Any]]] = None
     plan_reasoning: Optional[str] = None
@@ -1655,6 +1661,12 @@ async def get_thread_messages(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
+    # The funnel also resolves threads below a PUBLIC workspace for anyone
+    # (#1820), so decide the tool-trace projection from the access grant:
+    # owner/member keep redacted args + result/error; a public-only viewer
+    # (or unresolved trust) gets the activity-only projection.
+    trusted = workspace_access.thread_viewer_is_trusted(thread, current_user.id)
+
     # Fetch messages with citations eagerly loaded.
     if limit is None and before is None:
         # Default (no params): full history ascending — unchanged behavior.
@@ -1721,10 +1733,12 @@ async def get_thread_messages(
                 tool_name=msg.tool_name,
                 tool_call_id=msg.tool_call_id,
                 citations=citations_data,
-                # Serve-time redaction: rows were persisted with raw args
+                # Serve-time projection: rows were persisted with raw args
                 # (before and after #1046 redacted the live SSE preview), so
                 # redacting here is what covers historical rows on reload.
-                tool_executions=redact_tool_executions(msg.tool_executions),
+                tool_executions=tool_executions_for_viewer(
+                    msg.tool_executions, trusted=trusted
+                ),
                 plan=msg.plan,
                 plan_reasoning=msg.plan_reasoning,
                 reasoning_summary=msg.reasoning_summary,
