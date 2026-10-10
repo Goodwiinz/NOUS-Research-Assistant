@@ -1,3 +1,4 @@
+import { beginArtifactNavigation } from '@/utils/artifactNavigation';
 /**
  * Unit tests for the artifact panel store (Zustand).
  *
@@ -109,4 +110,65 @@ describe('artifactPanelStore', () => {
     });
     expect(useArtifactPanelStore.getState().artifact).toEqual(doc('b'));
   });
+});
+
+const generated = (versionId: string): Artifact => ({
+  kind: 'generated',
+  artifactId: 'a1',
+  versionId,
+  title: `${versionId}.txt`,
+});
+
+describe('generated artifact tabs', () => {
+  beforeEach(() => useArtifactPanelStore.getState().reset());
+
+  it('keeps ordered exact versions and deduplicates repeated opens', () => {
+    const store = useArtifactPanelStore.getState();
+    store.setScope('scope-a');
+    store.openArtifact(generated('v1'), { scope: 'scope-a' });
+    store.openArtifact(generated('v2'), { scope: 'scope-a' });
+    store.openArtifact(generated('v1'), { scope: 'scope-a' });
+    expect(
+      useArtifactPanelStore.getState().tabs.map((t) => t.versionId)
+    ).toEqual(['v1', 'v2']);
+    expect(useArtifactPanelStore.getState().activeVersionId).toBe('v1');
+  });
+
+  it('selects the nearest remaining version when closing and hides the final tab', () => {
+    const store = useArtifactPanelStore.getState();
+    store.openArtifact(generated('v1'));
+    store.openArtifact(generated('v2'));
+    store.closeTab('v2');
+    expect(useArtifactPanelStore.getState().artifact).toEqual(generated('v1'));
+    store.closeTab('v1');
+    expect(useArtifactPanelStore.getState().isOpen).toBe(false);
+  });
+
+  it('clears every tab synchronously on scope change and rejects a stale open', () => {
+    const store = useArtifactPanelStore.getState();
+    store.setScope('scope-a');
+    store.openArtifact(generated('v1'), { scope: 'scope-a' });
+    store.togglePin();
+    store.setScope('scope-b');
+    store.openArtifact(generated('v9'), { scope: 'scope-a' });
+    expect(useArtifactPanelStore.getState()).toMatchObject({
+      scope: 'scope-b',
+      tabs: [],
+      artifact: null,
+      activeVersionId: null,
+      isOpen: false,
+      pinned: false,
+    });
+  });
+});
+
+it('older pending navigation cleanup cannot release a newer UI lock', () => {
+  useArtifactPanelStore.getState().setScope('qa-scope');
+  const finishA = beginArtifactNavigation();
+  const finishB = beginArtifactNavigation();
+  const pendingB = useArtifactPanelStore.getState().pendingNavigation;
+  finishA?.();
+  expect(useArtifactPanelStore.getState().pendingNavigation).toBe(pendingB);
+  finishB?.();
+  expect(useArtifactPanelStore.getState().pendingNavigation).toBeNull();
 });

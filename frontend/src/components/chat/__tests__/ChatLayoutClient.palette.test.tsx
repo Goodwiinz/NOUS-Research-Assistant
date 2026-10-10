@@ -29,8 +29,11 @@ vi.mock('@/store/chat-store', () => ({
 }));
 
 vi.mock('@/stores/authStore', () => ({
-  useAuthStore: (selector: (state: unknown) => unknown) =>
-    selector({ isAuthenticated: false }),
+  useAuthStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({ isAuthenticated: false }),
+    { getState: () => ({ isAuthenticated: false, user: null }) }
+  ),
 }));
 
 vi.mock('next/navigation', () => ({

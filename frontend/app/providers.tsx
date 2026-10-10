@@ -1,5 +1,7 @@
 'use client';
 
+import '@/utils/artifactNavigation';
+
 // Note: AnalyticsProvider is temporarily disabled for TypeScript strict mode
 // import { AnalyticsProvider } from '@/components/analytics/AnalyticsProvider';
 import { AuthProvider } from '@/hooks';

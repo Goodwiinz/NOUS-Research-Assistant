@@ -7,12 +7,14 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import {
   artifactService,
+  type ArtifactCapabilities,
   type ArtifactVersion,
   type ProjectArtifact,
   type ThreadArtifact,
 } from '@/services/artifactService';
 import { threadHandoffKey } from '@/hooks/chat/useThreadHandoff';
 import { useChatStore } from '@/store/chat-store';
+import { useArtifactScope } from './useArtifactScope';
 
 /**
  * Query keys are scoped by thread; the root QueryClient is cleared on
@@ -55,6 +57,7 @@ const LATE_OUTPUT_WINDOW_MS = 5 * 60_000;
 export function useThreadArtifacts(
   threadId: string | null | undefined
 ): UseQueryResult<ThreadArtifact[]> {
+  const scope = useArtifactScope();
   const streamingHere = useChatStore(
     (s) => s.isStreaming && s.streamingThreadId === threadId
   );
@@ -66,9 +69,10 @@ export function useThreadArtifacts(
     wasStreaming.current = streamingHere;
   }, [streamingHere]);
   return useQuery({
-    queryKey: threadArtifactsKey(threadId ?? ''),
-    queryFn: () => artifactService.listThreadArtifacts(threadId ?? ''),
-    enabled: Boolean(threadId),
+    queryKey: [...threadArtifactsKey(threadId ?? ''), scope],
+    queryFn: ({ signal }) =>
+      artifactService.listThreadArtifacts(threadId ?? '', signal),
+    enabled: Boolean(threadId && scope),
     staleTime: 5_000,
     // Poll while output can still arrive without a stream frame: the run is
     // live (frames invalidate too, but a suppressed announcement is cheap to
@@ -93,10 +97,12 @@ export function useThreadArtifacts(
 export function useProjectArtifacts(
   projectId: string | null | undefined
 ): UseQueryResult<ProjectArtifact[]> {
+  const scope = useArtifactScope(projectId ?? null, true);
   return useQuery({
-    queryKey: projectArtifactsKey(projectId ?? ''),
-    queryFn: () => artifactService.listProjectArtifacts(projectId ?? ''),
-    enabled: Boolean(projectId),
+    queryKey: [...projectArtifactsKey(projectId ?? ''), scope],
+    queryFn: ({ signal }) =>
+      artifactService.listProjectArtifacts(projectId ?? '', signal),
+    enabled: Boolean(projectId && scope),
     staleTime: 5_000,
     retry: false,
   });
@@ -105,10 +111,12 @@ export function useProjectArtifacts(
 export function useArtifactVersions(
   artifactId: string | null | undefined
 ): UseQueryResult<ArtifactVersion[]> {
+  const scope = useArtifactScope();
   return useQuery({
-    queryKey: artifactVersionsKey(artifactId ?? ''),
-    queryFn: () => artifactService.listVersions(artifactId ?? ''),
-    enabled: Boolean(artifactId),
+    queryKey: [...artifactVersionsKey(artifactId ?? ''), scope],
+    queryFn: ({ signal }) =>
+      artifactService.listVersions(artifactId ?? '', signal),
+    enabled: Boolean(artifactId && scope),
     staleTime: 5_000,
     retry: false,
   });
@@ -140,3 +148,32 @@ export function useInvalidateThreadArtifacts(): (
 }
 
 export type { ThreadArtifact };
+
+/** The only cache for authenticated version bytes; previews/editors share it. */
+export function useArtifactContent(
+  versionId: string,
+  enabled = true
+): UseQueryResult<Blob> {
+  const scope = useArtifactScope();
+  return useQuery({
+    queryKey: ['artifact-content', scope, versionId],
+    queryFn: ({ signal }) =>
+      artifactService.fetchVersionBlob(versionId, signal),
+    enabled: Boolean(scope && versionId && enabled),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  });
+}
+
+/** Existing server flags are authoritative; callers require exact true. */
+export function useArtifactCapabilities(): UseQueryResult<ArtifactCapabilities> {
+  const scope = useArtifactScope();
+  return useQuery({
+    queryKey: ['artifact-capabilities', scope],
+    queryFn: ({ signal }) => artifactService.capabilities(signal),
+    enabled: Boolean(scope),
+    staleTime: 30_000,
+    retry: false,
+  });
+}

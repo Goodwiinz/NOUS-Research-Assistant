@@ -6,6 +6,7 @@ import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView'
 import { useThreadArtifacts } from '@/hooks/chat/useThreadArtifacts';
 import type { ThreadArtifact } from '@/services/artifactService';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
+import { useArtifactScope } from '@/hooks/chat/useArtifactScope';
 import { useChatStore } from '@/store/chat-store';
 
 import { formatBytes } from '../artifact-panel/ArtifactPreview';
@@ -42,6 +43,7 @@ export function GeneratedArtifactCards({
   const isLatestAssistantMessage = message !== undefined && isLatestAssistant;
   const { data, isError, refetch } = useThreadArtifacts(threadId);
   const openArtifact = useArtifactPanelStore((s) => s.openArtifact);
+  const scope = useArtifactScope();
   if (!message) return null;
   if (isError) {
     // One stable notice on the latest turn only; a silent blank would read
@@ -83,13 +85,14 @@ export function GeneratedArtifactCards({
         versionId: item.version.versionId,
         title: item.version.title,
       },
-      { source: 'user' }
+      { source: 'user', scope }
     );
   return (
     <section aria-label="Generated files" className="mt-2 flex flex-wrap gap-2">
       {items.map((item) => (
         <button
           key={item.version.versionId}
+          data-artifact-version={item.version.versionId}
           type="button"
           onClick={() => open(item)}
           className="flex max-w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-sm hover:bg-muted"

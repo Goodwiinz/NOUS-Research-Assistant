@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/api-client', () => ({
-  api: { get: vi.fn(), fetchBlob: vi.fn(), download: vi.fn() },
+  api: { get: vi.fn(), post: vi.fn(), fetchBlob: vi.fn(), download: vi.fn() },
 }));
 
 import { api } from '@/services/api-client';
@@ -60,11 +60,15 @@ describe('artifactService', () => {
   it('calls the thread and version routes with encoded ids', async () => {
     vi.mocked(api.get).mockResolvedValueOnce([wire]);
     const items = await artifactService.listThreadArtifacts('t 1');
-    expect(api.get).toHaveBeenCalledWith('/artifacts/threads/t%201');
+    expect(api.get).toHaveBeenCalledWith('/artifacts/threads/t%201', {
+      signal: undefined,
+    });
     expect(items[0]?.version.versionId).toBe('v1');
     vi.mocked(api.get).mockResolvedValueOnce([wire.version]);
     await artifactService.listVersions('a/1');
-    expect(api.get).toHaveBeenCalledWith('/artifacts/a%2F1/versions');
+    expect(api.get).toHaveBeenCalledWith('/artifacts/a%2F1/versions', {
+      signal: undefined,
+    });
     expect(artifactVersionContentPath('v1')).toBe(
       '/artifacts/versions/v1/content'
     );
@@ -77,4 +81,30 @@ describe('artifactService', () => {
       'report.md'
     );
   });
+});
+
+it('adopts the generated browser edit request and disables automatic POST retries', async () => {
+  vi.mocked(api.post).mockResolvedValue(wire.version);
+  await artifactService.editVersion('a/1', {
+    expectedParentVersionId: 'v1',
+    publicationId: 'receipt',
+    text: '',
+  });
+  expect(api.post).toHaveBeenCalledWith(
+    '/artifacts/a%2F1/edits',
+    { expected_parent_version_id: 'v1', publication_id: 'receipt', text: '' },
+    { retries: 0 }
+  );
+});
+it('requires exact true capabilities and forwards request cancellation', async () => {
+  vi.mocked(api.get).mockResolvedValue({
+    editing_enabled: 'true',
+    preview_enabled: null,
+  });
+  const signal = new AbortController().signal;
+  expect(await artifactService.capabilities(signal)).toEqual({
+    editingEnabled: false,
+    previewEnabled: false,
+  });
+  expect(api.get).toHaveBeenCalledWith('/artifacts/capabilities', { signal });
 });

@@ -1,8 +1,20 @@
-import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+vi.mock('../PdfArtifactPreview', () => ({
+  MAX_PDF_PREVIEW_BYTES: 2 * 1024 * 1024,
+  PdfArtifactPreview: ({ blob }: { blob: Blob }) => (
+    <p data-testid="pdf-renderer">{blob.size}</p>
+  ),
+}));
+import { useAuthStore } from '@/stores/authStore';
+import type { User } from '@/types/auth';
+import { act, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/artifactService', () => ({
-  artifactService: { fetchVersionBlob: vi.fn(), downloadVersion: vi.fn() },
+  artifactService: {
+    fetchVersionBlob: vi.fn(),
+    downloadVersion: vi.fn(),
+    capabilities: vi.fn(),
+  },
 }));
 
 import {
@@ -34,9 +46,9 @@ describe('ArtifactPreview', () => {
     expect(previewKindFor(base)).toBe('markdown');
     expect(previewKindFor({ ...base, mimeType: 'text/plain' })).toBe('text');
     expect(previewKindFor({ ...base, mimeType: 'image/png' })).toBe('image');
-    expect(previewKindFor({ ...base, mimeType: 'text/html' })).toBe('download');
+    expect(previewKindFor({ ...base, mimeType: 'text/html' })).toBe('html');
     expect(previewKindFor({ ...base, mimeType: 'application/pdf' })).toBe(
-      'download'
+      'pdf'
     );
     expect(
       previewKindFor({ ...base, byteSize: MAX_TEXT_PREVIEW_BYTES + 1 })
@@ -72,13 +84,15 @@ describe('ArtifactPreview', () => {
     vi.mocked(artifactService.downloadVersion).mockResolvedValue(undefined);
     const { user } = render(
       <ArtifactPreview
-        version={{ ...base, mimeType: 'text/html', title: 'tool.html' }}
+        version={{
+          ...base,
+          mimeType: 'application/octet-stream',
+          title: 'tool.bin',
+        }}
       />
     );
     expect(artifactService.fetchVersionBlob).not.toHaveBeenCalled();
-    await user.click(
-      screen.getByRole('button', { name: /Download tool.html/ })
-    );
+    await user.click(screen.getByRole('button', { name: /Download tool.bin/ }));
     expect(artifactService.downloadVersion).toHaveBeenCalled();
   });
 
@@ -95,4 +109,167 @@ describe('ArtifactPreview', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getByText('ok')).toBeInTheDocument());
   });
+});
+
+beforeEach(() => {
+  vi.mocked(artifactService.capabilities).mockResolvedValue({
+    editingEnabled: false,
+    previewEnabled: false,
+  });
+  useAuthStore.setState({
+    user: { id: 'actor', organization_id: 'org' } as User,
+    isAuthenticated: true,
+  });
+});
+
+it('removes rendered bytes immediately when the account scope changes', async () => {
+  vi.mocked(artifactService.fetchVersionBlob)
+    .mockResolvedValueOnce(
+      new Blob(['account A secret'], { type: 'text/plain' })
+    )
+    .mockImplementationOnce(() => new Promise(() => {}));
+  render(<ArtifactPreview version={{ ...base, mimeType: 'text/plain' }} />);
+  await screen.findByText('account A secret');
+  act(() =>
+    useAuthStore.setState({
+      user: { id: 'other', organization_id: 'foreign' } as User,
+    })
+  );
+  expect(screen.queryByText('account A secret')).toBeNull();
+});
+
+it('bounds CSV rows and columns while respecting quoted commas', async () => {
+  const rows = [
+    '"column, one",' + Array.from({ length: 60 }, (_, i) => `c${i}`).join(','),
+    ...Array.from(
+      { length: 220 },
+      (_, i) =>
+        `row${i},` + Array.from({ length: 60 }, () => '<img src=x>').join(',')
+    ),
+  ];
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValueOnce(
+    new Blob([rows.join('\n')], { type: 'text/csv' })
+  );
+  render(<ArtifactPreview version={{ ...base, mimeType: 'text/csv' }} />);
+  await screen.findByRole('table', { name: 'CSV preview' });
+  expect(screen.getAllByRole('row')).toHaveLength(200);
+  expect(screen.getAllByRole('columnheader')).toHaveLength(50);
+  expect(screen.getByText('column, one')).toBeInTheDocument();
+  expect(document.querySelector('img')).toBeNull();
+  expect(screen.getByText(/first 200 rows and 50 columns/)).toBeInTheDocument();
+});
+it('bounds deeply nested JSON and leaves invalid JSON as escaped source', async () => {
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValueOnce(
+    new Blob(['{"a":'.repeat(30) + '0' + '}'.repeat(30)], {
+      type: 'application/json',
+    })
+  );
+  render(
+    <ArtifactPreview version={{ ...base, mimeType: 'application/json' }} />
+  );
+  expect(await screen.findByLabelText('JSON preview')).toHaveTextContent(
+    '[depth limit]'
+  );
+});
+it('renders HTML source with no executable frame by default', async () => {
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValueOnce(
+    new Blob(['<script>parent.pwned=1</script>'], { type: 'text/html' })
+  );
+  render(<ArtifactPreview version={{ ...base, mimeType: 'text/html' }} />);
+  expect(
+    await screen.findByText('<script>parent.pwned=1</script>')
+  ).toBeInTheDocument();
+  expect(document.querySelector('iframe')).toBeNull();
+});
+it('checks actual response byte size before text decoding or object URL allocation', async () => {
+  const text = vi.fn();
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValueOnce({
+    size: MAX_TEXT_PREVIEW_BYTES + 1,
+    type: 'text/plain',
+    text,
+  } as unknown as Blob);
+  render(
+    <ArtifactPreview
+      version={{ ...base, mimeType: 'text/plain', byteSize: 1 }}
+    />
+  );
+  await screen.findByText(/File exceeds the inline preview limit/);
+  expect(text).not.toHaveBeenCalled();
+});
+it('passes authenticated bounded PDF bytes to the canvas renderer without a plugin frame or blob URL', async () => {
+  const create = vi.fn();
+  vi.stubGlobal(
+    'URL',
+    class extends URL {
+      static createObjectURL = create;
+      static revokeObjectURL = vi.fn();
+    }
+  );
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValueOnce(
+    new Blob(['%PDF-1.7'], { type: 'application/pdf' })
+  );
+  render(
+    <ArtifactPreview version={{ ...base, mimeType: 'application/pdf' }} />
+  );
+  await screen.findByTestId('pdf-renderer');
+  expect(screen.queryByTitle('PDF preview')).toBeNull();
+  expect(create).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole('button', { name: `Download ${base.title}` })
+  ).toBeVisible();
+});
+it('PDF source metadata above2MiB falls back to download', () => {
+  expect(
+    previewKindFor({
+      ...base,
+      mimeType: 'application/pdf',
+      byteSize: 2 * 1024 * 1024 + 1,
+    })
+  ).toBe('download');
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  document.querySelector('script[data-test-csp]')?.remove();
+});
+
+it('keeps HTML escaped and interactive preview absent when capability is off', async () => {
+  vi.mocked(artifactService.capabilities).mockResolvedValue({
+    editingEnabled: false,
+    previewEnabled: false,
+  });
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+    new Blob(['<button>calculator</button>'])
+  );
+  render(<ArtifactPreview version={{ ...base, mimeType: 'text/html' }} />);
+  expect(
+    await screen.findByText('<button>calculator</button>')
+  ).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Run HTML preview' })).toBeNull();
+  expect(screen.queryByTitle('Interactive HTML preview')).toBeNull();
+});
+it('requires explicit opt-in with capability on, and preserves source below the isolated frame', async () => {
+  const script = document.createElement('script');
+  script.nonce = 'dHJ1c3RlZC1hcHAtbm9uY2UtMTIzNDU=';
+  script.dataset.testCsp = 'true';
+  document.head.append(script);
+  vi.mocked(artifactService.capabilities).mockResolvedValue({
+    editingEnabled: false,
+    previewEnabled: true,
+  });
+  vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+    new Blob(['<button>calculator</button>'])
+  );
+  const { user } = render(
+    <ArtifactPreview version={{ ...base, mimeType: 'text/html' }} />
+  );
+  await screen.findByText('<button>calculator</button>');
+  const run = await screen.findByRole('button', { name: 'Run HTML preview' });
+  expect(screen.queryByTitle('Interactive HTML preview')).toBeNull();
+  await user.click(run);
+  expect(screen.getByTitle('Interactive HTML preview')).toHaveAttribute(
+    'sandbox',
+    'allow-scripts'
+  );
+  expect(screen.getByText('<button>calculator</button>')).toBeInTheDocument();
 });

@@ -70,14 +70,17 @@ const nextConfig = {
 
   // Webpack configuration for file uploads
   webpack: (config, { isServer }) => {
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      react: path.dirname(require.resolve('react/package.json')),
-      'react/jsx-runtime': require.resolve('react/jsx-runtime'),
-      'react/jsx-dev-runtime': require.resolve('react/jsx-dev-runtime'),
-      'react-dom': path.dirname(require.resolve('react-dom/package.json')),
-      'react-dom/client': require.resolve('react-dom/client'),
-    };
+    // Preserve Next's server React aliases used by metadata and Server Components.
+    if (!isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        react: path.dirname(require.resolve('react/package.json')),
+        'react/jsx-runtime': require.resolve('react/jsx-runtime'),
+        'react/jsx-dev-runtime': require.resolve('react/jsx-dev-runtime'),
+        'react-dom': path.dirname(require.resolve('react-dom/package.json')),
+        'react-dom/client': require.resolve('react-dom/client'),
+      };
+    }
 
     if (!isServer) {
       config.optimization = {

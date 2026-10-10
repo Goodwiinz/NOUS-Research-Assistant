@@ -1,5 +1,7 @@
+import { useAuthStore } from '@/stores/authStore';
+import type { User } from '@/types/auth';
 import { act, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/artifactService', () => ({
   artifactService: {
@@ -154,5 +156,12 @@ describe('GeneratedArtifactBody', () => {
     );
     expect(await screen.findByText('new')).toBeInTheDocument();
     expect(artifactService.listVersions).toHaveBeenCalledTimes(2);
+  });
+});
+
+beforeEach(() => {
+  useAuthStore.setState({
+    user: { id: 'actor', organization_id: 'org' } as User,
+    isAuthenticated: true,
   });
 });

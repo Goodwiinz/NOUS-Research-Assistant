@@ -129,3 +129,30 @@ describe('APIClient export downloads', () => {
     expect(click).not.toHaveBeenCalled();
   });
 });
+
+it('aborts an authenticated binary read when its Query caller changes scope', async () => {
+  const { APIClient } = await import('../api-client');
+  const client = new APIClient('http://api.test');
+  client.setAuth('test-token');
+  const caller = new AbortController();
+  let finish!: (blob: Blob) => void;
+  const fetcher = vi.fn().mockResolvedValue({
+    ok: true,
+    headers: new Headers({ 'content-type': 'text/plain' }),
+    blob: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const request = client.fetchBlob('/content', caller.signal);
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
+  caller.abort();
+  expect(fetcher.mock.calls[0][1].signal.aborted).toBe(true);
+  const rejected = expect(request).rejects.toMatchObject({
+    name: 'AbortError',
+  });
+  finish(new Blob(['late private bytes']));
+  await rejected;
+  vi.unstubAllGlobals();
+});

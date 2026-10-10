@@ -29,9 +29,22 @@ export interface OpenArtifactOptions {
    * has pinned the current artifact.
    */
   source?: 'user' | 'agent';
+  /** Captured scope rejects late results from a previous chat/account. */
+  scope?: string | null;
 }
 
+export type GeneratedArtifact = Extract<Artifact, { kind: 'generated' }>;
+
 interface ArtifactPanelState {
+  pendingNavigation: { scope: string; token: string } | null;
+  navigationGuard: (() => boolean) | null;
+  setNavigationGuard: (guard: (() => boolean) | null) => void;
+  scope: string | null;
+  tabs: GeneratedArtifact[];
+  activeVersionId: string | null;
+  setScope: (scope: string | null) => void;
+  selectTab: (versionId: string) => void;
+  closeTab: (versionId: string) => void;
   artifact: Artifact | null;
   isOpen: boolean;
   pinned: boolean;
@@ -53,17 +66,98 @@ interface ArtifactPanelState {
  * ledger for why that discipline exists).
  */
 export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
+  pendingNavigation: null,
+  navigationGuard: null,
+  setNavigationGuard: (navigationGuard) => set({ navigationGuard }),
+  scope: null,
+  tabs: [],
+  activeVersionId: null,
   artifact: null,
   isOpen: false,
   pinned: false,
 
-  openArtifact: (artifact, opts) => {
-    const { pinned, isOpen } = get();
-    if (opts?.source === 'agent' && pinned && isOpen) return;
-    set({ artifact, isOpen: true });
+  setScope: (scope) => {
+    if (scope !== get().scope) {
+      set({
+        scope,
+        pendingNavigation: null,
+        navigationGuard: null,
+        tabs: [],
+        activeVersionId: null,
+        artifact: null,
+        isOpen: false,
+        pinned: false,
+      });
+    }
   },
 
-  closePanel: () => set({ isOpen: false }),
+  selectTab: (versionId) => {
+    const artifact = get().tabs.find((tab) => tab.versionId === versionId);
+    if (
+      artifact &&
+      (get().activeVersionId === versionId ||
+        !get().navigationGuard ||
+        get().navigationGuard?.())
+    )
+      set({ artifact, activeVersionId: versionId, isOpen: true });
+  },
+
+  closeTab: (versionId) => {
+    const state = get();
+    const index = state.tabs.findIndex((tab) => tab.versionId === versionId);
+    if (index < 0) return;
+    if (
+      state.activeVersionId === versionId &&
+      state.navigationGuard &&
+      !state.navigationGuard()
+    )
+      return;
+    const tabs = state.tabs.filter((tab) => tab.versionId !== versionId);
+    if (state.activeVersionId !== versionId) {
+      set({ tabs });
+      return;
+    }
+    const artifact = tabs[Math.min(index, tabs.length - 1)] ?? null;
+    set({
+      tabs,
+      artifact,
+      activeVersionId: artifact?.versionId ?? null,
+      isOpen: Boolean(artifact),
+    });
+  },
+
+  openArtifact: (artifact, opts) => {
+    if (opts && 'scope' in opts && opts.scope !== get().scope) return;
+    const { pinned, isOpen, navigationGuard, activeVersionId } = get();
+    if (opts?.source === 'agent' && pinned && isOpen) return;
+    if (
+      navigationGuard &&
+      (artifact.kind !== 'generated' ||
+        artifact.versionId !== activeVersionId) &&
+      !navigationGuard()
+    )
+      return;
+    if (artifact.kind === 'generated') {
+      const tabs = get().tabs;
+      set({
+        artifact,
+        isOpen: true,
+        activeVersionId: artifact.versionId,
+        tabs: tabs.some((tab) => tab.versionId === artifact.versionId)
+          ? tabs.map((tab) =>
+              tab.versionId === artifact.versionId ? artifact : tab
+            )
+          : [...tabs, artifact],
+      });
+    } else {
+      set({ artifact, isOpen: true, activeVersionId: null });
+    }
+  },
+
+  closePanel: () => {
+    if (!get().navigationGuard || get().navigationGuard?.())
+      set({ isOpen: false });
+  },
 
   reopenPanel: () => {
     if (get().artifact) set({ isOpen: true });
@@ -71,5 +165,15 @@ export const useArtifactPanelStore = create<ArtifactPanelState>((set, get) => ({
 
   togglePin: () => set((s) => ({ pinned: !s.pinned })),
 
-  reset: () => set({ artifact: null, isOpen: false, pinned: false }),
+  reset: () =>
+    set({
+      pendingNavigation: null,
+      navigationGuard: null,
+      scope: null,
+      tabs: [],
+      activeVersionId: null,
+      artifact: null,
+      isOpen: false,
+      pinned: false,
+    }),
 }));

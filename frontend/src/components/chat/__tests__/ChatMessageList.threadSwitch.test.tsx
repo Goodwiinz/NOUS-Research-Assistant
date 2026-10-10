@@ -15,6 +15,7 @@ vi.mock('../shared/InlineAgentSummary', () => ({
 }));
 vi.mock('../CommandOutputBubble', () => ({ CommandOutputBubble: () => null }));
 vi.mock('@/store/chat-store', () => ({
+  selectCurrentThreadProjectId: () => null,
   useChatStore: (selector: any) => selector({ streamingCitations: [] }),
 }));
 
