@@ -370,6 +370,31 @@ class MessageAttachmentResponse(BaseModel):
         from_attributes = True
 
 
+class ToolExecutionActivityResponse(BaseModel):
+    """Persisted agent tool execution as served to a thread reader.
+
+    One DTO serves both viewer tiers. The activity fields are always present.
+    The trace fields below are populated ONLY for trusted viewers (workspace
+    owner or member, resolved server-side by ``workspace_access``); a viewer
+    whose only access is the workspace's ``is_public`` flag never receives a
+    value for them (``tool_executions_for_viewer`` omits the keys, so they
+    serialize as null).
+    """
+
+    id: Optional[str] = Field(None, max_length=128)
+    tool_name: str = Field(..., max_length=128)
+    tool_display_name: Optional[str] = Field(None, max_length=200)
+    status: Optional[str] = Field(None, max_length=32)
+    duration_ms: Optional[int] = Field(None, ge=0)
+    # Trusted viewers only: PII-redacted tool arguments.
+    args: Optional[Dict[str, Any]] = None
+    # Trusted viewers only: raw tool result (the owner's UI rebuilds activity
+    # summaries and Draft Task cards from it on reload).
+    result: Optional[Any] = None
+    # Trusted viewers only: tool error text.
+    error: Optional[str] = None
+
+
 class ChatMessageResponse(ChatMessageBase, TimestampMixin):
     """Chat message response"""
 
@@ -392,10 +417,10 @@ class ChatMessageResponse(ChatMessageBase, TimestampMixin):
     tool_call_id: Optional[str] = None
     feedback_rating: Optional[int] = None
     feedback_text: Optional[str] = None
-    # Agent tool executions recorded for this turn (JSONB passthrough:
-    # [{id, tool_name, tool_display_name, args, status, result, error,
-    # duration_ms}, ...]). Null for legacy rows and non-agent messages.
-    tool_executions: Optional[List[dict]] = None
+    # Agent activity for this turn. Trace fields (redacted args, result,
+    # error) are served only to workspace owners/members; public-only viewers
+    # get the activity fields alone. Unknown persisted keys never pass.
+    tool_executions: Optional[List[ToolExecutionActivityResponse]] = None
     # Per-turn agent provenance (JSONB passthrough). plan: planner steps
     # [{step, description, tool, args_hint, depends_on}]; token_usage:
     # {input_tokens, output_tokens}. Null for legacy/non-agent rows.

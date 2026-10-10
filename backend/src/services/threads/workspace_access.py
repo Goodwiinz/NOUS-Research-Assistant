@@ -34,7 +34,7 @@ session (see ``_persist_user_message``).
 """
 
 import logging
-from typing import List, Optional, Sequence
+from typing import List, Literal, Optional, Sequence
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, or_, select
@@ -53,6 +53,33 @@ from src.models.workspace import Workspace, WorkspaceMember
 
 logger = logging.getLogger(__name__)
 
+# Why ``user_can_access_workspace`` granted access. ``owner``/``member`` are
+# trusted (they already see the workspace's documents and can run the agent
+# themselves); ``public`` is a viewer whose ONLY access is the workspace's
+# ``is_public`` flag — possibly cross-org and anonymous to the owner — and
+# must never receive raw agent tool traces (see ``tool_executions_for_viewer``).
+WorkspaceTrust = Literal["owner", "member", "public"]
+_TRUSTED: frozenset = frozenset({"owner", "member"})
+
+
+def workspace_trust(workspace: Workspace, user_id: UUID) -> Optional[WorkspaceTrust]:
+    """Resolve the access grant for ``user_id`` on ``workspace``, or ``None``.
+
+    Same inputs as ``user_can_access_workspace`` (which delegates here) so the
+    two can never disagree: a soft-deleted workspace grants nothing; otherwise
+    ownership, then membership, then ``is_public`` — in that order, so the
+    owner of a public workspace resolves as ``owner``, not ``public``.
+    """
+    if workspace.is_deleted:
+        return None
+    if str(workspace.owner_id) == str(user_id):
+        return "owner"
+    if workspace.is_member(str(user_id)):
+        return "member"
+    if workspace.is_public:
+        return "public"
+    return None
+
 
 def user_can_access_workspace(workspace: Workspace, user_id: UUID) -> bool:
     """Canonical workspace access predicate.
@@ -64,13 +91,47 @@ def user_can_access_workspace(workspace: Workspace, user_id: UUID) -> bool:
     soft-deleted workspace revokes access to everything nested under it even
     though ``delete_workspace`` never cascades to children rows.
     """
-    if workspace.is_deleted:
+    return workspace_trust(workspace, user_id) is not None
+
+
+def thread_viewer_is_trusted(thread: object, user_id: UUID) -> bool:
+    """True only when the caller owns or is a member of the thread's workspace.
+
+    Decided server-side from the same ``thread.conversation.workspace``
+    (+ ``members``) graph the access funnels below eager-load — never from a
+    client flag. Fails closed: a public-only viewer, a thread without that
+    graph loaded (a lazy load under ``AsyncSession`` raises ``MissingGreenlet``
+    instead of querying), or any other resolution error all return ``False``,
+    so the caller falls back to the public tool-trace projection.
+    """
+    try:
+        workspace = thread.conversation.workspace  # type: ignore[attr-defined]
+        return workspace_trust(workspace, user_id) in _TRUSTED
+    except Exception:  # fail closed, whatever the shape or load state
+        logger.debug(
+            "viewer trust unresolved for thread %r; serving public projection",
+            getattr(thread, "id", None),
+            exc_info=True,
+        )
         return False
-    if workspace.is_public:
-        return True
-    if str(workspace.owner_id) == str(user_id):
-        return True
-    return workspace.is_member(str(user_id))
+
+
+def message_viewer_is_trusted(message: object, user_id: UUID) -> bool:
+    """``thread_viewer_is_trusted`` for a message row (via ``message.thread``).
+
+    ``get_message`` eager-loads the chain; ``message_service.list_messages``
+    attaches the thread it already resolved. Anything else fails closed.
+    """
+    try:
+        thread = message.thread  # type: ignore[attr-defined]
+    except Exception:
+        logger.debug(
+            "viewer trust unresolved for message %r; serving public projection",
+            getattr(message, "id", None),
+            exc_info=True,
+        )
+        return False
+    return thread_viewer_is_trusted(thread, user_id)
 
 
 def member_or_owner_workspace_clause(user_id: UUID) -> ColumnElement[bool]:

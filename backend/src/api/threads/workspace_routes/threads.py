@@ -204,7 +204,11 @@ async def get_thread(
         db, workspace_id, conversation_id, thread_id, current_user
     )
 
-    return _thread_to_detail_response(thread, include_messages)
+    return _thread_to_detail_response(
+        thread,
+        include_messages,
+        trusted=workspace_access.thread_viewer_is_trusted(thread, current_user.id),
+    )
 
 
 @router.patch(
@@ -310,7 +314,11 @@ async def get_thread_standalone(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    return _thread_to_detail_response(thread, include_messages)
+    return _thread_to_detail_response(
+        thread,
+        include_messages,
+        trusted=workspace_access.thread_viewer_is_trusted(thread, current_user.id),
+    )
 
 
 @standalone_router.patch("/threads/{thread_id}", response_model=ThreadResponse)

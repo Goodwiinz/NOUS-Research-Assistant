@@ -4690,8 +4690,7 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ToolExecutionActivityResponse"
                 },
                 "type": "array"
               },
@@ -15946,8 +15945,7 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/ToolExecutionActivityResponse"
                 },
                 "type": "array"
               },
@@ -29530,6 +29528,101 @@
           "input_schema"
         ],
         "title": "ToolDescriptorDTO",
+        "type": "object"
+      },
+      "ToolExecutionActivityResponse": {
+        "description": "Persisted agent tool execution as served to a thread reader.\n\nOne DTO serves both viewer tiers. The activity fields are always present.\nThe trace fields below are populated ONLY for trusted viewers (workspace\nowner or member, resolved server-side by ``workspace_access``); a viewer\nwhose only access is the workspace's ``is_public`` flag never receives a\nvalue for them (``tool_executions_for_viewer`` omits the keys, so they\nserialize as null).",
+        "properties": {
+          "args": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Args"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "result": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "tool_display_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Display Name"
+          },
+          "tool_name": {
+            "maxLength": 128,
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_name"
+        ],
+        "title": "ToolExecutionActivityResponse",
         "type": "object"
       },
       "ToolInvocation": {
