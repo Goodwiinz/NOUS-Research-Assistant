@@ -305,10 +305,11 @@ jobs:
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
     # Throwaway CI-local Postgres for the advisory execution probes. Credentials
-    # are disposable (postgres/postgres) — no secrets, by design.
+    # are disposable (postgres/postgres) — no secrets, by design. Docker's
+    # official ECR Public images avoid Docker Hub's shared-runner pull quota.
     services:
       postgres:
-        image: postgres:15-alpine
+        image: public.ecr.aws/docker/library/postgres:15-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -844,7 +845,7 @@ jobs:
         shard: [1, 2, 3]
     services:
       postgres:
-        image: postgres:15
+        image: public.ecr.aws/docker/library/postgres:15
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
@@ -854,7 +855,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
-        image: redis:7
+        image: public.ecr.aws/docker/library/redis:7
         ports:
           - 6379/tcp
         options: >-
@@ -1515,7 +1516,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     services:
       postgres:
-        image: postgres:15
+        image: public.ecr.aws/docker/library/postgres:15
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test

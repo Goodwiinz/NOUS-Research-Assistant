@@ -1194,3 +1194,148 @@ async def test_chat_bound_grant_leases_only_runs_in_its_chat(
     assert await lease_commands(db, await bind(other_chat), DEVICE) == []
     leased = await lease_commands(db, await bind(THREAD), DEVICE)
     assert [c.runId for c in leased] == [external_run.id]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_stop_after_dispatch_before_delivery_releases_ownership(
+    db, context, external_run, monkeypatch, enabled
+):
+    from src.services.harness.runs import record_observation
+    from tests.unit.services.harness.test_runs import accept
+
+    assert await dispatch_pending(db) == 1
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", enabled)
+    await cancel(db, str(external_run.id))
+    await cancel(db, str(external_run.id))
+    await record_observation(db, run_id=external_run.id, observation="unknown")
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "cancelled"
+    assert not session.workspace_locked
+    assert await lease_commands(db, context, DEVICE) == []
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentRunEvent)
+            .where(AgentRunEvent.event_type == "run.cancelled")
+        )
+        == 1
+    )
+    assert (await accept(db, context)).run_id != str(external_run.id)
+
+
+async def test_expired_lease_is_not_proof_of_nonexecution(db, context, command):
+    await db.execute(update(HarnessCommand).values(lease_until=now_expired()))
+    await db.commit()
+    await cancel(db, str(command.runId))
+    db.expire_all()
+    run = await db.get(AgentRun, str(command.runId))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "stopping"
+    assert session.workspace_locked
+
+
+def now_expired():
+    return datetime.now(timezone.utc) - timedelta(seconds=1)
+
+
+async def test_undelivered_stop_rolls_back_as_one_transaction(
+    db, context, external_run
+):
+    assert await dispatch_pending(db) == 1
+    await request_run_cancellation(
+        db,
+        run_id=str(external_run.id),
+        thread_id=THREAD,
+        user_id=USER,
+        organization_id=ORG,
+        reason="user",
+    )
+    await db.rollback()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "queued" and session.workspace_locked
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentRunEvent)
+            .where(AgentRunEvent.event_type == "run.cancelled")
+        )
+        == 0
+    )
+
+
+async def test_reconcile_closes_stranded_never_leased_stop_with_bridge_disabled(
+    db, context, external_run, monkeypatch
+):
+    assert await dispatch_pending(db) == 1
+    await db.execute(
+        update(AgentRun).values(
+            status="recovering", cancel_requested_at=datetime.now(timezone.utc)
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", False)
+    await reconcile_pending(db)
+    db.expire_all()
+    run = await db.get(AgentRun, str(external_run.id))
+    session = await db.scalar(select(HarnessSession))
+    assert run.status == "cancelled" and not session.workspace_locked
+
+
+async def test_reconcile_does_not_starve_unleased_stop_behind_leased_runs(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import UUID
+
+    cancelled_at = datetime.now(timezone.utc)
+    tail_id = str(UUID(int=2**128 - 1))
+    for number in range(101):
+        run_id = str(UUID(int=number + 1)) if number < 100 else tail_id
+        db.add(
+            AgentRun(
+                job_id=run_id,
+                organization_id=ORG,
+                user_id=USER,
+                execution_provider="codex",
+                status="recovering",
+                cancel_requested_at=cancelled_at,
+            )
+        )
+        db.add(
+            HarnessSession(
+                run_id=run_id,
+                grant_id=context.grant_id,
+                device_id=DEVICE,
+                workspace_id=uuid4(),
+            )
+        )
+        db.add(
+            HarnessCommand(
+                run_id=run_id,
+                generation=1,
+                kind="start",
+                body={"kind": "start", "input": "hello"},
+                expires_at=cancelled_at + timedelta(minutes=15),
+                lease_until=now_expired() if number < 100 else None,
+            )
+        )
+    await db.commit()
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", False)
+    await reconcile_pending(db)
+    db.expire_all()
+    tail: Any = await db.get(AgentRun, tail_id)
+    tail_session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == tail_id)
+    )
+    assert tail.status == "cancelled"
+    assert tail_session is not None and not tail_session.workspace_locked
+    assert (
+        await db.scalar(
+            select(func.count())
+            .select_from(AgentRun)
+            .where(AgentRun.status == "recovering")
+        )
+        == 100
+    )

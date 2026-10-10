@@ -246,6 +246,14 @@ async def test_recovery_blocks_second_workspace_writer(
 async def test_cancel_intent_survives_recovery_and_native_completion(
     db: AsyncSession, external_run: Any
 ) -> None:
+    from src.models.harness_session import HarnessCommand, HarnessReceipt
+
+    connection = await db.connection()
+    await connection.run_sync(HarnessCommand.__table__.create)
+    await connection.run_sync(HarnessReceipt.__table__.create)
+    await db.commit()
+    # Trusted running evidence means a start may already have escaped.
+    await record_observation(db, run_id=external_run.id, observation="running")
     await record_observation(db, run_id=external_run.id, observation="unknown")
     stopped = await request_run_cancellation(
         db,

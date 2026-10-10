@@ -375,9 +375,10 @@ export async function connect(
     scopes,
     workspaces: carried,
   } satisfies LocalState);
-  // The superseded binding's local credential is useless to this device now.
+  // Only after persisting the new connection can its superseded credential go,
+  // including a full reconnect to the same binding after expiry/scope changes.
   // Its server-side grant and consent stay valid until `disconnect` or expiry.
-  if (previous !== null && !sameBinding && previous.credentialHandle !== credentialHandle)
+  if (previous !== null && previous.credentialHandle !== credentialHandle)
     await store.removeLocal(previous.credentialHandle).catch((error: unknown) =>
       announce(
         `Could not remove the previous binding's local credential: ${error instanceof Error ? error.message : String(error)}`,

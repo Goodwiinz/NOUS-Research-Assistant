@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,6 +127,8 @@ test("a failed liveness probe falls back to the full login and consent flow", as
       assert.ok(later.some((u) => u.endsWith("/renew")));
       assert.ok(later.some((u) => u.endsWith("/cli-auth/start")), `full flow after ${reply.code}`);
       assert.notEqual(second.credentialHandle, first.credentialHandle);
+      assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false, `superseded credential removed after ${reply.code}`);
+      assert.equal(t.state().credentialHandle, second.credentialHandle);
       assert.equal(t.messages.some((m) => m.startsWith("Reusing binding")), false);
     } finally {
       t.cleanup();
@@ -137,9 +139,11 @@ test("a failed liveness probe falls back to the full login and consent flow", as
 test("a requested scope missing from the stored binding runs the full flow", async () => {
   const t = setup();
   try {
-    await connect({ ...t.base, threadId: CHAT, tools: true });
+    const first = await connect({ ...t.base, threadId: CHAT, tools: true });
     const mark = t.calls.length;
-    await connect({ ...t.base, threadId: CHAT, tools: true, handoff: true });
+    const second = await connect({ ...t.base, threadId: CHAT, tools: true, handoff: true });
+    assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false);
+    assert.equal(t.state().credentialHandle, second.credentialHandle);
     const later = t.since(mark);
     // No probe is spent when the scopes already rule reuse out.
     assert.equal(later.some((u) => u.endsWith("/renew")), false);
@@ -333,6 +337,50 @@ test("handoff commands refuse a workspace connection and say how to get a chat o
     await assert.rejects(handoffShow(options), refusal);
     await assert.rejects(handoffFlush(options), refusal);
     assert.equal(t.calls.length, mark, "refused before any request");
+  } finally {
+    t.cleanup();
+  }
+});
+
+// Cleanup ordering guard: removing the credential before writeLocal("connection")
+// makes this test lose the still-current credential on a failed durable write.
+test("failed connection persistence keeps the previous binding and credential", async () => {
+  const t = setup(() => ({ code: 403, body: { detail: "expired" } }));
+  try {
+    const first = await connect({ ...t.base, threadId: CHAT });
+    const writeLocal = CredentialStore.prototype.writeLocal;
+    const write = mock.method(CredentialStore.prototype, "writeLocal", async function (this: CredentialStore, name: string, value: unknown) {
+      if (name === "connection") throw new Error("disk write failed");
+      return writeLocal.call(this, name, value);
+    });
+    try {
+      await assert.rejects(connect({ ...t.base, threadId: CHAT }), /disk write failed/);
+      assert.equal(t.state().credentialHandle, first.credentialHandle);
+      assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), true);
+    } finally {
+      write.mock.restore();
+    }
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("cleanup failure preserves the new binding and reports retryable local cleanup", async () => {
+  const t = setup(() => ({ code: 403, body: { detail: "expired" } }));
+  try {
+    const first = await connect({ ...t.base, threadId: CHAT });
+    const remove = mock.method(CredentialStore.prototype, "removeLocal", async () => {
+      throw new Error("cannot unlink credential");
+    });
+    try {
+      const second = await connect({ ...t.base, threadId: CHAT });
+      assert.equal(t.state().credentialHandle, second.credentialHandle);
+      assert.equal(existsSync(join(t.dir, `${second.credentialHandle}.json`)), true);
+      assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), true);
+      assert.match(t.messages.join("\n"), /Could not remove the previous binding's local credential/);
+    } finally {
+      remove.mock.restore();
+    }
   } finally {
     t.cleanup();
   }

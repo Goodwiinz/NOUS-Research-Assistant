@@ -27,6 +27,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import os
 import shutil
 import signal
@@ -42,7 +43,12 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from src.core.encryption import initialize_encryption
 from src.models.research_import import ResearchImportRecord
@@ -1175,6 +1181,48 @@ def init_field_encryption() -> None:
     initialize_encryption()
 
 
+async def finalize_proof(
+    fleet: Fleet,
+    rec: Recorder,
+    out: Path,
+    engine: AsyncEngine,
+    primary_error: BaseException | None,
+) -> None:
+    """Attempt every cleanup step; retain a scenario failure over cleanup errors."""
+    errors: list[BaseException] = []
+
+    def stop_children() -> None:
+        fleet.stop_all()
+        rec.event("all_children_stopped")
+
+    steps: list[tuple[str, Callable[[], Any]]] = [
+        ("stop_children", stop_children),
+        ("save_summary", lambda: rec.save("log-summary.json", fleet.summary())),
+        (
+            "save_excerpts",
+            lambda: (out / "log-excerpts.txt").write_text(fleet.excerpts()),
+        ),
+        ("flush_evidence", rec.flush),
+    ]
+    for name, action in steps:
+        try:
+            action()
+        except BaseException as exc:
+            errors.append(exc)
+            logging.getLogger(__name__).warning(
+                "Live proof cleanup failed at %s", name, exc_info=True
+            )
+    try:
+        await engine.dispose()
+    except BaseException as exc:
+        errors.append(exc)
+        logging.getLogger(__name__).warning(
+            "Live proof database disposal failed", exc_info=True
+        )
+    if primary_error is None and errors:
+        raise errors[0]
+
+
 async def run(args: argparse.Namespace) -> int:
     out, scratch = Path(args.out), Path(args.scratch)
     out.mkdir(parents=True, exist_ok=True)
@@ -1287,12 +1335,7 @@ async def run(args: argparse.Namespace) -> int:
     finally:
         if crash_task is not None and not crash_task.done():
             crash_task.cancel()
-        fleet.stop_all()
-        rec.event("all_children_stopped")
-        rec.save("log-summary.json", fleet.summary())
-        (out / "log-excerpts.txt").write_text(fleet.excerpts())
-        rec.flush()
-        await engine.dispose()
+        await finalize_proof(fleet, rec, out, engine, sys.exception())
     failed = [c["check"] for c in rec.checks if not c["ok"]]
     print(
         f"checks: {len(rec.checks) - len(failed)} passed, {len(failed)} failed {failed}"

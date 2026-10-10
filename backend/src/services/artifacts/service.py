@@ -17,6 +17,7 @@ from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from src.models.agent_run import AgentRun
 from src.models.artifact import (
@@ -28,6 +29,7 @@ from src.models.artifact import (
 )
 from src.models.collection import Collection
 from src.models.conversation import Conversation
+from src.models.integration_grant import IntegrationGrant
 from src.models.thread import Thread
 from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.artifact import (
@@ -143,7 +145,7 @@ async def _upload_for(
     upload = await db.scalar(
         select(ArtifactUpload).where(
             ArtifactUpload.id == upload_id,
-            ArtifactUpload.grant_id == context.grant_id,
+            _publication_authority(context),
             ArtifactUpload.organization_id == context.organization_id,
             ArtifactUpload.project_id == context.project_id,
             ArtifactUpload.is_deleted.is_(False),
@@ -152,6 +154,26 @@ async def _upload_for(
     if upload is None:
         raise ArtifactNotFound()
     return cast(ArtifactUpload, upload)
+
+
+def _publication_authority(context: IntegrationContext) -> ColumnElement[bool]:
+    """Renewal retains a publication's consent, actor, project and chat.
+
+    The current request has already authenticated its live grant. Historical
+    grants establish receipt identity only; their expiry never mints authority.
+    Trusted internal grants without a consent retain exact-grant isolation.
+    """
+    if context.consent_id is None:
+        return ArtifactUpload.grant_id == context.grant_id
+    return ArtifactUpload.grant_id.in_(
+        select(IntegrationGrant.id).where(
+            IntegrationGrant.request_id == context.consent_id,
+            IntegrationGrant.user_id == context.user_id,
+            IntegrationGrant.organization_id == context.organization_id,
+            IntegrationGrant.project_id == context.project_id,
+            IntegrationGrant.thread_id == context.thread_id,
+        )
+    )
 
 
 def _version_dto(version: ArtifactVersion) -> ArtifactVersionDTO:
@@ -189,6 +211,20 @@ async def reserve_upload(
         .where(Collection.id == context.project_id)
         .with_for_update()
     )
+    # Renewed tokens have different grant ids, so their uniqueness constraint
+    # alone cannot arbitrate a replay. Recheck the stable consent identity
+    # after the project lock, before counting quota or allocating another row.
+    existing = await _existing_reservation(db, context, request.publication_id)
+    if existing is not None:
+        if existing.request_hash != request_hash:
+            raise ArtifactConflict()
+        replay = ArtifactUploadDTO(
+            upload_id=existing.id, expires_at=_aware(existing.expires_at)
+        )
+        # This service owns writes and their transaction. Release the quota
+        # lock before returning an identical concurrent reservation.
+        await db.commit()
+        return replay
     # Quota counts live committed versions plus reservations that could still
     # land: unexpired ones, and stored-but-unfinalized ones whose bytes exist
     # until the Task 1b sweeper removes them.
@@ -254,7 +290,9 @@ async def _existing_reservation(
         ArtifactUpload | None,
         await db.scalar(
             select(ArtifactUpload).where(
-                ArtifactUpload.grant_id == context.grant_id,
+                _publication_authority(context),
+                ArtifactUpload.organization_id == context.organization_id,
+                ArtifactUpload.project_id == context.project_id,
                 ArtifactUpload.publication_id == publication_id,
                 ArtifactUpload.is_deleted.is_(False),
             )
@@ -284,6 +322,7 @@ async def store_upload(
         raise ArtifactStorageUnavailable() from error
     # The reservation may have been swept while the object write was in
     # flight; only a live, unfinalized row may record the bytes.
+    upload_pk = upload.id
     stored = await db.execute(
         update(ArtifactUpload)
         .where(
@@ -295,6 +334,16 @@ async def store_upload(
     )
     if cast(CursorResult[Any], stored).rowcount != 1:
         await db.rollback()
+        # A duplicate request can finish publishing while this object write
+        # is in flight. Its immutable version now owns the same verified
+        # bytes; deleting the key here would corrupt the successful publish.
+        settled = await db.get(ArtifactUpload, upload_pk, populate_existing=True)
+        if (
+            settled is not None
+            and settled.version_id is not None
+            and settled.storage_key == key
+        ):
+            return
         try:
             await get_artifact_storage().delete(key)
         except Exception as error:  # noqa: BLE001 - orphaned blob, logged
