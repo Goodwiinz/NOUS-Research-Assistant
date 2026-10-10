@@ -1,4 +1,6 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/integrationContextService', () => ({
@@ -34,6 +36,7 @@ const options = (
   project_label: 'Thesis',
   memories,
   selected_memory_ids: selected,
+  skill_snapshot_status: 'none',
 });
 
 describe('ContextSelection', () => {
@@ -149,3 +152,190 @@ describe('ContextSelection', () => {
     );
   });
 });
+
+it('shares only checked skill versions and preserves the memory selection', async () => {
+  const data = {
+    ...options(['m1']),
+    skills: [
+      {
+        version_id: 'v1',
+        name: 'review',
+        version: 1,
+        description: 'Review rubric',
+        content_hash: 'a'.repeat(64),
+      },
+    ],
+    selected_skill_version_ids: [],
+    skill_snapshot_status: 'none' as const,
+  };
+  vi.mocked(integrationContextService.options).mockResolvedValue(data);
+  vi.mocked(integrationContextService.save).mockResolvedValue({
+    ...data,
+    selected_skill_version_ids: ['v1'],
+    skill_snapshot_status: 'ready',
+  });
+  const { user } = render(<ContextSelection requestId={REQUEST} />);
+  const skill = await screen.findByRole('checkbox', { name: /review.*v1/ });
+  expect(skill).not.toBeChecked();
+  await user.click(skill);
+  await user.click(screen.getByRole('button', { name: 'Save selection' }));
+  expect(integrationContextService.save).toHaveBeenCalledWith(
+    REQUEST,
+    ['m1'],
+    ['v1'],
+    false
+  );
+});
+
+it('offers an explicit refresh when the frozen skills expired', async () => {
+  const data = {
+    ...options(['m1']),
+    skills: [
+      {
+        version_id: 'v1',
+        name: 'review',
+        version: 1,
+        description: 'Review rubric',
+        content_hash: 'a'.repeat(64),
+      },
+    ],
+    selected_skill_version_ids: ['v1'],
+    skill_snapshot_status: 'unavailable' as const,
+  };
+  vi.mocked(integrationContextService.options).mockResolvedValue(data);
+  vi.mocked(integrationContextService.save).mockResolvedValue({
+    ...data,
+    skill_snapshot_status: 'ready',
+  });
+  const { user } = render(<ContextSelection requestId={REQUEST} />);
+  expect(
+    await screen.findByText(/Frozen skills are unavailable/)
+  ).toBeInTheDocument();
+  await user.click(
+    screen.getByRole('button', { name: 'Refresh selected skills' })
+  );
+  expect(integrationContextService.save).toHaveBeenCalledWith(
+    REQUEST,
+    ['m1'],
+    ['v1'],
+    true
+  );
+});
+
+it('replaces an older selected version when choosing the same skill name', async () => {
+  const data = {
+    ...options([]),
+    skills: [1, 2].map((version) => ({
+      version_id: `v${version}`,
+      name: 'review',
+      version,
+      description: 'Review rubric',
+      content_hash: 'a'.repeat(64),
+    })),
+    selected_skill_version_ids: ['v1'],
+    skill_snapshot_status: 'ready' as const,
+  };
+  vi.mocked(integrationContextService.options).mockResolvedValue(data);
+  vi.mocked(integrationContextService.save).mockResolvedValue(data);
+  const { user } = render(<ContextSelection requestId={REQUEST} />);
+  const old = await screen.findByRole('checkbox', { name: /review.*v1/ });
+  expect(old).toBeChecked();
+  await user.click(screen.getByRole('checkbox', { name: /review.*v2/ }));
+  expect(old).not.toBeChecked();
+  await user.click(screen.getByRole('button', { name: 'Save selection' }));
+  expect(integrationContextService.save).toHaveBeenCalledWith(
+    REQUEST,
+    [],
+    ['v2'],
+    false
+  );
+});
+
+// Mutation: ContextSelection.tsx:55 must use the initiating owner/request.
+// On 2026-10-09 replacing its key with the current queryKey leaks Alice's data
+// into the current cache; both cases fail, then pass after restoring the key.
+// PATH=/tmp/pr1864-next-font-repro/node-v24.21.0-linux-x64/bin:$PATH pnpm --dir
+// frontend exec vitest run src/components/integrations/__tests__/ContextSelection.test.tsx -t 'pending save'
+it.each(['account', 'consent'])(
+  'keeps a pending save scoped to its initiating %s',
+  async (change) => {
+    auth.user = { id: 'alice' };
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const wrapper = ({ children }: { children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const alice = {
+      ...options(
+        ['private-memory'],
+        [memory('private-memory', 'Alice private memory')]
+      ),
+      project_label: 'Alice private project',
+      skills: [
+        {
+          version_id: 'private-v1',
+          name: 'private-skill',
+          version: 1,
+          description: 'Private skill',
+          content_hash: 'a'.repeat(64),
+        },
+      ],
+      selected_skill_version_ids: ['private-v1'],
+      skill_snapshot_status: 'ready' as const,
+    };
+    const nextRequest = change === 'consent' ? 'second-consent' : REQUEST;
+    const nextOwner = change === 'account' ? 'bob' : 'alice';
+    const next = {
+      ...options([], [memory('public-memory', 'Current memory')]),
+      request_id: nextRequest,
+      project_label: 'Current project',
+      skills: [],
+      selected_skill_version_ids: [],
+      skill_snapshot_status: 'none' as const,
+    };
+    vi.mocked(integrationContextService.options)
+      .mockResolvedValueOnce(alice)
+      .mockResolvedValue(next);
+    let complete: (value: ApiContextOptions) => void = () => {
+      throw new Error('Save did not start');
+    };
+    vi.mocked(integrationContextService.save).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        })
+    );
+    const { user, rerender } = render(
+      <ContextSelection requestId={REQUEST} />,
+      { wrapper }
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Save selection' })
+    );
+    auth.user = { id: nextOwner };
+    rerender(<ContextSelection requestId={nextRequest} />);
+    await screen.findByText(/Current project/);
+    await act(async () => {
+      complete(alice);
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(client.getMutationCache().getAll()[0]?.state.status).toBe(
+        'success'
+      )
+    );
+    expect(
+      client.getQueryData<ApiContextOptions>([
+        'integration-context',
+        nextOwner,
+        nextRequest,
+      ])?.project_label
+    ).toBe('Current project');
+    expect(screen.queryByText('Alice private memory')).not.toBeInTheDocument();
+    expect(screen.queryByText(/private-skill/)).not.toBeInTheDocument();
+  }
+);

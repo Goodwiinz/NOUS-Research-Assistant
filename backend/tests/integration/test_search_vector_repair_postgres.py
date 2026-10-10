@@ -60,6 +60,8 @@ from typing import Any, AsyncIterator, Dict, Iterator, List, Tuple, cast
 
 import pytest
 import pytest_asyncio
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from httpx import AsyncClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, Engine, make_url
@@ -258,6 +260,19 @@ def _alembic(database: str, *alembic_args: str) -> str:
     done = _alembic_run(url, *alembic_args)
     assert done.returncode == 0, done.stderr[-4000:]
     return done.stderr
+
+
+def _script_head() -> str:
+    """The chain's single head. Later migrations stack on REVISION, so
+    ``upgrade head`` ends there, with REVISION applied on the way."""
+    config = Config(str(BACKEND_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
+    script = ScriptDirectory.from_config(config)
+    heads = script.get_heads()
+    assert len(heads) == 1, heads
+    chain = {rev.revision for rev in script.iterate_revisions(heads[0], "base")}
+    assert REVISION in chain
+    return heads[0]
 
 
 def _repair_sql() -> List[str]:
@@ -528,7 +543,7 @@ def _assert_triggers_fill_new_rows(scratch: Scratch) -> None:
 
 
 def _assert_repaired(scratch: Scratch) -> None:
-    assert scratch.scalar("SELECT version_num FROM alembic_version") == REVISION
+    assert scratch.scalar("SELECT version_num FROM alembic_version") == _script_head()
     assert _column_type(scratch, "threads") == "tsvector"
     assert _column_type(scratch, "chat_messages") == "tsvector"
     assert _indexes(scratch, "gin") >= GIN_INDEXES | {CITATIONS_INDEX}
@@ -637,7 +652,7 @@ async def test_upgrade_head_leaves_a_correct_schema_untouched(
     assert _locks_taken_by_repair(scratch) == []
 
     _alembic(scratch.name, "upgrade", "head")
-    assert scratch.scalar("SELECT version_num FROM alembic_version") == REVISION
+    assert scratch.scalar("SELECT version_num FROM alembic_version") == _script_head()
 
     assert _xmins(scratch, "threads") == thread_xmins
     assert _xmins(scratch, "chat_messages") == message_xmins

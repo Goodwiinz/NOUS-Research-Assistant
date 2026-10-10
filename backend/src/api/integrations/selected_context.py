@@ -20,6 +20,7 @@ from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_selected_context import (
     ContextOptions,
     ContextSelectionUpdate,
+    SelectedSkillLoad,
 )
 from src.schemas.integration_tools import ToolResult
 from src.services.integrations.selected_context import (
@@ -27,6 +28,7 @@ from src.services.integrations.selected_context import (
     ContextSelectionInvalid,
     ContextSelectionTooLarge,
     context_options,
+    load_selected_skill,
     read_selected_context,
     save_selection,
 )
@@ -53,12 +55,26 @@ async def put_context_selection(
     db: AsyncSession = Depends(get_db),
 ) -> ContextOptions:
     try:
-        return await save_selection(db, user, update.request_id, update.memory_ids)
+        if update.skill_version_ids is None and not update.refresh_skills:
+            return await save_selection(db, user, update.request_id, update.memory_ids)
+        return await save_selection(
+            db,
+            user,
+            update.request_id,
+            update.memory_ids,
+            skill_version_ids=update.skill_version_ids,
+            refresh_skills=update.refresh_skills,
+        )
     except ContextNotFound as error:
         raise HTTPException(404, "Context request not found") from error
     except ContextSelectionInvalid as error:
         raise HTTPException(
-            422, "Selected memories must belong to this project"
+            422,
+            (
+                "Selected memories must belong to this project"
+                if update.skill_version_ids is None
+                else "Select available project skill versions or refresh an expired selection"
+            ),
         ) from error
     except ContextSelectionTooLarge as error:
         raise HTTPException(
@@ -74,3 +90,14 @@ async def get_selected_context(
     if not settings.NOUS_MCP_ENABLED:
         raise HTTPException(503, "NOUS integration tools are disabled")
     return await read_selected_context(db, context)
+
+
+@router.post("/skills/load", response_model=ToolResult)
+async def post_selected_skill(
+    request: SelectedSkillLoad,
+    context: IntegrationContext = Depends(require_integration_context("context:read")),
+    db: AsyncSession = Depends(get_db),
+) -> ToolResult:
+    if not settings.NOUS_MCP_ENABLED:
+        raise HTTPException(503, "NOUS integration tools are disabled")
+    return await load_selected_skill(db, context, request.skill_name)

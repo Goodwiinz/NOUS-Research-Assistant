@@ -160,6 +160,19 @@ def test_harness_cannot_list_or_change_the_selection(
             ).status_code
             == 403
         )
+    assert (
+        client.put(
+            "/api/v1/integrations/context/selection",
+            json={
+                "request_id": str(REQUEST),
+                "memory_ids": [],
+                "skill_version_ids": [str(uuid4())],
+                "refresh_skills": True,
+            },
+            headers=CLI_HEADERS,
+        ).status_code
+        == 403
+    )
     assert calls["options"] == [] and calls["save"] == []
 
 
@@ -233,4 +246,53 @@ def test_disabled_flag_blocks_the_harness_read(
     assert (
         client.get("/api/v1/integrations/context", headers=CLI_HEADERS).status_code
         == 503
+    )
+    assert (
+        client.post(
+            "/api/v1/integrations/context/skills/load",
+            json={"skill_name": "review"},
+            headers=CLI_HEADERS,
+        ).status_code
+        == 503
+    )
+
+
+def test_skill_load_uses_only_grant_context_and_name(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api.integrations import selected_context
+
+    seen: list[Any] = []
+
+    async def load(_db: Any, context: Any, name: str) -> ToolResult:
+        seen.append((context, name))
+        return ToolResult(
+            content=[{"name": name, "version_id": "frozen"}],
+            is_error=False,
+            source_refs=[{"version_id": "frozen"}],
+        )
+
+    monkeypatch.setattr(selected_context, "load_selected_skill", load, raising=False)
+    response = client.post(
+        "/api/v1/integrations/context/skills/load",
+        json={"skill_name": "review"},
+        headers=CLI_HEADERS,
+    )
+    assert response.status_code == 200
+    assert seen[0][0].grant_id == GRANT and seen[0][1] == "review"
+    assert (
+        client.post(
+            "/api/v1/integrations/context/skills/load",
+            json={"skill_name": "review", "snapshot_id": str(uuid4())},
+            headers=CLI_HEADERS,
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/v1/integrations/context/skills/load",
+            json={"skill_name": "review"},
+            headers={"Authorization": "Bearer cli-jwt"},
+        ).status_code
+        == 403
     )

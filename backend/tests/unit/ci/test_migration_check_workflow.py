@@ -51,9 +51,9 @@ def test_job_has_postgres_15_service_with_healthcheck() -> None:
     services = job.get("services") or {}
     assert "postgres" in services, "migration-check must define a postgres service"
     postgres = services["postgres"]
-    assert str(postgres.get("image", "")).startswith(
-        "postgres:15"
-    ), f"expected postgres:15 image, got {postgres.get('image')!r}"
+    assert (
+        postgres.get("image") == "public.ecr.aws/docker/library/postgres:15-alpine"
+    ), f"expected official PostgreSQL 15 Alpine image, got {postgres.get('image')!r}"
     options = postgres.get("options") or ""
     assert "pg_isready" in options and "--health" in options, (
         "postgres service must declare a pg_isready health check so the upgrade "

@@ -11,10 +11,19 @@ export const integrationContextService = {
       `/integrations/context/options?request_id=${encodeURIComponent(requestId)}`
     );
   },
-  save(requestId: string, memoryIds: string[]): Promise<ApiContextOptions> {
+  save(
+    requestId: string,
+    memoryIds: string[],
+    skillVersionIds?: string[],
+    refreshSkills = false
+  ): Promise<ApiContextOptions> {
     const body: ApiContextSelectionUpdate = {
       request_id: requestId,
       memory_ids: memoryIds,
+      ...(skillVersionIds !== undefined
+        ? { skill_version_ids: skillVersionIds }
+        : {}),
+      refresh_skills: refreshSkills,
     };
     return api.put<ApiContextOptions>('/integrations/context/selection', body);
   },
