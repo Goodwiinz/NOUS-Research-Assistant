@@ -307,6 +307,7 @@ async function streamToTerminal(
   let retriedAfterMissingThread = false;
   let confirmRetried = false;
   let activeConfirmThreadId: string | null = null;
+  let activeApprovalId = '';
 
   turnSeparator();
 
@@ -413,6 +414,13 @@ async function streamToTerminal(
           spinners.clear();
           writer.abort();
           process.stdout.write('\n');
+          activeApprovalId = String(event.details.approval_id ?? '');
+          if (!/^[a-f0-9]{64}$/.test(activeApprovalId)) {
+            p.log.error(
+              'This approval has expired. Please start a new request.'
+            );
+            return;
+          }
           renderConfirmationDetails(event.details);
           const ok = await confirmKey({
             message: confirmationPromptMessage(event.details),
@@ -476,7 +484,10 @@ async function streamToTerminal(
 
     if (retryConfirm && activeConfirmThreadId) {
       writer = new ResponseWriter();
-      current = streamConfirm(activeConfirmThreadId, true, { signal });
+      current = streamConfirm(activeConfirmThreadId, true, {
+        signal,
+        approvalId: activeApprovalId,
+      });
       continue;
     }
 
@@ -491,7 +502,10 @@ async function streamToTerminal(
     // Reset the response block between pre- and post-confirm halves so the
     // post-confirm finish doesn't include the LLM's pre-confirm preamble.
     writer = new ResponseWriter();
-    current = streamConfirm(pendingConfirmThreadId, true, { signal });
+    current = streamConfirm(pendingConfirmThreadId, true, {
+      signal,
+      approvalId: activeApprovalId,
+    });
   }
 }
 

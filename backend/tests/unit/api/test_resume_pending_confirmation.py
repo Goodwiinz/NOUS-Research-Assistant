@@ -31,11 +31,13 @@ pytestmark = pytest.mark.unit
 
 class _Interrupt:
     def __init__(self, value: dict) -> None:
+        self.id = "test-interrupt"
         self.value = value
 
 
 class _Snapshot:
     def __init__(self, tasks: tuple) -> None:
+        self.config = {"configurable": {"checkpoint_id": "saved-interrupt"}}
         self.tasks = tasks
         self.values: dict[str, Any] = {"messages": []}
 
@@ -78,14 +80,12 @@ async def test_pending_interrupt_is_redelivered_as_a_confirmation_frame(
     from src.api.agent.execute import _pending_confirmation_frame
 
     confirmation = {"tools": [{"name": "create_project", "args": {"name": "rag"}}]}
-    # A task exposes .interrupts; each interrupt carries the payload in .value.
-    _patch_graph(
-        monkeypatch,
-        _Snapshot((SimpleNamespace(interrupts=[_Interrupt(confirmation)]),)),
-    )
-
+    user = _user()
+    snapshot = _Snapshot((SimpleNamespace(interrupts=[_Interrupt(confirmation)]),))
+    snapshot.values["user_id"] = str(user.id)
+    _patch_graph(monkeypatch, snapshot)
     thread_id = str(uuid4())
-    frame = await _pending_confirmation_frame(thread_id, _user())
+    frame = await _pending_confirmation_frame(thread_id, user)
 
     assert frame is not None, "a parked interrupt must be recoverable after resume"
     # Anchored to the event line, not the first byte: the frame leads with the

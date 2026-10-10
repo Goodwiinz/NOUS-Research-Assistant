@@ -134,7 +134,12 @@ async def create_message(
             status_code=404, detail="Thread not found or insufficient permissions"
         )
 
-    return _message_to_response(message)
+    # The row was re-queried without its thread; the path thread (already
+    # access-checked above) carries the viewer's workspace trust.
+    return _message_to_response(
+        message,
+        trusted=workspace_access.thread_viewer_is_trusted(thread, current_user.id),
+    )
 
 
 @router.get(
@@ -167,7 +172,13 @@ async def list_messages(
     messages, total, has_more = result
 
     return ChatMessageListResponse(
-        messages=[_message_to_response(m) for m in messages],
+        messages=[
+            _message_to_response(
+                m,
+                trusted=workspace_access.message_viewer_is_trusted(m, current_user.id),
+            )
+            for m in messages
+        ],
         total=total,
         page=page,
         limit=limit,
@@ -206,7 +217,10 @@ async def update_message_feedback(
         raise HTTPException(status_code=404, detail="Message not found")
 
     await db.commit()
-    return _message_to_response(message)
+    return _message_to_response(
+        message,
+        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
+    )
 
 
 # ============================================================================
@@ -271,7 +285,13 @@ async def list_messages_standalone(
     messages, total, has_more = result
 
     return ChatMessageListResponse(
-        messages=[_message_to_response(m) for m in messages],
+        messages=[
+            _message_to_response(
+                m,
+                trusted=workspace_access.message_viewer_is_trusted(m, current_user.id),
+            )
+            for m in messages
+        ],
         total=total,
         page=page,
         limit=limit,
@@ -336,7 +356,10 @@ async def create_message_standalone(
             status_code=404, detail="Thread not found or insufficient permissions"
         )
 
-    return _message_to_response(message)
+    return _message_to_response(
+        message,
+        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
+    )
 
 
 @standalone_router.get("/messages/{message_id}", response_model=ChatMessageResponse)
@@ -350,7 +373,10 @@ async def get_message_standalone(
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    return _message_to_response(message)
+    return _message_to_response(
+        message,
+        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
+    )
 
 
 @standalone_router.patch("/messages/{message_id}", response_model=ChatMessageResponse)
@@ -372,7 +398,10 @@ async def update_message_standalone(
         raise HTTPException(status_code=404, detail="Message not found")
 
     await db.commit()
-    return _message_to_response(message)
+    return _message_to_response(
+        message,
+        trusted=workspace_access.message_viewer_is_trusted(message, current_user.id),
+    )
 
 
 @standalone_router.delete(

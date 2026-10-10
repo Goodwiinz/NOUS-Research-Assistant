@@ -168,6 +168,34 @@ class _KernelBox:
         self.killed = True
 
 
+class _VirtualClock:
+    """Loop time that moves only when the code under test spends it.
+
+    Stands in for ``loop.time()`` and ``asyncio.sleep`` so a deadline test
+    checks the loop's own bookkeeping exactly. Comparing real loop timestamps
+    against a slack flaked on CI: a busy worker can be descheduled between a
+    deadline check and the attempt it sizes for longer than any slack.
+    """
+
+    MAX_SLEEPS = 100
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+        self.sleeps = 0
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.sleeps += 1
+        if self.sleeps > self.MAX_SLEEPS:
+            # Nothing else advances this clock, so a loop that ignores its
+            # deadline would spin forever; stop it so the test can fail.
+            raise RuntimeError("still sleeping long after the deadline")
+        self.now += delay
+        await asyncio.sleep(0)  # still a suspension point, like the real one
+
+
 # ---------------------------------------------------------------------------
 # SandboxManager.is_available
 # ---------------------------------------------------------------------------
@@ -960,42 +988,52 @@ class TestSandboxExecutionBounds:
         disabled here to model that: the loop must still stop on its own
         deadline, and no attempt may be given time past it.
 
-        Mutation: drop the deadline check and the loop spins until the guard
-        below times out; drop the ``min(..., left)`` clamp and the first
-        attempt outlives the window.
+        The loop runs on a virtual clock and every attempt hangs until its own
+        limit, so the schedule is exact under any CPU load.
+
+        Mutation: drop the deadline check and the loop keeps sleeping past the
+        deadline; drop the ``min(..., left)`` clamp and the last attempt
+        outlives the window.
         """
         from src.services.sandbox import e2b_sandbox_manager as module
 
-        window = 0.3
-        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", window)
-        monkeypatch.setattr(module, "_PROBE_RETRY_PAUSE_SECONDS", 0.02)
-        monkeypatch.setattr(asyncio, "timeout", lambda _delay: contextlib.nullcontext())
-        loop = asyncio.get_running_loop()
+        clock = _VirtualClock(now=100.0)
+        start = clock.now
+        monkeypatch.setattr(module, "POST_TIMEOUT_PROBE_SECONDS", 10)
+        monkeypatch.setattr(module, "_PROBE_ATTEMPT_SECONDS", 2.5)
+        monkeypatch.setattr(module, "_PROBE_RETRY_PAUSE_SECONDS", 0.25)
+        # Only the sandbox module sees the virtual clock: it gets a copy of
+        # asyncio whose loop.time() and sleep use it. The event loop the test
+        # runs on keeps real time.
+        virtual = ModuleType("asyncio")
+        virtual.__dict__.update(vars(asyncio))
+        virtual.__dict__.update(
+            get_running_loop=lambda: clock,
+            sleep=clock.sleep,
+            timeout=lambda _delay: contextlib.nullcontext(),
+        )
+        monkeypatch.setattr(module, "asyncio", virtual)
         attempts: list[tuple[float, float]] = []
         sandbox = AsyncMock()
 
         async def run(code: str, **kwargs: Any) -> Any:
-            attempts.append((loop.time(), kwargs["timeout"]))
-            raise asyncio.TimeoutError()  # every attempt times out at once
+            attempts.append((clock.now - start, kwargs["timeout"]))
+            clock.now += kwargs["timeout"]  # no answer before the attempt's limit
+            raise asyncio.TimeoutError()
 
         sandbox.run_code.side_effect = run
         manager = module.SandboxManager()
         caplog.set_level(logging.WARNING, logger="src.services.sandbox")
-        start = loop.time()
-        answered = await asyncio.wait_for(
-            manager._kernel_answers("deadline", sandbox, "python"), timeout=3
-        )
-        elapsed = loop.time() - start
+
+        answered = await manager._kernel_answers("deadline", sandbox, "python")
 
         assert answered is False
-        assert window <= elapsed < window + 1
-        assert len(attempts) > 1
-        # The first attempt starts in the same step that sets the deadline.
-        first_start = attempts[0][0]
-        assert all(
-            started + limit <= first_start + window + 0.01
-            for started, limit in attempts
-        ), attempts
+        # (start, limit) per attempt: 2.5 s attempts 0.25 s apart, and the
+        # fourth gets only the 1.75 s left, ending on the deadline. Quarter
+        # seconds are exact binary floats, so this comparison is exact.
+        assert attempts == [(0.0, 2.5), (2.75, 2.5), (5.5, 2.5), (8.25, 1.75)]
+        # It gave up within one retry pause of the deadline.
+        assert clock.now - start <= 10 + 0.25
         assert any("no answer" in r.getMessage() for r in caplog.records)
         sandbox.kill.assert_not_awaited()
 

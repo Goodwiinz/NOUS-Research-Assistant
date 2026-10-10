@@ -43,10 +43,12 @@ import asyncio
 from contextlib import nullcontext, suppress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+from uuid import uuid4
 
 import pytest
 from anyio import CancelScope
 
+from src.services.agent.confirmation_service import pending_approval
 from tests.utils.agent_thread_access import editable_thread_getter
 
 THREAD_ID = "11111111-1111-4111-8111-111111111626"
@@ -89,6 +91,7 @@ class _DisconnectGraph:
     the confirmation/done events."""
 
     def __init__(self, *, summary_only: bool = False):
+        self.checkpoint_id = str(uuid4())
         self.aclosed = False
         self._sent = False
         self.summary_only = summary_only
@@ -141,7 +144,20 @@ class _DisconnectGraph:
                 "messages": [],
                 "tool_executions": [],
             },
-            tasks=(),
+            tasks=(
+                (
+                    SimpleNamespace(
+                        interrupts=(
+                            SimpleNamespace(
+                                id="test-interrupt", value={"message": "Approve?"}
+                            ),
+                        )
+                    ),
+                )
+                if not self._sent
+                else ()
+            ),
+            config={"configurable": {"checkpoint_id": self.checkpoint_id}},
         )
 
 
@@ -151,7 +167,17 @@ async def test_confirm_stream_acloses_graph_on_disconnect():
 
     graph = _DisconnectGraph()
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=True))
-    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=THREAD_ID,
+        confirmed=True,
+        model="",
+        approval_id=pending_approval(
+            await graph.aget_state({}),
+            thread_id=THREAD_ID,
+            run_id="run-1",
+            user_id="user-1",
+        ).approval_id,
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -209,7 +235,17 @@ async def test_confirm_stream_persists_partial_on_disconnect():
     request = SimpleNamespace(
         is_disconnected=AsyncMock(side_effect=[False, True, True])
     )
-    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=THREAD_ID,
+        confirmed=True,
+        model="",
+        approval_id=pending_approval(
+            await graph.aget_state({}),
+            thread_id=THREAD_ID,
+            run_id="run-1",
+            user_id="user-1",
+        ).approval_id,
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     persist = AsyncMock(return_value="assistant-row-1")
@@ -279,10 +315,24 @@ def confirm_lifecycle(monkeypatch):
             "messages": [],
             "tool_executions": [],
         },
-        tasks=(),
+        tasks=(
+            SimpleNamespace(
+                interrupts=(
+                    SimpleNamespace(id="test-interrupt", value={"message": "Approve?"}),
+                )
+            ),
+        ),
         config={"configurable": {"checkpoint_id": "owner-checkpoint"}},
     )
-    graph.aget_state = AsyncMock(return_value=snapshot)
+    graph.aget_state = AsyncMock(
+        side_effect=lambda _: (
+            snapshot
+            if not graph._sent
+            else SimpleNamespace(
+                values=snapshot.values, tasks=(), config=snapshot.config
+            )
+        )
+    )
     graph.astream_events = Mock(wraps=graph.astream_events)
     db = AsyncMock()
     run = SimpleNamespace(
@@ -356,7 +406,14 @@ def confirm_lifecycle(monkeypatch):
         AsyncMock(return_value={}),
     )
     ctx.stream = streaming.stream_confirm_event_generator(
-        SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model=""),
+        SimpleNamespace(
+            thread_id=THREAD_ID,
+            confirmed=True,
+            model="",
+            approval_id=pending_approval(
+                snapshot, thread_id=THREAD_ID, run_id="run-1", user_id="user-1"
+            ).approval_id,
+        ),
         SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
         Mock(id="user-1", organization_id="org-1"),
     )
@@ -418,6 +475,68 @@ async def test_preclaim_confirm_cancel_preserves_winning_run(confirm_lifecycle):
 
 
 @pytest.mark.asyncio
+async def test_postclaim_snapshot_change_releases_without_cancelling_new_approval(
+    confirm_lifecycle, monkeypatch
+):
+    from src.api.agent import streaming
+
+    ctx = confirm_lifecycle
+    changed = SimpleNamespace(
+        values=ctx.snapshot.values,
+        tasks=ctx.snapshot.tasks,
+        config={"configurable": {"checkpoint_id": "newer-checkpoint"}},
+    )
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, changed]
+    release = AsyncMock(return_value=False)  # A newer approval owns the row now.
+    monkeypatch.setattr(streaming, "release_confirmation_claim", release)
+    frame = await anext(ctx.stream)
+    assert '"category": "conflict"' in frame
+    await ctx.stream.aclose()
+    release.assert_awaited_once()
+    ctx.finalize.assert_not_awaited()
+    ctx.persist.assert_not_awaited()
+    ctx.graph.astream_events.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+async def test_postclaim_release_commit_survives_cancellation(
+    confirm_lifecycle, monkeypatch, cancellation
+):
+    from src.api.agent import streaming
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    changed = SimpleNamespace(
+        values=ctx.snapshot.values,
+        tasks=ctx.snapshot.tasks,
+        config={"configurable": {"checkpoint_id": "newer-checkpoint"}},
+    )
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, changed]
+    committed = asyncio.Event()
+    release_ack = asyncio.Event()
+
+    async def release_claim(*args, **kwargs):
+        # The release is in flight; it commits only if its caller keeps going.
+        committed.set()
+        await release_ack.wait()
+        ctx.run.status = JobStatus.AWAITING_CONFIRMATION
+        return True
+
+    monkeypatch.setattr(streaming, "release_confirmation_claim", release_claim)
+    frames = await _cancel_while_commit_returns(
+        ctx, committed, release_ack, cancellation
+    )
+
+    assert (
+        ctx.run.status == JobStatus.AWAITING_CONFIRMATION
+    ), "released claim was abandoned mid-commit, leaving RUNNING with no owner"
+    ctx.finalize.assert_not_awaited()
+    ctx.graph.astream_events.assert_not_called()
+    assert not frames, "cancelled release still emitted a response"
+
+
+@pytest.mark.asyncio
 async def test_claimed_confirm_close_still_cancels_and_persists_partial(
     confirm_lifecycle,
 ):
@@ -454,15 +573,7 @@ async def test_finished_confirm_close_preserves_committed_disposition(
 
     ctx = confirm_lifecycle
     if terminal == "confirmation":
-        nested = SimpleNamespace(
-            values=ctx.snapshot.values,
-            tasks=(
-                SimpleNamespace(
-                    interrupts=(SimpleNamespace(value={"message": "Next action?"}),)
-                ),
-            ),
-        )
-        ctx.graph.aget_state.side_effect = [ctx.snapshot, nested]
+        _nested_confirmation(ctx)
     if during_emit:
         original_emit = streaming._SeqEmitter.emit
 
@@ -495,15 +606,22 @@ async def test_finished_confirm_close_preserves_committed_disposition(
 
 
 def _nested_confirmation(ctx):
+    # Pre-claim and post-claim receipt checks read the approved checkpoint;
+    # the third read mints the nested receipt from a new saved interrupt.
     nested = SimpleNamespace(
         values=ctx.snapshot.values,
+        config={"configurable": {"checkpoint_id": "nested-checkpoint"}},
         tasks=(
             SimpleNamespace(
-                interrupts=(SimpleNamespace(value={"message": "Next action?"}),)
+                interrupts=(
+                    SimpleNamespace(
+                        id="nested-interrupt", value={"message": "Next action?"}
+                    ),
+                )
             ),
         ),
     )
-    ctx.graph.aget_state.side_effect = [ctx.snapshot, nested]
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, ctx.snapshot, nested]
 
 
 async def _cancel_while_commit_returns(ctx, committed, release, cancellation):
@@ -681,7 +799,17 @@ async def test_confirm_stream_persists_summary_only_stop_before_answer() -> None
     request = SimpleNamespace(
         is_disconnected=AsyncMock(side_effect=[False, True, True])
     )
-    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=THREAD_ID,
+        confirmed=True,
+        model="",
+        approval_id=pending_approval(
+            await graph.aget_state({}),
+            thread_id=THREAD_ID,
+            run_id="run-1",
+            user_id="user-1",
+        ).approval_id,
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
     persist = AsyncMock(return_value="assistant-row-summary")
 

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from src.api.agent import streaming
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_stream import frames_of_type, make_stream_request, sse_data
 
 pytestmark = pytest.mark.unit
@@ -291,6 +292,7 @@ async def test_confirm_partial_persistence_retains_carried_context_order() -> No
         thread_id="44444444-4444-4444-8444-444444444444",
         confirmed=True,
         model="gpt-5",
+        approval_id="a" * 64,
     )
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     current_user = Mock(id="user-1", organization_id="org-1")
@@ -415,6 +417,7 @@ async def test_confirm_partial_persistence_uses_latest_resumed_context_snapshot(
         thread_id="44444444-4444-4444-8444-444444444444",
         confirmed=True,
         model="gpt-5",
+        approval_id="a" * 64,
     )
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
     current_user = Mock(id="user-1", organization_id="org-1")

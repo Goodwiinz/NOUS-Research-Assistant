@@ -35,7 +35,7 @@ from src.schemas.chat import (
     WorkspaceMemberResponse,
     WorkspaceResponse,
 )
-from src.services.agent._pii_redact import redact_tool_executions
+from src.services.agent._pii_redact import tool_executions_for_viewer
 from src.services.threads.thread_service import THREAD_PREVIEW_MAX_CHARS
 
 __all__ = [
@@ -171,13 +171,19 @@ def _thread_to_response(
 
 
 def _thread_to_detail_response(
-    thread: Thread, include_messages: bool = True
+    thread: Thread, include_messages: bool = True, *, trusted: bool = False
 ) -> ThreadDetailResponse:
-    """Convert Thread model to detail response schema"""
+    """Convert Thread model to detail response schema.
+
+    ``trusted`` (workspace owner/member, resolved by the route from
+    ``workspace_access.thread_viewer_is_trusted``) selects the tool-trace
+    projection for every nested message; the default fails closed to the
+    public activity-only view.
+    """
     messages = []
     if include_messages and thread.messages:
         messages = [
-            _message_to_response(m)
+            _message_to_response(m, trusted=trusted)
             for m in thread.messages
             # Edit-and-resend tombstone — twin of the loop in
             # ``api/threads/threads.py``; keep both in sync.
@@ -201,8 +207,16 @@ def _thread_to_detail_response(
     )
 
 
-def _message_to_response(message: ChatMessage) -> ChatMessageResponse:
-    """Convert ChatMessage model to response schema"""
+def _message_to_response(
+    message: ChatMessage, *, trusted: bool = False
+) -> ChatMessageResponse:
+    """Convert ChatMessage model to response schema.
+
+    ``trusted`` (workspace owner/member, resolved by the route from
+    ``workspace_access.message_viewer_is_trusted`` / ``thread_viewer_is_trusted``)
+    selects the tool-trace projection; the default fails closed to the public
+    activity-only view, so a caller that forgets to resolve it leaks nothing.
+    """
     return ChatMessageResponse(
         id=message.id,
         thread_id=message.thread_id,
@@ -220,7 +234,9 @@ def _message_to_response(message: ChatMessage) -> ChatMessageResponse:
         tool_call_id=message.tool_call_id,
         feedback_rating=message.feedback_rating,
         feedback_text=message.feedback_text,
-        tool_executions=redact_tool_executions(message.tool_executions),
+        tool_executions=tool_executions_for_viewer(
+            message.tool_executions, trusted=trusted
+        ),
         plan=message.plan,
         plan_reasoning=message.plan_reasoning,
         reasoning_summary=message.reasoning_summary,

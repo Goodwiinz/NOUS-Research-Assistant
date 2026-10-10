@@ -446,7 +446,7 @@ def test_job_confirm_fails_when_durable_stop_won() -> None:
     ):
         response = client.post(
             "/api/v1/agent/confirm/run-1",
-            json={"confirmed": True},
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
 
     assert response.status_code == 409
@@ -481,13 +481,14 @@ def test_job_confirm_releases_durable_claim_on_redis_conflict() -> None:
     ):
         response = client.post(
             "/api/v1/agent/confirm/run-1",
-            json={"confirmed": True},
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
 
     assert response.status_code == 409
     release.assert_awaited_once_with(
         _db,
         "run-1",
+        approval_id="a" * 64,
         organization_id=ORG_ID,
         user_id=USER_ID,
     )

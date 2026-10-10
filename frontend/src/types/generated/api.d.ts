@@ -12962,9 +12962,7 @@ export interface components {
             /** Tool Call Id */
             tool_call_id?: string | null;
             /** Tool Executions */
-            tool_executions?: {
-                [key: string]: unknown;
-            }[] | null;
+            tool_executions?: components["schemas"]["ToolExecutionActivityResponse"][] | null;
             /** Tool Name */
             tool_name?: string | null;
             /** Ttft Ms */
@@ -13955,6 +13953,8 @@ export interface components {
         };
         /** ConfirmationRequest */
         ConfirmationRequest: {
+            /** Approval Id */
+            approval_id: string;
             /**
              * Confirmed
              * @description Whether the user confirms the action
@@ -17814,9 +17814,7 @@ export interface components {
             /** Tool Call Id */
             tool_call_id?: string | null;
             /** Tool Executions */
-            tool_executions?: {
-                [key: string]: unknown;
-            }[] | null;
+            tool_executions?: components["schemas"]["ToolExecutionActivityResponse"][] | null;
             /** Tool Name */
             tool_name?: string | null;
         };
@@ -22888,6 +22886,8 @@ export interface components {
         };
         /** StreamConfirmRequest */
         StreamConfirmRequest: {
+            /** Approval Id */
+            approval_id: string;
             /** Confirmed */
             confirmed: boolean;
             /** Thread Id */
@@ -23593,6 +23593,37 @@ export interface components {
             };
             /** Name */
             name: string;
+        };
+        /**
+         * ToolExecutionActivityResponse
+         * @description Persisted agent tool execution as served to a thread reader.
+         *
+         *     One DTO serves both viewer tiers. The activity fields are always present.
+         *     The trace fields below are populated ONLY for trusted viewers (workspace
+         *     owner or member, resolved server-side by ``workspace_access``); a viewer
+         *     whose only access is the workspace's ``is_public`` flag never receives a
+         *     value for them (``tool_executions_for_viewer`` omits the keys, so they
+         *     serialize as null).
+         */
+        ToolExecutionActivityResponse: {
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            } | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id?: string | null;
+            /** Result */
+            result?: unknown | null;
+            /** Status */
+            status?: string | null;
+            /** Tool Display Name */
+            tool_display_name?: string | null;
+            /** Tool Name */
+            tool_name: string;
         };
         /** ToolInvocation */
         ToolInvocation: {

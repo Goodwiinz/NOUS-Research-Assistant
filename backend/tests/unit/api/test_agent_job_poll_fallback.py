@@ -160,7 +160,7 @@ async def test_confirm_without_a_job_payload_fails_closed() -> None:
     ):
         await confirm_agent_action(
             job_id,
-            ConfirmationRequest(confirmed=True),
+            ConfirmationRequest(confirmed=True, approval_id="a" * 64),
             MagicMock(),
             current_user=user,
             db=db,
@@ -237,7 +237,7 @@ async def test_confirm_stale_live_state_is_reconciled(stale_status: JobStatus) -
     ):
         response = await confirm_agent_action(
             job_id,
-            ConfirmationRequest(confirmed=True),
+            ConfirmationRequest(confirmed=True, approval_id="a" * 64),
             background_tasks,
             current_user=user,
             db=db,
@@ -308,7 +308,7 @@ async def test_confirm_stale_projection_keeps_request_for_edit_access_gate() -> 
     ):
         await confirm_agent_action(
             job_id,
-            ConfirmationRequest(confirmed=True),
+            ConfirmationRequest(confirmed=True, approval_id="a" * 64),
             background_tasks,
             current_user=user,
             db=db,
@@ -347,7 +347,7 @@ async def test_confirm_projection_read_failure_is_retryable_503() -> None:
     ):
         await confirm_agent_action(
             job_id,
-            ConfirmationRequest(confirmed=True),
+            ConfirmationRequest(confirmed=True, approval_id="a" * 64),
             MagicMock(),
             current_user=user,
             db=db,
@@ -377,7 +377,7 @@ async def test_confirm_empty_live_record_fails_closed_before_projection() -> Non
     ):
         await confirm_agent_action(
             str(uuid.uuid4()),
-            ConfirmationRequest(confirmed=True),
+            ConfirmationRequest(confirmed=True, approval_id="a" * 64),
             MagicMock(),
             current_user=user,
             db=AsyncMock(),
@@ -412,7 +412,7 @@ async def test_confirm_claim_failure_is_503_even_if_rollback_fails() -> None:
     ):
         await confirm_agent_action(
             str(uuid.uuid4()),
-            ConfirmationRequest(confirmed=True),
+            ConfirmationRequest(confirmed=True, approval_id="a" * 64),
             MagicMock(),
             current_user=user,
             db=db,

@@ -47,6 +47,14 @@ _TOKEN_RE: Final = re.compile(
     r"|github_pat_[A-Za-z0-9_]{30,})\b"
 )
 
+_MAX_PUBLIC_TOOL_EXECUTIONS: Final = 100
+_PUBLIC_TOOL_TEXT_LIMITS: Final = {
+    "id": 128,
+    "tool_name": 128,
+    "tool_display_name": 200,
+    "status": 32,
+}
+
 
 # NOTE: ``text`` is intentionally ``Any``. LangGraph HumanMessage.content
 # can be ``list[dict]`` for multimodal messages, and upstream callers may
@@ -131,9 +139,83 @@ def redact_tool_executions(entries: Any) -> Any:
     ]
 
 
+def _project_tool_executions(
+    entries: Any, *, trusted: bool
+) -> list[dict[str, Any]] | None:
+    """Allowlist projection shared by both viewer tiers (see callers below).
+
+    Malformed entries (non-list payload, non-dict entry, missing/non-string
+    ``tool_name``) are dropped for every viewer rather than reflected or
+    allowed to 500 a message response. ``trusted`` adds the trace fields —
+    ``args`` (PII-redacted, as ``redact_tool_executions`` always did), raw
+    ``result`` and ``error`` — and nothing else: unknown keys never pass.
+    """
+    if entries is None:
+        return None
+    if not isinstance(entries, list):
+        return []
+
+    activity = []
+    for entry in entries[:_MAX_PUBLIC_TOOL_EXECUTIONS]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("tool_name"), str):
+            continue
+
+        item: dict[str, Any] = {}
+        for field, limit in _PUBLIC_TOOL_TEXT_LIMITS.items():
+            value = entry.get(field)
+            if isinstance(value, str):
+                item[field] = value[:limit]
+
+        duration_ms = entry.get("duration_ms")
+        if isinstance(duration_ms, int) and not isinstance(duration_ms, bool):
+            item["duration_ms"] = max(0, duration_ms)
+
+        if trusted:
+            args = redact_tool_args(entry.get("args"))
+            item["args"] = args if isinstance(args, dict) else None
+            item["result"] = entry.get("result")
+            error = entry.get("error")
+            item["error"] = (
+                error if error is None or isinstance(error, str) else str(error)
+            )
+        activity.append(item)
+
+    return activity
+
+
+def public_tool_execution_activity(entries: Any) -> list[dict[str, Any]] | None:
+    """Project persisted tool traces onto the display-safe public activity DTO.
+
+    General workspace APIs can be read under public-workspace access rules, so
+    they must never expose raw arguments, results, errors, or unknown fields.
+    Invalid legacy entries are ignored rather than reflected or allowed to
+    break a message response.
+    """
+    return _project_tool_executions(entries, trusted=False)
+
+
+def tool_executions_for_viewer(
+    entries: Any, *, trusted: bool
+) -> list[dict[str, Any]] | None:
+    """The one serve-time funnel for persisted ``tool_executions``.
+
+    ``trusted`` is resolved server-side from the workspace access grant
+    (``workspace_access.thread_viewer_is_trusted`` /
+    ``message_viewer_is_trusted``: owner or member), never from a client flag.
+    Trusted viewers get what they always did — PII-redacted ``args`` plus raw
+    ``result``/``error`` — because the owner's UI rebuilds the activity strip
+    and Draft Task cards from them on reload. A viewer whose only grant is the
+    workspace's ``is_public`` flag, or any caller whose trust could not be
+    resolved, gets ``public_tool_execution_activity`` — never args/result/error.
+    """
+    return _project_tool_executions(entries, trusted=bool(trusted))
+
+
 __all__ = [
+    "public_tool_execution_activity",
     "redact_nested_pii",
     "redact_pii",
     "redact_tool_args",
     "redact_tool_executions",
+    "tool_executions_for_viewer",
 ]
