@@ -1,3 +1,5 @@
+import { useAuthStore } from '@/stores/authStore';
+import type { User } from '@/types/auth';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProjectArtifactsTab } from '@/components/research/ProjectArtifactsTab';
@@ -94,5 +96,12 @@ describe('ProjectArtifactsTab', () => {
     vi.mocked(artifactService.listProjectArtifacts).mockResolvedValue([]);
     render(<ProjectArtifactsTab projectId="p1" />);
     expect(await screen.findByText(/no files yet/i)).toBeInTheDocument();
+  });
+});
+
+beforeEach(() => {
+  useAuthStore.setState({
+    user: { id: 'actor', organization_id: 'org' } as User,
+    isAuthenticated: true,
   });
 });

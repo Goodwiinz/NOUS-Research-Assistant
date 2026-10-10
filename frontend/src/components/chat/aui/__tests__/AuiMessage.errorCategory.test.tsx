@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { useAuthStore } from '@/stores/authStore';
+import type { User } from '@/types/auth';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { screen, type RenderResult } from '@testing-library/react';
 import { render } from '@/test/test-utils';
@@ -57,6 +59,12 @@ function renderErrorMessage(
 }
 
 describe('AuiMessage error category', () => {
+  beforeEach(() =>
+    useAuthStore.setState({
+      isAuthenticated: true,
+      user: { id: 'actor', organization_id: 'org' } as User,
+    })
+  );
   it('renders the rate_limited helper line', () => {
     renderErrorMessage('rate_limited');
     expect(

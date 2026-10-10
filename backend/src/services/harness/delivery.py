@@ -23,7 +23,11 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.agent.agent_submission_service import finalize_submission
 from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
-from src.services.harness.runs import authorize_external_submission
+from src.services.harness.prompt_context import build_harness_prompt, prompt_is_current
+from src.services.harness.runs import (
+    authorize_external_submission,
+    cancel_undelivered_start,
+)
 from src.services.integrations.context import IntegrationAccessDenied, _validate_grant
 from src.shared.enums import AgentOutboxStatus, JobStatus
 
@@ -120,6 +124,7 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 event_type=RunEventType.RUN_CANCELLED,
                 payload={"reason": "Cancelled before local execution started."},
                 provider="codex",
+                commit=False,
             )
             return
         message = "Local Codex could not be started."
@@ -133,25 +138,45 @@ async def dispatch_pending(db: AsyncSession) -> int:
             error_code="harness_dispatch_failed",
             error=message,
             provider="codex",
+            commit=False,
         )
 
     try:
         rows = (
             await db.scalars(
-                select(AgentOutbox)
+                select(AgentOutbox.run_id)
                 .where(
                     AgentOutbox.kind == "harness.execute",
                     AgentOutbox.status == "pending",
                 )
-                .order_by(AgentOutbox.created_at)
+                .order_by(AgentOutbox.run_id, AgentOutbox.created_at)
                 .limit(100)
-                .with_for_update(skip_locked=True)
             )
         ).all()
         count = 0
-        for raw_outbox in rows:
-            outbox: Any = raw_outbox
-            run, session = await _locked(db, str(outbox.run_id))
+        for run_id in rows:
+            # Claim run, then outbox (the Stop/lease order), skipping either
+            # row while another dispatcher or Stop holds it: one held run
+            # must not stall the rest of the batch.
+            claimed = await db.scalar(
+                select(AgentRun.job_id)
+                .where(AgentRun.job_id == run_id)
+                .with_for_update(skip_locked=True)
+            )
+            if claimed is None:
+                continue
+            run, session = await _locked(db, str(run_id))
+            outbox: Any = await db.scalar(
+                select(AgentOutbox)
+                .where(
+                    AgentOutbox.run_id == run_id,
+                    AgentOutbox.kind == "harness.execute",
+                    AgentOutbox.status == "pending",
+                )
+                .with_for_update(skip_locked=True)
+            )
+            if outbox is None:
+                continue
             if JobStatus(run.status).is_terminal:
                 outbox.status = AgentOutboxStatus.FAILED.value
                 outbox.updated_at = now()
@@ -172,25 +197,28 @@ async def dispatch_pending(db: AsyncSession) -> int:
             except IntegrationAccessDenied:
                 await terminalize(outbox, run, cancelled=False)
                 continue
-            message: Any = (
-                await db.get(ChatMessage, run.user_message_id)
-                if run.user_message_id is not None
-                else None
-            )
-            if (
-                message is None
-                or not isinstance(message.content, str)
-                or not message.content.strip()
-            ):
+            try:
+                prompt = await build_harness_prompt(db, run_id=run.job_id)
+            except IntegrationAccessDenied:
                 await terminalize(outbox, run, cancelled=False)
                 continue
+            run.run_metadata = {
+                **(run.run_metadata or {}),
+                "harness_prompt": {
+                    "source_message_ids": [
+                        str(value) for value in prompt.source_message_ids
+                    ],
+                    "source_digest": prompt.source_digest,
+                    "history_truncated": prompt.history_truncated,
+                },
+            }
             db.add(
                 HarnessCommand(
                     id=uuid4(),
                     run_id=run.job_id,
                     generation=session.generation,
                     kind="start",
-                    body={"kind": "start", "input": message.content},
+                    body={"kind": "start", "input": prompt.input},
                     expires_at=grant.expires_at,
                 )
             )
@@ -235,6 +263,7 @@ async def lease_commands(
                         else [AgentRun.thread_id == context.thread_id]
                     ),
                 )
+                .order_by(HarnessSession.run_id)
                 .limit(100)
             )
         ).all()
@@ -276,6 +305,13 @@ async def lease_commands(
                         )
                     )
                     await db.flush()
+            # Match Stop/dispatch ordering even if source validation retires
+            # this command below: run, then accepted outbox, then commands.
+            await db.scalars(
+                select(AgentOutbox)
+                .where(AgentOutbox.run_id == run.job_id)
+                .with_for_update()
+            )
             commands = (
                 await db.scalars(
                     select(HarnessCommand)
@@ -296,6 +332,16 @@ async def lease_commands(
                     not settings.HARNESS_BRIDGE_ENABLED or run.cancel_requested_at
                 ):
                     continue
+                if command.kind == "start" and command.lease_until is None:
+                    try:
+                        valid = await prompt_is_current(
+                            db, run_id=run.job_id, body=command.body
+                        )
+                    except IntegrationAccessDenied:
+                        valid = False
+                    if not valid:
+                        await cancel_undelivered_start(db, run_id=run.job_id)
+                        continue
                 # Expiry renewal does not change a native-action identity.
                 command.expires_at = grant.expires_at
                 command.lease_until = min(
@@ -554,6 +600,42 @@ async def has_assistant_projection(db: AsyncSession, run: Any) -> bool:
 
 
 async def reconcile_pending(db: AsyncSession) -> int:
+    # Filter durable execution evidence before the batch cap; offline leased
+    # runs must not monopolize every tick. The helper rechecks under run lock.
+    cancelled_ids = (
+        await db.scalars(
+            select(AgentRun.job_id)
+            .join(HarnessSession, HarnessSession.run_id == AgentRun.job_id)
+            .where(
+                AgentRun.execution_provider == "codex",
+                AgentRun.cancel_requested_at.is_not(None),
+                AgentRun.status.notin_([s.value for s in TERMINAL.values()]),
+                AgentRun.started_at.is_(None),
+                HarnessSession.observation == "unknown",
+                HarnessSession.provider_session_id.is_(None),
+                HarnessSession.provider_turn_id.is_(None),
+                HarnessSession.source_id.is_(None),
+                HarnessSession.source_seq == 0,
+                ~select(HarnessCommand.id)
+                .where(
+                    HarnessCommand.run_id == AgentRun.job_id,
+                    or_(
+                        HarnessCommand.lease_until.is_not(None),
+                        HarnessCommand.acknowledged.is_(True),
+                    ),
+                )
+                .exists(),
+                ~select(HarnessReceipt.id)
+                .where(HarnessReceipt.run_id == AgentRun.job_id)
+                .exists(),
+            )
+            .order_by(AgentRun.job_id)
+            .limit(100)
+        )
+    ).all()
+    for run_id in cancelled_ids:
+        await cancel_undelivered_start(db, run_id=run_id)
+    await db.commit()
     ids = list(
         (
             await db.scalars(

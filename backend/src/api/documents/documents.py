@@ -127,9 +127,18 @@ async def _cleanup_document_graph(document_id: str, organization_id: str) -> Non
     """
     from src.core.database import AsyncSessionLocal
 
-    async with AsyncSessionLocal() as session:
-        await FileService(session).cleanup_deleted_document_graph(
-            document_id, organization_id
+    try:
+        async with AsyncSessionLocal() as session:
+            await FileService(session).cleanup_deleted_document_graph(
+                document_id, organization_id
+            )
+    except Exception:
+        # The committed pending marker remains available to the reconciler,
+        # including when a session cannot be created or entered at all.
+        logger.warning(
+            "Document graph cleanup failed",
+            extra={"document_id": document_id, "organization_id": organization_id},
+            exc_info=True,
         )
 
 

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { setImmediate } from "node:timers/promises";
 import { Journal } from "../src/journal.ts";
 import type { HarnessAdapter, SessionOptions } from "../src/contracts.ts";
 
@@ -57,6 +58,10 @@ function args(j: Journal, timing: Record<string, number>) {
 
 test("a silent peer trips the liveness watchdog and the socket is closed", async (t) => {
   const { connectBridge } = await import("../src/connection.ts");
+  t.mock.timers.enable({
+    apis: ["Date", "setTimeout", "setInterval"],
+    now: 1800000000000,
+  });
   let polls = 0;
   let closed = false;
   class Socket extends EventTarget {
@@ -78,13 +83,19 @@ test("a silent peer trips the liveness watchdog and the socket is closed", async
   const f = fixture();
   const j = new Journal(f.path, () => options);
   try {
-    const started = Date.now();
-    await assert.rejects(
+    const failure = assert.rejects(
       connectBridge(args(j, { pollMs: 10, livenessMs: 40 })),
       /bridge liveness timeout/,
     );
-    assert.ok(Date.now() - started < 2000, "watchdog fired promptly");
-    assert.ok(polls >= 1, "polled at least once before giving up");
+    await setImmediate(); // Deliver open and its initial poll.
+    for (let i = 0; i < 4; i++) {
+      t.mock.timers.tick(10);
+      await setImmediate();
+    }
+    assert.equal(closed, false, "the peer remains connected at the deadline");
+    assert.equal(polls, 5, "initial poll plus four scheduled polls");
+    t.mock.timers.tick(10);
+    await failure;
     assert.equal(closed, true);
   } finally {
     j.close();
@@ -94,13 +105,19 @@ test("a silent peer trips the liveness watchdog and the socket is closed", async
 
 test("a peer that answers polls keeps the connection alive", async (t) => {
   const { connectBridge } = await import("../src/connection.ts");
+  t.mock.timers.enable({
+    apis: ["Date", "setTimeout", "setInterval"],
+    now: 1800000000000,
+  });
   let polls = 0;
+  let peer!: Socket;
   class Socket extends EventTarget {
     static OPEN = 1;
     readyState = 1;
     deviceId = "";
     constructor() {
       super();
+      peer = this;
       queueMicrotask(() => this.dispatchEvent(new Event("open")));
     }
     send(raw: string) {
@@ -120,13 +137,11 @@ test("a peer that answers polls keeps the connection alive", async (t) => {
           new MessageEvent("message", { data: JSON.stringify(reply) }),
         ),
       );
-      // Server goes away cleanly after a while; this must be the only exit.
-      if (polls === 6) setTimeout(() => this.close(), 5);
     }
     close() {
       if (this.readyState !== 3) {
         this.readyState = 3;
-        this.dispatchEvent(new Event("close"));
+        queueMicrotask(() => this.dispatchEvent(new Event("close")));
       }
     }
   }
@@ -134,9 +149,29 @@ test("a peer that answers polls keeps the connection alive", async (t) => {
   const f = fixture();
   const j = new Journal(f.path, () => options);
   try {
-    // livenessMs is shorter than the total run; answered polls must reset it.
-    await connectBridge(args(j, { pollMs: 10, livenessMs: 35 }));
-    assert.ok(polls >= 6, `expected steady polling, got ${polls}`);
+    // Advance one poll at a time so queued replies arrive before the next tick.
+    // Elapsed time exceeds livenessMs; answered polls must reset the deadline.
+    let finished = false;
+    const connected = connectBridge(args(j, { pollMs: 10, livenessMs: 35 }));
+    const completion = assert.doesNotReject(connected);
+    void connected.then(
+      () => {
+        finished = true;
+      },
+      () => {
+        finished = true;
+      },
+    );
+    await setImmediate();
+    for (let i = 0; i < 5; i++) {
+      t.mock.timers.tick(10);
+      await setImmediate();
+    }
+    assert.equal(polls, 6);
+    assert.equal(finished, false, "healthy replies keep the connection open");
+    peer.close();
+    await completion;
+    assert.equal(finished, true, "only the peer close finishes the connection");
   } finally {
     j.close();
     f.cleanup();
@@ -145,20 +180,33 @@ test("a peer that answers polls keeps the connection alive", async (t) => {
 
 test("a socket that never opens trips the connect timeout", async (t) => {
   const { connectBridge } = await import("../src/connection.ts");
+  t.mock.timers.enable({
+    apis: ["Date", "setTimeout", "setInterval"],
+    now: 1800000000000,
+  });
+  let closed = false;
   class Socket extends EventTarget {
     static OPEN = 1;
     readyState = 0;
     send() {}
-    close() {}
+    close() {
+      closed = true;
+    }
   }
   withSocket(t, Socket);
   const f = fixture();
   const j = new Journal(f.path, () => options);
   try {
-    await assert.rejects(
+    const failure = assert.rejects(
       connectBridge(args(j, { pollMs: 10, livenessMs: 40, connectMs: 30 })),
       /bridge connect timeout/,
     );
+    t.mock.timers.tick(29);
+    await setImmediate();
+    assert.equal(closed, false);
+    t.mock.timers.tick(1);
+    await failure;
+    assert.equal(closed, true);
   } finally {
     j.close();
     f.cleanup();

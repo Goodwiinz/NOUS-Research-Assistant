@@ -5,17 +5,25 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.integrations.auth import require_integration_context
+from src.api.integrations.auth import (
+    require_integration_context,
+    require_interactive_user,
+)
 from src.core.config import settings
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.user import User
 from src.schemas.artifact import (
     ArtifactAccessDenied,
+    ArtifactCapabilitiesDTO,
     ArtifactConflict,
     ArtifactDigestMismatch,
+    ArtifactEditConflictDetail,
+    ArtifactEditConflictError,
+    ArtifactEditConflictResponse,
     ArtifactError,
     ArtifactNotFound,
     ArtifactQuotaExceeded,
@@ -23,12 +31,14 @@ from src.schemas.artifact import (
     ArtifactTooLarge,
     ArtifactUploadDTO,
     ArtifactVersionDTO,
+    EditArtifactVersionRequest,
     ProjectArtifactDTO,
     PublishVersionRequest,
     ReserveArtifactUploadRequest,
     ThreadArtifactDTO,
 )
 from src.schemas.integration_context import IntegrationContext
+from src.services.artifacts.editing import edit_version
 from src.services.artifacts.service import (
     MAX_ARTIFACT_BYTES,
     list_project_artifacts,
@@ -41,6 +51,20 @@ from src.services.artifacts.service import (
 )
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
+
+
+@router.get("/capabilities", response_model=ArtifactCapabilitiesDTO)
+async def artifact_capabilities(
+    response: Response,
+    user: User = Depends(require_interactive_user),
+) -> ArtifactCapabilitiesDTO:
+    """Browser controls follow the same default-off flags as the server."""
+    response.headers["Cache-Control"] = "private, no-store"
+    return ArtifactCapabilitiesDTO(
+        editing_enabled=settings.ARTIFACTS_ENABLED
+        and settings.ARTIFACT_EDITING_ENABLED,
+        preview_enabled=settings.ARTIFACT_PREVIEW_ENABLED,
+    )
 
 
 async def _project_bound(
@@ -210,3 +234,45 @@ async def version_content(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.post(
+    "/{artifact_id}/edits",
+    response_model=ArtifactVersionDTO,
+    responses={409: {"model": ArtifactEditConflictResponse}},
+)
+async def edit_artifact(
+    artifact_id: UUID,
+    request: EditArtifactVersionRequest,
+    user: User = Depends(require_interactive_user),
+    db: AsyncSession = Depends(get_db),
+) -> ArtifactVersionDTO | JSONResponse:
+    _require_publishing()
+    if not settings.ARTIFACT_EDITING_ENABLED:
+        raise HTTPException(503, "Artifact editing is disabled")
+    user_id, organization_id = _identity(user)
+    try:
+        return await edit_version(
+            db,
+            user_id=user_id,
+            organization_id=organization_id,
+            artifact_id=artifact_id,
+            **request.model_dump(),
+        )
+    except ArtifactConflict as error:
+        # Return the typed canonical envelope directly: the global exception
+        # handler otherwise puts a dictionary inside error.message and loses
+        # the details contract used by the browser's shared error parser.
+        return JSONResponse(
+            status_code=409,
+            content=ArtifactEditConflictResponse(
+                error=ArtifactEditConflictError(
+                    details=ArtifactEditConflictDetail(
+                        current_version_id=error.current_version_id
+                    )
+                )
+            ).model_dump(mode="json"),
+            headers={"Cache-Control": "private, no-store"},
+        )
+    except ArtifactError as error:
+        raise _http(error) from error

@@ -1,5 +1,6 @@
 'use client';
 
+import { confirmArtifactNavigation } from '@/utils/artifactNavigation';
 import { ChatSurface } from '@/components/chat/ChatSurface';
 import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { Loader2 } from 'lucide-react';
@@ -86,6 +87,7 @@ function ChatPageContent() {
         closeDrawer();
         return;
       }
+      if (!confirmArtifactNavigation()) return;
       setCurrentThread(id);
       router.push(getSelectedThreadUrl(id));
       closeDrawer();

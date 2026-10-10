@@ -1,5 +1,7 @@
 import { api } from '@/services/api-client';
 import type {
+  ApiArtifactCapabilities,
+  ApiArtifactEditRequest,
   ApiArtifactReference,
   ApiArtifactVersion,
   ApiProjectArtifact,
@@ -91,28 +93,80 @@ export function artifactVersionContentPath(versionId: string): string {
   return `/artifacts/versions/${encodeURIComponent(versionId)}/content`;
 }
 
+export interface ArtifactCapabilities {
+  editingEnabled: boolean;
+  previewEnabled: boolean;
+}
+export interface ArtifactEdit {
+  expectedParentVersionId: string;
+  publicationId: string;
+  text: string;
+}
+
 export const artifactService = {
-  async listThreadArtifacts(threadId: string): Promise<ThreadArtifact[]> {
+  async capabilities(signal?: AbortSignal): Promise<ArtifactCapabilities> {
+    const dto = await api.get<ApiArtifactCapabilities>(
+      '/artifacts/capabilities',
+      { signal }
+    );
+    return {
+      editingEnabled: dto.editing_enabled === true,
+      previewEnabled: dto.preview_enabled === true,
+    };
+  },
+  async editVersion(
+    artifactId: string,
+    edit: ArtifactEdit
+  ): Promise<ArtifactVersion> {
+    const body: ApiArtifactEditRequest = {
+      expected_parent_version_id: edit.expectedParentVersionId,
+      publication_id: edit.publicationId,
+      text: edit.text,
+    };
+    return toArtifactVersion(
+      await api.post<ApiArtifactVersion>(
+        `/artifacts/${encodeURIComponent(artifactId)}/edits`,
+        body,
+        { retries: 0 }
+      )
+    );
+  },
+  async listThreadArtifacts(
+    threadId: string,
+    signal?: AbortSignal
+  ): Promise<ThreadArtifact[]> {
     const rows = await api.get<ApiThreadArtifact[]>(
-      `/artifacts/threads/${encodeURIComponent(threadId)}`
+      `/artifacts/threads/${encodeURIComponent(threadId)}`,
+      { signal }
     );
     return rows.map(toThreadArtifact);
   },
-  async listProjectArtifacts(projectId: string): Promise<ProjectArtifact[]> {
+  async listProjectArtifacts(
+    projectId: string,
+    signal?: AbortSignal
+  ): Promise<ProjectArtifact[]> {
     const rows = await api.get<ApiProjectArtifact[]>(
-      `/artifacts/projects/${encodeURIComponent(projectId)}`
+      `/artifacts/projects/${encodeURIComponent(projectId)}`,
+      { signal }
     );
     return rows.map(toProjectArtifact);
   },
-  async listVersions(artifactId: string): Promise<ArtifactVersion[]> {
+  async listVersions(
+    artifactId: string,
+    signal?: AbortSignal
+  ): Promise<ArtifactVersion[]> {
     const rows = await api.get<ApiArtifactVersion[]>(
-      `/artifacts/${encodeURIComponent(artifactId)}/versions`
+      `/artifacts/${encodeURIComponent(artifactId)}/versions`,
+      { signal }
     );
     return rows.map(toArtifactVersion);
   },
   /** Bytes plus the served content type; the caller decides how to render. */
-  async fetchVersionBlob(versionId: string): Promise<Blob> {
-    return api.fetchBlob(artifactVersionContentPath(versionId));
+  async fetchVersionBlob(
+    versionId: string,
+    signal?: AbortSignal
+  ): Promise<Blob> {
+    return api.fetchBlob(artifactVersionContentPath(versionId), signal);
   },
   downloadVersion(version: ArtifactVersion): Promise<void> {
     return api.download(

@@ -407,3 +407,48 @@ async def test_project_bibliography_removed_member_is_404(
     after = await export_project_bibliography(c, "bibtex")
     assert after.status_code == 404
     assert_no_canary(after.content, *PROJECT_KEYS, "b-proj")
+
+
+@pytest.mark.parametrize(
+    "document_key,organization_key,caller_key,allowed",
+    [
+        ("a-doc", "a", "user-a", True),
+        ("b-doc", "b", "user-c", True),
+        ("a-old-org-doc", "a", "user-a", False),
+        ("a-old-org-doc", None, "user-a", False),
+        ("a-doc", "a", None, False),
+    ],
+)
+async def test_collection_document_access_fails_closed(
+    seed: None,
+    test_db: AsyncSession,
+    document_key: str,
+    organization_key: str | None,
+    caller_key: str | None,
+    allowed: bool,
+) -> None:
+    """An old uploader loses document access when organization scope is absent."""
+    from src.services.threads.workspace_access import get_accessible_document_or_none
+
+    result = await get_accessible_document_or_none(
+        test_db,
+        sid(document_key),
+        sid(caller_key) if caller_key else None,
+        sid(f"org-{organization_key}") if organization_key else None,
+    )
+    assert (result is not None) is allowed
+    if result is not None:
+        assert result.id == sid(document_key)
+
+
+async def test_public_workspace_requires_identity_but_allows_cross_org_reader(
+    seed: None, test_db: AsyncSession
+) -> None:
+    from src.models.workspace import Workspace
+    from src.services.threads.workspace_access import user_can_access_workspace
+
+    workspace = await test_db.get(Workspace, sid("b-ws"))
+    assert workspace is not None
+    workspace.is_public = True
+    assert user_can_access_workspace(workspace, None) is False
+    assert user_can_access_workspace(workspace, sid("user-a")) is True

@@ -6,7 +6,7 @@ from typing import Any, Iterator
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from src.core.database import get_db
@@ -47,7 +47,7 @@ def _version() -> ArtifactVersionDTO:
 
 
 @pytest.fixture
-def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+def app(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> FastAPI:
     from src.api import artifacts
     from src.core.config import settings
 
@@ -107,6 +107,10 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         yield None
 
     application = FastAPI()
+    if getattr(request, "param", False):
+        from src.main import http_exception_handler
+
+        application.add_exception_handler(HTTPException, http_exception_handler)
     application.include_router(artifacts.router, prefix="/api/v1")
     application.dependency_overrides[get_db] = fake_db
     application.dependency_overrides[get_current_user_token] = lambda: TokenData(
@@ -315,3 +319,145 @@ def test_download_is_attachment_no_store_with_safe_filename(client: TestClient) 
         f"/api/v1/artifacts/versions/{uuid4()}/content", headers=HEADERS
     )
     assert missing.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("is_cli", "headers", "enabled", "expected"),
+    [
+        (True, {}, True, 403),
+        (False, HEADERS, True, 403),
+        (False, {}, False, 503),
+        (False, {}, True, 200),
+    ],
+)
+def test_edit_requires_browser_and_flag(
+    app: FastAPI,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    is_cli: bool,
+    headers: dict[str, str],
+    enabled: bool,
+    expected: int,
+) -> None:
+    from src.api import artifacts
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "ARTIFACT_EDITING_ENABLED", enabled)
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=str(USER), organization_id=str(ORG), is_cli=is_cli
+    )
+
+    async def edit(_db: Any, **values: Any) -> ArtifactVersionDTO:
+        CALLS.append(("edit", values))
+        return _version()
+
+    monkeypatch.setattr(artifacts, "edit_version", edit)
+    response = client.post(
+        f"/api/v1/artifacts/{uuid4()}/edits",
+        json={
+            "expected_parent_version_id": str(VERSION),
+            "publication_id": str(uuid4()),
+            "text": "changed",
+        },
+        headers=headers,
+    )
+    assert response.status_code == expected
+    if expected == 200:
+        assert CALLS[0][1]["user_id"] == USER
+        assert CALLS[0][1]["organization_id"] == ORG
+    else:
+        assert CALLS == []
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_browser_capabilities_use_server_flags(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from src.core.config import settings
+
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=str(USER), organization_id=str(ORG), is_cli=False
+    )
+    monkeypatch.setattr(settings, "ARTIFACT_EDITING_ENABLED", enabled)
+    monkeypatch.setattr(settings, "ARTIFACT_PREVIEW_ENABLED", enabled)
+    response = client.get("/api/v1/artifacts/capabilities")
+    assert response.status_code == 200
+    assert response.json() == {"editing_enabled": enabled, "preview_enabled": enabled}
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+def test_cli_cannot_read_browser_capabilities(client: TestClient) -> None:
+    assert client.get("/api/v1/artifacts/capabilities").status_code == 403
+
+
+def test_master_write_flag_disables_browser_edits_and_capability(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api import artifacts
+    from src.core.config import settings
+
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=str(USER), organization_id=str(ORG), is_cli=False
+    )
+    monkeypatch.setattr(settings, "ARTIFACTS_ENABLED", False)
+    monkeypatch.setattr(settings, "ARTIFACT_EDITING_ENABLED", True)
+    monkeypatch.setattr(settings, "ARTIFACT_PREVIEW_ENABLED", True)
+
+    async def edit(_db: Any, **values: Any) -> ArtifactVersionDTO:
+        CALLS.append(("edit", values))
+        return _version()
+
+    monkeypatch.setattr(artifacts, "edit_version", edit)
+    response = client.post(
+        f"/api/v1/artifacts/{uuid4()}/edits",
+        json={
+            "expected_parent_version_id": str(VERSION),
+            "publication_id": str(uuid4()),
+            "text": "changed",
+        },
+    )
+    assert response.status_code == 503
+    assert CALLS == []
+    capabilities = client.get("/api/v1/artifacts/capabilities")
+    assert capabilities.json() == {"editing_enabled": False, "preview_enabled": True}
+    assert capabilities.headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.parametrize(
+    "app", [False, True], indirect=True, ids=["router", "real-handler"]
+)
+def test_edit_conflict_returns_safe_current_version(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.api import artifacts
+    from src.core.config import settings
+
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=str(USER), organization_id=str(ORG), is_cli=False
+    )
+    monkeypatch.setattr(settings, "ARTIFACT_EDITING_ENABLED", True)
+
+    async def conflict(_db: Any, **values: Any) -> ArtifactVersionDTO:
+        error = ArtifactConflict()
+        error.current_version_id = VERSION
+        raise error
+
+    monkeypatch.setattr(artifacts, "edit_version", conflict)
+    response = client.post(
+        f"/api/v1/artifacts/{uuid4()}/edits",
+        json={
+            "expected_parent_version_id": str(uuid4()),
+            "publication_id": str(uuid4()),
+            "text": "draft",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": {
+            "message": "Artifact publication conflict",
+            "status_code": 409,
+            "type": "http_error",
+            "details": {"current_version_id": str(VERSION)},
+        }
+    }
+    assert response.headers["cache-control"] == "private, no-store"

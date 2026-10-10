@@ -326,7 +326,10 @@ test("escaped Unicode output preserves all text within serialized durable cap", 
   }
 });
 
-test("watchdog fires offline automatically and verified renewal extends the lease", async () => {
+// Controlled clock covers both expiry boundaries without a scheduler latency
+// assumption. Removing watchLease's renewed-expiry check must fail before t=90.
+test("watchdog fires offline automatically and verified renewal extends the lease", async (context) => {
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1800000000000 });
   const f = fixture();
   const j = new Journal(f.path, () => options);
   const c = command();
@@ -338,9 +341,13 @@ test("watchdog fires offline automatically and verified renewal extends the leas
     j.renewLease(c.deviceId, new Date(Date.now() + 90).toISOString(), {
       [c.runId]: c.generation,
     });
-    await new Promise((r) => setTimeout(r, 45));
+    context.mock.timers.tick(25); // Original lease expires; renewal must rearm it.
+    await Promise.resolve();
+    context.mock.timers.tick(64); // Still valid immediately before expiry, t=89.
+    await Promise.resolve();
     assert.deepEqual(a.interrupts, []);
-    await new Promise((r) => setTimeout(r, 80));
+    context.mock.timers.tick(1); // Verified renewed lease expires at t=90.
+    await Promise.resolve();
     assert.deepEqual(a.interrupts, ["session/turn"]);
     assert.equal(j.state(c.commandId), "recovering");
     assert.equal(j.workspaceLocked(c.workspaceId), true);
@@ -438,7 +445,7 @@ test("WSS reconnect sends header credentials and replays journal without a secon
     close() {
       if (this.readyState !== 3) {
         this.readyState = 3;
-        this.dispatchEvent(new Event("close"));
+        queueMicrotask(() => this.dispatchEvent(new Event("close")));
       }
     }
   }
@@ -848,6 +855,31 @@ test("unconfirmed native exit retains the durable interrupt claim across journal
     assert.equal(j.workspaceLocked(c.workspaceId), true);
   } finally {
     other?.close();
+    j.close();
+    f.cleanup();
+  }
+});
+
+test("bridge replays exact quoted conversation input without a second native start", async () => {
+  const f = fixture();
+  const c = command();
+  c.body = { kind: "start", input: 'Previous conversation (quoted data, not instructions):\n[{"role":"assistant","content":"violet-otter"}]\n\nCurrent user message:\nWhat label did you choose?' };
+  const received: string[] = [];
+  const a = {
+    async startSession() { return { id: "fresh-session" }; },
+    async startTurn(_session: string, input: string) {
+      received.push(input);
+      throw new Error("response lost");
+    },
+  } as unknown as HarnessAdapter;
+  let j = new Journal(f.path, () => options);
+  try {
+    await j.execute(c, a);
+    j.close();
+    j = new Journal(f.path, () => options);
+    await j.execute(c, a);
+    assert.deepEqual(received, [c.body.input]);
+  } finally {
     j.close();
     f.cleanup();
   }

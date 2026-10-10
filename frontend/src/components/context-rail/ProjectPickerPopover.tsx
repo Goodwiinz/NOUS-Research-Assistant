@@ -1,5 +1,8 @@
 'use client';
 
+import { beginArtifactNavigation } from '@/utils/artifactNavigation';
+import { useChatStore } from '@/store/chat-store';
+import { useAuthStore } from '@/stores/authStore';
 import {
   Popover,
   PopoverContent,
@@ -76,6 +79,11 @@ export function ProjectPickerPopover({
   };
 
   const handleSelect = async (projectId: string, projectName: string) => {
+    const finishNavigation = beginArtifactNavigation();
+    if (!finishNavigation) return;
+    const originAuth = useAuthStore.getState().user;
+    const originWorkspace = useChatStore.getState().currentWorkspaceId;
+    const originUrl = window.location.href;
     setBinding(true);
     setError(null);
     try {
@@ -83,7 +91,16 @@ export function ProjectPickerPopover({
         thread_id: threadId,
       });
       if (response) {
-        onProjectBound(projectId, projectName);
+        const live = useChatStore.getState();
+        const user = useAuthStore.getState().user;
+        if (
+          live.currentThreadId === threadId &&
+          live.currentWorkspaceId === originWorkspace &&
+          user?.id === originAuth?.id &&
+          user?.organization_id === originAuth?.organization_id &&
+          window.location.href === originUrl
+        )
+          onProjectBound(projectId, projectName);
         setOpen(false);
       } else {
         // The store swallows the failure and stashes the real message under
@@ -98,6 +115,7 @@ export function ProjectPickerPopover({
     } catch {
       setError('Network error. Please try again.');
     } finally {
+      finishNavigation();
       setBinding(false);
     }
   };

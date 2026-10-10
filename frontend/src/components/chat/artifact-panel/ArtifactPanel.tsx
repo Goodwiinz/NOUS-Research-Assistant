@@ -1,5 +1,7 @@
 'use client';
 
+import { ArtifactTabs } from './ArtifactTabs';
+
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import {
@@ -517,6 +519,8 @@ export function ArtifactPanel({
           </div>
         </div>
 
+        {artifact.kind === 'generated' && <ArtifactTabs />}
+
         {/* Body */}
         <div className="nous-scrollbar flex-1 overflow-y-auto">
           {/* Every view leads with the chat handoff; the handoff-only view
@@ -542,7 +546,16 @@ export function ArtifactPanel({
           )}
           {artifact.kind === 'note' && <NoteArtifactBody artifact={artifact} />}
           {artifact.kind === 'generated' && (
-            <GeneratedArtifactBody artifact={artifact} />
+            <div
+              role="tabpanel"
+              id="generated-artifact-panel"
+              aria-labelledby={`artifact-tab-${artifact.versionId}`}
+            >
+              <GeneratedArtifactBody
+                key={artifact.versionId}
+                artifact={artifact}
+              />
+            </div>
           )}
           {artifact.kind === 'draft' && (
             <DraftArtifactBody

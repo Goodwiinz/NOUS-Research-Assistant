@@ -154,3 +154,33 @@ Run the separately configured browser acceptance with:
 ```sh
 pnpm --dir tests/e2e exec playwright test harness-bridge.spec.ts --project=chromium
 ```
+
+### Canonical chat context and pre-delivery Stop
+
+Each Local Codex run starts a fresh native session. Its first command includes
+visible user/assistant messages from the authorized NOUS thread through the
+accepted user row, ordered by `(created_at, id)`. Browser-supplied history,
+deleted/superseded messages, and system/tool rows do not supply context.
+Newest whole prior messages fit within `THREAD_DEFAULT_MAX_MESSAGES`,
+`THREAD_DEFAULT_MAX_TOKENS`, and the 65,536-character command limit. The current
+message remains complete even when it alone exceeds the history token budget.
+Prior turns are role-tagged quoted data. The run's server-owned `harness_prompt`
+metadata records source IDs, a content digest, and whether history was omitted.
+The command input and provenance persist together and remain unchanged on retry.
+Before its first lease, delivery rechecks authority and source provenance; an
+invalidated undelivered command closes without executing. Edit/regenerate use
+the existing tombstone/active-run contract and rebuild visible history for the
+replacement run.
+
+Stop closes a start proven never leased, including dispatched starts and
+previously stranded recovering runs, without needing the bridge online or the
+bridge feature enabled. A non-null lease, receipt, acknowledgement, or native
+execution evidence preserves ownership until native reconciliation. An expired
+lease never proves nonexecution. Cancellation, outbox retirement, terminal event,
+and ownership release share one transaction, using run → outbox → command lock
+order. Duplicate Stop is absorbing.
+
+`POST /api/v1/agent/execute` returns HTTP 422 with
+`Local Codex requires /api/v1/agent/stream.` for Codex selection before creating
+threads/messages/runs or dispatching work. The shared request schema and
+streaming route continue accepting authorized Codex selections.
