@@ -444,10 +444,22 @@ async def test_collection_document_access_fails_closed(
 async def test_public_workspace_requires_identity_but_allows_cross_org_reader(
     seed: None, test_db: AsyncSession
 ) -> None:
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
     from src.models.workspace import Workspace
     from src.services.threads.workspace_access import user_can_access_workspace
 
-    workspace = await test_db.get(Workspace, sid("b-ws"))
+    # Load members as the production getters do: the predicate checks
+    # membership before ``is_public``, and a lazy load on an AsyncSession
+    # raises MissingGreenlet instead of querying.
+    workspace = (
+        await test_db.execute(
+            select(Workspace)
+            .options(selectinload(Workspace.members))
+            .where(Workspace.id == sid("b-ws"))
+        )
+    ).scalar_one_or_none()
     assert workspace is not None
     workspace.is_public = True
     assert user_can_access_workspace(workspace, None) is False
