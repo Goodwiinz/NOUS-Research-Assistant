@@ -247,3 +247,32 @@ def test_no_user_message_fails_closed():
 
     assert decision.eligible is False
     assert decision.reason == "missing_user_message"
+
+
+@pytest.mark.parametrize(
+    "ack",
+    ["yes", "yep", "sure", "no", "nope", "go ahead", "proceed", "do it", "cancel"],
+)
+@pytest.mark.parametrize("use_rag", [False, True])
+def test_action_response_preserves_capabilities_without_project(ack, use_rag):
+    decision = _decide(
+        ack,
+        use_rag=use_rag,
+        history=[_message("assistant", "I can ingest those papers for you.")],
+    )
+    assert not decision.eligible
+    assert decision.reason == "ack_may_accept_proposal"
+
+
+@pytest.mark.parametrize("text", ["hello", "thanks", "yes"])
+def test_bare_turn_honors_context_budget(text):
+    from src.services.agent.fast_path import classify_fast_path_turn
+
+    decision = classify_fast_path_turn(
+        messages=[_message("assistant", "x" * 300), _message("user", text)],
+        page_context=None,
+        use_rag=False,
+        max_input_chars=10,
+    )
+    assert not decision.eligible
+    assert decision.reason == "context_budget_exceeded"

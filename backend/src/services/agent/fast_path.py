@@ -26,7 +26,7 @@ class FastPathDecision:
 
 
 _GREETING_WORDS = r"hi|hello|hey|goodbye|bye"
-_ACK_WORDS = r"thanks?|thank you|ok(?:ay)?|cool|nice|great"
+_ACK_WORDS = r"thanks?|thank you|ok(?:ay)?|cool|nice|great|yes|yep|sure|no|nope|go ahead|proceed|do it|cancel"
 
 
 def _bare(words: str) -> re.Pattern[str]:
@@ -119,6 +119,10 @@ def classify_fast_path_turn(
     if has_attachments:
         return FastPathDecision(False, "attachments_require_grounding")
 
+    total_chars = sum(len(_content(message)) for message in messages)
+    if total_chars > max(1, max_input_chars):
+        return FastPathDecision(False, "context_budget_exceeded")
+
     user_text = _content(latest_user).strip()
     if _BARE_GREETING_RE.fullmatch(user_text):
         return FastPathDecision(True, "bare_conversation")
@@ -145,10 +149,6 @@ def classify_fast_path_turn(
         ):
             return FastPathDecision(False, "ack_may_accept_proposal")
         return FastPathDecision(True, "bare_conversation")
-
-    total_chars = sum(len(_content(message)) for message in messages)
-    if total_chars > max(1, max_input_chars):
-        return FastPathDecision(False, "context_budget_exceeded")
 
     if grounded_page:
         return FastPathDecision(False, "grounded_page_context")

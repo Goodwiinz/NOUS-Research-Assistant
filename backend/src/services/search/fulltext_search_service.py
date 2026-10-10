@@ -456,7 +456,9 @@ class FullTextSearchService:
         params = {}
 
         if filters.document_types:
-            doc_types = [dt.value for dt in filters.document_types]
+            # SQLAlchemy's native Enum(DocumentType) persists member names;
+            # the API accepts their lowercase values but raw SQL needs names.
+            doc_types = [dt.name for dt in filters.document_types]
             placeholders = ",".join([f":doc_type_{i}" for i in range(len(doc_types))])
             clauses.append(f"    AND d.document_type IN ({placeholders})")
             for i, doc_type in enumerate(doc_types):

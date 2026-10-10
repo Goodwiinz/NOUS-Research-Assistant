@@ -22,6 +22,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api.documents import documents as documents_mod
+from src.core import database
 from src.models.organization import Organization
 
 pytestmark = pytest.mark.unit
@@ -121,3 +122,70 @@ def test_storage_usage_update_is_server_side_atomic():
     assert "storage_used_bytes +" in sql.replace(
         "organizations.storage_used_bytes", "storage_used_bytes"
     )
+
+
+def test_graph_session_acquisition_failure_keeps_committed_delete_successful(
+    monkeypatch, caplog
+):
+    document = _doc()
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_result(document))
+    file_service = MagicMock()
+    file_service.soft_delete_documents = AsyncMock(return_value=[document])
+    monkeypatch.setattr(
+        database,
+        "AsyncSessionLocal",
+        MagicMock(side_effect=OSError("pool unavailable")),
+    )
+
+    response = asyncio.run(_delete(document, db, file_service))
+
+    assert response["document_id"] == str(document.id)
+    assert "graph cleanup failed" in caplog.text
+
+
+@pytest.mark.parametrize("failure_at", ["construct", "enter", "cleanup", "exit"])
+def test_bulk_graph_cleanup_continues_after_session_failure(
+    monkeypatch, caplog, failure_at
+):
+    first_session = MagicMock()
+    first_session.__aenter__ = AsyncMock(return_value=first_session)
+    first_session.__aexit__ = AsyncMock(return_value=False)
+    error = OSError("pool unavailable")
+    if failure_at == "enter":
+        first_session.__aenter__.side_effect = error
+    if failure_at == "exit":
+        first_session.__aexit__.side_effect = error
+    second_session = MagicMock()
+    second_session.__aenter__ = AsyncMock(return_value=second_session)
+    second_session.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        database,
+        "AsyncSessionLocal",
+        MagicMock(
+            side_effect=[
+                error if failure_at == "construct" else first_session,
+                second_session,
+            ]
+        ),
+    )
+    cleanup = AsyncMock(side_effect=error if failure_at == "cleanup" else None)
+    second_cleanup = AsyncMock()
+    monkeypatch.setattr(
+        documents_mod,
+        "FileService",
+        MagicMock(
+            side_effect=lambda session: MagicMock(
+                cleanup_deleted_document_graph=(
+                    cleanup if session is first_session else second_cleanup
+                )
+            )
+        ),
+    )
+
+    asyncio.run(
+        documents_mod._cleanup_document_graphs_background(["first", "second"], "org")
+    )
+
+    second_cleanup.assert_awaited_once_with("second", "org")
+    assert "graph cleanup failed" in caplog.text

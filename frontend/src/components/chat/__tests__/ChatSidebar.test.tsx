@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  act,
   fireEvent,
   render as testingRender,
   screen,
@@ -364,5 +365,250 @@ describe('ChatSidebar', () => {
     fireEvent.click(screen.getAllByRole('checkbox')[1]);
     fireEvent.click(screen.getByRole('button', { name: '2' }));
     expect(onBulkDelete).toHaveBeenCalledWith(['conv-1', 'conv-2']);
+  });
+});
+
+describe('ChatSidebar virtual conversation list', () => {
+  const conversations = Array.from({ length: 500 }, (_, index) => ({
+    id: `large-${index}`,
+    title: `Large conversation ${index}`,
+    updatedAt: Date.now(),
+    messages: [],
+    pinned: index === 0,
+  }));
+
+  it('mounts a bounded window while retaining section headings and total size', () => {
+    render(
+      <ChatSidebar
+        conversations={conversations}
+        activeId={null}
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+      />
+    );
+    expect(document.querySelectorAll('.sb-conv').length).toBeLessThan(30);
+    expect(screen.getByRole('heading', { name: /Pinned/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole('list', { name: 'Conversations' })
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem')[0]).toHaveAttribute(
+      'aria-setsize',
+      '500'
+    );
+    expect(
+      screen.queryByText('Large conversation 499')
+    ).not.toBeInTheDocument();
+  });
+
+  it('reveals a distant active conversation and keeps keyboard focus across virtual windows', async () => {
+    const onSelect = vi.fn();
+    render(
+      <ChatSidebar
+        conversations={conversations}
+        activeId="large-499"
+        onSelect={onSelect}
+        onNew={vi.fn()}
+      />
+    );
+    const last = await screen.findByText('Large conversation 499');
+    const button = last.closest('button')!;
+    button.focus();
+    fireEvent.keyDown(button, { key: 'Home' });
+    await waitFor(() =>
+      expect(
+        screen.getByText('Large conversation 0').closest('button')
+      ).toHaveFocus()
+    );
+    fireEvent.keyDown(document.activeElement!, { key: 'End' });
+    await waitFor(() =>
+      expect(
+        screen.getByText('Large conversation 499').closest('button')
+      ).toHaveFocus()
+    );
+    fireEvent.click(document.activeElement!);
+    expect(onSelect).toHaveBeenCalledWith('large-499');
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+    await waitFor(() =>
+      expect(
+        screen.getByText('Large conversation 498').closest('button')
+      ).toHaveFocus()
+    );
+  });
+
+  it('preserves the current scroll window when older conversations are appended', async () => {
+    const props = {
+      conversations,
+      activeId: 'large-0',
+      onSelect: vi.fn(),
+      onNew: vi.fn(),
+    };
+    const { rerender } = render(<ChatSidebar {...props} />);
+    const first = screen.getByText('Large conversation 0').closest('button')!;
+    first.focus();
+    fireEvent.keyDown(first, { key: 'End' });
+    await waitFor(() =>
+      expect(screen.getByText('Large conversation 499')).toBeInTheDocument()
+    );
+    rerender(
+      <ChatSidebar
+        {...props}
+        conversations={[
+          ...conversations,
+          {
+            id: 'older',
+            title: 'Older conversation',
+            messages: [],
+            updatedAt: 0,
+            pinned: false,
+          },
+        ]}
+      />
+    );
+    expect(screen.getByText('Large conversation 499')).toBeInTheDocument();
+    expect(screen.queryByText('Large conversation 0')).not.toBeInTheDocument();
+  });
+
+  it('stops revealing a filtered-out active conversation after queued frames and row measurements', () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+    const measurements = new Map<Element, () => void>();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element): void {
+          measurements.set(element, () =>
+            this.callback([], this as unknown as ResizeObserver)
+          );
+        }
+        disconnect(): void {}
+      }
+    );
+    const flushFrames = (): void => {
+      const pending = [...frames.values()];
+      frames.clear();
+      act(() => pending.forEach((callback) => callback(0)));
+    };
+    const view = render(
+      <ChatSidebar
+        conversations={conversations}
+        activeId="large-5"
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+      />
+    );
+    try {
+      const activeRow = screen
+        .getByText('Large conversation 5')
+        .closest('[data-row-index]')!;
+      const previousIndex = activeRow.getAttribute('data-row-index');
+      expect(frames.size).toBeGreaterThan(0);
+      fireEvent.change(screen.getByPlaceholderText('Search threads...'), {
+        target: { value: 'Large conversation 1' },
+      });
+      expect(screen.queryByText('Large conversation 5')).toBeNull();
+      const list = screen.getByRole('list', { name: 'Conversations' });
+      const scroller = list.firstElementChild as HTMLElement;
+      const replacement = list.querySelector<HTMLElement>(
+        `[data-row-index="${previousIndex}"]`
+      )!;
+      expect(replacement).toBeInTheDocument();
+      const rect = (top: number, height: number): DOMRect =>
+        ({ top, bottom: top + height, height } as DOMRect);
+      vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(rect(0, 400));
+      vi.spyOn(replacement, 'getBoundingClientRect').mockReturnValue(
+        rect(500, 96)
+      );
+      const scrollBefore = scroller.scrollTop;
+      flushFrames();
+      expect(scroller.scrollTop).toBe(scrollBefore);
+
+      const content = replacement.firstElementChild!;
+      vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(rect(0, 120));
+      act(() => measurements.get(content)!());
+      flushFrames();
+      expect(scroller.scrollTop).toBe(scrollBefore);
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('tabs into the next checkbox when selection crosses the mounted window', async () => {
+    render(
+      <ChatSidebar
+        conversations={conversations}
+        activeId={null}
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Select conversations'));
+    const items = screen.getAllByRole('listitem');
+    const lastMounted = items.at(-1)!;
+    const lastIndex = Number(
+      lastMounted.getAttribute('data-conversation-id')!.split('-')[1]
+    );
+    const button = lastMounted.querySelector('button')!;
+    button.focus();
+    fireEvent.keyDown(button, { key: 'Tab' });
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(`Select Large conversation ${lastIndex + 1}`)
+      ).toHaveFocus()
+    );
+  });
+
+  it('retains list focus when scrolling unmounts a focused row', async () => {
+    render(
+      <ChatSidebar
+        conversations={conversations}
+        activeId={null}
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+      />
+    );
+    screen.getByText('Large conversation 0').closest('button')!.focus();
+    const list = screen.getByRole('list', { name: 'Conversations' });
+    const scroller = list.firstElementChild!;
+    Object.defineProperty(scroller, 'clientHeight', { value: 400 });
+    Object.defineProperty(scroller, 'scrollHeight', { value: 50000 });
+    fireEvent.scroll(scroller, { target: { scrollTop: 30000 } });
+    await waitFor(() => expect(list).toHaveFocus());
+    fireEvent.keyDown(list, { key: 'ArrowDown' });
+    await waitFor(() =>
+      expect(
+        screen.getByText('Large conversation 1').closest('button')
+      ).toHaveFocus()
+    );
+  });
+
+  it('keeps selection across scrolling and filtering', async () => {
+    const onBulkDelete = vi.fn();
+    render(
+      <ChatSidebar
+        conversations={conversations}
+        activeId={null}
+        onSelect={vi.fn()}
+        onNew={vi.fn()}
+        onBulkDelete={onBulkDelete}
+      />
+    );
+    fireEvent.click(screen.getByLabelText('Select conversations'));
+    fireEvent.click(screen.getByLabelText('Select Large conversation 0'));
+    const first = screen.getByText('Large conversation 0').closest('button')!;
+    first.focus();
+    fireEvent.keyDown(first, { key: 'End' });
+    await waitFor(() =>
+      expect(screen.getByText('Large conversation 499')).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByLabelText('Select Large conversation 499'));
+    fireEvent.click(screen.getByRole('button', { name: '2' }));
+    expect(onBulkDelete).toHaveBeenCalledWith(['large-0', 'large-499']);
   });
 });

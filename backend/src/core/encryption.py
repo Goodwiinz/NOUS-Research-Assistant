@@ -318,6 +318,12 @@ class KeyManager:
         old_key = self.get_key(key_id)
         if not old_key:
             raise KeyManagementError(f"Key not found: {key_id}")
+        if old_key.key_type == EncryptionKeyType.DATA:
+            # Random replacement keys live only in this manager. Reject before
+            # generating one or deactivating the stable, master-derived key.
+            raise KeyManagementError(
+                "DATA key rotation is unavailable until versioned keys are durable"
+            )
 
         # Create new key with same type and metadata
         expires_in_days = None

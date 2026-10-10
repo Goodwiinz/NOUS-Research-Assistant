@@ -560,9 +560,12 @@ async def request_run_cancellation(
             payload=stopping_payload,
             organization_id=organization_id,
         )
+        from src.services.harness.runs import cancel_undelivered_start
+
+        closed = await cancel_undelivered_start(db, run_id=run_id)
         return RunCancellationResult(
             run_id=run_id,
-            status=JobStatus.STOPPING,
+            status=JobStatus.CANCELLED if closed else JobStatus.STOPPING,
             claimed=True,
         )
 
@@ -1132,8 +1135,12 @@ async def finalize_submission(
     error: Optional[str] = None,
     run_metadata: Optional[dict[str, Any]] = None,
     provider: Literal["nous", "codex"] = "nous",
+    commit: bool = True,
 ) -> bool:
-    """Move the run to *status* at the end of the turn and commit.
+    """Move the run to *status* at the end of the turn and normally commit.
+
+    ``commit=False`` joins a service-owned transaction: it neither commits,
+    rolls back, nor retries independently of that caller.
 
     The run row must reach a terminal status or ``uq_agent_runs_active_thread``
     would leave a phantom active run that rejects the next turn, and the
@@ -1235,7 +1242,8 @@ async def finalize_submission(
                         provider=provider,
                     )
                 )
-                await db.commit()
+                if commit:
+                    await db.commit()
                 return landed
             if event_type is not None:
                 try:
@@ -1259,9 +1267,12 @@ async def finalize_submission(
                     .where(HarnessSession.run_id == run_id)
                     .values(workspace_locked=False)
                 )
-            await db.commit()
+            if commit:
+                await db.commit()
             return True
         except Exception as exc:
+            if not commit:
+                raise
             try:
                 await db.rollback()
             except Exception:

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
 import { render, cleanup } from "ink-testing-library";
+import { useFocusManager } from "ink";
+import { useEffect } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react-ink";
 import {
   MessageByIndexProvider,
@@ -90,6 +92,8 @@ test("React resolves independently for the web and terminal", () => {
 
 test("a failed clipboard write never displays Copied", async () => {
   const failures: string[] = [];
+  let ready = false;
+  let focused: string | undefined;
   const messages = [
     {
       id: "clipboard-test",
@@ -98,6 +102,11 @@ test("a failed clipboard write never displays Copied", async () => {
     },
   ];
   function Probe() {
+    const { activeId } = useFocusManager();
+    useEffect(() => {
+      ready = true;
+      focused = activeId;
+    }, [activeId]);
     const runtime = useExternalStoreRuntime({
       messages,
       convertMessage: (message) => message,
@@ -120,11 +129,11 @@ test("a failed clipboard write never displays Copied", async () => {
   const originalPath = process.env.PATH;
   try {
     const ui = render(<Probe />);
-    await until(() => !!ui.lastFrame()?.includes("[Copy]"), "Copy mounts");
+    await until(() => ready && !!ui.lastFrame()?.includes("[Copy]"), "Copy mounts");
     // Prevent every native clipboard provider from launching in this process.
     process.env.PATH = configDir;
     ui.stdin.write("\t");
-    await delay(50);
+    await until(() => focused !== undefined, "Copy receives keyboard focus");
     ui.stdin.write("\r");
     await until(() => failures.length === 1, "Clipboard failure is reported");
     await delay(50);
@@ -614,11 +623,16 @@ test("a queued turn waits for approval and the preceding response to finish", as
     "Approval blocks the queue",
   );
   assert.equal(paths.length, 1);
-  // Approval mounts and claims focus across multiple React commits.
-  await delay(150);
+  // Approval reads modal input directly; its visible prompt is the readiness
+  // boundary. Do not hide dropped keystrokes behind a fixed focus delay.
   const frames = ui.frames.length;
   ui.stdin.write("no");
-  await until(() => ui.frames.length > frames, "Decision is typed");
+  await until(
+    () =>
+      ui.frames.length > frames &&
+      /^\s*│\s*no\s*│\s*$/m.test(ui.lastFrame() ?? ""),
+    "Denial is visible in the approval prompt",
+  );
   ui.stdin.write("\r");
   await until(
     () => ui.lastFrame()?.includes("Second answer") ?? false,
@@ -1227,9 +1241,20 @@ test("typing slash opens and filters commands; arrows and Enter complete without
 });
 
 test("slash completion dismisses on Escape and leaves ordinary text and exact commands usable", async () => {
-  const ui = render(<App />);
+  let focused: string | undefined;
+  function ObservedApp() {
+    const { activeId } = useFocusManager();
+    useEffect(() => {
+      focused = activeId;
+    }, [activeId]);
+    return <App />;
+  }
+  const ui = render(<ObservedApp />);
   await until(
-    () => ui.frames.length > 1 && !!ui.lastFrame()?.includes("Ask NOUS"),
+    () =>
+      focused !== undefined &&
+      ui.frames.length > 1 &&
+      !!ui.lastFrame()?.includes("Ask NOUS"),
     "Composer ready",
   );
   ui.stdin.write("/se");
@@ -1237,13 +1262,19 @@ test("slash completion dismisses on Escape and leaves ordinary text and exact co
     () => !!ui.lastFrame()?.includes("Commands ("),
     "Suggestions visible",
   );
+  const originalFocus = focused;
   ui.stdin.write("\x1b");
   await until(
     () => !ui.lastFrame()?.includes("Commands ("),
     "Escape hides list",
   );
   assert.match(ui.lastFrame()!, /\/se/);
-  await delay(40);
+  // Ink clears focus on Escape. The SDK editor remounts to recover it across
+  // multiple React commits; sending the next character after 40ms loses it.
+  await until(
+    () => focused !== undefined && focused !== originalFocus,
+    "Composer regains focus after Escape",
+  );
   ui.stdin.write("t");
   await until(
     () => !!ui.lastFrame()?.includes("Commands (1)"),

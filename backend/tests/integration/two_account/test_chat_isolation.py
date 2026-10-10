@@ -143,7 +143,7 @@ async def test_deleted_ancestor_blocks_owner_export(
 ) -> None:
     await soft_delete(test_db, Conversation, "b-conv")
     r = await clients("B").post(
-        f"/api/v1/export/thread/{sid('b-thread')}", json={"format": "markdown"}
+        f"/api/v1/export/thread/{sid('b-thread')}", params={"format": "markdown"}
     )
     assert r.status_code == 404
     assert_no_canary(r.content, "b-msg")
@@ -220,13 +220,28 @@ async def test_removed_member_loses_reads(removed_member: AsyncClient) -> None:
         assert_no_canary(r.content, AFTER, "b-msg")
 
 
-async def test_creator_can_export_own_thread(clients: Clients) -> None:
+@pytest.mark.parametrize("fmt", ["markdown", "json", "html"])
+async def test_creator_can_export_own_thread(clients: Clients, fmt: str) -> None:
     """Positive control: the export path does return content to its owner."""
     r = await clients("B").post(
-        f"/api/v1/export/thread/{sid('b-thread')}", json={"format": "markdown"}
+        f"/api/v1/export/thread/{sid('b-thread')}", params={"format": fmt}
     )
     assert r.status_code == 200
     assert canary("b-msg") in r.text
+
+    assert r.headers["x-export-format"] == fmt
+    expected_type = {
+        "markdown": "text/markdown",
+        "json": "application/json",
+        "html": "text/html",
+    }[fmt]
+    assert r.headers["content-type"].startswith(expected_type)
+    if fmt == "json":
+        assert isinstance(r.json(), dict)
+    elif fmt == "html":
+        assert "<html" in r.text.lower()
+    else:
+        assert r.text.startswith("# ")
 
 
 EXPORT_FORMATS = ["markdown", "json", "html"]  # pdf: X4 section below
@@ -237,7 +252,7 @@ async def test_removed_member_single_export(
     removed_member: AsyncClient, fmt: str
 ) -> None:
     r = await removed_member.post(
-        f"/api/v1/export/thread/{sid('a-in-b-thread')}", json={"format": fmt}
+        f"/api/v1/export/thread/{sid('a-in-b-thread')}", params={"format": fmt}
     )
     assert_no_canary(r.content, AFTER)
     assert r.status_code == 404
@@ -290,7 +305,7 @@ async def test_stranger_export_is_denied(clients: Clients, fmt: str) -> None:
     """Single, stream and batch: B's thread never reaches cross-org A."""
     a, th = clients("A"), str(sid("b-thread"))
     responses = [
-        await a.post(f"/api/v1/export/thread/{th}", json={"format": fmt}),
+        await a.post(f"/api/v1/export/thread/{th}", params={"format": fmt}),
         await a.post(f"/api/v1/export/thread/{th}/stream?format={fmt}"),
         await a.post(
             "/api/v1/export/batch",

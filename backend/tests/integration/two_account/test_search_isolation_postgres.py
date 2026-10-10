@@ -769,3 +769,28 @@ async def test_document_search_services_fail_closed_without_organization(
         )
         if not organization_id:
             assert executed == [], "suggestions ran SQL without an organization"
+
+
+@pytest.mark.parametrize(
+    "document_types,expected",
+    [(["text"], A_DOCS), (["pdf"], ()), (["text", "pdf"], A_DOCS)],
+)
+async def test_document_type_filter_uses_native_enum_labels(
+    pg_clients: Clients, document_types: list[str], expected: tuple[str, ...]
+) -> None:
+    """The result and count accept API enum values against the real PG enum."""
+    r = await _search(
+        pg_clients("A"),
+        "/api/v1/search/",
+        "fulltext",
+        QUERY,
+        filters={"document_types": document_types},
+        limit=1,
+    )
+    assert r.status_code == 200, r.text
+    assert_no_documents(r.content, *ORG_B_DOCS)
+    body = r.json()
+    assert body["total_results"] == len(expected)
+    assert body["has_more"] is (len(expected) > 1)
+    assert _ids(body["results"], "document_id") <= _doc_ids(*expected)
+    assert len(body["results"]) == min(1, len(expected))

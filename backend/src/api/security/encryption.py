@@ -418,6 +418,12 @@ async def rotate_encryption_key(
                 _require_platform_operator(current_user, "rotate encryption keys")
             organization_id = _bind_caller_org(organization_id, current_user)
 
+        if request.key_type == EncryptionKeyType.DATA and not request.dry_run:
+            raise HTTPException(
+                status_code=409,
+                detail="DATA key rotation is unavailable until versioned keys are durable",
+            )
+
         # Perform key rotation
         rotation_results = encryption_service.rotate_encryption_keys(
             key_type=request.key_type,

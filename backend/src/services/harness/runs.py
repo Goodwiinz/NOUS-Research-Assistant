@@ -13,9 +13,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import WorkspaceBinding
-from src.models.harness_session import HarnessSession
+from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
 from src.models.integration_grant import IntegrationGrant
 from src.schemas.integration_context import IntegrationContext
 from src.services.agent.agent_run_service import ActiveRunConflict
@@ -140,6 +141,75 @@ async def bind_external_submission(
     await db.flush()
 
 
+async def cancel_undelivered_start(db: AsyncSession, *, run_id: str) -> bool:
+    """Close a provably unleased Codex start inside the caller's transaction.
+
+    Callers hold the run lock first. Delivery never clears lease_until: even
+    an expired lease is evidence that the command may have escaped.
+    """
+    run: Any = await db.scalar(
+        select(AgentRun)
+        .where(AgentRun.job_id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        run is None
+        or run.execution_provider != "codex"
+        or JobStatus(run.status).is_terminal
+    ):
+        return False
+    session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == run_id)
+    )
+    if session is None:
+        return False
+    outboxes = (
+        await db.scalars(
+            select(AgentOutbox).where(AgentOutbox.run_id == run_id).with_for_update()
+        )
+    ).all()
+    commands = (
+        await db.scalars(
+            select(HarnessCommand)
+            .where(HarnessCommand.run_id == run_id)
+            .with_for_update()
+        )
+    ).all()
+    receipt = await db.scalar(
+        select(HarnessReceipt.id).where(HarnessReceipt.run_id == run_id).limit(1)
+    )
+    if (
+        session.provider_session_id
+        or session.provider_turn_id
+        or session.source_id
+        or session.source_seq
+        or session.observation != "unknown"
+        or run.started_at
+        or receipt is not None
+        or any(
+            command.lease_until is not None or command.acknowledged
+            for command in commands
+        )
+    ):
+        return False
+    from src.services.agent.agent_submission_service import finalize_submission
+
+    for outbox in outboxes:
+        outbox.status = "failed"
+        outbox.updated_at = datetime.now(timezone.utc)
+    return await finalize_submission(
+        db,
+        run_id=run_id,
+        status=JobStatus.CANCELLED,
+        organization_id=run.organization_id,
+        event_type=RunEventType.RUN_CANCELLED,
+        payload={"reason": "Cancelled before local execution started."},
+        provider="codex",
+        commit=False,
+    )
+
+
 async def record_observation(
     db: AsyncSession, *, run_id: UUID, observation: Observation
 ) -> HarnessRunDTO:
@@ -167,6 +237,10 @@ async def record_observation(
         )
         if run is None or session is None:
             raise IntegrationAccessDenied()
+        if run.cancel_requested_at is not None:
+            await cancel_undelivered_start(db, run_id=str(run_id))
+            await db.refresh(run)
+            await db.refresh(session)
         # Delivery commits terminal native evidence before projecting the
         # assistant row. A sweeper's unknown observation must not erase that
         # sealed evidence while its idempotent projection is being retried.

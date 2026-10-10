@@ -1,7 +1,15 @@
 'use client';
 
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 
+import { VirtualizedConversationList } from './VirtualizedConversationList';
 import { cn } from '@/lib/utils';
 import { useThreadSearch } from '@/hooks/chat/useThreadSearch';
 import { isToday, isYesterday, formatDistanceToNowStrict } from 'date-fns';
@@ -240,6 +248,145 @@ export const ChatSidebar = memo(function ChatSidebar({
     return () => window.removeEventListener('keydown', handler);
   }, [onNew, exitSelectMode]);
 
+  const renderConversation = (conv: SidebarConversation): ReactNode => {
+    const isActive = conv.id === activeId;
+    const isSelected = selectedIds.includes(conv.id);
+    const timeStr = formatCompactTime(new Date(conv.updatedAt));
+    const messageCount = conv.messageCount ?? conv.messages.length;
+    const lastMessage = conv.messages[conv.messages.length - 1];
+    const previewSource = conv.previewText || lastMessage?.content;
+    const citationCount = conv.citationCount ?? 0;
+    const snippet =
+      citationCount > 0
+        ? `${citationCount} source${citationCount === 1 ? '' : 's'} · ${messageCount} turn${messageCount === 1 ? '' : 's'}`
+        : previewSource
+          ? truncatePreview(previewSource)
+          : conv.matchingMessageCount
+            ? `${conv.matchingMessageCount} matching message${conv.matchingMessageCount === 1 ? '' : 's'}`
+            : messageCount > 0
+              ? `${messageCount} message${messageCount === 1 ? '' : 's'}`
+              : 'No messages yet';
+
+    return (
+      <div
+        key={conv.id}
+        className={cn(
+          'relative group/row',
+          selectMode && 'flex items-center gap-1.5'
+        )}
+      >
+        {/* Outside the row <button>: interactive content nested in a
+                      button is invalid HTML and the checkbox was neither
+                      focusable nor operable on its own. */}
+        {selectMode && (
+          <input
+            type="checkbox"
+            aria-label={`Select ${conv.title}`}
+            checked={isSelected}
+            onChange={() => toggleSelected(conv.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="w-3 h-3 accent-(--nous-sol) shrink-0"
+          />
+        )}
+        <button
+          onClick={() =>
+            selectMode ? toggleSelected(conv.id) : onSelect(conv.id)
+          }
+          className={cn(
+            'sb-conv w-full text-left block p-[9px_11px] rounded-[7px] border transition-[background,border-color] duration-180 mb-px relative',
+            isActive
+              ? 'bg-(--nous-aurum) dark:bg-(--nous-ember) border-[rgba(var(--nous-sol-rgb),0.2)] dark:border-[rgba(var(--nous-helios-rgb),0.25)]'
+              : 'bg-transparent border-transparent hover:bg-(--nous-bg-2) dark:hover:bg-(--nous-obsidian)'
+          )}
+        >
+          {/* Row 1: pin + title + unread */}
+          <div className="flex items-center gap-1.5 mb-[3px]">
+            {conv.pinned && !selectMode && (
+              <Pin className="w-[10px] h-[10px] text-(--nous-sol) dark:text-(--nous-helios) shrink-0" />
+            )}
+            <span
+              className="text-[13px] font-medium text-(--nous-fg-1) truncate flex-1 min-w-0"
+              style={{ fontFamily: 'var(--nous-font-ui)' }}
+            >
+              {conv.title}
+            </span>
+            {conv.unread && (
+              <>
+                <span className="sr-only">Unread</span>
+                <span
+                  aria-hidden
+                  className="w-1.5 h-1.5 rounded-full bg-(--nous-sol) dark:bg-(--nous-helios) shadow-[0_0_0_2px_rgba(var(--nous-sol-rgb),0.15)] shrink-0"
+                />
+              </>
+            )}
+          </div>
+
+          {/* Snippet */}
+          <div
+            className="text-[12px] leading-normal text-(--nous-fg-2) truncate"
+            style={{ fontFamily: 'var(--nous-font-body)' }}
+          >
+            {snippet}
+          </div>
+
+          {/* Meta row: tags + time */}
+          <div className="flex items-center justify-between gap-2 mt-1.5">
+            <div className="flex gap-1 min-w-0 overflow-hidden">
+              {(conv.tags || []).slice(0, 2).map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center px-1.5 py-px bg-(--nous-bg-2) dark:bg-(--nous-nyx) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-[3px] text-[9px] text-(--nous-fg-2) dark:text-(--nous-parchment) whitespace-nowrap"
+                >
+                  {tag}
+                </span>
+              ))}
+              {messageCount > 0 && (
+                <span className="inline-flex items-center px-1.5 py-px bg-(--nous-bg-2) dark:bg-(--nous-nyx) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-[3px] text-[9px] text-(--nous-fg-2) dark:text-(--nous-parchment) whitespace-nowrap">
+                  {messageCount}
+                </span>
+              )}
+            </div>
+            <span className="text-[12px] text-(--nous-fg-2) shrink-0">
+              {timeStr}
+            </span>
+          </div>
+        </button>
+
+        {/* Hover actions */}
+        {!selectMode && (onRename || onDelete) && (
+          <div className="absolute right-1.5 top-2 hidden group-hover/row:flex group-focus-within/row:flex items-center gap-0.5 bg-(--nous-bg-2) dark:bg-(--nous-obsidian) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-md px-0.5 py-0.5 shadow-xs">
+            {onRename && (
+              <button
+                type="button"
+                aria-label={`Rename ${conv.title}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRename(conv.id);
+                }}
+                className="p-2.5 md:p-1 rounded hover:bg-(--nous-sol)/8 text-(--nous-fg-3) hover:text-(--nous-fg-1) transition-colors"
+              >
+                <Pencil className="w-2.5 h-2.5" />
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                aria-label={`Delete ${conv.title}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(conv.id);
+                }}
+                className="p-2.5 md:p-1 rounded hover:bg-(--nous-mars)/10 text-(--nous-fg-3) hover:text-(--nous-mars) transition-colors"
+              >
+                <Trash2 className="w-2.5 h-2.5" />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <aside
       aria-label="Conversations"
@@ -386,166 +533,14 @@ export const ChatSidebar = memo(function ChatSidebar({
       </div>
 
       {/* Scroll region — only this scrolls */}
-      <div className="flex-1 overflow-y-auto pt-1">
-        {sections.map((section) => (
-          <div key={section.label} className="px-2.5 pb-1.5">
-            {/* Section label */}
-            <div className="flex items-center gap-1.5 px-2 pt-2.5 pb-1.5">
-              {section.label === 'Pinned' && (
-                <Pin className="w-[9px] h-[9px] text-(--nous-sol) dark:text-(--nous-helios)" />
-              )}
-              <span
-                className="text-[11px] font-medium text-(--nous-fg-3)"
-                style={{ fontFamily: 'var(--nous-font-ui)' }}
-              >
-                {section.label}
-              </span>
-              <span className="ml-auto px-[5px] py-px bg-(--nous-bg-2) dark:bg-(--nous-obsidian) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-[3px] text-[9px] text-(--nous-fg-2)">
-                {section.items.length}
-              </span>
-            </div>
-
-            {/* Conversation items */}
-            {section.items.map((conv) => {
-              const isActive = conv.id === activeId;
-              const isSelected = selectedIds.includes(conv.id);
-              const timeStr = formatCompactTime(new Date(conv.updatedAt));
-              const messageCount = conv.messageCount ?? conv.messages.length;
-              const lastMessage = conv.messages[conv.messages.length - 1];
-              const previewSource = conv.previewText || lastMessage?.content;
-              const citationCount = conv.citationCount ?? 0;
-              const snippet =
-                citationCount > 0
-                  ? `${citationCount} source${citationCount === 1 ? '' : 's'} · ${messageCount} turn${messageCount === 1 ? '' : 's'}`
-                  : previewSource
-                    ? truncatePreview(previewSource)
-                    : conv.matchingMessageCount
-                      ? `${conv.matchingMessageCount} matching message${conv.matchingMessageCount === 1 ? '' : 's'}`
-                      : messageCount > 0
-                        ? `${messageCount} message${messageCount === 1 ? '' : 's'}`
-                        : 'No messages yet';
-
-              return (
-                <div
-                  key={conv.id}
-                  className={cn(
-                    'relative group/row',
-                    selectMode && 'flex items-center gap-1.5'
-                  )}
-                >
-                  {/* Outside the row <button>: interactive content nested in a
-                      button is invalid HTML and the checkbox was neither
-                      focusable nor operable on its own. */}
-                  {selectMode && (
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${conv.title}`}
-                      checked={isSelected}
-                      onChange={() => toggleSelected(conv.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="w-3 h-3 accent-(--nous-sol) shrink-0"
-                    />
-                  )}
-                  <button
-                    onClick={() =>
-                      selectMode ? toggleSelected(conv.id) : onSelect(conv.id)
-                    }
-                    className={cn(
-                      'sb-conv w-full text-left block p-[9px_11px] rounded-[7px] border transition-[background,border-color] duration-180 mb-px relative',
-                      isActive
-                        ? 'bg-(--nous-aurum) dark:bg-(--nous-ember) border-[rgba(var(--nous-sol-rgb),0.2)] dark:border-[rgba(var(--nous-helios-rgb),0.25)]'
-                        : 'bg-transparent border-transparent hover:bg-(--nous-bg-2) dark:hover:bg-(--nous-obsidian)'
-                    )}
-                  >
-                    {/* Row 1: pin + title + unread */}
-                    <div className="flex items-center gap-1.5 mb-[3px]">
-                      {conv.pinned && !selectMode && (
-                        <Pin className="w-[10px] h-[10px] text-(--nous-sol) dark:text-(--nous-helios) shrink-0" />
-                      )}
-                      <span
-                        className="text-[13px] font-medium text-(--nous-fg-1) truncate flex-1 min-w-0"
-                        style={{ fontFamily: 'var(--nous-font-ui)' }}
-                      >
-                        {conv.title}
-                      </span>
-                      {conv.unread && (
-                        <>
-                          <span className="sr-only">Unread</span>
-                          <span
-                            aria-hidden
-                            className="w-1.5 h-1.5 rounded-full bg-(--nous-sol) dark:bg-(--nous-helios) shadow-[0_0_0_2px_rgba(var(--nous-sol-rgb),0.15)] shrink-0"
-                          />
-                        </>
-                      )}
-                    </div>
-
-                    {/* Snippet */}
-                    <div
-                      className="text-[12px] leading-normal text-(--nous-fg-2) truncate"
-                      style={{ fontFamily: 'var(--nous-font-body)' }}
-                    >
-                      {snippet}
-                    </div>
-
-                    {/* Meta row: tags + time */}
-                    <div className="flex items-center justify-between gap-2 mt-1.5">
-                      <div className="flex gap-1 min-w-0 overflow-hidden">
-                        {(conv.tags || []).slice(0, 2).map((tag) => (
-                          <span
-                            key={tag}
-                            className="inline-flex items-center px-1.5 py-px bg-(--nous-bg-2) dark:bg-(--nous-nyx) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-[3px] text-[9px] text-(--nous-fg-2) dark:text-(--nous-parchment) whitespace-nowrap"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                        {messageCount > 0 && (
-                          <span className="inline-flex items-center px-1.5 py-px bg-(--nous-bg-2) dark:bg-(--nous-nyx) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-[3px] text-[9px] text-(--nous-fg-2) dark:text-(--nous-parchment) whitespace-nowrap">
-                            {messageCount}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[12px] text-(--nous-fg-2) shrink-0">
-                        {timeStr}
-                      </span>
-                    </div>
-                  </button>
-
-                  {/* Hover actions */}
-                  {!selectMode && (onRename || onDelete) && (
-                    <div className="absolute right-1.5 top-2 hidden group-hover/row:flex group-focus-within/row:flex items-center gap-0.5 bg-(--nous-bg-2) dark:bg-(--nous-obsidian) border border-(--nous-border-1) dark:border-(--nous-shade) rounded-md px-0.5 py-0.5 shadow-xs">
-                      {onRename && (
-                        <button
-                          type="button"
-                          aria-label={`Rename ${conv.title}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onRename(conv.id);
-                          }}
-                          className="p-2.5 md:p-1 rounded hover:bg-(--nous-sol)/8 text-(--nous-fg-3) hover:text-(--nous-fg-1) transition-colors"
-                        >
-                          <Pencil className="w-2.5 h-2.5" />
-                        </button>
-                      )}
-                      {onDelete && (
-                        <button
-                          type="button"
-                          aria-label={`Delete ${conv.title}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDelete(conv.id);
-                          }}
-                          className="p-2.5 md:p-1 rounded hover:bg-(--nous-mars)/10 text-(--nous-fg-3) hover:text-(--nous-mars) transition-colors"
-                        >
-                          <Trash2 className="w-2.5 h-2.5" />
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ))}
+      <div className="flex-1 min-h-0 flex flex-col pt-1">
+        {sections.length > 0 && (
+          <VirtualizedConversationList
+            sections={sections}
+            activeId={activeId}
+            renderConversation={renderConversation}
+          />
+        )}
 
         {hasServerSearchQuery && isSearching && sections.length === 0 && (
           <div

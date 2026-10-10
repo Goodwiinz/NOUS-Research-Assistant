@@ -933,6 +933,8 @@ async def my_queue(
         if isinstance(abstract, str) and abstract:
             abstracts.setdefault(report_id, abstract)
     visible = await visible_observation_ids(db, queue_id, user_id)
+    tips = await _tips(db, queue_id)
+    consumed = await _revealed_ids(db, queue_id)
     own: dict[UUID, ScreeningObservationResponse] = {}
     others: dict[UUID, list[ScreeningObservationResponse]] = {}
     for row in (
@@ -944,12 +946,19 @@ async def my_queue(
     ).scalars():
         report_id = cast(UUID, row.report_id)
         if row.reviewer_id == user_id:
+            # Resolution inputs belong to an earlier cycle unless they are
+            # inputs of the current tip. A reopen has no inputs of its own.
+            tip = tips.get(report_id)
+            current_inputs = tip.input_observation_ids if tip is not None else []
+            if row.id in consumed and str(row.id) not in {
+                str(value) for value in current_inputs
+            }:
+                continue
             own[report_id] = ScreeningObservationResponse.model_validate(row)
         elif screening_rules.visible(row.reviewer_id, row.id, user_id, visible):
             others.setdefault(report_id, []).append(
                 ScreeningObservationResponse.model_validate(row)
             )
-    tips = await _tips(db, queue_id)
     version = await _version(db, queue.protocol_version_id)
     items = [
         MyScreeningQueueItem(

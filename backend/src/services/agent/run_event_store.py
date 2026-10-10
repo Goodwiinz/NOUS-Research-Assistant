@@ -28,17 +28,19 @@ strategy, explicitly:
   snapshot and fail again; callers using those isolation levels must retry the
   whole transaction.
 
-A row-lock alternative (``SELECT ... FOR UPDATE`` on ``agent_runs``) was
-rejected: it serializes every append behind the run row even when there is no
-contention, and it cannot be exercised by the sqlite-backed unit suite, so the
-allocation path would ship untested.
+Every append first locks its ``agent_runs`` row until the caller's transaction
+ends. The terminal check and insertion therefore share one ordering boundary
+with terminalizers, including artifact announcements from another worker.
+SQLite ignores this lock; the two-connection PostgreSQL proof lives in
+``tests/unit/services/artifacts/test_terminal_postgres.py``. The unique-index
+retry remains a backstop for legacy writers that do not take this lock.
 
 **Terminal events are absorbing.** Once ``run.completed`` / ``run.failed`` /
 ``run.cancelled`` exists for a run, ``append_event`` refuses to append
 (``RunAlreadyTerminalError``). The read-then-write check alone races, so the
-partial unique index ``uq_agent_run_events_one_terminal`` enforces the same
-invariant in the database; a losing racer's ``IntegrityError`` is re-classified
-into ``RunAlreadyTerminalError`` on the retry pass.
+run-row lock serializes it with all appends. The partial unique index
+``uq_agent_run_events_one_terminal`` additionally prevents duplicate terminal
+events; by itself it cannot prevent a later nonterminal event.
 
 **Tenancy.** ``organization_id`` is nullable (org-less users exist) and is
 compared null-safely — ``== None`` compiles to ``IS NULL``. It is NEVER
@@ -149,6 +151,13 @@ async def append_event(
     typed = RunEventType(event_type)  # ValueError on unknown — never persist it
     validated = validate_payload(typed, payload or {})
     org_uuid = _coerce_uuid(organization_id)
+
+    # Take this before observing terminal state. Locking only the INSERT's
+    # high-water update is too late: a finalizer can commit between the check
+    # and insertion, reopening a closed ledger with a nonterminal event.
+    await db.execute(
+        select(AgentRun.job_id).where(AgentRun.job_id == run_id).with_for_update()
+    )
 
     next_seq = (
         select(func.coalesce(func.max(AgentRunEvent.seq), 0) + 1)
