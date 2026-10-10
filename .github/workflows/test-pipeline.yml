@@ -37,12 +37,93 @@ permissions:
   contents: read
 
 jobs:
+  # Selection is PR-only. Protected-branch pushes and manual runs retain full CI
+  # because release-dev.yml uses a successful develop push as release evidence.
+  ci-plan:
+    name: CI Plan
+    runs-on: ubuntu-latest
+    outputs:
+      profile: ${{ steps.select.outputs.profile }}
+      backend: ${{ steps.select.outputs.backend }}
+      frontend: ${{ steps.select.outputs.frontend }}
+      integration: ${{ steps.select.outputs.integration }}
+      e2e: ${{ steps.select.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Select checks from the complete PR diff
+        id: select
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          python3 scripts/ci/select_ci_jobs.py \
+            --event-name "$CI_EVENT_NAME" \
+            --base "origin/$PR_BASE_REF" \
+            --head "$PR_HEAD_SHA" \
+            --head-branch "$PR_HEAD_BRANCH" \
+            --output-file "$GITHUB_OUTPUT"
+
+  lightweight-checks:
+    name: Lightweight Checks
+    runs-on: ubuntu-latest
+    needs: ci-plan
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history: the feature-map shrink-only check reads the map at
+          # merge-base(base, HEAD), which a shallow clone cannot resolve.
+          fetch-depth: 0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install lightweight test dependencies
+        run: pip install pytest pytest-cov PyYAML
+      - name: Directory docs lint
+        run: python3 scripts/docs/check_dir_docs.py
+      - name: Feature map (nous-verify upkeep)
+        env:
+          # Live base BRANCH, not the creation-time-frozen base.sha — same
+          # resolution as the frontend quality ratchet.
+          PR_BASE_REF: ${{ github.base_ref || '' }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before || '' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'develop' }}
+        run: |
+          ZEROS="0000000000000000000000000000000000000000"
+          if [ -n "$PR_BASE_REF" ]; then
+            BASE="origin/${PR_BASE_REF}"
+          elif [ -n "$GITHUB_EVENT_BEFORE" ] && [ "$GITHUB_EVENT_BEFORE" != "$ZEROS" ]; then
+            BASE="$GITHUB_EVENT_BEFORE"
+          else
+            BASE="origin/${DEFAULT_BRANCH}"
+          fi
+          python3 scripts/ci/check_feature_map.py --base "$BASE"
+      - name: Script and NOUS instruction contracts
+        run: |
+          python3 -m pytest tests/unit/scripts/ \
+            --confcutdir=tests/unit/scripts -q -p no:cacheprovider --no-cov
+      - name: CI selection and Release Gate regressions
+        run: |
+          python3 -m pytest backend/tests/unit/ci/test_ci_scope.py \
+            backend/tests/unit/ci/test_release_gate.py \
+            backend/tests/unit/ci/test_release_workflow.py \
+            backend/tests/unit/ci/test_check_feature_map.py \
+            --noconftest -c /dev/null -q -p no:cacheprovider --no-cov
+
   # ==========================================================================
   # Code Quality Checks (Fast - Run First)
   # ==========================================================================
   lint-backend:
     name: Lint Backend
     runs-on: ubuntu-latest
+    needs: ci-plan
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -70,7 +151,7 @@ jobs:
       # divergent from the live lane). Direct pip install is faster (no buildx,
       # no remote layer cache) and keeps the linters in sync with the repo.
       - name: Install lint tools (current pins)
-        run: pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1 types-redis==4.6.0.20241004
+        run: pip install ruff==0.15.15 black==26.5.1 isort==5.13.2 mypy==1.7.1 types-redis==4.6.0.20241004 types-PyYAML==6.0.12.20260906
       - name: Run Ruff (blocking)
         run: ruff check backend/src --output-format=github
       - name: Directory docs lint (blocking — carried from the fast lane)
@@ -140,6 +221,8 @@ jobs:
   lint-frontend:
     name: Lint Frontend
     runs-on: ubuntu-latest
+    needs: ci-plan
+    if: needs.ci-plan.outputs.frontend == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -219,6 +302,8 @@ jobs:
   migration-check:
     name: Alembic Migration Check
     runs-on: ubuntu-latest
+    needs: ci-plan
+    if: needs.ci-plan.outputs.backend == 'true'
     # Throwaway CI-local Postgres for the advisory execution probes. Credentials
     # are disposable (postgres/postgres) — no secrets, by design.
     services:
@@ -345,7 +430,8 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -429,7 +515,8 @@ jobs:
   golden-replay:
     name: Golden Replay
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -491,7 +578,8 @@ jobs:
   openapi-contract:
     name: OpenAPI Contract Ratchet
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -647,7 +735,8 @@ jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
-    needs: lint-backend
+    needs: [ci-plan, lint-backend]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -672,7 +761,8 @@ jobs:
   frontend-tests:
     name: Frontend Tests
     runs-on: ubuntu-latest
-    needs: lint-frontend
+    needs: [ci-plan, lint-frontend]
+    if: needs.ci-plan.outputs.frontend == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -698,6 +788,18 @@ jobs:
           pnpm --dir ../terminal type-check
           pnpm --dir ../terminal test
           python3 ../terminal/tests/migration-smoke.py
+      - name: Check harness bridge
+        # The local Codex bridge and its NOUS MCP facade live in
+        # packages/harness-bridge; nothing else in the pipeline runs them.
+        # ubuntu also exercises the Linux-only paths (e.g. /proc/self/fd
+        # containment checks) that a macOS developer machine cannot.
+        run: |
+          pnpm --filter @nous/harness-bridge type-check
+          pnpm --filter @nous/harness-bridge test
+      - name: Check NOUS QA runner (node:test)
+        # tests/e2e/qa (pnpm qa:nous) and its nous-verify selection/evidence
+        # code have no other CI coverage; the suites need no browser.
+        run: node --test ../tests/unit/scripts/nous-qa.test.mjs ../tests/unit/scripts/nous-verify.test.mjs
       # Blocking ratchet: global coverage may never fall below the floors
       # committed in frontend/quality-baseline.json ("coverage" key).
       # Raising or lowering a floor is an intentional, reviewed JSON edit.
@@ -722,10 +824,24 @@ jobs:
   # Integration Tests (Require Services)
   # ==========================================================================
   integration-tests:
-    name: Integration Tests
+    name: Integration Tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [unit-tests, frontend-tests]
+    needs: [ci-plan, unit-tests, frontend-tests]
+    # Explicit status function avoids GitHub's implicit success() skipping this
+    # job when an unselected frontend dependency is intentionally skipped.
+    if: >-
+      !cancelled() && needs.ci-plan.result == 'success' &&
+      needs.ci-plan.outputs.integration == 'true' &&
+      needs.unit-tests.result == 'success' &&
+      (needs.frontend-tests.result == 'success' || needs.ci-plan.outputs.frontend == 'false')
+    strategy:
+      # One red shard must not hide the others' results.
+      fail-fast: false
+      matrix:
+        # File-level split by size (scripts/ci/shard_tests.py). Add a shard
+        # when a leg approaches the 30 minute cap.
+        shard: [1, 2, 3]
     services:
       postgres:
         image: postgres:15
@@ -766,20 +882,45 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-test-
             ${{ runner.os }}-pip-
+      - name: Install PDF renderer system libraries
+        # WeasyPrint (backend/requirements.txt) loads pango at runtime. The
+        # X4 PDF-export isolation tests render real PDFs (GOO-400). Same
+        # packages as backend/docker/Dockerfile.prod.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core
       - name: Install dependencies
         run: |
           pip install --build-constraint backend/constraints-ci.txt -r backend/requirements.txt
+      - name: Verify the PDF renderer
+        run: |
+          python -c 'from weasyprint import HTML; pdf = HTML(string="<h1>PDF smoke</h1>").write_pdf(); assert pdf.startswith(b"%PDF-"), pdf[:8]; print("weasyprint pdf_bytes=%d" % len(pdf))'
       - name: Run integration tests
         run: |
           mkdir -p test-results
+          files=$(python scripts/ci/shard_tests.py backend/tests/integration \
+            --shard "$SHARD" --of "$SHARDS")
+          if [ -z "$files" ]; then
+            echo "No integration test files in this shard - skipping"
+            exit 0
+          fi
+
+          if printf '%s\n' "$files" | grep -Fxq 'backend/tests/integration/test_ingestion_lifecycle_postgres.py'; then
+            # Match the production image's model without changing dependencies.
+            pip install --no-deps \
+              https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+          fi
+
           set +e
-          pytest backend/tests/integration/ \
+          # shellcheck disable=SC2086 # one test file path per word, no spaces
+          pytest $files \
             -c backend/pytest.ini \
             -m "integration" \
             --cov=backend/src \
             --cov-report=xml \
             --cov-report=term-missing \
-            --junitxml=test-results/integration.xml \
+            --junitxml="test-results/integration-$SHARD.xml" \
             -v
           exit_code=$?
           set -e
@@ -792,19 +933,121 @@ jobs:
           exit "$exit_code"
         env:
           ENVIRONMENT: testing
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
           DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # These suites also fall back to ORCHESTRATION_TEST_DATABASE_URL;
+          # their own variables keep them enrolled on their own. The third is
+          # the retention-purge FK regression (HO-2).
+          AGENT_TOOL_OPERATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          ARTIFACT_PUBLISH_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          RETENTION_PURGE_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          # The Daily Research Brief lifecycle and the other orchestration
+          # suites skip without these. Each fixture creates and drops its own
+          # schema, and the Redis suites delete only the keys they write.
+          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          ORCHESTRATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/15"
           REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # Lifecycle fixtures own a schema and queue in these throwaway services.
+          INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          INGESTION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          CLI_REVOCATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          # X4 PDF-export tests fail instead of skipping without the renderer.
+          PDF_EXPORT_TEST_REQUIRE_RENDERER: "1"
+      - name: Run ingestion recovery PostgreSQL tests
+        if: matrix.shard == 1
+        # These integration-marked tests live outside the sharded directory.
+        # Give them a real database once, and reject a green all-skipped run.
+        run: |
+          mkdir -p test-results
+          pytest backend/tests/unit/tasks/test_stuck_processing_recovery.py \
+            backend/tests/unit/tasks/test_stuck_recovery_terminal_retry.py \
+            backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py \
+            -c backend/pytest.ini -m integration \
+            --junitxml=test-results/ingestion-recovery.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("test-results/ingestion-recovery.xml").findall(".//testcase")
+          if not cases or any(
+              case.find(outcome) is not None
+              for case in cases
+              for outcome in ("skipped", "failure", "error")
+          ):
+              raise SystemExit("Recovery PostgreSQL tests must execute without skips")
+          print(f"PostgreSQL recovery: {len(cases)} tests executed without skips")
+          PY
+        env:
+          ENVIRONMENT: testing
+          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          DATABASE_URL: "sqlite:///:memory:"
+          ASYNC_DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          AZURE_OPENAI_CHAT_ENDPOINT: "https://example.invalid"
+          AZURE_OPENAI_CHAT_API_KEY: "test-key-not-real"
+      - name: Save ingestion recovery test results
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ingestion-recovery-results
+          path: test-results/ingestion-recovery.xml
+          retention-days: 7
+      - name: Run two-account PostgreSQL search isolation tests
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        # Matrix row S2 (GOO-399). The sharded run above has no
+        # TWO_ACCOUNT_PG_TEST_DATABASE_URL, so this suite skips there. Run it
+        # once against the job's postgres service and reject a green run in
+        # which any test skipped. A strict xfail is a matrix-tracked finding,
+        # not a skip; it fails pytest itself if it starts passing.
+        # The search-vector repair suite (Q-P3) shares the lane: it builds
+        # scratch databases with the real alembic chain (CREATE DATABASE needs
+        # the service's superuser) and guards the thread/message full-text
+        # objects and /api/v2/search/health on a migration-built schema.
+        run: |
+          mkdir -p test-results
+          pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
+            backend/tests/integration/test_search_vector_repair_postgres.py \
+            -c backend/pytest.ini -m integration \
+            --junitxml=test-results/two-account-pg-search.xml -q -ra
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("test-results/two-account-pg-search.xml").findall(".//testcase")
+
+
+          def not_executed(case):
+              skipped = case.find("skipped")
+              if skipped is not None and skipped.get("type") != "pytest.xfail":
+                  return True
+              return case.find("failure") is not None or case.find("error") is not None
+
+
+          if not cases or any(not_executed(case) for case in cases):
+              raise SystemExit("Two-account PostgreSQL search tests must execute without skips")
+          print(f"Two-account PostgreSQL search: {len(cases)} tests executed without skips")
+          PY
+        env:
+          ENVIRONMENT: testing
+          TWO_ACCOUNT_PG_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+      - name: Save two-account PostgreSQL search results
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: two-account-pg-search-results
+          path: test-results/two-account-pg-search.xml
+          retention-days: 7
       - name: Upload coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           files: coverage.xml
           flags: integration
-          name: integration-tests
+          name: integration-tests-${{ matrix.shard }}
       - name: Upload test results to Codecov (integration)
         if: always()
         uses: ./.github/actions/codecov-test-results
         with:
-          file: test-results/integration.xml
+          file: test-results/integration-${{ matrix.shard }}.xml
           flags: integration
           token: ${{ secrets.CODECOV_TOKEN }}
   # ==========================================================================
@@ -814,7 +1057,8 @@ jobs:
     name: Resilience Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: unit-tests
+    needs: [ci-plan, unit-tests]
+    if: needs.ci-plan.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -885,7 +1129,12 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     # Run on both push and PR, but use different test suites
-    needs: [integration-tests]
+    needs: [ci-plan, integration-tests, frontend-tests]
+    if: >-
+      !cancelled() && needs.ci-plan.result == 'success' &&
+      needs.ci-plan.outputs.e2e == 'true' &&
+      (needs.integration-tests.result == 'success' || needs.ci-plan.outputs.integration == 'false') &&
+      (needs.frontend-tests.result == 'success' || needs.ci-plan.outputs.frontend == 'false')
     # Backend image build/cache export can take ~33 minutes on a cold runner;
     # leave enough time for infrastructure startup and the actual Playwright run.
     timeout-minutes: 60
@@ -1323,6 +1572,8 @@ jobs:
     name: Release Gate
     runs-on: ubuntu-latest
     needs:
+      - ci-plan
+      - lightweight-checks
       - lint-backend
       - lint-frontend
       - migration-check
@@ -1337,9 +1588,11 @@ jobs:
     if: always()
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Require exact success from every blocking job
+      - name: Require successful selected checks and validate every skip
         env:
           REQUIRED_JOB_RESULTS: ${{ toJSON(needs) }}
+          CI_PROFILE: ${{ needs.ci-plan.outputs.profile }}
         run: |
           python3 scripts/ci/assert_required_jobs.py \
+            --profile "$CI_PROFILE" \
             --summary-file "$GITHUB_STEP_SUMMARY"

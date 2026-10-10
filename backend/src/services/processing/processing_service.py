@@ -114,19 +114,17 @@ class ProcessingPipeline:
         return job
 
     async def queue_processing_job(self, job_id: str):
-        """Queue a processing job for execution"""
+        """Reserve a fresh attempt durably before publishing it to the broker.
+
+        A reservation identifies an attempt, not proof of delivery. If the
+        producer dies before sending, the stuck-job sweeper fails the queued
+        row. Publication must never write QUEUED over a worker's newer state.
+        Callers commit input rows first; expected no-ops complete the read-only
+        transaction so the request's expire_on_commit=False objects stay usable.
+        """
         # Lazy: see module-level NOTE — a top-level import cycles through
         # src.tasks.__init__ back into this module.
         from src.tasks.celery_app import celery_app
-
-        result = await self.db.execute(
-            select(ProcessingJob).where(ProcessingJob.id == job_id)
-        )
-        job = result.scalar_one_or_none()
-
-        if not job:
-            logger.error(f"Job {job_id} not found")
-            return
 
         task_routes = {
             JobType.DOCUMENT_INGESTION: (
@@ -139,36 +137,115 @@ class ProcessingPipeline:
             JobType.GRAPH_INDEXING: ("index_in_graph", "graph_processing"),
         }
 
-        route = task_routes.get(job.job_type)
-        if route is None:
-            logger.error(f"Unknown job type: {job.job_type}")
-            return
-
-        task_name, queue = route
         try:
-            # enqueue-before-commit: job row committed by caller before this method; trailing commit only stores celery_task_id (unknowable until after send) + QUEUED status
-            task = celery_app.send_task(task_name, args=[job_id], queue=queue)
+            result = await self.db.execute(
+                select(ProcessingJob)
+                .where(ProcessingJob.id == job_id)
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
+            )
+            job = result.scalar_one_or_none()
+            if job is None:
+                logger.error("Job %s not found", job_id)
+                await self.db.commit()
+                return
+            if (
+                job.is_deleted
+                or job.status not in (JobStatus.PENDING, JobStatus.RETRYING)
+                or (job.status == JobStatus.PENDING and job.celery_task_id is not None)
+            ):
+                await self.db.commit()
+                return
 
-            # Update job with task ID
-            job.celery_task_id = task.id
-            job.queue_job()
+            route = task_routes.get(job.job_type)
+            if route is None:
+                logger.error("Unknown job type: %s", job.job_type)
+                await self.db.commit()
+                return
+
+            task_name, queue = route
+            task_id = str(uuid.uuid4())
+            document_id, organization_id = job.document_id, job.organization_id
+            job.celery_task_id = task_id
+            job.queue_job(queue)
             await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
 
-            logger.info(f"Queued job {job_id} with task ID {task.id}")
-
+        try:
+            # No database lock or trailing lifecycle write spans publication.
+            celery_app.send_task(task_name, args=[job_id], queue=queue, task_id=task_id)
+            logger.info("Published job %s with task ID %s", job_id, task_id)
         except Exception as e:
-            logger.error(f"Failed to queue job {job_id}: {str(e)}")
-            job.fail_job(f"Failed to queue job: {str(e)}")
-            # Also fail the associated document so it doesn't stay PENDING forever
-            if job.document_id:
-                doc_result = await self.db.execute(
-                    select(Document).where(Document.id == job.document_id)
+            logger.error("Failed to queue job %s: %s", job_id, e)
+            # A broker can accept the message and still raise. Reload rather
+            # than trusting the reservation's now-stale identity-map object.
+            # Document -> ProcessingJob matches lifecycle mutation lock order.
+            try:
+                document = None
+                if document_id:
+                    doc_result = await self.db.execute(
+                        select(Document)
+                        .where(
+                            Document.id == document_id,
+                            Document.organization_id == organization_id,
+                            Document.is_deleted == False,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                    document = doc_result.scalar_one_or_none()
+                result = await self.db.execute(
+                    select(ProcessingJob)
+                    .where(
+                        ProcessingJob.id == job_id,
+                        ProcessingJob.organization_id == organization_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True, autoflush=False)
                 )
-                document = doc_result.scalar_one_or_none()
-                if document:
-                    document.processing_status = ProcessingStatus.FAILED
-                    document.processing_error = f"Failed to queue: {str(e)}"
-            await self.db.commit()
+                job = result.scalar_one_or_none()
+                if (
+                    job is None
+                    or job.is_deleted
+                    or job.status != JobStatus.QUEUED
+                    or job.celery_task_id != task_id
+                ):
+                    await self.db.commit()
+                    return
+                job.fail_job(f"Failed to queue job: {e}")
+                if document and document.processing_status in (
+                    ProcessingStatus.PENDING,
+                    ProcessingStatus.RETRYING,
+                ):
+                    active_attempt = await self.db.execute(
+                        select(ProcessingJob.id)
+                        .where(
+                            ProcessingJob.document_id == document_id,
+                            ProcessingJob.organization_id == organization_id,
+                            ProcessingJob.id != job_id,
+                            ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                            ProcessingJob.is_deleted == False,
+                            ProcessingJob.status.in_(
+                                (
+                                    JobStatus.PENDING,
+                                    JobStatus.QUEUED,
+                                    JobStatus.RUNNING,
+                                    JobStatus.RETRYING,
+                                )
+                            ),
+                        )
+                        .limit(1)
+                        .execution_options(autoflush=False)
+                    )
+                    if active_attempt.scalar_one_or_none() is None:
+                        document.processing_status = ProcessingStatus.FAILED
+                        document.processing_error = f"Failed to queue: {e}"
+                await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+                raise
 
     async def process_text_extraction(self, document: Document) -> Dict[str, Any]:
         """Extract text content from document"""
@@ -257,7 +334,8 @@ class ProcessingPipeline:
                     page_text = page.get_text()
 
                     if page_text.strip():
-                        text.append(page_text)
+                        cleaned = self._clean_extracted_text(page_text)
+                        text.append(f"[Page {page_num + 1}]\n{cleaned}")
                     else:
                         # If no text found, try OCR
                         pix = page.get_pixmap()
@@ -265,7 +343,8 @@ class ProcessingPipeline:
                         img = Image.open(io.BytesIO(img_data))
                         ocr_text = pytesseract.image_to_string(img)
                         if ocr_text.strip():
-                            text.append(f"[OCR Page {page_num + 1}]\n{ocr_text}")
+                            cleaned = self._clean_extracted_text(ocr_text)
+                            text.append(f"[Page {page_num + 1}]\n{cleaned}")
 
                 doc.close()
 
@@ -282,13 +361,13 @@ class ProcessingPipeline:
                         img = Image.open(io.BytesIO(img_data))
                         ocr_text = pytesseract.image_to_string(img)
                         if ocr_text.strip():
-                            text.append(f"[OCR Page {page_num + 1}]\n{ocr_text}")
+                            cleaned = self._clean_extracted_text(ocr_text)
+                            text.append(f"[Page {page_num + 1}]\n{cleaned}")
 
-            extracted_text = "\n".join(text)
+            extracted_text = "\n\n".join(text)
 
             # Post-process and clean the text
             if extracted_text:
-                extracted_text = self._clean_extracted_text(extracted_text)
                 logger.info(
                     f"Successfully extracted {len(extracted_text)} characters from PDF"
                 )
@@ -315,8 +394,6 @@ class ProcessingPipeline:
 
             # Fix common OCR errors
             text = re.sub(r"\|", "I", text)  # Vertical bars to I
-            text = re.sub(r"1", "l", text)  # Sometimes 1 is misrecognized as l
-
             # Normalize line breaks
             text = re.sub(
                 r"\n\s*\n", "\n\n", text

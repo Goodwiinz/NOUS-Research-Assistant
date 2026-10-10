@@ -6,11 +6,17 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createRequire } from "node:module";
 import { render, cleanup } from "ink-testing-library";
+import { AssistantRuntimeProvider } from "@assistant-ui/react-ink";
+import {
+  MessageByIndexProvider,
+  useExternalStoreRuntime,
+} from "@assistant-ui/core/react";
 import type { RuntimeMessage } from "@nous/chat-runtime/types";
 import { saveConfig } from "../../frontend/cli/auth/store";
 import { streamReply, terminalText, type Approve } from "./adapter";
 import { App } from "./app";
 import { useTerminalSession } from "./session";
+import { Message } from "./ui";
 
 let configDir: string;
 const originalConfigDir = process.env.NOUS_CONFIG_DIR;
@@ -82,6 +88,55 @@ test("React resolves independently for the web and terminal", () => {
   }
 });
 
+test("a failed clipboard write never displays Copied", async () => {
+  const failures: string[] = [];
+  const messages = [
+    {
+      id: "clipboard-test",
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Clipboard test message" }],
+    },
+  ];
+  function Probe() {
+    const runtime = useExternalStoreRuntime({
+      messages,
+      convertMessage: (message) => message,
+      isRunning: false,
+      onNew: async () => {},
+    });
+    return (
+      <AssistantRuntimeProvider runtime={runtime}>
+        <MessageByIndexProvider index={0}>
+          <Message
+            index={0}
+            report={(promise) => {
+              void promise.catch((error) => failures.push(String(error)));
+            }}
+          />
+        </MessageByIndexProvider>
+      </AssistantRuntimeProvider>
+    );
+  }
+  const originalPath = process.env.PATH;
+  try {
+    const ui = render(<Probe />);
+    await until(() => !!ui.lastFrame()?.includes("[Copy]"), "Copy mounts");
+    // Prevent every native clipboard provider from launching in this process.
+    process.env.PATH = configDir;
+    ui.stdin.write("\t");
+    await delay(50);
+    ui.stdin.write("\r");
+    await until(() => failures.length === 1, "Clipboard failure is reported");
+    await delay(50);
+    assert.match(failures[0], /No clipboard provider found/);
+    assert.doesNotMatch(ui.lastFrame()!, /\[Copied\]/);
+    assert.match(ui.lastFrame()!, /\[Copy\]/);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+});
+
 test("real CLI transport preserves auth/context and renders revised text and tool results", async () => {
   const fetch = mock.method(
     globalThis,
@@ -131,6 +186,7 @@ for (const approved of [true, false]) {
                 {
                   thread_id: "thread-1",
                   confirmation: {
+                    approval_id: "a".repeat(64),
                     tool_name: "create_note",
                     tool_args: { title: "Review me" },
                   },
@@ -187,6 +243,7 @@ for (const approved of [true, false]) {
     assert.deepEqual(calls[1].body, {
       thread_id: "thread-1",
       confirmed: approved,
+      approval_id: "a".repeat(64),
     });
     assert.doesNotMatch(ui.lastFrame()!, /Approval required/);
     await delay(60);
@@ -201,12 +258,127 @@ for (const approved of [true, false]) {
   });
 }
 
+test("an approval decision typed as soon as the prompt renders is not lost", async () => {
+  // Regression for GOO-397: the composer unmounts and the approval prompt
+  // mounts in the same commit, so a focus-based input only becomes active a
+  // few commits later and keystrokes in that window were silently dropped.
+  const calls: string[] = [];
+  mock.method(globalThis, "fetch", async (url: RequestInfo | URL) => {
+    calls.push(String(url));
+    return calls.length === 1
+      ? response([
+          [
+            "confirmation",
+            {
+              thread_id: "thread-1",
+              confirmation: {
+                approval_id: "a".repeat(64),
+                tool_name: "create_note",
+                tool_args: {},
+              },
+            },
+          ],
+        ])
+      : response([["token", { content: "Note created" }], ["done", {}]]);
+  });
+  const ui = render(<App />);
+  await until(
+    () =>
+      ui.frames.length > 1 && (ui.lastFrame()?.includes("Ask NOUS") ?? false),
+    "Composer mounts",
+  );
+  ui.stdin.write("Find papers");
+  await until(
+    () => ui.lastFrame()?.includes("Find papers") ?? false,
+    "Input is visible",
+  );
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Approval required") ?? false,
+    "Approval is visible",
+  );
+  // No delay: type the decision in the very next tick after the prompt shows.
+  ui.stdin.write("yes");
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Note created") ?? false,
+    "Resumed response renders without waiting for focus",
+  );
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /\/agent\/stream\/confirm$/);
+  ui.unmount();
+});
+
+test("a pasted single-chunk decision submits once and shows no control characters", async () => {
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return calls.length === 1
+        ? response([
+            [
+              "confirmation",
+              {
+                thread_id: "thread-1",
+                confirmation: {
+                  approval_id: "a".repeat(64),
+                  tool_name: "create_note",
+                  tool_args: {},
+                },
+              },
+            ],
+          ])
+        : response([["token", { content: "Request denied" }], ["done", {}]]);
+    },
+  );
+  const ui = render(<App />);
+  await until(
+    () =>
+      ui.frames.length > 1 && (ui.lastFrame()?.includes("Ask NOUS") ?? false),
+    "Composer mounts",
+  );
+  ui.stdin.write("Find papers");
+  await until(
+    () => ui.lastFrame()?.includes("Find papers") ?? false,
+    "Input is visible",
+  );
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Approval required") ?? false,
+    "Approval is visible",
+  );
+  // One chunk, as a terminal paste delivers it; a second Enter must not
+  // post a second decision.
+  ui.stdin.write("no\r");
+  ui.stdin.write("\r");
+  await until(
+    () => ui.lastFrame()?.includes("Request denied") ?? false,
+    "Resumed response renders from a single-chunk paste",
+  );
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].body, {
+    thread_id: "thread-1",
+    confirmed: false,
+    approval_id: "a".repeat(64),
+  });
+  assert.doesNotMatch(ui.frames.join("\n"), /no\r/);
+  ui.unmount();
+});
+
 test("Ctrl+C during approval cancels without posting a decision", async () => {
   const fetch = mock.method(globalThis, "fetch", async () =>
     response([
       [
         "confirmation",
-        { thread_id: "thread-1", confirmation: { tool_name: "create_note" } },
+        {
+          thread_id: "thread-1",
+          confirmation: {
+            approval_id: "a".repeat(64),
+            tool_name: "create_note",
+          },
+        },
       ],
     ]),
   );
@@ -305,13 +477,77 @@ test("Ctrl+C aborts an active HTTP stream and leaves the composer usable", async
   ui.unmount();
 });
 
+test("nested approvals echo their own server receipts", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  mock.method(
+    globalThis,
+    "fetch",
+    async (_url: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      if (bodies.length <= 2) {
+        return response([
+          [
+            "confirmation",
+            {
+              thread_id: "thread-1",
+              confirmation: {
+                tool_name: "create_note",
+                approval_id: (bodies.length === 1 ? "a" : "b").repeat(64),
+              },
+            },
+          ],
+        ]);
+      }
+      return response([
+        ["token", { content: "Second action denied" }],
+        ["done", {}],
+      ]);
+    },
+  );
+  const decisions = [true, false];
+  await collect(run(async () => decisions.shift()!));
+  assert.deepEqual(bodies.slice(1), [
+    { thread_id: "thread-1", confirmed: true, approval_id: "a".repeat(64) },
+    { thread_id: "thread-1", confirmed: false, approval_id: "b".repeat(64) },
+  ]);
+});
+
+test("legacy approval cards expire before asking for a decision", async () => {
+  const fetch = mock.method(globalThis, "fetch", async () =>
+    response([
+      [
+        "confirmation",
+        { thread_id: "thread-1", confirmation: { tool_name: "create_note" } },
+      ],
+    ]),
+  );
+  let asked = false;
+  await assert.rejects(
+    collect(
+      run(async () => {
+        asked = true;
+        return true;
+      }),
+    ),
+    /approval has expired/,
+  );
+  assert.equal(asked, false);
+  assert.equal(fetch.mock.callCount(), 1);
+});
+
 test("an uncertain approval response is never posted again", async () => {
   const fetch = mock.method(globalThis, "fetch", async () => {
     if (fetch.mock.callCount() === 0)
       return response([
         [
           "confirmation",
-          { thread_id: "thread-1", confirmation: { tool_name: "create_note" } },
+          {
+            thread_id: "thread-1",
+            confirmation: {
+              approval_id: "a".repeat(64),
+              tool_name: "create_note",
+            },
+          },
         ],
       ]);
     throw new Error("Connection lost after posting");
@@ -369,7 +605,7 @@ test("a queued turn waits for approval and the preceding response to finish", as
   assert.equal(paths.length, 1);
   first.enqueue(
     new TextEncoder().encode(
-      'event: confirmation\ndata: {"thread_id":"thread-1","confirmation":{"tool_name":"create_note"}}\n\n',
+      `event: confirmation\ndata: ${JSON.stringify({ thread_id: "thread-1", confirmation: { approval_id: "a".repeat(64), tool_name: "create_note" } })}\n\n`,
     ),
   );
   first.close();
@@ -404,7 +640,10 @@ test("an earlier approval cannot authorize a later gate", async () => {
             "confirmation",
             {
               thread_id: "thread-1",
-              confirmation: { tool_name: "create_note" },
+              confirmation: {
+                approval_id: "a".repeat(64),
+                tool_name: "create_note",
+              },
             },
           ],
         ])

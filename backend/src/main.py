@@ -27,6 +27,7 @@ from starlette.middleware.gzip import GZipMiddleware
 logger = logging.getLogger(__name__)
 
 from src.api.agent import agent_router
+from src.api.artifacts import router as artifacts_router
 from src.api.arxiv import (
     arxiv_bulk_router,
     arxiv_change_router,
@@ -38,6 +39,7 @@ from src.api.arxiv import (
 )
 from src.api.auth import auth_router, cli_auth_router
 from src.api.auth.api_keys import router as api_keys_router
+from src.api.auth_orcid import router as orcid_router
 from src.api.connectors import connectors_router
 from src.api.diagnostics import diagnostics_router
 from src.api.documents import (
@@ -49,7 +51,9 @@ from src.api.documents import (
     table_extraction_router,
 )
 from src.api.evidence.router import router as evidence_router
+from src.api.harness import router as harness_router
 from src.api.infrastructure import evaluation_router, workers_router
+from src.api.integrations import router as integrations_router
 from src.api.quality import (
     performance_dashboard_router,
     quality_metrics_router,
@@ -64,22 +68,42 @@ from src.api.realtime import (
 from src.api.research import (
     chat_router,
     citations_router,
+    claims_router,
+    deposits_router,
     drafts_router,
     export_router,
     extraction_matrix_router,
+    manuscript_releases_router,
+    peer_review_router,
     pipeline_router,
     project_chat_router,
     project_report_router,
     project_skills_router,
     projects_router,
+    statements_router,
     tone_engine_router,
     writer_router,
 )
 from src.api.research_engine import (
+    research_engine_acquisition_router,
+    research_engine_appraisals_router,
     research_engine_blueprints_router,
+    research_engine_capabilities_router,
+    research_engine_corpus_router,
+    research_engine_evidence_router,
+    research_engine_experiments_router,
+    research_engine_identities_router,
+    research_engine_journey_router,
     research_engine_projects_router,
+    research_engine_protocols_router,
+    research_engine_reruns_router,
+    research_engine_review_versions_router,
+    research_engine_reviews_router,
     research_engine_runs_router,
+    research_engine_screening_router,
+    research_engine_search_updates_router,
     research_engine_steps_router,
+    research_engine_synthesis_router,
 )
 from src.api.search import knowledge_graph_router, search_quality_router, search_router
 from src.api.security import compliance_router, encryption_router, rbac_router
@@ -103,7 +127,7 @@ from src.exceptions.error_handlers import (
 from src.health.endpoints import router as health_router
 from src.middleware.disconnect_signal import AgentDisconnectSignalMiddleware
 from src.middleware.multi_tenancy import MultiTenancyMiddleware
-from src.middleware.rate_limiting import AnalyticsRateLimitMiddleware
+from src.middleware.rate_limiting import ApiRateLimitMiddleware
 from src.middleware.security_headers import SecurityHeadersMiddleware
 
 # from src.services.documents.file_service import redis_client  # Not exported, not needed here
@@ -265,20 +289,14 @@ async def lifespan(app: FastAPI):
     from src.core.config import settings as app_settings
 
     if app_settings.STORAGE_BACKEND == "s3":
-        missing = []
-        if not app_settings.S3_ENDPOINT_URL:
-            missing.append("S3_ENDPOINT_URL")
-        if not app_settings.S3_ACCESS_KEY:
-            missing.append("S3_ACCESS_KEY")
-        if not app_settings.S3_SECRET_KEY:
-            missing.append("S3_SECRET_KEY")
+        from src.core.s3_client import S3StorageHelper, missing_s3_credentials
+
+        missing = missing_s3_credentials()
         if missing:
             raise RuntimeError(
                 f"STORAGE_BACKEND=s3 but missing required env vars: {', '.join(missing)}"
             )
         try:
-            from src.core.s3_client import S3StorageHelper
-
             helper = S3StorageHelper()
             if not helper.check_health():
                 logger.warning("S3 storage health check failed — uploads may fail")
@@ -374,7 +392,19 @@ async def lifespan(app: FastAPI):
 
     logger.info("Application startup complete")
 
-    yield
+    from src.services.agent.typesafe_classifier import (
+        close_typesafe_client,
+        start_typesafe_client,
+    )
+
+    start_typesafe_client()
+    try:
+        yield
+    finally:
+        try:
+            await close_typesafe_client()
+        except Exception as exc:
+            logger.warning("TypeSafe client shutdown failed (%s)", type(exc).__name__)
 
     # Shutdown
     logger.info("Shutting down Multimodal RAG System...")
@@ -472,7 +502,28 @@ if OBSERVABILITY_ENABLED:
     except ImportError:
         instrument_services(sql_engine=engine)
 
-# Add CORS middleware
+# Compress JSON/text responses (list_messages/list_threads/thread-detail/
+# search) — SSE + export routes are excluded so token streaming isn't buffered.
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
+
+# Add global API rate limiting middleware (audit I2/I3): every /api/ route is
+# limited — heavy prefixes via the bucket table, wide default bucket for the
+# rest, legacy role-tier budgets preserved for analytics paths. Fully async
+# (redis.asyncio via core.rate_limit); a Redis outage degrades to a counted
+# per-process in-memory window, or 503 when RATE_LIMIT_FAIL_CLOSED is set.
+app.add_middleware(ApiRateLimitMiddleware)
+
+# Add multi-tenancy middleware — runs before rate limiting so tenant context is
+# available when rate limit decisions are made (registered after = executes first).
+app.add_middleware(MultiTenancyMiddleware)
+
+# Add CORS middleware — registered AFTER MultiTenancyMiddleware so it runs
+# OUTSIDE it (and outside rate limiting/GZip): the tenancy gate's own 401/500
+# and the rate limiter's 429 then carry Access-Control-Allow-Origin, so the
+# browser can read them (an expired token must reach the frontend as a 401,
+# not an opaque "Failed to fetch"). CORS also answers true preflights itself
+# before the tenancy gate. Pinned by
+# tests/unit/middleware/test_tenancy_cors_and_raw_path.py.
 # SECURITY: Strict CORS configuration - only allow specified origins, headers, and methods
 # Never use allow_origins=["*"] or allow_headers=["*"] in production
 app.add_middleware(
@@ -485,17 +536,6 @@ app.add_middleware(
     expose_headers=settings.cors_expose_list,
     max_age=settings.CORS_MAX_AGE,  # Cache preflight for 24 hours
 )
-
-# Compress JSON/text responses (list_messages/list_threads/thread-detail/
-# search) — SSE + export routes are excluded so token streaming isn't buffered.
-app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
-
-# Add rate limiting middleware for analytics endpoints
-app.add_middleware(AnalyticsRateLimitMiddleware, redis_client=redis_client)
-
-# Add multi-tenancy middleware — runs before rate limiting so tenant context is
-# available when rate limit decisions are made (registered after = executes first).
-app.add_middleware(MultiTenancyMiddleware)
 
 # Add trusted host middleware for production.
 # Kubelet HTTP probes set Host header to the pod IP, which is not in the
@@ -558,6 +598,9 @@ app.add_middleware(AgentDisconnectSignalMiddleware)
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(cli_auth_router, prefix="/api/v1")
+app.include_router(integrations_router, prefix="/api/v1")
+app.include_router(harness_router, prefix="/api/v1")
+app.include_router(artifacts_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(documents_router, prefix="/api/v1")
@@ -625,6 +668,12 @@ app.include_router(project_report_router)  # GET /api/v1/projects/{id}/report.ht
 app.include_router(project_skills_router)  # Project skill catalog and staged approvals
 app.include_router(project_chat_router)  # Project-Chat integration endpoints
 app.include_router(drafts_router)  # Research Assistant drafts endpoints
+app.include_router(claims_router)  # GOO-306 versioned claims and evidence links
+app.include_router(peer_review_router)  # GOO-314 external peer-review responses
+app.include_router(manuscript_releases_router)  # GOO-315 manuscript releases
+app.include_router(statements_router)  # GOO-316 statement sets and approvals
+app.include_router(deposits_router)  # GOO-318 archive deposits
+app.include_router(orcid_router)  # GOO-316 ORCID /authenticate receipts
 app.include_router(tone_engine_router)  # Scholarly Tone Engine endpoints
 app.include_router(extraction_matrix_router)  # Extraction Matrix endpoints
 app.include_router(writer_router)  # AI Writer endpoints
@@ -636,14 +685,59 @@ app.include_router(
     research_engine_projects_router, prefix="/api/v1"
 )  # Research Engine projects
 app.include_router(
+    research_engine_protocols_router, prefix="/api/v1"
+)  # Research Engine protocols
+app.include_router(
     research_engine_blueprints_router, prefix="/api/v1"
 )  # Research Engine blueprints
+app.include_router(
+    research_engine_capabilities_router, prefix="/api/v1"
+)  # Research Engine connector capabilities
 app.include_router(
     research_engine_runs_router, prefix="/api/v1"
 )  # Research Engine runs
 app.include_router(
     research_engine_steps_router, prefix="/api/v1"
 )  # Research Engine steps
+app.include_router(
+    research_engine_reviews_router, prefix="/api/v1"
+)  # Research Engine stage reviews
+app.include_router(
+    research_engine_identities_router, prefix="/api/v1"
+)  # Research Engine report/study identities (GOO-299)
+app.include_router(
+    research_engine_screening_router, prefix="/api/v1"
+)  # Research Engine screening queues (GOO-301)
+app.include_router(
+    research_engine_corpus_router, prefix="/api/v1"
+)  # Research Engine search import, citation chase, corpus export (GOO-300)
+app.include_router(
+    research_engine_search_updates_router, prefix="/api/v1"
+)  # Research Engine scheduled search updates and corpus deltas (GOO-319)
+app.include_router(
+    research_engine_review_versions_router, prefix="/api/v1"
+)  # Research Engine superseding review versions and update accounting (GOO-320)
+app.include_router(
+    research_engine_acquisition_router, prefix="/api/v1"
+)  # Research Engine full-text acquisition + PRISMA flow (GOO-303)
+app.include_router(
+    research_engine_journey_router, prefix="/api/v1"
+)  # Research Engine plan-to-write journey + audit bundle (GOO-308)
+app.include_router(
+    research_engine_appraisals_router, prefix="/api/v1"
+)  # Research Engine study-design appraisal (GOO-309)
+app.include_router(
+    research_engine_evidence_router, prefix="/api/v1"
+)  # Research Engine evidence tables, contradictions and certainty (GOO-310)
+app.include_router(
+    research_engine_synthesis_router, prefix="/api/v1"
+)  # Research Engine quantitative synthesis (GOO-311)
+app.include_router(
+    research_engine_experiments_router, prefix="/api/v1"
+)  # Research Engine run manifests, artifacts and figures (GOO-312)
+app.include_router(
+    research_engine_reruns_router, prefix="/api/v1"
+)  # Research Engine fresh reruns from run manifests (GOO-313)
 app.include_router(
     thread_search_router, prefix="/api/v2"
 )  # Thread and message full-text search
@@ -653,13 +747,12 @@ app.include_router(health_router)
 
 
 # Health check endpoint
+# Unauthenticated: never add VERSION/ENVIRONMENT here or to `/` (audit I17).
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": settings.VERSION,
-        "environment": settings.ENVIRONMENT,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -670,7 +763,6 @@ async def root():
     """Root endpoint"""
     return {
         "message": f"Welcome to {settings.APP_NAME}",
-        "version": settings.VERSION,
         "docs_url": (
             "/docs" if settings.DEBUG else "Documentation not available in production"
         ),
@@ -689,6 +781,64 @@ def _sanitize_log(value: Any) -> str:
     return str(value).replace("\r", "\\r").replace("\n", "\\n")
 
 
+def _safe_validation_errors(exc: RequestValidationError) -> list[dict[str, Any]]:
+    """Return useful validation metadata without reflecting request values."""
+
+    safe_locations = {
+        "body",
+        "query",
+        "path",
+        "header",
+        "cookie",
+        "run_id",
+        "step_index",
+        "review_kind",
+        "output_hash",
+        "decision",
+        "decision_payload",
+        "items",
+        "source_id",
+        "part_id",
+        "reason",
+        "note",
+    }
+    messages = {
+        "missing": "Field required",
+        "extra_forbidden": "Extra inputs are not permitted",
+        "string_too_long": "Input exceeds the allowed length",
+        "string_too_short": "Input is shorter than the allowed length",
+        "literal_error": "Input is not an allowed value",
+        "enum": "Input is not an allowed value",
+        "value_error": "Input failed validation",
+    }
+    safe_errors: list[dict[str, Any]] = []
+    for error in exc.errors():
+        error_type = str(error.get("type") or "value_error")
+        message = messages.get(error_type)
+        if message is None:
+            message = (
+                "Input has an invalid type or format"
+                if error_type.endswith(("_type", "_parsing"))
+                else "Invalid request value"
+            )
+        safe_errors.append(
+            {
+                "loc": [
+                    (
+                        component
+                        if isinstance(component, int)
+                        or (isinstance(component, str) and component in safe_locations)
+                        else "<field>"
+                    )
+                    for component in (error.get("loc") or ())
+                ],
+                "msg": message,
+                "type": error_type,
+            }
+        )
+    return safe_errors
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
@@ -697,17 +847,12 @@ async def validation_exception_handler(
     # 422 is a client error (malformed request), not a server fault — log at
     # warning so it doesn't inflate error-rate alerts (matches the HTTP 4xx
     # handling below).
+    safe_errors = _safe_validation_errors(exc)
     logger.warning(
         "Validation error on %s: %s",
         _sanitize_log(request.url.path),
-        _sanitize_log(exc.errors()),
+        _sanitize_log(safe_errors),
     )
-    safe_errors = []
-    for err in exc.errors():
-        safe = {k: v for k, v in err.items() if k != "ctx"}
-        if "ctx" in err and isinstance(err["ctx"], dict):
-            safe["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
-        safe_errors.append(safe)
     first_msg = (
         safe_errors[0].get("msg", "Validation error")
         if safe_errors

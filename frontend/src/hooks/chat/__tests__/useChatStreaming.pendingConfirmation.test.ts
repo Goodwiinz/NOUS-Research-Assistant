@@ -54,6 +54,7 @@ vi.mock('@/services/workspaceService', () => ({
 }));
 
 const CONFIRMATION = {
+  approval_id: 'a'.repeat(64),
   tool_name: 'create_project',
   tool_args: { name: 'rag testing' },
 };
@@ -212,6 +213,48 @@ describe('useChatStreaming pending-confirmation probe (cold thread load)', () =>
         }),
       })
     );
+  });
+
+  it('echoes the server receipt across nested gates and retries', async () => {
+    parkedInterrupt();
+    const confirm = vi.mocked(
+      (await import('@/services/agentChatService')).agentChatService
+        .streamConfirm
+    );
+    confirm.mockReset();
+    confirm
+      .mockImplementationOnce(async (_request, callbacks) => {
+        callbacks.onConfirmation?.('thread-A', {
+          ...CONFIRMATION,
+          approval_id: 'b'.repeat(64),
+        });
+      })
+      .mockRejectedValueOnce(new Error('Connection interrupted'))
+      .mockImplementationOnce(async (_request, callbacks) => {
+        callbacks.onDone?.({});
+      });
+    useChatStore.setState({ refreshMessages: vi.fn().mockResolvedValue(true) });
+    const { result } = await renderStreaming();
+    await waitFor(() =>
+      expect(result.current.pendingConfirmation).not.toBeNull()
+    );
+    const firstUiId = result.current.pendingConfirmation?.approvalId;
+    await act(async () => {
+      await result.current.handleConfirmation(true);
+    });
+    expect(result.current.pendingConfirmation?.approvalId).not.toBe(firstUiId);
+    await act(async () => {
+      await result.current.handleConfirmation(false);
+    });
+    expect(result.current.pendingConfirmation).not.toBeNull();
+    await act(async () => {
+      await result.current.handleConfirmation(false);
+    });
+    expect(confirm.mock.calls.map(([request]) => request)).toEqual([
+      { thread_id: 'thread-A', confirmed: true, approval_id: 'a'.repeat(64) },
+      { thread_id: 'thread-A', confirmed: false, approval_id: 'b'.repeat(64) },
+      { thread_id: 'thread-A', confirmed: false, approval_id: 'b'.repeat(64) },
+    ]);
   });
 
   it('keeps each parked confirmation while probing another thread', async () => {

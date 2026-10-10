@@ -10,9 +10,11 @@ import toast from 'react-hot-toast';
 import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
 import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { ChatConversation } from '@/hooks/chat/chatTypes';
+import { useChatPersistence } from '@/hooks/useChatPersistence';
 import { upsertConversationFromThread } from '@/components/chat/shared/threadConversationState';
 import { workspaceService } from '@/services/workspaceService';
-import { useChatStore } from '@/store/chat-store';
+import { useChatSessionGuard } from './useChatSessionGuard';
+import { useChatStore, onChatSessionReset } from '@/store/chat-store';
 import { useAuthStore } from '@/stores/authStore';
 import { getLoginPathWithRedirect } from '@/utils/authRedirect';
 import {
@@ -74,6 +76,10 @@ function indexThreads(threads: Thread[]): void {
 export interface ChatAuthRecoveryRoute {
   isReady: boolean;
   threadId: string | null;
+  /** True only while the initial URL/workspace selection is settling. */
+  isInitializing?: boolean;
+  /** Keeps an explicit ?new=1 intent distinct from a bare /chat URL. */
+  isNewChatIntent?: boolean;
 }
 
 export interface UseChatSessionReturn {
@@ -136,6 +142,8 @@ export interface UseChatSessionReturn {
  * Must be called inside a component wrapped in <Suspense> (uses useSearchParams).
  */
 export function useChatSession(): UseChatSessionReturn {
+  const isCurrentSession = useChatSessionGuard();
+  const { initialize: initializeChatPersistence } = useChatPersistence();
   // ---- State ----
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [messages, setMessages] = useState<ChatPageMessage[]>([]);
@@ -173,7 +181,8 @@ export function useChatSession(): UseChatSessionReturn {
   const unavailableInitialUrlThreadRef = useRef<string | null>(null);
 
   // ---- Auth ----
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const userId = user?.id ?? null;
 
   // ---- Store bindings ----
   const activeThreadId = useChatStore((state) => state.currentThreadId);
@@ -252,6 +261,8 @@ export function useChatSession(): UseChatSessionReturn {
     const routeThreadId = hasNewChatIntent ? null : threadFromUrl;
     return {
       threadId: routeThreadId,
+      isInitializing,
+      isNewChatIntent: hasNewChatIntent,
       isReady: Boolean(
         isAuthenticated &&
         !isInitializing &&
@@ -458,12 +469,47 @@ export function useChatSession(): UseChatSessionReturn {
     }
   }, [threadFromUrl, isInitializing, isAuthenticated, setCurrentThread]);
 
+  // A selection can land before or after initialization settles. Reconcile
+  // both against the live URL so an in-flight explicit navigation keeps its
+  // intent even before Next updates useSearchParams.
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      isInitializing ||
+      initError ||
+      hasNewChatIntent ||
+      threadFromUrl ||
+      !activeThreadId
+    ) {
+      return;
+    }
+    const liveParams = new URLSearchParams(window.location.search);
+    if (liveParams.get('new') === '1' || liveParams.has('thread')) return;
+    // This is only a same-page URL reconciliation. A router navigation starts
+    // an RSC request that can finish after the user clicks New chat and put the
+    // previous thread back in the address bar. Next syncs native history edits
+    // with useSearchParams without starting that competing navigation. Pass
+    // fresh state: reusing history.state carries Next's __NA marker and skips
+    // its router sync. Next copies its internal state into the new entry.
+    window.history.replaceState({}, '', getSelectedThreadUrl(activeThreadId));
+  }, [
+    activeThreadId,
+    hasNewChatIntent,
+    initError,
+    isAuthenticated,
+    isInitializing,
+    threadFromUrl,
+  ]);
+
   // Load threads and messages from database
   const loadThreadsFromDb = useCallback(
     async (
       workspaceId: string,
       _isRetry = false
-    ): Promise<{ ok: boolean; threadCount: number }> => {
+    ): Promise<{
+      ok: boolean;
+      threadCount: number;
+    }> => {
       const requestGeneration = threadsRequestGenerationRef.current + 1;
       const selectionAtRequestStart = useChatStore.getState().currentThreadId;
       const conversationIdsAtRequestStart = new Set(
@@ -531,7 +577,6 @@ export function useChatSession(): UseChatSessionReturn {
 
         const selectionIsStillOwned =
           useChatStore.getState().currentThreadId === selectionAtRequestStart;
-
         if (!selectionIsStillOwned) {
           console.log(
             '[Chat] Thread-page selection ignored after newer selection'
@@ -563,11 +608,6 @@ export function useChatSession(): UseChatSessionReturn {
           // thread, don't stomp it with our independently-fetched first row.
           const selectedConversation = uiConversations[0];
           setCurrentThread(selectedConversation.id);
-          // Keep the URL in sync with the auto-selection: a bare /chat URL
-          // breaks Back-button restoration and loses the thread on share.
-          routerRef.current.replace(
-            getSelectedThreadUrl(selectedConversation.id)
-          );
           console.log('[Chat] Active thread:', selectedConversation.title);
         }
         return { ok: true, threadCount: uiConversations.length };
@@ -636,6 +676,11 @@ export function useChatSession(): UseChatSessionReturn {
       threadsPageRef.current = nextPage;
       setHasMoreThreads(response.has_more);
     } catch (error) {
+      if (
+        threadsListWorkspaceIdRef.current !== workspaceId ||
+        threadsRequestGenerationRef.current !== requestGeneration
+      )
+        return;
       console.error('[Chat] Failed to load more threads:', error);
       toast.error('Could not load more threads. Please try again.');
     }
@@ -646,7 +691,7 @@ export function useChatSession(): UseChatSessionReturn {
     const initGeneration = initGenerationRef.current + 1;
     initGenerationRef.current = initGeneration;
     const ownsInitialization = (): boolean =>
-      initGenerationRef.current === initGeneration;
+      isCurrentSession() && initGenerationRef.current === initGeneration;
 
     // Watchdog: a hung request (socket open, no response) leaves init awaiting
     // forever and the UI stuck on "Initializing…". Surface a recoverable error
@@ -661,12 +706,6 @@ export function useChatSession(): UseChatSessionReturn {
     }, 15000);
 
     const initializeFromDb = async (): Promise<void> => {
-      // Initialization may overlap a first send or sidebar selection. Only the
-      // selection that existed when this run began may be restored from warm
-      // data; a newer synchronous store selection owns the UI.
-      const selectionAtInitializationStart =
-        useChatStore.getState().currentThreadId;
-
       if (!isAuthenticated) {
         console.log(
           '[Chat] Not authenticated, skipping database initialization'
@@ -686,21 +725,31 @@ export function useChatSession(): UseChatSessionReturn {
       let didFail = false;
       console.log('[Chat] Initializing from database...');
 
-      // Warm-start: the persisted selection may accelerate transcript restore,
-      // but it never scopes the sidebar. The sidebar always comes from the
-      // active workspace's globally ordered thread page.
-      // Explicit "new chat" intent (?new=1) suppresses warm-start restore so
-      // the page lands on a blank composer instead of the last thread.
-      const isNewChat = searchParamsRef.current.get('new') === '1';
-      const requestedThreadId = searchParamsRef.current.get('thread');
-      const restoreThreadId = isNewChat
-        ? null
-        : (requestedThreadId ?? useChatStore.getState().currentThreadId);
-
-      const wsPromise = workspaceService.getOrCreateDefaultWorkspace();
-
       try {
-        const ws: Workspace = await wsPromise;
+        // The layout and page consume the same shared initializer. Wait for
+        // its workspace/conversation cache before choosing a workspace-wide
+        // default thread, regardless of which component mounted first.
+        await initializeChatPersistence({ throwOnError: true });
+        if (!ownsInitialization()) return;
+        const layoutState = useChatStore.getState();
+        if (
+          !layoutState.currentWorkspaceId ||
+          !layoutState.currentConversationId
+        ) {
+          throw new Error('Chat initialization did not produce a conversation');
+        }
+
+        // Warm-start may accelerate transcript restore but never scopes the
+        // sidebar. An explicit new-chat intent keeps the composer blank.
+        const selectionAtInitializationStart = layoutState.currentThreadId;
+        const isNewChat = searchParamsRef.current.get('new') === '1';
+        const requestedThreadId = searchParamsRef.current.get('thread');
+        const restoreThreadId = isNewChat
+          ? null
+          : (requestedThreadId ?? selectionAtInitializationStart);
+
+        const ws: Workspace =
+          await workspaceService.getOrCreateDefaultWorkspace(userId);
         if (!ownsInitialization()) return;
         setWorkspace(ws);
 
@@ -796,9 +845,6 @@ export function useChatSession(): UseChatSessionReturn {
           );
           setMessages([]);
           setCurrentThread(restoreThreadId);
-          if (!requestedThreadId) {
-            routerRef.current.replace(getSelectedThreadUrl(restoreThreadId));
-          }
         }
 
         isHydratedRef.current = true;
@@ -841,7 +887,14 @@ export function useChatSession(): UseChatSessionReturn {
       threadsRequestGenerationRef.current += 1;
       threadsListWorkspaceIdRef.current = null;
     };
-  }, [isAuthenticated, loadThreadsFromDb, setCurrentThread]);
+  }, [
+    initializeChatPersistence,
+    isCurrentSession,
+    isAuthenticated,
+    userId,
+    loadThreadsFromDb,
+    setCurrentThread,
+  ]);
 
   // React-local messages are an overlay only. Bind a just-created thread's
   // optimistic turn to its new id, and clear the overlay on every real thread
@@ -859,6 +912,28 @@ export function useChatSession(): UseChatSessionReturn {
   // mid-turn never returns, so entries could accumulate for the session.
   // FIFO-cap the map — a park older than the last few switches is stale
   // anyway (the canonical rows have long since persisted).
+  useEffect(
+    () =>
+      onChatSessionReset(() => {
+        initGenerationRef.current += 1;
+        threadsRequestGenerationRef.current += 1;
+        threadsListWorkspaceIdRef.current = null;
+        threadsPageRef.current = 1;
+        firstPageThreadsRef.current = [];
+        parkedMessagesRef.current.clear();
+        messagesRef.current = [];
+        conversationsRef.current = [];
+        localMessagesThreadIdRef.current = null;
+        isHydratedRef.current = false;
+        unavailableInitialUrlThreadRef.current = null;
+        setWorkspace(null);
+        setMessages([]);
+        setConversations([]);
+        setHasMoreThreads(false);
+        setInitError(null);
+      }),
+    []
+  );
   const MAX_PARKED_THREADS = 8;
   const parkOverlay = (threadId: string, overlay: ChatPageMessage[]): void => {
     const parked = parkedMessagesRef.current;
@@ -870,6 +945,26 @@ export function useChatSession(): UseChatSessionReturn {
       parked.delete(oldest);
     }
   };
+  // An account switch (A -> B without sign-out) keeps isAuthenticated true and
+  // this page mounted. Drop every piece of the previous account's local state:
+  // workspace, sidebar list and pagination, transcript overlay, parked
+  // overlays and URL bookkeeping. The init effect above refetches for B.
+  const sessionUserIdRef = useRef(userId);
+  useEffect(() => {
+    if (sessionUserIdRef.current === userId) return;
+    sessionUserIdRef.current = userId;
+    isHydratedRef.current = false;
+    parkedMessagesRef.current.clear();
+    localMessagesThreadIdRef.current = null;
+    firstPageThreadsRef.current = [];
+    threadsPageRef.current = 1;
+    unavailableInitialUrlThreadRef.current = null;
+    setWorkspace(null);
+    setConversations([]);
+    setMessages([]);
+    setHasMoreThreads(false);
+  }, [userId]);
+
   useEffect(() => {
     const outgoingThreadId = localMessagesThreadIdRef.current;
 

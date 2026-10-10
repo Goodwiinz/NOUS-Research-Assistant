@@ -6,13 +6,10 @@
  * Drafts, Chat, Matrix, and Pipeline
  */
 
-import React, {
-  useEffect,
-  useState,
-  useCallback,
-  useRef,
-} from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { captureAccountSession } from '@/lib/account-session';
+
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   FileText,
   StickyNote,
@@ -28,11 +25,14 @@ import {
   Network,
   Upload,
   MoreHorizontal,
+  Workflow,
 } from 'lucide-react';
 import { ProjectHeader } from '@/components/research/ProjectHeader';
 import { DocumentList } from '@/components/research/DocumentList';
 import { ProjectKnowledgeTree } from '@/components/research/ProjectKnowledgeTree';
+import { ProjectArtifactsTab } from '@/components/research/ProjectArtifactsTab';
 import { ProjectSkillsTab } from '@/components/research/ProjectSkillsTab';
+import { ProjectWorkflow } from '@/components/research-engine/ProjectWorkflow';
 import { DraftGenerator } from '@/components/research/DraftGenerator';
 import { DraftViewer } from '@/components/research/DraftViewer';
 import { DraftGenerationProgress } from '@/components/research/DraftGenerationProgress';
@@ -82,12 +82,37 @@ type TabType =
   | 'chat'
   | 'matrix'
   | 'pipeline'
+  | 'workflow'
   | 'knowledge'
+  | 'files'
   | 'skills';
+
+const PROJECT_TABS: ReadonlySet<string> = new Set([
+  'documents',
+  'notes',
+  'bibliography',
+  'drafts',
+  'chat',
+  'matrix',
+  'pipeline',
+  'workflow',
+  'knowledge',
+  'files',
+  'skills',
+]);
+
+function isProjectTab(value: string): value is TabType {
+  return PROJECT_TABS.has(value);
+}
 
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const draftLinkKey =
+    searchParams?.get('tab') === 'drafts'
+      ? (searchParams.get('draftId') ?? '')
+      : null;
   const projectId = params.id as string;
   const { isAuthenticated } = useAuthStore();
 
@@ -115,7 +140,12 @@ export default function ProjectDetailPage() {
 
   const [mounted, setMounted] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<TabType>('documents');
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const requested = searchParams?.get('tab');
+    return requested && isProjectTab(requested) ? requested : 'documents';
+  });
+  const linkedDraftIdRef = useRef<string | null>(null);
+  const appliedDraftLinkRef = useRef<string | null>(null);
   const [bibFormat, setBibFormat] = useState<'bibtex' | 'ieee' | 'apa' | 'mla'>(
     'bibtex'
   );
@@ -228,12 +258,31 @@ export default function ProjectDetailPage() {
         const response = await projectService.listDrafts(projectId, {
           limit: 50,
         });
-        const versions = response.drafts.map((draft) => ({
+        let versions = response.drafts.map((draft) => ({
           id: draft.id,
           version: draft.version,
           created_at: draft.created_at,
           is_current: draft.is_current,
         }));
+
+        // A completion link can point to an older version outside this page.
+        const linkedDraftId = linkedDraftIdRef.current;
+        let linkedDraft: Draft | null = null;
+        if (
+          linkedDraftId &&
+          !versions.some((draft) => draft.id === linkedDraftId)
+        ) {
+          linkedDraft = await projectService.getDraft(projectId, linkedDraftId);
+          versions = [
+            ...versions,
+            {
+              id: linkedDraft.id,
+              version: linkedDraft.version,
+              created_at: linkedDraft.created_at,
+              is_current: linkedDraft.is_current,
+            },
+          ];
+        }
 
         setDraftVersions(versions);
 
@@ -249,6 +298,8 @@ export default function ProjectDetailPage() {
 
         const selectedVersion =
           preferredVersion ??
+          versions.find((draft) => draft.id === linkedDraftIdRef.current)
+            ?.version ??
           versions.find((draft) => draft.is_current)?.version ??
           versions[0].version;
 
@@ -256,10 +307,11 @@ export default function ProjectDetailPage() {
           versions.find((draft) => draft.version === selectedVersion) ??
           versions[0];
 
-        const selectedDraft = await projectService.getDraft(
-          projectId,
-          selectedDraftMeta.id
-        );
+        const selectedDraft =
+          linkedDraft?.id === selectedDraftMeta.id
+            ? linkedDraft
+            : await projectService.getDraft(projectId, selectedDraftMeta.id);
+        linkedDraftIdRef.current = null;
         setCurrentDraft(selectedDraft);
 
         setCompareVersionA((previous) => {
@@ -291,6 +343,26 @@ export default function ProjectDetailPage() {
     },
     [projectId]
   );
+
+  useEffect(() => {
+    if (
+      !mounted ||
+      !isAuthenticated ||
+      draftLinkKey === appliedDraftLinkRef.current
+    ) {
+      return;
+    }
+    appliedDraftLinkRef.current = draftLinkKey;
+    if (draftLinkKey === null) return;
+    linkedDraftIdRef.current = draftLinkKey || null;
+    if (activeTab === 'drafts') {
+      // A new draft link on this page needs to reload the selected version.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void loadDrafts();
+    } else {
+      setActiveTab('drafts');
+    }
+  }, [activeTab, draftLinkKey, isAuthenticated, loadDrafts, mounted]);
 
   useEffect(() => {
     if (activeTab === 'drafts' && mounted && isAuthenticated && projectId) {
@@ -654,7 +726,9 @@ export default function ProjectDetailPage() {
     { id: 'bibliography', label: 'Bibliography', icon: BookOpen },
     { id: 'matrix', label: 'Matrix', icon: Grid3X3 },
     { id: 'pipeline', label: 'Pipeline', icon: GitBranch },
+    { id: 'workflow', label: 'Workflow', icon: Workflow },
     { id: 'knowledge', label: 'Knowledge', icon: Network },
+    { id: 'files', label: 'Files', icon: FileText },
   ];
 
   if (skillsCatalog.isSuccess) {
@@ -1014,6 +1088,7 @@ export default function ProjectDetailPage() {
                       loading={draftsLoading}
                       documentCount={projectDocuments.length}
                       onGenerate={async (config) => {
+                        const isCurrentAccount = captureAccountSession();
                         setDraftsLoading(true);
                         try {
                           const result = await projectService.generateDraft(
@@ -1025,6 +1100,7 @@ export default function ProjectDetailPage() {
                               includeAbstract: config.includeAbstract,
                             }
                           );
+                          if (!isCurrentAccount()) return;
                           setGenerationTaskId(result.task_id);
                           // Poll until terminal. Transient poll failures are
                           // retried with backoff (bounded) instead of killing
@@ -1034,18 +1110,23 @@ export default function ProjectDetailPage() {
                           const POLL_RETRY_LIMIT = 5;
                           let pollFailures = 0;
                           const pollStatus = async () => {
+                            if (!isCurrentAccount()) return;
                             try {
                               const status =
                                 await projectService.getGenerationStatus(
                                   projectId,
                                   result.task_id
                                 );
+                              if (!isCurrentAccount()) return;
                               pollFailures = 0;
                               setGenerationStatus(status);
                               if (
-                                !['completed', 'failed', 'cancelled'].includes(
-                                  status.status
-                                )
+                                ![
+                                  'completed',
+                                  'failed',
+                                  'cancelled',
+                                  'interrupted',
+                                ].includes(status.status)
                               ) {
                                 pollTimeoutRef.current = setTimeout(
                                   pollStatus,
@@ -1053,6 +1134,7 @@ export default function ProjectDetailPage() {
                                 );
                               }
                             } catch {
+                              if (!isCurrentAccount()) return;
                               pollFailures += 1;
                               if (pollFailures >= POLL_RETRY_LIMIT) {
                                 setGenerationStatus({
@@ -1062,6 +1144,8 @@ export default function ProjectDetailPage() {
                                   current_step:
                                     'Lost contact with the generation job after repeated errors.',
                                   started_at: new Date().toISOString(),
+                                  // Client-synthesized; not a server record.
+                                  state_source: 'cache',
                                 });
                                 return;
                               }
@@ -1073,6 +1157,7 @@ export default function ProjectDetailPage() {
                           };
                           void pollStatus();
                         } catch (err) {
+                          if (!isCurrentAccount()) return;
                           console.error('Generation failed:', err);
                           toast.error(
                             err instanceof Error
@@ -1080,7 +1165,7 @@ export default function ProjectDetailPage() {
                               : 'Failed to start draft generation'
                           );
                         } finally {
-                          setDraftsLoading(false);
+                          if (isCurrentAccount()) setDraftsLoading(false);
                         }
                       }}
                     />
@@ -1272,10 +1357,21 @@ export default function ProjectDetailPage() {
         {/* Pipeline Tab */}
         {activeTab === 'pipeline' && <ResearchPipeline projectId={projectId} />}
 
+        {/* Research engine workflow uses the same canonical Collection ID. */}
+        {activeTab === 'workflow' && currentProject && (
+          <ProjectWorkflow
+            key={currentProject.id}
+            project={currentProject}
+            onOpenTab={handleTabChange}
+          />
+        )}
+
         {/* Knowledge Tab */}
         {activeTab === 'knowledge' && (
           <ProjectKnowledgeTree projectId={projectId} />
         )}
+
+        {activeTab === 'files' && <ProjectArtifactsTab projectId={projectId} />}
 
         {activeTab === 'skills' && <ProjectSkillsTab projectId={projectId} />}
       </div>

@@ -3,20 +3,22 @@ FastAPI dependencies for authentication and authorization
 """
 
 from typing import Optional
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.core.config import settings
 from src.core.database import get_db
-from src.core.security import get_current_user_token
+from src.core.security import TokenData, get_current_user_token
 from src.models.organization import Organization
 from src.models.user import User, UserRole
 
 
 async def get_current_user(
-    token_data: dict = Depends(get_current_user_token),
+    token_data: TokenData = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Get current authenticated user with eagerly loaded organization"""
@@ -47,9 +49,19 @@ async def get_current_user(
     user = result.scalars().first()
 
     if user is None:
-        from src.core.user_provisioning import ensure_user_and_org
+        from src.core.user_provisioning import (
+            SupabaseEmailLookupError,
+            ensure_user_and_org,
+        )
 
-        provisioned = await ensure_user_and_org(db, token_data)
+        try:
+            provisioned = await ensure_user_and_org(db, token_data)
+        except SupabaseEmailLookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Identity provider temporarily unavailable",
+                headers={"Retry-After": "5"},
+            ) from exc
         if provisioned:
             await db.commit()
             result = await db.execute(
@@ -63,11 +75,25 @@ async def get_current_user(
             )
             user = result.scalars().first()
 
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive",
-            )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
+
+    # JWT email values are snapshots. Reconcile only through the provider's
+    # current user record, and let AuthService own the database transaction.
+    if not token_data.is_cli and token_data.email:
+        from src.services.security.auth_service import AuthService
+
+        user = await AuthService(db).sync_user_email_from_provider(
+            user, token_data.email
+        )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
 
     return user
 
@@ -100,6 +126,36 @@ def require_role(required_role: UserRole):
 
 def require_admin(current_user: User = Depends(require_role(UserRole.ADMIN))) -> User:
     """Require admin role"""
+    return current_user
+
+
+def is_platform_operator(user: User) -> bool:
+    """Return True only for an allowlisted platform-operator user UUID.
+
+    Pure predicate behind ``require_platform_operator`` for routes that must
+    branch (tenant-scoped vs platform-wide) instead of hard-failing.
+    """
+    try:
+        user_id = UUID(str(user.id))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return user_id in settings.platform_operator_user_ids
+
+
+def require_platform_operator(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Require an explicitly allowlisted platform-operator user UUID.
+
+    Tenant roles intentionally do not participate in this decision.  An empty
+    or malformed ``PLATFORM_OPERATOR_USER_IDS`` value produces an empty parsed
+    allowlist and therefore denies every caller.
+    """
+    if not is_platform_operator(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform operator access required",
+        )
     return current_user
 
 
@@ -233,46 +289,30 @@ async def can_access_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> tuple[User, any]:
-    """Check if user can access a document"""
+    """Return the document if the caller may read it.
+
+    GOO-410: the document read boundary is the caller's organization plus
+    not soft-deleted, the rule every document, file and citation read route
+    applies. ``is_public`` is a label only, and an org-less caller reads
+    nothing. Every denial is the same 404 as a missing document, so ids
+    cannot be probed. (R4-L18 had narrowed this helper, which has no route
+    callers, to uploader-or-admin; that contradicted every live read route.)
+    """
     from src.models.document import Document
 
-    stmt = select(Document).where(
-        Document.id == document_id, Document.is_deleted == False
-    )
-    result = await db.execute(stmt)
-    document = result.scalars().first()
+    document = None
+    if current_user.organization_id is not None:
+        stmt = select(Document).where(
+            Document.id == document_id,
+            Document.organization_id == current_user.organization_id,
+            Document.is_deleted == False,
+        )
+        result = await db.execute(stmt)
+        document = result.scalars().first()
 
     if not document:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
-        )
-
-    # Check if user belongs to same organization
-    if document.organization_id != current_user.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this document",
-        )
-
-    # Check if document is public or user has sufficient permissions.
-    #
-    # R4-L18: this used to read
-    #   `not document.is_public and not current_user.has_permission(UserRole.USER)`
-    # which can never fire — UserRole.USER is rank 0 in the role hierarchy
-    # (models/user.py has_permission), so has_permission(UserRole.USER) is
-    # True for every authenticated user and the branch is dead. The org
-    # membership check above already restricts access to same-org users; a
-    # private (non-public) document's evident additional intent is to
-    # further restrict to its uploader or an admin, not every coworker in
-    # the org.
-    if (
-        not document.is_public
-        and current_user.id != document.uploaded_by_user_id
-        and not current_user.has_permission(UserRole.ADMIN)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to private document",
         )
 
     return current_user, document

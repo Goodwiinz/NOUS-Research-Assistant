@@ -4,13 +4,51 @@ stream_confirm_event_generator previously `break`-ed out of the
 astream_events loop on disconnect WITHOUT aclose()-ing the iterator, leaving
 the resumed graph run (which may execute destructive tools) running into a dead
 socket. It must aclose() the iterator and stop without emitting further events.
+
+AA-1 mutation verification (2026-10-02), from backend/:
+    python -m pytest tests/unit/api/test_agent_streaming_confirm_disconnect.py \
+        -k 'unclaimed or preclaim' -q --no-cov
+Removing streaming.py:4493's cleanup ownership guard fails all four cases.
+Removing its ownership release at :4244 fails both '-k "finished and confirmation"'
+cases; removing the release at :4453 fails both '-k "finished and done"' cases.
+The latter mutations cancel a parked run / mark a completed answer stopped.
+Restore the source byte-for-byte, then run this whole file to verify all guards.
+
+PR #1841 commit-boundary mutation verification (2026-10-08), from backend/:
+    python -m pytest tests/unit/api/test_agent_streaming_confirm_disconnect.py \
+        -q --no-cov -o log_cli=false --tb=short --color=no -k '<selector>'
+
+Each mutation below was applied independently and observed to fail with the
+listed selector; streaming.py was restored byte-for-byte after every run:
+
+* :4264, relinquish ownership in the parking exception handler:
+  ``failed_parking_retains`` -> 1 failure (orphaned RUNNING owner).
+* :3766, await claim_confirmation_run directly without the protected task:
+  ``claim_commit_cancellation`` -> 2 failures (committed claim left RUNNING).
+* :4261, await park_confirmation_run directly:
+  ``terminal_commit_cancellation and confirmation`` -> 2 failures (park cancelled).
+* :4490, await complete_confirmation_run directly:
+  ``terminal_commit_cancellation and done`` -> 2 failures (answer marked stopped).
+* :1682, omit propagation of the captured cancellation after the result:
+  ``claim_commit_cancellation and task`` -> 2 failures (request kept running).
+* :1668, omit the child-error handoff to cleanup_task.result():
+  ``failed_park_during and task`` -> 1 failure (parking error lost cancellation).
+
+The barriers model a durable database write whose result has not returned yet.
+Both repeated Task.cancel() and AnyIO request-scope cancellation are covered.
+These are isolated transition tests, not live PostgreSQL concurrency evidence.
 """
 
+import asyncio
+from contextlib import nullcontext, suppress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+from uuid import uuid4
 
 import pytest
+from anyio import CancelScope
 
+from src.services.agent.confirmation_service import pending_approval
 from tests.utils.agent_thread_access import editable_thread_getter
 
 THREAD_ID = "11111111-1111-4111-8111-111111111626"
@@ -32,6 +70,10 @@ def _allow_durable_confirm():
             new=AsyncMock(return_value=True),
         ),
         patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
             "src.api.agent.streaming._finalize_run_id",
             new=AsyncMock(return_value=True),
         ),
@@ -48,9 +90,11 @@ class _DisconnectGraph:
     aclose() the iterator (cancelling the resumed run) and stop without emitting
     the confirmation/done events."""
 
-    def __init__(self):
+    def __init__(self, *, summary_only: bool = False):
+        self.checkpoint_id = str(uuid4())
         self.aclosed = False
         self._sent = False
+        self.summary_only = summary_only
 
     def astream_events(self, *args, **kwargs):
         return self
@@ -65,7 +109,25 @@ class _DisconnectGraph:
                 "event": "on_chat_model_stream",
                 "name": "llm_node",
                 "metadata": {"langgraph_node": "llm_node"},
-                "data": {"chunk": SimpleNamespace(content="x")},
+                "data": {
+                    "chunk": SimpleNamespace(
+                        content=(
+                            [
+                                {
+                                    "type": "reasoning",
+                                    "summary": [
+                                        {
+                                            "type": "summary_text",
+                                            "text": "Before the answer, I compared evidence.",
+                                        }
+                                    ],
+                                }
+                            ]
+                            if self.summary_only
+                            else "x"
+                        )
+                    )
+                },
             }
         raise StopAsyncIteration
 
@@ -82,7 +144,20 @@ class _DisconnectGraph:
                 "messages": [],
                 "tool_executions": [],
             },
-            tasks=(),
+            tasks=(
+                (
+                    SimpleNamespace(
+                        interrupts=(
+                            SimpleNamespace(
+                                id="test-interrupt", value={"message": "Approve?"}
+                            ),
+                        )
+                    ),
+                )
+                if not self._sent
+                else ()
+            ),
+            config={"configurable": {"checkpoint_id": self.checkpoint_id}},
         )
 
 
@@ -92,7 +167,17 @@ async def test_confirm_stream_acloses_graph_on_disconnect():
 
     graph = _DisconnectGraph()
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=True))
-    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=THREAD_ID,
+        confirmed=True,
+        model="",
+        approval_id=pending_approval(
+            await graph.aget_state({}),
+            thread_id=THREAD_ID,
+            run_id="run-1",
+            user_id="user-1",
+        ).approval_id,
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -150,7 +235,17 @@ async def test_confirm_stream_persists_partial_on_disconnect():
     request = SimpleNamespace(
         is_disconnected=AsyncMock(side_effect=[False, True, True])
     )
-    body = SimpleNamespace(thread_id=THREAD_ID, confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=THREAD_ID,
+        confirmed=True,
+        model="",
+        approval_id=pending_approval(
+            await graph.aget_state({}),
+            thread_id=THREAD_ID,
+            run_id="run-1",
+            user_id="user-1",
+        ).approval_id,
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     persist = AsyncMock(return_value="assistant-row-1")
@@ -200,3 +295,559 @@ async def test_confirm_stream_persists_partial_on_disconnect():
     assert kwargs["thread_id"] == THREAD_ID
     # idempotency key derived from the original user turn's client_message_id
     assert kwargs["client_message_id"] is not None
+
+
+@pytest.fixture
+def confirm_lifecycle(monkeypatch):
+    """Drive the real confirmation generator with isolated external services."""
+    from src.api.agent import streaming
+    from src.core import caching
+    from src.services.agent import checkpointer
+    from src.services.agent import graph as graph_mod
+    from src.services.agent import job_store, memory, runtime_snapshot
+    from src.shared.enums import JobStatus
+
+    graph = _DisconnectGraph()
+    snapshot = SimpleNamespace(
+        values={
+            "user_id": "user-1",
+            "page_context": {},
+            "messages": [],
+            "tool_executions": [],
+        },
+        tasks=(
+            SimpleNamespace(
+                interrupts=(
+                    SimpleNamespace(id="test-interrupt", value={"message": "Approve?"}),
+                )
+            ),
+        ),
+        config={"configurable": {"checkpoint_id": "owner-checkpoint"}},
+    )
+    graph.aget_state = AsyncMock(
+        side_effect=lambda _: (
+            snapshot
+            if not graph._sent
+            else SimpleNamespace(
+                values=snapshot.values, tasks=(), config=snapshot.config
+            )
+        )
+    )
+    graph.astream_events = Mock(wraps=graph.astream_events)
+    db = AsyncMock()
+    run = SimpleNamespace(
+        job_id="run-1",
+        user_message_id=None,
+        client_message_id=None,
+        status=JobStatus.RUNNING,
+    )
+
+    async def finalize(_db, run_id, _user, **kwargs):
+        assert run_id == run.job_id
+        if run.status in {JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.FAILED}:
+            return False
+        run.status = kwargs["status"]
+        return True
+
+    ctx = SimpleNamespace(
+        graph=graph,
+        snapshot=snapshot,
+        db=db,
+        run=run,
+        claim=AsyncMock(return_value=True),
+        local_claim=Mock(return_value=True),
+        redis_claim=AsyncMock(return_value=True),
+        redis=AsyncMock(return_value=None),
+        finalize=AsyncMock(side_effect=finalize),
+        persist=AsyncMock(return_value="assistant-row-1"),
+        mark_stopped=AsyncMock(),
+        finish=AsyncMock(),
+    )
+    monkeypatch.setattr(streaming, "AsyncSessionLocal", lambda: db)
+    monkeypatch.setattr(streaming, "_bootstrap_langsmith", lambda: None)
+    monkeypatch.setattr(streaming, "_cancel_current_task_on_disconnect", lambda _: None)
+    monkeypatch.setattr(
+        streaming, "get_active_run_for_thread", AsyncMock(return_value=run)
+    )
+    monkeypatch.setattr(streaming, "claim_awaiting_run_for_confirmation", ctx.claim)
+    monkeypatch.setattr(streaming, "_acquire_local_confirm_claim", ctx.local_claim)
+    monkeypatch.setattr(streaming, "_release_local_confirm_claim", Mock())
+    monkeypatch.setattr(streaming, "_finalize_run_id", ctx.finalize)
+    monkeypatch.setattr(
+        streaming, "process_local_confirmation_coordination_allowed", lambda: True
+    )
+    monkeypatch.setattr(streaming._SeqEmitter, "finish", ctx.finish)
+    monkeypatch.setattr(
+        streaming._stream_buffer, "stream_id_for_run", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        streaming._stream_buffer,
+        "start_stream",
+        AsyncMock(side_effect=RuntimeError("redis down")),
+    )
+    monkeypatch.setattr(
+        streaming._jobs_mod, "_persist_assistant_message_safe", ctx.persist
+    )
+    monkeypatch.setattr(
+        streaming._jobs_mod, "_mark_assistant_message_stopped_safe", ctx.mark_stopped
+    )
+    monkeypatch.setattr(streaming._jobs_mod, "_run_heartbeat", lambda _: nullcontext())
+    monkeypatch.setattr(
+        checkpointer, "get_checkpointer", AsyncMock(return_value=object())
+    )
+    monkeypatch.setattr(memory, "get_memory_store", AsyncMock(return_value=object()))
+    monkeypatch.setattr(graph_mod, "compile_agent_graph", lambda **_: graph)
+    monkeypatch.setattr(job_store, "get_redis", ctx.redis)
+    monkeypatch.setattr(caching, "_acquire_lock", ctx.redis_claim)
+    monkeypatch.setattr(caching, "_release_lock", AsyncMock())
+    monkeypatch.setattr(
+        runtime_snapshot,
+        "hydrate_runtime_state_from_snapshot",
+        AsyncMock(return_value={}),
+    )
+    ctx.stream = streaming.stream_confirm_event_generator(
+        SimpleNamespace(
+            thread_id=THREAD_ID,
+            confirmed=True,
+            model="",
+            approval_id=pending_approval(
+                snapshot, thread_id=THREAD_ID, run_id="run-1", user_id="user-1"
+            ).approval_id,
+        ),
+        SimpleNamespace(is_disconnected=AsyncMock(return_value=False)),
+        Mock(id="user-1", organization_id="org-1"),
+    )
+    return ctx
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loser", ["local", "redis", "durable"])
+async def test_unclaimed_confirm_close_preserves_winning_run(confirm_lifecycle, loser):
+    """AA-1: closing a rejection must not mutate the producer it rejected."""
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    if loser == "local":
+        ctx.local_claim.return_value = False
+    elif loser == "redis":
+        ctx.redis.return_value = object()
+        ctx.redis_claim.return_value = False
+    else:
+        ctx.claim.return_value = False
+    frame = await anext(ctx.stream)
+    assert "event: error" in frame
+    await ctx.stream.aclose()
+    assert ctx.run.status == JobStatus.RUNNING, "claim loser cancelled the winning run"
+    ctx.finalize.assert_not_awaited()
+    ctx.persist.assert_not_awaited()
+    ctx.graph.astream_events.assert_not_called()
+    ctx.finish.assert_awaited_once()
+    ctx.db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_preclaim_confirm_cancel_preserves_winning_run(confirm_lifecycle):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    entered = asyncio.Event()
+
+    async def wait_for_redis():
+        entered.set()
+        await asyncio.Event().wait()
+
+    ctx.redis.side_effect = wait_for_redis
+    task = asyncio.create_task(anext(ctx.stream))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert (
+        ctx.run.status == JobStatus.RUNNING
+    ), "pre-claim disconnect cancelled the winner"
+    ctx.claim.assert_not_awaited()
+    ctx.finalize.assert_not_awaited()
+    ctx.persist.assert_not_awaited()
+    ctx.graph.astream_events.assert_not_called()
+    ctx.db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_postclaim_snapshot_change_releases_without_cancelling_new_approval(
+    confirm_lifecycle, monkeypatch
+):
+    from src.api.agent import streaming
+
+    ctx = confirm_lifecycle
+    changed = SimpleNamespace(
+        values=ctx.snapshot.values,
+        tasks=ctx.snapshot.tasks,
+        config={"configurable": {"checkpoint_id": "newer-checkpoint"}},
+    )
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, changed]
+    release = AsyncMock(return_value=False)  # A newer approval owns the row now.
+    monkeypatch.setattr(streaming, "release_confirmation_claim", release)
+    frame = await anext(ctx.stream)
+    assert '"category": "conflict"' in frame
+    await ctx.stream.aclose()
+    release.assert_awaited_once()
+    ctx.finalize.assert_not_awaited()
+    ctx.persist.assert_not_awaited()
+    ctx.graph.astream_events.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+async def test_postclaim_release_commit_survives_cancellation(
+    confirm_lifecycle, monkeypatch, cancellation
+):
+    from src.api.agent import streaming
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    changed = SimpleNamespace(
+        values=ctx.snapshot.values,
+        tasks=ctx.snapshot.tasks,
+        config={"configurable": {"checkpoint_id": "newer-checkpoint"}},
+    )
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, changed]
+    committed = asyncio.Event()
+    release_ack = asyncio.Event()
+
+    async def release_claim(*args, **kwargs):
+        # The release is in flight; it commits only if its caller keeps going.
+        committed.set()
+        await release_ack.wait()
+        ctx.run.status = JobStatus.AWAITING_CONFIRMATION
+        return True
+
+    monkeypatch.setattr(streaming, "release_confirmation_claim", release_claim)
+    frames = await _cancel_while_commit_returns(
+        ctx, committed, release_ack, cancellation
+    )
+
+    assert (
+        ctx.run.status == JobStatus.AWAITING_CONFIRMATION
+    ), "released claim was abandoned mid-commit, leaving RUNNING with no owner"
+    ctx.finalize.assert_not_awaited()
+    ctx.graph.astream_events.assert_not_called()
+    assert not frames, "cancelled release still emitted a response"
+
+
+@pytest.mark.asyncio
+async def test_claimed_confirm_close_still_cancels_and_persists_partial(
+    confirm_lifecycle,
+):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    async for frame in ctx.stream:
+        if "event: token" in frame:
+            break
+    else:
+        pytest.fail("resumed producer never delivered its token")
+    await ctx.stream.aclose()
+    assert ctx.run.status == JobStatus.CANCELLED
+    assert ctx.graph.aclosed
+    ctx.persist.assert_awaited_once()
+    assert ctx.persist.await_args.kwargs["content"] == "x"
+    assert ctx.persist.await_args.kwargs["stopped"] is True
+    ctx.finalize.assert_awaited_once()
+    assert (
+        ctx.finalize.await_args.kwargs["payload"]["assistant_message_id"]
+        == "assistant-row-1"
+    )
+    ctx.db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["done", "confirmation"])
+@pytest.mark.parametrize("during_emit", [False, True])
+async def test_finished_confirm_close_preserves_committed_disposition(
+    confirm_lifecycle, monkeypatch, terminal, during_emit
+):
+    from src.api.agent import streaming
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    if terminal == "confirmation":
+        _nested_confirmation(ctx)
+    if during_emit:
+        original_emit = streaming._SeqEmitter.emit
+
+        async def interrupt_terminal(self, event, *args, **kwargs):
+            if event.value == terminal:
+                raise asyncio.CancelledError()
+            return await original_emit(self, event, *args, **kwargs)
+
+        monkeypatch.setattr(streaming._SeqEmitter, "emit", interrupt_terminal)
+        with pytest.raises(asyncio.CancelledError):
+            async for _ in ctx.stream:
+                pass
+    else:
+        async for frame in ctx.stream:
+            if f"event: {terminal}" in frame:
+                break
+        else:
+            pytest.fail(f"missing terminal {terminal} frame")
+        await ctx.stream.aclose()
+    expected = (
+        JobStatus.COMPLETED if terminal == "done" else JobStatus.AWAITING_CONFIRMATION
+    )
+    assert (
+        ctx.run.status == expected
+    ), "closed transport overwrote the committed disposition"
+    ctx.mark_stopped.assert_not_awaited()
+    ctx.finalize.assert_awaited_once()
+    assert all(not call.kwargs.get("stopped") for call in ctx.persist.await_args_list)
+    ctx.db.close.assert_awaited_once()
+
+
+def _nested_confirmation(ctx):
+    # Pre-claim and post-claim receipt checks read the approved checkpoint;
+    # the third read mints the nested receipt from a new saved interrupt.
+    nested = SimpleNamespace(
+        values=ctx.snapshot.values,
+        config={"configurable": {"checkpoint_id": "nested-checkpoint"}},
+        tasks=(
+            SimpleNamespace(
+                interrupts=(
+                    SimpleNamespace(
+                        id="nested-interrupt", value={"message": "Next action?"}
+                    ),
+                )
+            ),
+        ),
+    )
+    ctx.graph.aget_state.side_effect = [ctx.snapshot, ctx.snapshot, nested]
+
+
+async def _cancel_while_commit_returns(ctx, committed, release, cancellation):
+    """Cancel after the write, before its result reaches the stream producer."""
+    frames = []
+    scope = CancelScope()
+
+    async def consume():
+        with scope:
+            async for frame in ctx.stream:
+                frames.append(frame)
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(committed.wait(), timeout=2)
+        if cancellation == "scope":
+            scope.cancel()
+        else:
+            task.cancel("client disconnected during commit")
+        # Let cancellation reach the suspended await before releasing the ACK.
+        await asyncio.sleep(0)
+        if cancellation == "task":
+            task.cancel("repeated disconnect cancellation")
+            await asyncio.sleep(0)
+        release.set()
+        if cancellation == "task":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        else:
+            await asyncio.wait_for(task, timeout=2)
+            assert scope.cancelled_caught
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    return frames
+
+
+@pytest.mark.asyncio
+async def test_failed_parking_retains_cleanup_ownership(confirm_lifecycle):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    _nested_confirmation(ctx)
+    original_finalize = ctx.finalize.side_effect
+
+    async def fail_parking(*args, **kwargs):
+        if kwargs["status"] == JobStatus.AWAITING_CONFIRMATION:
+            raise RuntimeError("parking transaction failed before commit")
+        return await original_finalize(*args, **kwargs)
+
+    ctx.finalize.side_effect = fail_parking
+    async for frame in ctx.stream:
+        if "event: confirmation" in frame:
+            break
+    else:
+        pytest.fail("missing nested confirmation")
+    await ctx.stream.aclose()
+
+    assert ctx.run.status == JobStatus.CANCELLED, "failed parking orphaned the owner"
+    assert ctx.graph.aclosed
+    ctx.persist.assert_awaited_once()
+    assert ctx.persist.await_args.kwargs["stopped"] is True
+    assert ctx.finalize.await_count == 2
+    ctx.db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+async def test_failed_park_during_cancellation_cancels_owner(
+    confirm_lifecycle, cancellation
+):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    _nested_confirmation(ctx)
+    waiting = asyncio.Event()
+    release = asyncio.Event()
+    original_finalize = ctx.finalize.side_effect
+
+    async def fail_parking(*args, **kwargs):
+        if kwargs["status"] == JobStatus.AWAITING_CONFIRMATION:
+            waiting.set()
+            await release.wait()
+            raise RuntimeError("parking transaction failed before commit")
+        return await original_finalize(*args, **kwargs)
+
+    ctx.finalize.side_effect = fail_parking
+    frames = await _cancel_while_commit_returns(ctx, waiting, release, cancellation)
+
+    assert ctx.run.status == JobStatus.CANCELLED, "failed parking orphaned the owner"
+    ctx.persist.assert_awaited_once()
+    assert ctx.persist.await_args.kwargs["stopped"] is True
+    assert ctx.finalize.await_count == 2
+    assert not any("event: confirmation" in frame for frame in frames)
+    ctx.db.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+@pytest.mark.parametrize("claim_won", [True, False])
+async def test_claim_commit_cancellation_resolves_ownership(
+    confirm_lifecycle, cancellation, claim_won
+):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    committed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def claim(*args, **kwargs):
+        # The winner's write is durable, but the caller has not received it.
+        ctx.run.status = JobStatus.RUNNING
+        committed.set()
+        await release.wait()
+        return claim_won
+
+    ctx.claim.side_effect = claim
+    frames = await _cancel_while_commit_returns(ctx, committed, release, cancellation)
+
+    expected = JobStatus.CANCELLED if claim_won else JobStatus.RUNNING
+    assert ctx.run.status == expected, "claim commit outcome was lost on cancellation"
+    assert ctx.finalize.await_count == int(claim_won)
+    ctx.graph.astream_events.assert_not_called()
+    ctx.persist.assert_not_awaited()
+    ctx.db.close.assert_awaited_once()
+    assert not frames, "cancelled claim resumed the graph or emitted a response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+@pytest.mark.parametrize("terminal", ["done", "confirmation"])
+async def test_terminal_commit_cancellation_preserves_disposition(
+    confirm_lifecycle, cancellation, terminal
+):
+    from src.shared.enums import JobStatus
+
+    ctx = confirm_lifecycle
+    expected = (
+        JobStatus.COMPLETED if terminal == "done" else JobStatus.AWAITING_CONFIRMATION
+    )
+    if terminal == "confirmation":
+        _nested_confirmation(ctx)
+    committed = asyncio.Event()
+    release = asyncio.Event()
+    original_finalize = ctx.finalize.side_effect
+
+    async def finalize(*args, **kwargs):
+        result = await original_finalize(*args, **kwargs)
+        if kwargs["status"] == expected:
+            committed.set()
+            await release.wait()
+        return result
+
+    ctx.finalize.side_effect = finalize
+    frames = await _cancel_while_commit_returns(ctx, committed, release, cancellation)
+
+    assert ctx.run.status == expected, "disconnect overwrote the committed disposition"
+    ctx.mark_stopped.assert_not_awaited()
+    ctx.finalize.assert_awaited_once()
+    assert all(not call.kwargs.get("stopped") for call in ctx.persist.await_args_list)
+    ctx.db.close.assert_awaited_once()
+    assert not any(f"event: {terminal}" in frame for frame in frames)
+
+
+@pytest.mark.asyncio
+async def test_confirm_stream_persists_summary_only_stop_before_answer() -> None:
+    """A public provider summary survives a stop even when no answer token
+    arrived yet; it must not fabricate answer content."""
+    from src.api.agent.streaming import stream_confirm_event_generator
+
+    graph = _DisconnectGraph(summary_only=True)
+    request = SimpleNamespace(
+        is_disconnected=AsyncMock(side_effect=[False, True, True])
+    )
+    body = SimpleNamespace(
+        thread_id=THREAD_ID,
+        confirmed=True,
+        model="",
+        approval_id=pending_approval(
+            await graph.aget_state({}),
+            thread_id=THREAD_ID,
+            run_id="run-1",
+            user_id="user-1",
+        ).approval_id,
+    )
+    current_user = Mock(id="user-1", organization_id="org-1")
+    persist = AsyncMock(return_value="assistant-row-summary")
+
+    with (
+        patch(
+            "src.api.agent.streaming._stream_buffer.start_stream",
+            new=AsyncMock(side_effect=RuntimeError("redis down")),
+        ),
+        patch(
+            "src.services.agent.observability.configure_langsmith", return_value=None
+        ),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "src.services.agent.memory.get_memory_store",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "src.services.agent.graph.compile_agent_graph",
+            return_value=graph,
+        ),
+        patch(
+            "src.api.agent.streaming._jobs_mod._persist_assistant_message_safe",
+            new=persist,
+        ),
+        patch(
+            "src.api.agent.streaming._latest_user_client_message_id",
+            new=AsyncMock(return_value="user-cmid-summary"),
+        ),
+        patch("src.api.agent.streaming.AsyncSessionLocal", return_value=AsyncMock()),
+    ):
+        async for _ in stream_confirm_event_generator(body, request, current_user):
+            pass
+
+    persist.assert_awaited_once()
+    kwargs = persist.await_args.kwargs
+    assert kwargs["content"] == ""
+    assert kwargs["reasoning_summary"] == "Before the answer, I compared evidence."
+    assert kwargs["stopped"] is True

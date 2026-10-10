@@ -75,7 +75,7 @@ export const OrganizationSettingsPage = (): ReactElement => {
     setMemberError(null);
     try {
       const defaultWorkspace =
-        await workspaceService.getOrCreateDefaultWorkspace();
+        await workspaceService.getOrCreateDefaultWorkspace(user.id);
       const details = await workspaceService.getWorkspace(defaultWorkspace.id);
       setWorkspace(details);
       setMembers(details.members ?? []);

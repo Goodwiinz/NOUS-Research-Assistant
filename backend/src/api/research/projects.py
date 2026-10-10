@@ -30,6 +30,7 @@ from src.models import (
 from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.services.research.bibliography_service import BibliographyService
 from src.services.research.project_service import ProjectService
+from src.services.research_engine.project_access import ResearchAction, resolve_project
 from src.shared.research_schemas import (
     NoteCreate,
     NoteListResponse,
@@ -105,11 +106,13 @@ async def list_projects(
             has_prev=result["has_prev"],
         )
 
-    except Exception as e:
-        logger.error("list_projects_failed", error=str(e), user_id=str(current_user.id))
+    except Exception:
+        logger.error(
+            "list_projects_failed", exc_info=True, user_id=str(current_user.id)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list projects: {str(e)}",
+            detail="Failed to list projects",
         )
 
 
@@ -147,14 +150,14 @@ async def create_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
         logger.error(
-            "create_project_failed", error=str(e), user_id=str(current_user.id)
+            "create_project_failed", exc_info=True, user_id=str(current_user.id)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create project: {str(e)}",
+            detail="Failed to create project",
         )
 
 
@@ -225,11 +228,11 @@ async def get_project(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("get_project_failed", error=str(e), project_id=str(project_id))
+    except Exception:
+        logger.error("get_project_failed", exc_info=True, project_id=str(project_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get project: {str(e)}",
+            detail="Failed to get project",
         )
 
 
@@ -265,12 +268,12 @@ async def update_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("update_project_failed", error=str(e), project_id=str(project_id))
+        logger.error("update_project_failed", exc_info=True, project_id=str(project_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update project: {str(e)}",
+            detail="Failed to update project",
         )
 
 
@@ -298,12 +301,12 @@ async def delete_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("delete_project_failed", error=str(e), project_id=str(project_id))
+        logger.error("delete_project_failed", exc_info=True, project_id=str(project_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete project: {str(e)}",
+            detail="Failed to delete project",
         )
 
 
@@ -378,11 +381,11 @@ async def list_project_documents(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("list_project_documents_failed", error=str(e))
+    except Exception:
+        logger.error("list_project_documents_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list documents: {str(e)}",
+            detail="Failed to list documents",
         )
 
 
@@ -407,9 +410,11 @@ async def add_document_to_project(
         Created association
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
-        # Verify document exists
+        # Verify the caller can read the document: same organization and not
+        # deleted. GOO-410: documents are organization-shared, so a colleague's
+        # private document can be added too; is_public is a label only.
         doc_query = select(Document).where(
             Document.id == document_id,
             Document.organization_id == current_user.organization_id,
@@ -419,14 +424,6 @@ async def add_document_to_project(
         document = doc_result.scalar_one_or_none()
 
         if not document:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document {document_id} not found",
-            )
-
-        if document.uploaded_by_user_id != current_user.id and not getattr(
-            document, "is_public", False
-        ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found",
@@ -508,15 +505,20 @@ async def add_document_to_project(
             matrix_result = await db.execute(matrix_query)
             matrices = matrix_result.scalars().all()
 
+            from src.services.research.extraction_forms_service import (
+                extraction_task_kwargs,
+            )
+
             for m in matrices:
                 task_id = f"auto-doc-{uuid.uuid4().hex[:12]}"
+                try:
+                    kwargs = await extraction_task_kwargs(
+                        db, m, [document_id], current_user.id, task_id
+                    )
+                except HTTPException:  # no form version: nothing to extract into
+                    continue
                 run_extraction_matrix.apply_async(
-                    kwargs={
-                        "matrix_id": str(m.id),
-                        "document_ids": [str(document_id)],
-                        "columns": m.columns,
-                        "task_id": task_id,
-                    },
+                    kwargs=kwargs,
                     task_id=task_id,
                     queue="low_priority",
                 )
@@ -596,12 +598,12 @@ async def add_document_to_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("add_document_failed", error=str(e))
+        logger.error("add_document_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add document: {str(e)}",
+            detail="Failed to add document",
         )
 
 
@@ -623,7 +625,7 @@ async def remove_document_from_project(
         db: Database session
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         # Find and delete the association
         query = select(CollectionDocument).where(
@@ -652,12 +654,12 @@ async def remove_document_from_project(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("remove_document_failed", error=str(e))
+        logger.error("remove_document_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove document: {str(e)}",
+            detail="Failed to remove document",
         )
 
 
@@ -735,11 +737,11 @@ async def list_project_notes(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("list_notes_failed", error=str(e))
+    except Exception:
+        logger.error("list_notes_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list notes: {str(e)}",
+            detail="Failed to list notes",
         )
 
 
@@ -770,7 +772,7 @@ async def create_note(
         # adapter — the route and the agent tool verify ownership differently
         # (see ProjectService.create_note docstring), so the shared service
         # method stays persistence-only.
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         await _validate_note_document_links(
             project_id, note_data.linked_document_ids, current_user, db
         )
@@ -795,12 +797,12 @@ async def create_note(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("create_note_failed", error=str(e))
+        logger.error("create_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create note: {str(e)}",
+            detail="Failed to create note",
         )
 
 
@@ -830,11 +832,11 @@ async def get_note(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("get_note_failed", error=str(e))
+    except Exception:
+        logger.error("get_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get note: {str(e)}",
+            detail="Failed to get note",
         )
 
 
@@ -859,7 +861,7 @@ async def update_note(
         Updated note
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         note = await _get_note(project_id, note_id, db)
 
         # Update fields
@@ -886,12 +888,12 @@ async def update_note(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("update_note_failed", error=str(e))
+        logger.error("update_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update note: {str(e)}",
+            detail="Failed to update note",
         )
 
 
@@ -911,7 +913,7 @@ async def delete_note(
         db: Database session
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         note = await _get_note(project_id, note_id, db)
 
         await db.delete(note)
@@ -921,12 +923,12 @@ async def delete_note(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("delete_note_failed", error=str(e))
+        logger.error("delete_note_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete note: {str(e)}",
+            detail="Failed to delete note",
         )
 
 
@@ -949,7 +951,7 @@ async def toggle_note_pin(
         Updated pin status
     """
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
         note = await _get_note(project_id, note_id, db)
 
         note.is_pinned = not note.is_pinned
@@ -962,12 +964,12 @@ async def toggle_note_pin(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("toggle_pin_failed", error=str(e))
+        logger.error("toggle_pin_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to toggle pin: {str(e)}",
+            detail="Failed to toggle pin",
         )
 
 
@@ -1018,13 +1020,17 @@ async def get_project_bibliography(
                 "generated_at": datetime.utcnow().isoformat(),
             }
 
-        # Get citations for these documents
+        # Get citations for these documents. A project can hold a document
+        # from another organization (a cross-org workspace member added it),
+        # so both reads apply the org + not-deleted document boundary, as
+        # list_project_documents and the citations export do (GOO-410).
         citation_query = (
             select(Citation)
             .join(Document, Citation.document_id == Document.id)
             .where(
                 Citation.document_id.in_(document_ids),
                 Citation.is_deleted.is_(False),
+                Document.organization_id == current_user.organization_id,
                 Document.is_deleted.is_(False),
             )
         )
@@ -1038,6 +1044,7 @@ async def get_project_bibliography(
 
             doc_stmt = select(Document).where(
                 Document.id.in_(document_ids),
+                Document.organization_id == current_user.organization_id,
                 Document.is_deleted == False,
             )
             doc_result2 = await db.execute(doc_stmt)
@@ -1079,11 +1086,11 @@ async def get_project_bibliography(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("generate_bibliography_failed", error=str(e))
+    except Exception:
+        logger.error("generate_bibliography_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate bibliography: {str(e)}",
+            detail="Failed to generate bibliography",
         )
 
 
@@ -1096,43 +1103,10 @@ async def _get_project_with_auth(
     project_id: UUID,
     current_user: User,
     db: AsyncSession,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> Collection:
-    """Get project with authorization check.
-
-    Args:
-        project_id: Project ID
-        current_user: Current user
-        db: Database session
-
-    Returns:
-        Project if authorized
-
-    Raises:
-        HTTPException: If not found or not authorized
-    """
-    from src.models import Workspace
-
-    query = (
-        select(Collection)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            and_(
-                Collection.id == project_id,
-                Workspace.owner_id == current_user.id,
-                Collection.is_deleted.is_(False),
-            )
-        )
-    )
-    result = await db.execute(query)
-    project = result.scalar_one_or_none()
-
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found or access denied",
-        )
-
-    return project
+    """Apply the canonical project authorization and lifecycle boundary."""
+    return (await resolve_project(db, project_id, current_user.id, action)).collection
 
 
 async def _get_note(
@@ -1216,6 +1190,10 @@ def _to_project_response(project: Collection) -> ProjectResponse:
 
     return ProjectResponse(
         id=project.id,
+        research_engine_project_id=project.__dict__.get("research_engine_project_id"),
+        can_edit=project.__dict__.get("can_edit", False),
+        can_manage=project.__dict__.get("can_manage", False),
+        workspace_archived=project.__dict__.get("workspace_archived", False),
         workspace_id=project.workspace_id,
         name=project.name,
         description=project.description,
@@ -1292,11 +1270,11 @@ async def list_project_memories(
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("list_memories_failed", error=str(e))
+    except Exception:
+        logger.error("list_memories_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list memories: {str(e)}",
+            detail="Failed to list memories",
         )
 
 
@@ -1313,7 +1291,7 @@ async def create_project_memory(
 ):
     """Save a durable fact for a project."""
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         memory = ProjectMemory(
             project_id=project_id,
@@ -1333,12 +1311,12 @@ async def create_project_memory(
         return _to_memory_response(memory)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("create_memory_failed", error=str(e))
+        logger.error("create_memory_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create memory: {str(e)}",
+            detail="Failed to create memory",
         )
 
 
@@ -1354,7 +1332,7 @@ async def delete_project_memory(
 ):
     """Delete a project memory."""
     try:
-        await _get_project_with_auth(project_id, current_user, db)
+        await _get_project_with_auth(project_id, current_user, db, ResearchAction.EDIT)
 
         query = select(ProjectMemory).where(
             and_(
@@ -1375,10 +1353,10 @@ async def delete_project_memory(
         logger.info("project_memory_deleted", memory_id=str(memory_id))
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        logger.error("delete_memory_failed", error=str(e))
+        logger.error("delete_memory_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete memory: {str(e)}",
+            detail="Failed to delete memory",
         )

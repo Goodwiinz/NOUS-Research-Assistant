@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -53,10 +53,8 @@ class TestThreadMessagesCountFilterParity:
             call_num = len(captured)
             result = MagicMock()
             if call_num == 1:
-                # Ownership check.
-                result.scalar_one_or_none = MagicMock(return_value=thread)
-            elif call_num == 2:
-                # Page query.
+                # Page query (access runs through workspace_access.get_thread,
+                # patched in each test).
                 result.scalars = MagicMock(
                     return_value=MagicMock(all=MagicMock(return_value=[]))
                 )
@@ -78,12 +76,16 @@ class TestThreadMessagesCountFilterParity:
         user = MagicMock()
         user.id = uuid4()
 
-        await get_thread_messages(
-            thread_id=thread_id, limit=10, before=before, current_user=user, db=db
-        )
+        with patch(
+            "src.api.agent.execute.workspace_access.get_thread",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            await get_thread_messages(
+                thread_id=thread_id, limit=10, before=before, current_user=user, db=db
+            )
 
-        assert len(captured) == 3, captured
-        page_sql, count_sql = captured[1], captured[2]
+        assert len(captured) == 2, captured
+        page_sql, count_sql = captured[0], captured[1]
 
         # The bug: the count statement was built independently of the page
         # query and never picked up the ``before`` predicate.
@@ -108,11 +110,15 @@ class TestThreadMessagesCountFilterParity:
         user = MagicMock()
         user.id = uuid4()
 
-        response = await get_thread_messages(
-            thread_id=thread_id, limit=None, before=None, current_user=user, db=db
-        )
+        with patch(
+            "src.api.agent.execute.workspace_access.get_thread",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            response = await get_thread_messages(
+                thread_id=thread_id, limit=None, before=None, current_user=user, db=db
+            )
 
-        assert len(captured) == 2  # ownership check + single messages query
+        assert len(captured) == 1  # single messages query
         assert response.total == 0
         assert response.messages == []
 
@@ -126,17 +132,12 @@ class TestListProjectsSearchEscaping:
         captured: list[str] = []
 
         async def _execute(stmt: Any, *a: Any, **kw: Any) -> Any:
-            captured.append(str(stmt.compile(compile_kwargs={"literal_binds": True})))
-            call_num = len(captured)
+            sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            captured.append(sql)
             result = MagicMock()
-            if call_num == 1:
-                # _get_workspace_ids_for_user
-                result.all = MagicMock(return_value=[(workspace_id,)])
-            elif call_num == 2:
-                # count_query
+            if "count(" in sql.lower():
                 result.scalar = MagicMock(return_value=0)
             else:
-                # page query
                 result.scalars = MagicMock(
                     return_value=MagicMock(all=MagicMock(return_value=[]))
                 )
@@ -147,27 +148,39 @@ class TestListProjectsSearchEscaping:
         return db, captured
 
     async def test_search_wildcards_are_escaped(self) -> None:
+        from unittest.mock import patch
+
         from src.services.research.project_service import ProjectService
 
         db, captured = self._capture_db(uuid4())
         service = ProjectService(db)
 
-        await service.list_projects(user_id=uuid4(), search="50%_done")
+        with patch(
+            "src.services.research.project_service.accessible_research_workspace_ids",
+            new=AsyncMock(return_value=[uuid4()]),
+        ):
+            await service.list_projects(user_id=uuid4(), search="50%_done")
 
         # Both the count and page queries share ``filters`` — assert both to
         # guard against the escaping being applied to only one of them.
-        assert len(captured) == 3, captured
-        assert all("50\\%\\_done" in sql for sql in captured[1:]), captured
+        assert len(captured) == 2, captured
+        assert all("50\\%\\_done" in sql for sql in captured), captured
 
     async def test_plain_search_term_is_unaffected(self) -> None:
         """Control: a search with no LIKE metacharacters compiles to the same
         substring match as before escaping was added — the fix must not
         narrow ordinary searches."""
+        from unittest.mock import patch
+
         from src.services.research.project_service import ProjectService
 
         db, captured = self._capture_db(uuid4())
         service = ProjectService(db)
 
-        await service.list_projects(user_id=uuid4(), search="hello")
+        with patch(
+            "src.services.research.project_service.accessible_research_workspace_ids",
+            new=AsyncMock(return_value=[uuid4()]),
+        ):
+            await service.list_projects(user_id=uuid4(), search="hello")
 
-        assert all("%hello%" in sql for sql in captured[1:]), captured
+        assert all("%hello%" in sql for sql in captured), captured

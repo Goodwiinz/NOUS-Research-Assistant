@@ -467,6 +467,16 @@ class TestSchemaOnConnect:
     full-scan (observed live: 'There is no such fulltext schema index').
     """
 
+    @pytest.fixture(autouse=True)
+    def _isolated_breaker(self):
+        # Other tests can leave the process-wide Neo4j breaker open. Tests of
+        # open/closed behavior below explicitly supply their own breaker.
+        with patch(
+            "src.services.knowledge_graph.knowledge_graph_service.get_circuit_breaker",
+            return_value=None,
+        ):
+            yield
+
     def _fresh_service(self):
         from src.services.knowledge_graph.knowledge_graph_service import (
             KnowledgeGraphService,

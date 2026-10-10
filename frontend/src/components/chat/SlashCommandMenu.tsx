@@ -37,6 +37,53 @@ export function SlashCommandMenu({
   onRun,
 }: SlashCommandMenuProps) {
   const reduceMotion = useReducedMotion();
+  // A plain marker avoids relying on motion's ref forwarding (and keeps the
+  // measurement testable with reduced-motion/component mocks). Its parent is
+  // the positioned menu and its grandparent is the composer anchor.
+  const menuRef = React.useRef<HTMLSpanElement>(null);
+  const optionRefs = React.useRef(new Map<string, HTMLButtonElement>());
+
+  const updateAvailableHeight = React.useCallback(() => {
+    const menu = menuRef.current?.parentElement;
+    const anchor = menu?.parentElement;
+    if (!open || !menu || !anchor) return;
+
+    const viewportTop = window.visualViewport?.offsetTop ?? 0;
+    const anchorTop = anchor.getBoundingClientRect().top;
+    const available = Math.max(0, Math.floor(anchorTop - viewportTop - 8));
+    menu.style.setProperty('--slash-menu-max-height', `${available}px`);
+  }, [open]);
+
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    updateAvailableHeight();
+
+    const anchor = menuRef.current?.parentElement?.parentElement;
+    const visualViewport = window.visualViewport;
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' || !anchor
+        ? null
+        : new ResizeObserver(updateAvailableHeight);
+    if (resizeObserver && anchor) resizeObserver.observe(anchor);
+    window.addEventListener('resize', updateAvailableHeight);
+    visualViewport?.addEventListener('resize', updateAvailableHeight);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updateAvailableHeight);
+      visualViewport?.removeEventListener('resize', updateAvailableHeight);
+    };
+  }, [open, updateAvailableHeight]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const activeCommand = commands[highlightedIndex];
+    if (!activeCommand) return;
+    const option = optionRefs.current.get(activeCommand.id);
+    if (typeof option?.scrollIntoView === 'function') {
+      option.scrollIntoView({ block: 'nearest' });
+    }
+  }, [commands, highlightedIndex, open]);
 
   return (
     <AnimatePresence>
@@ -49,16 +96,23 @@ export function SlashCommandMenu({
           animate={{ opacity: 1, y: 0 }}
           exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
           transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-          className="absolute left-0 right-0 z-50 overflow-hidden rounded-xl p-1"
+          className="absolute left-0 right-0 z-50 overflow-x-hidden overflow-y-auto rounded-xl p-1"
           style={{
             // Float 8px above the input box. Inline (not a Tailwind arbitrary
             // value) so the calc() spacing is guaranteed valid CSS.
             bottom: 'calc(100% + 8px)',
+            // Keep the entire menu within short visual viewports. The
+            // command rows remain keyboard reachable inside this scroll box.
+            maxHeight:
+              'var(--slash-menu-max-height, min(60dvh, calc(100dvh - 16px)))',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
             background: 'var(--nous-bg-2)',
             border: '1px solid var(--nous-border-1)',
             boxShadow: 'var(--nous-shadow-lg)',
           }}
         >
+          <span ref={menuRef} aria-hidden="true" className="hidden" />
           <div
             className="px-3 pt-1.5 pb-1 font-nous-mono text-[9px] uppercase"
             style={{ color: 'var(--nous-fg-3)', letterSpacing: '0.14em' }}
@@ -70,6 +124,10 @@ export function SlashCommandMenu({
             return (
               <button
                 key={cmd.id}
+                ref={(node) => {
+                  if (node) optionRefs.current.set(cmd.id, node);
+                  else optionRefs.current.delete(cmd.id);
+                }}
                 id={slashOptionId(cmd.id)}
                 role="option"
                 aria-selected={active}
@@ -84,7 +142,7 @@ export function SlashCommandMenu({
                 <span
                   className="font-nous-mono text-[12px] font-semibold shrink-0"
                   style={{
-                    color: active ? 'var(--nous-sol-safe)' : 'var(--nous-fg-1)',
+                    color: active ? 'var(--nous-erebus)' : 'var(--nous-fg-1)',
                     letterSpacing: '0.04em',
                   }}
                 >
@@ -93,7 +151,7 @@ export function SlashCommandMenu({
                 <span
                   className="font-nous-body text-[12px] truncate"
                   style={{
-                    color: active ? 'var(--nous-fg-1)' : 'var(--nous-fg-3)',
+                    color: active ? 'var(--nous-erebus)' : 'var(--nous-fg-3)',
                   }}
                 >
                   {cmd.title}

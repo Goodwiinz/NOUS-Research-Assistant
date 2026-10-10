@@ -22,7 +22,12 @@ import { workspaceService } from '@/services/workspaceService';
 import type { ChatStore } from './chat/types';
 import { initialState } from './chat/initialState';
 import {
-  abortAllNewestPageRequests,
+  discardPersistedSelection,
+  mergePersistedChatState,
+} from './chat/persistedSelection';
+import {
+  captureChatSession,
+  resetChatSession,
   setActiveAbortController,
 } from './chat/requestCoordinator';
 import { createSelectionSlice } from './chat/slices/selectionSlice';
@@ -61,16 +66,19 @@ export const useChatStore = create<ChatStore>()(
       },
 
       reset: () => {
-        abortAllNewestPageRequests();
+        resetChatSession();
+        discardPersistedSelection();
         set(initialState);
       },
 
       initializeDefaultWorkspace: async () => {
+        const isCurrentSession = captureChatSession();
         try {
           console.log('[ChatStore] Initializing default workspace...');
-          const { currentWorkspaceId } = get();
+          const { currentWorkspaceId, ownerUserId } = get();
           const workspace =
-            await workspaceService.getOrCreateDefaultWorkspace();
+            await workspaceService.getOrCreateDefaultWorkspace(ownerUserId);
+          if (!isCurrentSession()) return;
 
           // Keep local workspace list in sync with bootstrap result.
           set((state) => {
@@ -101,12 +109,14 @@ export const useChatStore = create<ChatStore>()(
           // Set current workspace and wait for its conversation load so
           // bootstrap callers do not have to issue the same read again.
           await get().setCurrentWorkspace(workspace.id);
+          if (!isCurrentSession()) return;
 
           // Reset retry counter on successful initialization
           set((s) => {
             s.reinitRetryCount = 0;
           });
         } catch (error) {
+          if (!isCurrentSession()) return;
           console.error(
             '[ChatStore] Error initializing default workspace:',
             error
@@ -122,12 +132,16 @@ export const useChatStore = create<ChatStore>()(
       name: 'chat-storage',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        // Only persist these fields
+        // Only persist these fields. The selection is stamped with the
+        // account it belongs to and held back at hydration until that
+        // account is published again (chat/persistedSelection.ts).
+        ownerUserId: state.ownerUserId,
         currentWorkspaceId: state.currentWorkspaceId,
         currentConversationId: state.currentConversationId,
         currentThreadId: state.currentThreadId,
         sidebarCollapsed: state.sidebarCollapsed,
       }),
+      merge: mergePersistedChatState,
       onRehydrateStorage: () => () => {
         // Reset streaming state on rehydration to prevent stale UI
         setActiveAbortController(null);
@@ -141,6 +155,11 @@ export const useChatStore = create<ChatStore>()(
 // ============================================================================
 
 export type { MessageFreshness, RefreshExpectation } from './chat/types';
+export {
+  captureChatSession,
+  onChatSessionReset,
+  getChatSessionSignal,
+} from './chat/requestCoordinator';
 
 // ============================================================================
 // Selectors (compatibility re-exports)

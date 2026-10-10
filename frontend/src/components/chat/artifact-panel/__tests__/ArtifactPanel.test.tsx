@@ -4,8 +4,18 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import React from 'react';
+import { flushSync } from 'react-dom';
 import { act } from '@testing-library/react';
 import { render, screen, waitFor } from '@/test/test-utils';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 
 import { ArtifactPanel } from '../ArtifactPanel';
 import {
@@ -44,6 +54,34 @@ const docArtifact: Artifact = {
   id: 'doc-1',
   title: 'RLHF Survey',
 };
+
+function ArtifactWithRadixPalette(): React.ReactElement {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>
+          <button type="button">Open palette</button>
+        </DialogTrigger>
+        <DialogContent
+          aria-label="Command palette"
+          onEscapeKeyDown={() => {
+            // Radix removes its portal during the Escape dispatch. This is
+            // the ordering the panel's global listener must tolerate.
+            flushSync(() => setOpen(false));
+          }}
+        >
+          <DialogTitle>Command palette</DialogTitle>
+          <DialogDescription>Search commands</DialogDescription>
+          <DialogPrimitive.Close asChild>
+            <button type="button">Close palette</button>
+          </DialogPrimitive.Close>
+        </DialogContent>
+      </Dialog>
+      <ArtifactPanel artifact={docArtifact} />
+    </>
+  );
+}
 
 describe('ArtifactPanel', () => {
   beforeEach(() => {
@@ -133,6 +171,41 @@ describe('ArtifactPanel', () => {
     } finally {
       overlay.remove();
     }
+  });
+
+  it('keeps the artifact open when a Radix palette consumes Escape', async () => {
+    const { user } = render(<ArtifactWithRadixPalette />);
+    await user.click(screen.getByRole('button', { name: 'Open palette' }));
+    expect(
+      screen.getByRole('dialog', { name: 'Command palette' })
+    ).toBeInTheDocument();
+
+    const palette = screen.getByRole('dialog', { name: 'Command palette' });
+    const escape = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    // Radix's DismissableLayer normally calls preventDefault after dismissing
+    // the dialog. Keep that call observable while leaving defaultPrevented
+    // false so this regression isolates the original composed event path.
+    const preventDefault = vi.fn();
+    Object.defineProperty(escape, 'preventDefault', {
+      configurable: true,
+      value: preventDefault,
+    });
+    act(() => {
+      palette.dispatchEvent(escape);
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Command palette' })
+      ).not.toBeInTheDocument()
+    );
+    expect(escape.defaultPrevented).toBe(false);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(useArtifactPanelStore.getState().isOpen).toBe(true);
   });
 
   it('pin button toggles the pinned flag with aria-pressed', async () => {

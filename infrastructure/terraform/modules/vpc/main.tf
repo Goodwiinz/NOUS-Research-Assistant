@@ -77,7 +77,7 @@ resource "aws_subnet" "database" {
 
 # NAT Gateway
 resource "aws_eip" "nat" {
-  count = var.enable_nat_gateway ? (var.one_nat_gateway_per_az ? length(var.public_subnets) : 1) : 0
+  count  = var.enable_nat_gateway ? (var.one_nat_gateway_per_az ? length(var.public_subnets) : 1) : 0
   domain = "vpc"
 
   tags = merge(var.tags, {
@@ -148,7 +148,7 @@ resource "aws_route_table_association" "public" {
 resource "aws_route_table_association" "private" {
   count = var.enable_nat_gateway ? length(aws_subnet.private) : 0
 
-  subnet_id = aws_subnet.private[count.index].id
+  subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[var.one_nat_gateway_per_az ? count.index : 0].id
 }
 
@@ -346,7 +346,7 @@ resource "aws_flow_log" "vpc" {
   iam_role_arn    = aws_iam_role.flow_log[0].arn
   log_destination = aws_cloudwatch_log_group.vpc_flow_log[0].arn
   traffic_type    = "ALL"
-  vpc_id         = aws_vpc.main.id
+  vpc_id          = aws_vpc.main.id
 
   tags = merge(var.tags, {
     Name = "${var.name}-flow-log"

@@ -61,4 +61,10 @@ def test_docids_query_excludes_soft_deleted_documents():
         # column names always appear in the SELECT list; the guard must be a
         # predicate, so assert inside the WHERE clause specifically
         where_clause = sql.split("where", 1)[1]
-        assert "is_deleted is false" in where_clause
+        assert "documents.is_deleted is false" in where_clause
+        assert "collection_documents.is_deleted is false" in where_clause
+
+
+def test_document_numbering_has_deterministic_order():
+    sql = _sql(DraftGenerationService._build_project_documents_query(uuid4(), None))
+    assert "order by documents.id" in sql

@@ -9,6 +9,7 @@ import {
   ConversationUpdate,
 } from '@/types/workspace';
 import { workspaceService } from '@/services/workspaceService';
+import { captureChatSession } from '../requestCoordinator';
 import type { ChatSliceCreator } from '../types';
 import { removeItemFromRecord } from '../recordIndex';
 import {
@@ -47,6 +48,7 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
   get
 ) => ({
   loadConversations: async (workspaceId) => {
+    const isCurrentSession = captureChatSession();
     const requestToken = {};
     loadConversationsRequestTokens.set(workspaceId, requestToken);
     set((state) => {
@@ -56,6 +58,7 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
 
     try {
       const response = await workspaceService.listConversations(workspaceId);
+      if (!isCurrentSession()) return;
       if (loadConversationsRequestTokens.get(workspaceId) !== requestToken) {
         return; // superseded by a newer load — the newer request owns state
       }
@@ -78,6 +81,7 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
         state.isLoadingConversations = false;
       });
     } catch (error) {
+      if (!isCurrentSession()) return;
       if (loadConversationsRequestTokens.get(workspaceId) !== requestToken) {
         return; // superseded — no stale error, no stale-data recovery
       }
@@ -141,8 +145,10 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
   },
 
   createConversation: async (data) => {
+    const isCurrentSession = captureChatSession();
     try {
       const conversation = await workspaceService.createConversation(data);
+      if (!isCurrentSession()) return null;
       set((state) => {
         const workspaceId = data.workspace_id;
         if (!state.conversations[workspaceId]) {
@@ -154,6 +160,7 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
       });
       return conversation;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error creating conversation:', error);
 
       // Handle 404 - workspace not found (stale data)
@@ -179,8 +186,10 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
   },
 
   updateConversation: async (id, data) => {
+    const isCurrentSession = captureChatSession();
     try {
       const conversation = await workspaceService.updateConversation(id, data);
+      if (!isCurrentSession()) return null;
       set((state) => {
         const workspaceId = conversation.workspace_id;
         const convs = state.conversations[workspaceId] || [];
@@ -191,6 +200,7 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
       });
       return conversation;
     } catch (error) {
+      if (!isCurrentSession()) return null;
       console.error('[ChatStore] Error updating conversation:', error);
       set((state) => {
         state.error = 'Failed to update conversation';
@@ -200,8 +210,10 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
   },
 
   deleteConversation: async (id) => {
+    const isCurrentSession = captureChatSession();
     try {
       await workspaceService.deleteConversation(id);
+      if (!isCurrentSession()) return false;
       // Cascade: the conversation's threads (and their message caches) are
       // unreachable once it's gone — deleting only the conversation row used
       // to orphan cached threads/messages/pagination/freshness and their
@@ -242,6 +254,7 @@ export const createConversationSlice: ChatSliceCreator<ConversationSlice> = (
       });
       return true;
     } catch (error) {
+      if (!isCurrentSession()) return false;
       console.error('[ChatStore] Error deleting conversation:', error);
       set((state) => {
         state.error = 'Failed to delete conversation';

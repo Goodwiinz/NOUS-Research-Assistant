@@ -1,5 +1,17 @@
-import { test, devices } from '@playwright/test';
+import { test, expect, devices } from '@playwright/test';
 import { LoginPage, DocumentsPage, SearchPage } from '../utils/page-objects';
+
+// Browser engines belong to Playwright projects; describe groups can vary
+// context options without changing the worker's defaultBrowserType.
+function contextOptions(device: (typeof devices)[string]) {
+  return {
+    viewport: device.viewport,
+    userAgent: device.userAgent,
+    deviceScaleFactor: device.deviceScaleFactor,
+    isMobile: device.isMobile,
+    hasTouch: device.hasTouch,
+  };
+}
 
 /**
  * Cross-Browser and Device Compatibility Tests
@@ -16,7 +28,7 @@ test.describe('Cross-Browser Compatibility', () => {
   // Desktop browser tests
   ['chromium', 'firefox', 'webkit', 'edge'].forEach(browserName => {
     test.describe(`${browserName} - Desktop Compatibility`, () => {
-      test.use({ ...devices['Desktop Chrome'] }); // Base desktop setup
+      test.use(contextOptions(devices['Desktop Chrome']));
 
       test(`${browserName}: Application loads and functions correctly`, async ({ page }) => {
         const loginPage = new LoginPage(page);
@@ -103,7 +115,7 @@ test.describe('Cross-Browser Compatibility', () => {
 test.describe('Device Compatibility', () => {
   // Tablet devices
   test.describe('iPad Compatibility', () => {
-    test.use({ ...devices['iPad Pro'] });
+    test.use(contextOptions(devices['iPad Pro 11']));
 
     test('iPad: Responsive layout and touch interactions', async ({ page }) => {
       await page.goto('/login');
@@ -157,7 +169,7 @@ test.describe('Device Compatibility', () => {
   });
 
   test.describe('Android Tablet Compatibility', () => {
-    test.use({ ...devices['Galaxy Tab S4'] });
+    test.use(contextOptions(devices['Galaxy Tab S4']));
 
     test('Android Tablet: Layout adaptation', async ({ page }) => {
       await page.goto('/login');
@@ -181,7 +193,7 @@ test.describe('Device Compatibility', () => {
 
   // Mobile devices
   test.describe('iPhone Compatibility', () => {
-    test.use({ ...devices['iPhone 14'] });
+    test.use(contextOptions(devices['iPhone 14']));
 
     test('iPhone: Mobile responsive design', async ({ page }) => {
       await page.goto('/login');
@@ -264,7 +276,7 @@ test.describe('Device Compatibility', () => {
   });
 
   test.describe('Android Mobile Compatibility', () => {
-    test.use({ ...devices['Pixel 5'] });
+    test.use(contextOptions(devices['Pixel 5']));
 
     test('Android Mobile: Material Design adaptation', async ({ page }) => {
       await page.goto('/login');
@@ -336,7 +348,7 @@ test.describe('Responsive Design Validation', () => {
 test.describe('Cross-Browser Feature Compatibility', () => {
   ['chromium', 'firefox', 'webkit'].forEach(browserName => {
     test.describe(`${browserName} - Feature Support`, () => {
-      test.use({ ...devices['Desktop Chrome'] });
+      test.use(contextOptions(devices['Desktop Chrome']));
 
       test(`${browserName}: Modern JavaScript features`, async ({ page }) => {
         await page.goto('/');
@@ -436,11 +448,10 @@ test.describe('Cross-Browser Feature Compatibility', () => {
 });
 
 test.describe('Performance Across Devices', () => {
-  ['Desktop Chrome', 'iPhone 14', 'iPad Pro'].forEach(deviceName => {
-    test(`Performance testing on ${deviceName}`, async ({ page }) => {
-      // Use appropriate device emulation
-      const device = devices[deviceName as keyof typeof devices] || devices['Desktop Chrome'];
-      test.use(device);
+  ['Desktop Chrome', 'iPhone 14', 'iPad Pro 11'].forEach(deviceName => {
+    test.describe(deviceName, () => {
+      test.use(contextOptions(devices[deviceName]));
+      test(`Performance testing on ${deviceName}`, async ({ page }) => {
 
       // Monitor performance metrics
       const performanceMetrics = await page.evaluate(() => {
@@ -461,6 +472,7 @@ test.describe('Performance Across Devices', () => {
       });
 
       console.log(`Performance metrics for ${deviceName}:`, performanceMetrics);
+      });
     });
   });
 });

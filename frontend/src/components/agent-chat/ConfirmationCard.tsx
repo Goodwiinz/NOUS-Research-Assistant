@@ -21,6 +21,7 @@ const TOOL_LABELS: Record<string, string> = {
   add_document_to_project: 'Add Document to Project',
   create_project_note: 'Create Project Note',
   create_draft: 'Generate Draft',
+  revise_draft: 'Revise Draft',
   create_project: 'Create Project',
   search_external_database: 'Search External Database',
   delete_document: 'Delete Document',

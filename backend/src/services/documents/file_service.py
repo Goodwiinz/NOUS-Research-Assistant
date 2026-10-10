@@ -2,6 +2,7 @@
 File handling and storage service
 """
 
+import asyncio
 import hashlib
 import logging
 import mimetypes
@@ -9,6 +10,7 @@ import os
 import time
 import uuid
 import uuid as uuid_module
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Optional
 
@@ -18,6 +20,7 @@ from fastapi import Depends, HTTPException, UploadFile, status
 from PIL import Image
 from pypdf import PdfReader
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Optional pandas import for spreadsheet processing
@@ -35,20 +38,69 @@ from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.models.user import User, UserRole
+from src.shared.enums import SatelliteSyncStatus
 
 logger = logging.getLogger(__name__)
 
+# Partial unique index on documents(organization_id, checksum_sha256) WHERE live;
+# see alembic/versions/uq_documents_org_checksum.py (INDEX_NAME).
+_CHECKSUM_UNIQUE_INDEX = "uq_documents_org_checksum_live"
+
+
+def _duplicate_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Identical file already exists in this organization",
+    )
+
+
+_ACTIVE_CONTENT_MIME_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+        "image/svg+xml",
+        "text/javascript",
+        "application/javascript",
+        "application/x-javascript",
+        # Executables: no supported document type is a binary program.
+        "application/x-dosexec",
+        "application/x-msdownload",
+        "application/x-executable",
+        "application/x-sharedlib",
+        "application/x-mach-binary",
+        "application/x-pie-executable",
+        "application/vnd.microsoft.portable-executable",
+        # XML deliberately absent: XML-bodied .txt/.md/.csv sniff as
+        # text/xml, and downloads already downgrade it to octet-stream + sandbox.
+    }
+)
+
 
 class FileValidationError(Exception):
-    """File validation related errors"""
+    """File validation related errors.
 
-    pass
+    ``str(exc)`` is for logs only. ``public_detail`` is a candidate reason:
+    the upload endpoint permits only exact members of its authoritative
+    ``_SAFE_FILE_VALIDATION_DETAILS`` allowlist (audit I8), otherwise returning
+    a generic message. Supplying a string does not make it client-safe.
+    """
+
+    def __init__(self, message: str, public_detail: str | None = None) -> None:
+        super().__init__(message)
+        self.public_detail = public_detail
 
 
 class FileStorageError(Exception):
     """File storage related errors"""
 
     pass
+
+
+@dataclass(frozen=True)
+class UploadCancellation:
+    job_id: uuid.UUID
+    status: JobStatus
+    cancelled: bool
 
 
 class FileService:
@@ -135,37 +187,31 @@ class FileService:
         """Calculate SHA-256 hash from raw bytes."""
         return hashlib.sha256(data).hexdigest()
 
-    def _assert_not_duplicate(self, file_hash: str, organization_id: str) -> None:
+    async def _assert_not_duplicate(self, file_hash: str, organization_id: str) -> None:
         """R2-L13: reject a live duplicate before any storage/quota work.
 
-        The base upload path computed file_hash but never checked it — the
-        same file could be uploaded twice and billed against quota twice.
+        Org-scoped; matches the ``checksum_sha256`` column and the
+        ``document_metadata.file_hash`` key that pre-column rows carry. This is
+        the fast path; two racing uploads can both pass it, and the partial
+        unique index ``uq_documents_org_checksum_live`` rejects the loser's
+        insert, which ``upload_file`` also maps to 409.
         """
-        # Best-effort pre-check: session quirks (tests use minimal doubles)
-        # must not break uploads — the authoritative hash uniqueness is
-        # enforced at the DB layer.
-        try:
-            dup = (
-                self.db.query(Document.id)
-                .filter(
-                    Document.organization_id == organization_id,
-                    Document.checksum_sha256 == file_hash,
-                    Document.is_deleted.is_(False),
-                )
-                .first()
-            )
-        except Exception:
-            return
-        # isinstance guard: generic test doubles return Mock rows; only a
-        # real Document.id (str/UUID) counts as a hit.
-        dup_id = getattr(dup, "id", None) if dup is not None else None
-        if isinstance(dup_id, (str, uuid_module.UUID)):
-            from fastapi import HTTPException as _HE
+        from sqlalchemy import or_
 
-            raise _HE(
-                status_code=409,
-                detail="Identical file already exists in this organization",
+        result = await self.db.execute(
+            select(Document.id)
+            .where(
+                Document.organization_id == organization_id,
+                Document.is_deleted.isnot(True),
+                or_(
+                    Document.checksum_sha256 == file_hash,
+                    Document.document_metadata["file_hash"].as_string() == file_hash,
+                ),
             )
+            .limit(1)
+        )
+        if result.first() is not None:
+            raise _duplicate_conflict()
 
     async def _spool_and_hash(self, file: UploadFile) -> tuple[str, str]:
         """Stream the upload to a temp spool while hashing (R2-L12).
@@ -286,14 +332,16 @@ class FileService:
         if file_size > organization.max_file_size_bytes:
             raise FileValidationError(
                 f"File size ({file_size} bytes) exceeds maximum allowed size "
-                f"({organization.max_file_size_bytes} bytes)"
+                f"({organization.max_file_size_bytes} bytes)",
+                public_detail="File exceeds the maximum allowed size",
             )
 
         # Check storage quota
         if not organization.can_upload_file(file_size):
             raise FileValidationError(
                 f"Insufficient storage quota. Available: "
-                f"{organization.storage_available_gb:.2f}GB"
+                f"{organization.storage_available_gb:.2f}GB",
+                public_detail="Insufficient storage quota",
             )
 
         # Check file extension
@@ -335,10 +383,16 @@ class FileService:
             # became an empty COMPLETED document. Reject honestly.
             raise FileValidationError(
                 f"Archive format '{file_ext}' is not supported; "
-                "extract and upload the contained files"
+                "extract and upload the contained files",
+                public_detail=(
+                    "Archive uploads are not supported; extract and upload the files"
+                ),
             )
         if file_ext not in allowed_extensions:
-            raise FileValidationError(f"File extension '{file_ext}' is not allowed")
+            raise FileValidationError(
+                f"File extension '{file_ext}' is not allowed",
+                public_detail="File type is not allowed",
+            )
 
         # Read content for type detection
         file_content = file.file.read(min(file_size, 8192))  # Read first 8KB
@@ -355,6 +409,10 @@ class FileService:
             sniffed = magic.from_buffer(file_content, mime=True)
         except Exception:
             sniffed = None
+        # I10: content the browser would execute is never stored, whatever
+        # extension it claims (a .png that sniffs as HTML/SVG is XSS bait).
+        if sniffed in _ACTIVE_CONTENT_MIME_TYPES:
+            raise FileValidationError(f"File content type '{sniffed}' is not allowed")
         guessed = mimetypes.guess_type(file.filename)[0]
         mime_type = sniffed or guessed or "application/octet-stream"
 
@@ -435,7 +493,9 @@ class FileService:
         # span multiple commits — without this, a failure orphans the object,
         # strands a PENDING row, or drifts org storage quota (see the except).
         document = None
+        document_id = None
         document_committed = False
+        commit_in_flight = False
         quota_committed = False
         processing_job = None
         processing_job_committed = False
@@ -443,6 +503,7 @@ class FileService:
         try:
             # Validate file
             validation_result = self.validate_file(file, user, organization)
+            organization_id = organization.id
             original_ext = Path(file.filename).suffix
             mime_type = validation_result["mime_type"] or "application/octet-stream"
 
@@ -460,10 +521,10 @@ class FileService:
                 # R2-L12: stream via spool instead of materializing up to
                 # max-file-size bytes in memory per upload.
                 spool_path, file_hash = await self._spool_and_hash(file)
-                self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
                     with open(spool_path, "rb") as fh:
-                        self._s3_helper.upload_fileobj(fh, s3_key, mime_type)
+                        self.s3_helper.upload_fileobj(fh, s3_key, mime_type)
                 finally:
                     try:
                         os.unlink(spool_path)
@@ -499,10 +560,10 @@ class FileService:
 
                 # R2-L12: streamed spool (see s3 branch)
                 spool_path, file_hash = await self._spool_and_hash(file)
-                self._assert_not_duplicate(file_hash, str(organization.id))
                 try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
                     with open(spool_path, "rb") as fh:
-                        storage_key = self._storage_helper.upload_fileobj(
+                        storage_key = self.storage_helper.upload_fileobj(
                             fh, bucket, key, mime_type
                         )
                 finally:
@@ -536,7 +597,12 @@ class FileService:
                 file_path_with_ext = f"{file_path}{original_ext}"
                 saved_path = await self.save_file(file, file_path_with_ext)
                 file_hash = self.calculate_file_hash(saved_path)
-                self._assert_not_duplicate(file_hash, str(organization.id))
+                try:
+                    await self._assert_not_duplicate(file_hash, str(organization.id))
+                except Exception:
+                    # Nothing references the saved file yet; don't orphan it.
+                    Path(saved_path).unlink(missing_ok=True)
+                    raise
 
                 document = Document(
                     title=title,
@@ -565,15 +631,29 @@ class FileService:
             )
 
             document.checksum_sha256 = file_hash
+            document_id = document.id
 
             # Add file hash as metadata
             document.add_metadata("file_hash", file_hash)
             document.add_metadata("original_filename", file.filename)
 
             self.db.add(document)
-            await self.db.commit()
-            await self.db.refresh(document)
+            try:
+                commit_in_flight = True
+                await self.db.commit()
+            except IntegrityError as exc:
+                # A rejected transaction did not commit, unlike a lost reply.
+                commit_in_flight = False
+                # Lost the dedup race: the outer handler rolls back and deletes
+                # the stored object (nothing else is committed yet).
+                if _CHECKSUM_UNIQUE_INDEX in str(exc.orig):
+                    raise _duplicate_conflict() from exc
+                raise
+            # The commit is durable even if the subsequent reload fails.
+            # Compensation must revoke the row before deleting its object.
             document_committed = True
+            commit_in_flight = False
+            await self.db.refresh(document)
 
             # Atomically CLAIM quota — conditional UPDATE fails (rowcount 0)
             # when a concurrent upload consumed the remaining headroom after
@@ -585,10 +665,13 @@ class FileService:
             )
             if claim.rowcount == 0:
                 raise FileValidationError(
-                    "Insufficient storage quota (concurrent-upload race lost)"
+                    "Insufficient storage quota (concurrent-upload race lost)",
+                    public_detail="Insufficient storage quota",
                 )
+            commit_in_flight = True
             await self.db.commit()
             quota_committed = True
+            commit_in_flight = False
 
             # Create processing job for document ingestion
             processing_job = ProcessingJob(
@@ -611,9 +694,11 @@ class FileService:
             )
 
             self.db.add(processing_job)
+            commit_in_flight = True
             await self.db.commit()
-            await self.db.refresh(processing_job)
             processing_job_committed = True
+            commit_in_flight = False
+            await self.db.refresh(processing_job)
 
             # Queue the job for processing
             from src.tasks.processing_tasks import process_document_ingestion
@@ -622,8 +707,22 @@ class FileService:
 
             return document
 
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
             await self.db.rollback()
+            if isinstance(e, IntegrityError):
+                commit_in_flight = False
+            if commit_in_flight:
+                # A failed or cancelled commit can have landed without a reply.
+                # Rolling back the session cannot undo an already durable write.
+                # Preserve backing storage until its durable outcome is known.
+                logger.warning(
+                    "upload commit outcome unknown for document %s; preserving storage",
+                    document_id,
+                    exc_info=True,
+                )
+                if isinstance(e, asyncio.CancelledError):
+                    raise
+                raise FileStorageError(f"Failed to upload file: {str(e)}") from e
             # Compensate whatever durably landed before the failure. First reverse
             # the DB (soft-delete the row + revert quota + drop the stray job in one
             # commit); only if that succeeds do we delete the storage object. If the
@@ -634,16 +733,15 @@ class FileService:
             reversal_ok = not document_committed
             if document_committed and document is not None:
                 try:
-                    # A committed ProcessingJob only exists when the enqueue
-                    # (.delay) failed — drop it so it can't run against the
-                    # soft-deleted document.
+                    # A committed job may survive reload, enqueue, or cancellation
+                    # failure; drop it before deleting the document's object.
                     if processing_job_committed and processing_job is not None:
                         await self.db.delete(processing_job)
                     document.soft_delete()
                     if quota_committed:
                         await self.db.execute(
                             Organization.storage_usage_update(
-                                organization.id, -validation_result["file_size"]
+                                organization_id, -validation_result["file_size"]
                             )
                         )
                     await self.db.commit()
@@ -653,7 +751,7 @@ class FileService:
                     logger.warning(
                         "upload rollback: failed to reverse committed row/quota for "
                         "document %s; leaving storage object as a sweepable orphan",
-                        getattr(document, "id", None),
+                        document_id,
                         exc_info=True,
                     )
             # Delete by captured primitives (never the possibly-expired instance).
@@ -668,6 +766,10 @@ class FileService:
                         storage_path or obj_file_path,
                         exc_info=True,
                     )
+            if isinstance(
+                e, (FileValidationError, HTTPException, asyncio.CancelledError)
+            ):
+                raise
             raise FileStorageError(f"Failed to upload file: {str(e)}")
 
     def extract_text_content(self, document: Document) -> str:
@@ -711,11 +813,12 @@ class FileService:
                 text = []
                 with open(file_path, "rb") as file:
                     pdf_reader = PdfReader(file)
-                    for page in pdf_reader.pages:
+                    for page_number, page in enumerate(pdf_reader.pages, start=1):
                         # `or ""` so a single page that yields None doesn't
                         # TypeError the whole join (losing every other page).
-                        text.append(page.extract_text() or "")
-                return "\n".join(text)
+                        page_text = page.extract_text() or ""
+                        text.append(f"[Page {page_number}]\n{page_text}")
+                return "\n\n".join(text)
 
             elif document.document_type in [DocumentType.SPREADSHEET]:
                 # Excel file - process if pandas is available
@@ -976,6 +1079,246 @@ class FileService:
                 exc_info=True,
             )
 
+    async def cancel_upload_job(
+        self, task_id: str, user: User
+    ) -> Optional[UploadCancellation]:
+        """Cancel a current task attempt, retaining its document and quota.
+
+        Refresh and lock Document -> ProcessingJob before checking ownership
+        and status. Completion, deletion or a newer dispatch may have happened
+        since the request began. Commit before best-effort broker revocation.
+        The returned snapshot remains readable even in an expiring session.
+        """
+        organization_id, user_id = user.organization_id, user.id
+        if organization_id is None:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        try:
+            with self.db.no_autoflush:
+                candidate = (
+                    await self.db.execute(
+                        select(ProcessingJob.id, ProcessingJob.document_id).where(
+                            ProcessingJob.celery_task_id == task_id,
+                            ProcessingJob.organization_id == organization_id,
+                            ProcessingJob.is_deleted == False,
+                        )
+                    )
+                ).first()
+                if candidate is None:
+                    await self.db.commit()
+                    return None
+
+                document = None
+                if candidate.document_id is not None:
+                    document = (
+                        await self.db.execute(
+                            select(Document)
+                            .where(
+                                Document.id == candidate.document_id,
+                                Document.organization_id == organization_id,
+                            )
+                            .with_for_update()
+                            .execution_options(populate_existing=True)
+                        )
+                    ).scalar_one_or_none()
+                    if document is None or document.is_deleted:
+                        raise HTTPException(status_code=404, detail="Upload not found")
+
+                job = (
+                    await self.db.execute(
+                        select(ProcessingJob)
+                        .where(
+                            ProcessingJob.id == candidate.id,
+                            ProcessingJob.organization_id == organization_id,
+                            ProcessingJob.celery_task_id == task_id,
+                            ProcessingJob.is_deleted == False,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one_or_none()
+                if job is None or job.document_id != candidate.document_id:
+                    await self.db.commit()
+                    return None
+                if job.created_by_user_id != user_id:
+                    raise HTTPException(
+                        status_code=403, detail="You can only cancel your own uploads"
+                    )
+                if job.is_finished:
+                    outcome = UploadCancellation(job.id, job.status, False)
+                    await self.db.commit()
+                    return outcome
+
+                job.cancel_job()
+                job.error_message = "Upload cancelled by user"
+                if document is not None and document.processing_status in (
+                    ProcessingStatus.PENDING,
+                    ProcessingStatus.PROCESSING,
+                    ProcessingStatus.RETRYING,
+                ):
+                    # An older job must not terminate another valid ingestion.
+                    other_attempt = (
+                        await self.db.execute(
+                            select(ProcessingJob.id).where(
+                                ProcessingJob.document_id == document.id,
+                                ProcessingJob.organization_id == organization_id,
+                                ProcessingJob.id != job.id,
+                                ProcessingJob.is_deleted == False,
+                                ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                                ProcessingJob.status.in_(
+                                    (
+                                        JobStatus.PENDING,
+                                        JobStatus.QUEUED,
+                                        JobStatus.RUNNING,
+                                        JobStatus.RETRYING,
+                                    )
+                                ),
+                            )
+                        )
+                    ).first()
+                    if other_attempt is None:
+                        document.update_processing_status(
+                            ProcessingStatus.FAILED, "Upload cancelled by user"
+                        )
+                outcome = UploadCancellation(job.id, job.status, True)
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        self._revoke_tasks([task_id])
+        return outcome
+
+    @staticmethod
+    def _revoke_tasks(task_ids: List[str]) -> None:
+        for task_id in task_ids:
+            try:
+                from src.tasks.processing_tasks import current_app
+
+                current_app.control.revoke(task_id, terminate=True)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to revoke Celery task %s after committed cancellation",
+                    task_id,
+                    exc_info=True,
+                )
+
+    async def soft_delete_documents(
+        self,
+        organization_id: Any,
+        document_ids: List[Any],
+        *,
+        cascade: bool = True,
+        user: Optional[User] = None,
+    ) -> List[Document]:
+        """Soft-delete live documents, cancel their unfinished jobs and release
+        their quota, in one committed transaction.
+
+        Rows are locked Document -> ProcessingJob and re-read, so a concurrent
+        delete of the same document waits, then finds it already deleted and
+        releases nothing twice. ``cascade`` additionally soft-deletes the
+        documents' entities and jobs; unfinished jobs are cancelled either way.
+        Celery revocation runs after the commit and is best effort: the
+        committed state plus the claim-time check in ``replay_guard`` are what
+        stop the worker. Returns the documents this call deleted. Physical and
+        satellite cleanup stay with the caller.
+        """
+        from datetime import datetime
+
+        from src.models.entity import Entity
+
+        try:
+            if user is not None and user.organization_id != organization_id:
+                raise HTTPException(status_code=404, detail="Document not found")
+            documents = list(
+                (
+                    await self.db.execute(
+                        select(Document)
+                        .where(
+                            Document.id.in_(document_ids),
+                            Document.organization_id == organization_id,
+                            Document.is_deleted == False,
+                        )
+                        .order_by(Document.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not documents:
+                await self.db.commit()
+                return []
+            if user is not None and not user.has_permission(UserRole.ADMIN):
+                if any(d.uploaded_by_user_id != user.id for d in documents):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Can only delete your own documents or require admin role",
+                    )
+            locked_ids = [d.id for d in documents]
+
+            jobs = (
+                (
+                    await self.db.execute(
+                        select(ProcessingJob)
+                        .where(
+                            ProcessingJob.document_id.in_(locked_ids),
+                            ProcessingJob.organization_id == organization_id,
+                            ProcessingJob.is_deleted == False,
+                        )
+                        .order_by(ProcessingJob.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            task_ids = []
+            for job in jobs:
+                if not job.is_finished:
+                    job.cancel_job()
+                    job.error_message = "Document deleted"
+                    if job.celery_task_id:
+                        task_ids.append(job.celery_task_id)
+                if cascade:
+                    job.soft_delete()
+
+            if cascade:
+                await self.db.execute(
+                    update(Entity)
+                    .where(
+                        Entity.document_id.in_(locked_ids),
+                        Entity.organization_id == organization_id,
+                        Entity.is_deleted == False,
+                    )
+                    .values(is_deleted=True, deleted_at=datetime.utcnow())
+                )
+            for document in documents:
+                # Record the user's cascade choice before any remote cleanup.
+                # A process loss or provider outage must leave retry intent,
+                # while a non-cascading delete must retain the graph.
+                document.document_metadata = {
+                    **(document.document_metadata or {}),
+                    "graph_cleanup_requested": cascade,
+                }
+                if cascade:
+                    document.neo4j_index_status = SatelliteSyncStatus.PENDING.value
+                document.soft_delete()
+            await self.db.execute(
+                Organization.storage_usage_update(
+                    organization_id,
+                    -sum(d.file_size_bytes or 0 for d in documents),
+                )
+            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
+
+        self._revoke_tasks(task_ids)
+        return documents
+
     async def delete_file(self, document: Document, user: User) -> bool:
         """Delete file and update storage.
 
@@ -1010,34 +1353,18 @@ class FileService:
         # still counted). With this order a failure leaves at worst a sweepable
         # orphan object, never a live row whose backing file is gone.
         try:
-            from datetime import datetime
-
-            from src.models.entity import Entity
-
-            await self.db.execute(
-                update(Entity)
-                .where(Entity.document_id == document.id, Entity.is_deleted == False)
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
+            deleted = await self.soft_delete_documents(
+                document.organization_id, [document.id], user=user
             )
-            await self.db.execute(
-                update(ProcessingJob)
-                .where(
-                    ProcessingJob.document_id == document.id,
-                    ProcessingJob.is_deleted == False,
-                )
-                .values(is_deleted=True, deleted_at=datetime.utcnow())
-            )
-
-            document.soft_delete()
-            await self.db.execute(
-                Organization.storage_usage_update(
-                    document.organization_id, -document.file_size_bytes
-                )
-            )
-            await self.db.commit()
+        except HTTPException:
+            raise
         except Exception as e:
-            await self.db.rollback()
             raise FileStorageError(f"Failed to delete file: {str(e)}")
+        if not deleted:
+            # A concurrent delete won; its commit already released the quota.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+            )
 
         # Best-effort physical delete AFTER the commit. A failure here must NOT
         # roll back the committed soft-delete — log it as a recoverable orphan.
@@ -1083,24 +1410,176 @@ class FileService:
         # Neo4j: reap this document's relationships then its now-orphaned entity
         # nodes (shared across docs — no blind DETACH DELETE), org-scoped. The KG
         # service is synchronous, so offload to a worker thread.
-        try:
-            import asyncio
+        await self.cleanup_deleted_document_graph(document_id, organization_id)
 
-            from src.services.knowledge_graph.knowledge_graph_service import (
-                KnowledgeGraphService,
-            )
+    async def lock_document_for_reprocessing(
+        self,
+        document_id,
+        organization_id,
+        user,
+        *,
+        not_found_detail: str = "Document not found",
+        forbidden_detail: str = "Can only reprocess your own documents or require admin role",
+    ):
+        """Serialize reprocessing with claims, stage commits and deletion.
 
-            await asyncio.to_thread(
-                lambda: KnowledgeGraphService().delete_document_graph(
-                    document_id, organization_id
+        The caller retains this document lock through its job-creation commit.
+        Reject overlapping attempts instead of giving two jobs write authority.
+        """
+        document = (
+            await self.db.execute(
+                select(Document)
+                .where(
+                    Document.id == document_id,
+                    Document.organization_id == organization_id,
+                    Document.is_deleted == False,
                 )
+                .with_for_update()
+                .execution_options(populate_existing=True, autoflush=False)
             )
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "knowledge-graph cleanup on file delete failed",
-                extra={"document_id": document_id},
-                exc_info=True,
+        ).scalar_one_or_none()
+        if document is None:
+            raise HTTPException(status_code=404, detail=not_found_detail)
+        if document.uploaded_by_user_id != user.id and not user.has_permission(
+            UserRole.ADMIN
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=forbidden_detail,
             )
+        from src.models.processing import JobStatus, JobType, ProcessingJob
+
+        active = (
+            await self.db.execute(
+                select(ProcessingJob.id)
+                .where(
+                    ProcessingJob.document_id == document.id,
+                    ProcessingJob.organization_id == organization_id,
+                    ProcessingJob.is_deleted == False,
+                    ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                    ProcessingJob.status.in_(
+                        (
+                            JobStatus.PENDING,
+                            JobStatus.QUEUED,
+                            JobStatus.RUNNING,
+                            JobStatus.RETRYING,
+                        )
+                    ),
+                )
+                .execution_options(autoflush=False)
+                .limit(1)
+            )
+        ).first()
+        if active is not None:
+            raise HTTPException(
+                status_code=409, detail="Document processing is already active"
+            )
+        return document
+
+    async def cleanup_deleted_document_graph(
+        self, document_id: str, organization_id: str
+    ) -> bool:
+        """Remove a deleted document's graph and persist its retryable outcome.
+
+        No database lock is held during the provider call. Only the satellite
+        status of the current, scoped, deleted row is updated afterwards.
+        """
+        import asyncio
+
+        from src.services.knowledge_graph.knowledge_graph_service import (
+            KnowledgeGraphService,
+        )
+
+        # Cleanup owns a separate transaction: rollback releases its read before
+        # the provider call without expiring the request's response objects or
+        # committing unrelated pending work in its session.
+        async with AsyncSession(
+            bind=self.db.bind, expire_on_commit=False
+        ) as cleanup_db:
+            try:
+                document = (
+                    (
+                        await cleanup_db.execute(
+                            select(Document)
+                            .where(
+                                Document.id == document_id,
+                                Document.organization_id == organization_id,
+                                Document.is_deleted == True,
+                            )
+                            .execution_options(populate_existing=True, autoflush=False)
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if (
+                    document is None
+                    or (document.document_metadata or {}).get("graph_cleanup_requested")
+                    is False
+                ):
+                    await cleanup_db.rollback()
+                    return True
+                await cleanup_db.rollback()
+                cleanup_ok = True
+                from datetime import datetime, timezone
+
+                started = datetime.now(timezone.utc)
+                try:
+                    await asyncio.to_thread(
+                        lambda: KnowledgeGraphService().delete_document_graph(
+                            document_id, organization_id
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    cleanup_ok = False
+                    logger.warning(
+                        "knowledge-graph cleanup on delete failed",
+                        extra={"document_id": document_id},
+                        exc_info=True,
+                    )
+                from src.services.documents.satellite_state import (
+                    pending_writes,
+                    retire_settled_writes,
+                )
+
+                current = (
+                    await cleanup_db.execute(
+                        select(Document)
+                        .where(
+                            Document.id == document_id,
+                            Document.organization_id == organization_id,
+                            Document.is_deleted == True,
+                        )
+                        .with_for_update()
+                        .execution_options(populate_existing=True, autoflush=False)
+                    )
+                ).scalar_one_or_none()
+                if (
+                    current is not None
+                    and (current.document_metadata or {}).get("graph_cleanup_requested")
+                    is not False
+                ):
+                    if cleanup_ok:
+                        retire_settled_writes(current, "graph", started)
+                    current.neo4j_index_status = (
+                        SatelliteSyncStatus.FAILED.value
+                        if not cleanup_ok
+                        else (
+                            SatelliteSyncStatus.PENDING.value
+                            if pending_writes(current, "graph")
+                            else SatelliteSyncStatus.COMPLETED.value
+                        )
+                    )
+                await cleanup_db.commit()
+                return cleanup_ok
+            except Exception:  # noqa: BLE001
+                await cleanup_db.rollback()
+                logger.warning(
+                    "Could not record deleted-document graph cleanup outcome",
+                    extra={"document_id": document_id},
+                    exc_info=True,
+                )
+                return False
 
     async def get_file_stats(self, organization_id: str) -> Dict[str, Any]:
         """Get file statistics for organization"""

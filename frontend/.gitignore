@@ -10,6 +10,7 @@ playwright/.brv/
 test-results/
 test-results/**/*.brv
 playwright-report/
+playwright-agent-qa-report/
 playwright-report/**/*.brv
 
 # Test artifacts by type

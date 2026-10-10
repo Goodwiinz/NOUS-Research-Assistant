@@ -35,6 +35,7 @@ KNOWN_TOOLS = frozenset(
         "find_entity_paths",
         "get_graph_stats",
         "create_draft",
+        "revise_draft",
         "get_current_draft",
         "export_bibliography",
         "execute_code",

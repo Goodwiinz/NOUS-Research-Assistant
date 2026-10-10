@@ -12,6 +12,7 @@ Router-only schemas (job start/status, confirmation, thread listing) stay in
 ``execute.py`` — nothing below the API layer needs them.
 """
 
+import json
 from typing import Annotated, Any, Dict, List, Literal, Optional, get_args
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.services.agent._sanitize import sanitize_page_context
 from src.services.agent._uuid import UUID_STRICT_PATTERN
 
 StrictUUIDString = Annotated[str, StringConstraints(pattern=UUID_STRICT_PATTERN)]
@@ -49,22 +51,79 @@ class AgentMessage(BaseModel):
         return v
 
 
+# R8-D4: page context is copied into the job cache (L1 + Redis) and the
+# Celery message, so it is bounded at the wire. String caps stay at or below
+# the sanitizer's 400-char field cap, which keeps a sanitized copy valid here.
+# Metadata is sanitized (strings truncated, keys/depth capped) before the 8 KB
+# bound applies, so a long project description is trimmed rather than
+# rejected; only a payload past the raw ceiling or the nesting cap is a 422.
+PAGE_CONTEXT_METADATA_MAX_BYTES = 8192
+PAGE_CONTEXT_METADATA_MAX_RAW_BYTES = 256 * 1024
+PAGE_CONTEXT_METADATA_MAX_DEPTH = 8
+
+
+def _json_size(value: Any) -> int:
+    return len(json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"))
+
+
+def _nested_deeper_than(value: Any, limit: int) -> bool:
+    """True when containers nest more than *limit* levels below *value*.
+
+    Recursion stops at *limit*, so a hostile payload cannot exhaust the stack.
+    """
+    if isinstance(value, dict):
+        children: Any = value.values()
+    elif isinstance(value, list):
+        children = value
+    else:
+        return False
+    if limit == 0:
+        return True
+    return any(_nested_deeper_than(child, limit - 1) for child in children)
+
+
 class PageContextRequest(BaseModel):
-    type: str = Field(default="unknown", description="Page context type")
+    type: str = Field(default="unknown", max_length=64, description="Page context type")
     workspace_id: Optional[UUID] = Field(
         default=None,
         description="Active chat workspace for durable thread creation",
     )
     project_id: Optional[str] = Field(
-        default=None, description="Project ID if on project page"
+        default=None, max_length=255, description="Project ID if on project page"
     )
     project_name: Optional[str] = Field(
-        default=None, description="Project name for display"
+        default=None, max_length=255, description="Project name for display"
     )
     label: Optional[str] = Field(
-        default=None, description="Current page label (e.g., 'Documents', 'Notes')"
+        default=None,
+        max_length=255,
+        description="Current page label (e.g., 'Documents', 'Notes')",
     )
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Free-form page metadata, sanitized on receipt (long strings "
+            "truncated, keys and depth capped). Rejected above 256 KB raw, 8 "
+            "levels of nesting, or 8 KB once sanitized."
+        ),
+    )
+
+    @field_validator("metadata")
+    @classmethod
+    def _bounded_metadata(
+        cls, value: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return value
+        if _nested_deeper_than(value, PAGE_CONTEXT_METADATA_MAX_DEPTH):
+            raise ValueError("metadata is nested too deeply")
+        if _json_size(value) > PAGE_CONTEXT_METADATA_MAX_RAW_BYTES:
+            raise ValueError("metadata is too large")
+        # Same pass (and depth) _page_context_to_dict applies; idempotent.
+        cleaned = sanitize_page_context({"metadata": value})["metadata"]
+        if _json_size(cleaned) > PAGE_CONTEXT_METADATA_MAX_BYTES:
+            raise ValueError("metadata is too large")
+        return cleaned
 
 
 SupportedModel = Literal["", "model-router", "gpt-5-mini", "gpt-5.6-luna"]
@@ -74,6 +133,20 @@ SUPPORTED_MODELS: frozenset[str] = frozenset(
 
 
 class AgentExecuteRequest(BaseModel):
+    execution_provider: Literal["nous", "codex"] = "nous"
+    device_id: Optional[UUID] = None
+    workspace_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _external_binding_required(self) -> "AgentExecuteRequest":
+        if self.execution_provider == "codex" and not (
+            self.device_id and self.workspace_id and self.thread_id
+        ):
+            raise ValueError(
+                "External execution requires device, workspace, and thread"
+            )
+        return self
+
     messages: List[AgentMessage] = Field(
         ...,
         min_length=1,

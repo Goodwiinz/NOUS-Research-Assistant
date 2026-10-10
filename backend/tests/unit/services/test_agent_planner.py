@@ -114,9 +114,54 @@ class TestGeneratePlan:
         assert "proj-123" in prompt
         # Complexity gating folded into the prompt
         assert "FEWER" in prompt and "empty steps list" in prompt
+        assert "normally returns a completed terminal result" in prompt
+        assert "pending result is terminal for the turn" in prompt
+        assert "revise_draft is synchronous" in prompt
 
         # Empty plan passes through unmodified (node layer treats it as "simple").
         assert result.steps == []
+
+    async def test_generate_plan_keeps_steps_after_create_draft(self):
+        model_plan = AgentPlan(
+            steps=[
+                PlanStep(
+                    step=1,
+                    description="Find sources",
+                    tool="search_arxiv",
+                ),
+                PlanStep(
+                    step=2,
+                    description="Create the draft",
+                    tool="create_draft",
+                    depends_on=[1],
+                ),
+                PlanStep(
+                    step=3,
+                    description="Read the pending draft",
+                    tool="get_current_draft",
+                    depends_on=[2],
+                ),
+            ],
+            reasoning="Find evidence, then start draft generation.",
+        )
+        mock_llm = _mock_llm_structured(model_plan)
+
+        with patch(
+            "src.services.agent.planner._build_planner_llm", return_value=mock_llm
+        ):
+            result = await generate_plan(
+                "Find sources, create a draft, then inspect it",
+                ["search_arxiv", "create_draft", "get_current_draft"],
+                PAGE_CONTEXT,
+            )
+
+        assert [step.tool for step in result.steps] == [
+            "search_arxiv",
+            "create_draft",
+            "get_current_draft",
+        ]
+        assert result.steps[-1].depends_on == [2]
+        assert result.reasoning == model_plan.reasoning
 
 
 # ---------------------------------------------------------------------------

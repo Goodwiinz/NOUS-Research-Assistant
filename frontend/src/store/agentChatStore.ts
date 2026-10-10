@@ -12,6 +12,7 @@ import type {
   AgentMessage,
   AgentThread,
   PageContext,
+  ToolExecution,
 } from '@/types/agent-chat';
 
 const DEFAULT_PAGE_CONTEXT: PageContext = {
@@ -24,8 +25,21 @@ const PROJECT_MUTATING_TOOLS = new Set([
   'add_document_to_project',
   'ingest_arxiv_papers',
   'create_draft',
+  'revise_draft',
   'create_project_note',
 ]);
+
+export function projectIdFromToolResult(result: unknown): string | undefined {
+  try {
+    const parsed: unknown =
+      typeof result === 'string' ? JSON.parse(result) : result;
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    const projectId = (parsed as Record<string, unknown>).project_id;
+    return typeof projectId === 'string' && projectId ? projectId : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // Dual-cache reconciliation (docs/engineering/frontend.md, "Legacy
 // server-state stores"): project-mutating agent tools bump
@@ -81,7 +95,10 @@ interface AgentChatStore extends AgentChatState, AgentChatActions {
  */
 function settleStreamingMessage(
   message: AgentMessage,
-  options: { fallbackContent?: string; toolStatus?: 'failed' | 'cancelled' } = {}
+  options: {
+    fallbackContent?: string;
+    toolStatus?: 'failed' | 'cancelled';
+  } = {}
 ): void {
   message.isStreaming = false;
   const toolStatus = options.toolStatus ?? 'failed';
@@ -91,6 +108,47 @@ function settleStreamingMessage(
   if (!message.content && options.fallbackContent) {
     message.content = options.fallbackContent;
   }
+}
+
+function toolResultStatus(
+  result: unknown,
+  transportStatus: string | undefined,
+  isError = false
+): ToolExecution['status'] {
+  if (isError) return 'failed';
+  let payload = result;
+  if (typeof result === 'string') {
+    try {
+      payload = JSON.parse(result);
+    } catch {
+      payload = undefined;
+    }
+  }
+  const payloadStatus =
+    payload && typeof payload === 'object' && 'status' in payload
+      ? String((payload as { status?: unknown }).status ?? '').toLowerCase()
+      : '';
+  if (['failed', 'error'].includes(payloadStatus)) return 'failed';
+  if (payloadStatus === 'cancelled') return 'cancelled';
+  if (['completed', 'complete', 'success', 'succeeded'].includes(payloadStatus))
+    return 'completed';
+  if (
+    [
+      'pending',
+      'running',
+      'analyzing',
+      'generating',
+      'citing',
+      'reviewing',
+      'finalizing',
+    ].includes(payloadStatus)
+  )
+    return 'pending';
+  const raw = String(transportStatus ?? '').toLowerCase();
+  if (raw === 'failed' || raw === 'error') return 'failed';
+  if (raw === 'cancelled') return 'cancelled';
+  if (raw === 'pending' || raw === 'running') return 'pending';
+  return 'completed';
 }
 
 const initialState: AgentChatState = {
@@ -182,7 +240,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService } =
           await import('@/services/agentChatService');
+        if (abortController.signal.aborted) return;
         let didMutateProjectData = false;
+        let mutatedProjectId: string | undefined;
 
         // Build messages array for the API (only user/assistant roles)
         const apiMessages: AgentExecuteRequest['messages'] =
@@ -305,9 +365,11 @@ export const useAgentChatStore = create<AgentChatStore>()(
                         const actualIdx = execs.length - 1 - teIdx;
                         // The service forwards the frame's is_error flag; a failed
                         // tool must not render as a completed one.
-                        execs[actualIdx].status = isError
-                          ? 'failed'
-                          : 'completed';
+                        execs[actualIdx].status = toolResultStatus(
+                          result,
+                          undefined,
+                          isError
+                        );
                         if (isError) execs[actualIdx].error = result;
                         try {
                           execs[actualIdx].result = JSON.parse(result);
@@ -317,8 +379,15 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       }
                     }
                   });
-                  if (PROJECT_MUTATING_TOOLS.has(tool)) {
+                  const completed =
+                    toolResultStatus(result, undefined, isError) ===
+                    'completed';
+                  if (PROJECT_MUTATING_TOOLS.has(tool) && completed) {
                     didMutateProjectData = true;
+                    if (!isError && tool === 'revise_draft') {
+                      mutatedProjectId =
+                        projectIdFromToolResult(result) ?? mutatedProjectId;
+                    }
                   }
                 },
                 // The event's second argument (the planner's rationale) is
@@ -416,6 +485,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       assistantMessageId: placeholderId,
                       jobId: threadId, // thread_id used as job identifier for SSE
                       origin: 'sse',
+                      approvalId: String(confirmation.approval_id ?? ''),
                       tools:
                         (confirmation.tools as Array<{
                           name: string;
@@ -448,7 +518,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       null;
                   });
                   if (didMutateProjectData) {
-                    invalidateProjectQueries(pageContext.projectId);
+                    invalidateProjectQueries(
+                      mutatedProjectId ?? pageContext.projectId
+                    );
                   }
                   // Read the panel state NOW, not at send time: closing the
                   // panel mid-answer used to leave the unread badge unset.
@@ -482,7 +554,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       null;
                   });
                   if (didMutateProjectData) {
-                    invalidateProjectQueries(pageContext.projectId);
+                    invalidateProjectQueries(
+                      mutatedProjectId ?? pageContext.projectId
+                    );
                   }
                 },
               },
@@ -490,6 +564,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             );
             return; // SSE streaming succeeded
           } catch {
+            if (abortController.signal.aborted) return;
             // R4-L19: the SSE transport died after the backend had already
             // parked this turn awaiting confirmation. The durable fallback
             // below re-runs the turn from the original request payload —
@@ -526,7 +601,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                 (state as unknown as AgentChatStore)._abortController = null;
               });
               if (didMutateProjectData) {
-                invalidateProjectQueries(pageContext.projectId);
+                invalidateProjectQueries(
+                  mutatedProjectId ?? pageContext.projectId
+                );
               }
               return;
             }
@@ -548,6 +625,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
         // Durable Trigger.dev fallback
         const { runId } =
           await agentChatService.startDurableRun(requestPayload);
+        if (abortController.signal.aborted) return;
         set((state) => {
           // The SSE attempt may have streamed tokens before throwing, in which
           // case its placeholder is still in the list. Pushing a second
@@ -604,6 +682,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
           if (abortController.signal.aborted) return;
 
           const run = await agentChatService.getDurableRunStatus(runId);
+          if (abortController.signal.aborted) return;
           const meta = run.metadata ?? {};
 
           if (meta.status === 'awaiting_confirmation') {
@@ -625,6 +704,10 @@ export const useAgentChatStore = create<AgentChatStore>()(
                 assistantMessageId: placeholderId,
                 jobId: runId,
                 origin: 'durable',
+                approvalId: String(
+                  (meta.confirmation as Record<string, unknown>)?.approval_id ??
+                    ''
+                ),
                 tools:
                   ((meta.confirmation as Record<string, unknown>)?.tools as
                     | Array<{ name: string; args: Record<string, unknown> }>
@@ -832,14 +915,20 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService, isTerminalJobStatus } =
           await import('@/services/agentChatService');
+        if (abortController.signal.aborted) return;
 
         // Try SSE streaming confirm first
         let streamedContent = '';
         let didMutateProjectData = false;
+        let mutatedProjectId: string | undefined;
 
         try {
           await agentChatService.streamConfirm(
-            { thread_id: jobId, confirmed },
+            {
+              thread_id: jobId,
+              confirmed,
+              approval_id: pendingConfirmation.approvalId ?? '',
+            },
             {
               onToken: (content: string) => {
                 if (!isCurrentGeneration()) return;
@@ -898,9 +987,11 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       const actualIdx = execs.length - 1 - teIdx;
                       // The service forwards the frame's is_error flag; a failed
                       // tool must not render as a completed one.
-                      execs[actualIdx].status = isError
-                        ? 'failed'
-                        : 'completed';
+                      execs[actualIdx].status = toolResultStatus(
+                        result,
+                        undefined,
+                        isError
+                      );
                       if (isError) execs[actualIdx].error = result;
                       try {
                         execs[actualIdx].result = JSON.parse(result);
@@ -909,8 +1000,15 @@ export const useAgentChatStore = create<AgentChatStore>()(
                       }
                     }
                   }
-                  if (PROJECT_MUTATING_TOOLS.has(tool)) {
+                  const completed =
+                    toolResultStatus(result, undefined, isError) ===
+                    'completed';
+                  if (PROJECT_MUTATING_TOOLS.has(tool) && completed) {
                     didMutateProjectData = true;
+                    if (!isError && tool === 'revise_draft') {
+                      mutatedProjectId =
+                        projectIdFromToolResult(result) ?? mutatedProjectId;
+                    }
                   }
                 });
               },
@@ -993,6 +1091,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
                     assistantMessageId: targetMessageId,
                     jobId: threadId,
                     origin: 'sse',
+                    approvalId: String(confirmation.approval_id ?? ''),
                     tools:
                       (confirmation.tools as Array<{
                         name: string;
@@ -1025,7 +1124,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                   (state as unknown as AgentChatStore)._abortController = null;
                 });
                 if (didMutateProjectData) {
-                  invalidateProjectQueries(get().pageContext.projectId);
+                  invalidateProjectQueries(
+                    mutatedProjectId ?? get().pageContext.projectId
+                  );
                 }
               },
               onError: (error: string, category?: AgentErrorCategory) => {
@@ -1072,6 +1173,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
             },
             abortController.signal
           );
+          if (confirmEpoch !== transcriptEpoch) return;
           if (abortController.signal.aborted) {
             set((state) => {
               state.pendingConfirmations[threadId] ??= pendingConfirmation;
@@ -1086,6 +1188,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
         } catch {
           // SSE confirm failed — fall back to polling
         }
+
+        if (abortController.signal.aborted || confirmEpoch !== transcriptEpoch)
+          return;
 
         // Durable run or legacy polling fallback. waitTokenId was captured
         // up-front (before pendingConfirmation was nulled) so this branch is
@@ -1193,7 +1298,11 @@ export const useAgentChatStore = create<AgentChatStore>()(
               'Confirmation stream failed and this confirmation has no durable job to fall back to'
             );
           }
-          await agentChatService.confirmAction(jobId, confirmed);
+          await agentChatService.confirmAction(
+            jobId,
+            confirmed,
+            pendingConfirmation.approvalId ?? ''
+          );
 
           const MAX_POLLS = 120;
           const POLL_INTERVAL_MS = 1500;
@@ -1206,10 +1315,19 @@ export const useAgentChatStore = create<AgentChatStore>()(
             if (!isCurrentGeneration()) return;
 
             if (job.status === 'completed' && job.result) {
-              const hasMutation =
-                job.result.tool_executions?.some((te) =>
-                  PROJECT_MUTATING_TOOLS.has(te.tool_name)
-                ) ?? false;
+              const completedMutations =
+                job.result.tool_executions?.filter(
+                  (te) =>
+                    te.status === 'completed' &&
+                    PROJECT_MUTATING_TOOLS.has(te.tool_name)
+                ) ?? [];
+              const hasMutation = completedMutations.length > 0;
+              const revisionExecution = [...completedMutations]
+                .reverse()
+                .find((te) => te.tool_name === 'revise_draft');
+              const mutatedProjectId = projectIdFromToolResult(
+                revisionExecution?.result
+              );
               set((state) => {
                 const lastAsst = [...state.messages]
                   .reverse()
@@ -1243,7 +1361,9 @@ export const useAgentChatStore = create<AgentChatStore>()(
                 }
               });
               if (hasMutation) {
-                invalidateProjectQueries(get().pageContext.projectId);
+                invalidateProjectQueries(
+                  mutatedProjectId ?? get().pageContext.projectId
+                );
               }
               return;
             }
@@ -1454,6 +1574,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService } =
           await import('@/services/agentChatService');
+        if (loadThreadsToken !== requestToken) return;
         const response = await agentChatService.listThreads();
         if (loadThreadsToken !== requestToken) return; // superseded
 
@@ -1494,6 +1615,7 @@ export const useAgentChatStore = create<AgentChatStore>()(
       try {
         const { agentChatService } =
           await import('@/services/agentChatService');
+        if (loadEpoch !== threadLoadEpoch) return;
         const response = await agentChatService.getThreadMessages(threadId);
 
         const messages: AgentMessage[] = response.messages.map((m) => ({
@@ -1513,10 +1635,17 @@ export const useAgentChatStore = create<AgentChatStore>()(
             toolName: te.tool_name,
             toolDisplayName: te.tool_display_name,
             args: te.args,
-            status: te.status as 'running' | 'completed' | 'failed',
+            status: toolResultStatus(te.result, te.status, Boolean(te.error)),
             result: te.result,
             error: te.error,
             durationMs: te.duration_ms,
+          })),
+          plan: m.plan?.map((step) => ({
+            step: step.step,
+            description: step.description,
+            tool: step.tool,
+            args_hint: step.args_hint ?? {},
+            depends_on: step.depends_on ?? [],
           })),
           backendMessageId: m.id,
         }));
@@ -1530,6 +1659,11 @@ export const useAgentChatStore = create<AgentChatStore>()(
 
         set((state) => {
           state.messages = messages;
+          state.currentPlan =
+            [...messages]
+              .reverse()
+              .find((message) => message.role === 'assistant' && message.plan)
+              ?.plan ?? null;
           state.activeThreadId = threadId;
           state.isLoadingMessages = false;
           state.messagesError = null;
@@ -1569,6 +1703,12 @@ export const useAgentChatStore = create<AgentChatStore>()(
     },
 
     // Reset
-    reset: () => set(() => ({ ...initialState })),
+    reset: () => {
+      transcriptEpoch += 1;
+      threadLoadEpoch += 1;
+      loadThreadsToken = null;
+      get()._abortController?.abort();
+      set(() => ({ ...initialState, _abortController: null }));
+    },
   }))
 );

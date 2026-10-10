@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { JobsIndicator } from './JobsIndicator';
+import { HandoffEntryButton } from './artifact-panel/HandoffCard';
 
 export const EXPORT_BLOCKED_REASON =
   'Export is available when the response finishes';
@@ -100,7 +101,10 @@ export const ChatHeader = memo(function ChatHeader({
   };
 
   return (
-    <div className="bg-(--nous-bg-1) flex h-12 sm:h-14 shrink-0 items-center gap-2 sm:gap-3 border-b border-(--nous-border-1) px-3 sm:px-4 z-40">
+    <div
+      data-testid="chat-mobile-header"
+      className="bg-(--nous-bg-1) flex h-12 sm:h-14 shrink-0 items-center gap-2 sm:gap-3 border-b border-(--nous-border-1) px-3 sm:px-4 z-40"
+    >
       {/* Left: sidebar trigger + title */}
       <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
         {onMobileSidebarToggle && (
@@ -131,6 +135,8 @@ export const ChatHeader = memo(function ChatHeader({
         {/* Background work (uploads, ingests, extraction) — renders nothing
             until there is a job to report. */}
         <JobsIndicator />
+
+        <HandoffEntryButton threadId={threadId} />
 
         {messages.length > 0 && onCopyAll && (
           <IconButton

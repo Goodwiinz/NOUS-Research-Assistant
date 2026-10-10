@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from src.core.security import TokenData
 from tests.utils.agent_stream import make_stream_request, sse_data, sse_event_name
 
 
@@ -99,6 +100,9 @@ async def test_accepted_latency_measured_from_request_start(
             request,  # type: ignore[arg-type]
             BackgroundTasks(),
             current_user=current_user,
+            # Browser-provenance token: the Codex authority gate only reads
+            # ``is_cli``, and this turn is an ordinary NOUS stream anyway.
+            token=TokenData(user_id="user-1", organization_id="org-1"),
         )
         body_iterator = response.body_iterator
         first_frame = await body_iterator.__anext__()  # type: ignore[union-attr]

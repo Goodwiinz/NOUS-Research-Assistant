@@ -163,4 +163,39 @@ describe('useChatStreaming main-stream done tool_executions', () => {
       { id: 'call-b', args: { query: 'second' }, result: 'second result' },
     ]);
   });
+
+  it('invalidates the project returned by a completed revision', async () => {
+    const invalidate = vi
+      .spyOn(QueryClient.prototype, 'invalidateQueries')
+      .mockResolvedValue(undefined);
+    streamMessageMock.mockImplementation(
+      (_req: unknown, cb: StreamCallbacks) => {
+        cb.onToolStart('revise_draft', {});
+        cb.onToolEnd(
+          'revise_draft',
+          '{"status":"completed","project_id":"project-from-result"}',
+          false
+        );
+        cb.onDone({});
+        return Promise.resolve();
+      }
+    );
+
+    try {
+      const params = makeParams();
+      const { result } = renderHook(() => useChatStreaming(params), {
+        wrapper,
+      });
+
+      await act(async () => {
+        await result.current.handleSubmit('revise the draft');
+      });
+
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: ['project', 'project-from-result'],
+      });
+    } finally {
+      invalidate.mockRestore();
+    }
+  });
 });

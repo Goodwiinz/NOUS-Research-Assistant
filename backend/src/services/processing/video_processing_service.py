@@ -92,6 +92,8 @@ class VideoProcessingService:
             # Use ffprobe for detailed metadata extraction
             cmd = [
                 "ffprobe",
+                "-protocol_whitelist",
+                "file,pipe",
                 "-v",
                 "error",
                 "-show_format",
@@ -318,6 +320,8 @@ class VideoProcessingService:
                 # Extract audio using ffmpeg
                 cmd = [
                     "ffmpeg",
+                    "-protocol_whitelist",
+                    "file,pipe",
                     "-i",
                     video_path,
                     "-vn",
@@ -390,6 +394,8 @@ class VideoProcessingService:
             # Extract keyframes using ffmpeg
             cmd = [
                 "ffmpeg",
+                "-protocol_whitelist",
+                "file,pipe",
                 "-i",
                 video_path,
                 "-vf",

@@ -10,17 +10,24 @@ STRING (adding ``category`` must not turn ``error`` into an object).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
+from uuid import uuid4
 
 import httpx
 import pytest
 from openai import RateLimitError
 
-from src.api.agent.streaming import _stream_failure_category
+from src.api.agent.streaming import _stream_failure_category, _stream_failure_message
 from src.services.agent.agent_run_service import ActiveRunConflict
+from src.services.integrations.context import (
+    DeviceBoundToAnotherChat,
+    IntegrationAccessDenied,
+)
 from src.shared.enums import AgentErrorCategory
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
 from tests.utils.agent_stream import frames_of_type, make_stream_request, sse_data
 
 
@@ -45,10 +52,12 @@ class _ConfirmGraph:
 
     def __init__(self, snapshot: Any) -> None:
         self._snapshot = snapshot
+        self.resume_input: Any = None
 
     async def astream_events(
         self, *args: Any, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:
+        self.resume_input = args[0] if args else None
         yield {"event": "on_chat_model_stream", "data": {}}
 
     async def aget_state(self, config: Any) -> Any:
@@ -65,11 +74,13 @@ def _rate_limit_error() -> RateLimitError:
     )
 
 
-async def _run_stream(graph: Any) -> list[str]:
+async def _run_stream(graph: Any, **overrides: Any) -> list[str]:
     from src.api.agent.streaming import stream_event_generator
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = make_stream_request(thread_id="11111111-1111-1111-1111-111111111301")
+    body = make_stream_request(
+        thread_id="11111111-1111-1111-1111-111111111301", **overrides
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (
@@ -96,12 +107,19 @@ async def _run_stream(graph: Any) -> list[str]:
         ]
 
 
-async def _run_confirm(graph: Any) -> list[str]:
+async def _run_confirm(
+    graph: Any,
+    *,
+    session: Any | None = None,
+    user_id: str = "user-1",
+    thread_id: str = "thread-confirm",
+) -> list[str]:
     from src.api.agent.streaming import stream_confirm_event_generator
 
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="thread-confirm", confirmed=True)
-    current_user = Mock(id="user-1", organization_id="org-1")
+    body = SimpleNamespace(thread_id=thread_id, confirmed=True, approval_id="a" * 64)
+    current_user = Mock(id=user_id, organization_id="org-1")
+    session = session or AsyncMock()
 
     with (
         # No Redis in unit CI: without this the emitter's start_stream sits on a
@@ -128,7 +146,10 @@ async def _run_confirm(graph: Any) -> list[str]:
             new=AsyncMock(return_value=object()),
         ),
         patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
-        patch("src.api.agent.streaming.AsyncSessionLocal", return_value=AsyncMock()),
+        patch(
+            "src.api.agent.streaming.AsyncSessionLocal",
+            new=Mock(return_value=session),
+        ),
         patch(
             "src.api.agent.streaming.get_active_run_for_thread",
             new=AsyncMock(
@@ -146,6 +167,18 @@ async def _run_confirm(graph: Any) -> list[str]:
             new=AsyncMock(return_value=True),
         ),
         patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
+            "src.api.agent.streaming._latest_user_client_message_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.services.agent.agent_execution_service._persist_assistant_message_safe",
+            new=AsyncMock(return_value="assistant-row"),
+        ),
+        patch(
             "src.api.agent.streaming._resolve_thread",
             new=AsyncMock(return_value=(SimpleNamespace(id="editable-thread"), None)),
         ),
@@ -156,6 +189,64 @@ async def _run_confirm(graph: Any) -> list[str]:
                 body, request, current_user
             )
         ]
+
+
+@pytest.mark.asyncio
+async def test_stream_confirm_hydrates_frozen_projection_into_resume_command() -> None:
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    user_id = uuid4()
+    runtime_snapshot_id = uuid4()
+    thread_id = uuid4()
+    registry_metadata = TOOL_REGISTRY.metadata_snapshot()
+    graph = _ConfirmGraph(
+        SimpleNamespace(
+            values={
+                "user_id": str(user_id),
+                "runtime_snapshot_id": str(runtime_snapshot_id),
+                "thread_id": str(thread_id),
+                "current_project_id": "",
+            },
+            tasks=(),
+            config={"configurable": {}},
+        )
+    )
+    row = SimpleNamespace(
+        id=runtime_snapshot_id,
+        user_id=user_id,
+        project_id=None,
+        thread_id=thread_id,
+        job_id="run-1",
+        tool_registry_hash=registry_metadata["hash"],
+        tool_registry_version=registry_metadata["version"],
+        tool_metadata={"descriptors": TOOL_REGISTRY.frozen_descriptor_metadata()},
+        skill_catalog=[],
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=row)
+
+    await _run_confirm(
+        graph,
+        session=session,
+        user_id=str(user_id),
+        thread_id=str(thread_id),
+    )
+
+    session.get.assert_awaited_once()
+    assert session.get.await_args is not None
+    assert session.get.await_args.args[1] == runtime_snapshot_id
+    assert graph.resume_input is not None
+    assert graph.resume_input.resume == {"test-interrupt": {"confirmed": True}}
+    assert graph.resume_input.update["runtime_tool_names"] == list(
+        TOOL_REGISTRY.available_descriptor_names()
+    )
+    assert graph.resume_input.update["tool_registry_hash"] == registry_metadata["hash"]
+    assert (
+        graph.resume_input.update["tool_registry_version"]
+        == registry_metadata["version"]
+    )
+    assert graph.resume_input.update["runtime_projection_unavailable"] is False
 
 
 def _error_payload(frames: list[str]) -> dict[str, Any]:
@@ -219,6 +310,56 @@ def test_active_thread_writer_is_a_conflict() -> None:
     assert (
         _stream_failure_category(ActiveRunConflict("safe"))
         is AgentErrorCategory.CONFLICT
+    )
+
+
+BOUND_MESSAGE = (
+    "This computer is bound to another chat — connect it to this chat or pick "
+    "another computer."
+)
+
+
+@pytest.mark.asyncio
+async def test_a_device_bound_to_another_chat_is_named_on_the_wire() -> None:
+    """AD-3: the catch-all names the chat-binding mismatch, the one preflight
+    failure the user can fix from the chat."""
+    # The mint runs in the Codex preflight, before the graph: resolve the
+    # thread so the stream reaches create_chat_context, which then refuses.
+    thread = SimpleNamespace(id="11111111-1111-1111-1111-111111111301")
+    with (
+        patch(
+            "src.api.agent.streaming._resolve_thread",
+            new=AsyncMock(return_value=(thread, None)),
+        ),
+        patch(
+            "src.api.agent.harness_streaming.create_chat_context",
+            new=AsyncMock(side_effect=DeviceBoundToAnotherChat()),
+        ) as mint,
+    ):
+        frames = await _run_stream(
+            _RaisingGraph(AssertionError("the graph must not run")),
+            execution_provider="codex",
+            device_id=uuid4(),
+            workspace_id=uuid4(),
+        )
+    mint.assert_awaited_once()
+    payload = _error_payload(frames)
+    assert payload["category"] == "device_bound_to_another_chat"
+    assert payload["error"] == BOUND_MESSAGE
+
+
+def test_other_preflight_failures_keep_the_generic_treatment() -> None:
+    # The generic message predates S2 and stays for every other failure.
+    for other in (
+        IntegrationAccessDenied(),
+        ValueError("The selected workspace is not bound to this chat project"),
+        ValueError("Local harness execution is disabled by server policy"),
+    ):
+        assert _stream_failure_category(other) is AgentErrorCategory.INTERNAL
+        assert _stream_failure_message(other) is other
+    assert (
+        _stream_failure_message(ActiveRunConflict("safe"))
+        == "A response is already in progress for this thread."
     )
 
 

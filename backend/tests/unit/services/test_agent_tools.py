@@ -137,8 +137,8 @@ class TestAddDocumentToProject:
 
         tool_db = MockAsyncSession()
         # The already-linked branch keys off the existence SELECT returning
-        # rows: _link_documents_to_project reads row[0] per row.
-        tool_db.set_query_result([(str(doc.id),)])
+        # rows: _link_documents_to_project reads (document_id, is_deleted).
+        tool_db.set_query_result([(str(doc.id), False)])
 
         with (
             patch(
@@ -159,6 +159,33 @@ class TestAddDocumentToProject:
             )
 
         assert result["status"] == "already_linked"
+
+    async def test_soft_deleted_link_is_restored_not_already_linked(self):
+        """R8-B3: a soft-deleted link is revived by the upsert, never skipped.
+
+        Guard: ``services/agent/tool_helpers.py:_link_documents_to_project``
+        (~L311, ``on_conflict_do_update(... is_deleted=False ...)``).
+        Mutation check: replace the ``on_conflict_do_update(...)`` call with
+        ``on_conflict_do_nothing(index_elements=["collection_id", "document_id"])``
+        and ``pytest -q backend/tests/unit/services/test_agent_tools.py -k
+        soft_deleted_link_is_restored`` fails on ``assert 'ON CONFLICT
+        (collection_id, document_id) DO UPDATE SET' in ...`` (pre-fix code
+        failed earlier on ``{'linked': 0, 'already_linked': 1} == ...``).
+        """
+        from sqlalchemy.dialects import postgresql
+
+        from src.services.agent.tool_helpers import _link_documents_to_project
+
+        doc_id = str(uuid4())
+        db = MockAsyncSession()
+        db.set_query_result([(doc_id, True)])
+
+        result = await _link_documents_to_project(db, _mock_project(), [doc_id])
+
+        assert result == {"linked": 1, "already_linked": 0, "restored": [doc_id]}
+        upsert = str(db.execute_calls[-1][0].compile(dialect=postgresql.dialect()))
+        assert "ON CONFLICT (collection_id, document_id) DO UPDATE SET" in upsert
+        assert "is_deleted" in upsert.split("DO UPDATE SET")[1]
 
     async def test_missing_document_id_returns_error(self):
         """Tool should reject calls without document_id."""
@@ -581,7 +608,7 @@ class TestIngestArxiv:
 
 
 class TestExecuteToolDispatch:
-    """Test that execute_tool routes to the correct tool function."""
+    """Test registered tool routing beneath the durable operation boundary."""
 
     async def test_unknown_tool_returns_error(self):
         """Unrecognised tool names should return an error, not crash."""
@@ -598,17 +625,16 @@ class TestExecuteToolDispatch:
         assert "error" in result
 
     async def test_add_document_dispatches_correctly(self):
-        """execute_tool should route add_document_to_project to its handler."""
-        from src.api.agent.execute import execute_tool
+        from src.services.agent.tools_impl import _dispatch_tool
 
         with patch(
             "src.services.agent.tools_impl._tool_add_document_to_project",
             new_callable=AsyncMock,
             return_value={"status": "success"},
         ) as mock_handler:
-            result = await execute_tool(
-                tool_name="add_document_to_project",
-                args={"document_id": "d1", "project_id": "p1"},
+            result = await _dispatch_tool(
+                "add_document_to_project",
+                {"document_id": "d1", "project_id": "p1"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=_mock_user(),
@@ -618,17 +644,16 @@ class TestExecuteToolDispatch:
         assert result["status"] == "success"
 
     async def test_create_project_dispatches_correctly(self):
-        """execute_tool should route create_project to its handler."""
-        from src.api.agent.execute import execute_tool
+        from src.services.agent.tools_impl import _dispatch_tool
 
         with patch(
             "src.services.agent.tools_impl._tool_create_project",
             new_callable=AsyncMock,
             return_value={"status": "success", "project_id": "p1"},
         ) as mock_handler:
-            result = await execute_tool(
-                tool_name="create_project",
-                args={"name": "Diffusion Transformers"},
+            result = await _dispatch_tool(
+                "create_project",
+                {"name": "Diffusion Transformers"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=_mock_user(),
@@ -638,8 +663,8 @@ class TestExecuteToolDispatch:
         assert result["status"] == "success"
 
     async def test_forget_memory_dispatches_correctly(self):
-        """execute_tool must route forget_memory to its handler (was Unknown tool)."""
-        from src.api.agent.execute import execute_tool
+        """The dispatcher passes the verified actor to forget_memory."""
+        from src.services.agent.tools_impl import _dispatch_tool
 
         acting_user = _mock_user()
         with patch(
@@ -647,12 +672,13 @@ class TestExecuteToolDispatch:
             new_callable=AsyncMock,
             return_value={"status": "completed", "deleted": 1, "matches": []},
         ) as mock_handler:
-            result = await execute_tool(
-                tool_name="forget_memory",
-                args={"query": "forget my transformer searches"},
+            result = await _dispatch_tool(
+                "forget_memory",
+                {"query": "forget my transformer searches"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=acting_user,
+                organization_id=str(acting_user.organization_id),
             )
 
         mock_handler.assert_awaited_once()
@@ -668,17 +694,17 @@ class TestExecuteToolDispatch:
         assert "error" not in result  # must NOT be the "Unknown tool" catch-all
 
     async def test_execute_code_threads_thread_id(self):
-        """execute_tool must forward thread_id to _tool_execute_code (was hardcoded "")."""
-        from src.api.agent.execute import execute_tool
+        """The dispatcher forwards the sandbox's thread scope."""
+        from src.services.agent.tools_impl import _dispatch_tool
 
         with patch(
             "src.services.agent.tools_impl._tool_execute_code",
             new_callable=AsyncMock,
             return_value={"status": "ok"},
         ) as mock_handler:
-            await execute_tool(
-                tool_name="execute_code",
-                args={"code": "print(1)"},
+            await _dispatch_tool(
+                "execute_code",
+                {"code": "print(1)"},
                 user_id="user-1",
                 db=AsyncMock(),
                 current_user=_mock_user(),
@@ -932,7 +958,7 @@ class TestSearchArxivRecencyParams:
             assert {"recency_days", "chronological"} <= set(params)
 
     async def test_search_arxiv_passes_recency_through(self, monkeypatch):
-        from src.services.agent.tools import search_arxiv
+        from src.services.agent.tools_impl import execute_tool
 
         captured: dict = {}
 
@@ -945,8 +971,8 @@ class TestSearchArxivRecencyParams:
             fake_tool_search_arxiv,
         )
 
-        await search_arxiv.ainvoke(
-            {"query": "q", "recency_days": 0, "chronological": True}
+        await execute_tool(
+            "search_arxiv", {"query": "q", "recency_days": 0, "chronological": True}
         )
 
         assert captured["recency_days"] == 0

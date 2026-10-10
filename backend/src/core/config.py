@@ -6,9 +6,11 @@ variables. Default values are only used for local development.
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
+from urllib.parse import urlsplit
+from uuid import UUID
 
-from pydantic import ValidationInfo, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 _LOCAL_SECRET_KEY = "local-development-secret-key-not-for-production"
@@ -26,6 +28,41 @@ _LOCAL_JWT_SECRET_KEY = "local-development-jwt-secret-not-for-production"
 MEMORY_FALLBACK_ENVIRONMENTS = frozenset(
     {"development", "testing", "local", "test", "ci"}
 )
+
+
+def _is_strict_environment(env: Optional[str]) -> bool:
+    """Strict = anything not explicitly a throwaway local/CI environment.
+
+    Replaces the old exact-match ``env in ("production", "staging")`` guard
+    (audit I24): unknown spellings like "prod", "prod-eu", "Production" or
+    custom shared-env names now fail closed instead of receiving the
+    repo-public fallback secrets (audit I1). An empty value is NOT unset —
+    it is an unknown environment name, so it is strict too; only a true
+    None/missing field defaults to the throwaway "development".
+    """
+    value = "development" if env is None else env
+    value = value.strip().lower()
+    return value not in MEMORY_FALLBACK_ENVIRONMENTS
+
+
+# Operator-facing allowlist appended to strict-env error messages: a message
+# that only says "non-throwaway environments" forces the operator to read
+# source to learn which values are exempt (audit I1 review).
+_THROWAWAY_ENVS_HINT = (
+    "(local/CI environments allowed: "
+    + ", ".join(sorted(MEMORY_FALLBACK_ENVIRONMENTS))
+    + ")"
+)
+
+
+def _env_is_strict(info: ValidationInfo) -> bool:
+    """Whether the ENVIRONMENT validated so far is strict (audit I1/I24).
+
+    Single derivation shared by every field-level guard so the missing-field
+    default (throwaway "development") and the fail-closed empty-string
+    handling of ``_is_strict_environment`` cannot drift between validators.
+    """
+    return _is_strict_environment(str(info.data.get("ENVIRONMENT", "development")))
 
 
 def _longest_literal_hostname_run(pattern: str) -> int:
@@ -66,6 +103,15 @@ def _cors_origin_regex_is_overbroad(pattern: str) -> bool:
 class Settings(BaseSettings):
     """Application settings"""
 
+    HARNESS_BRIDGE_ENABLED: bool = False
+    # Kill switch for the scoped integration read gateway (/integrations/tools).
+    NOUS_MCP_ENABLED: bool = False
+    # Artifact workspace rollout flags; reads stay available when writes are off.
+    ARTIFACTS_ENABLED: bool = False
+    ARTIFACT_EDITING_ENABLED: bool = False
+    ARTIFACT_PREVIEW_ENABLED: bool = False
+    ARTIFACT_SHARING_ENABLED: bool = False
+
     # Application
     APP_NAME: str = "Multimodal Enterprise RAG System"
     VERSION: str = "1.0.0"
@@ -98,7 +144,7 @@ class Settings(BaseSettings):
         re-deriving an env allowlist — a drifted second/third list is how the
         live ``ENVIRONMENT=dev`` deployment slips through the wrong branch.
         """
-        return self.ENVIRONMENT.strip().lower() in MEMORY_FALLBACK_ENVIRONMENTS
+        return not _is_strict_environment(self.ENVIRONMENT)
 
     @property
     def require_durable_agent_state(self) -> bool:
@@ -125,6 +171,24 @@ class Settings(BaseSettings):
     # Decoupled from CORS_ORIGINS so reordering the allowlist can't break login.
     # Empty falls back to cors_origins_list[0] for backward compatibility.
     FRONTEND_BASE_URL: str = ""
+
+    # GOO-316: ORCID OAuth (/authenticate scope only). With no client id the
+    # ORCID routes answer 503; the token response is never stored.
+    ORCID_CLIENT_ID: str = ""
+    ORCID_CLIENT_SECRET: str = ""
+    ORCID_BASE_URL: str = "https://sandbox.orcid.org"
+
+    # GOO-318: archive deposits to the Zenodo sandbox. With no token the
+    # deposit request answers 503. The token is read only by the adapter and
+    # never logged or retained; the account label is the non-secret
+    # ``account_ref`` an approval binds (changing it voids every approval).
+    ZENODO_BASE_URL: str = "https://sandbox.zenodo.org/api"
+    ZENODO_SANDBOX_TOKEN: Optional[SecretStr] = None
+    ZENODO_ACCOUNT_LABEL: str = ""
+    ZENODO_SANDBOX_ONLY: bool = True
+
+    # GOO-319: the scheduled search beat tick self-skips until enabled.
+    SEARCH_UPDATES_ENABLED: bool = False
 
     # CORS Configuration (comma-separated string from env, parsed to list)
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
@@ -211,11 +275,14 @@ class Settings(BaseSettings):
         if not pattern.startswith("^") or not pattern.endswith("$"):
             raise ValueError("CORS_ORIGIN_REGEX must be anchored with ^ and $")
 
-        env = str(info.data.get("ENVIRONMENT", "development"))
-        if env in ("production", "staging"):
+        # Audit I24: strict = anything not an explicit throwaway, so
+        # "prod"/"Production" spellings can't bypass the https-only rule the
+        # way the old exact-match ("production", "staging") gate allowed.
+        if _env_is_strict(info):
             if not pattern.startswith("^https://"):
                 raise ValueError(
-                    "CORS_ORIGIN_REGEX must use ^https:// in production/staging"
+                    "CORS_ORIGIN_REGEX must use ^https:// in non-throwaway "
+                    f"environments {_THROWAWAY_ENVS_HINT}"
                 )
         elif not (pattern.startswith("^https://") or pattern.startswith("^http://")):
             raise ValueError("CORS_ORIGIN_REGEX must start with ^https:// or ^http://")
@@ -272,6 +339,7 @@ class Settings(BaseSettings):
     # Public Preview — API may churn. One KB per organization.
     DO_KB_ENABLED: bool = False
     DO_KB_PRIMARY_READ: bool = False  # Phase 4b: DO KB serves reads
+    BEDROCK_KB_ID: str = ""  # Shared AWS KB; every read filters by organization_id
     DO_API_TOKEN: Optional[str] = None
     DO_KB_REGION: Optional[str] = None  # e.g. "tor1", "nyc3"
     DO_KB_PROJECT_ID: Optional[str] = None
@@ -312,9 +380,26 @@ class Settings(BaseSettings):
     CLI_TOKEN_REVOCATION_FAIL_CLOSED: bool = False
 
     @model_validator(mode="after")
+    def _zenodo_sandbox_only(self):
+        """GOO-318 enables the sandbox only; production Zenodo is out of scope."""
+        if self.ZENODO_SANDBOX_ONLY and (
+            urlsplit(self.ZENODO_BASE_URL).hostname != "sandbox.zenodo.org"
+        ):
+            raise ValueError("ZENODO_BASE_URL must be sandbox.zenodo.org")
+        return self
+
+    @model_validator(mode="after")
     def _enforce_debug_off_in_prod(self):
-        """Never allow DEBUG=True in production or staging."""
-        if self.ENVIRONMENT in ("production", "staging"):
+        """Never allow DEBUG=True outside throwaway local/CI environments.
+
+        Audit I24: the old exact-match ``ENVIRONMENT in ("production",
+        "staging")`` gate let any other spelling of a shared environment
+        ("prod", "Production", "dev", unknown names) keep DEBUG=True — the
+        same fail-open-by-spelling bug class as the secret guards. Strict
+        (non-throwaway) environments are force-cleared; the five throwaway
+        names keep local DEBUG behavior.
+        """
+        if _is_strict_environment(self.ENVIRONMENT):
             self.DEBUG = False
         return self
 
@@ -331,12 +416,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DATABASE_URL must start with postgresql:// or postgresql+asyncpg://"
             )
+        # Audit I24: strict = anything not an explicit throwaway, so
+        # "prod"/"Production" spellings can't point a shared environment at
+        # a localhost database the way the old exact-match gate allowed.
         if (
-            self.ENVIRONMENT in ("production", "staging")
+            _is_strict_environment(self.ENVIRONMENT)
             and "localhost" in self.DATABASE_URL
         ):
             raise ValueError(
-                "DATABASE_URL must not point to localhost in production/staging"
+                "DATABASE_URL must not point to localhost in non-throwaway "
+                f"environments {_THROWAWAY_ENVS_HINT}"
             )
         return self
 
@@ -356,10 +445,12 @@ class Settings(BaseSettings):
         )
 
         if is_weak:
-            env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _env_is_strict(info):
                 raise ValueError(
-                    "SECRET_KEY must be set to a strong value in production/staging"
+                    "SECRET_KEY must be set to a strong value in non-throwaway "
+                    f"environments {_THROWAWAY_ENVS_HINT}. "
+                    "Generate one with: python -c 'import secrets; "
+                    "print(secrets.token_urlsafe(48))'"
                 )
             return _LOCAL_SECRET_KEY
         if len(v) < 32:
@@ -382,11 +473,12 @@ class Settings(BaseSettings):
         )
 
         if is_weak:
-            env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _env_is_strict(info):
                 raise ValueError(
-                    "JWT_SECRET_KEY must be set to a strong value in production/staging. "
-                    "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+                    "JWT_SECRET_KEY must be set to a strong value in non-throwaway "
+                    f"environments {_THROWAWAY_ENVS_HINT}. "
+                    "Generate one with: python -c 'import secrets; "
+                    "print(secrets.token_urlsafe(48))'"
                 )
             return _LOCAL_JWT_SECRET_KEY
         if len(v) < 32:
@@ -398,10 +490,10 @@ class Settings(BaseSettings):
     def validate_neo4j_password(cls, v, info: ValidationInfo):
         """Validate NEO4J_PASSWORD - require in production."""
         if not v or v == "neo4jpassword":
-            env = str(info.data.get("ENVIRONMENT", "development"))
-            if env in ("production", "staging"):
+            if _env_is_strict(info):
                 raise ValueError(
-                    "NEO4J_PASSWORD must be set via environment variable in production/staging"
+                    "NEO4J_PASSWORD must be set via environment variable in "
+                    f"non-throwaway environments {_THROWAWAY_ENVS_HINT}"
                 )
             return "neo4jpassword"  # Default for local development
         return v
@@ -437,6 +529,35 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     AUTH_RATE_LIMIT_ATTEMPTS: int = 50  # Max auth attempts in window
     AUTH_RATE_LIMIT_WINDOW_MINUTES: int = 15  # Time window for rate limiting
+    # When true, a Redis outage makes the API rate limiter return 503 instead
+    # of degrading to the per-process in-memory fallback.
+    RATE_LIMIT_FAIL_CLOSED: bool = False
+
+    # UUIDs of explicitly trusted platform operators.  This is intentionally
+    # separate from tenant roles: an organization ADMIN must not gain access
+    # to process-wide worker controls or global ingestion sinks.  The value is
+    # a comma-separated environment setting; parsing is fail-closed so a
+    # malformed deployment value authorizes nobody.
+    PLATFORM_OPERATOR_USER_IDS: str = ""
+
+    @property
+    def platform_operator_user_ids(self) -> frozenset[UUID]:
+        """Return the configured platform-operator UUIDs, or none on error."""
+        raw = self.PLATFORM_OPERATOR_USER_IDS.strip()
+        if not raw:
+            return frozenset()
+
+        values = [value.strip() for value in raw.split(",")]
+        if not values or any(not value for value in values):
+            return frozenset()
+
+        parsed: set[UUID] = set()
+        for value in values:
+            try:
+                parsed.add(UUID(value))
+            except (AttributeError, ValueError):
+                return frozenset()
+        return frozenset(parsed)
 
     # External APIs
     OPENAI_API_KEY: Optional[str] = None
@@ -485,6 +606,12 @@ class Settings(BaseSettings):
     # Dedicated evidence-independent chat lane. Kept separate from the main
     # deployment so rollout/rollback never changes tool-calling behavior.
     AGENT_FAST_PATH_ENABLED: bool = False
+
+    # Runtime gate for the server-owned Daily Research Brief template. The
+    # repository default exposes new work; operators can set this false as a
+    # disable-first rollback. Existing runs remain readable/exportable while
+    # disabled; only discovery and new work are gated.
+    DAILY_RESEARCH_BRIEF_ENABLED: bool = False  # GOO-338: opt-in per environment
     AGENT_FAST_PATH_DEPLOYMENT: str = "gpt-5.6-luna"
     AGENT_FAST_PATH_MAX_INPUT_CHARS: int = 8_000
     AGENT_FAST_PATH_MAX_OUTPUT_TOKENS: int = 768
@@ -553,6 +680,18 @@ class Settings(BaseSettings):
     # "none" sidesteps that coupling too.
     AGENT_LIGHTWEIGHT_REASONING_EFFORT: str = "none"
 
+    # Opt-in semantic router; Azure still owns generation and routing fallback.
+    AGENT_INTENT_PROVIDER: Literal["azure", "typesafe"] = "azure"
+    TYPESAFE_API_KEY: Optional[SecretStr] = None
+    TYPESAFE_MODEL: str = "jev-1.13.0"
+    TYPESAFE_TIMEOUT_SECONDS: float = Field(
+        default=1.0, gt=0, le=25, allow_inf_nan=False
+    )
+    # Unset disables acceptance until a deployment-specific calibration is approved.
+    TYPESAFE_MIN_CONFIDENCE: Optional[float] = Field(
+        default=None, ge=0, le=1, allow_inf_nan=False
+    )
+
     # Synthesis-only override. Unset (None) inherits
     # AGENT_LIGHTWEIGHT_REASONING_EFFORT, so leaving it alone is a no-op —
     # existing single-knob deployments keep their current behaviour.
@@ -605,13 +744,6 @@ class Settings(BaseSettings):
     PROJECT_SKILL_CATALOG_ENABLED: bool = False
     PROJECT_SKILL_RUNTIME_ENABLED: bool = False
     PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS: int = 30
-
-    # Citation-faithfulness reviewer pass in draft generation (WS1).
-    # Default off: merge inert, flip in values-dev after verify.
-    # When flipping on in dev, no secret is needed — boolean env only;
-    # if ever sourced from Infisical, add DRAFT_CITATION_REVIEW_ENABLED
-    # to the /do-kb path per project convention.
-    DRAFT_CITATION_REVIEW_ENABLED: bool = False
 
     # Option B server-side history rebuild. When True, the agent stream ignores
     # all but the newest user turn in the request and rebuilds conversation
@@ -900,6 +1032,10 @@ class Settings(BaseSettings):
         env_file = "../.env"
         case_sensitive = True
         extra = "ignore"
+        # Fail-closed secret guards crash the boot: keep the rejected value
+        # (a real-but-short secret) out of the ValidationError text that
+        # lands in pod logs / Sentry.
+        hide_input_in_errors = True
 
 
 # Create settings instance

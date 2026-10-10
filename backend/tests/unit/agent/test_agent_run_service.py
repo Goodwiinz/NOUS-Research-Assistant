@@ -13,12 +13,19 @@ types elsewhere, so never ``create_all`` the full metadata):
 - record_job_status: the log-and-continue write-through entry point
 """
 
+import asyncio
 import uuid
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.sql import Select
+from sqlalchemy.sql.dml import Update
 
 from src.models.agent_run import AgentRun
 from src.services.agent import agent_run_service as svc
@@ -44,6 +51,21 @@ async def session_factory():
 
 def _job_id() -> str:
     return str(uuid.uuid4())
+
+
+class _ScalarResult:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self) -> Any:
+        return self._value
+
+
+class _ThreadForeignKeyViolation(Exception):
+    """Driver-shaped evidence for a missing thread FK in the wrapper test."""
+
+    sqlstate = "23503"
+    constraint_name = "agent_runs_thread_id_fkey"
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +132,58 @@ async def test_upsert_rejects_a_second_active_run_for_the_thread(session_factory
                 user_id=USER_A,
                 thread_id=thread_id,
             )
+
+
+@pytest.mark.parametrize("failure", ["active_thread", "missing_thread"])
+async def test_insert_recovery_preserves_approval_receipt(
+    session_factory: Any, failure: str
+) -> None:
+    job_id = _job_id()
+    thread_id = uuid.uuid4()
+    receipt = "a" * 64
+
+    class FailedFirstInsert:
+        def __init__(self, db: Any) -> None:
+            self._db = db
+            self._failed = False
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._db, name)
+
+        async def commit(self) -> None:
+            # The initial zero-row UPDATE commits too; fail only the INSERT.
+            if self._db.new and not self._failed:
+                self._failed = True
+                cause = (
+                    Exception("UNIQUE constraint failed: agent_runs.thread_id")
+                    if failure == "active_thread"
+                    else _ThreadForeignKeyViolation()
+                )
+                raise IntegrityError("INSERT", {}, cause)
+            await self._db.commit()
+
+    async with session_factory() as db:
+        await svc.upsert_run(
+            FailedFirstInsert(db),
+            job_id=job_id,
+            status=JobStatus.AWAITING_CONFIRMATION,
+            organization_id=ORG_A,
+            user_id=USER_A,
+            thread_id=str(thread_id),
+            run_metadata={"approval_id": receipt},
+        )
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert run is not None
+        assert run.run_metadata == {"approval_id": receipt}
+        assert run.thread_id == (thread_id if failure == "active_thread" else None)
+        assert await svc.claim_awaiting_run_for_confirmation(
+            verify,
+            job_id,
+            approval_id=receipt,
+            organization_id=ORG_A,
+            user_id=USER_A,
+        )
 
 
 async def test_upsert_normalizes_legacy_error_alias(session_factory):
@@ -214,7 +288,7 @@ async def test_queued_to_running_transition(session_factory):
         assert run.status == "running"
 
 
-async def test_upsert_backfills_but_never_overwrites_tenancy(session_factory):
+async def test_upsert_backfills_missing_org_for_same_owner(session_factory):
     job_id = _job_id()
     async with session_factory() as db:
         await svc.upsert_run(
@@ -224,11 +298,341 @@ async def test_upsert_backfills_but_never_overwrites_tenancy(session_factory):
             db,
             job_id=job_id,
             status=JobStatus.RUNNING,
-            organization_id=str(ORG_A),  # backfills NULL org
-            user_id=str(USER_B),  # must NOT overwrite existing owner
+            organization_id=str(ORG_A),
+            user_id=str(USER_A),
         )
         assert run.organization_id == ORG_A
         assert run.user_id == USER_A
+
+
+class _PausedTransitionSession:
+    """Pause a stale writer immediately before its transition reaches SQL."""
+
+    def __init__(self, db: Any, reached: asyncio.Event, release: asyncio.Event) -> None:
+        self._db = db
+        self._reached = reached
+        self._release = release
+        self._paused = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._db, name)
+
+    async def get(self, *args: Any, **kwargs: Any) -> Any:
+        row = await self._db.get(*args, **kwargs)
+        if row is not None and not self._paused:
+            self._paused = True
+            self._reached.set()
+            await self._release.wait()
+        return row
+
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(statement, Update) and not self._paused:
+            self._paused = True
+            self._reached.set()
+            await self._release.wait()
+        return await self._db.execute(statement, *args, **kwargs)
+
+
+async def _active_rows_for_thread(db: Any, thread_id: Any) -> Any:
+    return (
+        (
+            await db.execute(
+                select(AgentRun).where(
+                    AgentRun.thread_id == thread_id,
+                    AgentRun.status.in_(svc._ACTIVE_RUN_STATUSES),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def test_terminal_update_loses_to_completed(session_factory: Any) -> None:
+    """An update that read RUNNING before a concurrent completion must lose."""
+    job_id = _job_id()
+    thread_id = uuid.uuid4()
+    reached, release = asyncio.Event(), asyncio.Event()
+    async with session_factory() as setup:
+        await svc.upsert_run(
+            setup,
+            job_id=job_id,
+            status=JobStatus.RUNNING,
+            user_id=USER_A,
+            thread_id=thread_id,
+        )
+
+    async with session_factory() as delayed_db, session_factory() as finisher_db:
+        delayed = asyncio.create_task(
+            svc.upsert_run(
+                _PausedTransitionSession(delayed_db, reached, release),
+                job_id=job_id,
+                status=JobStatus.AWAITING_CONFIRMATION,
+            )
+        )
+        await asyncio.wait_for(reached.wait(), timeout=2)
+        await svc.upsert_run(finisher_db, job_id=job_id, status=JobStatus.COMPLETED)
+        release.set()
+        await delayed
+
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert run is not None
+        assert run.status == JobStatus.COMPLETED.value
+        assert run.user_id == USER_A
+        assert run.cancel_requested_at is None
+        assert await _active_rows_for_thread(verify, thread_id) == []
+
+
+async def test_terminal_update_loses_to_cancelled(session_factory: Any) -> None:
+    """A stale completion cannot replace the producer's cancellation ACK."""
+    job_id = _job_id()
+    thread_id = uuid.uuid4()
+    reached, release = asyncio.Event(), asyncio.Event()
+    async with session_factory() as setup:
+        await svc.upsert_run(
+            setup,
+            job_id=job_id,
+            status=JobStatus.RUNNING,
+            user_id=USER_A,
+            thread_id=thread_id,
+        )
+
+    async with session_factory() as delayed_db, session_factory() as canceller_db:
+        delayed = asyncio.create_task(
+            svc.upsert_run(
+                _PausedTransitionSession(delayed_db, reached, release),
+                job_id=job_id,
+                status=JobStatus.COMPLETED,
+            )
+        )
+        await asyncio.wait_for(reached.wait(), timeout=2)
+        stopping = await canceller_db.get(AgentRun, job_id)
+        assert stopping is not None
+        stopping.status = JobStatus.STOPPING.value
+        stopping.cancel_requested_at = datetime.now(timezone.utc)
+        await canceller_db.commit()
+        await svc.upsert_run(canceller_db, job_id=job_id, status=JobStatus.CANCELLED)
+        release.set()
+        await delayed
+
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert run is not None
+        assert run.status == JobStatus.CANCELLED.value
+        assert run.user_id == USER_A
+        assert run.cancel_requested_at is not None
+        assert await _active_rows_for_thread(verify, thread_id) == []
+
+
+async def test_stopping_rejects_completed(session_factory: Any) -> None:
+    """A completion racing an accepted Stop leaves the run visibly stopping."""
+    job_id = _job_id()
+    thread_id = uuid.uuid4()
+    async with session_factory() as db:
+        await svc.upsert_run(
+            db,
+            job_id=job_id,
+            status=JobStatus.RUNNING,
+            user_id=USER_A,
+            thread_id=thread_id,
+        )
+        run = await db.get(AgentRun, job_id)
+        assert run is not None
+        run.status = JobStatus.STOPPING.value
+        run.cancel_requested_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    async with session_factory() as stale_writer:
+        await svc.upsert_run(stale_writer, job_id=job_id, status=JobStatus.COMPLETED)
+
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert run is not None
+        assert run.status == JobStatus.STOPPING.value
+        assert run.user_id == USER_A
+        assert run.cancel_requested_at is not None
+        assert len(await _active_rows_for_thread(verify, thread_id)) == 1
+
+
+async def test_insert_race_preserves_owner_and_active_slot(
+    session_factory: Any,
+) -> None:
+    """A duplicate job-id insert from another owner cannot mutate the winner."""
+    job_id = _job_id()
+    thread_id = uuid.uuid4()
+
+    async with session_factory() as winner:
+        await svc.upsert_run(
+            winner,
+            job_id=job_id,
+            status=JobStatus.RUNNING,
+            user_id=USER_A,
+            thread_id=thread_id,
+        )
+
+    async with session_factory() as conflict_db:
+
+        class InsertRaceView:
+            """Model READ COMMITTED statements issued just before a winner commits."""
+
+            def __init__(self, db: Any) -> None:
+                self._db = db
+                self._miss_update = True
+                self._miss_reload = True
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._db, name)
+
+            async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+                if isinstance(statement, Update) and self._miss_update:
+                    self._miss_update = False
+                    return _ScalarResult(None)
+                if isinstance(statement, Select) and self._miss_reload:
+                    self._miss_reload = False
+                    return _ScalarResult(None)
+                return await self._db.execute(statement, *args, **kwargs)
+
+        returned = await svc.upsert_run(
+            InsertRaceView(conflict_db),
+            job_id=job_id,
+            status=JobStatus.COMPLETED,
+            user_id=USER_B,
+            thread_id=thread_id,
+        )
+
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert run is not None
+        assert run.status == JobStatus.RUNNING.value
+        assert run.user_id == USER_A
+        assert run.cancel_requested_at is None
+        assert run.thread_id == thread_id
+        assert returned is None
+        active = await _active_rows_for_thread(verify, thread_id)
+        assert len(active) == 1
+        assert active[0].job_id == job_id
+
+        with pytest.raises(svc.ActiveRunConflict):
+            await svc.upsert_run(
+                verify,
+                job_id=_job_id(),
+                status=JobStatus.RUNNING,
+                user_id=USER_B,
+                thread_id=thread_id,
+            )
+
+
+async def test_wrong_owner_cannot_backfill_legacy_organization(
+    session_factory: Any,
+) -> None:
+    """A foreign status payload cannot change a legacy row's tenant scope."""
+    job_id = _job_id()
+    thread_id = uuid.uuid4()
+    foreign_thread_id = uuid.uuid4()
+    async with session_factory() as setup:
+        await svc.upsert_run(
+            setup,
+            job_id=job_id,
+            status=JobStatus.RUNNING,
+            user_id=USER_A,
+            thread_id=thread_id,
+        )
+
+    async with session_factory() as foreign_writer:
+        returned = await svc.upsert_run(
+            foreign_writer,
+            job_id=job_id,
+            status=JobStatus.COMPLETED,
+            organization_id=ORG_B,
+            user_id=USER_B,
+            thread_id=foreign_thread_id,
+            idempotency_key="foreign-owner-key",
+        )
+
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert returned is None
+        assert run is not None
+        assert run.status == JobStatus.RUNNING.value
+        assert run.organization_id is None
+        assert run.user_id == USER_A
+        assert run.thread_id == thread_id
+        assert run.idempotency_key is None
+
+
+async def test_dangling_thread_fallback_does_not_resurrect_completed(
+    session_factory: Any,
+) -> None:
+    """The legacy uncorrelated retry uses the same atomic status guard."""
+    job_id = _job_id()
+    async with session_factory() as setup:
+        await svc.upsert_run(
+            setup, job_id=job_id, status=JobStatus.RUNNING, user_id=USER_A
+        )
+
+    async with session_factory() as stale_db, session_factory() as finisher_db:
+        fallback_read, release = asyncio.Event(), asyncio.Event()
+
+        class FailedCorrelationCommit:
+            def __init__(self, db: Any) -> None:
+                self._db = db
+                self._gets = 0
+                self._fail_first_commit = True
+                self._fallback_paused = False
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self._db, name)
+
+            async def get(self, *args: Any, **kwargs: Any) -> Any:
+                self._gets += 1
+                row = await self._db.get(*args, **kwargs)
+                if self._gets == 2 and not self._fallback_paused:
+                    self._fallback_paused = True
+                    fallback_read.set()
+                    await release.wait()
+                return row
+
+            async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+                values = getattr(statement, "_values", {})
+                writes_correlation = any(
+                    getattr(column, "key", None) == "thread_id" for column in values
+                )
+                if (
+                    isinstance(statement, Update)
+                    and not writes_correlation
+                    and not self._fallback_paused
+                ):
+                    self._fallback_paused = True
+                    fallback_read.set()
+                    await release.wait()
+                return await self._db.execute(statement, *args, **kwargs)
+
+            async def commit(self) -> None:
+                if self._fail_first_commit:
+                    self._fail_first_commit = False
+                    raise IntegrityError("UPDATE", {}, _ThreadForeignKeyViolation())
+                await self._db.commit()
+
+        delayed = asyncio.create_task(
+            svc.upsert_run(
+                FailedCorrelationCommit(stale_db),
+                job_id=job_id,
+                status=JobStatus.AWAITING_CONFIRMATION,
+                thread_id=uuid.uuid4(),
+            )
+        )
+        await asyncio.wait_for(fallback_read.wait(), timeout=2)
+        await svc.upsert_run(finisher_db, job_id=job_id, status=JobStatus.COMPLETED)
+        release.set()
+        await delayed
+
+    async with session_factory() as verify:
+        run = await verify.get(AgentRun, job_id)
+        assert run is not None
+        assert run.status == JobStatus.COMPLETED.value
+        assert run.user_id == USER_A
+        assert run.cancel_requested_at is None
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +673,7 @@ async def test_confirmation_claim_races_cancellation_on_durable_status(session_f
             db,
             job_id=job_id,
             status=JobStatus.AWAITING_CONFIRMATION,
+            run_metadata={"approval_id": "a" * 64},
             organization_id=ORG_A,
             user_id=USER_A,
         )
@@ -276,12 +681,14 @@ async def test_confirmation_claim_races_cancellation_on_durable_status(session_f
         assert await svc.claim_awaiting_run_for_confirmation(
             db,
             job_id,
+            approval_id="a" * 64,
             organization_id=ORG_A,
             user_id=USER_A,
         )
         assert not await svc.claim_awaiting_run_for_confirmation(
             db,
             job_id,
+            approval_id="a" * 64,
             organization_id=ORG_A,
             user_id=USER_A,
         )
@@ -289,11 +696,53 @@ async def test_confirmation_claim_races_cancellation_on_durable_status(session_f
         assert await svc.release_confirmation_claim(
             db,
             job_id,
+            approval_id="a" * 64,
             organization_id=ORG_A,
             user_id=USER_A,
         )
         run = await svc.get_run(db, job_id, organization_id=ORG_A, user_id=USER_A)
         assert run is not None and run.status == JobStatus.AWAITING_CONFIRMATION.value
+
+
+async def test_stale_claim_and_release_cannot_change_a_newer_approval(session_factory):
+    job_id = _job_id()
+    async with session_factory() as db:
+
+        async def park(receipt):
+            await svc.upsert_run(
+                db,
+                job_id=job_id,
+                status=JobStatus.AWAITING_CONFIRMATION,
+                organization_id=ORG_A,
+                user_id=USER_A,
+                run_metadata={"approval_id": receipt},
+            )
+
+        async def claim(receipt, *, user_id=USER_A):
+            return await svc.claim_awaiting_run_for_confirmation(
+                db,
+                job_id,
+                approval_id=receipt,
+                organization_id=ORG_A,
+                user_id=user_id,
+            )
+
+        await park("a" * 64)
+        assert not await claim("a" * 64, user_id=USER_B)
+        assert await claim("a" * 64)
+        await park("b" * 64)
+        assert not await claim("a" * 64)
+        assert await claim("b" * 64)
+        assert not await svc.release_confirmation_claim(
+            db,
+            job_id,
+            approval_id="a" * 64,
+            organization_id=ORG_A,
+            user_id=USER_A,
+        )
+        run = await svc.get_run(db, job_id, organization_id=ORG_A, user_id=USER_A)
+        assert run.status == JobStatus.RUNNING.value
+        assert run.run_metadata["approval_id"] == "b" * 64
 
 
 async def test_get_active_run_for_thread_is_tenant_scoped_and_non_terminal(
@@ -454,7 +903,16 @@ async def test_record_job_status_projects_job_store_payload(session_factory):
         "error": None,
     }
     with patch("src.core.database.AsyncSessionLocal", session_factory):
-        await svc.record_job_status(job_id, payload)
+        decision = await svc.record_job_status(job_id, payload)
+
+    assert decision is not None
+    assert decision.job_id == job_id
+    assert decision.requested_status is JobStatus.COMPLETED
+    assert decision.effective_status is JobStatus.COMPLETED
+    assert decision.requested_status_won is True
+    assert decision.thread_id == str(nested_thread)
+    with pytest.raises(FrozenInstanceError):
+        setattr(decision, "effective_status", JobStatus.FAILED)
 
     async with session_factory() as db:
         run = await db.get(AgentRun, job_id)

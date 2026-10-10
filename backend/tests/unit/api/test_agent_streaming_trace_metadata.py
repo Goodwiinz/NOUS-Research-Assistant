@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.models.user import User
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
 
 
@@ -22,6 +24,7 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
         "src.services.threads.workspace_access.get_thread",
         editable_thread_getter(),
     )
+    stub_durable_status_projection(monkeypatch)
 
 
 from src.services.agent.agent_submission_service import AcceptedSubmission
@@ -274,7 +277,7 @@ async def test_background_graph_config_uses_same_correlation_contract(
         patch.object(
             execution_mod,
             "AsyncSessionLocal",
-            return_value=_session_context(db),
+            side_effect=lambda: _session_context(db),
         ),
         patch.object(
             execution_mod,
@@ -305,11 +308,6 @@ async def test_background_graph_config_uses_same_correlation_contract(
         patch(
             "src.services.agent.observability.configure_langsmith",
             return_value=None,
-        ),
-        patch.object(
-            execution_mod,
-            "_set_job_async",
-            new=AsyncMock(return_value=None),
         ),
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -494,14 +492,18 @@ async def test_streaming_confirmation_root_uses_owned_durable_run_metadata(
     monkeypatch.setenv("IMAGE_TAG", "backend-image-456")
     graph = _ResumeCapturingGraph()
     graph.snapshot.tasks = ()
-    db = SimpleNamespace(close=AsyncMock())
+    db = SimpleNamespace(close=AsyncMock(), commit=AsyncMock())
     request = SimpleNamespace(
         state=SimpleNamespace(request_id=REQUEST_ID),
         is_disconnected=AsyncMock(return_value=False),
     )
-    body = SimpleNamespace(thread_id=str(THREAD_ID), confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=str(THREAD_ID), confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = cast(User, SimpleNamespace(id=USER_ID, organization_id=ORG_ID))
     durable_run = SimpleNamespace(
+        status="running",
+        run_metadata={"approval_id": "a" * 64},
         job_id=RUN_ID,
         thread_id=THREAD_ID,
         user_message_id=USER_MESSAGE_ID,
@@ -594,6 +596,8 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
     job_id = RUN_ID
     current_user = cast(User, SimpleNamespace(id=USER_ID, organization_id=ORG_ID))
     durable_run = SimpleNamespace(
+        status="running",
+        run_metadata={"approval_id": "a" * 64},
         job_id=job_id,
         thread_id=THREAD_ID,
         user_message_id=USER_MESSAGE_ID,
@@ -602,7 +606,7 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
 
     with (
         patch.object(
-            execution_mod, "AsyncSessionLocal", return_value=_session_context(db)
+            execution_mod, "AsyncSessionLocal", side_effect=lambda: _session_context(db)
         ),
         patch.object(
             execution_mod,
@@ -610,7 +614,6 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
             return_value={"request": body.model_dump()},
         ),
         patch.object(execution_mod, "get_run", new=AsyncMock(return_value=durable_run)),
-        patch.object(execution_mod, "_set_job_async", new=AsyncMock(return_value=None)),
         patch(
             "src.services.agent.checkpointer.get_checkpointer",
             new=AsyncMock(return_value=object()),
@@ -622,7 +625,9 @@ async def test_job_confirmation_root_uses_owned_durable_run_metadata(
         patch("src.services.agent.graph.compile_agent_graph", return_value=graph),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await execution_mod._resume_agent_graph(job_id, True, current_user)
+            await execution_mod._resume_agent_graph(
+                job_id, True, current_user, approval_id="a" * 64
+            )
 
     assert graph.invoke_config is not None
     assert graph.invoke_config["metadata"] == {
@@ -654,14 +659,18 @@ async def test_stream_confirmation_binds_buffer_to_durable_run_id(
     bind_thread_id = uuid.uuid4()
     graph = _ResumeCapturingGraph()
     graph.snapshot.tasks = ()
-    db = SimpleNamespace(close=AsyncMock())
+    db = SimpleNamespace(close=AsyncMock(), commit=AsyncMock())
     request = SimpleNamespace(
         state=SimpleNamespace(request_id=REQUEST_ID),
         is_disconnected=AsyncMock(return_value=False),
     )
-    body = SimpleNamespace(thread_id=str(bind_thread_id), confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id=str(bind_thread_id), confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = cast(User, SimpleNamespace(id=USER_ID, organization_id=ORG_ID))
     durable_run = SimpleNamespace(
+        status="running",
+        run_metadata={"approval_id": "a" * 64},
         job_id=RUN_ID,
         thread_id=str(bind_thread_id),
         user_message_id=USER_MESSAGE_ID,

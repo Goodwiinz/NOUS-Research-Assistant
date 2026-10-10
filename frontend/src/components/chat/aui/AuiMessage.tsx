@@ -1,5 +1,6 @@
 'use client';
 
+import { GeneratedArtifactCards } from '@/components/chat/aui/GeneratedArtifactCards';
 import React, {
   createContext,
   useContext,
@@ -52,6 +53,7 @@ import type {
   ActivityStep,
   ChatPageMessage,
 } from '@/components/chat/shared/cloudMessageView';
+import { BOUND_TO_ANOTHER_CHAT_MESSAGE } from '@/hooks/chat/useHarnessConnection';
 import { completeStreamingMarkdown } from '@/lib/markdown-utils';
 import { cn } from '@/lib/utils';
 import { useChatStore } from '@/store/chat-store';
@@ -59,6 +61,11 @@ import { useAgentActivityStore } from '@/stores/agentActivityStore';
 import { normalizeCitation } from '@/utils/citationNormalizer';
 import { getVisibleCitations, type Citation } from '@/utils/citationParser';
 import { toToolCallParts } from './convertMessage';
+import {
+  DraftTaskStatus,
+  draftTasksFromMessage,
+  removeStaleDraftStatus,
+} from './DraftTaskStatus';
 
 export type OnCitationClick = (
   citations: Citation[],
@@ -482,6 +489,7 @@ function LiveMessageTiming({
  */
 function StreamingReasoningSection({ label }: { label: string }): ReactElement {
   const streamingPlan = useChatStore((s) => s.streamingPlan);
+  const streamingPlanReasoning = useChatStore((s) => s.streamingPlanReasoning);
   const streamingSteps = useChatStore((s) => s.streamingSteps);
   const progress = useChatStore((s) => s.streamingProgress);
   const reasoning = useChatStore((s) => s.streamingReasoning);
@@ -507,13 +515,14 @@ function StreamingReasoningSection({ label }: { label: string }): ReactElement {
         streaming
         open={open}
         onOpenChange={setOpen}
-        restingLabel={label}
+        restingLabel={reasoning ? 'Reasoning summary' : label}
         aria-live="off"
         className="mb-2 max-w-none"
       />
-      {streamingPlan.length > 0 ? (
+      {streamingPlan.length > 0 || streamingPlanReasoning ? (
         <ChatInlinePlan
           plan={streamingPlan}
+          reasoning={streamingPlanReasoning || undefined}
           toolExecutions={streamingSteps}
           streaming
         />
@@ -527,20 +536,33 @@ function CompletedProgressSection({
 }: {
   message: ChatPageMessage;
 }): ReactElement | null {
-  const [open, setOpen] = useState(false);
-  if (!message.progressSteps?.length) return null;
+  // Provider-authored summaries are the public reasoning surface. Keep them
+  // visible after the stream commits; ordinary lifecycle progress remains
+  // collapsed so existing transcripts stay compact.
+  const [open, setOpen] = useState(Boolean(message.reasoningSummary));
+  const steps = [
+    ...(message.progressSteps ?? []).map((step) => ({
+      title: step.detail,
+      body: 'Completed',
+    })),
+    ...(message.reasoningSummary
+      ? [{ title: 'Reasoning summary', body: message.reasoningSummary }]
+      : []),
+  ];
+  if (steps.length === 0) return null;
 
   return (
     <ReasoningPanel
-      steps={message.progressSteps.map((step) => ({
-        title: step.detail,
-        body: 'Completed',
-      }))}
-      visibleSteps={message.progressSteps.length}
+      steps={steps}
+      visibleSteps={steps.length}
       streaming={false}
       open={open}
       onOpenChange={setOpen}
-      restingLabel="How this answer was prepared"
+      restingLabel={
+        message.reasoningSummary
+          ? 'Reasoning summary'
+          : 'How this answer was prepared'
+      }
       className="mb-2 max-w-none"
     />
   );
@@ -640,10 +662,8 @@ function AuiStreamingBody(): ReactElement {
  * Short, honest helper line under an error message, keyed by the SERVER's
  * `category` (see `AgentErrorCategory` in services/agentStreamEvents.ts).
  *
- * The category was write-only until now — recorded on the bubble and never
- * read. Anything absent or unrecognised falls back to the existing behaviour
- * (render `message.content`, the raw failure text), so an unknown category from
- * a newer backend degrades quietly instead of blanking the line.
+ * Unknown or absent categories use a stable retryable message. Raw stream
+ * diagnostics are never rendered in the product surface.
  */
 const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
   rate_limited: 'The service is busy. Try again in a moment.',
@@ -651,12 +671,27 @@ const ERROR_CATEGORY_HELP: Readonly<Record<string, string>> = {
   invalid_request: "This request can't be retried as-is.",
   conflict: 'A confirmation is already in progress.',
   permission_denied: "You don't have permission to complete this action.",
+  model_error: 'The model could not complete this response. Please retry.',
+  tool_error: 'A tool failed while preparing this response. Please retry.',
+  checkpoint_unavailable:
+    'The saved response state is unavailable. Please retry.',
+  internal: 'The response could not be completed. Please retry.',
+  cancelled: 'The response was stopped.',
+  device_bound_to_another_chat: BOUND_TO_ANOTHER_CHAT_MESSAGE,
 };
+const DEFAULT_ERROR_HELP =
+  'The response could not be completed. Please try again.';
 
 /**
  * Categories where an identical retry cannot succeed: the request itself is
  * rejected, or another confirmation already holds the claim. Offering Retry
  * there is a button that is guaranteed to fail — worse than no button.
+ *
+ * `device_bound_to_another_chat` stays retryable: Retry re-sends with the
+ * computer selected in the composer at that moment, so it works once the user
+ * picks a computer that can run in this chat. A computer connected to this
+ * chat since (`nous-harness connect --chat` registers a new device) appears
+ * in the picker after its list refreshes, which opening the picker does.
  */
 const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
   'invalid_request',
@@ -666,6 +701,7 @@ const NON_RETRYABLE_ERROR_CATEGORIES: ReadonlySet<string> = new Set([
 
 export function AuiAssistantMessage({
   message,
+  isLatestAssistant,
   onRetry,
   retryDisabled,
   onCitationClick,
@@ -675,11 +711,16 @@ export function AuiAssistantMessage({
    * usage), markdown + inline citations, and citation footer chips. When
    * absent (e.g. plain AuiMessages usage), falls back to primitive text. */
   message?: ChatPageMessage;
+  /** Last assistant row in the thread; anchors generated files whose
+   * message has not landed (or failed). */
+  isLatestAssistant?: boolean;
   onRetry?: () => void;
   /** True while a regenerate cannot be accepted (a turn is in flight). */
   retryDisabled?: boolean;
   onCitationClick?: OnCitationClick;
 }): ReactElement {
+  const draftTasks =
+    message && !message.isStreaming ? draftTasksFromMessage(message) : [];
   const allCitations = useMemo(
     () => message?.citations ?? [],
     [message?.citations]
@@ -713,7 +754,11 @@ export function AuiAssistantMessage({
     // content is deliberately excluded — the text is still moving.
     <div data-quotable>
       <CitationRenderer
-        content={message.content}
+        content={
+          draftTasks.length > 0
+            ? removeStaleDraftStatus(message.content)
+            : message.content
+        }
         citations={allCitations}
         citationNumbers={citationNumbers}
         onCitationClick={(citation) => {
@@ -750,7 +795,7 @@ export function AuiAssistantMessage({
   // ambiguous blank bubble. onRetry re-sends the prior user turn.
   if (message?.error) {
     const helperLine =
-      ERROR_CATEGORY_HELP[message.error.category ?? ''] ?? message.content;
+      ERROR_CATEGORY_HELP[message.error.category ?? ''] ?? DEFAULT_ERROR_HELP;
     const retryable = !NON_RETRYABLE_ERROR_CATEGORIES.has(
       message.error.category ?? ''
     );
@@ -767,7 +812,7 @@ export function AuiAssistantMessage({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-(--nous-mars)" />
             <div className="min-w-0">
               <p className="text-sm font-medium text-(--nous-fg-1)">
-                {message.error.message}
+                This response failed to generate. Please try again.
               </p>
               {helperLine ? (
                 <p className="mt-1 text-[12px] text-(--nous-fg-3)">
@@ -790,6 +835,10 @@ export function AuiAssistantMessage({
               </button>
             </div>
           ) : null}
+          <GeneratedArtifactCards
+            message={message}
+            isLatestAssistant={isLatestAssistant}
+          />
         </div>
       </MessagePrimitive.Root>
     );
@@ -803,13 +852,14 @@ export function AuiAssistantMessage({
       <div className="min-w-0 flex-1 text-left">
         {message && <CompletedProgressSection message={message} />}
         {/* Execution plan — committed provenance for agent turns */}
-        {message?.plan && message.plan.length > 0 && (
+        {(message?.plan && message.plan.length > 0) ||
+        message?.planReasoning ? (
           <ChatInlinePlan
-            plan={message.plan}
+            plan={message.plan ?? []}
             reasoning={message.planReasoning}
             toolExecutions={message.toolExecutions}
           />
-        )}
+        ) : null}
         {/* Tool strip — tools/sources/time/tokens/stopped */}
         {message && (
           <ToolStrip {...getToolStripProps(message, visibleCitations.length)} />
@@ -822,6 +872,13 @@ export function AuiAssistantMessage({
             executionByToolCallId={executionByToolCallId}
           />
         </div>
+        {draftTasks.map((task) => (
+          <DraftTaskStatus key={`${task.projectId}:${task.taskId}`} {...task} />
+        ))}
+        <GeneratedArtifactCards
+          message={message}
+          isLatestAssistant={isLatestAssistant}
+        />
         <MessageError />
         {/* Citations footer chips — provenance over assertion */}
         {visibleCitations.length > 0 && (
@@ -859,17 +916,15 @@ export function AuiAssistantMessage({
 }
 
 /**
- * Catches the transient out-of-bounds throw a single MessageByIndex can hit
- * when the external-store runtime's message array desyncs from the page list
- * on thread switch. The count guard in {@link AuiMessageByIndex} handles the
- * common post-commit lag, but under React's concurrent scheduler that guard
- * can read a stale (non-empty) count while MessageByIndex's own
- * useSyncExternalStore snapshot reads the freshly-emptied thread — a torn read
- * that throws "useClientLookup: Index N out of bounds" from inside the child's
- * store update, out of the render-time guard's reach (prod crash on thread
- * switch). That frame is transient: render nothing for it and re-attempt once
- * the runtime's client lookup settles. Anything else is a real bug —
- * rethrow it to the app's error boundary rather than silently swallow.
+ * Backstop for the transient out-of-bounds throw a message row can hit when
+ * the external-store runtime's message array desyncs from the page list on
+ * thread switch. {@link AuiMessageByIndex} now addresses rows by identity
+ * (Unstable_MessageById renders null instead of resolving a missing
+ * message), so this boundary no longer carries the crash — it remains as
+ * defense in depth for any render-phase transient throw the installed
+ * @assistant-ui version still emits (including the index-addressed wording
+ * below). Anything else is a real bug — rethrow it to the app's error
+ * boundary rather than silently swallow.
  */
 function MessageByIndexRetry({
   resetKey,
@@ -976,6 +1031,9 @@ export class MessageByIndexBoundary extends React.Component<
  * context instead of through closures baked into freshly-created functions. */
 interface BoundMessageContextValue {
   message?: ChatPageMessage;
+  /** True for the last assistant row in the runtime thread, including a
+   * local error row with no persisted id. Anchors late generated files. */
+  isLatestAssistant?: boolean;
   onRetry?: () => void;
   retryDisabled?: boolean;
   onEdit?: (newContent: string) => void;
@@ -997,11 +1055,17 @@ function BoundUserMessage(): ReactElement {
 }
 
 function BoundAssistantMessage(): ReactElement {
-  const { message, onRetry, retryDisabled, onCitationClick } =
-    useContext(BoundMessageContext);
+  const {
+    message,
+    isLatestAssistant,
+    onRetry,
+    retryDisabled,
+    onCitationClick,
+  } = useContext(BoundMessageContext);
   return (
     <AuiAssistantMessage
       message={message}
+      isLatestAssistant={isLatestAssistant}
       onRetry={onRetry}
       retryDisabled={retryDisabled}
       onCitationClick={onCitationClick}
@@ -1040,13 +1104,39 @@ export function AuiMessageByIndex({
   editDisabled?: boolean;
   onCitationClick?: OnCitationClick;
 }): ReactElement | null {
-  // The external-store runtime syncs in a useEffect (post-commit), so on
-  // the render where the page's message list grows (thread load/switch,
-  // first send) the runtime can still hold the previous — possibly empty —
-  // thread. MessageByIndex throws on out-of-bounds, so skip the stale
-  // frame; the effect fires immediately after commit and re-renders us.
+  // The external-store runtime syncs in a useEffect (post-commit), so on the
+  // render where the page's message list changes (thread load/switch, first
+  // send, pagination) the runtime can still hold the previous — possibly
+  // empty — thread. Address the row by message identity, never by index: an
+  // index-addressed scope re-resolves inside the runtime's store
+  // notification (the passive-effect adapter swap) and throws
+  // "useClientLookup: Index N out of bounds" from a non-render path that no
+  // error boundary can catch. Unstable_MessageById renders null while its
+  // id is absent from the runtime thread, so the stale frame renders
+  // nothing and the effect-driven runtime sync re-renders this row in place.
   const runtimeMessageCount = useThread((t) => t.messages.length);
   const runtimeMessageId = useThread((t) => t.messages[index]?.id);
+  // The page row's runtimeId IS the runtime message id (convertMessage).
+  // Fall back to the runtime's own id at this index only when the caller
+  // did not thread a page message through (e.g. a post-edit rerun).
+  const rowMessageId = message?.runtimeId ?? runtimeMessageId;
+  // Synchronous blanking on the legacy external-store read: when the id has
+  // left the runtime thread (empty store, thread switch, reconciliation),
+  // render nothing THIS frame. Unstable_MessageById enforces the same
+  // invariant on the tap store it reads, whose notification settles a tick
+  // later — belt and suspenders, and neither path resolves an index.
+  const runtimeHasRowId = useThread(
+    (t) =>
+      rowMessageId !== undefined &&
+      t.messages.some((m) => m.id === rowMessageId)
+  );
+  const isLatestAssistant = useThread((t) => {
+    for (let i = t.messages.length - 1; i >= 0; i -= 1) {
+      const row = t.messages[i];
+      if (row?.role === 'assistant') return row.id === rowMessageId;
+    }
+    return false;
+  });
 
   // The components map is module-level (stable identity); only the row's DATA
   // changes, and it travels by context so a message refresh re-renders the
@@ -1054,31 +1144,36 @@ export function AuiMessageByIndex({
   const bindings = useMemo<BoundMessageContextValue>(
     () => ({
       message,
+      isLatestAssistant,
       onRetry,
       retryDisabled,
       onEdit,
       editDisabled,
       onCitationClick,
     }),
-    [message, onRetry, retryDisabled, onEdit, editDisabled, onCitationClick]
+    [
+      message,
+      isLatestAssistant,
+      onRetry,
+      retryDisabled,
+      onEdit,
+      editDisabled,
+      onCitationClick,
+    ]
   );
 
-  if (index >= runtimeMessageCount) return null;
-  // Reconciliation can reorder rows without changing the runtime's length.
-  // Until its post-commit sync catches up, this index may still name an
-  // approval gate rather than the answer now occupying the list row. Never
-  // render another message's tools (or actionable approval) in this slot.
-  if (message && runtimeMessageId !== message.runtimeId) return null;
+  // Runtime empty and no row identity to address — render nothing for this
+  // frame. The runtime's post-commit sync re-renders the row.
+  if (!rowMessageId || !runtimeHasRowId) return null;
 
-  // resetKey settles the boundary when the runtime re-syncs: count changes on
-  // grow/shrink, and message id changes on thread switch even when counts match.
+  // resetKey settles the boundary if a transient throw still occurs: count
+  // changes on grow/shrink, and the row id changes on thread switch even
+  // when counts match.
   return (
-    <MessageByIndexBoundary
-      resetKey={`${runtimeMessageCount}:${message?.runtimeId ?? index}`}
-    >
+    <MessageByIndexBoundary resetKey={`${runtimeMessageCount}:${rowMessageId}`}>
       <BoundMessageContext.Provider value={bindings}>
-        <ThreadPrimitive.MessageByIndex
-          index={index}
+        <ThreadPrimitive.Unstable_MessageById
+          messageId={rowMessageId}
           components={BOUND_MESSAGE_COMPONENTS}
         />
       </BoundMessageContext.Provider>

@@ -38,125 +38,34 @@ def _extract_project_id_from_text(text: str) -> Optional[str]:
 
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
-_TOOL_PLACEHOLDER_CONTENT = '{"status": "skipped"}'
-
-
-def _tool_call_id(tc: Any) -> Optional[str]:
-    """Extract the ``id`` field from a tool_call entry, tolerating dict or attr form."""
-    if isinstance(tc, dict):
-        tc_id = tc.get("id")
-    else:
-        tc_id = getattr(tc, "id", None)
-    return tc_id if isinstance(tc_id, str) and tc_id else None
-
 
 def _sanitize_messages(raw: list) -> list:
-    """Ensure the message list is valid for LLM APIs.
+    """Ensure the message list is valid and bounded for model requests."""
+    from src.services.agent._sanitize import sanitize_model_messages
 
-    OpenAI-compatible chat APIs require:
-    1. Every assistant message with ``tool_calls`` must be IMMEDIATELY
-       followed by ``ToolMessage`` entries answering each call.
-    2. Every ``ToolMessage`` must follow an assistant message whose
-       ``tool_calls`` includes its ``tool_call_id``.
-
-    Real-world checkpoint state can violate both invariants — e.g. a
-    cancelled tool execution leaves an unanswered ``tool_call``, or a
-    HumanMessage gets inserted between an AI's tool_calls and the
-    ToolMessages answering them. We rebuild the message list defensively:
-
-    - Index every ``ToolMessage`` by its ``tool_call_id`` (last wins).
-    - Walk the raw list, skipping standalone ToolMessages — they're
-      re-emitted right after their parent AIMessage (or replaced with a
-      ``"skipped"`` placeholder if no real one exists).
-    - ToolMessages whose ``tool_call_id`` doesn't match any AI tool_call
-      are dropped — they're orphans that confuse the API.
-    - An AIMessage tool_call with no usable id (empty/missing id, or a
-      duplicate of one another message already answered) is stripped from
-      that AIMessage's ``tool_calls`` rather than merely left unanswered —
-      keeping it would still violate invariant 1 above (audit L1).
-    - Consecutive HumanMessages are merged into one (LangGraph state
-      occasionally appends them separately on retries / interrupts).
-
-    The placeholder content stays ``'{"status": "skipped"}'`` because
-    the compactor recognises that exact string to skip synthetic items.
-    """
-    # Pass 1: index ToolMessages by tool_call_id (last occurrence wins)
-    tm_by_id: dict[str, ToolMessage] = {}
-    for msg in raw:
-        if isinstance(msg, ToolMessage) and msg.tool_call_id:
-            tm_by_id[msg.tool_call_id] = msg
-
-    # Pass 2: rebuild list, putting each AI's ToolMessages right after it
-    rebuilt: list = []
-    placed_tm_ids: set[str] = set()
-    for msg in raw:
-        if isinstance(msg, ToolMessage):
-            # Standalone TMs are re-inserted via their parent AI (below)
-            # or dropped if no parent claims them.
-            continue
-        if not (isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None)):
-            rebuilt.append(msg)
-            continue
-        kept_tool_calls = []
-        answers: list = []
-        for tc in msg.tool_calls:
-            tc_id = _tool_call_id(tc)
-            if not tc_id or tc_id in placed_tm_ids:
-                # Unidentifiable, or already answered by an earlier message
-                # in this list — drop it from tool_calls too (see docstring)
-                # instead of just skipping its ToolMessage.
-                continue
-            kept_tool_calls.append(tc)
-            tm = tm_by_id.get(tc_id)
-            if tm is None:
-                tm = ToolMessage(content=_TOOL_PLACEHOLDER_CONTENT, tool_call_id=tc_id)
-            answers.append(tm)
-            placed_tm_ids.add(tc_id)
-        if len(kept_tool_calls) != len(msg.tool_calls):
-            msg = msg.model_copy(update={"tool_calls": kept_tool_calls})
-        rebuilt.append(msg)
-        rebuilt.extend(answers)
-
-    # Pass 3: collapse consecutive HumanMessages.
-    #
-    # When a previous turn is interrupted (CancelledError from the user
-    # aborting the stream by typing a new message), the unanswered
-    # HumanMessage stays in the checkpoint. The next user input arrives
-    # as a second consecutive HumanMessage. The previous concatenation
-    # behavior caused the LLM to see both as a single combined intent
-    # (trace 019e1885: "Find recent transformer papers" + "hi" → LLM
-    # answered the older cancelled query). Treat consecutive Human
-    # messages as supersession: keep only the latest. The earlier
-    # message had no AI response, so the user clearly abandoned it.
-    merged: list = []
-    for msg in rebuilt:
-        if (
-            merged
-            and isinstance(merged[-1], HumanMessage)
-            and isinstance(msg, HumanMessage)
-        ):
-            merged[-1] = msg
-        else:
-            merged.append(msg)
-    return trim_model_history(merged)
+    return sanitize_model_messages(raw)
 
 
 from langgraph.types import Command, RetryPolicy, interrupt
 
 from src.core.config import get_settings
 from src.core.openai_endpoint import classify_openai_endpoint
-from src.services.agent.compactor import make_compactor_node, trim_model_history
+from src.services.agent._sanitize import _TOOL_PLACEHOLDER_CONTENT
+from src.services.agent.compactor import make_compactor_node
 from src.services.agent.error_recovery import (
     ToolError,
     classify_error,
     classify_error_from_payload,
     retry_transient,
 )
-from src.services.agent.llm_factory import credential_fingerprint
+from src.services.agent.llm_factory import (
+    credential_fingerprint,
+    resolve_chat_deployment,
+)
 from src.services.agent.observability import track_node_execution
 from src.services.agent.planner import make_planner_node
 from src.services.agent.reflection import make_reflection_gate
@@ -241,11 +150,7 @@ def _build_llm(model_override: str | None = None):
     api_version = (
         settings.AZURE_OPENAI_CHAT_API_VERSION or settings.AZURE_OPENAI_API_VERSION
     )
-    deployment = (
-        model_override
-        or settings.AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
-        or settings.AZURE_OPENAI_DEPLOYMENT_NAME
-    )
+    deployment = resolve_chat_deployment(model_override)
 
     if not endpoint or not api_key:
         raise RuntimeError(

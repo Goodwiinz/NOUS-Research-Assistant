@@ -23,8 +23,10 @@ export const AGENT_STREAM_EVENTS = [
   'heartbeat',
   'status',
   'confirmation',
+  'approval_required',
   'done',
   'error',
+  'artifact',
 ] as const;
 
 /** Union of every agent SSE event name (mirror of backend `AgentStreamEvent`). */
@@ -53,6 +55,7 @@ export const AGENT_ERROR_CATEGORIES = [
   'invalid_request',
   'conflict',
   'internal',
+  'device_bound_to_another_chat',
 ] as const;
 
 /** Union of every server-authored error category (mirror of backend enum). */

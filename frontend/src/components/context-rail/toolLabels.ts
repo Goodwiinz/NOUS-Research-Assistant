@@ -69,6 +69,7 @@ const TOOL_COPY: Record<string, ToolCopy> = {
     'Drafting synthesis',
     'Drafted synthesis'
   ),
+  revise_draft: copy('Revise draft', 'Revising draft', 'Revised draft'),
   add_document_to_project: copy(
     'Add document to project',
     'Adding document to project',

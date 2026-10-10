@@ -206,6 +206,7 @@ def test_thread_detail_uses_message_presenter_without_losing_rich_provenance() -
             }
         ],
         plan_reasoning="Search before answering.",
+        reasoning_summary="I compared the retrieved evidence.",
         token_usage={"input_tokens": 11, "output_tokens": 7},
         progress_steps=[{"phase": "writing", "detail": "Drafting"}],
         citations=[
@@ -256,6 +257,7 @@ def test_thread_detail_uses_message_presenter_without_losing_rich_provenance() -
     assert nested.client_message_id == CLIENT_ASSISTANT_ID
     assert nested.stopped is True
     assert nested.plan_reasoning == "Search before answering."
+    assert nested.reasoning_summary == "I compared the retrieved evidence."
     assert nested.token_usage == {"input_tokens": 11, "output_tokens": 7}
     assert nested.progress_steps == [{"phase": "writing", "detail": "Drafting"}]
     assert nested.citations[0].document_title == "Stable Message Identity"

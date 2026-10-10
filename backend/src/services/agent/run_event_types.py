@@ -49,6 +49,8 @@ class RunEventType(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     RUN_CANCELLED = "run.cancelled"
+    # ID-only announcement; artifact metadata lives in the artifact tables.
+    ARTIFACT_VERSION_CREATED = "artifact.version_created"
 
 
 TERMINAL_RUN_EVENTS: frozenset[RunEventType] = frozenset(
@@ -207,6 +209,11 @@ class RunCancelledPayload(_Payload):
     assistant_message_id: str | None = None
 
 
+class ArtifactVersionCreatedPayload(_Payload):
+    artifact_id: str = Field(max_length=36)
+    version_id: str = Field(max_length=36)
+
+
 PAYLOAD_MODELS: dict[RunEventType, type[_Payload]] = {
     RunEventType.RUN_CREATED: RunCreatedPayload,
     RunEventType.RUN_STARTED: RunStartedPayload,
@@ -223,6 +230,7 @@ PAYLOAD_MODELS: dict[RunEventType, type[_Payload]] = {
     RunEventType.RUN_COMPLETED: RunCompletedPayload,
     RunEventType.RUN_FAILED: RunFailedPayload,
     RunEventType.RUN_CANCELLED: RunCancelledPayload,
+    RunEventType.ARTIFACT_VERSION_CREATED: ArtifactVersionCreatedPayload,
 }
 
 
@@ -257,3 +265,15 @@ __all__ = [
     "TERMINAL_RUN_EVENTS",
     "validate_payload",
 ]
+
+# External producers cannot forge lifecycle or retrieval/plan projections.
+BRIDGE_PRODUCER_EVENTS = frozenset(
+    {
+        RunEventType.ASSISTANT_DELTA,
+        RunEventType.TOOL_STARTED,
+        RunEventType.TOOL_COMPLETED,
+        RunEventType.APPROVAL_REQUIRED,
+        RunEventType.APPROVAL_RESOLVED,
+        RunEventType.USAGE_UPDATED,
+    }
+)

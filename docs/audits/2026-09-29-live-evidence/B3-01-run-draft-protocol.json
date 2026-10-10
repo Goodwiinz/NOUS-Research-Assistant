@@ -1,0 +1,23 @@
+{
+  "step": "B3-01-run-draft-protocol",
+  "as": "owner",
+  "at": "2026-09-29T10:19:26.015717+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/blueprints/fab71505-9dd2-4b00-b186-9f843c2b9ccf/runs",
+    "body": {
+      "protocol_version_id": "d38ab741-2deb-4c29-aae2-679754b74177"
+    }
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Approved protocol version is required",
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}

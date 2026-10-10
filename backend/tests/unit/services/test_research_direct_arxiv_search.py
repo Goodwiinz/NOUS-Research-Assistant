@@ -1,7 +1,13 @@
 """Regression tests for deterministic arXiv search routing."""
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
+
+_DECOMPOSED_MARK_COUNT_QUERY = (
+    "search arxiv for 15 a\u0301 b\u0301 c\u0301 d\u0301 e\u0301 f\u0301 "
+    "g\u0301 h\u0301 i\u0301 j\u0301 k\u0301 l\u0301 m\u0301 n\u0301 "
+    "o\u0301 p\u0301 q\u0301 r\u0301 papers"
+)
 
 
 @pytest.mark.unit
@@ -21,10 +27,7 @@ async def test_explicit_arxiv_search_emits_tool_call_without_llm(monkeypatch):
         {
             "messages": [
                 HumanMessage(
-                    content=(
-                        "Search arXiv for recent retrieval-augmented "
-                        "generation papers"
-                    )
+                    content="Search arXiv for retrieval-augmented generation papers"
                 )
             ],
             "plan": [],
@@ -40,8 +43,9 @@ async def test_explicit_arxiv_search_emits_tool_call_without_llm(monkeypatch):
     tool_call = message.tool_calls[0]
     assert tool_call["name"] == "search_arxiv"
     assert tool_call["args"] == {
-        "query": "recent retrieval-augmented generation papers",
+        "query": "retrieval-augmented generation papers",
         "max_results": 5,
+        "recency_days": 365,
     }
     assert tool_call["id"].startswith("direct_search_arxiv_")
     assert tool_call["type"] == "tool_call"
@@ -75,13 +79,207 @@ def test_explicit_time_window_skips_fast_path(content: str) -> None:
 @pytest.mark.parametrize(
     "content",
     [
-        "find arxiv papers on RAG",
-        "search arxiv for recent RAG papers",
-        "show me the latest arxiv papers on diffusion",
+        "find papers on arxiv about RAG",
+        "please search arxiv for retrieval augmented generation.",
+        "search arxiv for graph neural networks",
+        "search arxiv for 15-layer transformer architectures",
+        "search arxiv for eleven-dimensional transformer embeddings",
     ],
 )
-def test_recency_words_still_take_fast_path(content: str) -> None:
-    """ "recent"/"latest" keep the deterministic path — 365 days is right there."""
+def test_narrow_standalone_forms_take_fast_path(content: str) -> None:
+    """Simple affirmative forms use the bounded default search arguments."""
     from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_query
 
     assert _direct_arxiv_search_query(content) is not None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "content",
+    [
+        "do not search arxiv for transformers",
+        "search arxiv for transformers and save a draft",
+        "search arxiv for transformers then ingest them",
+        'search arxiv for "transformers"',
+        "search arxiv for transformers; then create a note",
+        "search arxiv for transformers—attention",
+        "search arxiv for transformers from 2020",
+        "search arxiv for transformers in the last five years",
+        "search arxiv for transformers last-week",
+        "search arxiv for five-year studies",
+        "search arxiv for the top 10 transformer papers",
+        "search arxiv for up to 5 transformer papers",
+        "search arxiv for transformers at least 5 papers",
+        "search arxiv for 15 transformer papers",
+        "search arxiv for eleven transformer papers",
+        "search arxiv for 15 transformer based language model optimization papers",
+        "search arxiv for eleven transformer based language model optimization papers",
+        "search arxiv for 15 a b c d e f g h i j k l m n o p q r papers",
+        "search arxiv for 15 a-b c-d e-f g-h i-j k-l m-n o-p q-r s-t papers",
+        "search arxiv for transformer-15 papers",
+        "search arxiv for paper-15 transformer",
+        "search arxiv for -15 papers",
+        _DECOMPOSED_MARK_COUNT_QUERY,
+        "search arxiv for transformer papers published yesterday",
+        "search arxiv for those papers",
+        "search arxiv for the same topic",
+        "search arxiv for transformers?",
+        "search arxiv for transformers\nthen save a draft",
+        "\nsearch arxiv for transformers",
+        "search arxiv for transformers\n",
+        "search arxiv for one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty one",
+    ],
+)
+def test_ambiguous_or_compound_requests_decline_direct_shortcut(content: str) -> None:
+    from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_query
+
+    assert _direct_arxiv_search_query(content) is None
+
+
+@pytest.mark.unit
+def test_count_guard_completes_for_many_hyphen_segments() -> None:
+    """Adversarial hyphen runs finish within a child-process time bound."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    backend_root = str(Path(__file__).resolve().parents[3])
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (backend_root, environment.get("PYTHONPATH", "")) if item
+    )
+    script = """
+from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_query
+content = "search arxiv for 15 " + "-".join(["token"] * 100) + " architectures"
+assert _direct_arxiv_search_query(content) is None
+"""
+    subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+        # The assertion guards against non-termination in the hyphen parser;
+        # allow headroom for the research-agent module's cold imports on CI.
+        timeout=20,
+    )
+
+
+def test_direct_shortcut_requires_fresh_ordinary_projected_search() -> None:
+    from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_message
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    messages = [HumanMessage(content="search arxiv for graph neural networks")]
+    ordinary = {
+        "messages": messages,
+        "plan": [],
+        "capability_limitation": {},
+        "tool_loop_count": 0,
+        "tool_executions": [],
+        "loaded_skill_versions": [],
+        "project_skill_catalog": [],
+    }
+    assert _direct_arxiv_search_message(messages, ordinary) is not None
+
+    cases = [
+        {**ordinary, "plan": [{"step": 1, "tool": "search_arxiv"}]},
+        {**ordinary, "capability_limitation": {"branch": "research"}},
+        {**ordinary, "tool_loop_count": 1},
+        {**ordinary, "tool_executions": [{"tool_name": "search_arxiv"}]},
+        {**ordinary, "loaded_skill_versions": [{"name": "paper-workflow"}]},
+        {
+            **ordinary,
+            "project_skill_catalog": [{"name": "paper-workflow"}],
+            "messages": [
+                HumanMessage(content="search arxiv for paper-workflow transformers")
+            ],
+        },
+        {
+            **ordinary,
+            "runtime_snapshot_id": "snapshot-1",
+            "runtime_tool_names": [
+                name
+                for name in TOOL_REGISTRY.available_descriptor_names()
+                if name != "search_arxiv"
+            ],
+            "tool_registry_hash": TOOL_REGISTRY.metadata_snapshot()["hash"],
+            "tool_registry_version": TOOL_REGISTRY.metadata_snapshot()["version"],
+        },
+        {**ordinary, "runtime_snapshot_id": "snapshot-1"},
+    ]
+    for state in cases:
+        assert _direct_arxiv_search_message(state["messages"], state) is None
+
+
+def test_prior_tool_result_after_current_human_disables_shortcut() -> None:
+    from src.services.agent.subgraphs.research_agent import _direct_arxiv_search_message
+
+    messages = [
+        HumanMessage(content="search arxiv for graph neural networks"),
+        ToolMessage(content="{}", tool_call_id="prior-result"),
+    ]
+    assert _direct_arxiv_search_message(messages, {"tool_loop_count": 0}) is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        "search arxiv for transformers and save a draft",
+        "search arxiv for 15 transformer papers",
+        "search arxiv for eleven transformer papers",
+        "search arxiv for 15 transformer based language model optimization papers",
+        "search arxiv for eleven transformer based language model optimization papers",
+        "search arxiv for 15 a-b c-d e-f g-h i-j k-l m-n o-p q-r s-t papers",
+        "search arxiv for transformer-15 papers",
+        "search arxiv for paper-15 transformer",
+        "search arxiv for -15 papers",
+        _DECOMPOSED_MARK_COUNT_QUERY,
+        "search arxiv for transformer papers published yesterday",
+    ],
+)
+async def test_declined_shortcut_uses_ordinary_research_model(monkeypatch, content):
+    from langchain_core.messages import AIMessage
+
+    import src.services.agent.graph as graph
+    import src.services.agent.llm_factory as factory
+    from src.services.agent.subgraphs.research_agent import research_llm_node
+
+    observed: dict[str, object] = {}
+
+    class FakeLLM:
+        def bind_tools(self, tools, **_kwargs):
+            observed["tools"] = {tool.name for tool in tools}
+            return self
+
+        async def ainvoke(self, messages, **_kwargs):
+            observed["ainvoke_calls"] = int(observed.get("ainvoke_calls", 0)) + 1
+            observed["messages"] = messages
+            return AIMessage(content="I will search for that topic.")
+
+    monkeypatch.setattr(graph, "_build_llm", lambda **_kwargs: FakeLLM())
+    monkeypatch.setattr(factory, "resolve_chat_deployment", lambda *_args: "test-main")
+
+    result = await research_llm_node(
+        {
+            "messages": [HumanMessage(content=content)],
+            "plan": [],
+            "capability_limitation": {},
+            "tool_loop_count": 0,
+            "tool_executions": [],
+            "runtime_tool_names": [],
+        },
+        {},
+    )
+
+    assert not result["messages"][0].tool_calls
+    assert observed["ainvoke_calls"] == 1
+    assert "search_arxiv" in observed["tools"]
+    model_messages = observed["messages"]
+    assert isinstance(model_messages, list)
+    assert any(
+        isinstance(message, HumanMessage) and message.content == content
+        for message in model_messages
+    )

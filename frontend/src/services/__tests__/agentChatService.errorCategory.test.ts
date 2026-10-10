@@ -97,6 +97,7 @@ describe('consumeSse error frame category', () => {
       'invalid_request',
       'conflict',
       'internal',
+      'device_bound_to_another_chat',
     ]) {
       const [, category] = await errorFromFrame(
         `event: error\ndata: {"error":"x","category":"${known}"}\n\n`
@@ -184,7 +185,7 @@ describe('HTTP-level failures synthesize a client-derived category', () => {
     global.fetch = fetchFailing(429);
     const onError = vi.fn();
     await agentChatService.streamConfirm(
-      { thread_id: 't1', confirmed: true },
+      { thread_id: 't1', confirmed: true, approval_id: 'a'.repeat(64) },
       { onError }
     );
     expect(onError.mock.calls[0][1]).toBe('rate_limited');
@@ -199,5 +200,19 @@ describe('HTTP-level failures synthesize a client-derived category', () => {
       error: 'Stream resume failed: 404',
     });
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('only reports lost observation for incomplete Codex streams', async () => {
+    const onConnectionLost = vi.fn();
+    global.fetch = fetchWith([]);
+    await agentChatService.streamMessage(request, { onConnectionLost });
+    expect(onConnectionLost).not.toHaveBeenCalled();
+
+    global.fetch = fetchWith([]);
+    await agentChatService.streamMessage(
+      { ...request, execution_provider: 'codex' },
+      { onConnectionLost }
+    );
+    expect(onConnectionLost).toHaveBeenCalledOnce();
   });
 });

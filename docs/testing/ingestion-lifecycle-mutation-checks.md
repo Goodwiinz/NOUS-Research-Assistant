@@ -1,0 +1,367 @@
+# Ingestion lifecycle mutation checks
+
+Guards added by the ingestion lifecycle repairs (Linear plan "Ingestion
+lifecycle repairs — Astra audit fix plan", 2026-10-01). Each proof disabled one
+guard, ran the focused test and read the assertion failure, restored the file
+from a byte-for-byte copy (`git diff` on it empty), and reran the test green.
+No mutant was committed.
+
+Postgres tests need `ORCHESTRATION_TEST_DATABASE_URL` pointing at a disposable
+PostgreSQL database; each test creates and drops its own schema. Without it
+they skip, so treat them as NOT RUN, not passing. Run from `backend/`.
+
+## GOO-356: deleted ingestion cannot start or double-release quota
+
+Verified in PR #1798 against local PostgreSQL 2026-10-01.
+
+### G1. Claim refuses deleted work
+
+- **Guard:** `backend/src/tasks/replay_guard.py:127`,
+  `claim_job_for_processing`: `if locked.is_deleted or (<document deleted>)`.
+- **Mutation:** condition replaced by `if False and (`.
+- **Command:** `pytest -q
+  tests/unit/tasks/test_replay_idempotency.py::test_claim_refuses_deleted_ingestion`
+- **Observed:** both `[job]` and `[document]` cases fail with
+  `assert True is False` (the deleted job was claimed).
+- **Note:** `test_non_cascade_delete_still_cancels_ingestion` still passes
+  under this mutation because the delete already moved the job to CANCELLED.
+  The guard matters for jobs that were deleted before this fix, or by any
+  writer that does not cancel. The SQLite cases seed exactly that state.
+
+### G2. Document row lock serializes concurrent deletes
+
+- **Guard:** `backend/src/services/documents/file_service.py:1016`,
+  `FileService.soft_delete_documents`: `.with_for_update()` on the live
+  Document select. A waiting delete re-evaluates `is_deleted == False` once
+  the winner commits and finds nothing.
+- **Mutation:** that `.with_for_update()` removed.
+- **Command:** `pytest -q
+  tests/integration/test_document_deletion_postgres.py::test_concurrent_deletes_release_quota_once`
+- **Observed:** `AssertionError: [None, None]`: both deletes succeeded, and the
+  quota was released twice.
+
+### G3. Delete cancels unfinished jobs
+
+- **Guard:** `backend/src/services/documents/file_service.py:1045`,
+  `if not job.is_finished: job.cancel_job() ...`.
+- **Mutation:** condition replaced by `if False:`.
+- **Command:** `pytest -q
+  tests/integration/test_document_deletion_postgres.py::test_deleted_ingestion_is_not_claimed`
+- **Observed:** `assert <JobStatus.QUEUED> == <JobStatus.CANCELLED>`: the
+  deleted document's job stayed queued.
+
+## GOO-357: a running worker cannot write after it lost the job
+
+Verified in PR #1800 against local PostgreSQL 2026-10-01. Task-level tests
+are in `tests/unit/tasks/test_ingestion_stage_guard_postgres.py` (here, not
+under `tests/integration/`, because that conftest mocks Redis, which breaks
+Celery's eager `.apply()`). The helper matrix is
+`tests/unit/tasks/test_processing_lifecycle.py`.
+
+**Red before the fix:** with the pre-fix `processing_tasks.py` from the GOO-356
+branch, 5 of 8 task-level tests fail. Cancelled, deleted and superseded
+attempts all finish `completed` with live entities; a cancel at finalize still
+completes; a crash after cancellation writes FAILED over CANCELLED.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G4 stage commits, `processing_tasks.py:318` `commit_if_active` | `return db.commit()` before the check | `test_cancel_after_extraction_blocks_stage_commit` (3 cases) | `assert 2 == 0` live entities |
+| G5 completion check, `processing_tasks.py:456` | check call replaced by a no-op | `test_cancel_before_final_completion_keeps_cancelled` | `KeyError: 'skipped'` (task completed) |
+| G6 failure-path ownership, `processing_tasks.py:516` | check replaced by plain `db.get` | `test_failure_after_cancellation_does_not_overwrite_cancelled` | `FAILED == CANCELLED` |
+| G7 `on_failure`, `processing_tasks.py:217` | `not job.is_finished` → `True` | same | `FAILED == CANCELLED` |
+| G8 task-id check, `processing_lifecycle.py:92` | `if False:` | `[_newer_retry-superseded]` + `test_lost_attempt_is_stopped[_supersede-*]` | completed / `DID NOT RAISE` |
+| G9 explicit flush, `processing_lifecycle.py:54` | removed | `test_live_attempt_passes_and_keeps_pending_stage_changes` | `assert None == 'extracted'` (refresh discarded the stage result) |
+
+An earlier G6 mutant (`rollback` → `raise`) survived because the raise landed
+in the outer `except` and wrote nothing. It was not a guard removal, so it was
+replaced by the plain-`db.get` mutant above.
+
+### GOO-357 review fixes (PR #1800)
+
+Both defects were reproduced on PostgreSQL before the fix: a real
+`DeadlockDetected`, and a live run stopped as `queued`.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G10 lock before flush, `processing_lifecycle.py:71` | `db.flush()` moved back above the lock selects | `test_guard_does_not_deadlock_with_a_concurrent_delete` | `DeadlockDetected` |
+| G11 lock before entity reset, `processing_tasks.py:402` | guard call replaced by a no-op | `test_entity_reset_does_not_deadlock_with_a_cascading_delete` | `DeadlockDetected` |
+| G12 late producer QUEUED, `processing_lifecycle.py:97` | `if False:` | `test_producer_late_queued_write_does_not_stop_live_run` | `'stopped' == 'completed'` |
+
+## GOO-358: remote writes that land after deletion are cleaned up
+
+Verified in the GOO-358 PR against local PostgreSQL 2026-10-02. Task-level
+tests are in `tests/unit/tasks/test_ingestion_stage_guard_postgres.py`;
+reconciler tests are in `tests/unit/tasks/test_reconcile_tasks.py`.
+
+**Red before the fix:** with the pre-fix `processing_tasks.py` and
+`reconcile_tasks.py` from the GOO-357 branch, all 5 new task-level tests fail.
+A late DO KB data source was never removed (`[] == ['ds-late']`). A late graph
+write was never cleaned up. The DO KB bridge's `merge()` reverted a swept
+FAILED document to PENDING.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G13 fresh row in DO KB bridge, `processing_tasks.py:92` | `kb_db.get` → `kb_db.merge(document)` | `test_stale_snapshot_does_not_revert_state_through_do_kb_sync` | `PENDING == FAILED` |
+| G14 compensation on deletion stop, `processing_tasks.py:560` | condition → `False` | `test_late_do_kb_success_is_compensated[*]`, `test_late_graph_write_is_compensated[*]` | no unsync / no graph delete |
+| G15 reconciler selects deleted + neo4j failed, `reconcile_tasks.py:89` `_reconcilable_filters` | clause → `False` | `test_late_graph_write_is_compensated[False]`, `test_apply_retries_deleted_document_graph_cleanup` | `0 == 1` |
+| G16 cleanup failure marker, `reconcile_tasks.py:246` `_cleanup_deleted_document_graph` | `_FAILED` → `_COMPLETED` | `test_late_graph_write_is_compensated[False]`, `test_failed_deleted_document_graph_cleanup_remains_retryable` | `'completed' == 'failed'` |
+
+### GOO-358 review fixes
+
+The independent review found three more gaps, and each was reproduced red
+first. The CodeRabbit review flagged the wrong G16 line number above, which is
+now corrected.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G17 compensation on the generic failure path, `processing_tasks.py:585` | removed | `test_late_graph_write_is_compensated_when_the_stage_then_crashes` | no graph delete |
+| G18 re-drive re-checks deletion, `reconcile_tasks.py:143` `_redrive_neo4j` | check removed | `test_redrive_racing_a_delete_cleans_up_instead_of_completing` | no graph delete; row marked completed |
+| G19 deleted + neo4j pending selected, `reconcile_tasks.py:89` | `(_FAILED, _PENDING)` → `(_FAILED,)` | `test_deleted_document_left_pending_is_cleaned_up` | `0 == 1` |
+
+
+
+## GOO-356 cancellation serialization follow-up — 2026-10-03
+
+## GOO-356 cancellation and claim follow-up, 2026-10-03
+
+This follow-up extends merged PR #1798, starting at develop commit
+`4555c24066e476ee19f17dda6156b5a1b83a2ef9`. The dated checks above retain
+their original source references. References below describe this follow-up.
+
+All 27 mutations below failed their focused tests, then passed after restoring
+the exact source bytes. The initial repair also had 11 behavioral failures
+before implementation. Only broker, physical storage and satellite transports
+were replaced; PostgreSQL queries, row locks, commits and independent observer
+sessions were real. These checks do not exercise a deployed broker or provider.
+
+Run from the repository root with its installed test dependencies and a
+disposable database. Each PostgreSQL case creates and drops a unique schema
+containing only Organization, User, Document, ProcessingJob and Entity tables:
+
+```bash
+export ORCHESTRATION_TEST_DATABASE_URL='postgresql://root@/codex_goo356_20261003'
+python3 -m pytest -q -o addopts= -o log_cli=false \
+  backend/tests/integration/test_document_deletion_postgres.py
+python3 -m pytest -q -o addopts= -o log_cli=false \
+  backend/tests/unit/tasks/test_replay_idempotency.py
+```
+
+To reproduce one row, temporarily apply its mutation and run its named test
+with `FILE::TEST` instead of the whole file. Restore the exact source and rerun
+the same selector. Quote selectors containing parameter brackets.
+
+In the matrix, **claim** means
+`backend/src/tasks/replay_guard.py:claim_job_for_processing`; **cancel** means
+`backend/src/services/documents/file_service.py:FileService.cancel_upload_job`;
+**delete** means that service's `soft_delete_documents`. Tests are in the
+PostgreSQL file above except the three explicitly marked **unit**, which are
+in `test_replay_idempotency.py`. Line references are the unmutated source.
+
+| Guard | Mutation | Focused test | Failure with mutation; restored result |
+| --- | --- | --- | --- |
+| G13 claim:142 deletion denial | Disable condition | **unit** `test_claim_refuses_deleted_ingestion` | Deleted work claimed; 2 pass |
+| G14 claim:125 Document lock | Remove `with_for_update()` | `test_claim_locks_document_before_starting` | Expected lock timeout absent; 1 pass |
+| G15 claim:116 lock order | Lock job before document | `test_claim_does_not_lock_job_while_waiting_for_document` | Competing job lock gets PostgreSQL 55P03; 1 pass |
+| G16 claim:124 Document refresh | Remove `populate_existing()` | `test_claim_refreshes_deleted_document` | Stale live document claimed; 1 pass |
+| G17 claim:131 job refresh | Remove `populate_existing()` | **unit** `test_claim_reads_freshly_locked_row_not_stale_cache` | Running job claimed twice; 1 pass |
+| G18 claim:150 association/missing-document denial | Disable condition | **unit** `test_claim_refuses_missing_or_foreign_document`; `test_claim_rechecks_document_association` | Inaccessible/remapped document accepted; 4 pass |
+| G19 cancel:1088 Document lock | Remove `with_for_update()` | `test_cancellation_does_not_lock_job_while_waiting_for_document[task]` | Required document-lock attempt never observed within bounded wait; 1 pass |
+| G20 cancel:1079 lock order | Lock job before document | `test_cancellation_does_not_lock_job_while_waiting_for_document[task]` | Competing job lock gets 55P03; 1 pass |
+| G21 cancel:1104 job lock | Remove `with_for_update()` | `test_cancellation_locks_job_before_checking_its_state` | Independent publisher can acquire job lock; 1 pass |
+| G22 cancel:1089 Document refresh | Disable `populate_existing` | `test_task_id_cancellation_refreshes_document` | Deleted document accepted / completed document changed to FAILED; 2 pass |
+| G23 cancel:1105 job refresh | Disable `populate_existing` | `test_task_id_cancellation_preserves_concurrent_completion[task]` | Completed job overwritten by stale cancellation; 1 pass |
+| G24 cancel:1115 terminal-state denial | Disable condition | `test_task_id_cancellation_preserves_concurrent_completion`; `test_task_id_cancellation_fails_retained_document` | Completed job overwritten; 4 pass |
+| G25 cancel:1101 dispatch identity | Remove locked task-ID predicate | `test_task_id_cancellation_rechecks_dispatch_identity` | Reassigned task accepted; 3 pass |
+| G26 cancel:1147 other active attempt | Always fail document | `test_cancelled_old_job_preserves_another_active_ingestion` | Another active attempt's document changed to FAILED; 1 pass |
+| G27 cancel:1152 commit-before-revoke | Revoke before commit | `test_task_id_cancellation_fails_retained_document` | Broker observer sees QUEUED/PENDING; 2 pass |
+| G28 delete:1212 Document refresh | Disable `populate_existing` | `test_delete_rechecks_owner_under_lock` | Changed owner accepted; 1 pass |
+| G29 delete:1211 Document lock | Remove `with_for_update()` | `test_concurrent_deletes_release_quota_once` | Both concurrent deletions succeed; 1 pass |
+| G30 delete:1248 job cancellation | Disable condition | `test_deleted_ingestion_is_not_claimed` | Job remains QUEUED; 1 pass |
+| G31 claim:107 autoflush suppression | Replace `no_autoflush` with a no-op context | `test_claim_does_not_lock_job_while_waiting_for_document` | Dirty snapshot locks job before document; 1 pass |
+| G32 cancel:1065 autoflush suppression | Replace `no_autoflush` with a no-op context | `test_cancellation_does_not_lock_job_while_waiting_for_document[task]` | Dirty snapshot locks job before document; 1 pass |
+| G33 delete:1212 Document-select autoflush | Enable autoflush | `test_cancellation_does_not_lock_job_while_waiting_for_document[document]` | Dirty snapshot locks job before document; 1 pass |
+| G34 delete:1240 job-select autoflush | Enable autoflush | `test_task_id_cancellation_preserves_concurrent_completion[document]` | Dirty stale job changes COMPLETED to CANCELLED; 1 pass |
+| G35 delete:1240 job refresh | Disable `populate_existing` | `test_task_id_cancellation_preserves_concurrent_completion[document]` | Cached job changes COMPLETED to CANCELLED; 1 pass |
+| G36 cancel:1122 document status | Fail every document status | `test_task_id_cancellation_refreshes_document[completed]` | Completed document changed to FAILED; 1 pass |
+| G37 cancel:1092 document deletion | Remove deletion check | `test_task_id_cancellation_refreshes_document[deleted]` | Deleted document accepted; 1 pass |
+| G38 cancel:1108 document association | Remove association recheck | `test_task_id_cancellation_rechecks_dispatch_identity[document]` | Changed document link accepted; 1 pass |
+| G39 cancel:1102 job deletion | Remove locked live-job predicate | `test_task_id_cancellation_rechecks_dispatch_identity[deleted]` | Deleted job accepted; 1 pass |
+
+The lock-order cases hold the Document lock in one connection while the
+claim/cancellation waits in another, then acquire the job with `NOWAIT` in the
+first connection. The commit-order case collects state from an independent
+observer at broker invocation and asserts outside the best-effort callback,
+so an assertion cannot be swallowed as a revocation error.
+
+Additional PostgreSQL regressions verify both cancellation ID forms, broker
+failure, duplicate cancellation, foreign tenants, cascade semantics, a commit
+failure that rolls back once without revoking, and quota release exactly once.
+
+## GOO-358 follow-up verification — 2026-10-03
+Source repair: `abc4a2682`; merged develop baseline: `2a45aa50ce0db947ed91bdbb03534704107e5553`.
+Real PostgreSQL fixtures, with remote provider transports simulated. Focused suite: **90 passed**. Covers late writes, ordinary deletion, retry intent, and concurrent changes to cleanup scope. No deployed-provider health claim.
+Each guard below was removed in a runtime-only recompilation of its original function. All 15 named checks failed at the expected assertion, then passed with the original function restored. Tracked source was unchanged. A first harness attempt copied function globals and lost dependency patches; those results were discarded and all 15 checks rerun with live module globals.
+Run each selector with `ORCHESTRATION_TEST_DATABASE_URL` pointing to disposable PostgreSQL and the backend dependencies available: `PYTHONPATH=backend pytest -q -o addopts= <selector>`. Source line is the function entry; the guard label identifies the exact condition mutated.
+| Check | Guard | Source function line | Named selector | Result |
+|---|---|---|---|---|
+| T4-1 | Persist cascade intent | `backend/src/services/documents/file_service.py:1175` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_non_cascade_late_graph_write_is_retained` | FAIL → PASS |
+| T4-2 | Persist pending cleanup before provider | `backend/src/services/documents/file_service.py:1175` | `backend/tests/integration/test_document_deletion_postgres.py::test_normal_delete_graph_cleanup_is_durable` | FAIL → PASS |
+| T4-3 | Late graph cleanup respects cascade | `backend/src/tasks/reconcile_tasks.py:232` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_non_cascade_late_graph_write_is_retained` | FAIL → PASS |
+| T4-4 | Reconciler selection respects cascade | `backend/src/tasks/reconcile_tasks.py:57` | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_non_cascade_deleted_graph_is_not_selected` | FAIL → PASS |
+| T4-5 | Refresh cascade intent after re-drive | `backend/src/tasks/reconcile_tasks.py:139` | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_redrive_preserves_non_cascade_graph_after_concurrent_delete` | FAIL → PASS |
+| T4-6 | Pre-cleanup tenant scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_rechecks_scope_and_delete_intent[foreign]` | FAIL → PASS |
+| T4-7 | Pre-cleanup deletion scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_rechecks_scope_and_delete_intent[live]` | FAIL → PASS |
+| T4-8 | Pre-cleanup cascade scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_rechecks_scope_and_delete_intent[non-cascade]` | FAIL → PASS |
+| T4-9 | Cleanup-outcome tenant scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_outcome_does_not_overwrite_changed_row[foreign]` | FAIL → PASS |
+| T4-10 | Cleanup-outcome deletion scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_outcome_does_not_overwrite_changed_row[live]` | FAIL → PASS |
+| T4-11 | Cleanup-outcome cascade scope | `backend/src/services/documents/file_service.py:1385` | `backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_outcome_does_not_overwrite_changed_row[non-cascade]` | FAIL → PASS |
+| T4-12 | Reload DO KB document rather than merge stale snapshot | `backend/src/tasks/processing_tasks.py:66` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_stale_snapshot_does_not_revert_state_through_do_kb_sync` | FAIL → PASS |
+| T4-13 | Do not report non-cascade graph cleanup | `backend/src/tasks/reconcile_tasks.py:264` | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_non_cascade_do_kb_cleanup_does_not_report_graph_cleanup` | FAIL → PASS |
+| T4-14 | Compensate late graph write | `backend/src/tasks/processing_tasks.py:194` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_graph_write_is_compensated` | FAIL → PASS |
+| T4-15 | Compensate late DO KB write | `backend/src/tasks/processing_tasks.py:194` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_do_kb_success_is_compensated` | FAIL → PASS |
+
+## GOO-358 cleanup session isolation — 2026-10-03
+
+The real worker/API check reproduced a committed cancellation followed by an
+HTTP 500 (`MissingGreenlet`). Three PostgreSQL regressions also reproduced
+expired caller objects before the repair. Cleanup now owns a separate
+`AsyncSession`; its rollback and commit do not expire caller objects, discard
+pending caller changes or commit them. The source repair is `e7c09db01`
+(original tested commit `27cbae1bf`; identical source).
+
+All T4-1 through T4-15 checks above were rerun against the isolated-session
+implementation: every mutant failed at the intended assertion and every
+restored selector passed. The added T4-16 check borrows the caller session
+instead of creating its own: `test_graph_cleanup_preserves_caller_objects_and_pending_writes[success]`
+fails with the expected `MissingGreenlet`, then passes after restoration.
+The initial harness expected only `AssertionError`; its classification was
+corrected for this exception reproduction and T4-16 was rerun. No mutant
+changed tracked source. The focused cleanup/worker suite passed **53 tests**.
+
+```bash
+ORCHESTRATION_TEST_DATABASE_URL='<disposable-postgres-url>' PYTHONPATH=backend \
+  pytest -q -o addopts= \
+  'backend/tests/integration/test_document_deletion_postgres.py::test_graph_cleanup_preserves_caller_objects_and_pending_writes'
+```
+
+## GOO-358 final Astra fix pass — 2026-10-03
+
+The single final Astra review found early successful cleanup hiding an
+unsettled write, stale repair completion overwriting failed deletion, lost
+DO KB identifiers after a failed persistence commit, and cleanup starvation.
+All were reproduced before the repair. The following additional logical
+removals failed at their intended assertions and passed after restoration.
+The mutation runs recompiled functions with live globals in memory; no source
+mutant was written or committed. The new cleanup implementation is
+`d236204a12a2d0a87e098c9da00130d535330f17`.
+
+Run from the repository root with disposable PostgreSQL and installed backend
+test prerequisites:
+
+```bash
+ORCHESTRATION_TEST_DATABASE_URL='<disposable-postgres-url>' PYTHONPATH=backend \
+  pytest -q -o addopts= -o log_cli=false '<selector from the table>'
+```
+
+Paths in the guard column name production modules under `backend/src/`.
+Paths in selectors name tests under `backend/tests/`.
+
+| Check | Removed guard | Named selector | Observed RED, then restored GREEN |
+|---|---|---|---|
+| A1 | `tasks/processing_tasks.py:545`, graph `begin_write` | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_graph_intent_is_durable_before_provider_and_survives_early_cleanup` | Missing committed `pending_satellite_writes`; PASS |
+| A2 | `services/documents/file_service.py:1467`, pending graph writes keep cleanup pending | Same selector as A1 | `completed != pending`; PASS |
+| A3 | `tasks/reconcile_tasks.py:107`, pending graph token selection | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_outstanding_writes_survive_an_older_completed_cleanup[graph]` | `scanned == 0`, expected 1; PASS |
+| A4 | `tasks/reconcile_tasks.py:188`, completion row lock | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_reconciler_completion_cannot_hide_concurrent_failed_delete` | Repair overwrote deletion `failed` with `completed`; PASS |
+| A5 | `tasks/processing_tasks.py:166`, accepted UUID return on persistence failure | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_do_kb_commit_failure_retains_accepted_uuid` | Lost remote handle, `None != ds-accepted`; PASS |
+| A7 | `tasks/reconcile_tasks.py:92`, pending DO token selection | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_outstanding_writes_survive_an_older_completed_cleanup[do_kb]` | `scanned == 0`, expected 1; PASS |
+| A9 | `tasks/reconcile_tasks.py:444`, durable attempt timestamp | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_repeated_runs_do_not_starve_later_cleanup[False]` | Later organization's cleanup still failed after two capped runs; PASS |
+| A10 | `tasks/reconcile_tasks.py:396`, disabled-only rows excluded from actionable cap | `backend/tests/unit/tasks/test_reconcile_tasks.py::test_repeated_runs_do_not_starve_later_cleanup[True]` | Disabled prefix hid first actionable cleanup; PASS |
+| A13 | `tasks/processing_tasks.py:294`, commit graph outcome before independent DO cleanup | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_late_do_kb_success_is_compensated[True]` | Two-second PostgreSQL lock timeout left `ds-late` uncleared; PASS |
+
+The first A10 attempt passed a two-run test because fair rotation masked the
+missing disabled-budget exclusion. That attempt is discarded. The final
+first-run assertion fails without the exclusion and passes with it. Worker
+loss after provider acceptance and active reprocessing are additionally
+covered by GOO-360's real-worker tests and its dated verification amendment.
+
+Unknown writer tokens intentionally remain eligible after successful cleanup:
+an earlier deletion cannot establish that a dispatched operation has finished.
+The existing reconciler rotates attempts fairly. Feature/apply flags still
+control remote mutations; no second scheduler was added.
+
+Standalone GOO-358 validation at `d236204a1` (documentation-only changes afterwards): the six cleanup/API regression files named in the implementation plan passed **100 tests, 4 warnings, 52.43 seconds**, with real disposable PostgreSQL and Redis. Full-source Ruff passed. The earlier sparse-checkout import error is not counted as test execution.
+
+## GOO-359 recovery verification — 2026-10-03
+
+Real PostgreSQL: the initial reproduction had **12 intended failures and 7 preservation cases passing**. After the repair, the focused recovery, existing sweeper and publication suite passed **65 tests**. Candidate-selection hooks commit competing changes before locked reloads. Independent `FOR UPDATE NOWAIT` sessions establish that document and job locks remain held through the commit. Rollback restores both rows.
+
+The following 15 logical guards in `backend/src/tasks/processing_tasks.py::sweep_stuck_processing_jobs` were removed using runtime-only AST recompilation. Every named regression failed at its intended assertion and passed after restoration. Tenant scope and ingestion-only guards span discovery and mutation predicates; their named mutation removes that logical guard at each occurrence. All source functions were restored.
+
+Run with disposable PostgreSQL: `ORCHESTRATION_TEST_DATABASE_URL=<disposable-url> PYTHONPATH=backend pytest -q -o addopts= <selector>`.
+
+| Check | Removed guard | Named selector | Result |
+|---|---|---|---|
+| T5-1 | `document-lock` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_holds_document_then_job_locks_through_commit` | FAIL → PASS |
+| T5-2 | `job-lock` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_holds_document_then_job_locks_through_commit` | FAIL → PASS |
+| T5-3 | `job.is_deleted` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_job_after_candidate_selection[delete]` | FAIL → PASS |
+| T5-4 | `job.status not in _NON_TERMINAL_PROCESSING_STATUSES` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_job_after_candidate_selection[cancel]` | FAIL → PASS |
+| T5-5 | `staleness` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_job_after_candidate_selection[progress]` | FAIL → PASS |
+| T5-6 | `job.organization_id != candidate.organization_id` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_candidate_association[organization_id]` | FAIL → PASS |
+| T5-7 | `job.document_id != candidate.document_id` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_candidate_association[document_id]` | FAIL → PASS |
+| T5-8 | `job.job_type != candidate.job_type` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_candidate_association[job_type]` | FAIL → PASS |
+| T5-9 | `not document.is_deleted` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_document_after_candidate_selection[delete]` | FAIL → PASS |
+| T5-10 | `document.processing_status` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_rechecks_document_after_candidate_selection[complete]` | FAIL → PASS |
+| T5-11 | `competing-attempt` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_preserves_new_active_ingestion` | FAIL → PASS |
+| T5-12 | `document-tenant-scope` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_preserves_documents_it_does_not_own[foreign]` | FAIL → PASS |
+| T5-13 | `ingestion-only` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_preserves_documents_it_does_not_own[non-ingestion]` | FAIL → PASS |
+| T5-14 | `document-update` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_fails_job_and_document_atomically` | FAIL → PASS |
+| T5-15 | `atomic-commit` | `backend/tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_fails_job_and_document_atomically` | FAIL → PASS |
+
+## GOO-360 final worker guards — 2026-10-03
+
+Verified on the tree in the [verification amendment](2026-10-01-ingestion-lifecycle-verification.md).
+With A1–A5, A7, A9, A10 and A13 above, these complete the 13 additional logical
+guard removals from the single Astra fix pass. Every mutant failed at its
+intended assertion, every restored selector passed, then the focused suite
+passed 207 tests. No source mutant was committed.
+
+Use the verification report's command/prerequisites: disposable PostgreSQL,
+Redis, Linux fork and the pinned model. Skipped worker cases are NOT RUN.
+Guard paths are relative to `backend/src/` at `b85f5458d4f00d66558ab506043dfa9cea473f31`.
+
+| Check | Removed guard | Named selector | RED then restored GREEN |
+|---|---|---|---|
+| A6 | `tasks/processing_tasks.py:125`, DO intent before dispatch | `backend/tests/integration/test_ingestion_lifecycle_postgres.py::test_cleanup_survives_worker_loss_after_late_provider_acceptance[do_kb]` | Missing committed intent; PASS |
+| A8 | `services/do_kb/ingest.py:428`, discovery of accepted unrecorded sources | Same selector as A6 | Accepted remote source remained after reconciliation; PASS |
+| A11 | `services/documents/file_service.py:1435`, active ingestion rejection | `backend/tests/integration/test_ingestion_lifecycle_postgres.py::test_reprocess_rejects_an_overlapping_worker` | Both routes returned 200 instead of 409; both PASS |
+| A12 | `services/documents/file_service.py:1399`, document lock | `backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_reprocessing_holds_document_lock_until_new_job_commit` | NOWAIT did not raise `OperationalError`; PASS |
+
+Acceptance cases delete/clean the document, wait for provider acceptance, kill
+the canonical worker before acknowledgement, then run actual reconciliation.
+DO coverage checks mirror-object and discovered-source removal. Overlap cases
+verify real JWT authentication and both actual routers, assert one job remains,
+deny foreign/anonymous callers, then let the original worker finish.
+
+### GOO-358 write-token lease (review of d236204a1)
+
+The independent review and CodeRabbit both flagged unbounded write tokens.
+These Postgres and unit tests prove the lease and retirement rules.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G20 `begin_write` prunes writers past the lease (`satellite_state.py`) | keep every token | `test_failed_do_kb_syncs_leave_a_bounded_token_set` | `2 == 1` tokens |
+| G21 DO KB cleanup retires settled tokens (`do_kb/ingest.py`) | retirement removed | `test_deleted_do_kb_cleanup_finds_lost_sources_and_retires_settled_tokens` | `{'dead','live'} == {'live'}` |
+| G22 graph cleanup retires settled tokens (`reconcile_tasks.py` `_cleanup_deleted_document_graph`) | retirement removed | `test_graph_cleanup_retires_writers_past_their_lease[*]` | `'pending' == 'completed'` |
+| G23 a token without a start counts as dead (`satellite_state.py` `_started_before`) | treat as live | `test_graph_cleanup_retires_writers_past_their_lease[None]` | `'pending' == 'completed'` |
+| G24 `list_data_sources` follows pages on the same host (`do_kb/client.py`) | stop after page 1 | `test_list_data_sources_follows_pages`, `test_list_data_sources_refuses_a_foreign_next_page` | one page only / `DID NOT RAISE` |
+
+The delete-time graph cleanup in `FileService` retires tokens in the same way.
+It has no dedicated mutation test: if it misses one, the reconciler (G22)
+retires it on its next run.
+
+### GOO-358 second review fixes
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| G25 deleted documents are cleaned by key (`do_kb/ingest.py` `unsync_document_from_kb`) | key path disabled | `test_deleted_do_kb_cleanup_removes_duplicates_without_tokens` | `{'ds-B'} == {'ds-A','ds-B'}` |
+| G26 dedup stops at the first match (`do_kb/client.py` `find_data_source`) | full listing then match | `test_dedup_lookup_keeps_an_early_match_when_a_later_page_fails` | `None == 'ds-1'` |

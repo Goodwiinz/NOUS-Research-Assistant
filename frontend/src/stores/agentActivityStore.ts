@@ -56,6 +56,8 @@ export interface Run {
   /** Run-correlation id (envelope stream_id) the cursor belongs to; passed
    * to resumeStream so a stale cursor can't attach to a newer run. */
   streamId?: string;
+  /** Durable AgentRun id used to fence Stop across hook remounts/resumes. */
+  runId?: string;
 }
 
 interface AgentActivityState {
@@ -71,6 +73,7 @@ interface AgentActivityState {
   ) => void;
   setPlan: (threadId: string, items: PlanItemInput[]) => void;
   setStreamSeq: (threadId: string, seq: number, streamId?: string) => void;
+  setRunId: (threadId: string, runId: string) => void;
   finishRun: (threadId: string, state: 'done' | 'error' | 'stopped') => void;
 }
 
@@ -229,6 +232,18 @@ export const useAgentActivityStore = create<AgentActivityState>((set) => ({
             streamSeq: seq,
             streamId: streamId ?? run.streamId,
           },
+        },
+      };
+    }),
+
+  setRunId: (threadId, runId) =>
+    set((s) => {
+      const run = s.runs[threadId];
+      if (!run || run.runId === runId) return s;
+      return {
+        runs: {
+          ...s.runs,
+          [threadId]: { ...run, runId },
         },
       };
     }),

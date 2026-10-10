@@ -1,10 +1,15 @@
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from itertools import islice
+from typing import Any, Dict, List, Optional, Tuple
 
 import redis.asyncio as redis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 
 from src.core.config import settings
 
@@ -12,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 # How often a degraded (Redis-down) rate limiter may warn.
 _FALLBACK_LOG_INTERVAL_SECONDS = 60.0
+_SWEEP_EVERY_N_CALLS = 1024
+_SWEEP_MAX_KEYS = 1024
 
 
 class RateLimiterInterface(ABC):
@@ -49,7 +56,8 @@ class InMemoryRateLimiter(RateLimiterInterface):
     def __init__(self, max_attempts: int = 5, window_minutes: int = 15):
         self.max_attempts = max_attempts
         self.window_minutes = window_minutes
-        self.attempts: Dict[str, List[datetime]] = {}
+        self.attempts: OrderedDict[str, List[datetime]] = OrderedDict()
+        self._calls_since_sweep = 0
 
     def _prune(self, key: str, window_start: datetime) -> List[datetime]:
         """Drop expired attempts for key; evict the key entirely once empty
@@ -65,13 +73,23 @@ class InMemoryRateLimiter(RateLimiterInterface):
             del self.attempts[key]
         return pruned
 
+    def _recent_attempts(self, key: str, now: datetime) -> List[datetime]:
+        """Prune this key and periodically reclaim a bounded batch of idle keys."""
+        window_start = now - timedelta(minutes=self.window_minutes)
+        self._calls_since_sweep += 1
+        if self._calls_since_sweep >= _SWEEP_EVERY_N_CALLS:
+            self._calls_since_sweep = 0
+            for candidate in tuple(islice(self.attempts, _SWEEP_MAX_KEYS)):
+                if self._prune(candidate, window_start):
+                    # Rotate live keys so they cannot starve later expired keys.
+                    self.attempts.move_to_end(candidate)
+        return self._prune(key, window_start)
+
     async def is_allowed(self, identifier: str, prefix: str = "") -> bool:
         """Check if identifier is allowed to make an attempt"""
         key = f"{prefix}:{identifier}" if prefix else identifier
         now = datetime.now(timezone.utc)
-        window_start = now - timedelta(minutes=self.window_minutes)
-
-        recent = self._prune(key, window_start)
+        recent = self._recent_attempts(key, now)
 
         # Check if under limit
         if len(recent) >= self.max_attempts:
@@ -89,9 +107,7 @@ class InMemoryRateLimiter(RateLimiterInterface):
         materialize an entry for a key that has never been seen."""
         key = f"{prefix}:{identifier}" if prefix else identifier
         now = datetime.now(timezone.utc)
-        window_start = now - timedelta(minutes=self.window_minutes)
-
-        recent = self._prune(key, window_start)
+        recent = self._recent_attempts(key, now)
 
         if len(recent) >= self.max_attempts:
             oldest = recent[0]
@@ -106,26 +122,15 @@ class InMemoryRateLimiter(RateLimiterInterface):
         """Write-only: record a failed attempt"""
         key = f"{prefix}:{identifier}" if prefix else identifier
         now = datetime.now(timezone.utc)
-        if key not in self.attempts:
-            self.attempts[key] = []
-        self.attempts[key].append(now)
+        recent = self._recent_attempts(key, now)
+        recent.append(now)
+        self.attempts[key] = recent
 
     async def get_remaining_attempts(self, identifier: str, prefix: str = "") -> int:
         """Get remaining attempts for identifier"""
         key = f"{prefix}:{identifier}" if prefix else identifier
-        if key not in self.attempts:
-            return self.max_attempts
-
         now = datetime.now(timezone.utc)
-        window_start = now - timedelta(minutes=self.window_minutes)
-
-        # Count recent attempts
-        recent_attempts = [
-            attempt_time
-            for attempt_time in self.attempts[key]
-            if attempt_time > window_start
-        ]
-
+        recent_attempts = self._recent_attempts(key, now)
         return max(0, self.max_attempts - len(recent_attempts))
 
     async def close(self):
@@ -135,10 +140,18 @@ class InMemoryRateLimiter(RateLimiterInterface):
 class RedisRateLimiter(RateLimiterInterface):
     """Redis-based rate limiter for distributed environments"""
 
-    def __init__(self, max_attempts: int, window_minutes: int, redis_url: str = None):
+    def __init__(
+        self,
+        max_attempts: int,
+        window_minutes: int,
+        redis_url: str = None,
+        *,
+        operation_timeout: float = 0.5,
+    ):
         self.max_attempts = max_attempts
         self.window_minutes = window_minutes
         self.redis_url = redis_url or settings.REDIS_URL
+        self.operation_timeout = operation_timeout
         self._redis: Optional[redis.Redis] = None
         # R7-M7: a Redis outage used to fail OPEN (every request allowed).
         # Degrade to the per-process limiter instead — weaker than the shared
@@ -177,8 +190,21 @@ class RedisRateLimiter(RateLimiterInterface):
     async def _get_redis(self) -> redis.Redis:
         """Get or create Redis connection"""
         if self._redis is None:
-            self._redis = redis.from_url(self.redis_url, decode_responses=True)
+            self._redis = redis.from_url(
+                self.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=min(0.25, self.operation_timeout),
+                socket_timeout=min(0.25, self.operation_timeout),
+                # Retrying an ambiguous INCR could count a request twice.
+                retry=Retry(NoBackoff(), 0),
+            )
         return self._redis
+
+    async def _execute_redis(self, operation: str, *args: Any) -> Any:
+        """Bound acquisition, command I/O, and any client retry/backoff together."""
+        async with asyncio.timeout(self.operation_timeout):
+            client = await self._get_redis()
+            return await getattr(client, operation)(*args)
 
     def _in_fallback_window(self) -> bool:
         """True while a recent Redis error pins this process to ``_fallback``.
@@ -200,7 +226,7 @@ class RedisRateLimiter(RateLimiterInterface):
             logger.warning(
                 "Redis rate limit unavailable (%s); enforcing per-process "
                 "in-memory limits instead",
-                exc,
+                type(exc).__name__,
             )
 
     async def is_allowed(self, identifier: str, prefix: str = "") -> bool:
@@ -208,7 +234,6 @@ class RedisRateLimiter(RateLimiterInterface):
         if self._in_fallback_window():
             return await self._fallback.is_allowed(identifier, prefix)
         try:
-            client = await self._get_redis()
             key = (
                 f"auth_rate_limit:{prefix}:{identifier}"
                 if prefix
@@ -217,8 +242,8 @@ class RedisRateLimiter(RateLimiterInterface):
 
             # Execute Lua script for atomicity and correct expiration behavior
             # ARGV[1] is expiration in seconds
-            current = await client.eval(
-                self._incr_expire_script, 1, key, self.window_minutes * 60
+            current = await self._execute_redis(
+                "eval", self._incr_expire_script, 1, key, self.window_minutes * 60
             )
 
             return int(current) <= self.max_attempts
@@ -234,7 +259,6 @@ class RedisRateLimiter(RateLimiterInterface):
         if self._in_fallback_window():
             return await self._fallback.check_rate_limit(identifier, prefix)
         try:
-            client = await self._get_redis()
             key = (
                 f"auth_rate_limit:{prefix}:{identifier}"
                 if prefix
@@ -242,7 +266,7 @@ class RedisRateLimiter(RateLimiterInterface):
             )
 
             # Execute Lua check script (GET + TTL, no writes)
-            result = await client.eval(self._check_script, 1, key)
+            result = await self._execute_redis("eval", self._check_script, 1, key)
             count, ttl = int(result[0]), int(result[1])
 
             if count >= self.max_attempts:
@@ -260,7 +284,6 @@ class RedisRateLimiter(RateLimiterInterface):
             await self._fallback.record_attempt(identifier, prefix)
             return
         try:
-            client = await self._get_redis()
             key = (
                 f"auth_rate_limit:{prefix}:{identifier}"
                 if prefix
@@ -268,7 +291,8 @@ class RedisRateLimiter(RateLimiterInterface):
             )
 
             # Execute Lua record script (INCR + EXPIRE)
-            await client.eval(
+            await self._execute_redis(
+                "eval",
                 self._record_script,
                 1,
                 key,
@@ -284,14 +308,13 @@ class RedisRateLimiter(RateLimiterInterface):
         if self._in_fallback_window():
             return await self._fallback.get_remaining_attempts(identifier, prefix)
         try:
-            client = await self._get_redis()
             key = (
                 f"auth_rate_limit:{prefix}:{identifier}"
                 if prefix
                 else f"auth_rate_limit:{identifier}"
             )
 
-            current = await client.get(key)
+            current = await self._execute_redis("get", key)
             if current is None:
                 return self.max_attempts
 

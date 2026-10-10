@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@/test/test-utils';
+import { resetAccountSession } from '@/lib/account-session';
 import { useAgentChatStore } from '@/store/agentChatStore';
 import ProjectDetailPage from '../../../../app/(dashboard)/projects/[id]/page';
 import { useProjectStore } from '@/store/projectStore';
@@ -13,6 +14,7 @@ const mockPush = vi.fn();
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: 'proj-1' }),
   useRouter: () => ({ push: mockPush }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock('@/stores/authStore', () => ({
@@ -47,7 +49,24 @@ vi.mock('@/components/research/DocumentList', () => ({
   DocumentList: () => <div>Documents Content</div>,
 }));
 vi.mock('@/components/research/DraftGenerator', () => ({
-  DraftGenerator: () => <div>Draft Generator</div>,
+  DraftGenerator: ({
+    onGenerate,
+  }: {
+    onGenerate: (config: unknown) => void;
+  }) => (
+    <button
+      onClick={() =>
+        onGenerate({
+          themes: ['A private theme'],
+          style: 'academic',
+          maxSections: 2,
+          includeAbstract: true,
+        })
+      }
+    >
+      Draft Generator
+    </button>
+  ),
 }));
 vi.mock('@/components/research/DraftViewer', () => ({
   DraftViewer: ({ draft }: { draft: { title: string } }) => (
@@ -67,7 +86,9 @@ vi.mock('@/components/research/ProjectChatTab', () => ({
   ProjectChatTab: () => <div>Project Chat</div>,
 }));
 vi.mock('@/components/research/ExtractionMatrix', () => ({
-  ExtractionMatrix: () => <div>Matrix</div>,
+  ExtractionMatrix: ({ projectId }: { projectId: string }) => (
+    <div>Matrix {projectId}</div>
+  ),
 }));
 vi.mock('@/components/research/ResearchPipeline', () => ({
   ResearchPipeline: () => <div>Pipeline</div>,
@@ -80,6 +101,11 @@ vi.mock('@/components/research/NoteList', () => ({
 }));
 vi.mock('@/components/research/ProjectSkillsTab', () => ({
   ProjectSkillsTab: () => <div>Project Skills Tab</div>,
+}));
+vi.mock('@/components/research-engine/ProjectWorkflow', () => ({
+  ProjectWorkflow: ({ project }: { project: { id: string } }) => (
+    <div>Workflow {project.id}</div>
+  ),
 }));
 vi.mock('@/components/upload', () => ({
   DocumentUploadWizard: () => null,
@@ -103,6 +129,7 @@ const mockClearError = vi.fn();
 
 describe('ProjectDetailPage agent sync', () => {
   beforeEach(() => {
+    window.history.replaceState(null, '', '/projects/proj-1');
     useAgentChatStore.getState().reset();
     vi.clearAllMocks();
     // Vitest config has `restoreMocks: true`, which resets `.mockResolvedValue`
@@ -118,7 +145,9 @@ describe('ProjectDetailPage agent sync', () => {
     mockUpdateNote.mockResolvedValue(undefined);
     mockDeleteNote.mockResolvedValue(undefined);
     mockToggleNotePin.mockResolvedValue(undefined);
-    mockProjectSkillService.list.mockRejectedValue({ error: { status_code: 404 } });
+    mockProjectSkillService.list.mockRejectedValue({
+      error: { status_code: 404 },
+    });
 
     mockUseProjectStore.mockReturnValue({
       currentProject: {
@@ -201,6 +230,137 @@ describe('ProjectDetailPage agent sync', () => {
     });
   });
 
+  it('opens the draft named by a chat completion link', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/projects/proj-1?tab=drafts&draftId=draft-1'
+    );
+    mockProjectService.listDrafts.mockResolvedValue({
+      drafts: [
+        {
+          id: 'draft-2',
+          project_id: 'proj-1',
+          version: 2,
+          title: 'Draft Two',
+          is_current: true,
+          created_at: '2026-03-26T00:00:00Z',
+        },
+        {
+          id: 'draft-1',
+          project_id: 'proj-1',
+          version: 1,
+          title: 'Draft One',
+          is_current: false,
+          created_at: '2026-03-25T00:00:00Z',
+        },
+      ],
+      total: 2,
+      skip: 0,
+      limit: 50,
+    } as never);
+
+    render(<ProjectDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /drafts/i })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      expect(mockProjectService.getDraft).toHaveBeenCalledWith(
+        'proj-1',
+        'draft-1'
+      );
+    });
+  });
+
+  it('keeps workflow, source, matrix, and draft reads on the collection id', async () => {
+    window.history.replaceState(null, '', '/projects/proj-1?tab=workflow');
+    const { user } = render(<ProjectDetailPage />);
+
+    expect(await screen.findByText('Workflow proj-1')).toBeInTheDocument();
+    expect(mockFetchProjectDocuments).toHaveBeenCalledWith('proj-1');
+
+    await user.click(screen.getByRole('button', { name: /more tabs/i }));
+    await user.click(screen.getByRole('menuitem', { name: /matrix/i }));
+    expect(await screen.findByText('Matrix proj-1')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /drafts/i }));
+    await waitFor(() =>
+      expect(mockProjectService.listDrafts).toHaveBeenCalledWith('proj-1', {
+        limit: 50,
+      })
+    );
+  });
+
+  it('opens a linked draft beyond the first page of versions', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/projects/proj-1?tab=drafts&draftId=draft-1'
+    );
+    mockProjectService.listDrafts.mockResolvedValue({
+      drafts: Array.from({ length: 50 }, (_, index) => ({
+        id: `draft-${51 - index}`,
+        project_id: 'proj-1',
+        version: 51 - index,
+        title: `Draft ${51 - index}`,
+        is_current: index === 0,
+        created_at: '2026-03-26T00:00:00Z',
+      })),
+      total: 51,
+      skip: 0,
+      limit: 50,
+    } as never);
+    mockProjectService.getDraft.mockImplementation(
+      async (_projectId, draftId) => ({
+        id: draftId,
+        project_id: 'proj-1',
+        version: draftId === 'draft-1' ? 1 : 51,
+        title: draftId === 'draft-1' ? 'Draft One' : 'Draft 51',
+        content: 'Draft content',
+        themes: ['theme'],
+        word_count: 500,
+        citation_count: 2,
+        is_current: draftId !== 'draft-1',
+        created_at: '2026-03-25T00:00:00Z',
+      })
+    );
+
+    render(<ProjectDetailPage />);
+
+    expect(await screen.findByText('Draft One')).toBeInTheDocument();
+    expect(mockProjectService.getDraft).toHaveBeenCalledWith(
+      'proj-1',
+      'draft-1'
+    );
+  });
+
+  it('opens a completion link while already viewing the project', async () => {
+    const { rerender } = render(<ProjectDetailPage />);
+    expect(
+      await screen.findByRole('tab', { name: /documents/i })
+    ).toHaveAttribute('aria-selected', 'true');
+
+    window.history.pushState(
+      null,
+      '',
+      '/projects/proj-1?tab=drafts&draftId=draft-1'
+    );
+    rerender(<ProjectDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /drafts/i })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      );
+      expect(mockProjectService.getDraft).toHaveBeenCalledWith(
+        'proj-1',
+        'draft-1'
+      );
+    });
+  });
+
   it('refreshes project data when the refresh button is clicked', async () => {
     const { user } = render(<ProjectDetailPage />);
 
@@ -236,4 +396,42 @@ describe('ProjectDetailPage agent sync', () => {
 
     expect(await screen.findByText('Project Skills Tab')).toBeInTheDocument();
   });
+  it.each(['resolve', 'reject'] as const)(
+    'stops draft polling after account reset when A poll %s',
+    async (outcome) => {
+      mockProjectService.generateDraft.mockResolvedValue({
+        task_id: 'A-task',
+      } as never);
+      let resolve!: (value: never) => void;
+      let reject!: (error: Error) => void;
+      mockProjectService.getGenerationStatus.mockReturnValueOnce(
+        new Promise((yes, no) => {
+          resolve = yes;
+          reject = no;
+        })
+      );
+      render(<ProjectDetailPage />);
+      fireEvent.click(await screen.findByRole('tab', { name: /drafts/i }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Draft Generator' })
+      );
+      await waitFor(() =>
+        expect(mockProjectService.getGenerationStatus).toHaveBeenCalledOnce()
+      );
+      vi.useFakeTimers();
+      try {
+        act(() => {
+          resetAccountSession();
+        });
+        await act(async () => {
+          if (outcome === 'resolve') resolve({ status: 'running' } as never);
+          else reject(new Error('A poll failed'));
+          await vi.advanceTimersByTimeAsync(2500);
+        });
+        expect(mockProjectService.getGenerationStatus).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 });

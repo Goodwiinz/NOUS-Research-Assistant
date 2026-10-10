@@ -9,13 +9,6 @@ on:
         description: "Full source commit SHA to check out and build"
         required: true
         type: string
-    secrets:
-      DO_REGISTRY_TOKEN:
-        required: true
-      DO_SPACES_ACCESS_KEY:
-        required: true
-      DO_SPACES_SECRET_KEY:
-        required: true
     outputs:
       source_sha:
         description: "The exact source commit that was built"
@@ -37,16 +30,17 @@ permissions:
   contents: read
 
 env:
-  REGISTRY: registry.digitalocean.com/ragsystemregistry
-  SPACES_ENDPOINT: https://nyc3.digitaloceanspaces.com
-  SPACES_BUCKET: rag-system-storage
-  SPACES_REGION: nyc3
+  REGISTRY: 267685730035.dkr.ecr.us-east-1.amazonaws.com
 
 jobs:
   build-backend:
     name: Build Backend Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # id-token: write enables GitHub OIDC -> AWS STS (no static keys).
+    permissions:
+      id-token: write
+      contents: read
     outputs:
       source_sha: ${{ steps.identity.outputs.source_sha }}
       image_tag: ${{ steps.identity.outputs.image_tag }}
@@ -64,7 +58,7 @@ jobs:
             exit 1
           fi
 
-          IMAGE_TAG="$REGISTRY/backend:$SOURCE_SHA"
+          IMAGE_TAG="$REGISTRY/nous/backend:$SOURCE_SHA"
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
@@ -96,12 +90,16 @@ jobs:
           driver-opts: |
             image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
 
-      - name: Log in to DO Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - name: Configure AWS credentials via GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DO_REGISTRY_TOKEN }}
-          password: ${{ secrets.DO_REGISTRY_TOKEN }}
+          role-to-assume: arn:aws:iam::267685730035:role/nous-github-ecr-push
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        with:
+          mask-password: true
 
       - name: Build and push exact backend image
         id: build
@@ -117,11 +115,6 @@ jobs:
             PYTHON_VERSION=3.11
             TORCH_CPU_ONLY=true
             GIT_SHA=${{ steps.identity.outputs.source_sha }}
-          cache-from: type=s3,bucket=${{ env.SPACES_BUCKET }},region=${{ env.SPACES_REGION }},endpoint_url=${{ env.SPACES_ENDPOINT }},prefix=buildcache/backend/
-          cache-to: type=s3,bucket=${{ env.SPACES_BUCKET }},region=${{ env.SPACES_REGION }},endpoint_url=${{ env.SPACES_ENDPOINT }},prefix=buildcache/backend/,mode=max
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
 
       - name: Verify registry digest evidence
         id: verify-image

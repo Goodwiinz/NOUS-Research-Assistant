@@ -37,6 +37,7 @@ from typing import List
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
+from pydantic import ValidationError
 
 from src.services.agent._pii_redact import redact_pii
 from src.services.agent.error_recovery import (
@@ -44,13 +45,86 @@ from src.services.agent.error_recovery import (
     classify_error_from_payload,
     retry_transient,
 )
+from src.services.agent.identity_ledger import (
+    extract_tool_identities,
+    merge_identity_ledger,
+)
 from src.services.agent.observability import track_node_execution
 from src.services.agent.retrieval_provenance import merge_retrieved_contexts
 from src.services.agent.state import AgentState
-from src.services.agent.tool_registry import ToolPolicyTag
+from src.services.agent.tool_deadline import tool_call_deadline_scope
+from src.services.agent.tool_registry import ToolPolicyTag, runtime_tool_descriptors
 from src.services.agent.tools import TOOL_REGISTRY
 
 logger = logging.getLogger(__name__)
+
+
+def unavailable_tool_calls(
+    tool_calls: list[dict],
+    state: AgentState,
+    *,
+    branch: str = "main",
+    allowed_tool_names: set[str] | None = None,
+) -> list[str]:
+    """Return server-known names in a batch outside its runtime projection."""
+    if allowed_tool_names is None:
+        allowed_tool_names = {
+            descriptor.name
+            for descriptor in runtime_tool_descriptors(branch, state, TOOL_REGISTRY)
+        }
+    return [
+        tc["name"]
+        for tc in tool_calls
+        if not isinstance(tc.get("name"), str)
+        or tc["name"] not in allowed_tool_names
+        or TOOL_REGISTRY.descriptor(tc["name"]) is None
+        or not TOOL_REGISTRY.descriptor(tc["name"]).enabled
+    ]
+
+
+def _capability_rejection(
+    state: AgentState,
+    tool_calls: list[dict],
+    unavailable_names: list[str],
+    *,
+    branch: str,
+) -> dict:
+    """Build a paired, non-reflective whole-batch rejection update."""
+    known_names = sorted(
+        {
+            name
+            for name in unavailable_names
+            if isinstance(name, str) and TOOL_REGISTRY.descriptor(name) is not None
+        }
+    )[:8]
+    messages = [
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "error_type": "capability_unavailable",
+                    "error": "The requested operation is not available in this workflow.",
+                }
+            ),
+            tool_call_id=str(call.get("id") or ""),
+            status="error",
+        )
+        for call in tool_calls
+    ]
+    limitation = {
+        "branch": branch,
+        "unavailable_tools": known_names,
+        "kind": "execution",
+        "reason": "The emitted tool batch includes an operation unavailable in this workflow.",
+    }
+    return {
+        "messages": messages,
+        "tool_executions": list(state.get("tool_executions", [])),
+        "capability_limitation": limitation,
+        "last_error": "capability_unavailable",
+        "error_count": state.get("error_count", 0),
+        "tool_loop_count": state.get("tool_loop_count", 0) + 1,
+        "tools_all_deduped": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -403,83 +477,81 @@ def _with_injected_project_id(tc: dict, page_context: dict) -> dict:
     return {**tc, "args": tool_args}
 
 
+def _batch_contains_mutation(tool_calls: list[dict]) -> bool:
+    return any(
+        (descriptor := TOOL_REGISTRY.descriptor(str(call.get("name", "")))) is not None
+        and descriptor.effect_mode.value != "read_only"
+        for call in tool_calls
+    )
+
+
 # Tools whose execution commits a side effect outside the graph state, so a
 # checkpoint replay of the same turn would duplicate it (audit B8-I1). Fixed
 # set on purpose: every other tool is a read, and a receipt for a read costs a
 # round trip and buys nothing.
 SIDE_EFFECT_TOOLS = frozenset(
-    {
-        "create_project",
-        "create_project_note",
-        "create_draft",
-        "ingest_arxiv_papers",
-        "execute_code",
-    }
+    descriptor.name
+    for descriptor in TOOL_REGISTRY.descriptors
+    if descriptor.effect_mode.value != "read_only"
 )
 
 
-async def _tool_receipt_exists(tool_call_id: str) -> bool:
-    """True when *tool_call_id* has already run to completion.
-
-    Best effort: a receipt-store outage must not block the tool. Failing open
-    restores the old (replay-prone) behaviour rather than breaking the turn.
-    """
-    from sqlalchemy import select
-
-    from src.models.agent_tool_receipt import AgentToolReceipt
-    from src.services.agent.tool_session import tool_session
-
-    try:
-        async with tool_session() as session:
-            found = await session.execute(
-                select(AgentToolReceipt.tool_call_id).where(
-                    AgentToolReceipt.tool_call_id == tool_call_id
-                )
-            )
-            return found.scalar_one_or_none() is not None
-    except Exception:  # noqa: BLE001 - never fail a tool over its receipt
-        logger.warning(
-            "tool receipt lookup failed for %s; executing anyway",
-            tool_call_id,
-            exc_info=True,
+def _identity_ledger_update(state: AgentState, observations: list[tuple]) -> dict:
+    """Merge exact bounded tool-result identities into checkpoint state."""
+    references = state.get("identity_current_references", [])
+    current_turn_id = str(state.get("tool_operation_turn_id", "") or "")
+    ledger = merge_identity_ledger(
+        state.get("identity_ledger"),
+        None,
+        references,
+        current_turn_id=current_turn_id,
+    )
+    for tool_name, call_id, status, payload in observations[:128]:
+        if not isinstance(payload, dict):
+            continue
+        if "status" not in payload and isinstance(status, str):
+            payload = {**payload, "status": status}
+        incoming = extract_tool_identities(
+            str(tool_name),
+            payload,
+            str(call_id),
+            current_turn_id or "unknown_turn",
         )
-        return False
-
-
-async def _record_tool_receipt(
-    tool_call_id: str, tool_name: str, thread_id: str
-) -> None:
-    """Write the receipt for a completed side-effecting call, best effort."""
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-    from src.models.agent_tool_receipt import AgentToolReceipt
-    from src.services.agent.tool_session import tool_session
-
-    try:
-        async with tool_session() as session:
-            await session.execute(
-                pg_insert(AgentToolReceipt)
-                .values(
-                    tool_call_id=tool_call_id,
-                    tool_name=tool_name,
-                    thread_id=thread_id or None,
-                )
-                .on_conflict_do_nothing(index_elements=["tool_call_id"])
-            )
-            await session.commit()
-    except Exception:  # noqa: BLE001 - the side effect already happened
-        logger.warning(
-            "tool receipt write failed for %s (%s)",
-            tool_call_id,
-            tool_name,
-            exc_info=True,
+        ledger = merge_identity_ledger(
+            ledger,
+            incoming,
+            references,
+            current_turn_id=current_turn_id,
         )
+    if len(observations) > 128:
+        ledger["overflow"]["dropped_count"] = min(
+            2**31 - 1, ledger["overflow"]["dropped_count"] + len(observations) - 128
+        )
+        ledger["overflow"]["incomplete"] = True
+    return {
+        "identity_ledger": ledger,
+        "tool_operation_turn_id": current_turn_id,
+    }
+
+
+def _identity_observation(
+    tool_name: str, call_id: str, execution: object
+) -> tuple | None:
+    if not isinstance(execution, dict):
+        return None
+    return (
+        tool_name,
+        call_id,
+        execution.get("status"),
+        execution.get("result"),
+    )
 
 
 async def _execute_single_tool(
     tc: dict,
     config: RunnableConfig,
     page_context: dict,
+    operation_context: dict | None = None,
 ) -> dict:
     """Execute a single tool call with timeout, retry, and structured error recovery."""
     # Lazy imports avoid circular dep with graph.py (which exposes the
@@ -499,37 +571,94 @@ async def _execute_single_tool(
     error_text = ""
     error_info: dict = {}
     thread_id = str((config.get("configurable") or {}).get("thread_id", "") or "")
+    descriptor = TOOL_REGISTRY.descriptor(tool_name)
+    operation_key = None
+    operation_error: dict | None = None
+    if descriptor is not None and descriptor.effect_mode.value != "read_only":
+        configurable = (config or {}).get("configurable", {})
+        protocol_version = (operation_context or {}).get(
+            "tool_operation_protocol_version"
+        )
+        turn_id = str((operation_context or {}).get("tool_operation_turn_id", "") or "")
+        user_id = str(configurable.get("user_id", "") or "")
+        organization_id = str(configurable.get("organization_id", "") or "")
+        try:
+            if protocol_version != 1 or not turn_id:
+                raise ValueError(
+                    "This mutation belongs to an older unanchored turn. Start a new turn before retrying."
+                )
+            from src.services.agent.tool_operations import ToolOperationKey
+            from src.services.agent.tools_impl import _validated_tool_arguments
 
-    # B8-I1: a durable receipt is the only replay guard that survives the
-    # node. The per-turn state["tool_executions"] list dies with the
-    # checkpoint, so a turn resumed from the pre-tool_node checkpoint would
-    # re-commit the side effect.
-    if tool_name in SIDE_EFFECT_TOOLS and await _tool_receipt_exists(tool_call_id):
-        skipped = {
-            "status": "skipped",
-            "reason": "already_executed",
-            "tool_call_id": tool_call_id,
-        }
-        # No "error" key: the classifier keys on that, and a skipped replay is
-        # not a failure.
+            effective_args = _validated_tool_arguments(tool_name, tool_args)
+            operation_key = ToolOperationKey.from_context(
+                organization_id=organization_id or None,
+                user_id=user_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                arguments=effective_args,
+            )
+            tool_args = effective_args
+        except ValidationError as exc:
+            # A mistyped argument is the model's to fix, not a broken turn
+            # (R8-B6). Same category and wording as execute_tool's check.
+            operation_error = {
+                "error": f"Invalid arguments for {tool_name}: {exc}",
+                "error_category": "invalid_tool_arguments",
+                "automatic_retry_allowed": True,
+                "retry_guidance": "Correct the arguments and call the tool again.",
+            }
+        except (TypeError, ValueError) as exc:
+            category = (
+                "legacy_operation_result_unavailable"
+                if protocol_version != 1 or not turn_id
+                else "operation_context_invalid"
+            )
+            operation_error = {
+                "error": str(exc),
+                "error_category": category,
+                "automatic_retry_allowed": False,
+                "retry_guidance": (
+                    "Start a new turn before retrying this mutation; use scoped status to inspect uncertain outcomes."
+                ),
+                **(
+                    {"restart_with_new_turn": True}
+                    if category == "legacy_operation_result_unavailable"
+                    else {}
+                ),
+            }
+
+    if operation_error is not None:
+        tool_error = classify_error_from_payload(tool_name, operation_error)
+        from src.services.agent.tools_impl import _tool_error_content
+
+        result_content = _tool_error_content(
+            tool_error, operation_error, tool_name=tool_name
+        )
+        _record_tool_error_category(tool_name, tool_error.category)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        _record_tool_metrics(tool_name, "failed")
         return {
             "message": ToolMessage(
-                content=json.dumps(skipped),
+                content=result_content,
                 tool_call_id=tool_call_id,
-                status="success",
+                status="error",
             ),
             "execution": {
                 "id": tool_call_id,
                 "tool_name": tool_name,
                 "tool_display_name": tool_name.replace("_", " ").title(),
                 "args": tool_args,
-                "status": "skipped",
-                "result": skipped,
-                "duration_ms": 0,
+                "status": "failed",
+                "result": _safe_json_loads(result_content),
+                "duration_ms": duration_ms,
+                "retry_exhausted": True,
             },
-            "error_increment": 0,
-            "error_text": "",
-            "error_info": {},
+            "error_increment": 1,
+            "error_text": tool_error.message,
+            "error_info": tool_error.to_state_info(),
         }
 
     timeout = (
@@ -552,18 +681,24 @@ async def _execute_single_tool(
             project_id = str(configurable.get("project_id", "") or "")
 
             async def _call_tool(args: dict):
-                result = await asyncio.wait_for(
-                    tool_executor(
-                        tool_name=tool_name,
-                        args=args,
-                        user_id=user_id,
-                        organization_id=organization_id,
-                        thread_id=thread_id,
-                        runtime_snapshot_id=runtime_snapshot_id,
-                        project_id=project_id,
-                    ),
-                    timeout=timeout,
-                )
+                execute_kwargs = {
+                    "tool_name": tool_name,
+                    "args": args,
+                    "user_id": user_id,
+                    "organization_id": organization_id,
+                    "thread_id": thread_id,
+                    "runtime_snapshot_id": runtime_snapshot_id,
+                    "project_id": project_id,
+                }
+                if operation_key is not None:
+                    execute_kwargs["operation_key"] = operation_key
+                # IN-2: a tool that must time out before this limit cancels it
+                # reads the deadline instead of restarting the clock at dispatch.
+                with tool_call_deadline_scope(timeout):
+                    result = await asyncio.wait_for(
+                        tool_executor(**execute_kwargs),
+                        timeout=timeout,
+                    )
                 if isinstance(result, dict) and "error" in result:
                     from langsmith import get_current_run_tree
 
@@ -618,7 +753,11 @@ async def _execute_single_tool(
                 status = "failed"
                 error_text = tool_error.message
                 error_info = tool_error.to_state_info()
-                result_content = tool_error.to_tool_message_content()
+                from src.services.agent.tools_impl import _tool_error_content
+
+                result_content = _tool_error_content(
+                    tool_error, result, tool_name=tool_name
+                )
                 _record_tool_error_category(tool_name, tool_error.category)
                 # error_increment counts toward the error ceiling only for
                 # non-transient errors. Either way the status is "failed" (not
@@ -626,8 +765,14 @@ async def _execute_single_tool(
                 # payload as a successful result and suppress a retry — a tool
                 # that returns {"error": <transient>} is retried on re-plan
                 # (retry_transient only retries raised exceptions, not returned
-                # payloads).
-                error_increment = 1 if tool_error.category != "transient" else 0
+                # payloads). A barrier replay of an earlier failure is not a
+                # fresh transient attempt, so it always counts (R8-B5).
+                error_increment = (
+                    1
+                    if tool_error.category != "transient"
+                    or result.get("replayed_from_operation")
+                    else 0
+                )
         except Exception as e:
             tool_error = classify_error(tool_name, e)
             logger.error(
@@ -643,9 +788,6 @@ async def _execute_single_tool(
             error_info = tool_error.to_state_info()
             result_content = tool_error.to_tool_message_content()
             _record_tool_error_category(tool_name, tool_error.category)
-
-    if status == "completed" and tool_name in SIDE_EFFECT_TOOLS:
-        await _record_tool_receipt(tool_call_id, tool_name, thread_id)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
     _record_tool_metrics(tool_name, status)
@@ -686,6 +828,12 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
     if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
         return {"messages": [], "tool_executions": []}
 
+    unavailable = unavailable_tool_calls(last_message.tool_calls, state)
+    if unavailable:
+        return _capability_rejection(
+            state, last_message.tool_calls, unavailable, branch="main"
+        )
+
     tool_executions: List[dict] = list(state.get("tool_executions", []))
     error_count = state.get("error_count", 0)
     last_error = state.get("last_error", "")
@@ -711,31 +859,56 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
     deduped_calls = [
         _with_injected_project_id(tc, page_context) for tc in last_message.tool_calls
     ]
-    cached = find_cached_tool_results(deduped_calls, state["messages"], tool_executions)
+    mutating_batch = _batch_contains_mutation(last_message.tool_calls)
+    cached = (
+        {}
+        if mutating_batch
+        else find_cached_tool_results(deduped_calls, state["messages"], tool_executions)
+    )
     # Circuit breaker: identical (tool, args) that already FAILED twice this
     # turn is not executed again — the model gets an explicit stop-retrying
     # error instead (traces 019f2a48-9083 / 019f2245-cf9d: 4x identical
     # retries per turn until the loop cap).
-    capped = {
-        tc_id: prior
-        for tc_id, prior in find_repeated_failures(
-            deduped_calls, state["messages"], tool_executions
-        ).items()
-        if tc_id not in cached
-    }
+    capped = (
+        {}
+        if mutating_batch
+        else {
+            tc_id: prior
+            for tc_id, prior in find_repeated_failures(
+                deduped_calls, state["messages"], tool_executions
+            ).items()
+            if tc_id not in cached
+        }
+    )
     fresh_calls = [
         tc
         for tc in last_message.tool_calls
         if tc["id"] not in cached and tc["id"] not in capped
     ]
 
-    # Execute all NEW tool calls concurrently with semaphore limiting
-    tasks = [_execute_single_tool(tc, config, page_context) for tc in fresh_calls]
-    fresh_results = await asyncio.gather(*tasks, return_exceptions=True)
+    operation_context = {
+        "tool_operation_protocol_version": state.get("tool_operation_protocol_version"),
+        "tool_operation_turn_id": state.get("tool_operation_turn_id", ""),
+    }
+    if mutating_batch:
+        # Preserve provider-emitted order whenever writes are present. Reads
+        # after a mutation attempt then observe the attempted write's outcome.
+        fresh_results = []
+        for tc in fresh_calls:
+            fresh_results.append(
+                await _execute_single_tool(tc, config, page_context, operation_context)
+            )
+    else:
+        tasks = [
+            _execute_single_tool(tc, config, page_context, operation_context)
+            for tc in fresh_calls
+        ]
+        fresh_results = await asyncio.gather(*tasks, return_exceptions=True)
     fresh_by_id = {tc["id"]: r for tc, r in zip(fresh_calls, fresh_results)}
 
     tool_messages: List[ToolMessage] = []
     batch_executions: List[dict] = []
+    identity_observations: list[tuple] = []
     any_failure = False
     all_success = True
     # Iterate in the original tool_calls order so ToolMessage ids line up
@@ -745,6 +918,9 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
             prior = cached[tc["id"]]
             tool_messages.append(build_deduped_tool_message(tc["id"], prior))
             tool_executions.append(build_deduped_execution_entry(tc["id"], tc, prior))
+            observation = _identity_observation(tc["name"], tc["id"], prior)
+            if observation is not None:
+                identity_observations.append(observation)
             continue
         if tc["id"] in capped:
             prior = capped[tc["id"]]
@@ -762,6 +938,9 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
             tool_executions.append(
                 build_failure_capped_execution_entry(tc["id"], tc, prior)
             )
+            observation = _identity_observation(tc["name"], tc["id"], prior)
+            if observation is not None:
+                identity_observations.append(observation)
             continue
         r = fresh_by_id.get(tc["id"])
         if r is None:
@@ -804,6 +983,9 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
         tool_messages.append(r["message"])
         tool_executions.append(r["execution"])
         batch_executions.append(r["execution"])
+        observation = _identity_observation(tc["name"], tc["id"], r["execution"])
+        if observation is not None:
+            identity_observations.append(observation)
         error_count += r["error_increment"]
         if r["error_text"]:
             last_error = r["error_text"]
@@ -860,10 +1042,15 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict:
         "tool_loop_count": state.get("tool_loop_count", 0) + 1,
         "tools_all_deduped": tools_all_deduped,
         "loaded_skill_versions": loaded_skill_versions,
+        **_identity_ledger_update(state, identity_observations),
     }
 
 
-def make_filtered_tool_node(allowed_tool_names: set[str]):
+def make_filtered_tool_node(
+    allowed_tool_names: set[str] | None = None,
+    *,
+    branch: str | None = None,
+):
     """Create a tool_node wrapper that only executes tools in the allowed set.
 
     Tool calls not in the allowed set are skipped with a warning ToolMessage.
@@ -875,13 +1062,41 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
         if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
             return {"messages": [], "tool_executions": []}
 
+        # Reject the complete emitted batch before dedupe, approval/effect
+        # checks, or the durable operation claim. A supported prefix must not
+        # run when any sibling call is unavailable.
+        if branch is not None:
+            unavailable = unavailable_tool_calls(
+                last_message.tool_calls, state, branch=branch
+            )
+        else:
+            unavailable = unavailable_tool_calls(
+                last_message.tool_calls,
+                state,
+                allowed_tool_names=allowed_tool_names or set(),
+            )
+        if unavailable:
+            return _capability_rejection(
+                state,
+                last_message.tool_calls,
+                unavailable,
+                branch=branch or "specialist",
+            )
+
+        selected_names = allowed_tool_names or set()
+        if branch is not None:
+            selected_names = {
+                descriptor.name
+                for descriptor in runtime_tool_descriptors(branch, state, TOOL_REGISTRY)
+            }
+
         # Filter tool calls
         allowed_calls = []
         skipped_messages = []
         for tc in last_message.tool_calls:
             descriptor = TOOL_REGISTRY.descriptor(tc["name"])
             if (
-                tc["name"] in allowed_tool_names
+                tc["name"] in selected_names
                 and descriptor is not None
                 and descriptor.enabled
             ):
@@ -897,7 +1112,7 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
                         content=json.dumps(
                             {
                                 "error": f"Tool '{tc['name']}' is not available in this context. "
-                                f"Available tools: {', '.join(sorted(allowed_tool_names))}"
+                                f"Available tools: {', '.join(sorted(selected_names))}"
                             }
                         ),
                         tool_call_id=tc["id"],
@@ -942,28 +1157,57 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
         deduped_calls = [
             _with_injected_project_id(tc, page_context) for tc in allowed_calls
         ]
-        cached = find_cached_tool_results(
-            deduped_calls, state["messages"], tool_executions
-        )
-        capped = {
-            tc_id: prior
-            for tc_id, prior in find_repeated_failures(
+        mutating_batch = _batch_contains_mutation(allowed_calls)
+        cached = (
+            {}
+            if mutating_batch
+            else find_cached_tool_results(
                 deduped_calls, state["messages"], tool_executions
-            ).items()
-            if tc_id not in cached
-        }
+            )
+        )
+        capped = (
+            {}
+            if mutating_batch
+            else {
+                tc_id: prior
+                for tc_id, prior in find_repeated_failures(
+                    deduped_calls, state["messages"], tool_executions
+                ).items()
+                if tc_id not in cached
+            }
+        )
         fresh_calls = [
             tc
             for tc in allowed_calls
             if tc["id"] not in cached and tc["id"] not in capped
         ]
 
-        tasks = [_execute_single_tool(tc, config, page_context) for tc in fresh_calls]
-        fresh_results = await asyncio.gather(*tasks, return_exceptions=True)
+        operation_context = {
+            "tool_operation_protocol_version": state.get(
+                "tool_operation_protocol_version"
+            ),
+            "tool_operation_turn_id": state.get("tool_operation_turn_id", ""),
+        }
+        if mutating_batch:
+            fresh_results = []
+            for tc in fresh_calls:
+                fresh_results.append(
+                    await _execute_single_tool(
+                        tc, config, page_context, operation_context
+                    )
+                )
+        else:
+            tasks = [
+                _execute_single_tool(tc, config, page_context, operation_context)
+                for tc in fresh_calls
+            ]
+            fresh_results = await asyncio.gather(*tasks, return_exceptions=True)
         fresh_by_id = {tc["id"]: r for tc, r in zip(fresh_calls, fresh_results)}
 
+        skipped_by_id = {message.tool_call_id: message for message in skipped_messages}
         tool_messages = list(skipped_messages)
         batch_executions: List[dict] = []
+        identity_observations: list[tuple] = []
         any_failure = False
         all_success = True
         for tc in allowed_calls:
@@ -973,6 +1217,9 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
                 tool_executions.append(
                     build_deduped_execution_entry(tc["id"], tc, prior)
                 )
+                observation = _identity_observation(tc["name"], tc["id"], prior)
+                if observation is not None:
+                    identity_observations.append(observation)
                 continue
             if tc["id"] in capped:
                 prior = capped[tc["id"]]
@@ -988,6 +1235,9 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
                 tool_executions.append(
                     build_failure_capped_execution_entry(tc["id"], tc, prior)
                 )
+                observation = _identity_observation(tc["name"], tc["id"], prior)
+                if observation is not None:
+                    identity_observations.append(observation)
                 continue
             r = fresh_by_id.get(tc["id"])
             if r is None:
@@ -1027,6 +1277,9 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
             tool_messages.append(r["message"])
             tool_executions.append(r["execution"])
             batch_executions.append(r["execution"])
+            observation = _identity_observation(tc["name"], tc["id"], r["execution"])
+            if observation is not None:
+                identity_observations.append(observation)
             error_count += r["error_increment"]
             if r["error_text"]:
                 last_error = r["error_text"]
@@ -1035,6 +1288,18 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
             if r["error_increment"] != 0:
                 any_failure = True
                 all_success = False
+
+        # Tool results must follow the provider's emitted order, including
+        # calls filtered out of this specialist lane.
+        messages_by_call_id = {
+            message.tool_call_id: message for message in tool_messages
+        }
+        messages_by_call_id.update(skipped_by_id)
+        tool_messages = [
+            messages_by_call_id[tc["id"]]
+            for tc in last_message.tool_calls
+            if tc["id"] in messages_by_call_id
+        ]
 
         # Reset the consecutive-error counter only when EVERY tool in
         # this batch succeeded (mirrors the main ``tool_node`` logic so
@@ -1065,6 +1330,7 @@ def make_filtered_tool_node(allowed_tool_names: set[str]):
             "last_error_info": last_error_info,
             "tool_loop_count": state.get("tool_loop_count", 0) + 1,
             "tools_all_deduped": tools_all_deduped,
+            **_identity_ledger_update(state, identity_observations),
         }
 
     return filtered_tool_node

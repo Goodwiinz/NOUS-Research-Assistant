@@ -22,6 +22,7 @@ from fastapi import HTTPException
 
 from src.api.documents import files as files_mod
 from src.models.processing import JobStatus
+from src.services.documents.file_service import FileService, UploadCancellation
 from src.shared.pagination import PaginationParams
 
 pytestmark = pytest.mark.unit
@@ -49,7 +50,11 @@ def test_reprocess_creates_job_and_enqueues():
     document.mime_type = "application/pdf"
 
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_result(document))
+    selected = MagicMock()
+    selected.scalar_one_or_none.return_value = document
+    inactive = MagicMock()
+    inactive.first.return_value = None
+    db.execute = AsyncMock(side_effect=[selected, inactive])
     db.add = MagicMock()
     db.flush = AsyncMock()
     db.commit = AsyncMock()
@@ -79,41 +84,75 @@ def test_reprocess_creates_job_and_enqueues():
     assert "job_id" in resp
 
 
+@pytest.mark.parametrize("surface", ["file", "document"])
+@pytest.mark.parametrize("missing", [True, False])
+def test_reprocess_preserves_public_error_details(surface, missing):
+    document = MagicMock()
+    document.id = uuid.uuid4()
+    document.uploaded_by_user_id = "another-owner"
+    selected = MagicMock()
+    selected.scalar_one_or_none.return_value = None if missing else document
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=selected)
+    org = MagicMock(id=uuid.uuid4())
+    user = _user()
+
+    async def invoke():
+        if surface == "file":
+            return await files_mod.reprocess_file(
+                document.id, current_user=user, organization=org, db=db
+            )
+        service = FileService.__new__(FileService)
+        service.db = db
+        return await service.lock_document_for_reprocessing(document.id, org.id, user)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(invoke())
+    assert exc.value.status_code == (404 if missing else 403)
+    expected = (
+        f"{surface.capitalize()} not found"
+        if missing
+        else f"Can only reprocess your own {surface}s or require admin role"
+    )
+    assert exc.value.detail == expected
+    db.add.assert_not_called()
+    db.flush.assert_not_called()
+    db.commit.assert_not_called()
+
+
 def test_cancel_uses_enum_not_string_and_cancels():
     upload_id = str(uuid.uuid4())
-    job = MagicMock()
-    job.created_by_user_id = "user-1"
-    job.status = JobStatus.PENDING  # a real enum member, not "pending"
-    job.id = uuid.uuid4()
-
+    job_id = uuid.uuid4()
+    service = MagicMock()
+    service.cancel_upload_job = AsyncMock(
+        return_value=UploadCancellation(job_id, JobStatus.CANCELLED, True)
+    )
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_result(job))
-    db.commit = AsyncMock()
 
     resp = asyncio.run(
         files_mod.cancel_upload(
-            upload_id, current_user=_user(), db=db, file_service=MagicMock()
+            upload_id, current_user=_user(), db=db, file_service=service
         )
     )
-    # The real cancel path executes (was dead code under the string compare).
-    job.cancel_job.assert_called_once()
+    # Transport preserves the service's committed cancellation result.
+    assert resp["job_id"] == job_id
     assert "cancelled successfully" in resp["message"].lower()
 
 
 def test_cancel_rejects_finished_job_with_enum_value():
     upload_id = str(uuid.uuid4())
-    job = MagicMock()
-    job.created_by_user_id = "user-1"
-    job.status = JobStatus.COMPLETED
+    service = MagicMock()
+    service.cancel_upload_job = AsyncMock(
+        return_value=UploadCancellation(uuid.uuid4(), JobStatus.COMPLETED, False)
+    )
     db = MagicMock()
-    db.execute = AsyncMock(return_value=_result(job))
 
     resp = asyncio.run(
         files_mod.cancel_upload(
-            upload_id, current_user=_user(), db=db, file_service=MagicMock()
+            upload_id, current_user=_user(), db=db, file_service=service
         )
     )
-    job.cancel_job.assert_not_called()
+    assert resp["job_status"] == "completed"
     assert "cannot cancel" in resp["message"].lower()
 
 

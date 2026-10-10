@@ -21,10 +21,13 @@ interface Starter {
 
 // Researcher tasks, not feature boasts. Each populates the composer verbatim.
 const STARTERS: Starter[] = [
-  { icon: ListChecks, prompt: 'Summarize this document in three points' },
-  { icon: Quote, prompt: 'Show the sources behind this claim' },
-  { icon: Workflow, prompt: 'How do the entities in my graph relate?' },
-  { icon: GitCompare, prompt: 'Compare these two findings' },
+  {
+    icon: ListChecks,
+    prompt: 'Summarize the document or passage I provide in three points',
+  },
+  { icon: Quote, prompt: 'Show the sources behind this claim: ' },
+  { icon: Workflow, prompt: 'How do these entities relate? Context: ' },
+  { icon: GitCompare, prompt: 'Compare these findings: ' },
 ];
 
 const NOUS_EASE: [number, number, number, number] = [0.16, 1, 0.3, 1];
@@ -94,6 +97,14 @@ export function WelcomeState({ onPromptSelect }: WelcomeStateProps) {
             </li>
           ))}
         </ul>
+
+        <p
+          className="mt-2 text-xs text-(--nous-fg-3)"
+          style={{ fontFamily: 'var(--nous-font-ui)' }}
+        >
+          Templates are editable — add the document, passage, claim, or findings
+          before sending.
+        </p>
 
         <p
           className="mt-4 text-xs text-(--nous-fg-3)"

@@ -95,6 +95,31 @@ async def test_finalize_without_payload_leaves_column_untouched(
     assert "assistant_message_id" not in _update_values(db)
 
 
+async def test_finalize_fails_closed_when_update_returns_no_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A test double cannot turn an unobserved guarded UPDATE into success."""
+    import src.services.agent.agent_submission_service as svc
+
+    append_event = AsyncMock()
+    monkeypatch.setattr(svc, "append_event", append_event)
+    db = _spy_db()
+    db.execute = AsyncMock(return_value=None)
+
+    transitioned = await finalize_submission(
+        db,
+        run_id=str(uuid.uuid4()),
+        status=JobStatus.CANCELLED,
+        organization_id=str(uuid.uuid4()),
+        event_type=RunEventType.RUN_CANCELLED,
+        payload={"reason": "user_requested"},
+    )
+
+    assert transitioned is False
+    append_event.assert_not_awaited()
+    db.commit.assert_awaited_once()
+
+
 async def test_finalize_writes_progress_bridge_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -132,6 +157,28 @@ async def test_terminal_finalize_failure_propagates_after_rollback(
             organization_id=str(uuid.uuid4()),
             event_type=RunEventType.RUN_COMPLETED,
             payload={},
+        )
+
+    db.rollback.assert_awaited_once()
+
+
+async def test_nonterminal_finalize_failure_propagates_after_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parking write error is distinct from a zero-row race result."""
+    import src.services.agent.agent_submission_service as svc
+
+    monkeypatch.setattr(svc, "append_event", AsyncMock())
+    db = _spy_db()
+    db.commit.side_effect = RuntimeError("db unavailable")
+
+    with pytest.raises(RuntimeError, match="db unavailable"):
+        await finalize_submission(
+            db,
+            run_id=str(uuid.uuid4()),
+            status=JobStatus.AWAITING_CONFIRMATION,
+            organization_id=str(uuid.uuid4()),
+            run_metadata={"progress_steps": []},
         )
 
     db.rollback.assert_awaited_once()

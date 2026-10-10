@@ -2,71 +2,60 @@
 
 Backend (FastAPI) + frontend (Next.js) + celery + Neo4j for the NOUS Multimodal Intelligence Platform.
 
-Three environment value files:
+AWS is the active GitOps deployment. The API, worker, scheduler and synthetic
+traffic share one immutable backend image; the frontend deploys through Vercel.
 
-| File | Cluster | Namespace | URL |
-|------|---------|-----------|-----|
-| `values-dev.yaml` | `do-nyc3-rag-system-cluster` | `rag-dev` | `dev-app.gen-text.app` |
-| `values-staging.yaml` | same | `rag-staging` | staging |
-| `values-production.yaml` | same | `rag-production` | `app.gen-text.app` |
+| File | Status | Cluster / namespace |
+| --- | --- | --- |
+| `values-aws.yaml` | Active, `nous-dev-aws` Argo application | EKS `nous-dev-cluster` / `multimodal-rag-system` |
+| `values-dev.yaml` | Retired DOKS rollback configuration | `do-nyc3-rag-system-cluster` / `rag-dev` |
+| `values-staging.yaml` | Retired render fixture | `rag-staging` |
+| `values-production.yaml` | Retired render fixture | `rag-production` |
+
+Always render `values.yaml` plus the selected overlay. The AWS source and
+namespace are declared in [the Argo application](../../argocd/applications/aws-dev.yaml).
 
 ## Externally managed secrets
 
-The chart references these k8s Secrets via `secretKeyRef`. They are **created out of band** (manual `kubectl create secret`, or whatever external secret operator you wire up) — no plaintext values live in this repo.
-
-| Secret name | Required keys | Source of truth |
-|---|---|---|
-| `database-credentials` | `DATABASE_URL`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | DigitalOcean Managed Postgres |
-| `app-secrets` | `JWT_SECRET`, `SECRET_KEY`, etc. | generated per env |
-| `redis-credentials` | `REDIS_URL` | DO Managed Valkey |
-| `spaces-credentials` | `S3_ACCESS_KEY`, `S3_SECRET_KEY` | DO Spaces |
-| `supabase-credentials` | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase project |
-| `azure-openai-credentials` | `AZURE_OPENAI_CHAT_ENDPOINT`, `AZURE_OPENAI_CHAT_API_KEY`, `AZURE_OPENAI_CHAT_DEPLOYMENT_NAME`, `AZURE_OPENAI_CHAT_API_VERSION` | Azure portal → Cognitive Services resource |
-| `neo4j-credentials` | `NEO4J_USER`, `NEO4J_PASSWORD` | Neo4j cluster (in-cluster StatefulSet) |
-
-### Updating a secret
-
-```sh
-NS=rag-dev   # or rag-staging / rag-production
-
-# 1. show what's there now
-kubectl get secret -n $NS azure-openai-credentials \
-  -o jsonpath='{.data.AZURE_OPENAI_CHAT_ENDPOINT}' | base64 -d
-
-# 2. patch a single key (preserves others)
-kubectl patch secret -n $NS azure-openai-credentials --type='json' \
-  -p='[{"op":"replace","path":"/data/AZURE_OPENAI_CHAT_ENDPOINT","value":"'"$(echo -n https://your-resource.cognitiveservices.azure.com | base64)"'"}]'
-
-# 3. roll the backend so the new env is picked up
-kubectl rollout restart deploy/nous-${NS#rag-}-knowledge-graph-analytics-backend -n $NS
-kubectl rollout status   deploy/nous-${NS#rag-}-knowledge-graph-analytics-backend -n $NS
-```
-
-### Verification
-
-```sh
-POD=$(kubectl get pod -n $NS -l app.kubernetes.io/component=backend -o jsonpath='{.items[0].metadata.name}')
-kubectl exec -n $NS $POD -- python -c "import socket,os,urllib.parse as u; \
-  print(socket.gethostbyname(u.urlparse(os.environ['AZURE_OPENAI_CHAT_ENDPOINT']).hostname))"
-```
-A printed IP = endpoint resolves; `socket.gaierror` = wrong hostname or DNS issue.
+AWS application SQL uses RDS through `aws-database-credentials`; Redis uses
+ElastiCache. `app-secrets` and `supabase-credentials` supply application and
+auth settings. Shared `envFrom` references and `secretKeyRef` entries are the
+contract; values files contain no plaintext credentials. AWS sets
+`SUPABASE_DB_URL` blank so an auxiliary Supabase connection cannot supersede
+RDS. Inspect the AWS overlay and [Infisical templates](templates/infisical-secrets.yaml)
+for the exact references. Update secrets through their declared provider;
+do not decode secret values into logs or patch generated Secrets as a routine
+verification step. Secret changes and workload restarts are operational
+mutations requiring explicit authorization.
 
 ## Database migrations
 
-The backend deployment ships with an `initContainer` named `run-migrations` that executes `alembic upgrade heads` against the same `DATABASE_URL` the app uses. It is gated by a per-env values flag:
+AWS enables `backend.migrations.enabled` and disables
+`backend.initContainers.runMigrations`. The chart rejects enabling both.
+One ordinary, digest-pinned Job runs `alembic upgrade heads` with the backend's
+shared secret references and environment. Argo applies shared resources in
+wave 0, waits for the migration Job in wave 1 to complete, then updates the
+API, worker, beat and synthetic CronJob in wave 2. A failure or the ten-minute
+deadline blocks new consumers; old pods may continue serving during migration.
+Migrations must remain compatible with those old pods during rollout.
 
-```yaml
-backend:
-  initContainers:
-    runMigrations: true   # dev + staging
-    runMigrations: false  # production
-```
+The Job name hashes its image and pod configuration, so a new image/configuration
+creates a new Job rather than modifying an immutable completed pod template.
+Completed Jobs have no TTL: deleting them automatically would make Argo
+self-heal rerun migrations. The next successful rollout prunes the previous
+Job. The Job has no automatic retries; diagnose a failed migration before an
+explicitly authorized retry. Provider-side secret content changes alone do not
+change Job identity; a new image/configuration or an authorized retry is needed.
 
-Production explicitly opts out so schema changes are reviewed and applied via `kubectl exec ... alembic upgrade heads` after a snapshot. Dev/staging auto-apply on every rollout to prevent drift like the `chat_messages.tool_executions` UndefinedColumnError this flag was added in response to.
+Use a full application Argo sync. Resource-selective sync and standalone Helm
+upgrade do not enforce this wave barrier and must not be used to promote AWS
+backend consumers. Render validation cannot prove live migration success.
+The legacy dev/staging overlays retain their API init path; the retired
+production overlay still opts out of automatic migration. Their rendering
+remains covered without declaring them active.
 
-To run migrations manually:
+Read-only rollout and environment checks (Helm 3.13.0, Python 3 + PyYAML):
+
 ```sh
-kubectl exec -n $NS $POD -- alembic current
-kubectl exec -n $NS $POD -- alembic upgrade heads --sql > /tmp/pending.sql   # dry-run
-kubectl exec -n $NS $POD -- alembic upgrade heads
+python3 infrastructure/helm/knowledge-graph-analytics/tests/deployment_consistency_render_test.py
 ```

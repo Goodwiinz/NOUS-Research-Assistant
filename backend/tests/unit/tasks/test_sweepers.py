@@ -15,15 +15,20 @@ Contract under test:
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
-from src.shared.enums import JobStatus
+from src.models.agent_run_event import AgentRunEvent
+from src.services.agent.run_event_store import append_event, has_terminal_event
+from src.services.agent.run_event_types import RunEventType
+from src.shared.enums import AgentOutboxStatus, JobStatus
 from src.tasks import agent_run_tasks as agent_tasks
 
 pytestmark = pytest.mark.unit
@@ -44,6 +49,8 @@ async def session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(AgentRun.__table__.create)
+        await conn.run_sync(AgentRunEvent.__table__.create)
+        await conn.run_sync(AgentOutbox.__table__.create)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     yield factory
     await engine.dispose()
@@ -54,20 +61,23 @@ async def _seed(
     *,
     status: str,
     updated_at: datetime,
+    user_id: Optional[uuid.UUID] = None,
     lease_owner=None,
     lease_expires_at=None,
+    cancel_requested_at: Optional[datetime] = None,
 ) -> str:
     job_id = str(uuid.uuid4())
     async with session_factory() as db:
         db.add(
             AgentRun(
                 job_id=job_id,
-                user_id=uuid.uuid4(),
+                user_id=user_id or uuid.uuid4(),
                 status=status,
                 created_at=updated_at,
                 updated_at=updated_at,
                 lease_owner=lease_owner,
                 lease_expires_at=lease_expires_at,
+                cancel_requested_at=cancel_requested_at,
             )
         )
         await db.commit()
@@ -113,6 +123,95 @@ async def test_stale_running_run_is_failed(session_factory):
     set_job.assert_not_awaited()
 
 
+async def _seed_stream_submission(
+    session_factory, *, status: str, cancel_requested_at: Optional[datetime] = None
+) -> str:
+    """A ``/stream`` run as accept_submission leaves it: open ledger + intent."""
+    job_id = await _seed(session_factory, status=status, updated_at=STALE)
+    async with session_factory() as db:
+        await append_event(
+            db,
+            run_id=job_id,
+            event_type=RunEventType.RUN_CREATED,
+            payload={},
+            organization_id=None,
+        )
+        db.add(
+            AgentOutbox(
+                run_id=job_id,
+                kind="agent.stream.execute",
+                payload={},
+                status=AgentOutboxStatus.PENDING.value,
+            )
+        )
+        # The ledger append bumps updated_at; age the row back past the cutoff.
+        await db.execute(
+            update(AgentRun)
+            .where(AgentRun.job_id == job_id)
+            .values(updated_at=STALE, cancel_requested_at=cancel_requested_at)
+        )
+        await db.commit()
+    return job_id
+
+
+async def _ledger_and_outbox(session_factory, job_id):
+    async with session_factory() as db:
+        closed = await has_terminal_event(db, job_id)
+        outbox = (
+            await db.execute(
+                select(AgentOutbox.status).where(AgentOutbox.run_id == job_id)
+            )
+        ).scalar_one()
+        return closed, outbox
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("seed_status", "cancel_marker", "expected_status", "expected_event"),
+    [
+        ("queued", None, "failed", RunEventType.RUN_FAILED.value),
+        ("running", STALE, "cancelled", RunEventType.RUN_CANCELLED.value),
+    ],
+)
+async def test_swept_run_closes_its_ledger_and_retires_its_outbox(
+    session_factory, seed_status, cancel_marker, expected_status, expected_event
+):
+    """R8-C4: a sweep terminalization is a full terminalization.
+
+    Status, terminal ledger event and outbox retirement commit together, the
+    same contract ``fail_queued_submission`` keeps — otherwise the ledger
+    stays open (artifact announcements keep appending to a dead run) and a
+    future relay sees live dispatch intent for a failed run.
+
+    Mutation check: drop the outbox UPDATE and ``append_event`` from
+    ``agent_run_service.terminalize_stale_run`` and
+    ``pytest -q backend/tests/unit/tasks/test_sweepers.py -k closes_its_ledger``
+    fails on ``assert (False, 'pending') == (True, 'failed')``.
+    """
+    job_id = await _seed_stream_submission(
+        session_factory, status=seed_status, cancel_requested_at=cancel_marker
+    )
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    assert (await _status(session_factory, job_id))[0] == expected_status
+    assert await _ledger_and_outbox(session_factory, job_id) == (True, "failed")
+    async with session_factory() as db:
+        events = (
+            (
+                await db.execute(
+                    select(AgentRunEvent.event_type)
+                    .where(AgentRunEvent.run_id == job_id)
+                    .order_by(AgentRunEvent.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert events == [RunEventType.RUN_CREATED.value, expected_event]
+
+
 @pytest.mark.asyncio
 async def test_terminal_and_recent_rows_untouched(session_factory):
     done_id = await _seed(session_factory, status="completed", updated_at=VERY_STALE)
@@ -136,7 +235,10 @@ async def test_live_leased_row_belongs_to_its_worker(session_factory):
         status="running",
         updated_at=STALE,
         lease_owner="celery:other",
-        lease_expires_at=NOW + timedelta(minutes=5),
+        # From the clock at run time, not the import-time NOW: the sweeper
+        # compares against the real clock, and a full xdist run can start
+        # this test more than 5 minutes after collection.
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     p1, p2, p3 = _sweep(session_factory)
     with p1, p2, p3:
@@ -165,6 +267,81 @@ async def test_expired_lease_is_reapable(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_expired_lease_old_stop_is_acknowledged_as_cancelled(
+    session_factory: Any,
+) -> None:
+    stopped_id = await _seed(
+        session_factory,
+        status=JobStatus.STOPPING.value,
+        updated_at=STALE,
+        lease_owner="celery:crashed",
+        lease_expires_at=NOW - timedelta(minutes=20),
+        cancel_requested_at=STALE,
+    )
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    async with session_factory() as db:
+        run = await db.get(AgentRun, stopped_id)
+        assert run is not None
+        assert run.status == JobStatus.CANCELLED.value
+        assert agent_tasks._as_utc(run.cancel_requested_at) == STALE
+        assert run.lease_owner is None
+    assert result["cancelled"] == 1
+    assert result["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_active_row_with_old_cancel_marker_is_acknowledged(
+    session_factory: Any,
+) -> None:
+    marked_id = await _seed(
+        session_factory,
+        status=JobStatus.RUNNING.value,
+        updated_at=STALE,
+        cancel_requested_at=STALE,
+    )
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    async with session_factory() as db:
+        run = await db.get(AgentRun, marked_id)
+        assert run is not None
+        assert run.status == JobStatus.CANCELLED.value
+        assert agent_tasks._as_utc(run.cancel_requested_at) == STALE
+        assert run.lease_owner is None
+    assert result["cancelled"] == 1
+    assert result["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fresh_stop_marker_keeps_sweeper_lease_without_ack(
+    session_factory: Any,
+) -> None:
+    fresh_marker_id = await _seed(
+        session_factory,
+        status=JobStatus.RUNNING.value,
+        updated_at=STALE,
+        cancel_requested_at=FRESH,
+    )
+    p1, p2, p3 = _sweep(session_factory)
+    with p1, p2, p3:
+        result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
+
+    async with session_factory() as db:
+        run = await db.get(AgentRun, fresh_marker_id)
+        assert run is not None
+        assert run.status == JobStatus.RUNNING.value
+        assert agent_tasks._as_utc(run.cancel_requested_at) == FRESH
+        assert run.lease_owner == "sweeper:t"
+    assert result["cancelled"] == 0
+    assert result["failed"] == 0
+    assert result["skipped"] == 1
+
+
+@pytest.mark.asyncio
 async def test_awaiting_confirmation_respects_longer_window(session_factory):
     parked_id = await _seed(
         session_factory, status="awaiting_confirmation", updated_at=STALE
@@ -187,8 +364,16 @@ async def test_awaiting_confirmation_respects_longer_window(session_factory):
 async def test_live_store_terminal_repairs_instead_of_failing(session_factory):
     """Projection missed the terminal write (fire-and-forget lost): the run
     actually completed — repair the projection, don't fail a finished run."""
-    lagged_id = await _seed(session_factory, status="running", updated_at=STALE)
-    live = {"status": "completed", "user_id": "u", "error": None}
+    owner_id = uuid.uuid4()
+    lagged_id = await _seed(
+        session_factory, status="running", updated_at=STALE, user_id=owner_id
+    )
+    live = {
+        "status": "completed",
+        "user_id": str(owner_id),
+        "error": None,
+        "result": {"message": "durable completion"},
+    }
     set_job = AsyncMock()
     p1, p2, p3 = _sweep(
         session_factory,
@@ -198,9 +383,21 @@ async def test_live_store_terminal_repairs_instead_of_failing(session_factory):
     with p1, p2, p3:
         result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
 
-    assert result == {"scanned": 1, "failed": 0, "repaired": 1, "skipped": 0}
+    assert result == {
+        "scanned": 1,
+        "failed": 0,
+        "repaired": 1,
+        "skipped": 0,
+        "cancelled": 0,
+    }
     assert (await _status(session_factory, lagged_id))[0] == "completed"
-    set_job.assert_not_awaited()
+    set_job.assert_awaited_once()
+    mirrored = set_job.await_args.args[1]
+    decision = set_job.await_args.kwargs["decision"]
+    assert decision.job_id == lagged_id
+    assert decision.effective_status is JobStatus.COMPLETED
+    assert mirrored["result"] == live["result"]
+    assert set_job.await_args.kwargs["project"] is False
 
 
 @pytest.mark.asyncio
@@ -211,7 +408,13 @@ async def test_live_store_read_failure_keeps_sweeper_lease(session_factory):
     with p1, p2, p3:
         result = await agent_tasks._sweep_stale_agent_runs(lease_owner="sweeper:t")
 
-    assert result == {"scanned": 1, "failed": 0, "repaired": 0, "skipped": 1}
+    assert result == {
+        "scanned": 1,
+        "failed": 0,
+        "repaired": 0,
+        "skipped": 1,
+        "cancelled": 0,
+    }
     assert (await _status(session_factory, stale_id))[0] == "running"
     owner, expires_at = await _lease(session_factory, stale_id)
     assert owner == "sweeper:t"
@@ -221,8 +424,15 @@ async def test_live_store_read_failure_keeps_sweeper_lease(session_factory):
 @pytest.mark.asyncio
 async def test_failure_is_pushed_to_live_store_when_record_exists(session_factory):
     """Pollers read Redis first — a swept run must stop them spinning."""
-    stale_id = await _seed(session_factory, status="running", updated_at=STALE)
-    live = {"status": "running", "user_id": "u", "request": {"thread_id": None}}
+    owner_id = uuid.uuid4()
+    stale_id = await _seed(
+        session_factory, status="running", updated_at=STALE, user_id=owner_id
+    )
+    live = {
+        "status": "running",
+        "user_id": str(owner_id),
+        "request": {"thread_id": None},
+    }
     set_job = AsyncMock()
     p1, p2, p3 = _sweep(
         session_factory,
@@ -236,7 +446,9 @@ async def test_failure_is_pushed_to_live_store_when_record_exists(session_factor
     written = set_job.await_args.args[1]
     assert written["status"] == JobStatus.FAILED
     assert "Swept as stale" in written["error"]
-    assert written["user_id"] == "u"  # ownership preserved (merge, not replace)
+    assert written["user_id"] == str(owner_id)
+    assert set_job.await_args.kwargs["decision"].effective_status is JobStatus.FAILED
+    assert set_job.await_args.kwargs["project"] is False
 
 
 def test_sweep_stale_agent_runs_gated_by_flag():

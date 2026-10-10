@@ -6,18 +6,274 @@ reset. This service provides profile management, admin operations, and user
 statistics.
 """
 
+import asyncio
+import hashlib
+import hmac
 import inspect
+import secrets
+import threading
+import time
+from collections import OrderedDict
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import Depends
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from src.core.database import get_db
 from src.models.user import User, UserRole
 
 logger = __import__("logging").getLogger(__name__)
+
+_STALE_EMAIL_CLAIM_TTL_SECONDS = 60
+_PROVIDER_EMAIL_VALIDATION_TTL_SECONDS = 60
+_PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS = 5
+_STALE_EMAIL_CLAIM_CACHE_LIMIT = 2048
+_STALE_EMAIL_CLAIM_HASH_KEY = secrets.token_bytes(32)
+_EMAIL_LOCK_TTL_SECONDS = 120
+_EMAIL_LOCK_WAIT_SECONDS = 15
+_EMAIL_LOCK_FAILURE_TTL_SECONDS = 5
+_RENEW_EMAIL_LOCK_SCRIPT = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
+)
+_CHECK_EMAIL_LOCK_SCRIPT = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return 1 else return 0 end"
+)
+_RELEASE_EMAIL_LOCK_SCRIPT = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
+
+
+class _EmailReconciliationBackoff:
+    """Bounded process-local backoff for disproved claims and local conflicts."""
+
+    def __init__(self) -> None:
+        self._entries: OrderedDict[tuple[str, str], float] = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(user_id: str, email: str) -> tuple[str, str]:
+        digest = hmac.new(
+            _STALE_EMAIL_CLAIM_HASH_KEY,
+            email.strip().lower().encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return user_id, digest
+
+    def contains(self, user_id: str, email: str) -> bool:
+        key = self._key(user_id, email)
+        now = time.monotonic()
+        with self._lock:
+            for expired_key, expires_at in list(self._entries.items()):
+                if expires_at <= now:
+                    del self._entries[expired_key]
+            expires_at = self._entries.get(key)
+            if expires_at is None:
+                return False
+            self._entries.move_to_end(key)
+            return True
+
+    def remember(
+        self,
+        user_id: str,
+        email: str,
+        ttl_seconds: float = _STALE_EMAIL_CLAIM_TTL_SECONDS,
+    ) -> None:
+        key = self._key(user_id, email)
+        now = time.monotonic()
+        with self._lock:
+            for expired_key, expires_at in list(self._entries.items()):
+                if expires_at <= now:
+                    del self._entries[expired_key]
+            self._entries[key] = now + ttl_seconds
+            self._entries.move_to_end(key)
+            while len(self._entries) > _STALE_EMAIL_CLAIM_CACHE_LIMIT:
+                self._entries.popitem(last=False)
+
+
+_email_reconciliation_backoff = _EmailReconciliationBackoff()
+_verified_provider_email_cache = _EmailReconciliationBackoff()
+
+
+class _RedisLockFailureBackoff:
+    """Short process-wide circuit for an unavailable Redis lock service."""
+
+    def __init__(self) -> None:
+        self._failed_until = 0.0
+        self._lock = threading.Lock()
+
+    def contains(self) -> bool:
+        with self._lock:
+            return self._failed_until > time.monotonic()
+
+    def remember(self, ttl_seconds: float) -> None:
+        with self._lock:
+            self._failed_until = max(self._failed_until, time.monotonic() + ttl_seconds)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._failed_until = 0.0
+
+
+_email_lock_failure_backoff = _RedisLockFailureBackoff()
+
+
+class _SharedEmailLease:
+    """Renew a shared lock and detect lease loss before writing the row."""
+
+    def __init__(self, client, key: str, token: str) -> None:
+        self._client = client
+        self._key = key
+        self._token = token
+        self._lost = False
+        self._renewal_task = asyncio.create_task(self._renew())
+
+    def __bool__(self) -> bool:
+        return not self._lost
+
+    async def _renew(self) -> None:
+        interval = max(0.1, _EMAIL_LOCK_TTL_SECONDS / 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await self._client.eval(
+                    _RENEW_EMAIL_LOCK_SCRIPT,
+                    1,
+                    self._key,
+                    self._token,
+                    _EMAIL_LOCK_TTL_SECONDS,
+                )
+            except Exception as exc:  # noqa: BLE001 - the lease is no longer trusted
+                from src.core.cli_token_revocation import reset_redis_client
+
+                reset_redis_client()
+                logger.warning(
+                    "Email reconciliation lease renewal failed (%s)",
+                    type(exc).__name__,
+                )
+                self._lost = True
+                return
+            if not renewed:
+                self._lost = True
+                return
+
+    async def still_owned(self) -> bool:
+        if self._lost:
+            return False
+        try:
+            owned = await self._client.eval(
+                _CHECK_EMAIL_LOCK_SCRIPT, 1, self._key, self._token
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed before the write
+            from src.core.cli_token_revocation import reset_redis_client
+
+            reset_redis_client()
+            logger.warning(
+                "Email reconciliation lease check failed (%s)", type(exc).__name__
+            )
+            self._lost = True
+            return False
+        self._lost = not bool(owned)
+        return not self._lost
+
+    async def close(self) -> None:
+        self._renewal_task.cancel()
+        try:
+            await self._renewal_task
+        except asyncio.CancelledError:
+            pass
+
+
+@asynccontextmanager
+async def _hold_shared_email_lock(
+    user_id: str,
+) -> AsyncIterator[Optional[_SharedEmailLease]]:
+    """Take a Redis lease so different workers serialize the same subject."""
+    from src.core.cli_token_revocation import get_redis_client, reset_redis_client
+
+    client = await get_redis_client()
+    if client is None:
+        yield None
+        return
+
+    key = f"auth:email-reconciliation:{hashlib.sha256(user_id.encode()).hexdigest()}"
+    token = secrets.token_urlsafe(24)
+    deadline = time.monotonic() + _EMAIL_LOCK_WAIT_SECONDS
+    acquired = False
+    try:
+        while time.monotonic() < deadline:
+            acquired = bool(
+                await client.set(key, token, nx=True, ex=_EMAIL_LOCK_TTL_SECONDS)
+            )
+            if acquired:
+                break
+            await asyncio.sleep(0.05)
+    except Exception as exc:  # noqa: BLE001 - fail closed on lock-store errors
+        reset_redis_client()
+        logger.warning(
+            "Email reconciliation lock unavailable for user %s (%s)",
+            user_id,
+            type(exc).__name__,
+        )
+        yield None
+        return
+
+    if not acquired:
+        logger.warning("Email reconciliation lock timed out for user %s", user_id)
+        yield None
+        return
+
+    lease = _SharedEmailLease(client, key, token)
+    try:
+        yield lease
+    finally:
+        await lease.close()
+        try:
+            await client.eval(_RELEASE_EMAIL_LOCK_SCRIPT, 1, key, token)
+        except Exception as exc:  # noqa: BLE001 - the lease expires if release fails
+            reset_redis_client()
+            logger.warning(
+                "Email reconciliation lock release failed for user %s (%s)",
+                user_id,
+                type(exc).__name__,
+            )
+
+
+class _KeyedEmailReconciliationLocks:
+    """Coalesce same-process work and serialize each subject across workers."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[asyncio.Lock, int]] = {}
+        self._guard = threading.Lock()
+
+    @asynccontextmanager
+    async def hold(self, user_id: str) -> AsyncIterator[Optional[_SharedEmailLease]]:
+        key = user_id
+        with self._guard:
+            entry = self._entries.get(key)
+            lock, users = entry if entry is not None else (asyncio.Lock(), 0)
+            self._entries[key] = (lock, users + 1)
+        try:
+            async with lock:
+                async with _hold_shared_email_lock(key) as acquired:
+                    yield acquired
+        finally:
+            with self._guard:
+                lock, users = self._entries[key]
+                if users == 1:
+                    del self._entries[key]
+                else:
+                    self._entries[key] = (lock, users - 1)
+
+
+_email_reconciliation_locks = _KeyedEmailReconciliationLocks()
 
 
 class AuthenticationError(Exception):
@@ -184,30 +440,164 @@ class AuthService:
         user: User,
         first_name: str = None,
         last_name: str = None,
-        email: str = None,
     ) -> User:
-        """Update user profile information"""
+        """Update the caller-editable profile fields (display names only).
+
+        ``users.email`` is deliberately NOT writable here (GOO-405). The
+        identity provider owns it, and JIT provisioning writes it from the
+        verified token. A client-supplied address allowed pre-registration
+        squatting of another person's email.
+        """
         if first_name:
             user.first_name = first_name
         if last_name:
             user.last_name = last_name
-        if email and email.lower() != user.email:
-            # Check if new email is already taken
-            stmt = select(User).where(
-                and_(User.email == email.lower(), User.id != user.id)
-            )
-            result = await self.db.execute(stmt)
-            existing_user = result.scalar_one_or_none()
-
-            if existing_user:
-                raise RegistrationError("Email already in use")
-
-            user.email = email.lower()
 
         await self.db.commit()
         await self.db.refresh(user)
 
         return user
+
+    async def sync_user_email_from_provider(
+        self, user: User, token_email: str
+    ) -> Optional[User]:
+        """Persist a changed email only after confirming GoTrue's current value.
+
+        Access-token claims may be stale, so they are only a signal to perform
+        the provider lookup. This service owns commit/rollback and never adopts
+        another row by email if the unique constraint detects a collision.
+        """
+        claimed_email = token_email.strip().lower()
+        if not claimed_email:
+            return user
+
+        subject_id = str(user.id)
+        # get_current_user has only read the row at this point. End that read
+        # transaction before waiting for a same-subject request or calling
+        # Supabase, so neither wait holds a scarce pool connection.
+        await self.db.rollback()
+        if _email_lock_failure_backoff.contains():
+            return await self._get_active_user(subject_id)
+        async with _email_reconciliation_locks.hold(subject_id) as lease:
+            if lease is None:
+                _email_lock_failure_backoff.remember(_EMAIL_LOCK_FAILURE_TTL_SECONDS)
+                return await self._get_active_user(subject_id)
+            current_user = await self._get_active_user(subject_id)
+            if current_user is None:
+                return None
+            if (
+                current_user.email.lower() == claimed_email
+                and _verified_provider_email_cache.contains(subject_id, claimed_email)
+            ):
+                return current_user
+            if _email_reconciliation_backoff.contains(subject_id, claimed_email):
+                return current_user
+
+            # The CAS below must match exactly the row state observed before
+            # the provider round trip. A fresh post-request read alone cannot
+            # prove this request's older provider result is still current.
+            observed_email = current_user.email
+            observed_updated_at = current_user.updated_at
+
+            # The row read above opened another transaction. Release it before
+            # the provider round trip, then load the subject again afterward.
+            await self.db.rollback()
+
+            from src.core.user_provisioning import (
+                SupabaseEmailLookupError,
+                get_verified_supabase_email,
+            )
+
+            try:
+                provider_email = await asyncio.to_thread(
+                    get_verified_supabase_email, subject_id
+                )
+            except SupabaseEmailLookupError:
+                _email_reconciliation_backoff.remember(
+                    subject_id,
+                    claimed_email,
+                    ttl_seconds=_PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS,
+                )
+                return await self._get_active_user(subject_id)
+            if not provider_email:
+                _email_reconciliation_backoff.remember(
+                    subject_id,
+                    claimed_email,
+                    ttl_seconds=_PROVIDER_EMAIL_LOOKUP_FAILURE_TTL_SECONDS,
+                )
+                return await self._get_active_user(subject_id)
+            if provider_email != claimed_email:
+                _email_reconciliation_backoff.remember(subject_id, claimed_email)
+
+            current_user = await self._get_active_user(subject_id)
+            if current_user is None:
+                return None
+            if current_user.email.lower() == provider_email:
+                _verified_provider_email_cache.remember(
+                    subject_id,
+                    provider_email,
+                    ttl_seconds=_PROVIDER_EMAIL_VALIDATION_TTL_SECONDS,
+                )
+                return current_user
+            if not await lease.still_owned():
+                logger.warning(
+                    "Email reconciliation lease lost for user %s; skipping write",
+                    subject_id,
+                )
+                return current_user
+
+            updated_at = datetime.utcnow()
+            email_write = (
+                update(User)
+                .where(
+                    User.id == subject_id,
+                    User.is_active == True,
+                    User.is_deleted == False,
+                    User.email == observed_email,
+                    User.updated_at == observed_updated_at,
+                )
+                .values(email=provider_email, updated_at=updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            try:
+                write_result = await self.db.execute(email_write)
+                if write_result.rowcount != 1:
+                    # Another worker changed the row while this provider
+                    # request was in flight. The compare-and-swap prevents a
+                    # former Redis lease owner from committing its stale read.
+                    await self.db.rollback()
+                    return await self._get_active_user(subject_id)
+                set_committed_value(current_user, "email", provider_email)
+                set_committed_value(current_user, "updated_at", updated_at)
+                await self.db.commit()
+            except IntegrityError:
+                _email_reconciliation_backoff.remember(subject_id, provider_email)
+                await self.db.rollback()
+                current_user = await self._get_active_user(subject_id)
+                logger.warning(
+                    "Current provider email sync for user %s conflicts with another "
+                    "account; operator reconciliation required",
+                    subject_id,
+                )
+            else:
+                _verified_provider_email_cache.remember(
+                    subject_id,
+                    provider_email,
+                    ttl_seconds=_PROVIDER_EMAIL_VALIDATION_TTL_SECONDS,
+                )
+            return current_user
+
+    async def _get_active_user(self, subject_id: str) -> Optional[User]:
+        result = await self.db.execute(
+            select(User)
+            .options(selectinload(User.organization))
+            .where(
+                User.id == subject_id,
+                User.is_active == True,
+                User.is_deleted == False,
+            )
+        )
+        return result.scalars().first()
 
     async def update_user_role(
         self, admin_user: User, target_user: User, new_role: UserRole

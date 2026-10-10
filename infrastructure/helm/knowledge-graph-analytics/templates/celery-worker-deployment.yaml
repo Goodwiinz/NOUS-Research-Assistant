@@ -4,11 +4,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}-celery-worker
+  {{- if .Values.backend.migrations.enabled }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  {{- end }}
   labels:
     {{- include "knowledge-graph-analytics.labels" . | nindent 4 }}
     app.kubernetes.io/component: celery-worker
 spec:
-  replicas: {{ .Values.celeryWorker.replicaCount | default 1 }}
+  replicas: {{ .Values.celeryWorker.replicaCount | int }}
   selector:
     matchLabels:
       {{- include "knowledge-graph-analytics.selectorLabels" . | nindent 6 }}

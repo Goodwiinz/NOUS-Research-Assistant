@@ -69,6 +69,7 @@ describe('useChatPersistence initialization', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/');
     useChatStore.setState(originalActions);
     useChatStore.getState().reset();
 
@@ -92,6 +93,7 @@ describe('useChatPersistence initialization', () => {
   });
 
   afterEach(() => {
+    window.history.replaceState({}, '', '/');
     useAuthStore.setState({ isAuthenticated: false });
     useChatStore.setState(originalActions);
     useChatStore.getState().reset();
@@ -149,7 +151,9 @@ describe('useChatPersistence initialization', () => {
     expect(secondSettled).toBe(true);
     expect(serviceMocks.listConversations).toHaveBeenCalledOnce();
     expect(serviceMocks.listThreads).toHaveBeenCalledOnce();
-    expect(useChatStore.getState().currentThreadId).toBe('thread-1');
+    // Layout hydration only caches its conversation; the chat page chooses
+    // the workspace-wide default when it mounts.
+    expect(useChatStore.getState().currentThreadId).toBeNull();
   });
 
   it('makes selection visible synchronously while the triggered read remains awaitable', async () => {
@@ -202,6 +206,156 @@ describe('useChatPersistence initialization', () => {
       threads.resolve(threadPage([]));
       await threadLoad;
     });
+  });
+
+  it('preserves an explicit deep-linked thread selected while layout init is in flight', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    // useChatSession can restore the URL target while this layout-owned
+    // initializer is still waiting for its conversation page. The later
+    // setCurrentConversation call must not erase that newer selection.
+    // Mutation check: neutralizing the deep-link restore branch in
+    // `src/hooks/useChatPersistence.ts` makes this test fail with
+    // `pnpm --dir frontend exec vitest run src/hooks/__tests__/useChatPersistence.initialization.test.tsx -t "preserves an explicit deep-linked thread" --reporter=dot`.
+    await act(async () => {
+      conversations.resolve(conversationPage([conversation]));
+      useChatStore.getState().setCurrentThread(thread.id);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe(thread.id);
+  });
+
+  it('preserves a sidebar selection on bare chat while conversation hydration is in flight', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    window.history.replaceState({}, '', '/chat');
+
+    const hook = renderHook(() => useChatPersistence());
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    await act(async () => {
+      useChatStore.getState().setCurrentThread('thread-selected');
+      conversations.resolve(conversationPage([conversation]));
+      await hook.result.current.initialize();
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe('thread-selected');
+  });
+
+  it('preserves a newer sidebar selection made before the URL catches up', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    serviceMocks.listThreads.mockResolvedValue(threadPage([thread]));
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    await act(async () => {
+      // The sidebar selection is newer than the A URL, but router.push has
+      // not committed B yet. setCurrentConversation must not erase B while
+      // resetting the downstream conversation selection.
+      useChatStore.getState().setCurrentThread('thread-2');
+      conversations.resolve(conversationPage([conversation]));
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe('thread-2');
+  });
+
+  it('keeps a newer sidebar selection when the URL changes during thread loading', async () => {
+    const conversations = deferred<never>();
+    const threads = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    serviceMocks.listThreads.mockReturnValue(threads.promise);
+    window.history.replaceState({}, '', '/chat?thread=thread-1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    // The URL-owned selection is captured before the conversation switch
+    // clears it. The sidebar can then select a different thread while the
+    // resulting thread page is still loading; that newer choice owns the UI.
+    await act(async () => {
+      useChatStore.getState().setCurrentThread(thread.id);
+      conversations.resolve(conversationPage([conversation]));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(serviceMocks.listThreads).toHaveBeenCalledWith('conversation-1')
+    );
+
+    window.history.replaceState({}, '', '/chat?thread=thread-2');
+    act(() => {
+      useChatStore.getState().setCurrentThread('thread-2');
+    });
+
+    await act(async () => {
+      threads.resolve(threadPage([thread]));
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBe('thread-2');
+  });
+
+  it('honors new-chat intent when a stale thread query is also present', async () => {
+    const conversations = deferred<never>();
+    serviceMocks.listConversations.mockReturnValue(conversations.promise);
+    serviceMocks.listThreads.mockResolvedValue(threadPage([thread]));
+    window.history.replaceState({}, '', '/chat?thread=thread-1&new=1');
+
+    const hook = renderHook(() => useChatPersistence());
+    let initialization!: Promise<void>;
+    act(() => {
+      initialization = hook.result.current.initialize();
+    });
+
+    await waitFor(() =>
+      expect(serviceMocks.listConversations).toHaveBeenCalledOnce()
+    );
+
+    // This is the selection that previously caused the post-conversation
+    // restoration branch to override the explicit new-chat intent.
+    await act(async () => {
+      useChatStore.getState().setCurrentThread(thread.id);
+      conversations.resolve(conversationPage([conversation]));
+      await initialization;
+    });
+
+    expect(useChatStore.getState().currentThreadId).toBeNull();
   });
 
   it('resolves null selections without reads and starts non-awaited selection reads', async () => {
@@ -319,6 +473,24 @@ describe('useChatPersistence initialization', () => {
     );
   });
 
+  it('defers first-thread fallback while an explicit deep link is pending', async () => {
+    window.history.replaceState({}, '', '/chat?thread=missing-thread');
+    serviceMocks.listThreads.mockResolvedValue(threadPage([thread]));
+
+    const hook = renderHook(() => useChatPersistence());
+    await waitFor(() =>
+      expect(serviceMocks.listThreads).toHaveBeenCalledWith('conversation-1')
+    );
+
+    // useChatSession owns the missing URL lookup and its 403/404 fallback. A
+    // persistence consumer must leave the selection empty until that owner
+    // resolves, otherwise the first thread wins and a later send targets it.
+    expect(useChatStore.getState().currentThreadId).toBeNull();
+
+    hook.unmount();
+    window.history.replaceState({}, '', '/');
+  });
+
   it('keeps explicit loads for different scopes physically independent', async () => {
     serviceMocks.listConversations.mockImplementation(async (workspaceId) =>
       conversationPage([
@@ -357,4 +529,83 @@ describe('useChatPersistence initialization', () => {
       'conversation-B'
     );
   });
+  it('reinitializes B when A signed out while no chat consumer was mounted', async () => {
+    const first = renderHook(() => useChatPersistence());
+    await act(async () => {
+      await first.result.current.initialize();
+    });
+    first.unmount();
+    useAuthStore
+      .getState()
+      .invalidateRejectedSession(useAuthStore.getState().user?.id ?? null);
+    useAuthStore.setState({
+      user: { id: 'B' } as never,
+      isAuthenticated: true,
+    });
+    const second = renderHook(() => useChatPersistence());
+    await act(async () => {
+      await second.result.current.initialize();
+    });
+    expect(serviceMocks.getOrCreateDefaultWorkspace).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().currentConversationId).toBe(
+      'conversation-1'
+    );
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'ignores A default conversation %s while B initialization is pending',
+    async (outcome) => {
+      const oldConversation = deferred<never>();
+      const newWorkspace = deferred<never>();
+      serviceMocks.listConversations.mockResolvedValueOnce(
+        conversationPage([])
+      );
+      serviceMocks.getOrCreateDefaultConversation.mockReturnValueOnce(
+        oldConversation.promise
+      );
+      const first = renderHook(() => useChatPersistence());
+      await waitFor(() =>
+        expect(
+          serviceMocks.getOrCreateDefaultConversation
+        ).toHaveBeenCalledOnce()
+      );
+      first.unmount();
+      act(() => {
+        useChatStore.getState().reset();
+      });
+      serviceMocks.getOrCreateDefaultWorkspace.mockReturnValueOnce(
+        newWorkspace.promise
+      );
+      const second = renderHook(() => useChatPersistence());
+      let secondFinished = false;
+      let pending!: Promise<void>;
+      act(() => {
+        pending = second.result.current.initialize().then(() => {
+          secondFinished = true;
+        });
+      });
+      await act(async () => {
+        if (outcome === 'resolve')
+          oldConversation.resolve({
+            id: 'A-private',
+            workspace_id: 'workspace-1',
+          } as never);
+        else oldConversation.reject(new Error('A private error'));
+      });
+      expect(useChatStore.getState().conversations).toEqual({});
+      expect(useChatStore.getState().currentConversationId).toBeNull();
+      expect(toastErrorMock).not.toHaveBeenCalled();
+      expect(secondFinished).toBe(false);
+      const third = renderHook(() => useChatPersistence());
+      await act(async () => {
+        newWorkspace.resolve(workspace);
+        await pending;
+        await third.result.current.initialize();
+      });
+      expect(serviceMocks.getOrCreateDefaultWorkspace).toHaveBeenCalledTimes(2);
+      expect(useChatStore.getState().currentConversationId).toBe(
+        'conversation-1'
+      );
+    }
+  );
 });

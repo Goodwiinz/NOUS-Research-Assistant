@@ -1,0 +1,27 @@
+{
+  "step": "M1-02-r3-retry-no-previous",
+  "as": "owner",
+  "at": "2026-09-30T21:16:26.777943+00:00",
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/research-engine/projects/2f7056ed-b0fb-488a-8290-8bf1c8502652/fulltext/requests/cdd09024-31e8-49e7-afca-f1305029187f/attempts",
+    "body": {
+      "outcome": "retrieved",
+      "attempted_on": "2026-09-30",
+      "document_id": "0d73d115-762d-4c3c-95bb-75ee470c6813",
+      "idempotency_key": "<redacted>",
+      "previous_attempt_id": null
+    }
+  },
+  "status": 409,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": {
+    "error": {
+      "message": "Attempt is stale; reload acquisition state",
+      "status_code": 409,
+      "type": "http_error"
+    }
+  }
+}

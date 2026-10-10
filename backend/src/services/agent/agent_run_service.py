@@ -27,16 +27,20 @@ mirroring ``jobs._persist_assistant_message_safe``.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.agent_outbox import AgentOutbox
 from src.models.agent_run import AgentRun
-from src.shared.enums import JobStatus
+from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
+from src.services.agent.run_event_types import RunEventType
+from src.shared.enums import AgentOutboxStatus, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +50,115 @@ DEFAULT_LEASE_SECONDS = 300
 _ACTIVE_RUN_STATUSES = tuple(
     status.value for status in JobStatus if not status.is_terminal
 )
+_PRE_STOP_RUN_STATUSES = tuple(
+    status for status in _ACTIVE_RUN_STATUSES if status != JobStatus.STOPPING.value
+)
 
 
 class ActiveRunConflict(RuntimeError):
     """A non-terminal run already owns the thread's single-writer slot."""
+
+
+class RunStatusProjectionRejected(RuntimeError):
+    """The durable row rejected a requested job-status projection."""
+
+
+@dataclass(frozen=True)
+class RunStatusDecision:
+    """Immutable durable outcome copied from the committed agent run row."""
+
+    job_id: str
+    requested_status: JobStatus
+    effective_status: JobStatus
+    user_id: Optional[str]
+    organization_id: Optional[str]
+    thread_id: Optional[str]
+    error: Optional[str]
+    cancel_requested_at: Optional[str]
+    updated_at: str
+
+    @property
+    def requested_status_won(self) -> bool:
+        """Whether the durable row has the requested status after this write."""
+        return self.requested_status == self.effective_status
+
+
+def _decision_from_run(
+    job_id: str, requested_status: JobStatus, run: Optional[AgentRun]
+) -> Optional[RunStatusDecision]:
+    if run is None:
+        return None
+    effective_status = _coerce_status(run.status)
+    if effective_status is None:
+        return None
+
+    def as_string(value: Any) -> Optional[str]:
+        return str(value) if value is not None else None
+
+    cancel_requested_at = run.cancel_requested_at
+    return RunStatusDecision(
+        job_id=job_id,
+        requested_status=requested_status,
+        effective_status=effective_status,
+        user_id=as_string(run.user_id),
+        organization_id=as_string(run.organization_id),
+        thread_id=as_string(run.thread_id),
+        error=run.error,
+        cancel_requested_at=(
+            cancel_requested_at.isoformat() if cancel_requested_at is not None else None
+        ),
+        updated_at=run.updated_at.isoformat(),
+    )
+
+
+def _integrity_error_chain(exc: IntegrityError) -> list[Any]:
+    """Return the bounded SQLAlchemy/driver cause chain for an integrity error."""
+    chain: list[Any] = []
+    current: Any = exc
+    for _ in range(5):
+        if current is None or current in chain:
+            break
+        chain.append(current)
+        current = getattr(current, "orig", None) or getattr(current, "__cause__", None)
+    return chain
+
+
+def _integrity_constraint_name(exc: IntegrityError) -> Optional[str]:
+    """Read a driver-reported constraint name without parsing user text."""
+    for original in _integrity_error_chain(exc):
+        constraint = getattr(original, "constraint_name", None)
+        if constraint:
+            return str(constraint)
+        diagnostic = getattr(original, "diag", None)
+        constraint = getattr(diagnostic, "constraint_name", None)
+        if constraint:
+            return str(constraint)
+    return None
+
+
+def _is_active_thread_conflict(exc: IntegrityError) -> bool:
+    constraint = _integrity_constraint_name(exc)
+    if constraint == "uq_agent_runs_active_thread":
+        return True
+    # SQLite's unit schema keeps the same partial unique index but does not
+    # expose its name on IntegrityError; only this exact generated key message
+    # is accepted as the active-thread collision.
+    message = str(exc.orig).lower()
+    return "unique constraint failed: agent_runs.thread_id" in message
+
+
+def _is_missing_thread_fk(exc: IntegrityError) -> bool:
+    sqlstate = None
+    for original in _integrity_error_chain(exc):
+        sqlstate = getattr(original, "sqlstate", None) or getattr(
+            original, "pgcode", None
+        )
+        if sqlstate:
+            break
+    constraint = _integrity_constraint_name(exc)
+    return sqlstate == "23503" and bool(
+        constraint and constraint.endswith("_thread_id_fkey")
+    )
 
 
 def _utcnow() -> datetime:
@@ -90,6 +199,7 @@ async def upsert_run(
     thread_id: Optional[str] = None,
     error: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    run_metadata: Optional[dict[str, Any]] = None,
 ) -> Optional[AgentRun]:
     """Create-or-update the projection row for *job_id*. Commits.
 
@@ -114,104 +224,97 @@ async def upsert_run(
     # the non-uuid job-id fallback) — drop what cannot bind.
     thread_uuid = _coerce_uuid(thread_id)
 
-    run = await db.get(AgentRun, job_id)
-    if run is None:
-        if user_uuid is None:
-            logger.warning(
-                "agent_runs: no row for job %s and no user_id in payload; "
-                "skipping insert",
-                job_id,
-            )
+    # The update itself is the transition claim. Reading an ORM object first
+    # and writing it later lets a stale producer replace a completion or Stop
+    # acknowledgement between those two operations.
+    run = await _transition_existing_run(
+        db,
+        job_id=job_id,
+        normalized=normalized,
+        organization_id=org_uuid,
+        user_id=user_uuid,
+        thread_id=thread_uuid,
+        error=error,
+        idempotency_key=idempotency_key,
+        backfill_metadata=True,
+        run_metadata=run_metadata,
+    )
+    if run is not None:
+        return run
+
+    # A zero-row update can mean either a missing row or an existing row that
+    # rejected this transition / owner/provider. Reload before attempting an
+    # insert.
+    existing = await _reload_run(db, job_id)
+    if existing is not None:
+        if existing.execution_provider != "nous":
+            # Native job-store projections are not evidence of remote execution.
+            return existing
+        if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
+            # A mismatched payload cannot backfill tenant or correlation data
+            # on another owner's partially scoped legacy row.
             return None
-        run = AgentRun(
-            job_id=job_id,
-            organization_id=org_uuid,
-            user_id=user_uuid,
-            thread_id=thread_uuid,
-            status=normalized.value,
-            error=error,
-            idempotency_key=idempotency_key,
+        return existing
+
+    if user_uuid is None:
+        logger.warning(
+            "agent_runs: no row for job %s and no user_id in payload; "
+            "skipping insert",
+            job_id,
         )
-        db.add(run)
-        try:
-            await db.commit()
-        except IntegrityError:
-            # A concurrent creator may have won the job-id/idempotency race, or
-            # another run may already own this thread's partial-unique slot.
-            # Only a genuinely dangling legacy thread id may retry uncorrelated;
-            # dropping thread_id for an active-run collision would let two graph
-            # writers race the same LangGraph checkpoint.
-            await db.rollback()
-            run = await db.get(AgentRun, job_id)
-            if run is None:
-                if idempotency_key is not None:
-                    existing = await get_run_by_idempotency_key(
-                        db,
-                        idempotency_key,
-                        organization_id=org_uuid,
-                        user_id=user_uuid,
-                    )
-                    if existing is not None:
-                        return None
-                if thread_uuid is not None:
-                    active = (
-                        await db.execute(
-                            select(AgentRun).where(
-                                AgentRun.thread_id == thread_uuid,
-                                AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if active is not None:
-                        raise ActiveRunConflict(
-                            "A response is already in progress for this thread."
-                        )
-                if thread_uuid is None:  # pragma: no cover — PK race implies row
-                    return None
-                run = AgentRun(
-                    job_id=job_id,
-                    organization_id=org_uuid,
-                    user_id=user_uuid,
-                    thread_id=None,
-                    status=normalized.value,
-                    error=error,
-                    idempotency_key=idempotency_key,
-                )
-                db.add(run)
-                try:
-                    await db.commit()
-                except IntegrityError:  # pragma: no cover — PK race on retry
-                    await db.rollback()
-                    run = await db.get(AgentRun, job_id)
-                    if run is None:
-                        return None
-                else:
-                    return run
-        else:
-            return run
+        return None
 
-    current = _coerce_status(run.status)
-    if current is not None and current.is_terminal and normalized != current:
-        return run  # absorbing terminal state — drop the stale transition
-
-    run.status = normalized.value
-    run.error = error
-    run.updated_at = _utcnow()
-    if run.organization_id is None and org_uuid is not None:
-        run.organization_id = org_uuid
-    if run.user_id is None and user_uuid is not None:
-        run.user_id = user_uuid
-    if run.thread_id is None and thread_uuid is not None:
-        run.thread_id = thread_uuid
-    if run.idempotency_key is None and idempotency_key:
-        run.idempotency_key = idempotency_key
+    run = AgentRun(
+        job_id=job_id,
+        organization_id=org_uuid,
+        user_id=user_uuid,
+        thread_id=thread_uuid,
+        status=normalized.value,
+        error=error,
+        idempotency_key=idempotency_key,
+        run_metadata=run_metadata,
+    )
+    db.add(run)
     try:
         await db.commit()
-    except IntegrityError:
-        # A backfill can collide with another run's active-thread slot. Do not
-        # silently drop correlation and keep both writers alive.
+    except IntegrityError as insert_error:
+        # Resolve duplicate job/idempotency claims before classifying a thread
+        # collision. The transaction must be rolled back before any recovery
+        # read can be trusted.
         await db.rollback()
-        if thread_uuid is not None:
+        existing = await _reload_run(db, job_id)
+        if existing is not None:
+            if existing.execution_provider != "nous":
+                return existing
+            if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
+                return None
+            return (
+                await _transition_existing_run(
+                    db,
+                    job_id=job_id,
+                    normalized=normalized,
+                    organization_id=org_uuid,
+                    user_id=user_uuid,
+                    thread_id=thread_uuid,
+                    error=error,
+                    idempotency_key=idempotency_key,
+                    backfill_metadata=True,
+                    run_metadata=run_metadata,
+                )
+                or existing
+            )
+
+        if idempotency_key is not None:
+            duplicate = await get_run_by_idempotency_key(
+                db,
+                idempotency_key,
+                organization_id=org_uuid,
+                user_id=user_uuid,
+            )
+            if duplicate is not None:
+                return None
+
+        if thread_uuid is not None and _is_active_thread_conflict(insert_error):
             active = (
                 await db.execute(
                     select(AgentRun).where(
@@ -224,16 +327,344 @@ async def upsert_run(
                 raise ActiveRunConflict(
                     "A response is already in progress for this thread."
                 )
-        # Otherwise this is the legacy dangling-thread path: keep the status
-        # transition and leave correlation unchanged.
-        run = await db.get(AgentRun, job_id)
-        if run is None:  # pragma: no cover
+            # The original writer may have released the slot while this
+            # transaction rolled back. Retry once with the original, valid
+            # correlation; never use absence from the active-row lookup as
+            # evidence that its FK is dangling.
+            run = AgentRun(
+                job_id=job_id,
+                organization_id=org_uuid,
+                user_id=user_uuid,
+                thread_id=thread_uuid,
+                status=normalized.value,
+                error=error,
+                idempotency_key=idempotency_key,
+                run_metadata=run_metadata,
+            )
+            db.add(run)
+            try:
+                await db.commit()
+                return run
+            except IntegrityError as retry_error:
+                await db.rollback()
+                existing = await _reload_run(db, job_id)
+                if existing is not None:
+                    if existing.execution_provider != "nous":
+                        return existing
+                    if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
+                        return None
+                    return existing
+                if _is_active_thread_conflict(retry_error):
+                    raise ActiveRunConflict(
+                        "A response is already in progress for this thread."
+                    ) from retry_error
+                if not _is_missing_thread_fk(retry_error):
+                    raise
+                insert_error = retry_error
+        elif not _is_missing_thread_fk(insert_error):
+            raise insert_error
+
+        if thread_uuid is None:
             return None
-        run.status = normalized.value
-        run.error = error
-        run.updated_at = _utcnow()
-        await db.commit()
+        # Compatibility path for a positively identified dangling-thread FK.
+        run = AgentRun(
+            job_id=job_id,
+            organization_id=org_uuid,
+            user_id=user_uuid,
+            thread_id=None,
+            status=normalized.value,
+            error=error,
+            idempotency_key=idempotency_key,
+            run_metadata=run_metadata,
+        )
+        db.add(run)
+        try:
+            await db.commit()
+        except IntegrityError as fallback_error:
+            await db.rollback()
+            existing = await _reload_run(db, job_id)
+            if existing is None:
+                if _is_active_thread_conflict(fallback_error):
+                    raise ActiveRunConflict(
+                        "A response is already in progress for this thread."
+                    ) from fallback_error
+                raise
+            if existing.execution_provider != "nous":
+                return existing
+            if not _belongs_to_upsert_owner(existing, org_uuid, user_uuid):
+                return None
+            return existing
+        return run
     return run
+
+
+def _transition_predicate(status: JobStatus):
+    """SQL predicate for a status transition, evaluated at the write point."""
+    if status == JobStatus.CANCELLED:
+        # A producer may acknowledge cancellation from any active state. This
+        # also covers task-level cancellation without a prior HTTP Stop claim.
+        return AgentRun.status.in_(_ACTIVE_RUN_STATUSES) | (
+            AgentRun.status == JobStatus.CANCELLED.value
+        )
+    if status == JobStatus.STOPPING:
+        return AgentRun.status.in_(_PRE_STOP_RUN_STATUSES) | (
+            AgentRun.status == JobStatus.STOPPING.value
+        )
+    if status.is_terminal:
+        # Same-terminal writes are idempotent. Other terminal writes require a
+        # non-stopping, uncancelled active row.
+        return (AgentRun.status == status.value) | and_(
+            AgentRun.status.in_(_PRE_STOP_RUN_STATUSES),
+            AgentRun.cancel_requested_at.is_(None),
+        )
+    return and_(
+        AgentRun.status.in_(_PRE_STOP_RUN_STATUSES),
+        AgentRun.cancel_requested_at.is_(None),
+    )
+
+
+def _belongs_to_upsert_owner(
+    run: AgentRun, organization_id: Optional[UUID], user_id: Optional[UUID]
+) -> bool:
+    return (user_id is None or run.user_id in (None, user_id)) and (
+        organization_id is None or run.organization_id in (None, organization_id)
+    )
+
+
+async def _reload_run(db: AsyncSession, job_id: str) -> Optional[AgentRun]:
+    return (
+        await db.execute(
+            select(AgentRun)
+            .where(AgentRun.job_id == job_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+
+async def _transition_existing_run(
+    db: AsyncSession,
+    *,
+    job_id: str,
+    normalized: JobStatus,
+    organization_id: Optional[UUID],
+    user_id: Optional[UUID],
+    thread_id: Optional[UUID],
+    error: Optional[str],
+    idempotency_key: Optional[str],
+    backfill_metadata: bool,
+    run_metadata: Optional[dict[str, Any]] = None,
+) -> Optional[AgentRun]:
+    predicates = [
+        AgentRun.job_id == job_id,
+        AgentRun.execution_provider == "nous",
+        _transition_predicate(normalized),
+    ]
+    if organization_id is not None:
+        predicates.append(
+            or_(
+                AgentRun.organization_id.is_(None),
+                AgentRun.organization_id == organization_id,
+            )
+        )
+    if user_id is not None:
+        predicates.append(or_(AgentRun.user_id.is_(None), AgentRun.user_id == user_id))
+
+    values: dict[str, Any] = {
+        "status": normalized.value,
+        "error": error,
+        "updated_at": _utcnow(),
+    }
+    if run_metadata is not None:
+        values["run_metadata"] = run_metadata
+    if backfill_metadata:
+        if organization_id is not None:
+            values["organization_id"] = func.coalesce(
+                AgentRun.organization_id, organization_id
+            )
+        if user_id is not None:
+            values["user_id"] = func.coalesce(AgentRun.user_id, user_id)
+        if thread_id is not None:
+            values["thread_id"] = func.coalesce(AgentRun.thread_id, thread_id)
+        if idempotency_key:
+            values["idempotency_key"] = func.coalesce(
+                AgentRun.idempotency_key, idempotency_key
+            )
+
+    retry_with_correlation_succeeded = False
+    fallback_to_status_only = False
+    try:
+        result = await db.execute(
+            update(AgentRun)
+            .where(*predicates)
+            .values(**values)
+            .returning(AgentRun.job_id)
+            .execution_options(synchronize_session=False)
+        )
+        transitioned = result.scalar_one_or_none() is not None
+        await db.commit()
+    except IntegrityError as update_error:
+        await db.rollback()
+        if thread_id is not None and _is_active_thread_conflict(update_error):
+            active = (
+                await db.execute(
+                    select(AgentRun).where(
+                        AgentRun.thread_id == thread_id,
+                        AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
+                    )
+                )
+            ).scalar_one_or_none()
+            if active is not None and active.job_id != job_id:
+                raise ActiveRunConflict(
+                    "A response is already in progress for this thread."
+                )
+            # The blocking run may have completed between rollback and the
+            # lookup. Retry the original guarded write once, retaining T.
+            try:
+                result = await db.execute(
+                    update(AgentRun)
+                    .where(*predicates)
+                    .values(**values)
+                    .returning(AgentRun.job_id)
+                    .execution_options(synchronize_session=False)
+                )
+                transitioned = result.scalar_one_or_none() is not None
+                await db.commit()
+                retry_with_correlation_succeeded = True
+            except IntegrityError as retry_error:
+                await db.rollback()
+                if _is_active_thread_conflict(retry_error):
+                    raise ActiveRunConflict(
+                        "A response is already in progress for this thread."
+                    ) from retry_error
+                if not _is_missing_thread_fk(retry_error):
+                    raise
+                update_error = retry_error
+                fallback_to_status_only = True
+        elif not _is_missing_thread_fk(update_error):
+            raise update_error
+        else:
+            fallback_to_status_only = True
+
+        if fallback_to_status_only and thread_id is not None:
+            # Only a positive thread-FK failure authorizes the legacy
+            # status-only fallback. Preserve status/owner/cancellation guards.
+            fallback_values = {
+                "status": normalized.value,
+                "error": error,
+                "updated_at": _utcnow(),
+            }
+            if run_metadata is not None:
+                fallback_values["run_metadata"] = run_metadata
+            result = await db.execute(
+                update(AgentRun)
+                .where(*predicates)
+                .values(**fallback_values)
+                .returning(AgentRun.job_id)
+                .execution_options(synchronize_session=False)
+            )
+            transitioned = result.scalar_one_or_none() is not None
+            await db.commit()
+        elif not retry_with_correlation_succeeded:
+            raise update_error
+
+    if not transitioned:
+        return None
+    return await _reload_run(db, job_id)
+
+
+_SWEEP_TERMINAL_EVENTS: dict[JobStatus, RunEventType] = {
+    JobStatus.COMPLETED: RunEventType.RUN_COMPLETED,
+    JobStatus.FAILED: RunEventType.RUN_FAILED,
+    JobStatus.CANCELLED: RunEventType.RUN_CANCELLED,
+}
+
+
+def _sweep_event_payload(status: JobStatus, error: Optional[str]) -> dict[str, Any]:
+    if status is JobStatus.FAILED:
+        return {
+            "code": "stale_run_swept",
+            "message": (error or "Agent run failed.")[:1000],
+        }
+    if status is JobStatus.CANCELLED:
+        return {"reason": "stale_producer_lease"}
+    return {}
+
+
+async def terminalize_stale_run(
+    db: AsyncSession,
+    *,
+    job_id: str,
+    status: JobStatus,
+    organization_id: Any,
+    user_id: Any,
+    error: Optional[str],
+) -> Optional[AgentRun]:
+    """Sweeper terminalization: status, terminal ledger event and outbox
+    retirement in ONE transaction. Commits.
+
+    ``upsert_run`` only moves the status, which left a swept run's ledger open
+    (artifact announcements kept appending to it) and its ``pending`` dispatch
+    intent live for a future relay (R8-C4). This mirrors
+    ``fail_queued_submission``. Guarded by the same transition predicate as
+    ``upsert_run``; returns the reloaded row whatever the outcome so the
+    caller derives the effective decision from durable state.
+    """
+    if not status.is_terminal:
+        raise ValueError("terminalize_stale_run requires a terminal status")
+    now = _utcnow()
+    try:
+        claimed = (
+            await db.execute(
+                update(AgentRun)
+                .where(
+                    AgentRun.job_id == job_id,
+                    AgentRun.execution_provider == "nous",
+                    AgentRun.organization_id == _coerce_uuid(organization_id),
+                    AgentRun.user_id == _coerce_uuid(user_id),
+                    _transition_predicate(status),
+                )
+                .values(
+                    status=status.value,
+                    error=error,
+                    completed_at=now,
+                    updated_at=now,
+                )
+                .returning(AgentRun.job_id)
+                .execution_options(synchronize_session=False)
+            )
+        ).first()
+        if claimed is not None:
+            await db.execute(
+                update(AgentOutbox)
+                .where(
+                    AgentOutbox.run_id == job_id,
+                    AgentOutbox.status == AgentOutboxStatus.PENDING.value,
+                )
+                .values(
+                    status=(
+                        AgentOutboxStatus.DISPATCHED.value
+                        if status is JobStatus.COMPLETED
+                        else AgentOutboxStatus.FAILED.value
+                    ),
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            try:
+                await append_event(
+                    db,
+                    run_id=job_id,
+                    event_type=_SWEEP_TERMINAL_EVENTS[status],
+                    payload=_sweep_event_payload(status, error),
+                    organization_id=organization_id,
+                )
+            except RunAlreadyTerminalError:
+                logger.debug("terminalize_stale_run: ledger already closed %s", job_id)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return await _reload_run(db, job_id)
 
 
 async def get_run(
@@ -255,6 +686,37 @@ async def get_run(
         AgentRun.user_id == _coerce_uuid(user_id),
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def is_run_cancellation_requested(
+    db: AsyncSession,
+    job_id: str,
+    *,
+    organization_id: Any,
+    user_id: Any,
+) -> bool:
+    """Read the durable stop marker for one caller-owned run.
+
+    The producer polls scalar columns rather than an ORM instance so a
+    long-lived stream session cannot reuse stale identity-map state after the
+    HTTP Stop request commits in another session.
+    """
+    row = (
+        await db.execute(
+            select(AgentRun.status, AgentRun.cancel_requested_at)
+            .where(
+                AgentRun.job_id == job_id,
+                AgentRun.organization_id == _coerce_uuid(organization_id),
+                AgentRun.user_id == _coerce_uuid(user_id),
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none()
+    if row is None:
+        return False
+    return bool(
+        row.cancel_requested_at is not None or row.status == JobStatus.STOPPING.value
+    )
 
 
 async def get_active_run_for_thread(
@@ -283,18 +745,51 @@ async def get_active_run_for_thread(
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def get_latest_run_for_thread(
+    db: AsyncSession,
+    thread_id: Any,
+    *,
+    organization_id: Any,
+    user_id: Any,
+) -> Optional[AgentRun]:
+    """Return the newest caller-owned run for a durable thread.
+
+    Resume uses this only to distinguish a stale checkpoint from a legacy
+    thread with no durable run. A terminal run means the checkpoint's old HITL
+    interrupt must not be re-delivered after completion or cancellation.
+    """
+    thread_uuid = _coerce_uuid(thread_id)
+    if thread_uuid is None:
+        return None
+    stmt = (
+        select(AgentRun)
+        .where(
+            AgentRun.thread_id == thread_uuid,
+            AgentRun.organization_id == _coerce_uuid(organization_id),
+            AgentRun.user_id == _coerce_uuid(user_id),
+        )
+        .order_by(AgentRun.updated_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def claim_awaiting_run_for_confirmation(
     db: AsyncSession,
     job_id: str,
     *,
     organization_id: Any,
     user_id: Any,
+    approval_id: str,
 ) -> bool:
-    """Atomically claim one caller-owned parked run for confirmation. Commits."""
+    """Claim only the exact caller-owned pending approval. Commits."""
     result = await db.execute(
         update(AgentRun)
         .where(
             AgentRun.job_id == job_id,
+            AgentRun.execution_provider == "nous",
+            AgentRun.cancel_requested_at.is_(None),
+            AgentRun.run_metadata["approval_id"].as_string() == approval_id,
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
             AgentRun.status == JobStatus.AWAITING_CONFIRMATION.value,
@@ -312,12 +807,16 @@ async def release_confirmation_claim(
     *,
     organization_id: Any,
     user_id: Any,
+    approval_id: str,
 ) -> bool:
     """Return a pre-execution confirmation claim to its parked state. Commits."""
     result = await db.execute(
         update(AgentRun)
         .where(
             AgentRun.job_id == job_id,
+            AgentRun.execution_provider == "nous",
+            AgentRun.cancel_requested_at.is_(None),
+            AgentRun.run_metadata["approval_id"].as_string() == approval_id,
             AgentRun.organization_id == _coerce_uuid(organization_id),
             AgentRun.user_id == _coerce_uuid(user_id),
             AgentRun.status == JobStatus.RUNNING.value,
@@ -390,6 +889,7 @@ async def claim_execution(
         .where(
             AgentRun.job_id == job_id,
             AgentRun.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+            AgentRun.execution_provider == "nous",
             AgentRun.lease_owner.is_(None),
         )
         .values(
@@ -533,7 +1033,7 @@ def _extract_thread_id(data: dict) -> Optional[str]:
 
 async def record_job_status(
     job_id: str, data: dict, *, raise_on_error: bool = False
-) -> None:
+) -> Optional[RunStatusDecision]:
     """Project a job-store write into ``agent_runs`` — log-and-continue.
 
     The write-through entry point fired (as a background task) by the job
@@ -542,22 +1042,38 @@ async def record_job_status(
     Thread-scoped terminal writes pass ``raise_on_error=True`` so completion
     cannot become visible while the durable single-writer slot remains held.
     """
+    status = data.get("status")
+    if status is None:
+        return None
+    normalized = _coerce_status(status)
+    if normalized is None:
+        return None
     try:
-        status = data.get("status")
-        if status is None:
-            return
         from src.core.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
-            await upsert_run(
+            run = await upsert_run(
                 db,
                 job_id=job_id,
-                status=status,
+                status=normalized,
                 organization_id=data.get("organization_id"),
                 user_id=data.get("user_id"),
                 thread_id=_extract_thread_id(data),
                 error=data.get("error"),
+                run_metadata=(
+                    {"approval_id": data["confirmation"]["approval_id"]}
+                    if normalized == JobStatus.AWAITING_CONFIRMATION
+                    and isinstance(data.get("confirmation"), dict)
+                    and data["confirmation"].get("approval_id")
+                    else None
+                ),
             )
+            decision = _decision_from_run(job_id, normalized, run)
+            if decision is None and raise_on_error:
+                raise RunStatusProjectionRejected(
+                    f"agent_runs rejected status projection for job {job_id}"
+                )
+            return decision
     except Exception:
         logger.warning(
             "agent_runs projection write failed for job %s (Redis remains "
@@ -567,6 +1083,7 @@ async def record_job_status(
         )
         if raise_on_error:
             raise
+        return None
 
 
 async def claim_execution_safe(

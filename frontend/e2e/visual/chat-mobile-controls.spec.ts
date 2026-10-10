@@ -1,7 +1,7 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 
 const FIXTURE_PATH = '/visual-test/chat-mobile-controls';
-const MOBILE_WIDTHS = new Set([320, 375, 390]);
+const HISTORY_DOCK_BREAKPOINT = 1280;
 
 async function openFixture(page: Page): Promise<void> {
   await page.route('**/api/v1/processing/jobs**', (route) =>
@@ -93,7 +93,8 @@ async function expectKeyboardReachability(
   });
 
   const focusOrder: string[] = [];
-  for (let index = 0; index < 16; index += 1) {
+  const maxTabs = 60;
+  for (let index = 0; index < maxTabs; index += 1) {
     await page.keyboard.press('Tab');
     const name = await page.evaluate(() => {
       const active = document.activeElement;
@@ -103,7 +104,11 @@ async function expectKeyboardReachability(
       );
     });
     focusOrder.push(name);
-    if (name === 'Send') break;
+    if (
+      expectedNames.every((expectedName) => focusOrder.includes(expectedName))
+    ) {
+      break;
+    }
   }
 
   for (const expectedName of expectedNames) {
@@ -122,7 +127,7 @@ test('long chat controls remain reachable by pointer and keyboard', async ({
   const actionNames = await expectHeaderActionsInViewport(page);
   const viewportWidth = page.viewportSize()?.width ?? 0;
   const expectedHeaderActions = [
-    ...(MOBILE_WIDTHS.has(viewportWidth) ? ['Toggle chat history'] : []),
+    ...(viewportWidth < HISTORY_DOCK_BREAKPOINT ? ['Toggle chat history'] : []),
     'Background jobs: 1 running',
     'Copy all messages',
     'Export chat',
@@ -150,6 +155,9 @@ test('long chat controls remain reachable by pointer and keyboard', async ({
   expect.soft(titleLayout.whiteSpace).toBe('nowrap');
 
   const send = page.getByRole('button', { name: 'Send' });
+  await page
+    .getByRole('textbox', { name: 'Message' })
+    .fill('Compare the cited studies and explain the recommendation.');
   await expect(send).toBeVisible();
   const sendCenterHitsSend = await send.evaluate((element) => {
     const box = element.getBoundingClientRect();

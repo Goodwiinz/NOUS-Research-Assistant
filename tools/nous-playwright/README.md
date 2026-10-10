@@ -17,7 +17,16 @@ pnpm report
 
 `--ignore-workspace` keeps this standalone package separate from the root workspace install and lockfile. This handoff is not yet integrated into the repository E2E suite.
 
-`pnpm auth` opens a normal browser. Sign in there, then return to the terminal and press Enter. No password is embedded in the code, read from this conversation, or entered in the terminal. Login is outside the recorded test. The resulting `.auth/nous.json` is a private authenticated session file and is ignored by Git.
+`pnpm auth` automatically uses headless Chromium on Linux without `DISPLAY`, including SSH sessions. It prompts for your email and password in the terminal; the password is hidden. On a computer with a display, it opens a browser for you to sign in, then asks you to press Enter in the terminal. Login is outside the recorded test. The resulting `.auth/nous.json` is a private authenticated session file with owner-only permissions and is ignored by Git.
+
+For a server without a display, run from the repository root:
+
+```bash
+corepack pnpm@10.18.2 --dir tools/nous-playwright auth --headless
+corepack pnpm@10.18.2 --dir tools/nous-playwright test
+```
+
+For unattended authentication, supply `NOUS_EMAIL` and `NOUS_PASSWORD` through your runtime's secret environment. The helper also accepts `AGENT_QA_EMAIL` and `AGENT_QA_PASSWORD`; it never mixes the two pairs. For SSO or MFA, use `pnpm auth --headed` on a computer with a display and transfer the private session file to the test runtime.
 
 The account must have the indexed paper available. The default document ID is the one verified in the demo. For another deployment, set the matching ID **for the same paper**:
 
@@ -53,6 +62,8 @@ Treat authenticated traces, videos, and session files as private. The test never
 ## Scope and validation
 
 The authenticated Chromium workflow passed against `https://goodwiinz.tech` on 2026-09-13: **1 passed (1.8m)**, using Node 24 and pnpm 10.18.2. It exercised real retrieval, the source-to-document viewer, both exact approval gates, and single-document persistence after reload. See `CODEX_HANDOFF.md` for the run history and remaining scope.
+
+Run `pnpm test:auth` for browser-based helper regression tests against a local login fixture; these cover headless authentication, automatic display detection, missing credentials, rejected login, and private session-file permissions.
 
 This is a real-service integration test with a three-minute budget per agent transition. If the model asks an extra clarification, proposes another tool, chooses the wrong document, fails to finish, or duplicates final assistant rows, the test fails rather than accepting a different workflow. Inspect its trace before changing an assertion.
 

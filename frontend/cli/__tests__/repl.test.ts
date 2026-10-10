@@ -123,7 +123,7 @@ test('clears a missing confirmation thread and retries the message once', async 
         {
           type: 'confirmation',
           threadId: 'stale-thread',
-          details: { message: 'Confirm?' },
+          details: { approval_id: 'a'.repeat(64), message: 'Confirm?' },
         },
       ])
     )
@@ -164,7 +164,7 @@ test('retries confirm once before falling back to fresh thread', async () => {
       {
         type: 'confirmation',
         threadId: 'stale-thread',
-        details: { message: 'Confirm?' },
+        details: { approval_id: 'a'.repeat(64), message: 'Confirm?' },
       },
     ])
   );
@@ -209,7 +209,7 @@ test('falls through to fresh thread if confirm retry also fails', async () => {
         {
           type: 'confirmation',
           threadId: 'stale-thread',
-          details: { message: 'Confirm?' },
+          details: { approval_id: 'a'.repeat(64), message: 'Confirm?' },
         },
       ])
     )
@@ -434,7 +434,10 @@ describe('confirm flow happy path', () => {
         {
           type: 'confirmation',
           threadId: 'thread-1',
-          details: { tools: [{ name: 'create_draft', args: {} }] },
+          details: {
+            approval_id: 'a'.repeat(64),
+            tools: [{ name: 'create_draft', args: {} }],
+          },
         },
       ])
     );
@@ -459,7 +462,10 @@ describe('confirm flow happy path', () => {
         {
           type: 'confirmation',
           threadId: 'thread-2',
-          details: { tools: [{ name: 'ingest_arxiv_papers', args: {} }] },
+          details: {
+            approval_id: 'a'.repeat(64),
+            tools: [{ name: 'ingest_arxiv_papers', args: {} }],
+          },
         },
       ])
     );
@@ -500,7 +506,10 @@ describe('confirm flow happy path', () => {
         {
           type: 'confirmation',
           threadId: 'thread-3',
-          details: { tools: [{ name: 'create_project_note', args: {} }] },
+          details: {
+            approval_id: 'a'.repeat(64),
+            tools: [{ name: 'create_project_note', args: {} }],
+          },
         },
       ])
     );
@@ -930,7 +939,10 @@ describe('confirmKey', () => {
         {
           type: 'confirmation',
           threadId: 'thread-x',
-          details: { tools: [{ name: 'create_project', args: {} }] },
+          details: {
+            approval_id: 'a'.repeat(64),
+            tools: [{ name: 'create_project', args: {} }],
+          },
         },
       ])
     );

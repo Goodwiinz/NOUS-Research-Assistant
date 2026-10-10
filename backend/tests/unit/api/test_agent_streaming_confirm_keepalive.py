@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+
 
 @pytest.fixture(autouse=True)
 def _allow_durable_confirm():
@@ -28,6 +30,10 @@ def _allow_durable_confirm():
         patch(
             "src.api.agent.streaming._finalize_run_id",
             new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
         ),
     ):
         yield
@@ -144,6 +150,33 @@ async def test_graph_keepalive_polls_disconnect_while_next_event_is_pending(
 
 
 @pytest.mark.asyncio
+async def test_graph_keepalive_polls_durable_stop_while_next_event_is_pending(
+    monkeypatch,
+):
+    import src.api.agent.streaming as st
+
+    cleaned = asyncio.Event()
+    graph = _token_then_hang(cleaned)
+    # Stop polls are time-gated (R8-D1), so the disconnect check may run more
+    # often than the poll; only the poll sequence is pinned here.
+    request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
+    stop_requested = AsyncMock(side_effect=[False, False, True])
+    monkeypatch.setattr(st, "_SSE_KEEPALIVE_SECONDS", 0.2)
+    monkeypatch.setattr(st, "_SSE_DISCONNECT_POLL_SECONDS", 0.01, raising=False)
+
+    events = st._graph_events_with_keepalive(
+        graph,
+        request,
+        stop_requested=stop_requested,
+    )
+    assert await anext(events) == {"type": "event", "event": {"event": "token"}}
+
+    assert await asyncio.wait_for(anext(events), timeout=0.1) == {"type": "stop"}
+    await events.aclose()
+    assert stop_requested.await_count == 3
+
+
+@pytest.mark.asyncio
 async def test_graph_disconnect_cleanup_preserves_concurrent_asgi_cancellation(
     monkeypatch,
 ):
@@ -250,7 +283,9 @@ async def test_confirm_stream_emits_heartbeat_from_keepalive():
 
     graph = _SilentThenDoneGraph()
     request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
-    body = SimpleNamespace(thread_id="t-1", confirmed=True, model="")
+    body = SimpleNamespace(
+        thread_id="t-1", confirmed=True, model="", approval_id="a" * 64
+    )
     current_user = Mock(id="user-1", organization_id="org-1")
 
     with (

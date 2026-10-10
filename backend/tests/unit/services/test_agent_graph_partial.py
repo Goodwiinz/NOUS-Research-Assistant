@@ -116,6 +116,10 @@ def _assert_shared_rules_present(system_text: str) -> None:
     # instead of calling list_projects, 5 dev runs out of 5)
     assert "Resolving a save target" in system_text
     assert "list_projects FIRST" in system_text
+    # Missing citation fields must stay unknown on every specialist route.
+    assert "Incomplete citations and unknown metadata" in system_text
+    assert "Missing metadata is not evidence that a work is unpublished" in system_text
+    assert "[incomplete reference; metadata unverified]" in system_text
 
 
 # ---------------------------------------------------------------------------
@@ -837,6 +841,8 @@ class TestHumanInTheLoopFlow:
         state = _make_initial_state("ingest paper 2401.12345")
         state["messages"].append(ai_msg)
         state["intent"] = "research"
+        state["tool_operation_protocol_version"] = 1
+        state["tool_operation_turn_id"] = str(uuid4())
 
         graph.update_state(config, values=state, as_node="research_llm_node")
 
@@ -894,18 +900,18 @@ class TestHumanInTheLoopFlow:
         thread_id = str(uuid4())
         config = _make_config(thread_id)
 
-        # Setup: LLM requested a destructive tool
+        # Setup: LLM requested a destructive tool available on the general lane.
         ai_msg = AIMessage(
-            content="I'll create a draft.",
+            content="I'll ingest that paper.",
             tool_calls=[
                 {
                     "id": "tc1",
-                    "name": "create_draft",
-                    "args": {"themes": ["AI"]},
+                    "name": "ingest_arxiv_papers",
+                    "args": {"paper_ids": ["2401.12345"]},
                 }
             ],
         )
-        state = _make_initial_state("create a draft about AI")
+        state = _make_initial_state("ingest paper 2401.12345")
         state["messages"].append(ai_msg)
         state["intent"] = "general"
 

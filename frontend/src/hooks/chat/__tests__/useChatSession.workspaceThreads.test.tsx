@@ -15,6 +15,10 @@ const navigationMocks = vi.hoisted(() => ({
 
 const authMocks = vi.hoisted(() => ({ isAuthenticated: true }));
 
+const persistenceMocks = vi.hoisted(() => ({
+  initialize: vi.fn().mockResolvedValue(undefined),
+}));
+
 const workspaceMocks = vi.hoisted(() => ({
   getOrCreateDefaultWorkspace: vi.fn(),
   getOrCreateDefaultConversation: vi.fn(),
@@ -26,7 +30,10 @@ const workspaceMocks = vi.hoisted(() => ({
 
 const chatStoreMocks = vi.hoisted(() => {
   const state = {
+    currentWorkspaceId: 'ws-1',
+    currentConversationId: 'conv-default',
     currentThreadId: null as string | null,
+    error: null as string | null,
     messages: {} as Record<string, ChatMessage[]>,
     messageFreshness: {} as Record<string, string>,
     messagePagination: {} as Record<string, never>,
@@ -64,7 +71,12 @@ vi.mock('@/services/workspaceService', () => ({
   workspaceService: workspaceMocks,
 }));
 
-vi.mock('@/store/chat-store', () => ({
+vi.mock('@/hooks/useChatPersistence', () => ({
+  useChatPersistence: () => ({ initialize: persistenceMocks.initialize }),
+}));
+
+vi.mock('@/store/chat-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/chat-store')>()),
   useChatStore: chatStoreMocks.useStore,
 }));
 
@@ -77,6 +89,7 @@ vi.mock('react-hot-toast', () => ({
 }));
 
 import { useChatSession } from '@/hooks/chat/useChatSession';
+import toast from 'react-hot-toast';
 
 function thread(id: string, conversationId: string, title = id): Thread {
   return {
@@ -143,6 +156,10 @@ describe('useChatSession workspace-wide thread pages', () => {
     authMocks.isAuthenticated = true;
     navigationMocks.threadId = null;
     navigationMocks.isNewChat = false;
+    window.history.replaceState({}, '', '/chat');
+    chatStoreMocks.state.currentWorkspaceId = 'ws-1';
+    chatStoreMocks.state.currentConversationId = 'conv-default';
+    chatStoreMocks.state.error = null;
     chatStoreMocks.state.currentThreadId = null;
     chatStoreMocks.state.setCurrentThread.mockImplementation(
       (threadId: string | null) => {
@@ -180,6 +197,8 @@ describe('useChatSession workspace-wide thread pages', () => {
       page: 1,
       limit: 50,
     });
+    expect(window.location.search).toBe('?thread=thread-new');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
     expect(workspaceMocks.listThreads).not.toHaveBeenCalled();
     expect(
       result.current.conversations.map((item) => item.conversationId)
@@ -202,6 +221,45 @@ describe('useChatSession workspace-wide thread pages', () => {
     });
     expect(workspaceMocks.listThreads).not.toHaveBeenCalled();
     expect(result.current.conversations[0].conversationId).toBe('conv-real');
+  });
+
+  it('syncs a thread selected during bare chat initialization into the URL', async () => {
+    const pendingPage = deferred<ThreadListResponse>();
+    workspaceMocks.listWorkspaceThreads.mockReturnValue(pendingPage.promise);
+    const { result } = renderHook(() => useChatSession());
+
+    await waitFor(() =>
+      expect(workspaceMocks.listWorkspaceThreads).toHaveBeenCalled()
+    );
+    act(() => {
+      chatStoreMocks.state.currentThreadId = 'thread-layout';
+    });
+    await act(async () => {
+      pendingPage.resolve(page([thread('thread-layout', 'conv-default')]));
+      await pendingPage.promise;
+    });
+
+    await waitFor(() => expect(result.current.isInitializing).toBe(false));
+    expect(window.location.search).toBe('?thread=thread-layout');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
+  });
+
+  it('syncs a thread selected after bare chat initialization into the URL once', async () => {
+    const { result, rerender } = renderHook(() => useChatSession());
+
+    await waitFor(() => expect(result.current.isInitializing).toBe(false));
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
+    const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
+
+    act(() => {
+      chatStoreMocks.state.currentThreadId = 'thread-layout';
+      rerender();
+    });
+
+    expect(window.location.search).toBe('?thread=thread-layout');
+    expect(replaceStateSpy).toHaveBeenCalledOnce();
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
+    replaceStateSpy.mockRestore();
   });
 
   it('upserts an overlapping next page by thread id without duplicating rows', async () => {
@@ -437,5 +495,36 @@ describe('useChatSession workspace-wide thread pages', () => {
     expect(
       workspaceMocks.getOrCreateDefaultConversation
     ).not.toHaveBeenCalled();
+  });
+
+  it('ignores a pagination error after the account session ends', async () => {
+    authMocks.isAuthenticated = false;
+    const { result } = renderHook(() => useChatSession());
+    await act(async () => {
+      await result.current.loadThreadsFromDb('ws-1');
+    });
+    let reject!: (error: Error) => void;
+    workspaceMocks.listWorkspaceThreads.mockReturnValueOnce(
+      new Promise((_resolve, rejectRequest) => {
+        reject = rejectRequest;
+      })
+    );
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.loadMoreThreads();
+    });
+    const { useChatStore: actualChatStore } =
+      await vi.importActual<typeof import('@/store/chat-store')>(
+        '@/store/chat-store'
+      );
+    act(() => {
+      actualChatStore.getState().reset();
+    });
+    vi.mocked(toast.error).mockClear();
+    await act(async () => {
+      reject(new Error('A private failure'));
+      await pending;
+    });
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

@@ -52,7 +52,7 @@ async def test_rest_ingest_does_not_persist_when_arxiv_returns_no_papers(monkeyp
     monkeypatch.setattr(core, "persist_arxiv_documents", persist)
 
     await core._process_arxiv_ingestion(
-        paper_ids=["missing"],
+        paper_ids=["2401.99999"],
         user_id="user-1",
         organization_id="org-A",
         download_pdfs=True,
@@ -60,5 +60,5 @@ async def test_rest_ingest_does_not_persist_when_arxiv_returns_no_papers(monkeyp
         batch_size=1,
     )
 
-    service.search_papers.assert_awaited_once_with(query="id:missing", max_results=1)
+    service.search_papers.assert_awaited_once_with(query="id:2401.99999", max_results=1)
     persist.assert_not_awaited()

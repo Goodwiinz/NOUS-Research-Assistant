@@ -1,141 +1,115 @@
 # CI and release workflows
 
-A successful Test Pipeline on `develop` starts `release-dev.yml`, which builds
-that exact source SHA and opens a digest-pinned GitOps pull request using the
-built-in `GITHUB_TOKEN`. No GitHub App private key or personal token is needed.
-The workflow dispatches Test Pipeline, Secret Scan, and Helm Validate at the
-proposal branch because token-created PR events require workflow approval.
-Merge the proposal after those checks pass; Argo CD then deploys the image.
+A successful full Test Pipeline push on `develop` starts `release-dev.yml`,
+which builds that exact source SHA and opens a digest-pinned GitOps pull request. PR creation
+uses `RELEASE_PR_TOKEN` when configured so the PR's workflow checks start
+normally. PRs created with the built-in `GITHUB_TOKEN` require a human to approve
+their workflow runs; manually dispatched workflows do not satisfy the PR's
+checks. If the secret is absent, creation falls back to `GITHUB_TOKEN` and emits
+a warning that the owner must approve the PR's workflow runs.
+
+The workflow validates the AWS Helm candidate and enables squash auto-merge
+for the proposal's exact head. GitHub waits for configured required checks and
+an up-to-date branch, then AWS Argo CD deploys the merged image from `develop`.
 Deployment-only commits are skipped to prevent a release loop.
+The proposed file is `values-aws.yaml`; `values-dev.yaml` is historical DO
+rollback material. All three AWS Argo CD definitions (`aws-dev`, `nous-dev-aws`,
+and `nous-dev-aws-ingress`) track `develop` with automated sync.
 
-Repository setup: enable **Actions > General > Workflow permissions > Allow
+After the source freshness check, promotion lists up to 100 open PRs based on
+`develop` and closes superseded proposals whose head starts with
+`codex/release-dev-`, deleting their branches and commenting with the new
+source's short SHA. The current proposal branch is excluded.
+
+Repository setup: enable **Allow auto-merge** and **Actions > General > Workflow permissions > Allow
 GitHub Actions to create and approve pull requests**. Keep default workflow
-permissions read-only. Only the promotion job requests contents, pull-request,
-and workflow-dispatch write permissions; it never approves or merges a PR,
-changes branch protection, or pushes to `develop`.
+permissions read-only. Only the promotion job requests `contents: write` and
+`pull-requests: write`. It requests auto-merge only for its generated release
+proposal, without bypassing branch rules or approving PRs.
+AWS Helm lint/render runs before the request because Helm Validate is not
+currently a required repository check.
 
-Keep **Require branches to be up to date before merging** enabled on
-`develop`. The required Lint Backend job checks each generated release
-branch against the current `develop` SHA. Together these reject a proposal
-if source advances during CI or before merge; updating the old branch does
-not make its old image eligible again.
+Create the repository Actions secret **`RELEASE_PR_TOKEN`** using a fine-grained
+personal access token restricted to **Goodwiinz/NOUS-Research-Assistant** with
+**Pull requests: read and write**. Use a token whose owner has access to this
+repository, with organization approval if required. The secret is used only
+for `gh pr create`; Git pushes, PR lookups, superseded-proposal cleanup, and
+auto-merge continue to use `GITHUB_TOKEN`. No GitHub App private key is needed.
+
+`develop` requires **Release Gate** from GitHub Actions and **Require branches
+to be up to date before merging** (restored 2026-10-01). Release preparation
+and promotion each verify the effective branch rule with a read-only preflight;
+missing protection fails before image construction or proposal creation.
+The Lint Backend job checks each generated release branch against the current
+`develop` SHA. Release Gate includes that job; these guards reject a proposal if
+source advances during CI or before merge; updating the old branch does not
+make its old image eligible again. Auto-merge only waits for checks that are
+actually required by the repository.
 
 ## Workflow responsibilities
 
 | Workflow | Trigger | Responsibility |
 | --- | --- | --- |
-| `test-pipeline.yml` | Push and pull request | Run all required checks and publish the exact `Release Gate` result. |
-| `release-dev.yml` | Completed successful Test Pipeline run on `develop` | Build the tested SHA and open a checked `values-dev.yaml` promotion PR. |
+| `test-pipeline.yml` | Push, pull request, or manual dispatch | Select affected PR checks; run full CI on protected-branch pushes and manual runs; publish the exact `Release Gate` result. |
+| `release-dev.yml` | Completed successful Test Pipeline push on `develop` | Build the tested SHA, validate AWS values, retire superseded proposals, and request auto-merge of a checked `values-aws.yaml` promotion PR. |
 | `docker-build.yml` | Reusable call or manual dispatch | Check out an explicit full SHA, assert `HEAD`, push the full-SHA trace tag, and return its digest. Called by `release-dev.yml`. |
-| `gitops-image-update.yml` | Manual dispatch only | Retained legacy production image update; it has no dev role. |
-| `deploy.yml` | Manual dispatch only | Retained legacy staging/production Helm path; it has no dev role and requires an explicit image tag. |
 | `helm-validate.yml` | Push and pull request | Validate the Helm chart and environment values. |
 | `workflow-lint.yml` | Workflow changes | Run `actionlint` across all workflows. |
+| `supabase-migrations.yml` | Push to `develop` touching `supabase/migrations/`, or manual dispatch | Apply pending Supabase migrations to the hosted project with `supabase db push` (repository secret `SUPABASE_DB_URL`; the job runs only on `develop`). |
 
-The frontend is deployed separately through Vercel. The backend, migration init
-container, Celery worker, Celery beat, and synthetic-traffic workloads share the
-same backend digest through the Helm image helper.
+The frontend deploys separately through Vercel. Its draft claims/release
+controls discover available operations from the deployed backend schema and
+stay unavailable until the required operations exist. The backend, AWS migration
+Job, Celery worker, Celery beat, and synthetic workloads share the same backend
+digest. AWS Argo waits for the wave-1 migration Job before wave-2 consumers;
+see the [chart contract](../../infrastructure/helm/knowledge-graph-analytics/README.md#database-migrations).
 
-## Removed: the original automatic dev release
+The retired manual staging/production deploy paths and duplicate deployment
+workflow tree have been removed. `trigger-deploy.yml` remains unchanged; its
+Trigger.dev production deployment is not part of the AWS dev release path.
 
-`release-dev.yml` ("Release Dev") implemented an exact-SHA dev release: on
-every successful `Test Pipeline` run on `develop` it would build a backend
-image via `docker-build.yml` and promote the digest onto a `deploy/dev` branch
-for Argo CD to pick up.
+## Change-based PR checks
 
-It was removed on 2026-08 because it never worked end to end and was costing
-real runner time for no benefit:
+Test Pipeline always runs and publishes **Release Gate**, including for
+documentation-only PRs. `CI Plan` reads the complete PR diff against the merge
+base of the live target branch. It includes deleted paths and both sides of a
+rename. Check selection depends on affected files, never the number of changed
+lines: a one-line dependency or workflow change still gets full CI.
 
-- `deploy/dev` was never seeded — the branch never existed, so the final
-  promotion step had nothing valid to push against.
-- The required App credential (`DEV_RELEASE_APP_ID` /
-  `DEV_RELEASE_APP_PRIVATE_KEY`) was never provisioned, so the "Promote
-  Immutable Dev Digest" step always failed with
-  `[@octokit/auth-app] appId option is required`.
-- Because `develop` CI had been red for weeks, the workflow only recently
-  started actually firing, and every green push was burning a full backend
-  image build (~17 minutes of runner time) that produced an image nothing
-  consumed, then failing.
+| PR profile | Changes | Blocking checks |
+| --- | --- | --- |
+| Documentation | Allowlisted root and directory docs, Markdown under `docs/`, and Claude command instructions | Directory-doc lint, script/NOUS contracts, CI selection, Release Gate and release-source regressions |
+| Frontend | Frontend files without shared dependency/build changes | Lightweight checks, frontend lint/types, frontend/terminal/harness tests, E2E smoke |
+| Backend | Backend files without shared dependency/build changes | Lightweight checks, backend lint, migration and OpenAPI contracts, security, unit/golden/integration/resilience tests, E2E smoke |
+| Full | Mixed frontend/backend changes, generated API contract artifacts, CI/scripts, shared dependencies/build files, infrastructure, unknown paths, or an empty diff | Lightweight checks and every existing blocking job |
 
-Argo CD's `nous-dev` Application (`infrastructure/argocd/applications/dev.yaml`)
-tracks `develop` directly and was never switched over to `deploy/dev`, so
-removing this workflow does not orphan any live deployment path.
+Markdown under `backend/src/` or `frontend/src/` is runtime content and stays in
+its code profile. The [supported agent workflows guide](../../docs/operations/agent-supported-workflows.md)
+also uses the backend profile because backend tests validate its limits and
+relative links. Combining that guide with frontend changes selects full CI.
+Release proposal branches (`codex/release-dev-<source SHA>`) always use full CI
+so the existing stale-source guard runs.
 
-### Design notes preserved for a deliberate reintroduction
+Every push to `develop`/`main` and every manual dispatch also uses full CI.
+This preserves the successful `develop` push as the release workflow's source
+verification. Release preparation explicitly rejects PR and manual runs even
+when their head branch is `develop`. The optimization currently applies to PRs
+only.
 
-The original workflow enforced a real chain of guarantees that any
-reintroduction should preserve:
+Release Gate requires exact success from CI Plan, Lightweight Checks, and all
+selected jobs. Only explicitly unselected jobs may be skipped; their summary
+rows say **not selected**. Missing results, failures, cancellations, unknown
+profiles/dependencies, and inconsistent plan outputs block the gate. The branch
+rule still requires Release Gate and an up-to-date branch.
 
-```text
-push to develop
-      |
-      v
-Test Pipeline at source SHA
-      |
-      | completed/success + Release Gate completed/success
-      v
-Release Dev (single writer)
-      |
-      +-- re-fetch develop; stop if source SHA is stale
-      |
-      +-- call Docker Build with that exact source SHA
-      |     `backend:<full-source-SHA>` is a trace tag
-      |     `sha256:...` is the immutable deployment identity
-      |
-      +-- validate Helm in a read-only job; stop if source SHA is stale
-      |
-      `-- on a fresh runner, prepare a bounded two-file commit
-            recheck develop, mint the App token only at the write boundary,
-            then force-with-lease only deploy/dev
+Run the selection and gate regressions without backend services:
+
+```bash
+python3 -m pytest backend/tests/unit/ci/test_ci_scope.py \
+  backend/tests/unit/ci/test_release_gate.py \
+  backend/tests/unit/ci/test_release_workflow.py \
+  --noconftest -c /dev/null -q -p no:cacheprovider --no-cov
 ```
-
-Release authorization relied on all of:
-
-1. The event being a completed, successful Test Pipeline `push` run for
-   `develop` in this repository.
-2. The producer run returned by the Actions API matching event, repository,
-   branch, `workflow_run.head_sha`, and `workflow_run.run_attempt`.
-3. The attempt-specific jobs endpoint returning exactly one producer job named
-   `Release Gate`, with status/conclusion exactly `completed`/`success` for
-   that SHA. A rerun could never borrow the gate result from another attempt.
-4. A fresh `develop` read still pointing to the tested SHA before build.
-5. Read-only Helm validation succeeding for the built digest, followed by
-   another `develop` check.
-6. A fresh promotion runner checking `develop` before preparing the bounded
-   commit and again immediately before minting a write token.
-
-It used a single concurrency group with cancellation, `force-with-lease` to
-protect `deploy/dev` from an undetected competing update, a short-lived
-GitHub App installation token minted only at the write boundary, and recorded
-per-build evidence (source SHA, producer run ID/attempt/URL, trace tag,
-digest, `release-evidence.json`, `release-dev.json`) in the release commit.
-
-**If you want to reintroduce this:** see the removed file's history —
-`git log --diff-filter=D -- .github/workflows/release-dev.yml` — for the full
-implementation, and re-provision the following before re-enabling it:
-
-1. A first-stage `develop` ruleset requiring pull requests, approval, and
-   resolved conversations, blocking direct pushes. Do not require `Release
-   Gate` as a status check yet — it has not produced a proven check run.
-2. Seed `deploy/dev` and add a ruleset that permits only a dedicated release
-   GitHub App to perform the workflow's non-fast-forward update, with no
-   bypass on `develop` or other protected source refs.
-3. Provision `DEV_RELEASE_APP_ID` (Actions variable) and
-   `DEV_RELEASE_APP_PRIVATE_KEY` (Actions secret) for that App, installed only
-   where release commits are needed, granted repository Contents write, and
-   run shadow releases.
-4. After one same-SHA green shadow run, extend the `develop` ruleset with the
-   required `Release Gate`, up-to-date branch, and secret-scanning
-   requirements.
-5. Only then consider cutting Argo CD's `nous-dev` Application over from
-   `develop` to `deploy/dev` — a separate, explicitly authorized operation
-   (pausing/re-enabling root auto-sync, manually syncing the cutover, and
-   collecting Application/revision and live pod `imageID` evidence).
-
-`docker-build.yml` and `gitops-image-update.yml` were deliberately left in
-place (see their own top-of-file comments) since neither self-triggers and
-both remain useful building blocks — the former as the reusable build step,
-the latter as the retired manual production-promotion path.
 
 ## Manual Docker build
 
@@ -162,10 +136,11 @@ incomplete and does not lint on its own.
 
 ```bash
 chart=infrastructure/helm/knowledge-graph-analytics
-for env in dev staging production; do
+for env in dev staging production aws; do
   helm lint "$chart" -f "$chart/values.yaml" -f "$chart/values-$env.yaml"
   helm template rag "$chart" \
     -f "$chart/values.yaml" -f "$chart/values-$env.yaml" >/dev/null
 done
 bash "$chart/tests/backend_image_digest_render_test.sh"
+python3 "$chart/tests/deployment_consistency_render_test.py"
 ```

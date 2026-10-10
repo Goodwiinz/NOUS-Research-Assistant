@@ -217,6 +217,7 @@ class TestProductionToolRegistryParity:
         "find_entity_paths",
         "get_graph_stats",
         "create_draft",
+        "revise_draft",
         "export_bibliography",
         "execute_code",
         "search_external_database",
@@ -251,6 +252,7 @@ class TestProductionToolRegistryParity:
             },
             "writing": {
                 "create_draft",
+                "revise_draft",
                 "get_current_draft",
                 "create_project_note",
                 "export_bibliography",
@@ -301,6 +303,7 @@ class TestProductionToolRegistryParity:
             },
             "writing": {
                 "create_draft",
+                "revise_draft",
                 "get_current_draft",
                 "create_project_note",
                 "export_bibliography",
@@ -321,9 +324,13 @@ class TestProductionToolRegistryParity:
                 # search, and lit-review requests classify as writing.
                 "search_external_database",
                 "list_external_databases",
+                # Resolve named accessible local sources and retrieve their
+                # authorized content from the writing lane.
+                "search_documents",
+                "do_kb_retrieve",
             },
             "data": {
-                # list_project_documents' _missing_project_error names this.
+                # list_project_documents needs a project_id; this finds one.
                 "list_projects",
                 "extract_entities",
                 "search_knowledge_graph",
@@ -380,7 +387,12 @@ class TestProductionToolRegistryParity:
             # Appended at positions 11 and 12 so the existing order is untouched.
             "search_external_database",
             "list_external_databases",
+            "revise_draft",
             "get_current_draft",
+            # Appended at positions 15 and 16 for named-source resolution and
+            # scoped content retrieval.
+            "search_documents",
+            "do_kb_retrieve",
         ]
         assert [
             item.name for item in TOOL_REGISTRY.descriptors_for_subgraph("data")
@@ -507,6 +519,7 @@ class TestProductionToolRegistryParity:
             "create_project",
             "create_project_note",
             "create_draft",
+            "revise_draft",
             "execute_code",
             "forget_memory",
         }
@@ -517,8 +530,10 @@ class TestProductionToolRegistryParity:
         } == {
             "ingest_arxiv_papers",
             "create_draft",
+            "revise_draft",
             "compare_documents",
             "search_arxiv",
+            "execute_code",
         }
         assert {
             descriptor.name
@@ -531,6 +546,7 @@ class TestProductionToolRegistryParity:
             "add_document_to_project",
             "create_project_note",
             "create_draft",
+            "revise_draft",
             "execute_code",
             "forget_memory",
         }

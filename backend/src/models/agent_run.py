@@ -96,6 +96,10 @@ class AgentRun(Base):
         nullable=True,
     )
 
+    execution_provider = Column(
+        String(16), nullable=False, default="nous", server_default="nous"
+    )
+
     # Lifecycle status; values constrained to the JobStatus domain.
     status = Column(String(32), nullable=False)
 
@@ -174,12 +178,15 @@ class AgentRun(Base):
             unique=True,
             postgresql_where=text(
                 "thread_id IS NOT NULL AND status IN "
-                "('queued', 'running', 'awaiting_confirmation', 'stopping')"
+                "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering')"
             ),
             sqlite_where=text(
                 "thread_id IS NOT NULL AND status IN "
-                "('queued', 'running', 'awaiting_confirmation', 'stopping')"
+                "('queued', 'running', 'awaiting_confirmation', 'stopping', 'recovering')"
             ),
+        ),
+        CheckConstraint(
+            "execution_provider IN ('nous', 'codex')", name="ck_agent_runs_provider"
         ),
         CheckConstraint(AGENT_RUN_STATUS_CHECK, name="ck_agent_runs_status"),
     )

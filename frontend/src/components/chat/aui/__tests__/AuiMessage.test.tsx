@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
   type RenderResult,
-} from '@testing-library/react';
+} from '@/test/test-utils';
 
 import { makeChatPageMessage } from '@/test/chatMessageFactory';
 import { ChatRuntimeProvider } from '../ChatRuntimeProvider';
@@ -464,11 +464,33 @@ describe('AuiAssistantMessage committed-path chrome (ChatBubble parity)', () => 
     expect(screen.getByText('Request accepted')).toBeInTheDocument();
     expect(screen.getByText('Drafting the response')).toBeInTheDocument();
   });
+
+  it('opens a persisted provider reasoning summary so it is visible after completion', () => {
+    renderByIndex([
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Prepared answer.',
+        timestamp: 2,
+        reasoningSummary: 'I compared the strongest retrieved sources.',
+      },
+    ]);
+
+    const trigger = screen.getByRole('button', {
+      name: /reasoning summary/i,
+    });
+    expect(trigger).toHaveAttribute('data-state', 'open');
+    expect(
+      screen.getByText('I compared the strongest retrieved sources.')
+    ).toBeInTheDocument();
+  });
 });
 
 describe('AuiMessageByIndex runtime-sync race', () => {
-  // Mutation proof: removing AuiMessageByIndex's runtimeMessageId mismatch
-  // guard must fail this test on the stale Approval needed dialog.
+  // Mutation proof: the row must only ever mount its own message. Identity
+  // addressing enforces that — a row can resolve solely its own runtime id —
+  // so reverting to index addressing (MessageByIndex renders whatever sits at
+  // the index) must fail this test on the stale Approval needed dialog.
   // From frontend: vitest run src/components/chat/aui/__tests__/AuiMessage.test.tsx -t 'stale approval'
   it('does not render a stale approval in a completed answer slot before runtime sync', async () => {
     const approval = makeChatPageMessage({
@@ -595,14 +617,13 @@ describe('AuiMessageByIndex runtime-sync race', () => {
   });
 
   it('renders nothing instead of throwing when the runtime shrinks under a mounted message (thread switch)', () => {
-    // Thread switch: the list mounts MessageByIndex(0) for thread A, then the
-    // active thread's messages are cleared/replaced. The external-store runtime
+    // Thread switch: the list mounts the row for thread A, then the active
+    // thread's messages are cleared/replaced. The external-store runtime
     // syncs post-commit, so for one frame the runtime empties while the
-    // still-mounted MessageByIndex(0) subscription re-reads its snapshot —
-    // useClientLookup(0) on an empty thread. The render-time count guard cannot
-    // catch this: the throw originates in the child's store-driven update, not
-    // the parent's render. Prod crash: "useClientLookup: Index 0 out of bounds
-    // (length: 0)" on thread switch.
+    // still-mounted row's subscription re-reads its snapshot. Identity
+    // addressing (Unstable_MessageById) renders null for that frame — no
+    // resolution against the empty thread, no throw. Prod crash this pins:
+    // "useClientLookup: Index 0 out of bounds (length: 0)" on thread switch.
     const msg = makeChatPageMessage({
       id: 'a1',
       role: 'assistant',
@@ -636,6 +657,67 @@ describe('AuiMessageByIndex runtime-sync race', () => {
     ).not.toThrow();
 
     expect(screen.queryByText('From thread A.')).not.toBeInTheDocument();
+  });
+
+  it('renders its own message while the runtime still holds it at a shifted index', async () => {
+    // Pagination/reconciliation lag frame: the page list has shifted the
+    // row's index, but the post-commit runtime sync still holds the row's
+    // message at a different position. Identity addressing renders the
+    // row's own message for that frame; index addressing either blanks the
+    // row (id-at-index mismatch) or resolves whatever message now sits at
+    // the index — the useClientLookup out-of-bounds crash path.
+    const user = makeChatPageMessage({
+      id: 'u1',
+      role: 'user',
+      content: 'question',
+      timestamp: 1,
+    });
+    const answer = makeChatPageMessage({
+      id: 'a1',
+      role: 'assistant',
+      content: 'Shifted but stable.',
+      timestamp: 2,
+    });
+
+    render(
+      <ChatRuntimeProvider
+        messages={[user, answer]}
+        isRunning={false}
+        onSend={noop}
+        onCancel={noop}
+      >
+        {/* The page already moved the answer to index 0; the runtime still
+            holds it at index 1. The row must show the answer, not nothing. */}
+        <AuiMessageByIndex index={0} message={answer} />
+      </ChatRuntimeProvider>
+    );
+
+    expect(await screen.findByText('Shifted but stable.')).toBeInTheDocument();
+  });
+
+  it('renders the runtime message at the index when no page message is threaded through', () => {
+    // Legacy/no-message callers (post-edit rerun) address the runtime row by
+    // index; the wrapper falls back to the runtime's own message id at that
+    // index, preserving that path under identity addressing.
+    const msg = makeChatPageMessage({
+      id: 'u1',
+      role: 'user',
+      content: 'Runtime-owned row.',
+      timestamp: 1,
+    });
+
+    render(
+      <ChatRuntimeProvider
+        messages={[msg]}
+        isRunning={false}
+        onSend={noop}
+        onCancel={noop}
+      >
+        <AuiMessageByIndex index={0} message={undefined} />
+      </ChatRuntimeProvider>
+    );
+
+    expect(screen.getByText('Runtime-owned row.')).toBeInTheDocument();
   });
 });
 
@@ -811,8 +893,8 @@ describe('AuiUserMessage inline edit-and-resend', () => {
 });
 
 describe('AuiAssistantMessage retry', () => {
-  // AuiAssistantMessage reads message scope off ThreadPrimitive.MessageByIndex
-  // context (mounting it directly throws "does not have a 'message'
+  // AuiAssistantMessage reads the message scope off the row's message
+  // provider (mounting it directly throws "does not have a 'message'
   // property"), so this drives it the same way the edit-and-resend tests
   // above drive AuiUserMessage: through AuiMessageByIndex inside a real
   // ChatRuntimeProvider, revealing the autohiding action bar via hover.

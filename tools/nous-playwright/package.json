@@ -3,13 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@10.18.2",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "auth": "node auth.mjs",
+    "test:auth": "node --test unit/auth.test.mjs",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:list": "playwright test --list",
     "report": "playwright show-report"
   },
-  "devDependencies": { "playwright": "1.62.1" }
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
 }

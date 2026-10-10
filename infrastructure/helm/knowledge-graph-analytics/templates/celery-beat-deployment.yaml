@@ -3,11 +3,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}-celery-beat
+  {{- if .Values.backend.migrations.enabled }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  {{- end }}
   labels:
     {{- include "knowledge-graph-analytics.labels" . | nindent 4 }}
     app.kubernetes.io/component: celery-beat
 spec:
-  replicas: 1
+  replicas: {{ .Values.celeryBeat.replicaCount | int }}
   strategy:
     type: Recreate
   selector:

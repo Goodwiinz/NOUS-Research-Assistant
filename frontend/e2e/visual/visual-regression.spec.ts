@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures/test-data.fixture';
 import { LoginPage, DocumentsPage, SearchPage, KnowledgeGraphPage } from '../utils/page-objects';
 
 /**
@@ -369,7 +369,8 @@ test.describe('Visual Regression Tests', () => {
   test.describe('Cross-browser Visual Consistency', () => {
     ['chromium', 'firefox', 'webkit'].forEach(browserName => {
       test.describe(`${browserName} visual consistency`, () => {
-        test.use({ ...devices['Desktop Chrome'] }); // Standard viewport for comparison
+        // Browser engine comes from the project; keep only a shared viewport.
+        test.use({ viewport: { width: 1280, height: 720 } });
 
         test(`${browserName}: Login page layout`, async ({ page }) => {
           await page.goto('/login');

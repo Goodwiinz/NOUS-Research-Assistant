@@ -38,6 +38,7 @@ import type { UseChatDrawerReturn } from '@/hooks/chat/useChatDrawer';
 import type { UseCitationPanelReturn } from '@/hooks/chat/useCitationPanel';
 import type { UseChatComposerActionsReturn } from '@/hooks/chat/useChatComposerActions';
 import type { UseSlashCommandsReturn } from '@/hooks/chat/useSlashCommands';
+import type { AgentStreamCallbacks } from '@/services/agentChatService';
 
 function wrapper({ children }: { children: ReactNode }): ReactElement {
   const client = new QueryClient({
@@ -52,13 +53,26 @@ vi.mock('next/navigation', () => ({
 }));
 
 const streamMessageMock = vi.fn();
+const cancelActiveRunMock = vi.fn();
+const listHarnessDevicesMock = vi.fn();
+const listHarnessWorkspacesMock = vi.fn();
 vi.mock('@/services/agentChatService', () => ({
   agentChatService: {
     streamMessage: (...args: unknown[]) => streamMessageMock(...args),
     streamConfirm: vi.fn(),
+    cancelActiveRun: (...args: unknown[]) => cancelActiveRunMock(...args),
     // The hook probes for a parked HITL confirmation on thread activation;
     // nothing is parked in these scenarios.
     resumeStream: vi.fn().mockResolvedValue({ status: 'idle' }),
+  },
+}));
+
+vi.mock('@/services/harnessService', () => ({
+  harnessService: {
+    listDevices: (...args: unknown[]) => listHarnessDevicesMock(...args),
+    listWorkspaces: (...args: unknown[]) => listHarnessWorkspacesMock(...args),
+    readRequest: vi.fn(),
+    decideRequest: vi.fn(),
   },
 }));
 
@@ -213,6 +227,10 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     streamMessageMock.mockReset();
+    cancelActiveRunMock.mockResolvedValue(undefined);
+    listHarnessDevicesMock.mockResolvedValue([]);
+    listHarnessWorkspacesMock.mockResolvedValue([]);
+    window.localStorage.clear();
     vi.mocked(workspaceService.getOrCreateDefaultWorkspace).mockResolvedValue({
       id: 'ws-A',
     } as never);
@@ -247,7 +265,11 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       title: 'Visible before preflight',
     } as never);
     streamMessageMock.mockResolvedValue(undefined);
-    useChatStore.setState({ currentThreadId: null });
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
 
     render(<OptimisticFirstSendHarness />, { wrapper });
     fireEvent.change(
@@ -276,17 +298,46 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
           .join(' ')
           .includes('useClientLookup: Index 0 out of bounds')
       )
-    ).toBe(true);
+    ).toBe(false);
+    // The optimistic first-send frame used to log exactly the transient
+    // out-of-bounds throw (plus React's "The above error occurred" echo)
+    // while the external-store runtime lagged the optimistic row. Rows are
+    // identity-addressed now, so that frame renders null instead — the
+    // crash signature must be gone AND nothing else may log an error.
     expect(
-      consoleError.mock.calls
-        .map((args) => args.map(String).join(' '))
-        .filter(
-          (message) =>
-            !/useClientLookup: Index 0 out of bounds|The above error occurred/i.test(
-              message
-            )
-        )
+      consoleError.mock.calls.map((args) => args.map(String).join(' '))
     ).toEqual([]);
+  });
+
+  it('keeps drafts isolated by thread, account, and workspace', async () => {
+    const params = makeParams();
+    const { result, rerender } = renderHook(
+      ({ workspaceId }: { workspaceId: string }) =>
+        useChatStreaming({
+          ...params,
+          workspace: { id: workspaceId, name: workspaceId } as never,
+        }),
+      { initialProps: { workspaceId: 'workspace-A' }, wrapper }
+    );
+
+    act(() => result.current.setInput('thread A draft'));
+    act(() => useChatStore.setState({ currentThreadId: 'thread-B' }));
+    await waitFor(() => expect(result.current.input).toBe(''));
+
+    act(() => result.current.setInput('thread B draft'));
+    act(() => useChatStore.setState({ currentThreadId: 'thread-A' }));
+    await waitFor(() => expect(result.current.input).toBe('thread A draft'));
+
+    act(() => useAuthStore.setState({ user: USER_B }));
+    await waitFor(() => expect(result.current.input).toBe(''));
+
+    act(() => result.current.setInput('account B draft'));
+    rerender({ workspaceId: 'workspace-B' });
+    await waitFor(() => expect(result.current.input).toBe(''));
+
+    act(() => result.current.setInput('workspace B draft'));
+    rerender({ workspaceId: 'workspace-A' });
+    await waitFor(() => expect(result.current.input).toBe('account B draft'));
   });
 
   it('a synchronous second handleSubmit call while the first is still in flight only fires streamMessage once', async () => {
@@ -334,6 +385,76 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
     expect(streamMessageMock).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a Codex Stop pending until the accepted run id arrives', async () => {
+    listHarnessDevicesMock.mockResolvedValue([
+      { id: 'device-a', label: 'My laptop' },
+    ]);
+    listHarnessWorkspacesMock.mockResolvedValue([
+      { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
+    ]);
+    const pendingStream = deferred<void>();
+    let callbacks: AgentStreamCallbacks | undefined;
+    let streamSignal: AbortSignal | undefined;
+    streamMessageMock.mockImplementation(
+      (
+        _request: unknown,
+        received: AgentStreamCallbacks,
+        signal: AbortSignal
+      ) => {
+        callbacks = received;
+        streamSignal = signal;
+        return pendingStream.promise;
+      }
+    );
+    const params = {
+      ...makeParams(),
+      dbConversation: { id: 'conversation-A' } as never,
+      workspace: { id: 'ws-A', name: 'Research' } as never,
+    };
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+    act(() => {
+      result.current.harnessConnection?.selectProvider('codex');
+    });
+    await waitFor(() =>
+      expect(result.current.harnessConnection?.devices).toHaveLength(1)
+    );
+    act(() => {
+      result.current.harnessConnection?.selectProvider('codex');
+      result.current.harnessConnection?.selectDevice('device-a');
+      result.current.harnessConnection?.selectWorkspace('workspace-a');
+    });
+    await waitFor(() =>
+      expect(result.current.harnessConnection?.canSend).toBe(true)
+    );
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.handleSubmit('Codex task');
+    });
+    await waitFor(() => expect(streamMessageMock).toHaveBeenCalledOnce());
+    expect(streamSignal).toBeDefined();
+
+    act(() => result.current.handleStop());
+    expect(streamSignal?.aborted).toBe(false);
+    expect(cancelActiveRunMock).not.toHaveBeenCalled();
+    expect(result.current.harnessConnection?.statusLabel).toBe('Stopping');
+
+    await act(async () => {
+      callbacks?.onRunId?.('run-codex');
+    });
+    await waitFor(() =>
+      expect(cancelActiveRunMock).toHaveBeenCalledWith('thread-A', 'run-codex')
+    );
+    expect(streamSignal?.aborted).toBe(false);
+    expect(result.current.harnessConnection?.statusLabel).toBe('Stopping');
+
+    await act(async () => {
+      callbacks?.onError?.('Codex stopped', 'cancelled');
+      pendingStream.resolve();
+      await submission;
+    });
+  });
+
   it('does not start streaming when Stop lands during first-thread creation', async () => {
     let finishThreadCreation!: (thread: unknown) => void;
     vi.mocked(workspaceService.createThread).mockImplementationOnce(
@@ -349,7 +470,11 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       displayedMessages: originalMessages,
       dbConversation: { id: 'conversation-A' } as never,
     };
-    useChatStore.setState({ currentThreadId: null });
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
     const { result } = renderHook(() => useChatStreaming(params), { wrapper });
 
     let submission!: Promise<void>;
@@ -576,4 +701,120 @@ describe('useChatStreaming submit single-flight (submitLockRef)', () => {
       }
     }
   );
+
+  it('keeps the originating draft when a superseded preflight settles late', async () => {
+    const pendingWorkspace = deferred<{ id: string }>();
+    vi.mocked(workspaceService.getOrCreateDefaultWorkspace).mockReturnValueOnce(
+      pendingWorkspace.promise as never
+    );
+    const params = makeParams();
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.handleSubmit('originating draft');
+    });
+    await waitFor(() =>
+      expect(
+        workspaceService.getOrCreateDefaultWorkspace
+      ).toHaveBeenCalledOnce()
+    );
+
+    act(() => {
+      useAuthStore.setState({ user: USER_B });
+      useChatStore.setState({ currentThreadId: 'thread-B' });
+      result.current.setInput('account B draft');
+    });
+    expect(result.current.input).toBe('account B draft');
+
+    act(() => result.current.handleStop());
+    await act(async () => {
+      pendingWorkspace.resolve({ id: 'workspace-A' });
+      await submission;
+    });
+
+    expect(result.current.input).toBe('account B draft');
+    expect(streamMessageMock).not.toHaveBeenCalled();
+
+    act(() => {
+      useAuthStore.setState({ user: USER_A });
+      useChatStore.setState({ currentThreadId: null });
+    });
+    await waitFor(() => expect(result.current.input).toBe('originating draft'));
+  });
+
+  it('keeps the originating draft when the same account changes threads mid-preflight', async () => {
+    const pendingWorkspace = deferred<{ id: string }>();
+    vi.mocked(workspaceService.getOrCreateDefaultWorkspace).mockReturnValueOnce(
+      pendingWorkspace.promise as never
+    );
+    const params = makeParams();
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.handleSubmit('originating draft');
+    });
+    await waitFor(() =>
+      expect(
+        workspaceService.getOrCreateDefaultWorkspace
+      ).toHaveBeenCalledOnce()
+    );
+
+    act(() => {
+      useChatStore.setState({ currentThreadId: 'thread-B' });
+      result.current.setInput('thread B draft');
+    });
+    expect(result.current.input).toBe('thread B draft');
+
+    act(() => result.current.handleStop());
+    await act(async () => {
+      pendingWorkspace.resolve({ id: 'workspace-A' });
+      await submission;
+    });
+
+    expect(result.current.input).toBe('thread B draft');
+    expect(streamMessageMock).not.toHaveBeenCalled();
+
+    act(() => useChatStore.setState({ currentThreadId: null }));
+    await waitFor(() => expect(result.current.input).toBe('originating draft'));
+  });
+
+  it('does not resurrect a sent first-chat prompt after starting New chat', async () => {
+    vi.mocked(workspaceService.createThread).mockResolvedValueOnce({
+      id: 'thread-created',
+      conversation_id: 'conversation-A',
+      title: 'Sent prompt',
+    } as never);
+    streamMessageMock.mockResolvedValue(undefined);
+    const params = {
+      ...makeParams(),
+      workspace: { id: 'workspace-A' } as never,
+      dbConversation: { id: 'conversation-A' } as never,
+    };
+    useChatStore.setState({
+      currentThreadId: null,
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { result } = renderHook(() => useChatStreaming(params), { wrapper });
+
+    await act(async () => {
+      await result.current.handleSubmit('already sent');
+    });
+    expect(streamMessageMock).toHaveBeenCalledOnce();
+
+    act(() => useChatStore.setState({ currentThreadId: null }));
+    await waitFor(() => expect(result.current.input).toBe(''));
+  });
 });

@@ -1,8 +1,8 @@
 name: Helm Validate
 
 # Lints and renders the knowledge-graph-analytics chart on PRs that touch it.
-# There is otherwise no PR-time Helm gate (deploy.yml only runs Helm at deploy),
-# so chart/template/values regressions could previously reach `develop` unseen.
+# This PR-time gate catches chart/template/values regressions before they reach
+# `develop`; release-dev.yml also validates the actual AWS promotion candidate.
 on:
   pull_request:
     paths:
@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Helm
-        # v3.0.0 — pinned for security (matches deploy.yml)
+        # v3.0.0 — pinned for security (matches release-dev.yml)
         uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
         with:
           version: "3.13.0"
@@ -39,7 +39,7 @@ jobs:
         # base file alone is intentionally incomplete (e.g. neo4j.image), so lint
         # each real combination rather than the base on its own.
         run: |
-          for env in dev staging production; do
+          for env in dev staging production aws; do
             echo "::group::helm lint ($env)"
             helm lint "$CHART" -f "$CHART/values.yaml" -f "$CHART/values-$env.yaml"
             echo "::endgroup::"
@@ -47,7 +47,7 @@ jobs:
 
       - name: Helm template (render sanity, all envs)
         run: |
-          for env in dev staging production; do
+          for env in dev staging production aws; do
             echo "::group::helm template ($env)"
             helm template rag "$CHART" -f "$CHART/values.yaml" -f "$CHART/values-$env.yaml" >/dev/null
             echo "::endgroup::"
@@ -61,3 +61,8 @@ jobs:
 
       - name: Pod disruption budget render assertions
         run: bash "$CHART/tests/pdb_render_test.sh"
+
+      - name: AWS rollout and environment assertions
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 "$CHART/tests/deployment_consistency_render_test.py"

@@ -560,36 +560,45 @@ class TestCitationTenancy:
         assert data["total"] == len(sample_citations)
 
     @pytest.mark.asyncio
-    async def test_list_excludes_other_users_private_document_citations(
+    async def test_list_includes_same_org_colleague_private_document_citations(
         self, async_client, test_db: AsyncSession, other_user
     ):
-        """W-A3: a citation anchored to another user's private document is
-        excluded by the SQL access filter (formerly the Python-side rule)."""
-        private_doc = Document(
-            id=uuid4(),
-            title="Private Doc",
-            filename="private.pdf",
-            file_path="/data/uploads/private.pdf",
-            file_size_bytes=1,
-            mime_type="application/pdf",
-            document_type=DocumentType.PDF,
-            uploaded_by_user_id=other_user.id,
-            organization_id=other_user.organization_id,
-            is_public=False,
-        )
-        test_db.add(private_doc)
+        """GOO-410: documents are organization-shared, so a citation anchored
+        to a same-org colleague's private document is listed and counted; the
+        same document soft-deleted is excluded from both."""
+        docs = {}
+        for key, deleted in (("shared", False), ("deleted", True)):
+            docs[key] = Document(
+                id=uuid4(),
+                title=f"Colleague {key} doc",
+                filename=f"{key}.pdf",
+                file_path=f"/data/uploads/{key}.pdf",
+                file_size_bytes=1,
+                mime_type="application/pdf",
+                document_type=DocumentType.PDF,
+                uploaded_by_user_id=other_user.id,
+                organization_id=other_user.organization_id,
+                is_public=False,
+                is_deleted=deleted,
+            )
+            test_db.add(docs[key])
         await test_db.flush()
-        hidden = Citation(
-            id=uuid4(),
-            document_id=private_doc.id,
-            document_title="Hidden citation",
-            metadata_source="manual",
-        )
-        test_db.add(hidden)
+        cits = {
+            key: Citation(
+                id=uuid4(),
+                document_id=doc.id,
+                document_title=f"Colleague {key} citation",
+                metadata_source="manual",
+            )
+            for key, doc in docs.items()
+        }
+        test_db.add_all(cits.values())
         await test_db.commit()
 
         response = await async_client.get("/api/v1/citations")
         assert response.status_code == 200
         data = response.json()
-        assert str(hidden.id) not in {c["id"] for c in data["citations"]}
-        assert data["total"] == 0
+        ids = {c["id"] for c in data["citations"]}
+        assert str(cits["shared"].id) in ids
+        assert str(cits["deleted"].id) not in ids
+        assert data["total"] == 1

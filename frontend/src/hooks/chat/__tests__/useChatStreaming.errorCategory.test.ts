@@ -256,9 +256,10 @@ describe('useChatStreaming confirm-path failure bubble', () => {
     expect(bubble?.error?.category).toBe('stream-error');
   });
 
-  it('keeps the raw failure text as the bubble content', async () => {
+  it('keeps raw failure text out of the bubble content', async () => {
     const bubble = await confirmWithError('checkpoint_unavailable');
-    expect(bubble?.content).toBe('Confirmation error: confirm exploded');
+    expect(bubble?.content).toBe('');
+    expect(bubble?.content).not.toContain('confirm exploded');
     expect(bubble?.error?.category).toBe('checkpoint_unavailable');
   });
 });

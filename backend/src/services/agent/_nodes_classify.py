@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -31,6 +32,12 @@ from langchain_core.runnables import RunnableConfig
 
 from src.services.agent._nodes_memory import memory_retrieval_node
 from src.services.agent._nodes_rag import _coerce_text, rag_node
+from src.services.agent.identity_ledger import (
+    MAX_HARVEST_MESSAGES,
+    MAX_REFERENCE_TEXT_CHARS,
+    harvest_legacy_tool_messages,
+    identity_references_from_text,
+)
 from src.services.agent.observability import (
     record_node_duration,
     tag_trace_intent,
@@ -63,37 +70,40 @@ def _prune_checkpoint_history(messages: List[Any]) -> List[RemoveMessage]:
 
 
 def _extract_prior_tool(messages: List[Any]) -> Optional[Dict[str, Any]]:
-    """Walk *messages* backwards and return the most recent tool call.
-
-    Returns a dict with keys ``name``, ``args``, and ``result`` (the matching
-    ToolMessage content as a string), or ``None`` if no tool call exists in
-    the conversation. Used to pass retry context to the intent classifier so
-    short follow-ups like "try again" route to the same intent as the prior
-    tool.
-    """
-    for ai_idx in range(len(messages) - 1, -1, -1):
+    """Return bounded tool outcomes from the immediately preceding user turn."""
+    user_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, HumanMessage)
+    ]
+    current_user_idx = user_indexes[-1] if user_indexes else len(messages)
+    previous_user_idx = user_indexes[-2] if len(user_indexes) > 1 else -1
+    for ai_idx in range(current_user_idx - 1, previous_user_idx, -1):
         msg = messages[ai_idx]
         if not isinstance(msg, AIMessage):
             continue
         tool_calls = getattr(msg, "tool_calls", None)
         if not tool_calls:
             continue
-        first = tool_calls[0]
-        tool_call_id = first.get("id")
-        result = ""
-        # Only scan AFTER the AIMessage we found — otherwise a stale
-        # ToolMessage from a previous turn that happens to share an id
-        # (or a synthetic placeholder) gets returned, misleading the
-        # classifier about what just happened.
+        results = {}
+        # Only match within this batch; never reuse a stale result with the
+        # same call ID from an earlier/later assistant or user turn.
         for follow in messages[ai_idx + 1 :]:
-            if isinstance(follow, ToolMessage) and follow.tool_call_id == tool_call_id:
-                result = str(follow.content)
+            if isinstance(follow, (AIMessage, HumanMessage)):
                 break
-        return {
-            "name": first.get("name", ""),
-            "args": first.get("args", {}) or {},
-            "result": result,
-        }
+            if isinstance(follow, ToolMessage):
+                results[follow.tool_call_id] = follow
+        calls = []
+        for call in tool_calls[-8:]:
+            result = results.get(call.get("id"))
+            calls.append(
+                {
+                    "name": call.get("name", ""),
+                    "result": result.content if result is not None else "",
+                    "status": getattr(result, "status", "missing"),
+                }
+            )
+        return {"calls": calls, "truncated": len(tool_calls) > 8}
     return None
 
 
@@ -205,6 +215,46 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
     - count this turn's first error against last turn's accumulated
       ``error_count``.
     """
+    messages = list(state.get("messages", []))
+    latest_human = next(
+        (
+            message
+            for message in reversed(messages[-MAX_HARVEST_MESSAGES:])
+            if isinstance(message, HumanMessage)
+        ),
+        None,
+    )
+    checkpointed_messages: list[Any] = []
+    operation_turn_id: str | None = None
+    if latest_human is not None:
+        message_id = getattr(latest_human, "id", None)
+        if not isinstance(message_id, str) or not message_id:
+            message_id = str(uuid.uuid4())
+            latest_human.id = message_id
+            checkpointed_messages = [latest_human]
+        if len(message_id) <= 128:
+            operation_turn_id = message_id
+
+    latest_user_text = (
+        latest_human.content[:MAX_REFERENCE_TEXT_CHARS]
+        if latest_human is not None and isinstance(latest_human.content, str)
+        else ""
+    )
+    identity_references = identity_references_from_text(
+        latest_user_text,
+        state.get("current_project_id"),
+        existing_ledger=state.get("identity_ledger"),
+    )
+    # Recover before any downstream LLM node trims the legacy message history.
+    # This is also run on resumed checkpoints, whose older ToolMessages may
+    # predate the ledger field.
+    recovered_identity_ledger = harvest_legacy_tool_messages(
+        messages,
+        state.get("identity_ledger"),
+        identity_references,
+        current_turn_id=operation_turn_id,
+    )
+
     results = await asyncio.gather(
         _timed_subtask("rag", rag_node(state, config)),
         _timed_subtask("classify", _classify_core(state, config)),
@@ -219,7 +269,9 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
     ]
     merged: dict = {
         # Per-turn resets — must come BEFORE merging subtask results so a
-        # subtask that explicitly sets one of these keys still wins.
+        # subtask that explicitly sets one of these keys still wins. In-graph
+        # on purpose: callers that bypass runtime_snapshot.turn_reset_fields
+        # (langgraph.json, evals) get them too.
         "plan": [],
         "plan_reasoning": "",
         "reflection_count": 0,
@@ -238,10 +290,22 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         # tool_calls "no response" exit). Reset both per turn.
         "compaction_count": 0,
         "_force_synthesis_fired": False,
+        # Never let a prior checkpoint's operation anchor authorize a legacy
+        # or unanchored new turn. Set the v1 pair again only when the current
+        # checkpointed HumanMessage has a stable id.
+        "tool_operation_protocol_version": 0,
+        "tool_operation_turn_id": "",
+        "identity_ledger": recovered_identity_ledger,
+        "identity_current_references": identity_references,
     }
+    if operation_turn_id is not None:
+        merged["tool_operation_protocol_version"] = 1
+        merged["tool_operation_turn_id"] = operation_turn_id
+    if checkpointed_messages:
+        merged["messages"] = checkpointed_messages
     removals = _prune_checkpoint_history(list(state.get("messages", [])))
     if removals:
-        merged["messages"] = removals
+        merged["messages"] = [*merged.get("messages", []), *removals]
     for result, default in zip(results, defaults):
         if isinstance(result, asyncio.CancelledError):
             # CancelledError is BaseException (not Exception) since 3.8, so the

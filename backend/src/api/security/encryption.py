@@ -17,13 +17,21 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, validator
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from src.auth.rbac_decorator import require_permission
-from src.core.database import get_db
-from src.core.dependencies import get_current_user, is_active_user
+from src.core.database import get_db_sync
+from src.core.dependencies import is_active_user, is_platform_operator
 from src.core.encryption import EncryptionError, EncryptionKeyType
+
+# audit I12: the analytics RBAC decorators module (deleted) expected an
+# AnalyticsPermission enum, not a list[str], and crashed (TypeError/500) for
+# every authenticated caller. Use the repo-canonical dependency instead — the
+# same one the compliance and RBAC-management routers use. No "encryption:*"
+# permission exists in SYSTEM_PERMISSIONS (src/models/permission.py), so the
+# closest existing permission, "system_admin", is required (sibling precedent:
+# compliance.py / rbac_management.py guard their most sensitive operations
+# with it).
+from src.middleware.rbac import require_permission_dep
 from src.models.organization import Organization
 from src.models.user import User
 from src.services.security.encryption_service import EncryptionService
@@ -170,21 +178,56 @@ class EncryptionValidationResponse(BaseModel):
     errors: List[str]
 
 
+# Tenant binding (GOO-406 E2)
+
+
+def _bind_caller_org(requested_org_id: Optional[UUID], current_user: User) -> UUID:
+    """Return the caller's own organization id.
+
+    A caller without an organization, or a different ``requested_org_id``,
+    is refused with 403: per-org ``system_admin`` and the legacy
+    ``users.role == "admin"`` are tenant roles and never authorize another
+    tenant's data (or a global view).
+    """
+    own_org_id = current_user.organization_id
+    if own_org_id is None:
+        # Never fall through to an unscoped (global) view.
+        raise HTTPException(
+            status_code=403,
+            detail="Organization context required",
+        )
+    if requested_org_id is not None and str(requested_org_id) != str(own_org_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized for another organization",
+        )
+    return own_org_id
+
+
+def _require_platform_operator(current_user: User, action: str) -> None:
+    """403 unless the caller is on the PLATFORM_OPERATOR_USER_IDS allowlist."""
+    if not is_platform_operator(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Platform operator access required to {action}",
+        )
+
+
 # API Endpoints
 
 
 @router.post("/profiles/user", response_model=Dict[str, Any])
-@require_permission(["encryption:manage"])
 async def encrypt_user_profile(
     request: UserProfileEncryptionRequest,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Encrypt user profile data
 
     This endpoint encrypts sensitive personal information in user profiles.
-    Requires encryption:manage permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -217,6 +260,8 @@ async def encrypt_user_profile(
             "encrypted_fields": list(request.profile_data.keys()),
         }
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Encryption failed: {e}")
         raise HTTPException(status_code=500, detail="Encryption failed")
@@ -226,34 +271,28 @@ async def encrypt_user_profile(
 
 
 @router.post("/profiles/organization", response_model=Dict[str, Any])
-@require_permission(["encryption:manage", "organization:manage"])
 async def encrypt_organization_profile(
     request: OrganizationProfileEncryptionRequest,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Encrypt organization profile data
 
     This endpoint encrypts sensitive business information in organization profiles.
-    Requires encryption:manage and organization:manage permissions.
+    Requires the system_admin permission (audit I12: no encryption:*
+    permission exists in SYSTEM_PERMISSIONS).
     """
     try:
         encryption_service = EncryptionService(db)
 
-        # Check if user has permission to encrypt the target organization's profile
-        if (
-            current_user.organization_id != request.organization_id
-            and current_user.role.value not in ["admin"]
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Not authorized to encrypt this organization's profile",
-            )
+        # GOO-406 E2: only the caller's own organization profile is writable.
+        organization_id = _bind_caller_org(request.organization_id, current_user)
 
         # Encrypt the profile
         encrypted_profile = encryption_service.encrypt_organization_profile(
-            organization_id=request.organization_id,
+            organization_id=organization_id,
             profile_data=request.profile_data,
             performed_by=current_user.id,
         )
@@ -265,6 +304,8 @@ async def encrypt_organization_profile(
             "encrypted_fields": list(request.profile_data.keys()),
         }
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Encryption failed: {e}")
         raise HTTPException(status_code=500, detail="Encryption failed")
@@ -274,17 +315,17 @@ async def encrypt_organization_profile(
 
 
 @router.post("/decrypt", response_model=Dict[str, Any])
-@require_permission(["encryption:decrypt"])
 async def decrypt_data(
     request: DecryptionRequest,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Decrypt sensitive data
 
     This endpoint decrypts sensitive data for authorized users.
-    Requires encryption:decrypt permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
@@ -317,15 +358,8 @@ async def decrypt_data(
             )
 
         elif request.resource_type == "organization_profile":
-            # Check if user can access this organization's data
-            if (
-                current_user.organization_id != request.resource_id
-                and current_user.role.value != "admin"
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Not authorized to decrypt this organization's data",
-                )
+            # GOO-406 E2: only the caller's own organization.
+            _bind_caller_org(request.resource_id, current_user)
 
             # Implementation for organization profile decryption would go here
             decrypted_data = {
@@ -347,6 +381,8 @@ async def decrypt_data(
             ),
         }
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Decryption failed: {e}")
         raise HTTPException(status_code=500, detail="Decryption failed")
@@ -356,39 +392,44 @@ async def decrypt_data(
 
 
 @router.post("/keys/rotate", response_model=KeyRotationResponse)
-@require_permission(["encryption:key_rotate"])
 async def rotate_encryption_key(
     request: KeyRotationRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Rotate encryption keys
 
     This endpoint rotates encryption keys for enhanced security.
-    Requires encryption:key_rotate permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
 
-        # Admin only for organization-scoped rotation
-        if request.organization_id and current_user.role.value != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can perform organization-scoped key rotation",
-            )
+        # GOO-406 E2: the DATA/FILE keys are process-global and
+        # rotate_encryption_keys re-encrypts every tenant's rows regardless of
+        # organization_id, so a real rotation is a platform action. A tenant
+        # system_admin may only dry-run, scoped to its own organization.
+        organization_id: Optional[UUID] = request.organization_id
+        if not is_platform_operator(current_user):
+            if not request.dry_run:
+                _require_platform_operator(current_user, "rotate encryption keys")
+            organization_id = _bind_caller_org(organization_id, current_user)
 
         # Perform key rotation
         rotation_results = encryption_service.rotate_encryption_keys(
             key_type=request.key_type,
             performed_by=current_user.id,
-            organization_id=request.organization_id,
+            organization_id=organization_id,
             dry_run=request.dry_run,
         )
 
         return KeyRotationResponse(**rotation_results)
 
+    except HTTPException:
+        raise
     except EncryptionError as e:
         logger.error(f"Key rotation failed: {e}")
         raise HTTPException(status_code=500, detail="Key rotation failed")
@@ -398,65 +439,57 @@ async def rotate_encryption_key(
 
 
 @router.get("/status", response_model=EncryptionStatusResponse)
-@require_permission(["encryption:view"])
 async def get_encryption_status(
     organization_id: Optional[UUID] = Query(
         None, description="Organization scope (admin only)"
     ),
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Get encryption status and statistics
 
     This endpoint returns the current encryption status and statistics.
-    Requires encryption:view permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
 
-        # Admin only for organization-scoped status
-        if organization_id and current_user.role.value != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can view organization-scoped encryption status",
-            )
-
-        # If not admin, limit to user's own organization
-        if current_user.role.value != "admin":
-            organization_id = current_user.organization_id
+        # GOO-406 E2: tenants see only their own organization; the global
+        # view (organization_id omitted) is reserved for platform operators.
+        if not is_platform_operator(current_user):
+            organization_id = _bind_caller_org(organization_id, current_user)
 
         status = encryption_service.get_encryption_status(organization_id)
 
         return EncryptionStatusResponse(**status)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/validate", response_model=EncryptionValidationResponse)
-@require_permission(["encryption:validate"])
 async def validate_encryption_integrity(
     sample_size: int = Query(10, ge=1, le=100, description="Number of records to test"),
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Validate encryption integrity
 
     This endpoint validates the integrity of encrypted data by testing sample records.
-    Requires encryption:validate permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         encryption_service = EncryptionService(db)
 
-        # Admin only for system-wide validation
-        if current_user.role.value not in ["admin"]:
-            raise HTTPException(
-                status_code=403,
-                detail="Only administrators can validate encryption integrity",
-            )
+        # GOO-406 E2: validation samples every tenant's encrypted rows.
+        _require_platform_operator(current_user, "validate encryption integrity")
 
         validation_results = encryption_service.validate_encryption_integrity(
             sample_size
@@ -464,26 +497,28 @@ async def validate_encryption_integrity(
 
         return EncryptionValidationResponse(**validation_results)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/audit/logs", response_model=List[Dict[str, Any]])
-@require_permission(["encryption:audit"])
 async def get_encryption_audit_logs(
     limit: int = Query(50, ge=1, le=500, description="Number of logs to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     operation_type: Optional[str] = Query(None, description="Filter by operation type"),
     resource_type: Optional[str] = Query(None, description="Filter by resource type"),
     current_user: User = Depends(is_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_sync),
+    _: str = Depends(require_permission_dep("system_admin")),
 ):
     """
     Get encryption audit logs
 
     This endpoint returns encryption operation audit logs.
-    Requires encryption:audit permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         from src.models.encrypted_user import EncryptionAuditLog
@@ -496,14 +531,12 @@ async def get_encryption_audit_logs(
         if resource_type:
             query = query.filter(EncryptionAuditLog.resource_type == resource_type)
 
-        # Non-admin users can only see logs for their own organization
-        if current_user.role.value != "admin":
-            query = query.filter(
-                or_(
-                    EncryptionAuditLog.performed_by == current_user.id,
-                    EncryptionAuditLog.organization_id == current_user.organization_id,
-                )
-            )
+        # GOO-406 E2: tenant callers see only their own organization's rows;
+        # the legacy users.role "admin" is per-org and no longer unscopes this.
+        # _bind_caller_org 403s an org-less caller (never an IS NULL filter).
+        if not is_platform_operator(current_user):
+            own_org_id = _bind_caller_org(None, current_user)
+            query = query.filter(EncryptionAuditLog.organization_id == own_org_id)
 
         # Apply pagination and ordering
         logs = (
@@ -533,19 +566,23 @@ async def get_encryption_audit_logs(
             for log in logs
         ]
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/config/sensitive-fields", response_model=List[str])
-@require_permission(["encryption:view"])
-async def get_sensitive_fields_config(current_user: User = Depends(is_active_user)):
+async def get_sensitive_fields_config(
+    current_user: User = Depends(is_active_user),
+    _: str = Depends(require_permission_dep("system_admin")),
+):
     """
     Get list of configured sensitive field patterns
 
     This endpoint returns the list of field patterns that are automatically encrypted.
-    Requires encryption:view permission.
+    Requires the system_admin permission (see module docstring, audit I12).
     """
     try:
         from src.middleware.encryption_middleware import EncryptionMiddleware
@@ -556,6 +593,8 @@ async def get_sensitive_fields_config(current_user: User = Depends(is_active_use
         )  # Create instance to access default fields
         return middleware.sensitive_fields + middleware.sensitive_patterns
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Internal server error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

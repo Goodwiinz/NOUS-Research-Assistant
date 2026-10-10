@@ -1,9 +1,10 @@
+import { useChatSessionGuard } from './useChatSessionGuard';
 import { useCallback } from 'react';
 import toast from 'react-hot-toast';
 
 import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
 import { enhancedDocumentService } from '@/services/enhancedDocumentService';
-import type { Workspace } from '@/types/workspace';
+import type { MessageAttachment, Workspace } from '@/types/workspace';
 
 // ============================================
 // HOOK PARAMS
@@ -16,7 +17,8 @@ export interface UseChatComposerActionsParams {
     contentOverride?: string,
     historyOverride?: ChatPageMessage[],
     supersedesClientMessageId?: string,
-    attachmentIds?: string[]
+    attachmentIds?: string[],
+    attachments?: MessageAttachment[]
   ) => Promise<void>;
   isLoading: boolean;
   storeIsStreaming: boolean;
@@ -46,10 +48,7 @@ export interface UseChatComposerActionsReturn {
    * carries a persisted `clientMessageId`, that id also rides along as
    * `supersedes_client_message_id` so the server durably tombstones the old
    * turn and everything after it. */
-  handleEditUserMessage: (
-    userMessageIndex: number,
-    newContent: string
-  ) => void;
+  handleEditUserMessage: (userMessageIndex: number, newContent: string) => void;
   retryLast: () => void;
   /** Bare submit — clears nothing, just forwards to the streaming path.
    * Callers that need to clear ephemeral output first (useSlashCommands)
@@ -75,12 +74,15 @@ export function useChatComposerActions({
   storeIsStreaming,
   displayedMessages,
 }: UseChatComposerActionsParams): UseChatComposerActionsReturn {
+  const isCurrentSession = useChatSessionGuard();
+
   // Upload files selected via the Paperclip attach control.
   // Uses enhancedDocumentService (v1 /files/upload) since no workspace-scoped
   // attach endpoint exists yet. Each upload is isolated via .catch so one
   // failure does not cancel others.
   const handleAttach = useCallback(
     async (files: FileList) => {
+      if (!isCurrentSession()) return [];
       if (!workspace) {
         console.warn('[Chat] Cannot attach: no workspace');
         toast.error('No workspace available — attachment was not uploaded.');
@@ -107,6 +109,7 @@ export function useChatComposerActions({
       // Promise.all preserves order, so the caller can zip these onto the
       // chips it created from the same FileList.
       const results = await Promise.all(uploads);
+      if (!isCurrentSession()) return [];
       const failed = results.filter((r) => !r.ok);
       if (failed.length > 0) {
         toast.error(
@@ -120,7 +123,7 @@ export function useChatComposerActions({
         ...(r.ok && r.documentId ? { documentId: r.documentId } : {}),
       }));
     },
-    [workspace]
+    [workspace, isCurrentSession]
   );
 
   // Regenerate a specific assistant turn — re-sends its prior user message
@@ -130,7 +133,7 @@ export function useChatComposerActions({
     (assistantMessageIndex: number) => {
       // Bail before preparing a replacement turn if a stream is in flight;
       // handleSubmit would otherwise reject it via its own single-flight guard.
-      if (isLoading || storeIsStreaming) return;
+      if (!isCurrentSession() || isLoading || storeIsStreaming) return;
       let priorUserIndex = -1;
       for (let index = assistantMessageIndex - 1; index >= 0; index -= 1) {
         if (displayedMessages[index]?.role === 'user') {
@@ -152,12 +155,28 @@ export function useChatComposerActions({
       // renders both answers after reconcile/reload. Omitted for legacy rows
       // with no persisted client_message_id (FE-only truncation, as before).
       const supersedes = priorUser.clientMessageId;
-      setTimeout(
-        () => handleSubmit(contentToSend, regenerationHistory, supersedes),
-        0
-      );
+      // Preserve attachments while fencing the deferred send to its account.
+      const attachments = priorUser.attachments;
+      const attachmentIds = attachments?.map((file) => file.document_id);
+      setTimeout(() => {
+        if (isCurrentSession())
+          void handleSubmit(
+            contentToSend,
+            regenerationHistory,
+            supersedes,
+            attachmentIds,
+            attachments
+          );
+      }, 0);
     },
-    [displayedMessages, handleSubmit, isLoading, storeIsStreaming, setInput]
+    [
+      displayedMessages,
+      handleSubmit,
+      isLoading,
+      storeIsStreaming,
+      setInput,
+      isCurrentSession,
+    ]
   );
 
   // Edit a prior user message in place and re-send it. The history is
@@ -166,7 +185,7 @@ export function useChatComposerActions({
   // handleSubmit drops non-optimistic overlays from newMessages automatically.
   const handleEditUserMessage = useCallback(
     (userMessageIndex: number, newContent: string) => {
-      if (isLoading || storeIsStreaming) return;
+      if (!isCurrentSession() || isLoading || storeIsStreaming) return;
       const content = newContent.trim();
       if (!content) return;
       const edited = displayedMessages[userMessageIndex];
@@ -179,14 +198,29 @@ export function useChatComposerActions({
       // client_message_id — a legacy row or one that never reached the server;
       // the FE-only truncation is then the same behaviour as before.
       const supersedes = edited.clientMessageId;
+      const attachments = edited.attachments;
+      const attachmentIds = attachments?.map((file) => file.document_id);
       // Pass content explicitly — setInput only schedules an update, and the
       // deferred handleSubmit would otherwise read the stale input value.
-      setTimeout(
-        () => handleSubmit(content, editedHistory, supersedes),
-        0
-      );
+      setTimeout(() => {
+        if (isCurrentSession())
+          void handleSubmit(
+            content,
+            editedHistory,
+            supersedes,
+            attachmentIds,
+            attachments
+          );
+      }, 0);
     },
-    [displayedMessages, handleSubmit, isLoading, storeIsStreaming, setInput]
+    [
+      displayedMessages,
+      handleSubmit,
+      isLoading,
+      storeIsStreaming,
+      setInput,
+      isCurrentSession,
+    ]
   );
 
   // Regenerate the most recent assistant response (the /retry command).
@@ -200,9 +234,10 @@ export function useChatComposerActions({
 
   const submit = useCallback(
     (attachmentIds?: string[]) => {
-      handleSubmit(undefined, undefined, undefined, attachmentIds);
+      if (isCurrentSession())
+        void handleSubmit(undefined, undefined, undefined, attachmentIds);
     },
-    [handleSubmit]
+    [handleSubmit, isCurrentSession]
   );
 
   return {

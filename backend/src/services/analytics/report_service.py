@@ -32,6 +32,7 @@ from src.models.analytics.analytics_models import (
 )
 from src.models.analytics.dashboard_models import Dashboard
 from src.models.base import GUID
+from src.utils.outbound_url_guard import assert_public_https_url
 
 logger = logging.getLogger(__name__)
 
@@ -683,6 +684,11 @@ class ReportGenerationService:
             logger.warning("No webhook URL specified")
             return
 
+        # GOO-409: user-supplied destination. Public https only; refuse private,
+        # loopback, link-local and metadata addresses (also on resolution).
+        # The default resolver blocks, so run the check off the event loop.
+        await asyncio.to_thread(assert_public_https_url, url)
+
         # Prepare payload
         payload = {
             "report_id": str(report.id),
@@ -697,16 +703,23 @@ class ReportGenerationService:
             async with aiofiles.open(file_path, "rb") as f:
                 file_data = await f.read()
 
-            files = {"file": (file_path.name, file_data)}
+            form = aiohttp.FormData()
+            for key, value in payload.items():
+                form.add_field(key, str(value))
+            form.add_field("file", file_data, filename=file_path.name)
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=payload, files=files) as response:
+                async with session.post(
+                    url, data=form, allow_redirects=False
+                ) as response:
                     if response.status != 200:
                         logger.error(f"Webhook failed with status {response.status}")
                     else:
                         logger.info("Webhook delivered successfully")
         else:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as response:
+                async with session.post(
+                    url, json=payload, allow_redirects=False
+                ) as response:
                     if response.status != 200:
                         logger.error(f"Webhook failed with status {response.status}")
                     else:

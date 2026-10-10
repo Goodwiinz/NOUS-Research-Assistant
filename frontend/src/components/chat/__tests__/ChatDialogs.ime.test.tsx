@@ -14,7 +14,12 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { ChatDialogs } from '../ChatDialogs';
 
 const baseProps = {
-  renameDialog: { open: true, threadId: 't1', currentTitle: 'old', value: 'にほんご' },
+  renameDialog: {
+    open: true,
+    threadId: 't1',
+    currentTitle: 'old',
+    value: 'にほんご',
+  },
   setRenameDialog: vi.fn(),
   commitRename: vi.fn(),
   deleteDialog: { open: false, threadId: null },
@@ -29,6 +34,12 @@ describe('ChatDialogs rename IME safety', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     render(<ChatDialogs {...baseProps} />);
+  });
+
+  it('gives the rename textbox an accessible name', () => {
+    expect(
+      screen.getByRole('textbox', { name: 'Thread name' })
+    ).toBeInTheDocument();
   });
 
   it('does not rename on Enter while an IME composition is active', () => {

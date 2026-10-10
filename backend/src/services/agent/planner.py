@@ -10,11 +10,12 @@ Pydantic models.
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Union
 
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from src.services.agent._sanitize import _sanitize_prompt_field, sanitize_page_context
 from src.services.agent.llm_factory import build_lightweight_llm
@@ -186,7 +187,7 @@ def _is_grounded_summary_flow(query: str) -> bool:
 class PlanStep(BaseModel):
     """A single step in an agent execution plan."""
 
-    step: int
+    step: StrictInt
     description: str
     # ``tool`` is conceptually required but LLMs occasionally emit a final
     # "summarize / present results" step with no tool. Default to "" so the
@@ -198,7 +199,7 @@ class PlanStep(BaseModel):
     # a string like "query='X'; max_results=5" which failed strict dict
     # validation with 5 errors. Accept both; downstream consumers normalize.
     args_hint: Union[dict, str] = Field(default_factory=dict)
-    depends_on: list[int] = Field(default_factory=list)
+    depends_on: list[StrictInt] = Field(default_factory=list)
 
 
 class AgentPlan(BaseModel):
@@ -208,6 +209,117 @@ class AgentPlan(BaseModel):
     # Some models omit the top-level reasoning field even when explicitly
     # asked for it. Don't fail the whole plan over a missing rationale.
     reasoning: str = ""
+    outcome: str = "supported"
+    missing_capabilities: list[str] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlanValidation:
+    """Safe validation result; model-authored prose never crosses the gate."""
+
+    plan: list[dict[str, Any]] | None
+    unavailable_tools: tuple[str, ...] = ()
+    malformed: bool = False
+    unsupported: bool = False
+
+
+def validate_plan(
+    plan: AgentPlan | list[dict[str, Any]] | None,
+    allowed_names: set[str] | frozenset[str],
+) -> PlanValidation:
+    """Validate the complete plan before any length-based suppression."""
+    if plan is None:
+        return PlanValidation(plan=None, malformed=True)
+    if isinstance(plan, list) and any(
+        isinstance(item, dict)
+        and (
+            isinstance(item.get("step"), bool)
+            or (
+                isinstance(item.get("depends_on"), list)
+                and any(
+                    isinstance(dependency, bool) for dependency in item["depends_on"]
+                )
+            )
+        )
+        for item in plan
+    ):
+        # Python treats bool as an int, and Pydantic's ordinary int parser
+        # coerces it before the later structural checks can see the input.
+        return PlanValidation(plan=None, malformed=True)
+    try:
+        parsed = (
+            plan
+            if isinstance(plan, AgentPlan)
+            else AgentPlan.model_validate({"steps": plan})
+        )
+    except Exception:
+        return PlanValidation(plan=None, malformed=True)
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    if parsed.outcome != "supported":
+        if parsed.outcome == "unsupported":
+            known = tuple(
+                sorted(
+                    {
+                        name.strip()
+                        for name in parsed.missing_capabilities
+                        if isinstance(name, str)
+                        and name.strip()
+                        and TOOL_REGISTRY.descriptor(name.strip()) is not None
+                    }
+                )[:8]
+            )
+            return PlanValidation(plan=None, unavailable_tools=known, unsupported=True)
+        return PlanValidation(plan=None, malformed=True)
+
+    steps = parsed.steps
+    seen: set[int] = set()
+    previous = 0
+    unavailable: set[str] = set()
+    unregistered = False
+    validated: list[dict[str, Any]] = []
+    for step in steps:
+        if (
+            isinstance(step.step, bool)
+            or step.step <= 0
+            or step.step in seen
+            or step.step <= previous
+            or not step.description.strip()
+        ):
+            return PlanValidation(plan=None, malformed=True)
+        seen.add(step.step)
+        previous = step.step
+    for step in steps:
+        if any(isinstance(dependency, bool) for dependency in step.depends_on):
+            return PlanValidation(plan=None, malformed=True)
+        if len(set(step.depends_on)) != len(step.depends_on):
+            return PlanValidation(plan=None, malformed=True)
+        if any(
+            dependency not in seen or dependency >= step.step
+            for dependency in step.depends_on
+        ):
+            return PlanValidation(plan=None, malformed=True)
+        tool_name = step.tool.strip()
+        # "N/A" is the model's no-tool marker for a summarise/present step.
+        if tool_name.upper() == "N/A":
+            tool_name = ""
+        if tool_name and tool_name not in allowed_names:
+            # R8-A5: only a REGISTERED tool missing from this branch is a real
+            # capability gap. A name the registry has never heard of is
+            # planner noise — drop the plan, don't end the turn.
+            if TOOL_REGISTRY.descriptor(tool_name) is None:
+                unregistered = True
+            else:
+                unavailable.add(tool_name)
+        validated.append({**step.model_dump(), "tool": tool_name})
+    if unavailable:
+        # Only canonical tool names are returned to the terminal renderer.
+        return PlanValidation(
+            plan=None, unavailable_tools=tuple(sorted(unavailable)), unsupported=True
+        )
+    if unregistered:
+        return PlanValidation(plan=None, malformed=True)
+    return PlanValidation(plan=validated)
 
 
 # ---------------------------------------------------------------------------
@@ -277,11 +389,18 @@ async def generate_plan(
         "them (e.g. search_arxiv → ingest_arxiv_papers) BEFORE any step that "
         "summarizes, drafts, or saves notes about them — a write step must "
         "depend_on the resolve/ingest steps.\n"
+        "create_draft normally returns a completed terminal result, but may "
+        "return pending after its bounded wait. Later dependent steps may run "
+        "only after a completed result; a pending result is terminal for the turn. "
+        "revise_draft is synchronous.\n"
+        "If the requested composition cannot be represented by these tools, "
+        "return outcome='unsupported', no steps, and at most eight canonical "
+        "tool names in missing_capabilities. Otherwise set outcome='supported'. "
         "Also provide a top-level ``reasoning`` string explaining the "
         "overall approach (required)."
     )
 
-    result = await structured_llm.ainvoke(
+    result: AgentPlan = await structured_llm.ainvoke(
         [HumanMessage(content=prompt)], config=internal_llm_config()
     )
     return result
@@ -347,7 +466,10 @@ def render_plan_directive(plan: list[dict] | None) -> str | None:
         "documents to already be resolved + ingested — if the plan lists a "
         "write step before the sources exist, run the search/ingest steps "
         "FIRST, then the write. Never write a note/draft/summary for a paper "
-        "you only have a title for.\n"
+        "you only have a title for. After create_draft, execute later planned "
+        "steps only when its result is completed; a pending result is terminal "
+        "for this turn. "
+        "revise_draft is synchronous.\n"
         f"{plan_block}"
     )
 
@@ -358,7 +480,9 @@ def render_plan_directive(plan: list[dict] | None) -> str | None:
 
 
 def make_planner_node(
-    tool_names: list[str],
+    tool_names: list[str] | Callable[[Dict[str, Any]], list[str]],
+    *,
+    branch: str = "main",
 ) -> Callable:
     """Return a LangGraph node function that conditionally plans.
 
@@ -370,12 +494,62 @@ def make_planner_node(
     3. Returns the plan as serialized dicts when it has 3+ steps.
     """
 
+    branch_name = str(getattr(tool_names, "__agent_branch__", branch))
+
     async def planner_node(state: Dict[str, Any], config: RunnableConfig) -> dict:
+        allowed_tool_names = (
+            tool_names(state) if callable(tool_names) else list(tool_names)
+        )
+
+        from src.services.agent.tools import TOOL_REGISTRY
+
+        current_registry = TOOL_REGISTRY.metadata_snapshot()
+        if state.get("runtime_projection_unavailable") or (
+            state.get("runtime_snapshot_id")
+            and (
+                state.get("tool_registry_hash") != current_registry["hash"]
+                or state.get("tool_registry_version") != current_registry["version"]
+                or not isinstance(state.get("runtime_tool_names"), list)
+            )
+        ):
+            return {
+                "plan": [],
+                "capability_limitation": {
+                    "branch": branch_name,
+                    "unavailable_tools": [],
+                    "kind": "runtime",
+                    "reason": "The saved tool runtime for this confirmation is unavailable.",
+                },
+            }
+
         # Skip if a plan already exists for THIS turn. ``preprocessing_node``
         # clears stale plans at the start of every new user turn, so any
         # ``state["plan"]`` we see here was produced by an earlier pass
         # within the current turn (e.g. a revise loop) and must be reused.
         if state.get("plan"):
+            validation = validate_plan(state.get("plan"), set(allowed_tool_names))
+            if validation.unavailable_tools:
+                return {
+                    "plan": [],
+                    "capability_limitation": {
+                        "branch": branch_name,
+                        "unavailable_tools": list(validation.unavailable_tools),
+                        "kind": "plan",
+                        "reason": "The stored plan requests an operation unavailable in this workflow.",
+                    },
+                }
+            if validation.unsupported:
+                return {
+                    "plan": [],
+                    "capability_limitation": {
+                        "branch": branch_name,
+                        "unavailable_tools": list(validation.unavailable_tools),
+                        "kind": "plan",
+                        "reason": "The planner cannot represent the requested composition with this workflow.",
+                    },
+                }
+            if validation.malformed:
+                return {"plan": [], "plan_reasoning": ""}
             return {}
 
         # Plans only matter when there's a project context to organize the
@@ -427,7 +601,7 @@ def make_planner_node(
         # into the prompt, which returns empty steps for simple queries).
         try:
             plan = await asyncio.wait_for(
-                generate_plan(query, tool_names, page_context),
+                generate_plan(query, allowed_tool_names, page_context),
                 timeout=PLANNER_LLM_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
@@ -448,12 +622,36 @@ def make_planner_node(
         # later passes and confuse reflection-prompt rendering). ``plan``
         # may be ``None`` if the structured-output LLM call returned an
         # unparseable response without raising.
-        if plan is None or len(plan.steps) < 3:
+        validation = validate_plan(plan, set(allowed_tool_names))
+        if validation.unavailable_tools:
+            return {
+                "plan": [],
+                "capability_limitation": {
+                    "branch": branch_name,
+                    "unavailable_tools": list(validation.unavailable_tools),
+                    "kind": "plan",
+                    "reason": "The planner requests an operation unavailable in this workflow.",
+                },
+            }
+        if validation.unsupported:
+            return {
+                "plan": [],
+                "capability_limitation": {
+                    "branch": branch_name,
+                    "unavailable_tools": list(validation.unavailable_tools),
+                    "kind": "plan",
+                    "reason": "The planner cannot represent the requested composition with this workflow.",
+                },
+            }
+        if validation.malformed or validation.plan is None:
+            logger.info("Planner returned malformed plan; continuing without a plan")
+            return {"plan": [], "plan_reasoning": ""}
+        if len(validation.plan) < 3:
             logger.info("Planner judged query simple (<3 steps); no plan stored")
             return {}
 
         return {
-            "plan": [step.model_dump() for step in plan.steps],
+            "plan": validation.plan,
             "plan_reasoning": (plan.reasoning or "")[:2000],
         }
 

@@ -16,6 +16,7 @@ from src.core.dependencies import get_current_user
 from src.models.user import User
 from src.services.arxiv.arxiv_kg_integration import ArXivKnowledgeGraphIntegration
 from src.services.arxiv.arxiv_service import ArXivIngestionService
+from src.services.expensive_work_admission import metered_expensive_work
 from src.services.processing.entity_extraction_service import EntityExtractionService
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ def _serialize_entities(entities: List[Any]) -> Dict[str, Any]:
 
 
 @router.post("/extract-features")
+@metered_expensive_work
 async def extract_paper_features(
     request: ExtractionRequest,
     background_tasks: BackgroundTasks,
@@ -114,6 +116,15 @@ async def extract_paper_features(
 
     The extraction can be performed synchronously or asynchronously in the background.
     """
+    return await _extract_paper_features(request, background_tasks, current_user)
+
+
+async def _extract_paper_features(
+    request: ExtractionRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User,
+):
+    """Extract papers after the calling HTTP endpoint has admitted the work."""
     try:
         logger.info(f"Starting feature extraction for {len(request.paper_ids)} papers")
 
@@ -404,6 +415,7 @@ async def get_extracted_features(
 
 
 @router.post("/bulk-extract")
+@metered_expensive_work
 async def bulk_extract_features(
     request: dict, current_user: User = Depends(get_current_user)
 ):
@@ -414,7 +426,8 @@ async def bulk_extract_features(
         # Extract parameters from request body
         categories = request.get("categories", [])
         days_back = request.get("days_back", 7)
-        max_papers = request.get("max_papers", 100)
+        # Only the first 50 are extracted below; never search past that.
+        max_papers = min(int(request.get("max_papers", 50)), 50)
         extraction_options = request.get("extraction_options", {})
 
         logger.info(f"Starting bulk extraction for categories: {categories}")
@@ -447,7 +460,7 @@ async def bulk_extract_features(
 
         # Process extraction
         bulk_background_tasks = BackgroundTasks()
-        result = await extract_paper_features(
+        result = await _extract_paper_features(
             request=extraction_request,
             background_tasks=bulk_background_tasks,
             current_user=current_user,

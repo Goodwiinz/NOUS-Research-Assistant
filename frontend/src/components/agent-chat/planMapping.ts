@@ -31,6 +31,28 @@ export function deriveStepStatus(
   occurrence = 0,
   occurrencesForTool = 1
 ): string {
+  const status = deriveStepExecutionStatus(
+    step,
+    toolExecutions,
+    occurrence,
+    occurrencesForTool
+  );
+  if (!status) return 'pending';
+  if (status === 'running') return 'in-progress';
+  if (status === 'completed') return 'completed';
+  // R4-L20: 'cancelled' (stopped/superseded mid-run) is terminal, same as
+  // 'failed' — the plan UI has no separate vocabulary for it, and mapping
+  // to 'pending' made a stopped step look like it hadn't started.
+  if (status === 'failed' || status === 'cancelled') return 'failed';
+  return 'pending';
+}
+
+export function deriveStepExecutionStatus(
+  step: PlanStep,
+  toolExecutions: ToolExecution[],
+  occurrence = 0,
+  occurrencesForTool = 1
+): ToolExecution['status'] | undefined {
   const matching = toolExecutions.filter((te) => te.toolName === step.tool);
   // A plan can name the same tool in several steps (2x search_documents is
   // common); correlate positionally so one execution can't complete every
@@ -46,15 +68,7 @@ export function deriveStepStatus(
   // The newest attempt decides: a retry that succeeded is not a failed step,
   // and a failure after an earlier success is not a completed one.
   const newest = window[window.length - 1];
-  if (!newest) return 'pending';
-  if (newest.status === 'running') return 'in-progress';
-  if (newest.status === 'completed') return 'completed';
-  // R4-L20: 'cancelled' (stopped/superseded mid-run) is terminal, same as
-  // 'failed' — the plan UI has no separate vocabulary for it, and mapping
-  // to 'pending' made a stopped step look like it hadn't started.
-  if (newest.status === 'failed' || newest.status === 'cancelled')
-    return 'failed';
-  return 'pending';
+  return newest?.status;
 }
 
 /** Renders the planner's `args_hint` as a compact single-line summary. */

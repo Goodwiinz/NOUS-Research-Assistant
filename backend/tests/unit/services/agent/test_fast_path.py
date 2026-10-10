@@ -14,6 +14,7 @@ def _decide(
     page_type: str = "chat",
     project_id: str | None = None,
     history: list | None = None,
+    has_attachments: bool = False,
 ):
     from src.services.agent.fast_path import classify_fast_path_turn
 
@@ -23,12 +24,115 @@ def _decide(
         page_context={"type": page_type, "project_id": project_id},
         use_rag=use_rag,
         max_input_chars=8_000,
+        has_attachments=has_attachments,
     )
 
 
 @pytest.mark.parametrize("content", ["hi", "Thanks!", "okay", "goodbye"])
 def test_bare_conversation_uses_fast_path_even_when_rag_toggle_is_on(content):
     decision = _decide(content, use_rag=True)
+
+    assert decision.eligible is True
+    assert decision.reason == "bare_conversation"
+
+
+def test_ack_accepting_proposal_on_project_page_fails_closed():
+    """R8-A4 (GOO-366): "ok" may accept a proposed tool action — needs tools."""
+    from src.services.agent.fast_path import classify_fast_path_turn
+
+    decision = classify_fast_path_turn(
+        messages=[
+            _message("assistant", "Shall I ingest these?"),
+            _message("user", "ok"),
+        ],
+        page_context={
+            "type": "project",
+            "project_id": "4a370aff-0347-4e51-8cf5-e67999232b47",
+        },
+        use_rag=True,
+        max_input_chars=8_000,
+    )
+
+    assert decision.eligible is False
+
+
+@pytest.mark.parametrize(
+    "assistant",
+    [
+        "Shall I ingest these 3 papers?",
+        "I found 3 papers. Would you like me to add them? 1. A 2. B 3. C",
+        "I can ingest these for you, just let me know.",
+        "Want me to proceed with the import",
+        "I can search for more results if you'd like.",
+        "I can ingest these for you.",
+        "I could add them to your project.",
+        "Happy to summarize the second paper too.",
+        "If you\u2019d like, I\u2019ll compare them.",
+    ],
+)
+@pytest.mark.parametrize("ack", ["ok", "Okay!", "great", "thanks"])
+def test_ack_answering_assistant_question_or_proposal_fails_closed(ack, assistant):
+    decision = _decide(ack, use_rag=True, history=[_message("assistant", assistant)])
+
+    assert decision.eligible is False
+    assert decision.reason == "ack_may_accept_proposal"
+
+
+@pytest.mark.parametrize("page_type", ["project", "documents"])
+def test_ack_on_grounded_page_fails_closed(page_type):
+    decision = _decide(
+        "ok",
+        use_rag=True,
+        page_type=page_type,
+        history=[_message("assistant", "Here is the summary.")],
+    )
+
+    assert decision.eligible is False
+    assert decision.reason == "grounded_page_context"
+
+
+@pytest.mark.parametrize(
+    "assistant",
+    [
+        "Here are the results.",
+        "I can't find that paper in your library.",
+        "I cannot access live sources.",
+        "I could not find a match.",
+    ],
+)
+def test_ack_after_statement_or_refusal_keeps_fast_path(assistant):
+    decision = _decide(
+        "thanks", use_rag=True, history=[_message("assistant", assistant)]
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "bare_conversation"
+
+
+def test_ack_after_plain_statement_keeps_fast_path():
+    decision = _decide(
+        "thanks!",
+        use_rag=True,
+        history=[
+            _message("assistant", "Would you like a summary?"),
+            _message("user", "yes"),
+            _message("assistant", "Here is the summary."),
+        ],
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "bare_conversation"
+
+
+@pytest.mark.parametrize("content", ["hi", "Hello!", "bye"])
+def test_greeting_keeps_fast_path_after_proposal_on_project_page(content):
+    decision = _decide(
+        content,
+        use_rag=True,
+        page_type="project",
+        project_id="4a370aff-0347-4e51-8cf5-e67999232b47",
+        history=[_message("assistant", "Shall I ingest these?")],
+    )
 
     assert decision.eligible is True
     assert decision.reason == "bare_conversation"
@@ -56,6 +160,17 @@ def test_explicit_rag_fails_closed_for_non_conversational_question():
 
     assert decision.eligible is False
     assert decision.reason == "rag_requested"
+
+
+def test_attachment_turn_fails_closed_to_grounded_graph_path_when_rag_is_off():
+    decision = _decide(
+        "What is the launch code?",
+        use_rag=False,
+        has_attachments=True,
+    )
+
+    assert decision.eligible is False
+    assert decision.reason == "attachments_require_grounding"
 
 
 @pytest.mark.parametrize("page_type", ["project", "documents"])

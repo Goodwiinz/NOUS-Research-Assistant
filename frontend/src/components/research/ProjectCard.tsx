@@ -8,6 +8,7 @@ import {
   FolderKanban,
   MoreHorizontal,
   Trash2,
+  Workflow,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -21,6 +22,7 @@ import type { Project } from '@/services/projectService';
 export interface ProjectCardProps {
   project: Project;
   onOpen: (projectId: string) => void;
+  onOpenWorkflow?: (projectId: string) => void;
   onDelete?: (projectId: string) => void;
   onArchive?: (projectId: string) => void;
   onRestore?: (projectId: string) => void;
@@ -46,6 +48,7 @@ const statusLabels: Record<string, string> = {
 export function ProjectCard({
   project,
   onOpen,
+  onOpenWorkflow,
   onDelete,
   onArchive,
   onRestore,
@@ -192,6 +195,19 @@ export function ProjectCard({
       <div className="mt-3 text-xs text-muted-foreground">
         Updated {createdLabel}
       </div>
+      {project.research_engine_project_id && onOpenWorkflow && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenWorkflow(project.id);
+          }}
+          className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+        >
+          <Workflow className="h-3.5 w-3.5" aria-hidden="true" />
+          Open workflow
+        </button>
+      )}
     </div>
   );
 }

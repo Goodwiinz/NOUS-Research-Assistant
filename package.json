@@ -8,7 +8,8 @@
     "frontend",
     "tests/e2e",
     "terminal",
-    "packages/chat-runtime"
+    "packages/chat-runtime",
+    "packages/harness-bridge"
   ],
   "scripts": {
     "dev": "pnpm --filter multimodal-rag-frontend dev",
@@ -18,6 +19,7 @@
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
     "test:e2e": "pnpm --filter ./tests/e2e test:e2e",
+    "qa:nous": "node scripts/nous-qa.mjs",
     "validate": "pnpm --filter multimodal-rag-frontend validate",
     "clean": "pnpm -r --if-present clean && rm -rf node_modules",
     "install:all": "pnpm install",

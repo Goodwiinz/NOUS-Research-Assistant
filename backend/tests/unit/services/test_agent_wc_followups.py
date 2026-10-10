@@ -32,6 +32,9 @@ from src.services.agent.agent_execution_service import (
     _resume_agent_graph,
     _set_job,
 )
+from tests.utils.agent_approval import isolated_claimed_confirmation  # noqa: F401
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
 
 
@@ -41,6 +44,7 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
         "src.services.threads.workspace_access.get_thread",
         editable_thread_getter(),
     )
+    stub_durable_status_projection(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -51,12 +55,18 @@ def _allow_durable_thread_access(monkeypatch: pytest.MonkeyPatch) -> None:
 def _interrupt_task() -> SimpleNamespace:
     """A pending LangGraph task carrying a live interrupt (the real HITL signal —
     `pending_confirmation` is always `{}` while an interrupt is live)."""
-    return SimpleNamespace(interrupts=[SimpleNamespace(value={"tools": []})])
+    return SimpleNamespace(
+        interrupts=[SimpleNamespace(id="test-interrupt", value={"tools": []})]
+    )
 
 
 def _snapshot(values: dict, tasks: tuple = ()) -> SimpleNamespace:
     """Build a minimal LangGraph snapshot stub with the given values + tasks."""
-    return SimpleNamespace(values=values, tasks=tasks)
+    return SimpleNamespace(
+        values=values,
+        tasks=tasks,
+        config={"configurable": {"checkpoint_id": "saved-interrupt"}},
+    )
 
 
 def _make_graph(snapshot_values: dict | None, tasks: tuple = ()) -> Mock:
@@ -184,10 +194,12 @@ async def test_resume_short_circuits_when_interrupt_already_consumed():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
-        await _resume_agent_graph(job_id, confirmed=True, current_user=user)
+        await _resume_agent_graph(
+            job_id, confirmed=True, current_user=user, approval_id="a" * 64
+        )
 
     graph.ainvoke.assert_not_called()
     job = _get_job(job_id)
@@ -230,10 +242,12 @@ async def test_resume_proceeds_when_interrupt_present():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
-        await _resume_agent_graph(job_id, confirmed=True, current_user=user)
+        await _resume_agent_graph(
+            job_id, confirmed=True, current_user=user, approval_id="a" * 64
+        )
 
     graph.ainvoke.assert_awaited_once()
 
@@ -271,10 +285,12 @@ async def test_resume_rejects_ownerless_checkpoint():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
-        await _resume_agent_graph(job_id, confirmed=True, current_user=user)
+        await _resume_agent_graph(
+            job_id, confirmed=True, current_user=user, approval_id="a" * 64
+        )
 
     graph.ainvoke.assert_not_called()
     job = _get_job(job_id)
@@ -350,9 +366,13 @@ def test_double_confirm_second_request_returns_409(confirm_client):
             new=AsyncMock(return_value=None),
         ),
     ):
-        first = client.post(f"/api/v1/agent/confirm/{job_id}", json={"confirmed": True})
+        first = client.post(
+            f"/api/v1/agent/confirm/{job_id}",
+            json={"approval_id": "a" * 64, "confirmed": True},
+        )
         second = client.post(
-            f"/api/v1/agent/confirm/{job_id}", json={"confirmed": True}
+            f"/api/v1/agent/confirm/{job_id}",
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
 
     assert first.status_code == 200
@@ -396,7 +416,8 @@ def test_confirm_falls_back_to_redis_after_l1_eviction(confirm_client):
         ),
     ):
         response = client.post(
-            f"/api/v1/agent/confirm/{job_id}", json={"confirmed": True}
+            f"/api/v1/agent/confirm/{job_id}",
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
 
     assert response.status_code == 200
@@ -451,10 +472,12 @@ async def test_resume_uses_job_id_when_payload_has_no_thread_id():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
-        await _resume_agent_graph(job_id, confirmed=True, current_user=user)
+        await _resume_agent_graph(
+            job_id, confirmed=True, current_user=user, approval_id="a" * 64
+        )
 
     graph.ainvoke.assert_awaited_once()
     read_config = graph.aget_state.await_args.args[0]
@@ -480,10 +503,12 @@ async def test_resume_fails_expired_when_job_payload_is_gone():
         ),
         patch(
             "src.services.agent.agent_execution_service.AsyncSessionLocal",
-            return_value=_async_session_cm(),
+            side_effect=_async_session_cm,
         ),
     ):
-        await _resume_agent_graph(job_id, confirmed=True, current_user=user)
+        await _resume_agent_graph(
+            job_id, confirmed=True, current_user=user, approval_id="a" * 64
+        )
 
     graph.aget_state.assert_not_awaited()
     graph.ainvoke.assert_not_called()

@@ -21,6 +21,7 @@ from uuid import UUID
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     Header,
     HTTPException,
@@ -31,28 +32,23 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from langgraph.errors import GraphInterrupt  # noqa: F401  re-export for backward compat
 from pydantic import BaseModel, Field
-from sqlalchemy import cast, desc, func, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user, require_admin
 from src.core.rate_limit import create_rate_limiter
-from src.models.chat_message import ChatMessage, MessageRole
-from src.models.conversation import Conversation
-from src.models.document import Document
-from src.models.thread import Thread, ThreadStatus
+from src.core.security import TokenData, get_current_user_token
+from src.models.chat_message import ChatMessage
 from src.models.user import User
-from src.models.workspace import Workspace
 from src.services.agent import stream_buffer as _stream_buffer
 from src.services.agent._pii_redact import redact_tool_executions
-from src.services.agent.agent_execution_service import (  # noqa: F401
+from src.services.agent.agent_execution_service import (
     MAX_JOBS,
     AgentThreadResolutionError,
     _actor_fields,
     _cleanup_jobs,
-    _clear_stale_pending_confirmation,
     _get_job,
     _get_latest_user_content,
     _jobs,
@@ -63,12 +59,22 @@ from src.services.agent.agent_execution_service import (  # noqa: F401
     _run_agent_graph,
     _set_job,
 )
+from src.services.agent.agent_execution_service import (  # noqa: F401
+    stored_request_payload as _stored_request_payload,
+)
 from src.services.agent.agent_run_service import (
     claim_awaiting_run_for_confirmation,
     get_active_run_for_thread,
+    get_latest_run_for_thread,
+    get_run,
     release_confirmation_claim,
 )
-from src.services.agent.agent_submission_service import abandon_awaiting_submission
+from src.services.agent.agent_submission_service import (
+    abandon_awaiting_submission,
+    commit_cancellation,
+    request_run_cancellation,
+)
+from src.services.agent.job_store import set_job as _set_job_async
 
 # Wire models moved to the service layer (audit B5) so the graph runner can
 # build them without importing src.api. Re-exported here so every existing
@@ -110,6 +116,7 @@ from src.services.agent.tools_impl import (  # noqa: F401
     _tool_list_external_databases,
     _tool_list_project_documents,
     _tool_list_projects,
+    _tool_revise_draft,
     _tool_search_arxiv,
     _tool_search_documents,
     _tool_search_external_database,
@@ -117,6 +124,7 @@ from src.services.agent.tools_impl import (  # noqa: F401
     _tool_summarize_document,
     execute_tool,
 )
+from src.services.threads import thread_service, workspace_access
 from src.shared.enums import AgentStreamEvent, JobStatus
 
 from .streaming import (  # noqa: F401
@@ -218,16 +226,61 @@ class HTTPErrorResponse(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-AGENT_THREAD_MARKER = {"source": "agent"}
+AGENT_THREAD_MARKER = thread_service.AGENT_THREAD_MARKER
 
 
 class ConfirmationRequest(BaseModel):
+    approval_id: str = Field(..., pattern=r"^[a-f0-9]{64}$")
     confirmed: bool = Field(..., description="Whether the user confirms the action")
 
 
 class StreamConfirmRequest(BaseModel):
+    approval_id: str = Field(..., pattern=r"^[a-f0-9]{64}$")
     thread_id: StrictUUIDString
     confirmed: bool
+
+
+class StreamCancelRequest(BaseModel):
+    expected_run_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The active run the caller intends to stop",
+    )
+
+
+async def _require_editable_agent_thread(
+    db: AsyncSession,
+    current_user: User,
+    thread_id: _uuid.UUID,
+) -> Any:
+    """Require the canonical workspace/thread edit permission.
+
+    Agent stream actions share the same editable-thread policy as turn
+    creation and confirmation. In particular, a workspace editor/admin may
+    operate on an editable thread while viewers, revoked members, and threads
+    below deleted ancestors receive the same indistinguishable 404.
+    AgentRun reads below this gate remain scoped to the caller's organization
+    and user, so thread edit access never grants control of another caller's
+    run.
+    """
+    request = AgentExecuteRequest.model_construct(
+        messages=[AgentMessage(role="user", content="authorization")],
+        thread_id=str(thread_id),
+        page_context=PageContextRequest(),
+    )
+    try:
+        thread, _conversation_id = await _resolve_thread(
+            db,
+            current_user,
+            request,
+            create_if_missing=False,
+        )
+    except (AgentThreadResolutionError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return thread
 
 
 _SSE_RESPONSE = {
@@ -374,7 +427,7 @@ async def _celery_dispatch(
 
         run_agent_job.delay(
             job_id=job_id,
-            request_payload=request.model_dump(mode="json"),
+            request_payload=_stored_request_payload(request),
             user_id=str(current_user.id),
         )
     except Exception:
@@ -382,21 +435,16 @@ async def _celery_dispatch(
             "celery dispatch: enqueue failed for job %s — marking failed", job_id
         )
         error = "Agent dispatch failed (task queue unavailable). Please retry."
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": JobStatus.FAILED,
                 "error": error,
                 "tool_executions": [],
+                "thread_id": str(request.thread_id) if request.thread_id else None,
                 **_actor_fields(current_user),
             },
-        )
-        # Durable projection write (await — the fire-and-forget projection
-        # scheduled by _set_job is best-effort; this one must land so the
-        # sweeper never resurrects the orphan as "stale running").
-        await agent_run_service.record_job_status(
-            job_id,
-            {"status": JobStatus.FAILED, "error": error, **_actor_fields(current_user)},
+            require_durable_decision=True,
         )
         return "failed", job_id
 
@@ -437,7 +485,8 @@ async def execute_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid thread ID") from exc
     except AgentThreadResolutionError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        logger.warning("Agent thread resolution failed", exc_info=True)
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
     if thread is not None:
         request.thread_id = str(thread.id) if thread is not None else None
 
@@ -446,7 +495,7 @@ async def execute_agent(
         "status": JobStatus.RUNNING,
         "tool_executions": [],
         **_actor_fields(current_user),
-        "request": request.model_dump(mode="json"),
+        "request": _stored_request_payload(request),
     }
 
     if _resolve_dispatch_backend() == "celery":
@@ -561,11 +610,22 @@ async def get_job_status(
     # poller would see "running" until the 1h TTL. get_job_fresh degrades to
     # the L1 read when Redis is unavailable, so single-process behavior (and
     # Redis-less tests) are unchanged.
-    job = _get_job(job_id)
+    from src.services.agent.job_store import get_job_for_poll as _get_job_for_poll
+
+    job = await _get_job_for_poll(job_id)
     if job is None or not _normalized_job_status(job.get("status")).is_terminal:
         from src.services.agent.job_store import get_job_fresh as _get_job_fresh
 
         job = (await _get_job_fresh(job_id)) or job
+        # The Redis refresh above yields to a concurrent terminal publisher.
+        # Resolve that generation at the final selection boundary so this
+        # poll cannot return the reservation while its Redis winner is pending.
+        terminal_snapshot = await _get_job_for_poll(job_id)
+        if (
+            terminal_snapshot is not None
+            and _normalized_job_status(terminal_snapshot.get("status")).is_terminal
+        ):
+            job = terminal_snapshot
     if not job:
         # Redis miss: fall back to the durable projection (tenancy-filtered —
         # org + user must both match; a miss 404s without confirming existence).
@@ -576,14 +636,19 @@ async def get_job_status(
             organization_id=getattr(current_user, "organization_id", None),
             user_id=current_user.id,
         )
-        if run is None:
+        # The durable read above yields while a normal terminal publication
+        # may register its local reservation. Re-enter the pending-aware
+        # selector before returning either the projection or a 404.
+        job = await _get_job_for_poll(job_id)
+        if job is None and run is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        run_thread_id = getattr(run, "thread_id", None)
-        return JobStatusResponse(
-            status=_normalized_job_status(run.status),
-            error=run.error,
-            thread_id=str(run_thread_id) if run_thread_id else None,
-        )
+        if job is None:
+            run_thread_id = getattr(run, "thread_id", None)
+            return JobStatusResponse(
+                status=_normalized_job_status(run.status),
+                error=run.error,
+                thread_id=str(run_thread_id) if run_thread_id else None,
+            )
     # Fail closed: a job record without an owner must not be readable. Every
     # write path stamps user_id; its absence means a corrupted/legacy record,
     # not a public one.
@@ -593,11 +658,21 @@ async def get_job_status(
     thread_id = job.get("thread_id") or (
         request.get("thread_id") if isinstance(request, dict) else None
     )
+    # R8-D7: the job record keeps raw tool args; redact them like every other
+    # browser-visible copy (/stream done, confirm done, thread messages).
+    result = job.get("result")
+    if isinstance(result, dict) and result.get("tool_executions"):
+        result = {
+            **result,
+            "tool_executions": redact_tool_executions(result["tool_executions"]),
+        }
     return JobStatusResponse(
         **{
             **job,
             "status": _normalized_job_status(job.get("status")),
             "thread_id": thread_id,
+            "result": result,
+            "tool_executions": redact_tool_executions(job.get("tool_executions")),
         }
     )
 
@@ -719,6 +794,7 @@ async def confirm_agent_action(
         durable_claimed = await claim_awaiting_run_for_confirmation(
             db,
             job_id,
+            approval_id=request.approval_id,
             organization_id=current_user.organization_id,
             user_id=current_user.id,
         )
@@ -736,6 +812,7 @@ async def confirm_agent_action(
             await release_confirmation_claim(
                 db,
                 job_id,
+                approval_id=request.approval_id,
                 organization_id=current_user.organization_id,
                 user_id=current_user.id,
             )
@@ -796,6 +873,7 @@ async def confirm_agent_action(
         job_id,
         request.confirmed,
         current_user,
+        approval_id=request.approval_id,
     )
     return {"status": JobStatus.RUNNING, "job_id": job_id}
 
@@ -813,6 +891,7 @@ async def stream_agent(
     request: Request,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
+    token: TokenData = Depends(get_current_user_token),
 ):
     """Stream agent responses via Server-Sent Events.
 
@@ -822,6 +901,11 @@ async def stream_agent(
     trace, usage, heartbeat, status, confirmation, done, error. The terminal
     frames are done, error, or confirmation.
     """
+    if request_body.execution_provider == "codex" and (
+        token.is_cli or "x-nous-integration-grant" in request.headers
+    ):
+        raise HTTPException(403, "Interactive browser authentication required")
+
     # Stamp the accepted-latency SLI clock on handler entry. Rate limiting,
     # body parsing, and StreamingResponse setup all cost the client wall time
     # before the generator builds its emitter, so starting the clock there
@@ -881,7 +965,7 @@ async def stream_confirm_agent(
         404: {"model": HTTPErrorResponse, "description": "Thread not found"},
         409: {
             "model": HTTPErrorResponse,
-            "description": "Run is not awaiting confirmation",
+            "description": "Run is no longer the expected active run",
         },
         503: {
             "model": HTTPErrorResponse,
@@ -891,25 +975,22 @@ async def stream_confirm_agent(
 )
 async def cancel_stream_confirmation(
     thread_id: _uuid.UUID,
+    request: Request,
+    cancellation: Optional[StreamCancelRequest] = Body(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Durably abandon a caller-owned graph parked on HITL confirmation."""
+    """Request durable cancellation of a caller-owned stream run.
+
+    An omitted body preserves the parked-confirmation endpoint contract. A
+    body identifies a normal running turn; its producer must observe the
+    ``stopping`` marker and acknowledge cancellation before the response can
+    become terminal.
+    """
     await _enforce_rate_limit(
         _agent_read_rate_limiter, str(current_user.id), _AGENT_READ_PREFIX
     )
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_id,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
-    )
-    if (await db.execute(ownership_stmt)).scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    await _require_editable_agent_thread(db, current_user, thread_id)
 
     active = await get_active_run_for_thread(
         db,
@@ -918,21 +999,87 @@ async def cancel_stream_confirmation(
         user_id=current_user.id,
     )
     if active is None:
+        # A body carrying an exact identity is an acknowledged cancellation
+        # command, rather than the legacy parked-confirmation probe. Preserve
+        # the distinction between a repeated stop of an already-cancelled run
+        # (idempotent success) and a late stop after completion (conflict).
+        expected_run_id = cancellation.expected_run_id if cancellation else None
+        if cancellation is not None and expected_run_id is not None:
+            terminal = await get_run(
+                db,
+                expected_run_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+            )
+            if terminal is not None and terminal.status != JobStatus.CANCELLED.value:
+                raise HTTPException(status_code=409, detail="Run is already complete")
+        return Response(status_code=204)
+    expected_run_id = cancellation.expected_run_id if cancellation else None
+    if expected_run_id is not None and expected_run_id != active.job_id:
+        raise HTTPException(status_code=409, detail="Run is no longer active")
+    if (
+        cancellation is not None
+        and active.status != JobStatus.AWAITING_CONFIRMATION.value
+    ):
+        if expected_run_id is None:
+            raise HTTPException(status_code=409, detail="Run identity is required")
+        request_id = getattr(getattr(request, "state", None), "request_id", None)
+        try:
+            requested = await commit_cancellation(
+                db,
+                request_run_cancellation(
+                    db,
+                    run_id=expected_run_id,
+                    thread_id=thread_id,
+                    organization_id=current_user.organization_id,
+                    user_id=current_user.id,
+                    reason="user_requested",
+                    request_id=request_id,
+                ),
+            )
+        except Exception as exc:
+            logger.exception("Failed to request cancellation of agent stream")
+            raise HTTPException(
+                status_code=503,
+                detail="Cancellation is temporarily unavailable; please retry",
+            ) from exc
+        if requested is None:
+            # The exact run disappeared between the active lookup and claim;
+            # a newer owner must never be cancelled by this stale request.
+            raced = await get_active_run_for_thread(
+                db,
+                thread_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+            )
+            if raced is not None and raced.job_id != expected_run_id:
+                raise HTTPException(status_code=409, detail="Run is no longer active")
+            return Response(status_code=204)
+        if requested.status == JobStatus.AWAITING_CONFIRMATION:
+            raise HTTPException(
+                status_code=409, detail="Run is already awaiting confirmation"
+            )
+        if requested.status.is_terminal:
+            if requested.status != JobStatus.CANCELLED:
+                raise HTTPException(status_code=409, detail="Run is already complete")
+            return Response(status_code=204)
         return Response(status_code=204)
     if active.status != JobStatus.AWAITING_CONFIRMATION.value:
         raise HTTPException(status_code=409, detail="Run is not awaiting confirmation")
 
     try:
-        abandoned = await abandon_awaiting_submission(
+        abandoned = await commit_cancellation(
             db,
-            thread_id=thread_id,
-            organization_id=current_user.organization_id,
-            user_id=current_user.id,
-            reason="user_stopped_confirmation",
+            abandon_awaiting_submission(
+                db,
+                thread_id=thread_id,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+                reason="user_stopped_confirmation",
+                expected_run_id=active.job_id,
+            ),
         )
-        await db.commit()
     except Exception as exc:
-        await db.rollback()
         logger.exception("Failed to cancel pending agent confirmation")
         raise HTTPException(
             status_code=503,
@@ -970,33 +1117,11 @@ async def cancel_stream_confirmation(
             exc_info=True,
         )
 
-    # The durable terminal write above is authoritative. Checkpoint cleanup is
-    # best-effort; a fresh turn repeats it before invoking the graph.
-    try:
-        from src.services.agent.checkpointer import get_checkpointer
-        from src.services.agent.graph import compile_agent_graph
-        from src.services.agent.memory import get_memory_store
-
-        graph = compile_agent_graph(
-            checkpointer=await get_checkpointer(),
-            store=await get_memory_store(),
-        )
-        await _clear_stale_pending_confirmation(
-            graph,
-            {
-                "configurable": {
-                    "thread_id": str(thread_id),
-                    "user_id": str(current_user.id),
-                    "organization_id": str(current_user.organization_id or ""),
-                }
-            },
-        )
-    except Exception:
-        logger.warning(
-            "Cancelled HITL run but could not clear checkpoint for thread %s",
-            str(thread_id),
-            exc_info=True,
-        )
+    # Do not clear the shared thread checkpoint here. A newer turn may have
+    # replaced this parked run between the durable cancellation commit and
+    # this point; clearing now could erase that newer producer's checkpoint.
+    # The durable cancelled status suppresses stale resume/confirm paths, and
+    # the producer/new-turn path owns cleanup after it claims the replacement.
     return Response(status_code=204)
 
 
@@ -1023,19 +1148,11 @@ async def get_graph_trace(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid thread_id")
 
-    # Verify the thread exists and belongs to the current user before
-    # exposing any execution trace data (IDOR guard).
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_uuid,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
+    # IDOR guard through the access funnel (R8-D3): membership-based and
+    # re-checks every soft-deleted ancestor, like the workspace routes.
+    thread_row = await workspace_access.get_thread(
+        db, thread_uuid, current_user.id, include_messages=False
     )
-    thread_row = (await db.execute(ownership_stmt)).scalar_one_or_none()
     if thread_row is None:
         raise HTTPException(status_code=404, detail="Trace not found")
 
@@ -1053,7 +1170,11 @@ async def _single_frame(frame: str):
 
 
 async def _pending_confirmation_frame(
-    thread_id: str, current_user: User, *, after: int = 0
+    thread_id: str,
+    current_user: User,
+    *,
+    after: int = 0,
+    db: Optional[AsyncSession] = None,
 ) -> Optional[str]:
     """SSE ``confirmation`` frame when the graph is parked on a HITL interrupt.
 
@@ -1073,6 +1194,50 @@ async def _pending_confirmation_frame(
     without one the client's Last-Event-ID cursor never advances past this
     frame and a reconnect replays from a stale position.
     """
+    active_run = None
+    if db is not None:
+        # Check durable ownership before opening the graph/checkpointer. A
+        # cancelled/completed run can leave its checkpoint parked on the old
+        # interrupt; probing that checkpoint first would both waste a cold
+        # reload and risk resurrecting an approval after a terminal ACK.
+        try:
+            active_run = await get_active_run_for_thread(
+                db,
+                thread_id,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            if (
+                active_run is not None
+                and getattr(active_run, "status", None)
+                != JobStatus.AWAITING_CONFIRMATION.value
+            ):
+                # Only a parked run can take an answer (R8-D6). STOPPING (Stop
+                # claimed, terminal ACK pending) and QUEUED/RUNNING (already
+                # confirmed via REST /confirm or a live-only confirm stream)
+                # leave the checkpoint's interrupt in place until the resumed
+                # step commits; re-arming its card there only buys a 409.
+                return None
+            if active_run is None:
+                latest_run = await get_latest_run_for_thread(
+                    db,
+                    thread_id,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                if latest_run is not None:
+                    return None
+        except Exception:
+            logger.warning(
+                "Failed to resolve parked run id for thread %s",
+                thread_id,
+                exc_info=True,
+            )
+            # Without a tenant-scoped durable answer, a checkpoint interrupt
+            # cannot be distinguished from a stale terminal run. Fail closed
+            # for cold resume rather than rearming an approval that may already
+            # have been cancelled or completed.
+            return None
     try:
         from src.services.agent.checkpointer import get_checkpointer
         from src.services.agent.graph import compile_agent_graph
@@ -1094,18 +1259,43 @@ async def _pending_confirmation_frame(
         snapshot = await graph.aget_state(config)
         if snapshot is None:
             return None
+        if db is not None:
+            checkpoint_values = getattr(snapshot, "values", None)
+            checkpoint_user_id = (
+                checkpoint_values.get("user_id")
+                if isinstance(checkpoint_values, dict)
+                else None
+            )
+            if checkpoint_user_id is None or str(checkpoint_user_id) != str(
+                current_user.id
+            ):
+                logger.warning(
+                    "Suppressing parked confirmation owned by another or unknown "
+                    "user for thread %s",
+                    thread_id,
+                )
+                return None
 
-        confirmation: Dict[str, Any] = {}
-        for task in snapshot.tasks or ():
-            for intr in getattr(task, "interrupts", ()) or ():
-                confirmation = getattr(intr, "value", {}) or {}
-                break
-            if confirmation:
-                break
-        if not confirmation:
+        from src.services.agent.confirmation_service import pending_confirmation
+
+        confirmation = pending_confirmation(
+            snapshot,
+            thread_id=thread_id,
+            run_id=str(active_run.job_id) if active_run is not None else None,
+            user_id=current_user.id,
+        )
+        if confirmation is None:
+            return None
+        if (
+            active_run is not None
+            and (active_run.run_metadata or {}).get("approval_id")
+            != confirmation["approval_id"]
+        ):
             return None
 
         payload = {"thread_id": thread_id, "confirmation": confirmation}
+        if active_run is not None:
+            payload["run_id"] = str(active_run.job_id)
         logger.info(
             "Re-delivering pending HITL confirmation on resume for thread %s",
             thread_id,
@@ -1170,23 +1360,100 @@ async def resume_stream(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid thread_id")
 
-    # Same IDOR guard as get_graph_trace: thread must belong to the caller's
-    # workspace; 404 (not 403) so we don't confirm another tenant's thread.
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_uuid,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
-    )
-    thread_row = (await db.execute(ownership_stmt)).scalar_one_or_none()
-    if thread_row is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    # Reconnect uses the same editable-thread policy as turn creation and
+    # confirmation. The durable AgentRun checks below still scope the stream
+    # identity to this caller, so an editor cannot replay another member's run.
+    await _require_editable_agent_thread(db, current_user, thread_uuid)
 
     sid = await _stream_buffer.active_stream_id(thread_id)
+    # External runs own a PostgreSQL event ledger and keep executing when this
+    # browser goes away. Reattach directly to that durable observation path
+    # only when there is no native Redis stream to resume.
+    latest_run_for_resume = None
+    latest_run_checked = False
+    if sid is None:
+        if stream is not None:
+            latest_run_for_resume = await get_latest_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            latest_run_checked = True
+            external_run = (
+                latest_run_for_resume
+                if latest_run_for_resume is not None
+                and getattr(latest_run_for_resume, "execution_provider", "nous")
+                == "codex"
+                else None
+            )
+        else:
+            active_external = await get_active_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            external_run = (
+                active_external
+                if active_external is not None
+                and getattr(active_external, "execution_provider", "nous") == "codex"
+                else None
+            )
+            if external_run is None:
+                latest_run_for_resume = await get_latest_run_for_thread(
+                    db,
+                    thread_uuid,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                latest_run_checked = True
+                if (
+                    latest_run_for_resume is not None
+                    and getattr(latest_run_for_resume, "execution_provider", "nous")
+                    == "codex"
+                ):
+                    from src.services.harness.delivery import has_assistant_projection
+
+                    # Without a stream id the caller is the cold-load probe, or a
+                    # resume that never learned the run id (its transport dropped
+                    # before the `accepted` frame). A finished Codex run whose
+                    # outcome is an assistant row is already in the transcript;
+                    # replaying its ledger from seq 0 re-streamed old answers and
+                    # re-added "failed to generate" bubbles (BR-2). A finished
+                    # run with no such row (dispatch failed, or it was cancelled
+                    # before dispatch) still replays: its terminal event is the
+                    # turn's only visible outcome. A named stream still replays
+                    # a just-finished run in the branch above.
+                    finished = JobStatus(latest_run_for_resume.status).is_terminal
+                    if not finished or not await has_assistant_projection(
+                        db, latest_run_for_resume
+                    ):
+                        external_run = latest_run_for_resume
+        if external_run is not None:
+            from src.api.agent.harness_streaming import (
+                context_for_accepted_run,
+                external_resume_cursor,
+                stream_harness_run,
+            )
+
+            external_run_id = _uuid.UUID(external_run.job_id)
+            external_context = await context_for_accepted_run(
+                db, run_id=external_run_id, current_user=current_user
+            )
+            # R8-D2: the request-scoped session lives until the streamed body
+            # ends. Its reads are done; release the connection before streaming.
+            await db.rollback()
+            return StreamingResponse(
+                stream_harness_run(
+                    request,
+                    external_run_id,
+                    external_context,
+                    after_seq=external_resume_cursor(after, stream, external_run_id),
+                ),
+                media_type="text/event-stream",
+                headers=_SSE_HEADERS,
+            )
     # Run correlation (codex audit CX1): the client's seq cursor is only
     # meaningful against the stream it was read from. If the caller names its
     # stream and a DIFFERENT run now owns the thread's active pointer, replaying
@@ -1194,12 +1461,40 @@ async def resume_stream(
     # frames — 204 tells the client its old run is over.
     if stream is not None and sid is not None and stream.lower() != sid.lower():
         return Response(status_code=204)
+    if sid is not None:
+        active_run = await get_active_run_for_thread(
+            db,
+            thread_uuid,
+            organization_id=getattr(current_user, "organization_id", None),
+            user_id=current_user.id,
+        )
+        if active_run is None:
+            # A Redis pointer without a caller-owned durable run is either a
+            # legacy stream or another caller's stream. Fail closed without
+            # exposing its buffered frames.
+            return Response(status_code=204)
+        active_stream = await _stream_buffer.stream_id_for_run(str(active_run.job_id))
+        if active_stream is None or active_stream.lower() != sid.lower():
+            return Response(status_code=204)
     if sid is None and stream is not None:
         # The active pointer is deliberately cleared after the terminal frame,
         # but the per-stream buffer remains for an hour. Verify the immutable
         # stream->thread mapping before replaying that just-finished stream.
         owner_thread_id = await _stream_buffer.thread_id_for_stream(stream)
         if owner_thread_id is None or owner_thread_id.lower() != thread_id.lower():
+            return Response(status_code=204)
+        latest_run = latest_run_for_resume
+        if not latest_run_checked:
+            latest_run = await get_latest_run_for_thread(
+                db,
+                thread_uuid,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+        if latest_run is None:
+            return Response(status_code=204)
+        latest_stream = await _stream_buffer.stream_id_for_run(str(latest_run.job_id))
+        if latest_stream is None or latest_stream.lower() != stream.lower():
             return Response(status_code=204)
         sid = stream
     if sid is None:
@@ -1210,8 +1505,14 @@ async def resume_stream(
         # forever while the run sat waiting for an answer. The user sees a
         # turn that produced nothing, re-sends, and the pending interrupt is
         # discarded as abandoned. Re-deliver it instead.
-        frame = await _pending_confirmation_frame(thread_id, current_user, after=after)
+        frame = await _pending_confirmation_frame(
+            thread_id,
+            current_user,
+            after=after,
+            db=db,
+        )
         if frame is not None:
+            await db.rollback()  # R8-D2: see the harness branch above.
             return StreamingResponse(
                 _single_frame(frame),
                 media_type="text/event-stream",
@@ -1219,6 +1520,9 @@ async def resume_stream(
             )
         return Response(status_code=204)
 
+    # R8-D2: the replay can follow for ~10 minutes; do not hold the
+    # request-scoped session's read transaction (and connection) through it.
+    await db.rollback()
     return StreamingResponse(
         replay_buffered_stream(
             request,
@@ -1271,6 +1575,7 @@ class MessageResponse(BaseModel):
     # Per-turn agent provenance (assistant rows only; None for legacy rows).
     plan: Optional[List[Dict[str, Any]]] = None
     plan_reasoning: Optional[str] = None
+    reasoning_summary: Optional[str] = None
     token_usage: Optional[Dict[str, int]] = None
 
 
@@ -1290,26 +1595,8 @@ async def list_agent_threads(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List threads for the current user, ordered by most recently updated."""
-    # Build query: Thread -> Conversation -> Workspace, filter by owner
-    # Single query: a window count returns the (pre-limit) total alongside the
-    # page, so we avoid firing a second full count query on every thread-list
-    # load.
-    stmt = (
-        select(Thread, func.count().over().label("total"))
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-            Thread.rag_document_scope.contains(AGENT_THREAD_MARKER),
-        )
-        .order_by(desc(Thread.updated_at))
-        .limit(50)
-    )
-    rows = (await db.execute(stmt)).all()
-    threads = [row[0] for row in rows]
-    total = rows[0][1] if rows else 0
+    """List agent threads the caller can reach, most recently updated first."""
+    threads, total = await thread_service.list_agent_threads(db, current_user.id)
 
     thread_summaries = []
     for t in threads:
@@ -1359,20 +1646,12 @@ async def get_thread_messages(
     Pass ``limit`` to fetch the most recent N (and ``before`` to page older),
     with ``has_more`` signalling whether older messages remain.
     """
-    # Verify thread exists and belongs to the current user via ownership chain
-    ownership_stmt = (
-        select(Thread)
-        .join(Conversation, Thread.conversation_id == Conversation.id)
-        .join(Workspace, Conversation.workspace_id == Workspace.id)
-        .where(
-            Thread.id == thread_id,
-            Workspace.owner_id == current_user.id,
-            Thread.is_deleted == False,
-        )
+    # Read access through the access funnel (R8-D3): an editor's own agent
+    # thread in a shared workspace resolves; a thread below a soft-deleted
+    # conversation/workspace does not.
+    thread = await workspace_access.get_thread(
+        db, thread_id, current_user.id, include_messages=False
     )
-    ownership_result = await db.execute(ownership_stmt)
-    thread = ownership_result.scalar_one_or_none()
-
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -1383,6 +1662,7 @@ async def get_thread_messages(
             select(ChatMessage)
             .where(
                 ChatMessage.thread_id == thread_id,
+                ChatMessage.is_deleted == False,
                 # Edit-and-resend tombstones: a superseded turn (and everything
                 # after it) must never render, or a reload shows the answer to a
                 # question the user replaced.
@@ -1406,6 +1686,7 @@ async def get_thread_messages(
         # full-thread total instead of the filtered one).
         filters = [
             ChatMessage.thread_id == thread_id,
+            ChatMessage.is_deleted == False,
             ChatMessage.superseded_by_message_id.is_(None),
         ]
         if before is not None:
@@ -1446,6 +1727,7 @@ async def get_thread_messages(
                 tool_executions=redact_tool_executions(msg.tool_executions),
                 plan=msg.plan,
                 plan_reasoning=msg.plan_reasoning,
+                reasoning_summary=msg.reasoning_summary,
                 token_usage=msg.token_usage,
             )
         )

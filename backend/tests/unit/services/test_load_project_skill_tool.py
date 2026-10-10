@@ -7,6 +7,21 @@ from uuid import uuid4
 import pytest
 
 
+def _snapshot_registry_fields() -> dict:
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    metadata = TOOL_REGISTRY.metadata_snapshot()
+    return {
+        "tool_registry_hash": metadata["hash"],
+        "tool_registry_version": metadata["version"],
+        "tool_metadata": {
+            "descriptors": TOOL_REGISTRY.frozen_descriptor_metadata(
+                conditions={"project_skill_catalog"}
+            )
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_loader_requires_server_snapshot_context_and_never_accepts_ids_from_model() -> (
     None
@@ -21,13 +36,75 @@ async def test_loader_requires_server_snapshot_context_and_never_accepts_ids_fro
         "user_id",
     } & set(schema["properties"])
 
+    from src.services.agent.tools_impl import execute_tool
+
+    # A model-supplied id is dropped by schema validation; the dispatcher only
+    # forwards server-owned config ids, and none are set here.
+    session = Mock()
+    session.get = AsyncMock()
     with patch(
-        "src.core.config.get_settings",
+        "src.services.agent.runtime_snapshot.get_settings",
         return_value=SimpleNamespace(PROJECT_SKILL_RUNTIME_ENABLED=True),
     ):
-        result = await load_project_skill.ainvoke({"skill_name": "literature-review"})
+        result = await execute_tool(
+            "load_project_skill",
+            {
+                "skill_name": "literature-review",
+                "runtime_snapshot_id": str(uuid4()),
+                "project_id": str(uuid4()),
+            },
+            user_id=str(uuid4()),
+            db=session,
+            current_user=SimpleNamespace(id=uuid4(), organization_id=uuid4()),
+        )
 
     assert result["error_type"] == "runtime_snapshot_required"
+    session.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_loader_rejects_a_snapshot_without_frozen_loader_membership() -> None:
+    from src.services.agent.runtime_snapshot import load_project_skill_from_snapshot
+    from src.services.agent.tools import TOOL_REGISTRY
+
+    snapshot_id, user_id, project_id = uuid4(), uuid4(), uuid4()
+    registry_metadata = TOOL_REGISTRY.metadata_snapshot()
+    row = SimpleNamespace(
+        id=snapshot_id,
+        user_id=user_id,
+        project_id=project_id,
+        expires_at=None,
+        tool_registry_hash=registry_metadata["hash"],
+        tool_registry_version=registry_metadata["version"],
+        tool_metadata={"descriptors": TOOL_REGISTRY.frozen_descriptor_metadata()},
+        skill_catalog=[
+            {
+                "version_id": str(uuid4()),
+                "name": "literature-review",
+                "version": 1,
+                "content_hash": "a" * 64,
+            }
+        ],
+        loaded_skill_versions=[],
+    )
+    session = AsyncMock()
+    session.get.return_value = row
+
+    with patch(
+        "src.services.agent.runtime_snapshot.get_settings",
+        return_value=SimpleNamespace(PROJECT_SKILL_RUNTIME_ENABLED=True),
+    ):
+        result = await load_project_skill_from_snapshot(
+            session,
+            snapshot_id=str(snapshot_id),
+            user_id=str(user_id),
+            project_id=str(project_id),
+            skill_name="literature-review",
+        )
+
+    assert result["error_type"] == "tool_not_in_snapshot"
+    assert session.get.await_count == 1
+    session.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -43,6 +120,7 @@ async def test_loader_returns_exact_frozen_version_and_records_unique_load() -> 
         user_id=user_id,
         project_id=project_id,
         expires_at=None,
+        **_snapshot_registry_fields(),
         skill_catalog=[
             {
                 "version_id": str(version_id),
@@ -150,6 +228,7 @@ async def test_loader_rejects_a_fourth_unique_skill_before_reading_the_version()
         user_id=user_id,
         project_id=project_id,
         expires_at=None,
+        **_snapshot_registry_fields(),
         skill_catalog=[
             {
                 "version_id": str(uuid4()),
@@ -198,6 +277,7 @@ async def test_loader_enforces_aggregate_token_limit_before_returning_instructio
         user_id=user_id,
         project_id=project_id,
         expires_at=None,
+        **_snapshot_registry_fields(),
         skill_catalog=[
             {
                 "version_id": str(version_id),
@@ -245,6 +325,7 @@ async def test_loader_rejects_mutated_instructions_with_a_stale_stored_hash() ->
         user_id=user_id,
         project_id=project_id,
         expires_at=None,
+        **_snapshot_registry_fields(),
         skill_catalog=[
             {
                 "version_id": str(version_id),
@@ -290,6 +371,7 @@ async def test_loader_rejects_snapshot_version_owned_by_another_project() -> Non
         user_id=user_id,
         project_id=project_id,
         expires_at=None,
+        **_snapshot_registry_fields(),
         skill_catalog=[
             {
                 "version_id": str(version_id),

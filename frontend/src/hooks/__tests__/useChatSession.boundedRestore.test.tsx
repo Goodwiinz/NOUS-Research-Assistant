@@ -11,6 +11,10 @@ const navigationMocks = vi.hoisted(() => ({
   isNew: false,
 }));
 
+const persistenceMocks = vi.hoisted(() => ({
+  initialize: vi.fn().mockResolvedValue(undefined),
+}));
+
 const workspaceMocks = vi.hoisted(() => ({
   getOrCreateDefaultWorkspace: vi.fn(),
   getOrCreateDefaultConversation: vi.fn(),
@@ -22,6 +26,8 @@ const workspaceMocks = vi.hoisted(() => ({
 
 const chatStoreMocks = vi.hoisted(() => {
   const state = {
+    currentWorkspaceId: 'workspace-1',
+    currentConversationId: 'conv-1',
     currentThreadId: null as string | null,
     messages: {} as Record<string, ChatMessage[]>,
     addMessageToStore: vi.fn(),
@@ -70,7 +76,12 @@ vi.mock('@/services/workspaceService', () => ({
   workspaceService: workspaceMocks,
 }));
 
-vi.mock('@/store/chat-store', () => ({
+vi.mock('@/hooks/useChatPersistence', () => ({
+  useChatPersistence: () => ({ initialize: persistenceMocks.initialize }),
+}));
+
+vi.mock('@/store/chat-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/chat-store')>()),
   useChatStore: chatStoreMocks.useStore,
 }));
 
@@ -148,6 +159,9 @@ describe('useChatSession bounded restoration', () => {
     localStorage.clear();
     navigationMocks.threadId = null;
     navigationMocks.isNew = false;
+    window.history.replaceState({}, '', '/chat');
+    chatStoreMocks.state.currentWorkspaceId = 'workspace-1';
+    chatStoreMocks.state.currentConversationId = 'conv-1';
     chatStoreMocks.state.currentThreadId = null;
     chatStoreMocks.state.setCurrentThread.mockImplementation(
       (threadId: string | null) => {
@@ -292,9 +306,8 @@ describe('useChatSession bounded restoration', () => {
       hasMore: true,
       loadedCount: 50,
     });
-    expect(navigationMocks.replace).toHaveBeenCalledWith(
-      '/chat?thread=thread-old'
-    );
+    expect(window.location.search).toBe('?thread=thread-old');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
     expect(result.current.initError).toBeNull();
   });
 
@@ -386,6 +399,7 @@ describe('useChatSession bounded restoration', () => {
     await waitFor(() => expect(result.current.isInitializing).toBe(false));
     expect(result.current.initError).toBeNull();
     expect(chatStoreMocks.state.currentThreadId).toBe('thread-newer-selection');
+    expect(window.location.search).toBe('?thread=thread-newer-selection');
     expect(navigationMocks.replace).not.toHaveBeenCalled();
   });
 
@@ -473,8 +487,7 @@ describe('useChatSession bounded restoration', () => {
       'thread-off-page',
       'thread-newest',
     ]);
-    expect(navigationMocks.replace).toHaveBeenCalledWith(
-      '/chat?thread=thread-off-page'
-    );
+    expect(window.location.search).toBe('?thread=thread-off-page');
+    expect(navigationMocks.replace).not.toHaveBeenCalled();
   });
 });

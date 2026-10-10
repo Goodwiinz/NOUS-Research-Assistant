@@ -34,6 +34,10 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 class ProfileUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    # Kept for OpenAPI compatibility ONLY (GOO-405). ``users.email`` is owned by
+    # the identity provider and written once, at JIT provisioning, from the
+    # verified token. ``update_profile`` accepts this field only when it echoes
+    # the caller's current address; any other value is rejected with 400.
     email: Optional[EmailStr] = None
 
 
@@ -72,12 +76,29 @@ async def update_profile(
     auth_service: AuthService = Depends(get_auth_service),
 ):
     """Update current user profile"""
+    # The email address cannot be changed here (GOO-405). A client-chosen
+    # users.email let any signed-in user squat a victim's address before the
+    # victim's first login. users.email is UNIQUE, so the victim's JIT
+    # provisioning then failed and they were locked out with a 401. Email
+    # changes go through Supabase's verified email-change flow. (The docstring
+    # above is the OpenAPI description; it is left unchanged so the contract
+    # snapshot does not move.)
+    if profile_data.email is not None and (
+        profile_data.email.lower() != (current_user.email or "").lower()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Email cannot be changed via this endpoint; "
+                "it is managed by the identity provider"
+            ),
+        )
+
     try:
         updated_user = await auth_service.update_user_profile(
             user=current_user,
             first_name=profile_data.first_name,
             last_name=profile_data.last_name,
-            email=profile_data.email,
         )
 
         return {
@@ -85,8 +106,12 @@ async def update_profile(
             "user": updated_user.to_dict(exclude_sensitive=True),
         }
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in update_profile: {e}")
         raise HTTPException(
@@ -159,8 +184,12 @@ async def update_user_role(
             "user": updated_user.to_dict(exclude_sensitive=True),
         }
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in update_user_role: {e}")
         raise HTTPException(
@@ -197,8 +226,12 @@ async def deactivate_user(
 
         return {"message": "User deactivated successfully"}
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in deactivate_user: {e}")
         raise HTTPException(
@@ -238,8 +271,12 @@ async def cleanup_inactive_users(
             "deleted_count": deleted_count,
         }
 
-    except (AuthenticationError, RegistrationError) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (AuthenticationError, RegistrationError):
+        logger.warning("Authentication request failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authentication failed",
+        )
     except Exception as e:
         logger.error(f"Error in cleanup_inactive_users: {e}")
         raise HTTPException(

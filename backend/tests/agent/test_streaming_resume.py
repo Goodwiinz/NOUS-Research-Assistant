@@ -1,7 +1,9 @@
 """Resumable-stream plumbing: sequence-numbered SSE frames teed into the
 Redis stream buffer, with finish_stream after the terminal frame."""
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -277,6 +279,28 @@ class _DisconnectThenHangGraph:
         return SimpleNamespace(values={}, tasks=())
 
 
+class _TokenThenBlockedGraph:
+    """One token, then a pending graph pull that Stop must close."""
+
+    def __init__(self):
+        self.closed = False
+
+    async def astream_events(self, *args, **kwargs):
+        yield {
+            "event": "on_chat_model_stream",
+            "name": "llm_node",
+            "metadata": {"langgraph_node": "llm_node"},
+            "data": {"chunk": SimpleNamespace(content="partial answer")},
+        }
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.closed = True
+
+    async def aget_state(self, config):  # pragma: no cover - not reached
+        return SimpleNamespace(values={}, tasks=())
+
+
 @pytest.mark.asyncio
 async def test_connected_graph_timeout_persists_partial_and_emits_error(monkeypatch):
     """A graph timeout with a connected client keeps the failure contract."""
@@ -398,6 +422,10 @@ async def test_buffered_disconnect_cancels_and_persists_partial(monkeypatch):
             new=AsyncMock(return_value=None),
         ),
         patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=AsyncMock(return_value=False),
+        ),
+        patch(
             "src.api.agent.streaming._resolve_and_bind_project",
             new=AsyncMock(return_value=None),
         ),
@@ -446,6 +474,98 @@ async def test_buffered_disconnect_cancels_and_persists_partial(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_buffered_durable_stop_cancels_graph_without_transport_disconnect(
+    monkeypatch,
+):
+    """The graph acknowledges a durable Stop and never publishes done."""
+    buf = _RecordingBuffer()
+    buf.install(monkeypatch)
+
+    request = SimpleNamespace(is_disconnected=AsyncMock(return_value=False))
+    thread_id = "33333333-3333-3333-3333-333333333333"
+    body = make_stream_request(thread_id=thread_id, use_rag=False)
+    current_user = Mock(id="user-1", organization_id="org-1")
+    persist = AsyncMock(return_value="row-1")
+    finalize = AsyncMock(return_value=True)
+    graph = _TokenThenBlockedGraph()
+    thread_obj = SimpleNamespace(id=thread_id)
+    acceptance = streaming.AcceptedSubmission(
+        run_id="55555555-5555-5555-5555-555555555555",
+        thread_id=thread_id,
+        user_message_id="66666666-6666-6666-6666-666666666666",
+        outbox_id="outbox-durable-stop",
+        idempotency_key="durable-stop",
+    )
+    stop_requested = AsyncMock(side_effect=[False, False, False, False, True])
+
+    with (
+        patch(
+            "src.services.agent.observability.configure_langsmith",
+            return_value=None,
+        ),
+        patch(
+            "src.services.agent.checkpointer.get_checkpointer",
+            new=AsyncMock(return_value=object()),
+        ),
+        patch(
+            "src.services.agent.graph.compile_agent_graph",
+            return_value=graph,
+        ),
+        patch(
+            "src.api.agent.streaming._resolve_thread",
+            new=AsyncMock(return_value=(thread_obj, None)),
+        ),
+        patch(
+            "src.api.agent.streaming.accept_submission",
+            new=AsyncMock(return_value=acceptance),
+        ),
+        patch(
+            "src.api.agent.streaming.mark_submission_dispatched",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "src.api.agent.streaming.is_run_cancellation_requested",
+            new=stop_requested,
+        ),
+        patch(
+            "src.api.agent.streaming._resolve_and_bind_project",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.api.agent.streaming._jobs_mod._persist_assistant_message_safe",
+            new=persist,
+        ),
+        patch(
+            "src.api.agent.streaming._finalize_run",
+            new=finalize,
+        ),
+        patch(
+            "src.api.agent.streaming.AsyncSessionLocal",
+            return_value=AsyncMock(),
+        ),
+    ):
+        events = [
+            event
+            async for event in streaming.stream_event_generator(
+                body, request, current_user
+            )
+        ]
+
+    assert persist.await_args.kwargs["content"] == "partial answer"
+    assert persist.await_args.kwargs["stopped"] is True
+    assert graph.closed is True
+    assert not any("event: done" in frame for frame in events)
+    assert not any("event: error" in frame for frame in events)
+    assert buf.finished == [(thread_id, f"sid-{thread_id}")]
+    finalize.assert_awaited_once()
+    assert finalize.await_args.kwargs["status"] is streaming.JobStatus.CANCELLED
+    assert (
+        finalize.await_args.kwargs["event_type"] is streaming.RunEventType.RUN_CANCELLED
+    )
+    assert finalize.await_args.kwargs["payload"]["reason"] == "user_requested"
+
+
 # ---------------------------------------------------------------------------
 # GET /stream/resume/{thread_id}
 # ---------------------------------------------------------------------------
@@ -463,14 +583,46 @@ from src.services.agent.stream_buffer import BufferedFrame
 THREAD_ID = str(uuid4())
 
 
-def _client(owns_thread=True):
+def _client(owns_thread=True, *, run_stream_id=None):
     app = FastAPI()
     app.include_router(execute_mod.router)
 
     user = Mock(id="user-1", organization_id="org-1")
-    thread = SimpleNamespace(id=THREAD_ID) if owns_thread else None
+    workspace = SimpleNamespace(
+        is_deleted=False,
+        is_public=False,
+        owner_id="workspace-owner",
+        is_member=lambda user_id: user_id == user.id,
+        can_user_edit=lambda user_id: user_id == user.id,
+    )
+    conversation = SimpleNamespace(
+        id=f"conversation-{THREAD_ID}",
+        workspace_id=f"workspace-{THREAD_ID}",
+        is_deleted=False,
+        workspace=workspace,
+    )
+    thread = (
+        SimpleNamespace(
+            id=THREAD_ID,
+            is_deleted=False,
+            conversation_id=conversation.id,
+            conversation=conversation,
+        )
+        if owns_thread
+        else None
+    )
     db = AsyncMock()
-    db.execute.return_value = Mock(scalar_one_or_none=Mock(return_value=thread))
+    thread_result = Mock()
+    thread_result.scalars.return_value.first.return_value = thread
+    if run_stream_id is None:
+        db.execute.return_value = thread_result
+    else:
+        run_result = Mock()
+        run_result.scalar_one_or_none.return_value = SimpleNamespace(
+            job_id=f"run-{run_stream_id}",
+            status="running",
+        )
+        db.execute.side_effect = [thread_result, run_result]
 
     async def override_db():
         yield db
@@ -517,6 +669,14 @@ def test_resume_no_active_stream_returns_204(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=None)
     )
+    # This unit test covers the empty-buffer branch. The pending-confirmation
+    # probe is covered by test_agent_resume_confirmation_envelope and must not
+    # reach a real LangGraph/Postgres checkpointer here.
+    monkeypatch.setattr(
+        execute_mod,
+        "_pending_confirmation_frame",
+        AsyncMock(return_value=None),
+    )
     resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
     assert resp.status_code == 204
 
@@ -531,6 +691,11 @@ def test_resume_just_finished_named_stream_replays(monkeypatch):
         "thread_id_for_stream",
         AsyncMock(return_value=THREAD_ID),
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=sid),
+    )
 
     async def read_after(stream_id, after_seq, start_index=None):
         assert stream_id == sid
@@ -538,7 +703,9 @@ def test_resume_just_finished_named_stream_replays(monkeypatch):
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}")
+    resp = _client(run_stream_id=sid).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}"
+    )
 
     assert resp.status_code == 200
     assert "event: done" in resp.text
@@ -554,10 +721,17 @@ def test_resume_finished_stream_rejects_wrong_thread_mapping(monkeypatch):
         "thread_id_for_stream",
         AsyncMock(return_value=str(uuid4())),
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=sid),
+    )
     read_after = AsyncMock(return_value=_frames())
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}")
+    resp = _client(run_stream_id=sid).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={sid}"
+    )
 
     assert resp.status_code == 204
     read_after.assert_not_awaited()
@@ -567,13 +741,20 @@ def test_resume_replays_frames_and_stops_after_done(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
 
     async def read_after(sid, after_seq, start_index=None):
         assert sid == "sid-1"
         return [f for f in _frames() if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+    resp = _client(run_stream_id="sid-1").get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}"
+    )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
     body = resp.text
@@ -592,12 +773,19 @@ def test_resume_excludes_frames_at_or_below_after(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
 
     async def read_after(sid, after_seq, start_index=None):
         return [f for f in _frames() if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?after=2")
+    resp = _client(run_stream_id="sid-1").get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?after=2"
+    )
     assert "id: 1" not in resp.text and "id: 2\n" not in resp.text
     assert "event: done" in resp.text
 
@@ -606,6 +794,11 @@ def test_resume_uses_last_event_id_header_as_cursor(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
     cursors: list[int] = []
 
     async def read_after(sid, after_seq, start_index=None):
@@ -613,7 +806,7 @@ def test_resume_uses_last_event_id_header_as_cursor(monkeypatch):
         return [f for f in _frames() if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(
+    resp = _client(run_stream_id="sid-1").get(
         f"/api/v1/agent/stream/resume/{THREAD_ID}?after=1",
         headers={"Last-Event-ID": "2"},
     )
@@ -649,6 +842,11 @@ def test_resume_token_containing_terminal_text_does_not_stop_replay(monkeypatch)
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value="sid-1")
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value="sid-1"),
+    )
     frames = [
         BufferedFrame(
             seq=1,
@@ -662,7 +860,9 @@ def test_resume_token_containing_terminal_text_does_not_stop_replay(monkeypatch)
         return [f for f in frames if f.seq > after_seq]
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+    resp = _client(run_stream_id="sid-1").get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}"
+    )
     body = resp.text
     assert "id: 2\n" in body  # replay continued past the decoy token frame
     assert body.rstrip().endswith("event: done\ndata: {}")
@@ -715,10 +915,17 @@ def test_resume_mismatched_stream_param_returns_204(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=active)
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=active),
+    )
     read_after = AsyncMock(return_value=_frames())
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={stale}")
+    resp = _client(run_stream_id=active).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={stale}"
+    )
 
     assert resp.status_code == 204
     read_after.assert_not_awaited()
@@ -729,6 +936,11 @@ def test_resume_matching_stream_param_replays(monkeypatch):
     monkeypatch.setattr(
         execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=active)
     )
+    monkeypatch.setattr(
+        execute_mod._stream_buffer,
+        "stream_id_for_run",
+        AsyncMock(return_value=active),
+    )
 
     async def read_after(sid, after_seq, start_index=None):
         assert sid == active
@@ -736,10 +948,188 @@ def test_resume_matching_stream_param_replays(monkeypatch):
 
     monkeypatch.setattr(execute_mod._stream_buffer, "read_after", read_after)
 
-    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={active}")
+    resp = _client(run_stream_id=active).get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={active}"
+    )
 
     assert resp.status_code == 200
     assert "event: done" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# BR-2: a stream-less resume (the frontend cold-load probe) must not replay a
+# finished Codex run whose outcome is already an assistant transcript row.
+# Mutation: execute.py resume_stream — drop the `not JobStatus(...).is_terminal`
+# clause of the stream-less Codex fallback; the parametrized test then fails
+# with "a finished Codex run was handed to the replay path".
+#
+# A finished run with NO assistant row (dispatch_pending.terminalize() closed it
+# before the local process started) must still replay: its terminal event is
+# the turn's only visible outcome. Mutation: drop the
+# `or not await has_assistant_projection(...)` clause; the missing-row test
+# then gets 204 instead of 200.
+# ---------------------------------------------------------------------------
+
+
+def _codex_run(status: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        job_id=str(uuid4()), status=status, execution_provider="codex"
+    )
+
+
+def _no_native_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        execute_mod._stream_buffer, "active_stream_id", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod, "_pending_confirmation_frame", AsyncMock(return_value=None)
+    )
+
+
+def _fake_harness_stream(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    from src.api.agent import harness_streaming
+
+    cursors: list[int] = []
+
+    async def stream(*_args: object, after_seq: int = 0) -> AsyncIterator[str]:
+        cursors.append(after_seq)
+        yield "id: 1\nevent: status\ndata: {}\n\n"
+
+    monkeypatch.setattr(
+        harness_streaming,
+        "context_for_accepted_run",
+        AsyncMock(return_value=object()),
+    )
+    monkeypatch.setattr(harness_streaming, "stream_harness_run", stream)
+    return cursors
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_streamless_resume_does_not_replay_a_finished_codex_run_in_the_transcript(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    from src.api.agent import harness_streaming
+    from src.services.harness import delivery
+
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        delivery, "has_assistant_projection", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        execute_mod, "get_active_run_for_thread", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod,
+        "get_latest_run_for_thread",
+        AsyncMock(return_value=_codex_run(status)),
+    )
+    monkeypatch.setattr(
+        harness_streaming,
+        "context_for_accepted_run",
+        AsyncMock(
+            side_effect=AssertionError(
+                "a finished Codex run was handed to the replay path"
+            )
+        ),
+    )
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 204
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_streamless_resume_replays_a_finished_codex_run_missing_from_the_transcript(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    """dispatch_pending.terminalize() fails a run it could not hand to the local
+    process, or cancels one stopped before dispatch, without writing an
+    assistant row. After a reload the cold-load probe is the only way the user
+    sees that outcome, so the fallback must still replay the run from seq 0."""
+    from src.services.harness import delivery
+
+    run = _codex_run(status)
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod, "get_active_run_for_thread", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod, "get_latest_run_for_thread", AsyncMock(return_value=run)
+    )
+    projected = AsyncMock(return_value=False)
+    monkeypatch.setattr(delivery, "has_assistant_projection", projected)
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 200
+    assert "event: status" in resp.text
+    assert cursors == [0]
+    assert projected.await_args is not None
+    assert projected.await_args.args[1] is run
+
+
+def test_streamless_resume_still_attaches_to_an_active_codex_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod,
+        "get_active_run_for_thread",
+        AsyncMock(return_value=_codex_run("running")),
+    )
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 200
+    assert "event: status" in resp.text
+    assert cursors == [0]
+
+
+def test_streamless_resume_fallback_still_replays_a_live_codex_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard's true branch: when the active-run lookup misses but the
+    latest Codex run is still non-terminal, the fallback hands it to replay.
+    Mutation: make the `not JobStatus(...).is_terminal` clause always false;
+    this test then gets 204 instead of 200."""
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod, "get_active_run_for_thread", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        execute_mod,
+        "get_latest_run_for_thread",
+        AsyncMock(return_value=_codex_run("running")),
+    )
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(f"/api/v1/agent/stream/resume/{THREAD_ID}")
+
+    assert resp.status_code == 200
+    assert "event: status" in resp.text
+    assert cursors == [0]
+
+
+def test_named_stream_still_replays_a_just_finished_codex_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The resume effect passes stream=<run id>; a run that finished while the
+    browser reconnected must still deliver its tail from the caller's cursor."""
+    run = _codex_run("completed")
+    _no_native_stream(monkeypatch)
+    monkeypatch.setattr(
+        execute_mod, "get_latest_run_for_thread", AsyncMock(return_value=run)
+    )
+    cursors = _fake_harness_stream(monkeypatch)
+
+    resp = _client().get(
+        f"/api/v1/agent/stream/resume/{THREAD_ID}?stream={run.job_id}&after=7"
+    )
+
+    assert resp.status_code == 200
+    assert cursors == [7]
 
 
 def test_envelope_carries_stream_id_only_when_present():

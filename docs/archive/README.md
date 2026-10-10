@@ -1,9 +1,19 @@
-# Archive
+# Archived documentation
 
-Read-only historical documents. These are preserved for reference but are no longer actively maintained.
+Retired planning and implementation records retained for historical reference.
+Keep their original decisions, checkboxes and results intact; they do not define
+current runtime behavior or setup commands.
 
-| Directory | Contents |
-|---|---|
-| `plans/` | 66 planning documents from Feb–Apr 2026 (feature designs, architecture explorations, sprint plans) |
+[Documentation home](../README.md) · [Current engineering contracts](../engineering/README.md)
 
-Active planning documents live in `.claude/plans/`.
+## Collections
+
+* [Archived plans](plans/) contains earlier feature designs, explorations and
+  implementation records, including its nested `archived/` collection.
+
+## Related planning records
+
+[Repository plans](../plans/README.md) and [Superpowers plans](../superpowers/plans/README.md)
+are indexed separately. Their presence outside this archive does not establish
+that every proposal remains active or implemented. Read each record’s date,
+status and source revision, then check current source and delivery evidence.

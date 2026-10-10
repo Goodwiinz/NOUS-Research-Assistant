@@ -48,6 +48,8 @@ describe('streaming reasoning panel and elapsed time', () => {
       streamingContent: '',
       streamingSteps: [],
       streamingProgress: [],
+      streamingPlan: [],
+      streamingPlanReasoning: '',
       streamingReasoning: '',
       streamingCitations: [],
       isRetrievingRag: false,
@@ -128,6 +130,18 @@ describe('streaming reasoning panel and elapsed time', () => {
     expect(panel).toHaveTextContent(
       'Comparing the strongest evidence across sources.'
     );
+  });
+
+  it('shows planner rationale even when the planner emitted no steps', () => {
+    useChatStore.setState({
+      streamingPlanReasoning: 'The request needs a direct evidence check.',
+    });
+    renderStreamingTurn();
+
+    expect(screen.getByText('Planner rationale')).toBeInTheDocument();
+    expect(
+      screen.getByText('The request needs a direct evidence check.')
+    ).toBeInTheDocument();
   });
 
   it('keeps message timing visible after answer tokens arrive', () => {

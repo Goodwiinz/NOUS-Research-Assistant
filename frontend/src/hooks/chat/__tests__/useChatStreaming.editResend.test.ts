@@ -12,12 +12,22 @@
 //     silently dropped.
 //  2. A normal send omits the field entirely (not null, not empty string).
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createElement, type ReactElement, type ReactNode } from 'react';
-import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
+import {
+  createElement,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
+import {
+  selectDisplayedMessages,
+  type ChatPageMessage,
+} from '@/components/chat/shared/cloudMessageView';
 import { makeChatPageMessage } from '@/test/chatMessageFactory';
 import { useChatStore } from '@/store/chat-store';
+import type { ChatMessage, MessageAttachment } from '@/types/workspace';
+import { useChatComposerActions } from '@/hooks/chat/useChatComposerActions';
 
 function wrapper({ children }: { children: ReactNode }): ReactElement {
   const client = new QueryClient({
@@ -38,6 +48,10 @@ vi.mock('@/services/agentChatService', () => ({
     streamConfirm: vi.fn(),
     resumeStream: vi.fn().mockResolvedValue({ status: 'idle' }),
   },
+}));
+
+vi.mock('@/services/enhancedDocumentService', () => ({
+  enhancedDocumentService: { uploadDocument: vi.fn() },
 }));
 
 vi.mock('@/services/workspaceService', () => ({
@@ -66,6 +80,46 @@ const history: ChatPageMessage[] = [
   }),
 ];
 
+const replacementStoreRows = [
+  {
+    id: 'before-user',
+    client_message_id: 'runtime-before-user',
+    role: 'user',
+    content: 'Earlier question',
+  },
+  {
+    id: 'before-assistant',
+    client_message_id: 'runtime-before-assistant',
+    role: 'assistant',
+    content: 'Earlier answer',
+  },
+  {
+    id: 'old-user',
+    client_message_id: EDITED_CMID,
+    role: 'user',
+    content: 'Original question',
+  },
+  {
+    id: 'old-assistant',
+    client_message_id: 'runtime-old-assistant',
+    role: 'assistant',
+    content: 'Original answer',
+  },
+] as ChatMessage[];
+
+function withStoreMetadata(
+  rows: ChatMessage[],
+  createdAtOffset = 0
+): ChatMessage[] {
+  return rows.map((row, index) => ({
+    ...row,
+    created_at: new Date(
+      Date.UTC(2026, 7, 1, 0, 0, createdAtOffset + index)
+    ).toISOString(),
+    citations: [],
+  }));
+}
+
 function makeParams(
   overrides: Record<string, unknown> = {}
 ): Record<string, unknown> {
@@ -83,8 +137,18 @@ function makeParams(
 }
 
 type Payload = {
-  messages: Array<{ role: string; content: string; client_message_id?: string }>;
+  messages: Array<{
+    role: string;
+    content: string;
+    client_message_id?: string;
+  }>;
   supersedes_client_message_id?: string;
+};
+
+type ReplacementStreamCallbacks = {
+  onToken?: (content: string) => void;
+  onDone?: (payload?: Record<string, unknown>) => void;
+  onError?: (error: string, category?: string, localFailure?: string) => void;
 };
 
 describe('useChatStreaming edit-and-resend', () => {
@@ -121,6 +185,247 @@ describe('useChatStreaming edit-and-resend', () => {
     expect(lastTurn.client_message_id).not.toBe(EDITED_CMID);
   });
 
+  it('hides the replaced suffix while pending, then restores it on stream failure', async () => {
+    let callbacks!: ReplacementStreamCallbacks;
+    let release!: () => void;
+    streamMessageMock.mockImplementation(
+      (_request: unknown, nextCallbacks: ReplacementStreamCallbacks) => {
+        callbacks = nextCallbacks;
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    );
+    useChatStore.setState({
+      currentThreadId: 'thread-A',
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const displayedFrames: Array<{
+      ids: string[];
+      replacementInFlight: boolean;
+    }> = [];
+    const { result } = renderHook(
+      () => {
+        const [messages, setMessages] = useState<ChatPageMessage[]>([]);
+        const [storeRows] = useState(() =>
+          withStoreMetadata(replacementStoreRows)
+        );
+        const displayedMessages = selectDisplayedMessages({
+          localMessages: messages,
+          storeMessages: storeRows,
+          messageFreshness: 'stale',
+        });
+        const streaming = useChatStreaming({
+          messages,
+          displayedMessages,
+          setMessages,
+          conversations: [],
+          setConversations: vi.fn(),
+          dbConversation: null,
+          enableRAG: false,
+        });
+        return { messages, displayedMessages, streaming };
+      },
+      { wrapper }
+    );
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.streaming.handleSubmit(
+        'first turn, edited',
+        [],
+        EDITED_CMID
+      );
+    });
+    await waitFor(() =>
+      expect(
+        result.current.messages.some(
+          (message) => message.replacesClientMessageId === EDITED_CMID
+        )
+      ).toBe(true)
+    );
+    const pendingDisplay = result.current.displayedMessages.map(
+      ({ runtimeId }) => runtimeId
+    );
+    displayedFrames.push({ ids: pendingDisplay, replacementInFlight: true });
+    expect(pendingDisplay).not.toContain(EDITED_CMID);
+    expect(pendingDisplay).not.toContain('runtime-old-assistant');
+    expect(pendingDisplay).toContain('runtime-before-user');
+    expect(pendingDisplay).toContain('runtime-before-assistant');
+
+    callbacks.onError?.('synthetic replacement failure', 'stream-error');
+    await act(async () => {
+      release();
+      await submission;
+    });
+
+    expect(
+      result.current.messages.some(
+        (message) => message.replacesClientMessageId !== undefined
+      )
+    ).toBe(false);
+    const failedDisplay = result.current.displayedMessages.map(
+      ({ runtimeId }) => runtimeId
+    );
+    displayedFrames.push({ ids: failedDisplay, replacementInFlight: false });
+    expect(
+      displayedFrames
+        .filter(({ replacementInFlight }) => replacementInFlight)
+        .every(
+          ({ ids }) =>
+            !ids.includes(EDITED_CMID) && !ids.includes('runtime-old-assistant')
+        )
+    ).toBe(true);
+    expect(failedDisplay).toContain('runtime-before-user');
+    expect(failedDisplay).toContain('runtime-before-assistant');
+    expect(failedDisplay).toContain(EDITED_CMID);
+    expect(failedDisplay).toContain('runtime-old-assistant');
+    expect(
+      result.current.messages.some(
+        (message) => message.error?.category === 'stream-error'
+      )
+    ).toBe(true);
+  });
+
+  it('keeps the replacement hidden until a successful canonical refresh reconciles it', async () => {
+    let callbacks!: ReplacementStreamCallbacks;
+    let release!: () => void;
+    streamMessageMock.mockImplementation(
+      (_request: unknown, nextCallbacks: ReplacementStreamCallbacks) => {
+        callbacks = nextCallbacks;
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    );
+    useChatStore.setState({
+      currentThreadId: 'thread-A',
+      isStreaming: false,
+      streamingThreadId: null,
+    });
+    const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
+    const displayedFrames: Array<{
+      ids: string[];
+      replacementInFlight: boolean;
+    }> = [];
+    const { result } = renderHook(
+      () => {
+        const [messages, setMessages] = useState<ChatPageMessage[]>([]);
+        const [storeRows, setStoreRows] = useState(() =>
+          withStoreMetadata(replacementStoreRows)
+        );
+        const [freshness, setFreshness] = useState<'stale' | 'fresh'>('stale');
+        const displayedMessages = selectDisplayedMessages({
+          localMessages: messages,
+          storeMessages: storeRows,
+          messageFreshness: freshness,
+        });
+        const streaming = useChatStreaming({
+          messages,
+          displayedMessages,
+          setMessages,
+          conversations: [],
+          setConversations: vi.fn(),
+          dbConversation: null,
+          enableRAG: false,
+        });
+        return {
+          messages,
+          displayedMessages,
+          setStoreRows,
+          setFreshness,
+          streaming,
+        };
+      },
+      { wrapper }
+    );
+
+    let submission!: Promise<void>;
+    act(() => {
+      submission = result.current.streaming.handleSubmit(
+        'first turn, edited',
+        [],
+        EDITED_CMID
+      );
+    });
+    await waitFor(() => expect(callbacks).toBeDefined());
+    callbacks.onToken?.('edited answer');
+    callbacks.onDone?.({ assistant_message_id: 'new-assistant' });
+    await act(async () => {
+      release();
+      await submission;
+    });
+
+    const pendingDisplay = result.current.displayedMessages.map(
+      ({ runtimeId }) => runtimeId
+    );
+    displayedFrames.push({ ids: pendingDisplay, replacementInFlight: true });
+    expect(pendingDisplay).not.toContain(EDITED_CMID);
+    expect(pendingDisplay).not.toContain('runtime-old-assistant');
+    const replacementUser = result.current.messages.find(
+      (message) => message.role === 'user'
+    );
+    const replacementAssistant = result.current.messages.find(
+      (message) => message.role === 'assistant'
+    );
+    expect(replacementUser).toBeDefined();
+    expect(replacementAssistant).toBeDefined();
+
+    act(() => {
+      result.current.setStoreRows(
+        withStoreMetadata(
+          [
+            replacementStoreRows[0],
+            replacementStoreRows[1],
+            {
+              id: 'new-user',
+              client_message_id: replacementUser!.runtimeId,
+              role: 'user',
+              content: 'first turn, edited',
+            },
+            {
+              id: 'new-assistant',
+              client_message_id: replacementAssistant!.runtimeId,
+              role: 'assistant',
+              content: 'edited answer',
+            },
+          ] as ChatMessage[],
+          10
+        )
+      );
+      result.current.setFreshness('fresh');
+    });
+    await waitFor(() =>
+      expect(
+        result.current.displayedMessages.map(({ runtimeId }) => runtimeId)
+      ).toEqual([
+        'runtime-before-user',
+        'runtime-before-assistant',
+        replacementUser!.runtimeId,
+        replacementAssistant!.runtimeId,
+      ])
+    );
+    displayedFrames.push({
+      ids: result.current.displayedMessages.map(({ runtimeId }) => runtimeId),
+      replacementInFlight: false,
+    });
+    expect(
+      displayedFrames
+        .filter(({ replacementInFlight }) => replacementInFlight)
+        .every(
+          ({ ids }) =>
+            !ids.includes(EDITED_CMID) && !ids.includes('runtime-old-assistant')
+        )
+    ).toBe(true);
+    expect(
+      result.current.displayedMessages.filter(
+        ({ runtimeId }) => runtimeId === replacementUser!.runtimeId
+      )
+    ).toHaveLength(1);
+  });
+
   it('omits the field entirely on a normal send', async () => {
     const { useChatStreaming } = await import('@/hooks/chat/useChatStreaming');
     const { result } = renderHook(() => useChatStreaming(makeParams()), {
@@ -148,4 +453,116 @@ describe('useChatStreaming edit-and-resend', () => {
     const payload = streamMessageMock.mock.calls[0][0] as Payload;
     expect('supersedes_client_message_id' in payload).toBe(false);
   });
+
+  it.each(['edit', 'regenerate'] as const)(
+    '%s keeps the turn’s attachments on the optimistic replacement, during the stream and after a failure',
+    async (action) => {
+      const attachment: MessageAttachment = {
+        id: 'attachment-row',
+        document_id: '33333333-3333-4333-8333-333333333333',
+        display_name: 'Synthetic audit paper.pdf',
+      };
+      let callbacks!: ReplacementStreamCallbacks;
+      let release!: () => void;
+      streamMessageMock.mockImplementation(
+        (_request: unknown, nextCallbacks: ReplacementStreamCallbacks) => {
+          callbacks = nextCallbacks;
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+      );
+      useChatStore.setState({
+        currentThreadId: 'thread-A',
+        isStreaming: false,
+        streamingThreadId: null,
+      });
+      const { useChatStreaming } =
+        await import('@/hooks/chat/useChatStreaming');
+      const { result } = renderHook(
+        () => {
+          const [messages, setMessages] = useState<ChatPageMessage[]>([]);
+          const [storeRows] = useState(() =>
+            withStoreMetadata(replacementStoreRows).map((row) =>
+              row.client_message_id === EDITED_CMID
+                ? { ...row, attachments: [attachment] }
+                : row
+            )
+          );
+          const displayedMessages = selectDisplayedMessages({
+            localMessages: messages,
+            storeMessages: storeRows,
+            messageFreshness: 'stale',
+          });
+          const streaming = useChatStreaming({
+            messages,
+            displayedMessages,
+            setMessages,
+            conversations: [],
+            setConversations: vi.fn(),
+            dbConversation: null,
+            enableRAG: false,
+          });
+          const composer = useChatComposerActions({
+            workspace: null,
+            setInput: streaming.setInput,
+            handleSubmit: streaming.handleSubmit,
+            isLoading: streaming.isLoading,
+            storeIsStreaming: false,
+            displayedMessages,
+          });
+          return { messages, composer };
+        },
+        { wrapper }
+      );
+
+      // Rows: before-user(0) before-assistant(1) old-user(2) old-assistant(3)
+      act(() => {
+        if (action === 'edit')
+          result.current.composer.handleEditUserMessage(2, 'Edited question');
+        else result.current.composer.handleRegenerate(3);
+      });
+      await waitFor(() => expect(callbacks).toBeDefined());
+      try {
+        const replacement = (): ChatPageMessage | undefined =>
+          result.current.messages.find(
+            (message) => message.replacesClientMessageId === EDITED_CMID
+          );
+        expect(replacement()?.attachments).toEqual([attachment]);
+        // The backend still receives only the ids.
+        expect(
+          (streamMessageMock.mock.calls[0][0] as { attachment_ids?: string[] })
+            .attachment_ids
+        ).toEqual([attachment.document_id]);
+        // Attachment metadata is display-only: it never reaches the wire.
+        const serializedRequest = JSON.stringify(
+          streamMessageMock.mock.calls[0][0]
+        );
+        expect(serializedRequest).not.toContain(attachment.display_name);
+        expect(serializedRequest).not.toContain(attachment.id);
+
+        callbacks.onError?.('synthetic replacement failure', 'stream-error');
+        await act(async () => {
+          release();
+        });
+        await waitFor(() =>
+          expect(
+            result.current.messages.some(
+              (message) => message.error?.category === 'stream-error'
+            )
+          ).toBe(true)
+        );
+        const failedTurn = result.current.messages.find(
+          (message) => message.role === 'user'
+        );
+        expect(failedTurn?.attachments).toEqual([attachment]);
+      } finally {
+        // Never leave the stream hanging into the next case.
+        callbacks.onError?.('test cleanup', 'stream-error');
+        await act(async () => {
+          release();
+        });
+      }
+    }
+  );
 });

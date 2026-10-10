@@ -1,0 +1,34 @@
+{
+  "name": "@nous/harness-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "bin": {
+    "nous-harness": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/contracts.ts",
+    "./codex": "./src/adapters/codex.ts",
+    "./credentials": "./src/credentials.ts",
+    "./journal": "./src/journal.ts",
+    "./connection": "./src/connection.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-sqlite --import tsx --test --test-timeout=60000",
+    "type-check": "tsc --noEmit",
+    "start": "node --import tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "ajv": "8.20.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "tsx": "4.22.4",
+    "typescript": "5.9.3"
+  }
+}

@@ -31,6 +31,12 @@ export interface ChatState {
   currentWorkspaceId: string | null;
   currentConversationId: string | null;
   currentThreadId: string | null;
+  /**
+   * The verified account the selection above belongs to, persisted with it
+   * so a payload written for one account is never adopted by another (see
+   * `chat/persistedSelection.ts`). Null until the auth store publishes a user.
+   */
+  ownerUserId: string | null;
 
   // Data
   workspaces: Workspace[];
@@ -106,6 +112,8 @@ export interface ChatState {
    * transcript render the plan WHILE the turn streams instead of only after
    * commit. Mirrors the committed message's `plan` field shape exactly. */
   streamingPlan: PlanStep[];
+  /** Planner-authored rationale for the current live plan. */
+  streamingPlanReasoning: string;
   /** Display-safe server progress accumulated for the current turn. */
   streamingProgress: AgentProgressStep[];
   /** Bounded provider-authored reasoning summary for the live turn. */
@@ -138,6 +146,12 @@ export interface ChatActions {
     projectId: string | null
   ) => boolean;
   registerThread: (thread: Thread) => void;
+  /**
+   * Called by the auth store when it publishes a verified user: adopts the
+   * hydrated persisted selection only if it was written for that user, and
+   * stamps every later persisted write with the user's id.
+   */
+  adoptPersistedSelection: (ownerUserId: string) => void;
 
   // UI actions
   setShortcutsDialogOpen: (open: boolean) => void;

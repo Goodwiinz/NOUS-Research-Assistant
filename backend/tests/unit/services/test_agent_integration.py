@@ -13,6 +13,9 @@ from uuid import uuid4
 
 import pytest
 
+from tests.utils.agent_approval import isolated_claimed_confirmation  # noqa: F401
+from tests.utils.agent_approval import isolated_confirmation_identity  # noqa: F401
+
 pytestmark = pytest.mark.asyncio
 
 from fastapi import FastAPI
@@ -23,9 +26,17 @@ from src.api.agent.execute import (
     ConfirmationRequest,
     _get_job,
     _set_job,
+    _set_job_async,
     router,
 )
+from tests.utils.agent_job_status import stub_durable_status_projection
 from tests.utils.agent_thread_access import editable_thread_getter
+
+
+@pytest.fixture(autouse=True)
+def _stub_durable_status_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_durable_status_projection(monkeypatch)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -80,6 +91,7 @@ def app_with_overrides(mock_user_a):
     """Create a FastAPI app with the agent router and dependency overrides."""
     from src.core.database import get_db
     from src.core.dependencies import get_current_user
+    from src.core.security import TokenData, get_current_user_token
 
     app = FastAPI()
     app.include_router(router)
@@ -91,6 +103,11 @@ def app_with_overrides(mock_user_a):
         return _make_mock_db()
 
     app.dependency_overrides[get_current_user] = override_get_current_user
+    # /stream also resolves the raw token for the Codex authority gate; a
+    # browser-provenance TokenData keeps these NOUS turns on the normal path.
+    app.dependency_overrides[get_current_user_token] = lambda: TokenData(
+        user_id=str(mock_user_a.id)
+    )
     app.dependency_overrides[get_db] = override_get_db
 
     return app
@@ -115,10 +132,10 @@ def client(app_with_overrides):
 class TestJobOwnershipEndpoints:
     """Integration tests for job ownership enforcement on API endpoints."""
 
-    def test_get_job_status_returns_404_for_wrong_user(self, client, mock_user_a):
+    async def test_get_job_status_returns_404_for_wrong_user(self, client, mock_user_a):
         """GET /jobs/{id} should return 404 if job belongs to different user."""
         job_id = str(uuid4())
-        _set_job(
+        await _set_job_async(
             job_id,
             {
                 "status": "completed",
@@ -168,7 +185,7 @@ class TestJobOwnershipEndpoints:
 
         response = client.post(
             f"/api/v1/agent/confirm/{job_id}",
-            json={"confirmed": True},
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
         assert response.status_code == 404
 
@@ -191,7 +208,7 @@ class TestJobOwnershipEndpoints:
         ):
             response = client.post(
                 f"/api/v1/agent/confirm/{job_id}",
-                json={"confirmed": True},
+                json={"approval_id": "a" * 64, "confirmed": True},
             )
         assert response.status_code == 200
         assert response.json()["status"] == "running"
@@ -210,7 +227,7 @@ class TestJobOwnershipEndpoints:
 
         response = client.post(
             f"/api/v1/agent/confirm/{job_id}",
-            json={"confirmed": True},
+            json={"approval_id": "a" * 64, "confirmed": True},
         )
         assert response.status_code == 409
 
@@ -385,11 +402,7 @@ class TestResumePersistence:
             ) as mock_persist_user,
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_mock_async_session(),
-            ),
-            patch(
-                "src.services.agent.agent_run_service.record_job_status",
-                new_callable=AsyncMock,
+                side_effect=_mock_async_session,
             ),
         ):
             mock_graph = MagicMock()
@@ -397,7 +410,7 @@ class TestResumePersistence:
             mock_graph.aget_state = AsyncMock(return_value=None)
             mock_compile.return_value = mock_graph
 
-            await _resume_agent_graph(job_id, True, user)
+            await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
         mock_persist_assistant.assert_awaited_once()
         assert (
@@ -462,11 +475,7 @@ class TestResumePersistence:
             ),
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_mock_async_session(),
-            ),
-            patch(
-                "src.services.agent.agent_run_service.record_job_status",
-                new_callable=AsyncMock,
+                side_effect=_mock_async_session,
             ),
         ):
             mock_graph = MagicMock()
@@ -474,7 +483,7 @@ class TestResumePersistence:
             mock_graph.aget_state = AsyncMock(return_value=None)
             mock_compile.return_value = mock_graph
 
-            await _resume_agent_graph(job_id, True, user)
+            await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
         config = mock_graph.ainvoke.call_args.kwargs["config"]
         assert config["configurable"]["thread_id"] == thread_id
@@ -535,11 +544,7 @@ class TestResumePersistence:
             ),
             patch(
                 "src.services.agent.agent_execution_service.AsyncSessionLocal",
-                return_value=_mock_async_session(),
-            ),
-            patch(
-                "src.services.agent.agent_run_service.record_job_status",
-                new_callable=AsyncMock,
+                side_effect=_mock_async_session,
             ),
         ):
             mock_graph = MagicMock()
@@ -547,7 +552,7 @@ class TestResumePersistence:
             mock_graph.aget_state = AsyncMock(return_value=None)
             mock_compile.return_value = mock_graph
 
-            await _resume_agent_graph(job_id, True, user)
+            await _resume_agent_graph(job_id, True, user, approval_id="a" * 64)
 
         job = _get_job(job_id)
         assert job["status"] == "completed"
@@ -620,6 +625,7 @@ class TestSSEStreamPersistence:
             "model": "model-router",
             "use_rag": True,
             "max_context_docs": 5,
+            "attachment_ids": ["44444444-4444-4444-8444-444444444444"],
         }
 
         async def _empty_events():
@@ -672,6 +678,8 @@ class TestSSEStreamPersistence:
             "project_name": None,
         }
         assert initial_state["page_context"] == expected_context
+        assert initial_state["attachment_ids"] == payload["attachment_ids"]
+        assert initial_state["attachment_status"] == []
         assert config["configurable"]["page_context"] == expected_context
 
     def test_stream_confirm_persists_resumed_messages(self, client, mock_user_a):
@@ -684,7 +692,7 @@ class TestSSEStreamPersistence:
         from langchain_core.messages import AIMessage, HumanMessage
 
         thread_id = str(uuid4())
-        payload = {"thread_id": thread_id, "confirmed": True}
+        payload = {"thread_id": thread_id, "confirmed": True, "approval_id": "a" * 64}
 
         async def _empty_events():
             if False:
@@ -783,6 +791,7 @@ class TestSSEStreamPersistence:
         mock_claim.assert_awaited_once()
         assert mock_claim.await_args.args[1] == "run-1"
         assert mock_claim.await_args.kwargs == {
+            "approval_id": "a" * 64,
             "organization_id": mock_user_a.organization_id,
             "user_id": mock_user_a.id,
         }
@@ -790,7 +799,7 @@ class TestSSEStreamPersistence:
     def test_stream_confirm_rejects_snapshot_without_user_id(self, client):
         """SSE /stream/confirm must not resume legacy ownerless checkpoints."""
         thread_id = str(uuid4())
-        payload = {"thread_id": thread_id, "confirmed": True}
+        payload = {"thread_id": thread_id, "confirmed": True, "approval_id": "a" * 64}
 
         snapshot = SimpleNamespace(
             values={

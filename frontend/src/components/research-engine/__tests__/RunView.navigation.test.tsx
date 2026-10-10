@@ -1,0 +1,112 @@
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RunView } from '../RunView';
+import {
+  getRun,
+  getRunManifest,
+  listSteps,
+} from '@/services/researchEngineService';
+import { useResearchEngineStore } from '@/store/research-engine-store';
+
+const push = vi.fn();
+const back = vi.fn();
+
+// GOO-312: the reproducibility section owns its own query; tested apart.
+vi.mock('../RunReproducibility', () => ({ RunReproducibility: () => null }));
+vi.mock('../RunRerun', () => ({ RunRerun: () => null }));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push, back }),
+}));
+vi.mock('@/services/researchEngineService', () => ({
+  getRun: vi.fn(),
+  getRunManifest: vi.fn(),
+  listSteps: vi.fn(),
+  pauseRun: vi.fn(),
+  resumeRun: vi.fn(),
+}));
+
+describe('RunView canonical navigation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(listSteps).mockResolvedValue([]);
+    vi.mocked(getRunManifest).mockResolvedValue({});
+    useResearchEngineStore.setState({
+      activeRun: null,
+      runEvents: [],
+      isLoading: false,
+      error: null,
+    });
+  });
+
+  it('returns a stable run URL to the canonical collection workflow', async () => {
+    vi.mocked(getRun).mockResolvedValue({
+      id: 'run-1',
+      project_id: 'collection-1',
+      research_engine_project_id: 'engine-1',
+      blueprint_id: 'blueprint-1',
+      blueprint_version: 1,
+      protocol_version_id: 'protocol-version-1',
+      effective_plan_hash: 'a'.repeat(64),
+      conformance_status: 'plan_verified',
+      status: 'completed',
+      total_tokens: 10,
+    });
+
+    render(<RunView runId="run-1" />);
+    await screen.findByText('Completed');
+    expect(screen.getByText('Conformance: Plan verified')).toBeInTheDocument();
+    expect(screen.getByText('Protocol protocol')).toBeInTheDocument();
+    expect(screen.getByText('Plan aaaaaaaaaaaa')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Go back' }));
+
+    expect(push).toHaveBeenCalledWith('/projects/collection-1?tab=workflow');
+    expect(back).not.toHaveBeenCalled();
+  });
+
+  it('ignores an old project response after navigating to another run', async () => {
+    let resolveOld!: (run: Awaited<ReturnType<typeof getRun>>) => void;
+    let resolveNew!: (run: Awaited<ReturnType<typeof getRun>>) => void;
+    vi.mocked(getRun)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveNew = resolve;
+        })
+      );
+
+    const { rerender } = render(<RunView runId="old-run" />);
+    await waitFor(() => expect(getRun).toHaveBeenCalledWith('old-run'));
+    rerender(<RunView runId="new-run" />);
+    const newRun = {
+      id: 'new-run',
+      project_id: 'new-collection',
+      research_engine_project_id: 'new-engine',
+      blueprint_id: 'blueprint-2',
+      blueprint_version: 1,
+      status: 'completed',
+      total_tokens: 10,
+    };
+    await act(async () => {
+      resolveNew(newRun);
+    });
+    await screen.findByText('Completed');
+    await act(async () => {
+      resolveOld({ ...newRun, id: 'old-run', project_id: 'old-collection' });
+    });
+
+    expect(useResearchEngineStore.getState().activeRun?.id).toBe('new-run');
+    fireEvent.click(screen.getByRole('button', { name: 'Go back' }));
+    expect(push).toHaveBeenCalledWith('/projects/new-collection?tab=workflow');
+  });
+});

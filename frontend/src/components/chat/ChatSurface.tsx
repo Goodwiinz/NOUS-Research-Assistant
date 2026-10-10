@@ -1,6 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 // ChatInput resolves through the barrel (not its own module path) — the
@@ -9,6 +15,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ChatInput } from '@/components/chat';
 import { ChatDialogs } from '@/components/chat/ChatDialogs';
 import { ChatHeader } from '@/components/chat/ChatHeader';
+import { HarnessSelector } from '@/components/chat/HarnessSelector';
 import { ChatSidebar } from '@/components/chat/ChatSidebar';
 import { ChatTranscriptState } from '@/components/chat/ChatTranscriptState';
 import { ChatRuntimeProvider } from '@/components/chat/aui/ChatRuntimeProvider';
@@ -88,6 +95,8 @@ export function ChatSurface({
     storeIsRetrievingRag,
     streamingThreadId,
   } = streaming;
+  const harnessConnection = streaming.harnessConnection;
+  const harnessCanSend = harnessConnection?.canSend ?? true;
 
   const {
     renameDialog,
@@ -143,7 +152,11 @@ export function ChatSurface({
     ? pendingConfirmation
     : null;
 
-  const isBusy = isLoading || storeIsStreaming || !!activeConfirmation;
+  const isBusy =
+    isLoading ||
+    storeIsStreaming ||
+    !!activeConfirmation ||
+    Boolean(harnessConnection?.runId);
 
   // The first send starts before the server has assigned a thread id. Adopt
   // that id into the current runtime identity while an optimistic message is
@@ -218,6 +231,17 @@ export function ChatSurface({
   // handleEditUserMessage bails while a turn is in flight, so the editor must
   // KNOW that up front instead of closing on a save nothing will act on.
   const canSubmitEdit = isSessionInteractive && !isBusy;
+
+  const handleStarterSelect = useCallback(
+    (prompt: string): void => {
+      // A starter is an editable prompt, not an implicit send. Keep anything
+      // already typed and put focus back in the composer so the user can edit
+      // before deciding what to send.
+      setInput((current) => (current ? current : prompt));
+      chatInputRef.current?.focus();
+    },
+    [chatInputRef, setInput]
+  );
 
   // F2 (chat-bug-hunt 2026-08-23): the runtime key encodes THREAD IDENTITY
   // ONLY. It used to also encode a hydration phase (`new:empty` →
@@ -346,9 +370,11 @@ export function ChatSurface({
           key={runtimeKey}
           messages={displayedMessages}
           isRunning={isBusy}
-          isSendDisabled={!!activeConfirmation || !isSessionInteractive}
+          isSendDisabled={
+            !!activeConfirmation || !isSessionInteractive || !harnessCanSend
+          }
           onSend={(text, attachmentIds) => {
-            if (isSessionInteractive) {
+            if (isSessionInteractive && harnessCanSend) {
               void handleSubmit(text, undefined, undefined, attachmentIds);
             }
           }}
@@ -372,6 +398,15 @@ export function ChatSurface({
             onMobileSidebarToggle={toggleDrawer}
           />
 
+          <div className="relative flex min-h-10 shrink-0 items-center border-b border-(--nous-border-1) px-3 sm:px-4">
+            {harnessConnection && (
+              <HarnessSelector
+                controller={harnessConnection}
+                disabled={isBusy}
+              />
+            )}
+          </div>
+
           <ChatTranscriptState
             isAuthenticated={isAuthenticated}
             isInitializing={isInitializing}
@@ -384,7 +419,7 @@ export function ChatSurface({
             isLoading={isLoading}
             storeStreamingContent={storeStreamingContent}
             storeIsRetrievingRag={storeIsRetrievingRag}
-            onPromptSelect={setInput}
+            onPromptSelect={handleStarterSelect}
             onRegenerate={(index) => {
               if (isSessionInteractive) handleRegenerate(index);
             }}
@@ -419,7 +454,7 @@ export function ChatSurface({
               }
             }}
             isLoading={isBusy}
-            disabled={!isSessionInteractive}
+            disabled={!isSessionInteractive || !harnessCanSend}
             enableRAG={enableRAG}
             onRAGToggle={setEnableRAG}
             inputRef={chatInputRef}

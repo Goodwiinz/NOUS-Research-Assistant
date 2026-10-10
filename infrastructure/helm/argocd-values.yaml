@@ -1,5 +1,6 @@
-# ArgoCD resource limits — resolves DOKS clusterlint warnings
-# Apply with: helm upgrade argocd argo/argo-cd -n argocd -f argocd-values.yaml
+# ArgoCD resource limits (sized for the lean EKS dev node; carried over from
+# the DOKS-era clusterlint sizing).
+# Install: helm install argocd argo/argo-cd -n argocd --create-namespace -f infrastructure/helm/argocd-values.yaml
 
 controller:
   resources:
@@ -20,13 +21,17 @@ server:
       memory: 512Mi
 
 repoServer:
+  # git fetch runs as a subprocess; ARGOCD_GIT_REQUEST_TIMEOUT does not bound it.
+  env:
+    - name: ARGOCD_EXEC_TIMEOUT
+      value: 600s
   resources:
     requests:
       cpu: 100m
       memory: 128Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
   # copyutil init container
   copyutil:
     resources:
@@ -36,6 +41,22 @@ repoServer:
       limits:
         cpu: 100m
         memory: 64Mi
+
+# NOTE: configs.params is a TOP-LEVEL chart key. A previous attempt nested it
+# under repoServer.configs, which the chart silently ignored (argocd-cmd-params-cm
+# never contained the git timeout) -> every fresh git fetch of the big rag repo
+# died at the 90s exec timeout.
+configs:
+  cm:
+    url: https://argo.goodwiinz.tech
+  params:
+    # Git client request budget; subprocess fetch also needs ARGOCD_EXEC_TIMEOUT.
+    reposerver.git.request.timeout: "900"
+    # The rag repo pack is ~1.3 GiB; the controller's rpc deadline to the
+    # repo-server (default 60s) expires mid-fetch -> GenerateManifest
+    # DeadlineExceeded. Give the reconcile path room to pull.
+    controller.repo.server.timeout.seconds: "900"
+    server.repo.server.timeout.seconds: "900"
 
 redis:
   resources:

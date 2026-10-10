@@ -75,11 +75,11 @@ def search_threads(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in thread search: {e}")
+    except Exception:
+        logger.error("Error in thread search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -175,11 +175,11 @@ def search_threads_get(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in thread search: {e}")
+    except Exception:
+        logger.error("Error in thread search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -214,11 +214,11 @@ def search_messages(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in message search: {e}")
+    except Exception:
+        logger.error("Error in message search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -317,11 +317,11 @@ def search_messages_get(
             request=request, user_id=current_user.id, db=db
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in message search: {e}")
+    except Exception:
+        logger.error("Error in message search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -362,11 +362,11 @@ def combined_search(
             db=db,
         )
         return result
-    except Exception as e:
-        logger.error(f"Error in combined search: {e}")
+    except Exception:
+        logger.error("Error in combined search", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}",
+            detail="Search failed",
         )
 
 
@@ -404,7 +404,7 @@ def get_search_suggestions(
         # all users, and within an org showed all members' titles regardless of
         # membership.
         suggestion_sql = """
-            SELECT DISTINCT t.title
+            SELECT t.title
             FROM threads t
             JOIN conversations c ON t.conversation_id = c.id
             JOIN workspaces w ON c.workspace_id = w.id
@@ -434,7 +434,12 @@ def get_search_suggestions(
             suggestion_sql += " AND w.id = :workspace_id"
             params["workspace_id"] = str(workspace_id)
 
-        suggestion_sql += " ORDER BY t.last_message_at DESC LIMIT :limit"
+        # GOO-399: one row per title, most recent first. PostgreSQL rejects
+        # SELECT DISTINCT with an ORDER BY column outside the select list, so
+        # the previous form answered 500 on every call.
+        suggestion_sql += (
+            " GROUP BY t.title ORDER BY MAX(t.last_message_at) DESC LIMIT :limit"
+        )
         params["limit"] = limit
 
         result = db.execute(text(suggestion_sql), params)
@@ -485,11 +490,21 @@ def search_health_check(
         # Check if GIN indexes exist. Only the index name is surfaced below —
         # not indexdef (the raw DDL) — since the auth gate above narrows who
         # can call this, not what a caller who legitimately can should see.
+        # pg_indexes renders the access method in lower case ("USING gin"),
+        # so the match must be case-insensitive (Q-P3: `LIKE '%GIN%'` never
+        # matched and this endpoint reported index_count 0 on a healthy DB).
+        # An INVALID index (an interrupted CONCURRENTLY build) serves no
+        # query, so it must not count as healthy either.
         index_check_sql = """
-            SELECT indexname, indexdef
-            FROM pg_indexes
-            WHERE tablename IN ('threads', 'chat_messages')
-                AND indexdef LIKE '%GIN%'
+            SELECT x.indexname, x.indexdef
+            FROM pg_indexes x
+            JOIN pg_class c
+                ON c.relname = x.indexname
+                AND c.relnamespace = x.schemaname::regnamespace
+            JOIN pg_index i ON i.indexrelid = c.oid
+            WHERE x.tablename IN ('threads', 'chat_messages')
+                AND i.indisvalid
+                AND x.indexdef ILIKE '%USING gin%'
         """
 
         result = db.execute(text(index_check_sql))

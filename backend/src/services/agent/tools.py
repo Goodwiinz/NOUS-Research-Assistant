@@ -1,36 +1,34 @@
-"""LangGraph tool wrappers for agent tools.
+"""LangGraph tool declarations for the agent.
 
-Each tool delegates to the existing implementation in
-``src.services.agent.tools_impl``. The LangGraph ``RunnableConfig.configurable``
-dict carries **scalar identifiers only** (``user_id`` / ``organization_id`` /
-``thread_id`` / ``page_context``) — never a live ``AsyncSession`` or ORM
-``User`` (audit B8). Wrappers that need database access open a fresh
-tool-call-scoped session via :func:`~src.services.agent.tool_session.tool_session`
-and re-load the acting user org-scoped with ``resolve_tool_user``.
+Each ``@tool`` below is a schema, not an implementation: its signature and
+docstring are the LLM binding and the argument contract that
+``tools_impl.execute_tool`` validates. Production dispatch is
+``_nodes_tools._execute_single_tool`` -> ``tools_impl.execute_tool`` ->
+``tools_impl._tool_*``, so these bodies never run. They used to carry caps,
+allowlists and page-project resolution that protected nothing in production
+(agent audit round 8); every guard belongs in the ``_tool_*`` impl.
+Server-owned context (user, organization, thread, page project, runtime
+snapshot) is added by ``_nodes_tools`` and ``execute_tool``;
+``tests/unit/agent/test_tool_args_contract.py`` drives every registered tool
+through that path.
 """
 
-import asyncio
 import functools
 import inspect
-import logging
-import re
-from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, NoReturn, Optional
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import Field
 from typing_extensions import Annotated
 
-from src.services.agent.tool_helpers import _reject_invalid_arxiv_ids
 from src.services.agent.tool_registry import (
     AgentIntent,
     AgentSubgraph,
     ToolDescriptor,
+    ToolEffectMode,
     ToolPolicyTag,
     ToolRegistry,
 )
-
-logger = logging.getLogger(__name__)
 
 try:
     from langchain_core.tools import tool
@@ -66,180 +64,11 @@ except Exception:  # pragma: no cover - exercised in tests via module stubs
         return decorator(func)
 
 
-# ---------------------------------------------------------------------------
-# Input bounds and validation
-# ---------------------------------------------------------------------------
-
-# Conservative caps for numeric LLM-controlled tool arguments. Without these,
-# an LLM hallucination of ``max_depth=999`` or ``limit=10000`` can DoS the
-# Neo4j / Qdrant / external connectors by triggering an unbounded fan-out.
-_MAX_RESULTS_CAP = 50
-_MAX_RESULTS_EXTERNAL_CAP = 100
-_MAX_GRAPH_DEPTH = 5
-_MAX_GRAPH_LIMIT = 100
-_MAX_INGEST_BATCH = 10
-# Must match the impl's own limit (tools_impl `_tool_compare_documents`), which
-# rejects >5. Two independent constants drifted, so 6-10 documents were a
-# guaranteed error loop: the wrapper let them through, the impl always refused.
-_MAX_COMPARE_DOCUMENTS = 5
-_MAX_EXPORT_DOCUMENTS = 50
-_MAX_PROJECT_LIMIT = 100
-
-# External database connector / domain identifiers must be alphanumeric +
-# underscore + dash; rejecting anything else stops path-traversal-style
-# inputs from bleeding into the dynamic dispatch in the implementation.
-_CONNECTOR_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
-
-
-def _clamp_int(value: int, *, lo: int, hi: int) -> int:
-    """Clamp ``value`` into the inclusive range ``[lo, hi]``."""
-    if value < lo:
-        return lo
-    if value > hi:
-        return hi
-    return value
-
-
-def _reject_over_cap(
-    values: Optional[List[str]], *, cap: int, noun: str
-) -> Optional[Dict[str, Any]]:
-    """Return an error payload when *values* exceeds *cap*, else ``None``.
-
-    Truncating instead would drop ids the model asked for while still
-    reporting success against the truncated list — the caller never learns
-    anything went missing. Refusing lets the model split the batch.
-    """
-    if values is not None and len(values) > cap:
-        return {
-            "error": (
-                f"Maximum {cap} {noun} per request; {len(values)} were "
-                f"requested. Split them into batches of {cap} or fewer."
-            )
-        }
-    return None
-
-
-def _reject_invalid_identifier(
-    value: Optional[str], *, kind: str
-) -> Optional[Dict[str, Any]]:
-    """Return an error payload when *value* was supplied but is not allowlisted.
-
-    Omitting a connector/domain means "search everything" — a legitimate
-    fan-out. Silently downgrading a REJECTED name to that same "unspecified"
-    state turned one typo into a ~250-connector burst, so a supplied-but-bad
-    identifier must fail loudly instead.
-    """
-    if value and _validate_connector_name(value) is None:
-        return {
-            "error": f"Unknown {kind} {value!r}; call list_external_databases first."
-        }
-    return None
-
-
-def _validate_connector_name(value: Optional[str]) -> Optional[str]:
-    """Return ``value`` if it matches the allowlist regex, else ``None``.
-
-    Treating an invalid value as "unspecified" matches the original
-    behaviour for missing connectors (fan-out across all) without ever
-    forwarding adversarial input downstream.
-    """
-    if not value:
-        return None
-    if not _CONNECTOR_NAME_RE.match(value):
-        logger.warning("Rejecting invalid external-database identifier: %r", value)
-        return None
-    return value
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _get_ids(config: RunnableConfig) -> Tuple[str, str, dict]:
-    """Extract (user_id, organization_id, page_context) from config.
-
-    The configurable carries scalar ids only (audit B8) — never a live
-    session or ORM user.
-    """
-    configurable = config.get("configurable", {})
-    return (
-        str(configurable.get("user_id", "") or ""),
-        str(configurable.get("organization_id", "") or ""),
-        configurable.get("page_context", {}) or {},
+def _schema_only() -> NoReturn:
+    """Fail loudly if anything treats a declaration as an executor."""
+    raise NotImplementedError(
+        "Agent tools run through tools_impl.execute_tool; this @tool is a schema."
     )
-
-
-@asynccontextmanager
-async def _tool_context(config: RunnableConfig) -> AsyncIterator[tuple]:
-    """Yield ``(session, current_user, page_context)`` for one tool call.
-
-    Opens a fresh tool-call-scoped session and re-loads the acting user
-    org-scoped from the ids in ``configurable`` (audit B8). ``current_user``
-    is ``None`` when the ids are missing/invalid — implementations already
-    fail closed with "Authentication required" in that case.
-    """
-    from src.services.agent.tool_session import resolve_tool_user, tool_session
-
-    user_id, organization_id, page_ctx = _get_ids(config)
-    async with tool_session() as session:
-        current_user = await resolve_tool_user(session, user_id, organization_id)
-        # Release the resolve transaction's connection back to the pool while
-        # the (possibly slow) tool body runs; expire_on_commit=False keeps
-        # the loaded User usable.
-        await session.commit()
-        yield session, current_user, page_ctx
-
-
-def _resolve_project_id(
-    explicit_project_id: Optional[str],
-    page_context: dict,
-) -> Optional[str]:
-    """Return a valid project UUID, preferring explicit input.
-
-    Discards an explicit value that isn't a UUID (LLMs occasionally
-    hallucinate IDs like ``"proj_12345"``); in that case we fall back to
-    the active project from ``page_context`` so the user's intent of
-    "add this to the project I'm viewing" still wins.
-    """
-    from src.services.agent._uuid import UUID_STRICT_RE
-
-    if explicit_project_id and UUID_STRICT_RE.match(explicit_project_id.strip()):
-        return explicit_project_id.strip()
-    if page_context.get("type") == "project" and page_context.get("project_id"):
-        return page_context["project_id"]
-    return None
-
-
-def _missing_project_error(tool_name: str) -> Dict[str, Any]:
-    """Standard error payload when no project_id can be resolved.
-
-    Returning a structured error keeps the LLM aware that it must either
-    supply a project_id explicitly or call list_projects to discover one,
-    instead of forwarding ``""`` downstream where it surfaces as an
-    opaque ``invalid UUID`` error.
-    """
-    return {
-        "error": (
-            f"{tool_name} requires a project_id but none was provided and "
-            "no project page is active. Call list_projects to choose one, "
-            "or include project_id explicitly."
-        ),
-        # Declared recoverable, and it now takes effect. The old
-        # "user_fixable" label never applied to anything: this wording
-        # ("requires a project_id") matches no TOOL_ERROR_HINTS key and no
-        # step-5 keyword, so the payload reached the model as *fatal* —
-        # telling the agent not to recover from a situation the message
-        # itself explains how to fix. list_projects is bound to every
-        # subgraph that can raise this, so the suggestion is followable.
-        #
-        # Careful: rewording this to "project_id is required" would hand
-        # create_draft / create_project_note back to TOOL_ERROR_HINTS and
-        # drop the suggestion below. test_missing_project_error_is_recoverable
-        # pins the delivered payload.
-        "error_type": "recoverable",
-        "suggestion": "list_projects",
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -269,18 +98,7 @@ async def search_arxiv(
     or a larger N to widen the window. Set chronological=true to sort
     newest-first instead of by relevance.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_search_arxiv
-
-    args: Dict[str, Any] = {
-        "query": query,
-        "max_results": _clamp_int(max_results, lo=1, hi=_MAX_RESULTS_CAP),
-        "recency_days": _clamp_int(recency_days, lo=0, hi=36500),
-        "chronological": bool(chronological),
-    }
-    if categories:
-        args["categories"] = categories
-    return await _tool_search_arxiv(args)
+    _schema_only()
 
 
 @tool
@@ -304,33 +122,7 @@ async def ingest_arxiv_papers(
     project page — the tool auto-attaches. Pass an explicit UUID only to
     target a different project.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_ingest_arxiv
-
-    # Bound the batch — ingestion is heavy and a hallucinated 100-paper batch
-    # will saturate the worker pool and trip downstream timeouts. Refuse rather
-    # than truncate: the old slice dropped ids 11+ and still reported success
-    # over the ten that survived.
-    over_cap = _reject_over_cap(paper_ids, cap=_MAX_INGEST_BATCH, noun="papers")
-    if over_cap:
-        return over_cap
-
-    invalid = _reject_invalid_arxiv_ids(paper_ids)
-    if invalid:
-        return invalid
-
-    async with _tool_context(config) as (db, current_user, page_ctx):
-        user_id = str(current_user.id) if current_user else ""
-        resolved_project_id = _resolve_project_id(project_id, page_ctx)
-        return await _tool_ingest_arxiv(
-            {
-                "paper_ids": [str(p).strip() for p in (paper_ids or [])],
-                "project_id": resolved_project_id,
-            },
-            user_id,
-            db,
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -346,18 +138,7 @@ async def search_documents(
     do_kb_retrieve instead. A multi-word query here must appear verbatim
     in a single title/filename to match.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_search_documents
-
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        return await _tool_search_documents(
-            {
-                "query": query,
-                "max_results": _clamp_int(max_results, lo=1, hi=_MAX_RESULTS_CAP),
-            },
-            db,
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -375,24 +156,7 @@ async def do_kb_retrieve(
     using the quote. If top relevance is below 5, call this tool again
     with a narrower or broader reformulation instead of settling for weak
     evidence."""
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_do_kb_retrieve
-
-    async with _tool_context(config) as (db, current_user, page_ctx):
-        # Forward active project_id so the retrieval result is scoped to the
-        # current project and does not leak sibling-project documents.
-        project_id = _resolve_project_id(None, page_ctx)
-        args: Dict[str, Any] = {
-            "query": query,
-            "top_k": _clamp_int(top_k, lo=1, hi=20),
-        }
-        if project_id:
-            args["project_id"] = project_id
-        if document_ids is not None:
-            # Presence is meaningful: an explicit empty list is invalid scoped
-            # intent and must reach the dispatcher instead of broadening.
-            args["document_ids"] = document_ids
-        return await _tool_do_kb_retrieve(args, db, current_user)
+    _schema_only()
 
 
 @tool
@@ -406,18 +170,7 @@ async def add_document_to_project(
     If *project_id* is omitted and the user is on a project page, the
     project is inferred from the page context.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_add_document_to_project
-
-    async with _tool_context(config) as (db, current_user, page_ctx):
-        resolved_pid = _resolve_project_id(project_id, page_ctx)
-        if not resolved_pid:
-            return _missing_project_error("add_document_to_project")
-        return await _tool_add_document_to_project(
-            {"document_id": document_id, "project_id": resolved_pid},
-            db,
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -433,20 +186,7 @@ async def create_project(
 
     If *workspace_id* is omitted, the user's first workspace is used.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_create_project
-
-    args: Dict[str, Any] = {"name": name}
-    if description:
-        args["description"] = description
-    if research_goals:
-        args["research_goals"] = research_goals
-    if tags:
-        args["tags"] = tags
-    if workspace_id:
-        args["workspace_id"] = workspace_id
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        return await _tool_create_project(args, db, current_user)
+    _schema_only()
 
 
 @tool
@@ -466,21 +206,7 @@ async def create_project_note(
     or contents: topic-matching a project silently files the note in the
     wrong place.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_create_project_note
-
-    async with _tool_context(config) as (db, current_user, page_ctx):
-        resolved_pid = _resolve_project_id(project_id, page_ctx)
-        if not resolved_pid:
-            return _missing_project_error("create_project_note")
-        args: Dict[str, Any] = {
-            "title": title,
-            "content": content,
-            "project_id": resolved_pid,
-        }
-        if tags:
-            args["tags"] = tags
-        return await _tool_create_project_note(args, db, current_user)
+    _schema_only()
 
 
 @tool
@@ -506,20 +232,7 @@ async def list_projects(
     or wants to discover existing projects before choosing one. Prefer this
     over asking the user to provide a project_id.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_list_projects
-
-    args: Dict[str, Any] = {
-        "limit": _clamp_int(limit, lo=1, hi=_MAX_PROJECT_LIMIT),
-    }
-    if status:
-        args["status"] = status
-    if tag:
-        args["tag"] = tag
-    if search:
-        args["search"] = search
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        return await _tool_list_projects(args, db, current_user)
+    _schema_only()
 
 
 @tool
@@ -539,22 +252,7 @@ async def list_project_documents(
 
     Returns pagination fields (``total``/``returned``/``has_more``).
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_list_project_documents
-
-    async with _tool_context(config) as (db, current_user, page_ctx):
-        resolved_pid = _resolve_project_id(project_id, page_ctx)
-        if not resolved_pid:
-            return _missing_project_error("list_project_documents")
-        return await _tool_list_project_documents(
-            {
-                "project_id": resolved_pid,
-                "limit": _clamp_int(limit, lo=1, hi=500),
-                "offset": _clamp_int(offset, lo=0, hi=2**31 - 1),
-            },
-            db,
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -569,18 +267,7 @@ async def get_current_draft(
     or available to show. Set ``include_content`` only when the user asks to
     read or continue the draft in chat.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_get_current_draft
-
-    async with _tool_context(config) as (db, current_user, page_ctx):
-        resolved_pid = _resolve_project_id(project_id, page_ctx)
-        if not resolved_pid:
-            return _missing_project_error("get_current_draft")
-        return await _tool_get_current_draft(
-            {"project_id": resolved_pid, "include_content": include_content},
-            db,
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -592,13 +279,7 @@ async def summarize_document(
 
     Use when the user asks for a summary or overview of a specific document.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_summarize_document
-
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        return await _tool_summarize_document(
-            {"document_id": document_id}, db, current_user
-        )
+    _schema_only()
 
 
 @tool
@@ -612,22 +293,7 @@ async def compare_documents(
     Use when the user wants to compare, contrast, or analyze differences
     between two or more documents.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_compare_documents
-
-    _COMPARISON_TYPES = {"general", "methodology", "findings", "themes"}
-    safe_type = type if type in _COMPARISON_TYPES else "general"
-    over_cap = _reject_over_cap(
-        document_ids, cap=_MAX_COMPARE_DOCUMENTS, noun="documents"
-    )
-    if over_cap:
-        return over_cap
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        return await _tool_compare_documents(
-            {"document_ids": list(document_ids or []), "type": safe_type},
-            db,
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -640,13 +306,7 @@ async def extract_entities(
     Use when the user wants to identify key entities, people, organizations,
     or concepts mentioned in a document.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_extract_entities
-
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        return await _tool_extract_entities(
-            {"document_id": document_id}, db, current_user
-        )
+    _schema_only()
 
 
 @tool
@@ -660,14 +320,7 @@ async def search_knowledge_graph(
     Use when the user asks about concepts, people, or organizations
     in the research corpus, or wants to explore entity relationships.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_search_knowledge_graph
-
-    args: Dict[str, Any] = {"query": query}
-    if entity_types:
-        args["entity_types"] = entity_types
-    async with _tool_context(config) as (_db, current_user, _page_ctx):
-        return await _tool_search_knowledge_graph(args, current_user)
+    _schema_only()
 
 
 @tool
@@ -684,18 +337,7 @@ async def explore_entity_neighborhood(
     related to X", or wants to understand how an entity fits in the graph.
     First use search_knowledge_graph to find the entity_id.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_explore_entity_neighborhood
-
-    async with _tool_context(config) as (_db, current_user, _page_ctx):
-        return await _tool_explore_entity_neighborhood(
-            {
-                "entity_id": entity_id,
-                "max_depth": _clamp_int(max_depth, lo=1, hi=_MAX_GRAPH_DEPTH),
-                "limit": _clamp_int(limit, lo=1, hi=_MAX_GRAPH_LIMIT),
-            },
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -711,18 +353,7 @@ async def find_entity_paths(
     or wants to understand the chain of relationships between two concepts.
     First use search_knowledge_graph to find both entity IDs.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_find_entity_paths
-
-    async with _tool_context(config) as (_db, current_user, _page_ctx):
-        return await _tool_find_entity_paths(
-            {
-                "source_entity_id": source_entity_id,
-                "target_entity_id": target_entity_id,
-                "max_depth": _clamp_int(max_depth, lo=1, hi=_MAX_GRAPH_DEPTH),
-            },
-            current_user,
-        )
+    _schema_only()
 
 
 @tool
@@ -735,11 +366,7 @@ async def get_graph_stats(
     connectivity metrics. Use when the user asks about the size or shape
     of the knowledge base, or wants an overview of what's in the graph.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_get_graph_stats
-
-    async with _tool_context(config) as (_db, current_user, _page_ctx):
-        return await _tool_get_graph_stats({}, current_user)
+    _schema_only()
 
 
 @tool
@@ -747,6 +374,8 @@ async def create_draft(
     themes: List[str],
     project_id: Optional[str] = None,
     style: str = "academic",
+    document_ids: Optional[List[str]] = None,
+    instructions: Optional[str] = None,
     config: RunnableConfig = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     """Generate a literature review draft for a project based on themes.
@@ -754,20 +383,19 @@ async def create_draft(
     Use when the user wants to create a draft, write a review, or synthesize
     research around specific themes.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_create_draft
+    _schema_only()
 
-    _DRAFT_STYLES = {"academic", "technical", "summary"}
-    safe_style = style if style in _DRAFT_STYLES else "academic"
-    async with _tool_context(config) as (db, current_user, page_ctx):
-        resolved_pid = _resolve_project_id(project_id, page_ctx)
-        if not resolved_pid:
-            return _missing_project_error("create_draft")
-        return await _tool_create_draft(
-            {"project_id": resolved_pid, "themes": themes, "style": safe_style},
-            db,
-            current_user,
-        )
+
+@tool
+async def revise_draft(
+    instructions: str,
+    project_id: Optional[str] = None,
+    base_version: Optional[int] = None,
+    mode: Literal["revise", "citations_only"] = "revise",
+    config: RunnableConfig = None,  # type: ignore[assignment]
+) -> Dict[str, Any]:
+    """Revise a saved draft version using its server-loaded durable content."""
+    _schema_only()
 
 
 @tool
@@ -781,18 +409,7 @@ async def export_bibliography(
     Use when the user wants to export citations, references, or a bibliography
     for one or more documents. Supports bibtex, apa, ieee, and mla formats.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_export_bibliography
-
-    over_cap = _reject_over_cap(
-        document_ids, cap=_MAX_EXPORT_DOCUMENTS, noun="documents"
-    )
-    if over_cap:
-        return over_cap
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        return await _tool_export_bibliography(
-            {"document_ids": document_ids, "format": format}, db, current_user
-        )
+    _schema_only()
 
 
 # ---------------------------------------------------------------------------
@@ -819,33 +436,7 @@ async def execute_code(
     The sandbox is stateful within a conversation — variables and files
     persist between executions, so you can build on previous results.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_execute_code
-
-    configurable = config.get("configurable", {})
-
-    async with _tool_context(config) as (_db, current_user, _page_ctx):
-        # The sandbox is keyed by this id and is stateful, so a shared literal
-        # fallback ("default") put every thread that arrived without a
-        # thread_id into ONE sandbox — variables and files leaking across
-        # conversations and users. Fall back to the caller's own id, and fail
-        # closed when there isn't one rather than joining the shared box.
-        thread_id = configurable.get("thread_id") or (
-            f"user-{current_user.id}" if current_user else None
-        )
-        if not thread_id:
-            return {"error": "Authentication required"}
-
-        return await _tool_execute_code(
-            {
-                "code": code,
-                "description": description,
-                "language": language,
-                "packages": packages,
-            },
-            thread_id=thread_id,
-            current_user=current_user,
-        )
+    _schema_only()
 
 
 # ---------------------------------------------------------------------------
@@ -864,8 +455,8 @@ async def search_external_database(
 ) -> Dict[str, Any]:
     """Search external databases (PubMed, UniProt, ChEMBL, PubChem, FRED, SEC EDGAR, etc.).
 
-    Provides a single entry point to 250+ external scientific and financial
-    data sources. Supply ``connector`` to target one (e.g. ``"pubmed"``),
+    Provides a single entry point to the registered scientific and financial
+    connector adapters. Supply ``connector`` to target one (e.g. ``"pubmed"``),
     ``domain`` to fan out across a category (``biomedical``, ``chemistry``,
     ``finance``, ``clinical``, ``genomics``, ``economic``, ``literature``),
     or omit both to search every available connector concurrently.
@@ -874,36 +465,7 @@ async def search_external_database(
     economic time series, SEC filings, or any other domain-specific data not
     available in the local document store.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_search_external_database
-
-    bad_identifier = _reject_invalid_identifier(
-        connector, kind="connector"
-    ) or _reject_invalid_identifier(domain, kind="domain")
-    if bad_identifier:
-        return bad_identifier
-
-    args: Dict[str, Any] = {
-        "query": query,
-        "max_results": _clamp_int(max_results, lo=1, hi=_MAX_RESULTS_EXTERNAL_CAP),
-    }
-    safe_connector = _validate_connector_name(connector)
-    if safe_connector:
-        args["connector"] = safe_connector
-    safe_domain = _validate_connector_name(domain)
-    if safe_domain:
-        args["domain"] = safe_domain
-    # Filters are an opaque mapping; only pass through scalar values to
-    # keep the dispatch surface small and prevent nested-payload abuse.
-    if filters and isinstance(filters, dict):
-        scalar_filters = {
-            k: v
-            for k, v in filters.items()
-            if isinstance(k, str) and isinstance(v, (str, int, float, bool))
-        }
-        if scalar_filters:
-            args["filters"] = scalar_filters
-    return await _tool_search_external_database(args)
+    _schema_only()
 
 
 @tool
@@ -917,18 +479,7 @@ async def list_external_databases(
     ``search_external_database`` to discover the right connector name. Pass
     ``domain`` to filter by category.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_list_external_databases
-
-    bad_identifier = _reject_invalid_identifier(domain, kind="domain")
-    if bad_identifier:
-        return bad_identifier
-
-    args: Dict[str, Any] = {}
-    safe_domain = _validate_connector_name(domain)
-    if safe_domain:
-        args["domain"] = safe_domain
-    return await _tool_list_external_databases(args)
+    _schema_only()
 
 
 # ---------------------------------------------------------------------------
@@ -947,14 +498,7 @@ async def forget_memory(
     memory ("forget what I said about X", "stop remembering Y"). Returns
     a summary of which memories were deleted.
     """
-    config = config or {}
-    from src.services.agent.tools_impl import _tool_forget_memory
-
-    # Memory is keyed by the scalar user_id — no session or ORM user needed.
-    user_id, org_id, page_ctx = _get_ids(config)
-    return await _tool_forget_memory(
-        query=query, user_id=user_id, organization_id=org_id, page_context=page_ctx
-    )
+    _schema_only()
 
 
 @tool
@@ -968,27 +512,7 @@ async def load_project_skill(
     server supplies the snapshot, user, and project context; never ask for or
     invent identifiers.
     """
-    config = config or {}
-    configurable = config.get("configurable", {})
-    snapshot_id = str(configurable.get("runtime_snapshot_id", "") or "")
-    project_id = str(configurable.get("project_id", "") or "")
-    if not snapshot_id or not project_id:
-        return {
-            "error_type": "runtime_snapshot_required",
-            "error": "Project skill loading requires server runtime snapshot context.",
-        }
-
-    from src.services.agent.tools_impl import _tool_load_project_skill
-
-    async with _tool_context(config) as (db, current_user, _page_ctx):
-        user_id = str(current_user.id) if current_user is not None else ""
-        return await _tool_load_project_skill(
-            {"skill_name": skill_name},
-            user_id=user_id,
-            project_id=project_id,
-            runtime_snapshot_id=snapshot_id,
-            db=db,
-        )
+    _schema_only()
 
 
 # ---------------------------------------------------------------------------
@@ -1030,6 +554,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="search_documents",
@@ -1041,8 +566,14 @@ TOOL_REGISTRY = ToolRegistry(
                     AgentIntent.GENERAL,
                 }
             ),
-            subgraphs=frozenset({AgentSubgraph.RESEARCH, AgentSubgraph.DATA}),
-            subgraph_positions=((AgentSubgraph.RESEARCH, 2), (AgentSubgraph.DATA, 5)),
+            subgraphs=frozenset(
+                {AgentSubgraph.RESEARCH, AgentSubgraph.WRITING, AgentSubgraph.DATA}
+            ),
+            subgraph_positions=(
+                (AgentSubgraph.RESEARCH, 2),
+                (AgentSubgraph.WRITING, 15),
+                (AgentSubgraph.DATA, 5),
+            ),
             policy_tags=frozenset(),
         ),
         ToolDescriptor(
@@ -1060,8 +591,14 @@ TOOL_REGISTRY = ToolRegistry(
             # only, that advice was unfollowable from the data subgraph —
             # make_filtered_tool_node answers "not available in this context"
             # (guarded by test_recovery_suggestions_are_callable).
-            subgraphs=frozenset({AgentSubgraph.RESEARCH, AgentSubgraph.DATA}),
-            subgraph_positions=((AgentSubgraph.RESEARCH, 3), (AgentSubgraph.DATA, 8)),
+            subgraphs=frozenset(
+                {AgentSubgraph.RESEARCH, AgentSubgraph.WRITING, AgentSubgraph.DATA}
+            ),
+            subgraph_positions=(
+                (AgentSubgraph.RESEARCH, 3),
+                (AgentSubgraph.WRITING, 16),
+                (AgentSubgraph.DATA, 8),
+            ),
             policy_tags=frozenset(),
             exposed_in_all_tools=False,
         ),
@@ -1080,6 +617,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="list_projects",
@@ -1116,6 +654,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="create_project_note",
@@ -1132,6 +671,7 @@ TOOL_REGISTRY = ToolRegistry(
             policy_tags=frozenset(
                 {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
             ),
+            effect_mode=ToolEffectMode.LOCAL_TRANSACTION,
         ),
         ToolDescriptor(
             name="list_project_documents",
@@ -1161,7 +701,7 @@ TOOL_REGISTRY = ToolRegistry(
             tool=get_current_draft,
             intents=frozenset({AgentIntent.WRITING}),
             subgraphs=frozenset({AgentSubgraph.WRITING}),
-            subgraph_positions=((AgentSubgraph.WRITING, 13),),
+            subgraph_positions=((AgentSubgraph.WRITING, 14),),
             policy_tags=frozenset(),
             exposed_in_all_tools=False,
         ),
@@ -1238,6 +778,22 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
+        ),
+        ToolDescriptor(
+            name="revise_draft",
+            tool=revise_draft,
+            intents=frozenset({AgentIntent.WRITING}),
+            subgraphs=frozenset({AgentSubgraph.WRITING}),
+            subgraph_positions=((AgentSubgraph.WRITING, 13),),
+            policy_tags=frozenset(
+                {
+                    ToolPolicyTag.DESTRUCTIVE,
+                    ToolPolicyTag.SLOW,
+                    ToolPolicyTag.NO_OUTER_RETRY,
+                }
+            ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="export_bibliography",
@@ -1267,9 +823,17 @@ TOOL_REGISTRY = ToolRegistry(
             intents=frozenset({AgentIntent.RESEARCH}),
             subgraphs=frozenset({AgentSubgraph.RESEARCH}),
             subgraph_positions=((AgentSubgraph.RESEARCH, 9),),
+            # SLOW (IN-2): the sandbox interrupts a cell after
+            # AGENT_CELL_TIMEOUT_SECONDS and keeps the box; the 30 s default
+            # tier cancelled the call first, and cancellation kills the box.
             policy_tags=frozenset(
-                {ToolPolicyTag.DESTRUCTIVE, ToolPolicyTag.NO_OUTER_RETRY}
+                {
+                    ToolPolicyTag.DESTRUCTIVE,
+                    ToolPolicyTag.NO_OUTER_RETRY,
+                    ToolPolicyTag.SLOW,
+                }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
         ToolDescriptor(
             name="search_external_database",
@@ -1333,6 +897,7 @@ TOOL_REGISTRY = ToolRegistry(
                     ToolPolicyTag.NO_OUTER_RETRY,
                 }
             ),
+            effect_mode=ToolEffectMode.EXTERNAL,
         ),
     ]
 )

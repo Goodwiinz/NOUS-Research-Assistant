@@ -164,3 +164,152 @@ Run from `frontend/`.
   rollback assertion receives the optimistic user message instead of the
   original empty list; without the post-`createThread` signal check,
   `setConversations` is called once and publishes the canceled thread.
+
+## 2026-09-17 durable Stop verification amendment
+
+Verified against the Task 2 follow-up to `533fdeabf`. These are new checks;
+the earlier dated evidence above remains unchanged. Each mutation was applied
+individually, the focused test failed by assertion (exit 1), and the original
+source bytes were restored in a `finally` block. The five restored backend
+tests passed together (5 passed in 3.30s).
+
+Backend commands run from the repository root with the project Python test
+environment active and `PYTHONPATH=backend`; the audit used an isolated Redis
+service. Frontend commands run from `frontend/` with Node 24 and pnpm 10.18.2.
+
+### stop-claim
+
+- Source: `backend/src/services/agent/agent_submission_service.py`.
+- Guard: `AgentRun.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),`; mutant: `True,`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py::test_running_run_stop_claim_is_durable_and_idempotent --timeout=20 --tb=short`.
+- Observed failure: `E   AssertionError: assert (RunCancellationResult(run_id='45d4614f-6228-45d9-8127-ecd4238c173a', status=<JobStatus.STOPPING: 'stopping'>, claimed=True) is not None and True is False)`.
+
+### completion-stop
+
+- Source: `backend/src/services/agent/agent_submission_service.py`.
+- Guard: `else [AgentRun.status != JobStatus.STOPPING.value]`; mutant: `else []`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py::test_completion_cannot_overwrite_a_durable_stop --timeout=20 --tb=short`.
+- Observed failure: `E   assert True is False`.
+
+### terminal-once
+
+- Source: `backend/src/services/agent/agent_submission_service.py`.
+- Guard: `AgentRun.status.notin_(_TERMINAL_RUN_STATUSES),`; mutant: `True,`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/services/agent/test_agent_submission_service.py::test_producer_ack_closes_stopping_run_once --timeout=20 --tb=short`.
+- Observed failure: `E   assert True is False`.
+
+### expected-run
+
+- Source: `backend/src/api/agent/execute.py`.
+- Guard: `if expected_run_id is not None and expected_run_id != active.job_id:`; mutant: `if False and expected_run_id is not None and expected_run_id != active.job_id:`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/api/test_agent_cancel_confirmation.py::test_cancel_rejects_stale_identity_without_touching_newer_run --timeout=20 --tb=short`.
+- Observed failure: `E   AssertionError: Expected mock to not have been awaited. Awaited 1 times.`.
+
+### lost-park
+
+- Source: `backend/src/api/agent/streaming.py`.
+- Guard: `if parked is False:`; mutant: `if False and parked is False:`.
+- Command: `PYTHONPATH=backend python -m pytest -q backend/tests/unit/api/test_agent_streaming_terminal_guard.py::test_graph_park_stop_race_finalizes_cancelled_before_confirmation --timeout=20 --tb=short`.
+- Observed failure: `E   AssertionError: assert 'confirmation' not in ['status', 'status', 'trace', 'confirmation']`.
+
+### Late producer acknowledgement
+
+- Source: `frontend/src/hooks/chat/useChatStreaming.ts`.
+- Guard: `if (current?.runId === runId) {`; mutant: `if (current) {`.
+- Command: `pnpm exec vitest run --project unit src/hooks/__tests__/useChatStreaming.streamOwnership.test.tsx -t "does not let a late ACK stop a newer run"`.
+- Mutation makes an older run's ACK mark the newer activity `stopped` instead
+  of retaining `running`. The focused test fails, and passes after exact
+  restoration (1 passed, 8 skipped).
+
+### Interrupted cleanup ACK exception retrieval
+
+- **Source:** `backend/src/api/agent/streaming.py:1524`.
+- **Guard:** `cleanup_task.result()` after the cancellation loop; it retrieves
+  a shielded cleanup task's exception when outer AnyIO cancellation arrives on
+  the same turn that the task completes.
+- **Covering test:**
+  `backend/tests/unit/api/test_agent_streaming_response_cancellation.py::test_interrupted_cleanup_surfaces_ack_failure_after_request_cancellation`.
+- **Command:**
+  `PYTHONPATH=backend pytest -q backend/tests/unit/api/test_agent_streaming_response_cancellation.py::test_interrupted_cleanup_surfaces_ack_failure_after_request_cancellation --tb=short`.
+- **Mutation:** removing `cleanup_task.result()` made the test fail with
+  `Failed: DID NOT RAISE RuntimeError`; restoring the exact source bytes made
+  it pass. The shield-success companion test also passes with the guard.
+
+## 2026-09-17 public summary ownership verification amendment
+
+Verified against `9927b2138`. The confirmation completion regression now
+drives `onReasoningDelta` after switching from thread A to B and asserts that
+A's summary never enters B's displayed messages.
+
+- Source: `frontend/src/hooks/chat/useChatStreaming.ts`.
+- Guard: `isConfirmDisplayed` calls `confirmationBelongsToThread` with the
+  pending confirmation and current displayed thread.
+- Mutation: replace the predicate with `() => true`.
+- Command (from `frontend/`, Node 24, pnpm 10.18.2):
+  `pnpm exec vitest run --project unit src/hooks/__tests__/useChatStreaming.streamOwnership.test.tsx -t "clears a settled confirmation from its own thread"`.
+- Observed failure: the new summary isolation assertion failed with
+  `AssertionError: expected true to be false` (exit 1).
+- Exact source bytes were restored in `finally`; the same command then
+  passed (1 passed, 8 skipped). No product source change remains.
+
+## 2026-09-17 Task 7 editable-thread and stream-identity guards
+
+- **Canonical route gate:** `backend/src/api/agent/execute.py` now delegates
+  Stop and resume to `_resolve_thread(..., create_if_missing=False)` instead of
+  checking `Workspace.owner_id` directly. The old owner-only implementation
+  was restored for the five new allow/mismatch route tests; all five failed
+  with 404 (exit 1), log `/tmp/chat-audit-20260916/task7-owner-only-mutant.log`.
+  The intended source was restored/reconstructed and the complete focused set
+  passed 31 tests. This route boundary uses a mocked canonical resolver; real
+  role/access evidence is the existing workspace model and resolver suite.
+- **Active run-to-stream fence:** tests cover a caller-owned active AgentRun
+  whose mapping points to a different stream and require 204/no replay.
+- **Finished run-to-stream fence:** tests cover a caller-owned latest terminal
+  AgentRun whose mapping points to a different stream and require 204/no replay.
+
+Two preliminary standalone mapping-mutant attempts were invalid: one failed
+at the old owner-only 404 before exercising stream correlation; the other
+produced an import `IndentationError`. Neither counts as mutation evidence.
+
+Root independently verified both guards on frozen `2f78c21b0` using Python
+`try/finally` and exact byte restoration:
+
+- Active guard at `backend/src/api/agent/execute.py:1355`: `if active_stream is None or active_stream.lower() != sid.lower():`.
+  Replacing only this condition with `if False:` made
+  `test_resume_returns_204_when_active_caller_run_maps_to_another_stream`
+  fail with `assert 200 == 204`: it replayed the mismatched stream.
+- Terminal guard at `backend/src/api/agent/execute.py:1373`: `if latest_stream is None or latest_stream.lower() != stream.lower():`.
+  The same one-condition bypass made
+  `test_resume_returns_204_when_latest_caller_run_maps_to_another_stream`
+  fail with `assert 200 == 204`.
+- Each test command used
+  `PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:56379/15 python -m pytest -q backend/tests/unit/api/test_agent_resume_confirmation_envelope.py::<test-name> --timeout=30 --tb=short`.
+- Both regressions passed together after restoration. Restored source SHA256:
+  `4c9c5530fbc2229dc34d0c90750cfb00d8706a7845fe30f019435818a80273d1`.
+  The source matched the committed file exactly; no product diff remains.
+- Logs: `/tmp/chat-audit-20260916/task7-root-active-mutant.log`,
+  `task7-root-terminal-mutant.log`, `task7-root-restored.log`, and
+  `task7-root-mutation-summary.log` in the same private directory.
+
+### Parked confirmation checkpoint ownership
+
+Verified on `236867d21`, source `backend/src/api/agent/execute.py:1251`.
+The authenticated checkpoint-owner block rejects a foreign or missing
+`snapshot.values["user_id"]` before it can emit a parked approval prompt.
+
+- Mutation: replace only the `if db is not None:` immediately before
+  `checkpoint_values =` with `if False:`. The temporary file parsed
+  successfully before the test ran.
+- Focused tests in
+  `backend/tests/unit/api/test_agent_resume_confirmation_envelope.py`:
+  `test_resume_does_not_redeliver_foreign_checkpoint_to_editable_member` and
+  `test_resume_denies_checkpoint_without_owner_identity`.
+- Command for each test:
+  `PYTHONPATH=backend REDIS_URL=redis://127.0.0.1:56379/15 python -m pytest -q backend/tests/unit/api/test_agent_resume_confirmation_envelope.py::<test-name> --timeout=30 --tb=short`.
+- Both failed with `assert 200 == 204`, proving an approval would be emitted.
+  Exact source bytes were restored in `finally`. Both denied cases and
+  `test_resume_redelivers_checkpoint_to_its_owner` then passed together.
+- Restored source SHA256:
+  `952fc4e05c4d80c0a6a54899bfe4beafc0bba99b70ef22a17095b1bb93fe4bc6`.
+  Logs under `/tmp/chat-audit-20260916/`: `task7-root-checkpoint-mutant.log`,
+  `task7-root-checkpoint-restored.log`, `task7-root-checkpoint-summary.log`.

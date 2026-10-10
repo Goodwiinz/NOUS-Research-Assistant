@@ -40,21 +40,16 @@ describe('ChatInlinePlan', () => {
     );
   });
 
-  it('renders the reasoning paragraph only while expanded', () => {
+  it('opens a committed planner rationale so it is visible after completion', () => {
     render(
       <ChatInlinePlan
         plan={plan}
         reasoning="Search arXiv first, then summarize the top hit."
       />
     );
-    // Collapsed by default (non-streaming) — reasoning not yet in the DOM.
     expect(
-      screen.queryByText('Search arXiv first, then summarize the top hit.')
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Execution plan · 0/1' })
-    );
+      screen.getByRole('button', { name: 'Reasoning · Execution plan · 0/1' })
+    ).toHaveAttribute('aria-expanded', 'true');
     expect(
       screen.getByText('Search arXiv first, then summarize the top hit.')
     ).toBeInTheDocument();
@@ -63,6 +58,21 @@ describe('ChatInlinePlan', () => {
   it('omits the reasoning paragraph when no reasoning is provided', () => {
     render(<ChatInlinePlan plan={plan} streaming />);
     expect(screen.queryByText(/search arxiv first/i)).not.toBeInTheDocument();
+  });
+
+  it('renders planner rationale when a plan has no steps', () => {
+    render(
+      <ChatInlinePlan
+        plan={[]}
+        reasoning="The request needs a direct evidence check."
+        streaming
+      />
+    );
+
+    expect(screen.getByText('Planner rationale')).toBeInTheDocument();
+    expect(
+      screen.getByText('The request needs a direct evidence check.')
+    ).toBeInTheDocument();
   });
 
   it('toggles aria-expanded and visible content on click', () => {

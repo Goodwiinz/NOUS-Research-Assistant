@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.models.collection import Collection, CollectionDocument
+from src.models.user import User
 from src.schemas.chat import CollectionCreate, CollectionUpdate
 from src.services.threads import workspace_access
 
@@ -78,10 +79,17 @@ async def create_collection(
     db.add(collection)
 
     if data.document_ids:
-        organization_id = getattr(workspace, "organization_id", None)
+        organization_id = await db.scalar(
+            select(User.organization_id).where(User.id == user_id)
+        )
         for i, doc_id in enumerate(data.document_ids):
-            doc = await workspace_access.get_accessible_document_or_none(
-                db, doc_id, user_id, organization_id
+            # Do not use the uploader fallback when caller identity is absent.
+            doc = (
+                await workspace_access.get_accessible_document_or_none(
+                    db, doc_id, user_id, organization_id
+                )
+                if organization_id is not None
+                else None
             )
             if doc:
                 db.add(
@@ -247,10 +255,16 @@ async def add_documents_to_collection(
         )
     ).scalar() or 0
 
-    organization_id = getattr(collection.workspace, "organization_id", None)
+    organization_id = await db.scalar(
+        select(User.organization_id).where(User.id == user_id)
+    )
     for i, doc_id in enumerate(document_ids):
-        doc = await workspace_access.get_accessible_document_or_none(
-            db, doc_id, user_id, organization_id
+        doc = (
+            await workspace_access.get_accessible_document_or_none(
+                db, doc_id, user_id, organization_id
+            )
+            if organization_id is not None
+            else None
         )
         if not doc:
             continue
@@ -261,7 +275,6 @@ async def add_documents_to_collection(
                     select(CollectionDocument).where(
                         CollectionDocument.collection_id == collection_id,
                         CollectionDocument.document_id == doc_id,
-                        CollectionDocument.is_deleted == False,  # noqa: E712
                     )
                 )
             )
@@ -276,11 +289,18 @@ async def add_documents_to_collection(
                     sort_order=max_order + i + 1,
                 )
             )
+        elif existing.is_deleted:
+            # Revive the soft-deleted row; a second insert would violate
+            # uq_collection_documents (R6-M7).
+            existing.restore()
+            existing.sort_order = max_order + i + 1
 
     await db.flush()
-    # See create_collection: re-fetch with `.documents` eager-loaded rather
-    # than db.refresh(), which would expire the relationship and
-    # MissingGreenlet on next access under the async session.
+    # The rows above were added by FK only, and `collection.documents` is
+    # already loaded (identity-mapped), so the re-fetch below would return it
+    # stale. Expire just that attribute (AsyncSession.expire is sync) so the
+    # eager load repopulates it. See create_collection for why not db.refresh().
+    db.expire(collection, ["documents"])
     updated = await workspace_access.get_collection(db, collection_id, user_id)
     assert updated is not None
     return updated
@@ -309,7 +329,19 @@ async def remove_documents_from_collection(
     if not collection.workspace.can_user_edit(str(user_id)):
         raise PermissionError("Insufficient permissions")
 
+    organization_id = await db.scalar(
+        select(User.organization_id).where(User.id == user_id)
+    )
     for doc_id in document_ids:
+        doc = (
+            await workspace_access.get_accessible_document_or_none(
+                db, doc_id, user_id, organization_id
+            )
+            if organization_id is not None
+            else None
+        )
+        if not doc:
+            continue
         collection_doc = (
             (
                 await db.execute(

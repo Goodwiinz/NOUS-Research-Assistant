@@ -55,6 +55,18 @@ backend owns; each entity has exactly **one** client-side cache, never two.
   ever adopted for reads/writes, each carries its own authz check and
   participates in coordinated revalidation — it does not shadow-cache what
   Query or the store already owns.
+- **A persisted user-scoped key carries its owner or gets cleared.** Anything
+  user-scoped written to `localStorage`/`sessionStorage` must either carry
+  `ownerUserId` and be checked against the verified user before it is read
+  (`chat-storage` via `store/chat/persistedSelection.ts`,
+  `default-workspace-object` in `services/workspaceService.ts`), or be
+  removed in `clearUserScopedClientState` (`stores/authStore.ts`). The
+  origin-level stamp (`lib/client-owner.ts`) only decides whether a load
+  clears everything; it cannot vouch for a payload another tab wrote later.
+  Storage access in that path is best-effort: a refused write or removal
+  must never abort the clear. Enforced by
+  `src/store/__tests__/auth-client-owner.test.ts` and
+  `src/store/__tests__/auth-store-storage-failures.test.ts`.
 
 ## Canonical writer + terminal reconciliation
 

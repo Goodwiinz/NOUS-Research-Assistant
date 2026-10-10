@@ -5,7 +5,6 @@ Provides REST endpoints for thread and message management.
 """
 
 import logging
-import threading
 import time
 from datetime import datetime
 from typing import List, Literal, Optional
@@ -15,10 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.config import settings
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.middleware.rate_limiting import get_rate_limiter
+from src.middleware.rate_limiting import ApiRateLimiter
 from src.models.thread import ThreadStatus
 from src.models.user import User
 from src.schemas.chat import (  # Thread schemas; Bulk thread schemas; Message schemas
@@ -45,35 +43,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/threads", tags=["Threads"])
 
-# Initialize rate limiter (uses Redis if available, falls back to in-memory)
-_rate_limiter = None
-_rate_limiter_lock = threading.Lock()
-
-
-def get_bulk_rate_limiter():
-    """Get or create the rate limiter instance (thread-safe)."""
-    global _rate_limiter
-    # First check (without lock for performance)
-    if _rate_limiter is None:
-        with _rate_limiter_lock:
-            # Double-check inside lock to prevent race conditions
-            if _rate_limiter is None:
-                try:
-                    import redis
-
-                    redis_client = redis.Redis.from_url(
-                        settings.REDIS_URL or "redis://localhost:6379/0",
-                        decode_responses=True,
-                    )
-                    redis_client.ping()
-                    _rate_limiter = get_rate_limiter(redis_client)
-                    logger.info("Bulk thread rate limiter initialized with Redis")
-                except Exception as e:
-                    logger.warning(
-                        f"Redis unavailable for rate limiting, using in-memory: {e}"
-                    )
-                    _rate_limiter = get_rate_limiter(None)
-    return _rate_limiter
+# Initialize rate limiter (async — Redis if available via the shared facade,
+# per-process in-memory fallback that still counts during an outage; audit I3)
+_bulk_rate_limiter = ApiRateLimiter()
 
 
 async def check_bulk_rate_limit(
@@ -96,10 +68,8 @@ async def check_bulk_rate_limit(
     Raises:
         HTTPException: 429 if rate limit exceeded
     """
-    rate_limiter = get_bulk_rate_limiter()
     rate_key = f"threads:bulk:{current_user.id}:{operation}"
-
-    allowed, info = rate_limiter.is_allowed(rate_key, limit, window)
+    allowed, info = await _bulk_rate_limiter.is_allowed(rate_key, limit, window)
 
     if not allowed:
         retry_after = info.get("retry_after", window)
@@ -1077,6 +1047,7 @@ def _format_message_response(message) -> ChatMessageResponse:
         tool_executions=public_tool_execution_activity(message.tool_executions),
         plan=message.plan,
         plan_reasoning=message.plan_reasoning,
+        reasoning_summary=message.reasoning_summary,
         token_usage=message.token_usage,
         progress_steps=message.progress_steps,
         model_name=message.model_name,

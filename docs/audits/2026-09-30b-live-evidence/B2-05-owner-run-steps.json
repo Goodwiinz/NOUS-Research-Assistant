@@ -1,0 +1,15 @@
+{
+  "step": "B2-05-owner-run-steps",
+  "as": "owner",
+  "at": "2026-09-30T20:57:40.868011+00:00",
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/research-engine/runs/a90c3860-2ed5-4e98-9a8c-390516f16fd3/steps",
+    "body": null
+  },
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "response": []
+}

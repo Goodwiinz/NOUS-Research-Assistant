@@ -25,9 +25,29 @@ class FastPathDecision:
     reason: str
 
 
-_BARE_CONVERSATION_RE = re.compile(
-    r"^\s*(?:hi|hello|hey|thanks?|thank you|ok(?:ay)?|cool|nice|great|"
-    r"goodbye|bye)[!.?\s]*$",
+_GREETING_WORDS = r"hi|hello|hey|goodbye|bye"
+_ACK_WORDS = r"thanks?|thank you|ok(?:ay)?|cool|nice|great"
+
+
+def _bare(words: str) -> re.Pattern[str]:
+    return re.compile(rf"^\s*(?:{words})[!.?\s]*$", re.IGNORECASE)
+
+
+_BARE_GREETING_RE = _bare(_GREETING_WORDS)
+_BARE_ACK_RE = _bare(_ACK_WORDS)
+_BARE_CONVERSATION_RE = _bare(f"{_GREETING_WORDS}|{_ACK_WORDS}")
+
+# An assistant turn that asks or offers something: a bare ack after it may be
+# the user accepting a proposed tool action (R8-A4, trace 019f33ca), which a
+# tool-less Luna reply cannot carry out. Declarative offers count too ("I can
+# ingest these for you.", "... if you'd like."); refusals ("I can't", "I
+# cannot", "I could not") do not.
+_AWAITS_REPLY_RE = re.compile(
+    r"\?\s*$|\b(?:"
+    r"shall i|should i|(?:do|would) you (?:like|want)|want me to|let me know|"
+    r"confirm|proceed|i can(?!['\u2019]t)|i could(?! not)|happy to|"
+    r"if you(?:['\u2019]d| would)? (?:like|want|prefer)"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -69,35 +89,68 @@ def classify_fast_path_turn(
     page_context: Mapping[str, Any] | None,
     use_rag: bool,
     max_input_chars: int,
+    has_attachments: bool = False,
 ) -> FastPathDecision:
     """Return a deterministic, explainable routing decision.
 
-    Bare acknowledgements are evidence-independent even when the RAG toggle is
-    enabled. All other turns require an explicit ungrounded request
+    Bare greetings are evidence-independent even when the RAG toggle is
+    enabled. Bare acks ("ok", "thanks") are too, unless they may be accepting
+    something: the previous assistant message asks/offers, or a grounded page
+    is open. All other turns require an explicit ungrounded request
     (``use_rag=False``) and must avoid agent-capability or contextual language.
     """
 
-    latest_user = next(
+    latest_index = next(
         (
-            message
-            for message in reversed(messages)
-            if getattr(message, "role", None) == "user"
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if getattr(messages[index], "role", None) == "user"
         ),
         None,
     )
-    if latest_user is None:
+    if latest_index is None:
         return FastPathDecision(False, "missing_user_message")
+    latest_user = messages[latest_index]
+
+    # Luna's evidence-independent path has no document loader. Explicit
+    # attachments therefore always take the graph path, including when the
+    # RAG toggle is off: direct user-selected content remains usable while
+    # broad retrieval stays disabled.
+    if has_attachments:
+        return FastPathDecision(False, "attachments_require_grounding")
 
     user_text = _content(latest_user).strip()
-    if _BARE_CONVERSATION_RE.fullmatch(user_text):
+    if _BARE_GREETING_RE.fullmatch(user_text):
+        return FastPathDecision(True, "bare_conversation")
+
+    context = page_context or {}
+    grounded_page = bool(context.get("project_id")) or (
+        context.get("type") in _GROUNDED_PAGE_TYPES
+    )
+    if _BARE_ACK_RE.fullmatch(user_text):
+        if grounded_page:
+            return FastPathDecision(False, "grounded_page_context")
+        previous_assistant = next(
+            (
+                message
+                for message in reversed(messages[:latest_index])
+                if getattr(message, "role", None) == "assistant"
+            ),
+            None,
+        )
+        # ponytail: a client that omits history hides the proposal and the
+        # ack stays eligible; the web client sends its last 50 messages.
+        if previous_assistant is not None and _AWAITS_REPLY_RE.search(
+            _content(previous_assistant).strip()
+        ):
+            return FastPathDecision(False, "ack_may_accept_proposal")
         return FastPathDecision(True, "bare_conversation")
 
     total_chars = sum(len(_content(message)) for message in messages)
     if total_chars > max(1, max_input_chars):
         return FastPathDecision(False, "context_budget_exceeded")
 
-    context = page_context or {}
-    if context.get("project_id") or context.get("type") in _GROUNDED_PAGE_TYPES:
+    if grounded_page:
         return FastPathDecision(False, "grounded_page_context")
 
     if _AGENT_CAPABILITY_RE.search(user_text):

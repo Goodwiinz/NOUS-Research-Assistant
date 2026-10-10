@@ -1,0 +1,33 @@
+{
+  "id": "known-answer",
+  "note": "Collector only. Never shown to principals; no product change may be tuned against it.",
+  "duplicates": [["KA-01", "KA-02"]],
+  "not_retrieved": ["KA-03"],
+  "prisma_counts": {
+    "records_identified": 10,
+    "duplicates_removed": 1,
+    "unique_reports": 9,
+    "records_screened": 9,
+    "records_excluded": 2,
+    "reports_sought": 7,
+    "reports_not_retrieved": 1,
+    "reports_assessed": 6,
+    "reports_excluded_by_reason": {"wrong design": 1, "wrong population": 1},
+    "included_reports": 4
+  },
+  "exclusion_reasons": {"KA-04": "wrong population", "KA-05": "wrong design"},
+  "accepted_values": [
+    {"field": "intervention_weeks", "value": "12"},
+    {"field": "mean_age", "value": "71.4"},
+    {"field": "sample_size", "value": "120"}
+  ],
+  "claim_support": {
+    "The tai chi trial randomized 120 participants.": "supporting",
+    "Participants in the tai chi trial had a mean age of 71.4 years.": "supporting",
+    "The supervised programme lasted 12 weeks.": "supporting",
+    "Tai chi reduced depressive symptoms by 40 percent.": "unresolved",
+    "Tai chi did not change depressive symptoms compared with usual care.": "opposing",
+    "Depressive symptoms fell more with tai chi than with usual care.": "supporting"
+  },
+  "seeded": {"unsupported_number": "C4", "contradictory": "C5"}
+}

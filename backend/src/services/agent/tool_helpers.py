@@ -7,9 +7,10 @@ other utilities referenced across multiple _tool_* functions.
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.collection import Collection, CollectionDocument
 from src.models.document import Document
 from src.models.user import User
-from src.models.workspace import Workspace
+from src.services.research_engine.project_access import (
+    ResearchAction,
+    accessible_research_workspace_ids,
+    resolve_project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,20 +233,20 @@ async def _resolve_project_id(
     # Try by name (case-insensitive)
     if project_id and db and current_user:
         try:
+            workspace_ids = await accessible_research_workspace_ids(db, current_user.id)
             stmt = (
                 select(Collection.id)
-                .join(Workspace, Collection.workspace_id == Workspace.id)
                 .where(
                     Collection.name.ilike(_escape_like(project_id)),
                     Collection.is_deleted == False,
-                    Workspace.owner_id == current_user.id,
+                    Collection.workspace_id.in_(workspace_ids),
                 )
-                .limit(1)
+                .limit(2)
             )
             result = await db.execute(stmt)
-            row = result.scalar_one_or_none()
-            if row:
-                return row
+            matches = list(result.scalars().all())
+            if len(matches) == 1:
+                return cast(UUID, matches[0])
         except Exception:
             pass
 
@@ -252,26 +257,19 @@ async def _verify_project_ownership(
     project_id: str,
     db: AsyncSession,
     current_user: User,
+    action: ResearchAction = ResearchAction.VIEW,
 ) -> Optional[Collection]:
-    """Verify a project (collection) exists and belongs to the current user."""
+    """Resolve legacy agent name inputs, then apply canonical authorization."""
     proj_uuid = await _resolve_project_id(project_id, db, current_user)
     if not proj_uuid:
         return None
-
-    stmt = (
-        select(Collection)
-        .join(Workspace, Collection.workspace_id == Workspace.id)
-        .where(
-            Collection.id == proj_uuid,
-            Collection.is_deleted == False,
-            Workspace.owner_id == current_user.id,
-        )
-    )
-    result = await db.execute(stmt)
-    project = result.scalar_one_or_none()
-    if project is None:
+    try:
+        return (
+            await resolve_project(db, proj_uuid, current_user.id, action)
+        ).collection
+    except HTTPException:
         _log_resource_access_denied("project", project_id, current_user)
-    return project
+        return None
 
 
 async def _link_documents_to_project(
@@ -281,38 +279,48 @@ async def _link_documents_to_project(
 ) -> Dict[str, Any]:
     """Idempotently link documents to a project.
 
-    Uses ``INSERT ... ON CONFLICT DO NOTHING`` against the
-    ``(collection_id, document_id)`` unique constraint so concurrent
-    ingests of the same paper don't race the existence check, and so we
-    avoid an N+1 ``SELECT`` per document.
+    Upserts against the ``(collection_id, document_id)`` unique constraint so
+    concurrent ingests of the same paper don't race the existence check, and
+    so a soft-deleted link (REST remove) is revived rather than silently
+    skipped (R8-B3).
 
-    Returns ``{"linked": int, "already_linked": int}`` — caller decides
-    how to surface the result.
+    Returns ``{"linked": int, "already_linked": int, "restored": [ids]}``;
+    ``linked`` counts new and revived links — caller decides how to surface it.
     """
-    ids = [str(d) for d in document_ids if d]
+    # Deduped: ON CONFLICT DO UPDATE rejects a row proposed twice in one INSERT.
+    ids = list(dict.fromkeys(str(d) for d in document_ids if d))
     if not ids:
-        return {"linked": 0, "already_linked": 0}
+        return {"linked": 0, "already_linked": 0, "restored": []}
 
-    existing_stmt = select(CollectionDocument.document_id).where(
+    existing_stmt = select(
+        CollectionDocument.document_id, CollectionDocument.is_deleted
+    ).where(
         CollectionDocument.collection_id == project.id,
         CollectionDocument.document_id.in_(ids),
     )
-    existing = {str(row[0]) for row in (await db.execute(existing_stmt)).all()}
+    is_deleted = {
+        str(row[0]): bool(row[1]) for row in (await db.execute(existing_stmt)).all()
+    }
+    to_link = [doc_id for doc_id in ids if is_deleted.get(doc_id, True)]
 
-    new_rows = [
-        {"collection_id": project.id, "document_id": doc_id}
-        for doc_id in ids
-        if doc_id not in existing
-    ]
-
-    if new_rows:
+    if to_link:
+        stmt = pg_insert(CollectionDocument).values(
+            [{"collection_id": project.id, "document_id": d} for d in to_link]
+        )
         await db.execute(
-            pg_insert(CollectionDocument)
-            .values(new_rows)
-            .on_conflict_do_nothing(index_elements=["collection_id", "document_id"])
+            stmt.on_conflict_do_update(
+                index_elements=["collection_id", "document_id"],
+                set_={
+                    "is_deleted": False,
+                    "deleted_at": None,
+                    "updated_at": func.now(),
+                },
+                where=CollectionDocument.is_deleted.is_(True),
+            )
         )
 
     return {
-        "linked": len(new_rows),
-        "already_linked": len(existing),
+        "linked": len(to_link),
+        "already_linked": len(ids) - len(to_link),
+        "restored": [d for d in to_link if d in is_deleted],
     }

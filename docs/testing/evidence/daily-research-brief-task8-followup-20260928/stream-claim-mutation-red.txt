@@ -1,0 +1,21 @@
+CLASSIFICATION: EXPECTED RED
+SOURCE_SHA_BEFORE_MUTATION: a92fcfa770f4fbe89d7154f1bb88b37f8cf5f408
+PRODUCTION_FILE_SHA256_BEFORE_MUTATION: 7a96b08ab56709178bcff0fc23b74b164c16cf1ad13a53bafc235bb67df72ec6
+GUARD: `backend/src/services/research_engine/run_lifecycle.py:685`
+MUTATION: removed only `await self._lock_run(run)` from `ResearchRunLifecycleService.claim_stream`
+RAW_CAPTURE_SHA256: 5f7da35d27c1e82261766ef4ab278a15bf31ea70db503174106e5b92765eabb6
+EXIT_STATUS: 1
+COMMAND:
+  PYTHONPATH=backend ORCHESTRATION_TEST_DATABASE_URL="$ORCHESTRATION_TEST_DATABASE_URL" .venv/bin/python -m pytest -c backend/pytest.ini -q -vv backend/tests/integration/test_daily_research_brief_postgres.py::test_controlled_lifecycle_persists_each_stage_exactly_once
+
+SALIENT OUTPUT:
+  stage_duration step_index=2 stage_type=extract status=completed
+  stage_duration step_index=2 stage_type=extract status=completed
+  AssertionError: assert (200, 200) == (200, 409)
+  At index 1 diff: 200 != 409
+  FAILED backend/tests/integration/test_daily_research_brief_postgres.py::test_controlled_lifecycle_persists_each_stage_exactly_once
+  1 failed, 1 warning in 3.13s
+
+The deliberate guard-breaking mutation therefore let both real SSE consumers
+claim and execute the extraction stage. This is the failure the regression is
+designed to detect.

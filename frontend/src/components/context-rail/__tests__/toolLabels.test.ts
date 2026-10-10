@@ -8,6 +8,7 @@ describe('toolLabel', () => {
     ['document_search', 'Search documents'],
     ['ingest_document', 'Ingest document'],
     ['create_draft', 'Draft synthesis'],
+    ['revise_draft', 'Revise draft'],
     ['create_note', 'Save note'],
     ['entity_search', 'Query entities'],
     ['kg_query', 'Query knowledge graph'],
@@ -60,5 +61,7 @@ describe('toolLabel', () => {
     expect(toolStatusLabel('search_arxiv', 'incomplete')).toBe(
       'Search arXiv status unavailable'
     );
+    expect(toolStatusLabel('revise_draft', 'active')).toBe('Revising draft…');
+    expect(toolStatusLabel('revise_draft', 'done')).toBe('Revised draft');
   });
 });

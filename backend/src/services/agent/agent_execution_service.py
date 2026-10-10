@@ -29,9 +29,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import AsyncSessionLocal
 from src.models.user import User
 
-from ._errors import client_safe_error, extract_interrupt_confirmation
+from ._errors import client_safe_error
 
 logger = logging.getLogger(__name__)
+
+_CANCELLATION_POLL_SECONDS = 0.5
+# A Stop-marker read is advisory while the graph runs: one pool timeout or
+# connection blip must not cancel a turn mid-tool. Only this many consecutive
+# failed polls (~5 s at the default interval) escalate to a failed turn.
+_CANCELLATION_POLL_MAX_CONSECUTIVE_FAILURES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +53,13 @@ logger = logging.getLogger(__name__)
 
 from src.services.agent import job_store as _job_store
 from src.services.agent._builders import RECURSION_LIMIT
-from src.services.agent._sanitize import sanitize_page_context
-from src.services.agent.agent_run_service import get_run
-from src.services.agent.job_store import _is_newer_or_equal
+from src.services.agent._sanitize import current_turn_final_text, sanitize_page_context
+from src.services.agent.agent_run_service import RunStatusDecision, get_run
+from src.services.agent.confirmation_service import (
+    ApprovalExpired,
+    pending_confirmation,
+    require_approval,
+)
 from src.services.agent.job_store import _l1 as _jobs
 from src.services.agent.job_store import _l1_lock as _jobs_lock
 from src.services.agent.job_store import _write_to_redis_only
@@ -135,6 +145,17 @@ def _set_job(job_id: str, data: dict, *, project: bool = True):
     """
     import asyncio as _asyncio
 
+    try:
+        sync_status = JobStatus(data.get("status"))
+    except (TypeError, ValueError):
+        sync_status = None
+    if sync_status is not None and (
+        sync_status.is_terminal or sync_status == JobStatus.STOPPING
+    ):
+        raise _job_store.JobStatusPublicationError(
+            "Terminal and STOPPING job writes require awaited durable publication"
+        )
+
     data["created_at"] = time.time()
     with _jobs_lock:
         # Same owner carry-forward as job_store.set_job: replacement writes
@@ -162,7 +183,7 @@ def _set_job(job_id: str, data: dict, *, project: bool = True):
         # one order.
         _job_store._seq += 1
         data["_seq"] = _job_store._seq
-        if existing is None or _is_newer_or_equal(data, existing):
+        if _job_store._cache_transition_allowed(data, existing):
             _jobs[job_id] = data
 
     # Durable projection (fire-and-forget; Redis stays authoritative). The
@@ -209,6 +230,67 @@ def _actor_fields(current_user: User) -> dict:
         "user_id": str(current_user.id),
         "organization_id": str(org) if org else None,
     }
+
+
+async def _publish_producer_status(
+    job_id: str,
+    payload: dict,
+    current_user: User,
+    *,
+    thread_id: Optional[str] = None,
+) -> RunStatusDecision:
+    """Publish a producer exit only after its durable status decision.
+
+    A late Stop can win after the cancellation monitor's final read. The row
+    transition returned by ``set_job`` is the arbitration point: when it says
+    STOPPING (or reports an active run with a committed cancellation marker),
+    this producer acknowledges the request once as CANCELLED before returning.
+    """
+    scoped_payload = {**payload, **_actor_fields(current_user)}
+    if thread_id is not None:
+        scoped_payload["thread_id"] = str(thread_id)
+    decision = await _set_job_async(
+        job_id,
+        scoped_payload,
+        require_durable_decision=True,
+    )
+    if decision is None:
+        raise _job_store.JobStatusPublicationError(
+            f"Durable status decision returned no outcome for job {job_id}"
+        )
+
+    effective_status = JobStatus(decision.effective_status)
+    cancellation_requested = effective_status == JobStatus.STOPPING or (
+        not effective_status.is_terminal and decision.cancel_requested_at is not None
+    )
+    if not cancellation_requested:
+        return decision
+
+    cancellation_payload = {
+        "status": JobStatus.CANCELLED,
+        "error": "execution cancelled",
+        **_actor_fields(current_user),
+    }
+    if thread_id is not None:
+        cancellation_payload["thread_id"] = str(thread_id)
+    acknowledged = await _set_job_async(
+        job_id,
+        cancellation_payload,
+        require_durable_decision=True,
+    )
+    if acknowledged is None:
+        raise _job_store.JobStatusPublicationError(
+            f"Cancellation acknowledgement returned no outcome for job {job_id}"
+        )
+    acknowledged_status = JobStatus(acknowledged.effective_status)
+    if acknowledged_status == JobStatus.STOPPING or (
+        not acknowledged_status.is_terminal
+        and acknowledged.cancel_requested_at is not None
+    ):
+        raise _job_store.JobStatusPublicationError(
+            f"Cancellation acknowledgement left job {job_id} active"
+        )
+    return acknowledged
 
 
 def _get_job(job_id: str) -> dict | None:
@@ -299,6 +381,22 @@ def _page_context_to_dict(
             "metadata": raw.get("metadata"),
         }
     )
+
+
+def stored_request_payload(request: Any) -> Dict[str, Any]:
+    """The request as every job-store publication and Celery message carries it.
+
+    R8-D4: page context is stored in its sanitized form, never the raw client
+    blob; ``workspace_id`` is kept. Sanitizing is idempotent and only shrinks
+    values, so the payload re-validates as an ``AgentExecuteRequest`` on the
+    confirm and worker paths. Use this for every write of ``"request"``.
+    """
+    payload: Dict[str, Any] = request.model_dump(mode="json")
+    payload["page_context"] = {
+        **_page_context_to_dict(request.page_context),
+        "workspace_id": (payload.get("page_context") or {}).get("workspace_id"),
+    }
+    return payload
 
 
 def _get_latest_user_content(messages: List[Any]) -> Optional[str]:
@@ -776,7 +874,8 @@ async def _clear_stale_pending_confirmation(
     resets these on a normal turn entry, but clearing them here makes the
     invariant local to this function so future graph refactors that bypass
     ``preprocessing_node`` cannot silently inherit a stale counter from the
-    abandoned turn.
+    abandoned turn. Separate from ``turn_reset_fields`` because a pending
+    interrupt task survives any input dict; only a checkpoint write clears it.
 
     Returns the list of dropped tool name(s) when state was cleared, or None
     when nothing needed clearing, so callers can observe the drop.
@@ -1900,6 +1999,7 @@ async def _persist_assistant_message(
     client_message_id: Optional[str] = None,
     plan: Optional[list] = None,
     plan_reasoning: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
 ) -> Optional[str]:
@@ -1962,6 +2062,7 @@ async def _persist_assistant_message(
         client_message_id=client_message_id,
         plan=plan,
         plan_reasoning=plan_reasoning,
+        reasoning_summary=reasoning_summary,
         token_usage=token_usage,
         progress_steps=progress_steps,
     )
@@ -2061,6 +2162,7 @@ async def _persist_assistant_message_safe(
     client_message_id: Optional[str] = None,
     plan: Optional[list] = None,
     plan_reasoning: Optional[str] = None,
+    reasoning_summary: Optional[str] = None,
     token_usage: Optional[dict] = None,
     progress_steps: Optional[list] = None,
     required: bool = False,
@@ -2091,6 +2193,7 @@ async def _persist_assistant_message_safe(
                 client_message_id=client_message_id,
                 plan=plan,
                 plan_reasoning=plan_reasoning,
+                reasoning_summary=reasoning_summary,
                 token_usage=token_usage,
                 progress_steps=progress_steps,
             )
@@ -2117,6 +2220,56 @@ async def _persist_assistant_message_safe(
         if required:
             raise
         return None
+
+
+async def _mark_assistant_message_stopped_safe(
+    *,
+    thread_id: str,
+    message_id: str,
+) -> bool:
+    """Mark an already-written assistant row as the stopped partial.
+
+    A durable Stop can win in the small window after a producer writes the
+    answer row but before it commits ``run.completed``. Reusing the insert
+    helper would dedupe and leave ``stopped=false``; this focused projection
+    keeps the backend as the sole writer while preserving the row identity.
+    """
+    from uuid import UUID
+
+    from sqlalchemy import update
+
+    from src.models.chat_message import ChatMessage, MessageRole
+
+    try:
+        message_uuid = UUID(message_id)
+        thread_uuid = UUID(thread_id)
+    except (ValueError, AttributeError, TypeError):
+        # Unit doubles and degraded, threadless streams can carry opaque ids;
+        # there is no valid database row to project onto in that case.
+        return False
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                update(ChatMessage)
+                .where(
+                    ChatMessage.id == message_uuid,
+                    ChatMessage.thread_id == thread_uuid,
+                    ChatMessage.role == MessageRole.ASSISTANT,
+                )
+                .values(stopped=True)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            return bool(result.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to mark assistant row stopped for thread %s: %s",
+            thread_id,
+            exc,
+            exc_info=exc,
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -2199,6 +2352,96 @@ async def _run_heartbeat(job_id: str, *, interval_seconds: Optional[float] = Non
             await beat_task
 
 
+async def _invoke_graph_with_cancellation_monitor(
+    graph: Any,
+    graph_input: Any,
+    config: dict[str, Any],
+    job_id: str,
+    current_user: User,
+) -> dict[str, Any]:
+    """Run a graph turn while polling its durable owner-scoped stop marker.
+
+    Each read uses a short-lived session so it observes the committed marker
+    independently of the runner's persistence session. The monitor owns graph
+    cancellation and joins the child before returning.
+    """
+    from src.services.agent.agent_run_service import is_run_cancellation_requested
+
+    organization_id = getattr(current_user, "organization_id", None)
+    user_id = str(current_user.id)
+
+    async def cancellation_requested() -> bool:
+        try:
+            async with AsyncSessionLocal() as cancellation_db:
+                return await is_run_cancellation_requested(
+                    cancellation_db,
+                    job_id,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Unable to read agent-run cancellation marker",
+                extra={"job_id": job_id},
+            )
+            raise
+
+    if await cancellation_requested():
+        raise asyncio.CancelledError
+
+    graph_task = asyncio.create_task(graph.ainvoke(graph_input, config=config))
+
+    async def monitor() -> None:
+        consecutive_failures = 0
+        while not graph_task.done():
+            await asyncio.sleep(_CANCELLATION_POLL_SECONDS)
+            if graph_task.done():
+                return
+            try:
+                requested = await cancellation_requested()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Already logged by cancellation_requested(). The strict
+                # pre-start and post-return reads still fail closed.
+                consecutive_failures += 1
+                if consecutive_failures >= _CANCELLATION_POLL_MAX_CONSECUTIVE_FAILURES:
+                    raise
+                continue
+            consecutive_failures = 0
+            if requested:
+                graph_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await graph_task
+                return
+
+    monitor_task = asyncio.create_task(monitor())
+    try:
+        done, _pending = await asyncio.wait(
+            {graph_task, monitor_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if monitor_task in done:
+            monitor_task.result()
+
+        final_state = await graph_task
+        # Close the race where Stop commits as the graph returns, just before
+        # the polling task's next interval.
+        if await cancellation_requested():
+            raise asyncio.CancelledError
+        return final_state
+    finally:
+        if not monitor_task.done():
+            monitor_task.cancel()
+        if not graph_task.done():
+            graph_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await monitor_task
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await graph_task
+
+
 async def _run_agent_graph(
     job_id: str,
     request: Any,  # AgentExecuteRequest
@@ -2231,28 +2474,21 @@ async def _run_agent_graph(
             resolved_thread_id: Optional[str] = None
             thread_obj = None
             tombstones = TombstoneReport()
-            try:
-                thread_obj, _conversation_id = await _resolve_thread(
-                    db, current_user, request
-                )
-                if thread_obj is not None:
-                    resolved_thread_id = str(thread_obj.id)
-                    if request.thread_id != resolved_thread_id:
-                        request.thread_id = resolved_thread_id
-                    # Retry-once + observable-on-failure so a swallowed persist
-                    # can't silently diverge the two stores (audit D3 / P2.6).
-                    await _persist_user_message_guarded(
-                        db, current_user, request, tombstoned_out=tombstones
-                    )
-            except AgentThreadResolutionError:
-                # An explicit thread/workspace is authoritative. Access loss
-                # between edge validation and worker dispatch must fail the
-                # run, never continue against an ephemeral checkpoint.
-                raise
-            except Exception:
-                logger.warning(
-                    "Failed to persist user turn before agent graph run",
-                    exc_info=True,
+            # Any resolution failure (access loss or a DB error during the
+            # re-check) fails the run: continuing would run the graph on an
+            # unverified ``request.thread_id`` checkpoint labelled ephemeral.
+            # The persist below never raises (_persist_user_message_guarded).
+            thread_obj, _conversation_id = await _resolve_thread(
+                db, current_user, request
+            )
+            if thread_obj is not None:
+                resolved_thread_id = str(thread_obj.id)
+                if request.thread_id != resolved_thread_id:
+                    request.thread_id = resolved_thread_id
+                # Retry-once + observable-on-failure so a swallowed persist
+                # can't silently diverge the two stores (audit D3 / P2.6).
+                await _persist_user_message_guarded(
+                    db, current_user, request, tombstoned_out=tombstones
                 )
 
             # Configure LangSmith tracing if available
@@ -2337,6 +2573,7 @@ async def _run_agent_graph(
                 create_runtime_snapshot,
                 runtime_config_fields,
                 runtime_state_fields,
+                turn_reset_fields,
             )
 
             runtime_snapshot = await create_runtime_snapshot(
@@ -2350,29 +2587,18 @@ async def _run_agent_graph(
             initial_state = {
                 "messages": messages,
                 "page_context": page_context,
-                "retrieved_contexts": [],
-                "tool_executions": [],
+                **turn_reset_fields(),
+                "attachment_ids": [
+                    str(document_id)
+                    for document_id in (getattr(request, "attachment_ids", None) or [])
+                ],
                 "thread_id": request.thread_id or "",
                 "thread_persistence": (
                     THREAD_PERSISTENCE_DURABLE
                     if resolved_thread_id is not None
                     else THREAD_PERSISTENCE_EPHEMERAL
                 ),
-                "turn_index": 0,
-                "tool_loop_count": 0,
-                "error_count": 0,
-                "last_error": "",
-                "pending_confirmation": {},
-                "user_confirmed": False,
-                "intent": "",
-                "user_memories": [],
                 "project_memories": project_memories,
-                "plan": [],
-                "plan_reasoning": "",
-                "reflection_count": 0,
-                "compaction_count": 0,
-                "intent_confidence": 0.0,
-                "last_error_info": {},
                 "user_id": str(current_user.id),
                 "model": request.model,
                 "use_rag": request.use_rag,
@@ -2432,47 +2658,60 @@ async def _run_agent_graph(
                 # S2-M15: heartbeat updated_at while the graph runs so the
                 # staleness sweeper can never mistake a live run for dead.
                 async with _run_heartbeat(job_id), asyncio.timeout(360):
-                    final_state = await graph.ainvoke(initial_state, config=config)
+                    final_state = await _invoke_graph_with_cancellation_monitor(
+                        graph, initial_state, config, job_id, current_user
+                    )
 
                 # Primary interrupt detection — see _extract_pending_interrupt.
                 # ainvoke() returning without raising does NOT mean the turn
                 # completed; the graph may have paused at interrupt_node.
-                confirmation_details = _extract_pending_interrupt(
-                    await graph.aget_state(config)
+                confirmation_details = pending_confirmation(
+                    await graph.aget_state(config),
+                    thread_id=config["configurable"]["thread_id"],
+                    run_id=job_id,
+                    user_id=current_user.id,
                 )
                 if confirmation_details is not None:
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             "status": JobStatus.AWAITING_CONFIRMATION,
                             "confirmation": confirmation_details,
                             "tool_executions": [],
-                            **_actor_fields(current_user),
-                            "request": request.model_dump(mode="json"),
+                            "request": stored_request_payload(request),
                         },
+                        current_user,
+                        thread_id=resolved_thread_id,
                     )
                     return
-            except GraphInterrupt as exc:
+            except GraphInterrupt:
                 # Defensive fallback — see _extract_pending_interrupt docstring.
-                confirmation_details = extract_interrupt_confirmation(exc)
-                await _set_job_async(
+                confirmation_details = pending_confirmation(
+                    await graph.aget_state(config),
+                    thread_id=config["configurable"]["thread_id"],
+                    run_id=job_id,
+                    user_id=current_user.id,
+                )
+                if confirmation_details is None:
+                    raise ApprovalExpired()
+                await _publish_producer_status(
                     job_id,
                     {
                         "status": JobStatus.AWAITING_CONFIRMATION,
                         "confirmation": confirmation_details,
                         "tool_executions": [],
-                        **_actor_fields(current_user),
-                        "request": request.model_dump(mode="json"),
+                        "request": stored_request_payload(request),
                     },
+                    current_user,
+                    thread_id=resolved_thread_id,
                 )
                 return
 
-            # Extract assistant content from the last AI message
-            assistant_content = ""
-            for msg in reversed(final_state["messages"]):
-                if hasattr(msg, "type") and msg.type == "ai" and msg.content:
-                    assistant_content = msg.content
-                    break
+            # Checkpoint state includes previous turns; never use an older
+            # answer when this turn has no content-bearing assistant message.
+            assistant_content = (
+                current_turn_final_text(final_state.get("messages", [])) or ""
+            )
 
             # User row was already persisted up-front (before the graph ran).
             # Only write the assistant row here — Task 4 of
@@ -2564,14 +2803,15 @@ async def _run_agent_graph(
                 conversation_id=conversation_id,
             )
 
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.COMPLETED,
                     "result": result.model_dump(),
                     "tool_executions": list(final_state.get("tool_executions", [])),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=resolved_thread_id,
             )
         except asyncio.CancelledError:
             # CancelledError inherits from BaseException (since Python 3.8),
@@ -2579,37 +2819,39 @@ async def _run_agent_graph(
             # and the job would stay stuck in ``"running"`` forever. Mark it
             # cancelled first, then re-raise so the task tears down cleanly.
             logger.warning("Agent graph execution cancelled", extra={"job_id": job_id})
-            try:
-                await _set_job_async(
-                    job_id,
-                    {
-                        "status": JobStatus.CANCELLED,
-                        "error": "execution cancelled",
-                        **_actor_fields(current_user),
-                    },
-                )
-            except Exception:
-                logger.exception("Failed to mark cancelled job %s", job_id)
+            await _publish_producer_status(
+                job_id,
+                {"status": JobStatus.CANCELLED, "error": "execution cancelled"},
+                current_user,
+                thread_id=resolved_thread_id,
+            )
+            raise
+        except _job_store.JobStatusPublicationError:
+            logger.exception(
+                "Durable status publication failed for agent graph %s", job_id
+            )
             raise
         except asyncio.TimeoutError:
             logger.error("Agent graph execution timed out", extra={"job_id": job_id})
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": "Agent execution timed out after 360s",
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=resolved_thread_id,
             )
         except Exception as e:
             logger.error("Agent graph execution failed", exc_info=e)
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": client_safe_error(e),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=resolved_thread_id,
             )
 
 
@@ -2617,6 +2859,8 @@ async def _resume_agent_graph(
     job_id: str,
     confirmed: bool,
     current_user: User,
+    *,
+    approval_id: str,
 ):
     """Resume the agent graph after human confirmation."""
     from langgraph.errors import GraphInterrupt
@@ -2633,7 +2877,46 @@ async def _resume_agent_graph(
     AgentMessage = schemas["AgentMessage"]
 
     async with AsyncSessionLocal() as db:
+        verified_thread_id: Optional[str] = None
+        confirmation_claim_owned = False
         try:
+            durable_run = await get_run(
+                db,
+                job_id,
+                organization_id=getattr(current_user, "organization_id", None),
+                user_id=current_user.id,
+            )
+            if asyncio.iscoroutine(
+                durable_run
+            ):  # fail closed on a malformed DB adapter
+                durable_run.close()
+                durable_run = None
+            # BackgroundTasks may start after another producer has advanced
+            # the run. Such a task owns nothing and must not fail/re-park it.
+            # The status write path has no receipt predicate, so this receipt
+            # match is the only proof that a terminal publish targets our claim.
+            owns_approval = (
+                durable_run is not None
+                and (getattr(durable_run, "run_metadata", None) or {}).get(
+                    "approval_id"
+                )
+                == approval_id
+            )
+            run_status = getattr(durable_run, "status", None)
+            if owns_approval and run_status == JobStatus.STOPPING.value:
+                # A Stop accepted after /confirm claimed this approval but
+                # before this task started still leaves the CANCELLED ACK to
+                # the claiming producer; nobody else will write it.
+                confirmation_claim_owned = True
+                await _publish_producer_status(
+                    job_id,
+                    {"status": JobStatus.CANCELLED, "error": "resume cancelled"},
+                    current_user,
+                )
+                return
+            if not owns_approval or run_status != JobStatus.RUNNING.value:
+                return
+            confirmation_claim_owned = True
             # L1 first, then Redis: in Celery dispatch mode (or behind a
             # multi-replica API) the pod resuming the confirm may not be the
             # pod that dispatched, so the request payload only exists in
@@ -2661,7 +2944,7 @@ async def _resume_agent_graph(
                 logger.warning(
                     "Resume aborted for %s: no job payload (expired)", job_id
                 )
-                await _set_job_async(
+                await _publish_producer_status(
                     job_id,
                     {
                         "status": JobStatus.FAILED,
@@ -2669,8 +2952,8 @@ async def _resume_agent_graph(
                             "This confirmation has expired. "
                             "Please start the request again."
                         ),
-                        **_actor_fields(current_user),
                     },
+                    current_user,
                 )
                 return
 
@@ -2683,13 +2966,13 @@ async def _resume_agent_graph(
                         create_if_missing=False,
                     )
                 except (AgentThreadResolutionError, ValueError):
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             "status": JobStatus.FAILED,
                             "error": "Thread not found",
-                            **_actor_fields(current_user),
                         },
+                        current_user,
                     )
                     return
 
@@ -2750,13 +3033,13 @@ async def _resume_agent_graph(
                     # Stamp the *requesting* user so their polling sees the
                     # error; never the snapshot owner. Status is FAILED — the
                     # legacy failed/error split is collapsed (audit C7).
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             "status": JobStatus.FAILED,
                             "error": "Thread not found",
-                            **_actor_fields(current_user),
                         },
+                        current_user,
                     )
                     return
 
@@ -2782,35 +3065,45 @@ async def _resume_agent_graph(
                         "checkpoint; interrupt already consumed",
                         job_id,
                     )
-                    await _set_job_async(
+                    await _publish_producer_status(
                         job_id,
                         {
                             # Collapsed from the legacy "error" status (C7).
                             "status": JobStatus.FAILED,
                             "error": "Interrupt already consumed",
-                            **_actor_fields(current_user),
                         },
+                        current_user,
                     )
                     return
 
-            durable_run = await get_run(
-                db,
-                job_id,
-                organization_id=getattr(current_user, "organization_id", None),
-                user_id=current_user.id,
-            )
-            if asyncio.iscoroutine(
-                durable_run
-            ):  # fail closed on a malformed DB adapter
-                durable_run.close()
-                durable_run = None
-            verified_thread_id = None
+            try:
+                approval = require_approval(
+                    snapshot,
+                    approval_id=approval_id,
+                    thread_id=resume_thread_id,
+                    run_id=job_id,
+                    user_id=current_user.id,
+                )
+            except ApprovalExpired:
+                from src.services.agent.agent_run_service import (
+                    release_confirmation_claim,
+                )
+
+                await release_confirmation_claim(
+                    db,
+                    job_id,
+                    approval_id=approval_id,
+                    organization_id=getattr(current_user, "organization_id", None),
+                    user_id=current_user.id,
+                )
+                return
+
             if (
                 durable_run is not None
                 and durable_run.thread_id is not None
                 and str(durable_run.thread_id) == str(resume_thread_id)
             ):
-                verified_thread_id = durable_run.thread_id
+                verified_thread_id = str(durable_run.thread_id)
             config["metadata"] = build_trace_metadata(
                 trace_source=TraceSource.GRAPH,
                 user_id=current_user.id,
@@ -2826,6 +3119,20 @@ async def _resume_agent_graph(
                 ),
             )
 
+            runtime_state_update = {}
+            if snapshot and snapshot.values:
+                from src.services.agent.runtime_snapshot import (
+                    hydrate_runtime_state_from_snapshot,
+                )
+
+                runtime_state_update = await hydrate_runtime_state_from_snapshot(
+                    db,
+                    dict(snapshot.values),
+                    user_id=current_user.id,
+                    thread_id=resume_thread_id,
+                    job_id=job_id,
+                )
+
             # See the parallel commit in _run_agent_graph above (audit M9) —
             # get_run() above is a bare SELECT, so without this the session
             # holds its pooled connection through the whole confirm run.
@@ -2834,40 +3141,51 @@ async def _resume_agent_graph(
             # Same heartbeat as the fresh-run path (S2-M15): a confirm resume
             # is equally live and equally silent between status writes.
             async with _run_heartbeat(job_id), asyncio.timeout(360):
-                final_state = await graph.ainvoke(
-                    Command(resume={"confirmed": confirmed}),
-                    config=config,
+                final_state = await _invoke_graph_with_cancellation_monitor(
+                    graph,
+                    Command(
+                        **(
+                            {"update": runtime_state_update}
+                            if runtime_state_update
+                            else {}
+                        ),
+                        resume=approval.resume(confirmed),
+                    ),
+                    config,
+                    job_id,
+                    current_user,
                 )
 
             # Primary interrupt detection (mirrors _run_agent_graph and the
             # pre-resume check above) — a multi-step destructive flow can
             # re-fire interrupt() during resume without raising GraphInterrupt.
-            confirmation_details = _extract_pending_interrupt(
-                await graph.aget_state(config)
+            confirmation_details = pending_confirmation(
+                await graph.aget_state(config),
+                thread_id=resume_thread_id,
+                run_id=job_id,
+                user_id=current_user.id,
             )
             if confirmation_details is not None:
-                await _set_job_async(
+                await _publish_producer_status(
                     job_id,
                     {
                         "status": JobStatus.AWAITING_CONFIRMATION,
                         "confirmation": confirmation_details,
                         "tool_executions": list(final_state.get("tool_executions", [])),
-                        **_actor_fields(current_user),
                         "request": (
-                            original_request.model_dump(mode="json")
+                            stored_request_payload(original_request)
                             if original_request
                             else None
                         ),
                     },
+                    current_user,
+                    thread_id=verified_thread_id,
                 )
                 return
 
-            # Extract assistant content
-            assistant_content = ""
-            for msg in reversed(final_state["messages"]):
-                if hasattr(msg, "type") and msg.type == "ai" and msg.content:
-                    assistant_content = msg.content
-                    break
+            assistant_content = (
+                current_turn_final_text(final_state.get("messages", [])) or ""
+            )
 
             # Token cost on the HITL resume path (parity with the initial run).
             # Computed once here and reused for the assistant-row token_usage,
@@ -2976,16 +3294,17 @@ async def _resume_agent_graph(
                 conversation_id=conversation_id,
             )
 
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.COMPLETED,
                     "result": result.model_dump(),
                     "tool_executions": list(final_state.get("tool_executions", [])),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )
-        except GraphInterrupt as exc:
+        except GraphInterrupt:
             # A multi-step destructive flow can re-fire interrupt() during the
             # resume (user confirms tool #1, the agent then issues tool #2).
             # Without this handler the second interrupt bubbles into the generic
@@ -2994,8 +3313,15 @@ async def _resume_agent_graph(
             # HITL on the job/poll path. Mirror _run_agent_graph: re-park the job
             # as awaiting_confirmation. Uses original_request (the resume path's
             # request), not ``request``.
-            confirmation_details = extract_interrupt_confirmation(exc)
-            await _set_job_async(
+            confirmation_details = pending_confirmation(
+                await graph.aget_state(config),
+                thread_id=resume_thread_id,
+                run_id=job_id,
+                user_id=current_user.id,
+            )
+            if confirmation_details is None:
+                raise ApprovalExpired()
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.AWAITING_CONFIRMATION,
@@ -3003,48 +3329,57 @@ async def _resume_agent_graph(
                     # ainvoke raised before returning, so no final_state exists —
                     # match _run_agent_graph and reset the per-turn executions.
                     "tool_executions": [],
-                    **_actor_fields(current_user),
                     "request": (
-                        original_request.model_dump(mode="json")
+                        stored_request_payload(original_request)
                         if original_request
                         else None
                     ),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )
             return
         except asyncio.CancelledError:
+            if not confirmation_claim_owned:
+                raise
             # See parallel handler in _run_agent_graph above — CancelledError
             # is a BaseException, so the ``except Exception`` below misses it.
             logger.warning("Agent graph resume cancelled", extra={"job_id": job_id})
-            try:
-                await _set_job_async(
-                    job_id,
-                    {
-                        "status": JobStatus.CANCELLED,
-                        "error": "resume cancelled",
-                        **_actor_fields(current_user),
-                    },
-                )
-            except Exception:
-                logger.exception("Failed to mark cancelled resume job %s", job_id)
+            await _publish_producer_status(
+                job_id,
+                {"status": JobStatus.CANCELLED, "error": "resume cancelled"},
+                current_user,
+                thread_id=verified_thread_id,
+            )
+            raise
+        except _job_store.JobStatusPublicationError:
+            logger.exception(
+                "Durable status publication failed for resumed agent graph %s", job_id
+            )
             raise
         except asyncio.TimeoutError:
+            if not confirmation_claim_owned:
+                return
             logger.error("Agent graph resume timed out", extra={"job_id": job_id})
-            await _set_job_async(
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": "Agent execution timed out after 360s",
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )
         except Exception as e:
             logger.error("Agent graph resume failed", exc_info=e)
-            await _set_job_async(
+            if not confirmation_claim_owned:
+                return
+            await _publish_producer_status(
                 job_id,
                 {
                     "status": JobStatus.FAILED,
                     "error": client_safe_error(e),
-                    **_actor_fields(current_user),
                 },
+                current_user,
+                thread_id=verified_thread_id,
             )

@@ -37,6 +37,23 @@ const CITATIONS: Citation[] = [
 ];
 
 describe('CitationRenderer — plain path (no citation markers)', () => {
+  it('keeps a bare year answer in selectable text rather than a list marker', () => {
+    const { container } = render(<CitationRenderer content="2022." />);
+
+    expect(container.querySelector('ol')).toBeNull();
+    expect(container).toHaveTextContent('2022.');
+  });
+
+  it('still renders a numbered list when an item has content', () => {
+    const { container } = render(
+      <CitationRenderer content="1. Read the paper" />
+    );
+
+    expect(container.querySelector('ol li')).toHaveTextContent(
+      'Read the paper'
+    );
+  });
+
   it('renders headings', () => {
     render(<CitationRenderer content={'## Results\n\nBody text.'} />);
     expect(

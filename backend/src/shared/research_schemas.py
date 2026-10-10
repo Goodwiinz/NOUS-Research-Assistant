@@ -6,7 +6,7 @@ This module contains Pydantic schemas for the Research Assistant feature (User S
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel, Field, validator
@@ -514,9 +514,13 @@ class ProjectUpdate(BaseModel):
 
 
 class ProjectResponse(BaseModel):
-    """Research project response"""
+    """Research project response; id is the canonical Collection identifier."""
 
     id: UUID
+    research_engine_project_id: Optional[UUID] = None
+    can_edit: bool = False
+    can_manage: bool = False
+    workspace_archived: bool = False
     workspace_id: UUID
     name: str
     description: Optional[str] = None
@@ -715,6 +719,71 @@ class DraftResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ReleaseBlocker(BaseModel):
+    """One reason a draft version cannot be promoted (GOO-307)."""
+
+    code: str
+    claim_version_id: Optional[UUID] = None
+    start: int
+    end: int
+    text: str
+    detail: str
+
+
+class DraftReleaseResponse(BaseModel):
+    """A promotion of one exact draft version; stale rows are kept."""
+
+    id: UUID
+    collection_id: UUID
+    draft_id: UUID
+    draft_version: int
+    content_hash: str
+    claim_version_ids: List[UUID]
+    assessment_ids: List[UUID]
+    interpretation_claim_version_ids: List[UUID]
+    protocol_version_id: Optional[UUID] = None
+    policy_version: int
+    promoted_by_id: UUID
+    actor_role: str
+    rationale: Optional[str] = None
+    created_at: datetime
+    stale_at: Optional[datetime] = None
+    stale_event_id: Optional[UUID] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ReleaseInvalidation(BaseModel):
+    """Why the latest release is stale: persisted, or derived on read."""
+
+    stale_at: Optional[datetime] = None
+    cause: Dict[str, Any]
+    changed_nodes: List[str]
+    assessment_ids: List[UUID]
+
+
+class ReleaseCheckResponse(BaseModel):
+    """A draft version's release status, blockers and invalidation report."""
+
+    draft_id: UUID
+    draft_version: int
+    release_status: Literal["candidate", "verified", "stale"]
+    content_hash: str
+    blockers: List[ReleaseBlocker]
+    dimensions: Dict[str, Any]
+    release: Optional[DraftReleaseResponse] = None
+    invalidation: Optional[ReleaseInvalidation] = None
+
+
+class DraftPromoteRequest(BaseModel):
+    """Promote the exact version whose content hashes to ``content_hash``."""
+
+    content_hash: str = Field(..., pattern=r"^[0-9a-f]{64}$")
+    idempotency_key: str = Field(..., min_length=1, max_length=255)
+    rationale: Optional[str] = Field(default=None, max_length=2000)
 
 
 class DraftVersion(BaseModel):

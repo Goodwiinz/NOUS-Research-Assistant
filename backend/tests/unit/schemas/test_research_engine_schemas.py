@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+import src.schemas.research_engine as research_schemas
 from src.schemas.research_engine import (
     BlueprintCreate,
     BlueprintResponse,
@@ -26,7 +27,6 @@ from src.schemas.research_engine import (
     StepType,
 )
 
-
 # ============================================================================
 # Enum Tests
 # ============================================================================
@@ -42,7 +42,7 @@ class TestStepType:
         assert StepType.EXPORT == "export"
 
     def test_all_values(self):
-        assert len(StepType) == 6
+        assert len(StepType) == 7  # GOO-312 adds analyze
 
 
 class TestExecutionMode:
@@ -138,6 +138,7 @@ class TestProjectResponse:
         uid = uuid4()
         p = ProjectResponse(
             id=uid,
+            project_id=uid,
             name="Project",
             description="Desc",
             status="active",
@@ -194,23 +195,15 @@ class TestBlueprintStepDefinition:
 
     def test_temperature_min(self):
         with pytest.raises(ValidationError):
-            BlueprintStepDefinition(
-                type=StepType.SEARCH, name="s", temperature=-0.1
-            )
+            BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=-0.1)
 
     def test_temperature_max(self):
         with pytest.raises(ValidationError):
-            BlueprintStepDefinition(
-                type=StepType.SEARCH, name="s", temperature=2.1
-            )
+            BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=2.1)
 
     def test_temperature_boundaries(self):
-        s0 = BlueprintStepDefinition(
-            type=StepType.SEARCH, name="s", temperature=0.0
-        )
-        s2 = BlueprintStepDefinition(
-            type=StepType.SEARCH, name="s", temperature=2.0
-        )
+        s0 = BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=0.0)
+        s2 = BlueprintStepDefinition(type=StepType.SEARCH, name="s", temperature=2.0)
         assert s0.temperature == 0.0
         assert s2.temperature == 2.0
 
@@ -244,6 +237,39 @@ class TestBlueprintCreate:
         with pytest.raises(ValidationError):
             BlueprintCreate(steps=[self._step()])
 
+    def test_step_count_is_server_bounded(self):
+        with pytest.raises(ValidationError):
+            BlueprintCreate(
+                name="BP",
+                steps=[self._step(str(index)) for index in range(33)],
+            )
+
+    def test_nested_parameters_are_server_bounded(self):
+        with pytest.raises(ValidationError):
+            BlueprintCreate(
+                name="BP",
+                steps=[
+                    BlueprintStepDefinition(
+                        type=StepType.SEARCH,
+                        name="Search",
+                        parameters={"nested": {"payload": "x" * 40_000}},
+                    )
+                ],
+            )
+
+    def test_nested_prompt_is_server_bounded(self):
+        with pytest.raises(ValidationError):
+            BlueprintCreate(
+                name="BP",
+                steps=[
+                    BlueprintStepDefinition(
+                        type=StepType.SYNTHESIZE,
+                        name="Synthesize",
+                        parameters={"system_prompt_template": "x" * 20_000},
+                    )
+                ],
+            )
+
 
 class TestBlueprintUpdate:
     def test_all_optional(self):
@@ -251,6 +277,18 @@ class TestBlueprintUpdate:
         assert b.name is None
         assert b.steps is None
         assert b.parameters is None
+
+    def test_oversized_prompt_is_rejected_on_update(self):
+        with pytest.raises(ValidationError):
+            BlueprintUpdate(
+                steps=[
+                    BlueprintStepDefinition(
+                        type=StepType.SYNTHESIZE,
+                        name="Synthesize",
+                        system_prompt_template="x" * 20_000,
+                    )
+                ]
+            )
 
 
 class TestBlueprintResponse:
@@ -265,6 +303,7 @@ class TestBlueprintResponse:
         b = BlueprintResponse(
             id=uid,
             project_id=pid,
+            research_engine_project_id=pid,
             name="BP",
             template_source=None,
             version=1,
@@ -287,10 +326,159 @@ class TestRunCreate:
     def test_defaults(self):
         r = RunCreate()
         assert r.parameters_override == {}
+        assert r.scope_confirmation is None
 
     def test_with_overrides(self):
         r = RunCreate(parameters_override={"max_results": 10})
         assert r.parameters_override["max_results"] == 10
+
+    def test_oversized_nested_override_is_rejected(self):
+        with pytest.raises(ValidationError):
+            RunCreate(parameters_override={"nested": ["x" * 40_000]})
+
+    def test_accepts_typed_scope_confirmation(self):
+        confirmation = research_schemas.DailyBriefScopeConfirmation(
+            research_question="What changed in grounded generation?",
+            inclusion_criteria=["Peer-reviewed empirical work"],
+            exclusion_criteria=[],
+            providers=["openalex"],
+            limit_per_provider=25,
+            confirmed=True,
+        )
+
+        request = RunCreate(scope_confirmation=confirmation)
+
+        assert request.scope_confirmation == confirmation
+
+
+class TestDailyBriefScopeConfirmation:
+    def _valid(self, **overrides):
+        values = {
+            "research_question": "What changed in grounded generation?",
+            "inclusion_criteria": ["Peer-reviewed empirical work"],
+            "exclusion_criteria": [],
+            "providers": ["openalex", "crossref"],
+            "limit_per_provider": 25,
+            "notes": "Focus on reproducible evaluations.",
+            "confirmed": True,
+        }
+        values.update(overrides)
+        return research_schemas.DailyBriefScopeConfirmation(**values)
+
+    def test_accepts_exact_field_boundaries(self):
+        confirmation = self._valid(
+            research_question="q" * 2000,
+            inclusion_criteria=["i" * 500] * 25,
+            exclusion_criteria=["e" * 500] * 25,
+            providers=["arxiv", "crossref", "openalex", "pubmed"],
+            limit_per_provider=50,
+            notes="n" * 2000,
+        )
+
+        assert len(confirmation.research_question) == 2000
+        assert len(confirmation.inclusion_criteria) == 25
+        assert len(confirmation.exclusion_criteria) == 25
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("research_question", ""),
+            ("research_question", "q" * 2001),
+            ("inclusion_criteria", []),
+            ("inclusion_criteria", ["criterion"] * 26),
+            ("inclusion_criteria", ["i" * 501]),
+            ("exclusion_criteria", ["criterion"] * 26),
+            ("exclusion_criteria", ["e" * 501]),
+            ("providers", []),
+            (
+                "providers",
+                ["arxiv", "crossref", "openalex", "pubmed", "semantic_scholar"],
+            ),
+            ("limit_per_provider", 0),
+            ("limit_per_provider", 51),
+            ("notes", "n" * 2001),
+            ("confirmed", False),
+        ],
+    )
+    def test_rejects_out_of_bounds_values(self, field, value):
+        with pytest.raises(ValidationError):
+            self._valid(**{field: value})
+
+    @pytest.mark.parametrize(
+        "providers",
+        [
+            ["web"],
+            ["rag_store"],
+            ["unknown"],
+            ["openalex", "openalex"],
+        ],
+    )
+    def test_rejects_noncanonical_ineligible_or_duplicate_providers(self, providers):
+        with pytest.raises(ValidationError):
+            self._valid(providers=providers)
+
+    def test_rejects_client_hash_and_other_extra_fields(self):
+        with pytest.raises(ValidationError):
+            self._valid(configuration_hash="client-controlled")
+        with pytest.raises(ValidationError):
+            self._valid(unexpected="value")
+
+    @pytest.mark.parametrize("confirmed", [1, 1.0, "true"])
+    def test_rejects_coerced_confirmation_values(self, confirmed):
+        with pytest.raises(ValidationError):
+            self._valid(confirmed=confirmed)
+
+    @pytest.mark.parametrize("limit", [True, 25.0, "25"])
+    def test_rejects_coerced_provider_limits(self, limit):
+        with pytest.raises(ValidationError):
+            self._valid(limit_per_provider=limit)
+
+
+class TestRunResumeRequest:
+    def test_defaults_to_ordinary_resume(self):
+        request = research_schemas.RunResumeRequest()
+        assert request.continue_unverified is False
+        assert request.output_hash is None
+
+    def test_accepts_current_verification_hash(self):
+        request = research_schemas.RunResumeRequest(
+            continue_unverified=True,
+            output_hash="a" * 64,
+        )
+        assert request.output_hash == "a" * 64
+
+    @pytest.mark.parametrize("output_hash", ["short", "g" * 64, "a" * 65])
+    def test_rejects_malformed_verification_hash(self, output_hash):
+        with pytest.raises(ValidationError):
+            research_schemas.RunResumeRequest(
+                continue_unverified=True,
+                output_hash=output_hash,
+            )
+
+
+class TestBlueprintTemplateDetailResponse:
+    def test_validates_full_server_template(self):
+        from src.services.research_engine.blueprints.loader import BlueprintLoader
+
+        template = BlueprintLoader(daily_research_brief_enabled=True).load_template(
+            "daily_research_brief"
+        )
+        response = research_schemas.BlueprintTemplateDetailResponse(
+            slug="daily_research_brief",
+            **template,
+        )
+
+        assert response.contract_version == 1
+        assert response.template_source == "daily_research_brief"
+        assert [step.type.value for step in response.steps] == [
+            "search",
+            "screen",
+            "extract",
+            "synthesize",
+            "verify",
+            "export",
+        ]
+        assert response.constraints["providers"] == {"min": 1, "max": 4}
 
 
 class TestRunResponse:
@@ -302,6 +490,8 @@ class TestRunResponse:
         r = RunResponse(
             id=uuid4(),
             blueprint_id=uuid4(),
+            project_id=uuid4(),
+            research_engine_project_id=uuid4(),
             blueprint_version=1,
             status=RunStatus.PENDING,
             started_at=None,
@@ -318,6 +508,8 @@ class TestRunResponse:
         r = RunResponse(
             id=uuid4(),
             blueprint_id=uuid4(),
+            project_id=uuid4(),
+            research_engine_project_id=uuid4(),
             blueprint_version=1,
             status=RunStatus.RUNNING,
             created_at=now,

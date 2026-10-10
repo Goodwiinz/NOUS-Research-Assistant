@@ -54,6 +54,12 @@ describe('deriveStepStatus', () => {
     expect(deriveStepStatus(makeStep(), execs)).toBe('in-progress');
   });
 
+  it('returns pending when the matching execution is still pending', () => {
+    expect(
+      deriveStepStatus(makeStep(), [makeExec({ status: 'pending' })])
+    ).toBe('pending');
+  });
+
   it('returns completed when all matching executions completed', () => {
     const execs = [makeExec({ status: 'completed' })];
     expect(deriveStepStatus(makeStep(), execs)).toBe('completed');
