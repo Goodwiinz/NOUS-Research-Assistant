@@ -26,6 +26,8 @@ from src.schemas.artifact import (
 )
 from src.schemas.integration_context import IntegrationContext
 from src.services.artifacts.service import (
+    _authorize_context,
+    _existing_reservation,
     authorize_artifact,
     publish_version,
     reserve_upload,
@@ -88,9 +90,16 @@ async def edit_version(
         ),
     )
     # reserve_upload enforces Workspace.can_user_edit on every invocation.
-    # Do not pre-reject a stale parent here: an identical already-committed
-    # retry must return its stored version even if a later edit advanced it.
+    # An identical already-committed retry must return its stored version
+    # even if a later edit advanced the pointer, so only a fresh publication
+    # of a stale parent is rejected here, before it reserves quota or stores
+    # bytes. A parent that goes stale after this check still loses in
+    # publish_version.
     try:
+        if artifact.current_version_id != expected_parent_version_id:
+            await _authorize_context(db, context, edit=True)
+            if await _existing_reservation(db, context, publication_id) is None:
+                raise ArtifactConflict()
         reservation = await reserve_upload(
             db,
             context,

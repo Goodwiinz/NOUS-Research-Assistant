@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.models.artifact import Artifact, ArtifactVersion
+from src.models.artifact import Artifact, ArtifactUpload, ArtifactVersion
 from src.models.collection import Collection
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.artifact import (
@@ -81,6 +81,7 @@ async def test_stale_parent_preserves_current(
         text="new version\n",
     )
     edited = await edit_version(db, **args)
+    uploads = await db.scalar(select(func.count()).select_from(ArtifactUpload))
     with pytest.raises(ArtifactConflict) as conflict:
         await edit_version(db, **{**args, "publication_id": uuid4(), "text": "stale"})
     assert conflict.value.current_version_id == edited.version_id
@@ -88,6 +89,8 @@ async def test_stale_parent_preserves_current(
     assert artifact is not None
     assert artifact.current_version_id == edited.version_id
     assert await db.scalar(select(func.count()).select_from(ArtifactVersion)) == 2
+    # A fresh stale edit is rejected before it reserves quota or stores bytes.
+    assert await db.scalar(select(func.count()).select_from(ArtifactUpload)) == uploads
 
 
 @pytest.mark.parametrize(
