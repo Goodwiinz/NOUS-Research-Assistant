@@ -9,6 +9,7 @@ the same version.
 import hashlib
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
@@ -353,7 +354,11 @@ async def store_upload(
 
 
 async def publish_version(
-    db: AsyncSession, context: IntegrationContext, request: PublishVersionRequest
+    db: AsyncSession,
+    context: IntegrationContext,
+    request: PublishVersionRequest,
+    *,
+    publication_guard: Callable[[AsyncSession], Awaitable[None]] | None = None,
 ) -> ArtifactVersionDTO:
     await _authorize_context(db, context, edit=True)
     upload = await _upload_for(db, context, request.upload_id)
@@ -401,6 +406,10 @@ async def publish_version(
     if not present:
         await db.rollback()
         raise ArtifactStorageUnavailable()
+    if publication_guard is not None:
+        # Native completion rechecks its saved source and live chat after all
+        # storage I/O, then holds the source lock through this commit.
+        await publication_guard(db)
     if context.run_id is not None:
         run_org = await db.scalar(
             select(AgentRun.organization_id).where(

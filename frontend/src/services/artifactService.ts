@@ -3,9 +3,12 @@ import type {
   ApiArtifactCapabilities,
   ApiArtifactEditRequest,
   ApiArtifactReference,
+  ApiArtifactShare,
   ApiArtifactVersion,
   ApiProjectArtifact,
   ApiThreadArtifact,
+  ApiSharedArtifactVersion,
+  ApiCreateArtifactShareRequest,
 } from '@/types/api/artifact-contract';
 
 export type ArtifactProducer = 'harness' | 'nous' | 'user';
@@ -96,6 +99,33 @@ export function artifactVersionContentPath(versionId: string): string {
 export interface ArtifactCapabilities {
   editingEnabled: boolean;
   previewEnabled: boolean;
+  sharingEnabled: boolean;
+}
+
+/** The shared read contract deliberately contains no source/provenance fields. */
+export type SharedArtifactVersion = Pick<
+  ArtifactVersion,
+  'artifactId' | 'versionId' | 'title' | 'mimeType' | 'byteSize' | 'sha256'
+>;
+
+export interface ArtifactShare {
+  id: string;
+  versionId: string;
+  expiresAt: string;
+  revokedAt: string | null;
+}
+
+function toArtifactShare(dto: ApiArtifactShare): ArtifactShare {
+  return {
+    id: dto.id,
+    versionId: dto.version_id,
+    expiresAt: dto.expires_at,
+    revokedAt: dto.revoked_at ?? null,
+  };
+}
+
+export function artifactShareContentPath(shareId: string): string {
+  return `/artifacts/shares/${encodeURIComponent(shareId)}/content`;
 }
 export interface ArtifactEdit {
   expectedParentVersionId: string;
@@ -112,7 +142,71 @@ export const artifactService = {
     return {
       editingEnabled: dto.editing_enabled === true,
       previewEnabled: dto.preview_enabled === true,
+      sharingEnabled: dto.sharing_enabled === true,
     };
+  },
+  async createArtifactShare(
+    versionId: string,
+    audienceUserIds: string[],
+    expiresAt: string,
+    signal?: AbortSignal
+  ): Promise<ArtifactShare> {
+    const body: ApiCreateArtifactShareRequest = {
+      version_id: versionId,
+      audience_user_ids: audienceUserIds,
+      expires_at: expiresAt,
+    };
+    return toArtifactShare(
+      await api.post<ApiArtifactShare>('/artifacts/shares', body, {
+        retries: 0,
+        signal,
+      })
+    );
+  },
+  async listArtifactShares(
+    artifactId: string,
+    signal?: AbortSignal
+  ): Promise<ArtifactShare[]> {
+    const rows = await api.get<ApiArtifactShare[]>(
+      `/artifacts/${encodeURIComponent(artifactId)}/shares`,
+      { signal }
+    );
+    return rows.map(toArtifactShare);
+  },
+  async getArtifactShare(
+    shareId: string,
+    signal?: AbortSignal
+  ): Promise<SharedArtifactVersion> {
+    const dto = await api.get<ApiSharedArtifactVersion>(
+      `/artifacts/shares/${encodeURIComponent(shareId)}`,
+      { signal }
+    );
+    return {
+      artifactId: dto.artifact_id,
+      versionId: dto.version_id,
+      title: dto.title,
+      mimeType: dto.mime_type,
+      byteSize: dto.byte_size,
+      sha256: dto.sha256,
+    };
+  },
+  getSharedArtifactContent(
+    shareId: string,
+    signal?: AbortSignal
+  ): Promise<Blob> {
+    return api.fetchBlob(artifactShareContentPath(shareId), signal);
+  },
+  async revokeArtifactShare(
+    shareId: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await api.delete(`/artifacts/shares/${encodeURIComponent(shareId)}`, {
+      retries: 0,
+      signal,
+    });
+  },
+  downloadSharedArtifact(shareId: string, title: string): Promise<void> {
+    return api.download(artifactShareContentPath(shareId), title);
   },
   async editVersion(
     artifactId: string,

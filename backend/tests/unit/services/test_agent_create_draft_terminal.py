@@ -7,9 +7,91 @@ from uuid import uuid4
 import pytest
 
 from src.models.user import User
-from src.services.agent.tools_impl import _tool_create_draft
+from src.services.agent.tools_impl import _dispatch_tool, _tool_create_draft
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+
+
+async def test_native_artifact_context_uses_server_thread_and_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "ARTIFACTS_ENABLED", True)
+    project = SimpleNamespace(id=uuid4(), name="Review")
+    user = cast(User, SimpleNamespace(id=uuid4(), organization_id=uuid4()))
+    thread_id = uuid4()
+    run_id = uuid4()
+    db, _ = _request_session()
+    service = MagicMock()
+    service.generate_draft = AsyncMock(
+        return_value={"task_id": "native", "status": "pending"}
+    )
+    with (
+        patch(
+            "src.services.agent.tools_impl._verify_project_ownership",
+            new=AsyncMock(return_value=project),
+        ),
+        patch(
+            "src.services.research.draft_generation_service.DraftGenerationService"
+        ) as service_cls,
+    ):
+        service_cls.return_value = service
+        service_cls.wait_for_terminal_status = AsyncMock(
+            return_value={"status": "completed", "draft_id": "d"}
+        )
+        await _dispatch_tool(
+            "create_draft",
+            {
+                "project_id": str(project.id),
+                "themes": ["review"],
+                "thread_id": str(uuid4()),
+                "user_id": str(uuid4()),
+            },
+            db=db,
+            current_user=user,
+            thread_id=str(thread_id),
+            run_id=str(run_id),
+        )
+    context = service.generate_draft.await_args.kwargs["artifact_context"]
+    assert context.user_id == user.id
+    assert context.organization_id == user.organization_id
+    assert context.project_id == project.id
+    assert context.thread_id == thread_id
+    assert context.run_id == run_id
+    assert context.consent_id is None
+
+
+async def test_draft_node_forwards_server_run_correlation() -> None:
+    from src.services.agent._nodes_tools import _execute_single_tool
+
+    run_id = str(uuid4())
+    actor, organization, project, thread = [str(uuid4()) for _ in range(4)]
+    executor = AsyncMock(return_value={"status": "completed", "draft_id": "d"})
+    with patch("src.services.agent.graph._get_execute_tool", return_value=executor):
+        result = await _execute_single_tool(
+            {
+                "name": "create_draft",
+                "args": {"project_id": project, "themes": ["review"]},
+                "id": "native-call",
+            },
+            {
+                "configurable": {
+                    "user_id": actor,
+                    "organization_id": organization,
+                    "thread_id": thread,
+                },
+                "metadata": {"agent_run_id": run_id},
+            },
+            {},
+            {
+                "tool_operation_protocol_version": 1,
+                "tool_operation_turn_id": str(uuid4()),
+            },
+        )
+    assert result["execution"]["status"] == "completed"
+    assert executor.await_args.kwargs["run_id"] == run_id
+    assert "run_id" not in executor.await_args.kwargs["args"]
 
 
 def _request_session() -> tuple[MagicMock, Callable[[], bool]]:

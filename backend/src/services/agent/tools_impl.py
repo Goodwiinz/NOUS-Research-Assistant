@@ -1649,6 +1649,7 @@ async def execute_tool(
     db: Optional[AsyncSession] = None,
     current_user: Optional[User] = None,
     operation_key: Optional["ToolOperationKey"] = None,
+    run_id: str = "",
 ) -> Dict[str, Any]:
     """Execute an agent tool and return the result.
 
@@ -1752,6 +1753,7 @@ async def execute_tool(
             project_id=project_id,
             organization_id=organization_id,
             dispatch_session=db,
+            run_id=run_id,
         )
 
     from src.services.agent.tool_session import resolve_tool_user, tool_session
@@ -1839,6 +1841,7 @@ async def execute_tool(
             project_id=project_id,
             organization_id=organization_id,
             dispatch_session=session,
+            run_id=run_id,
         )
 
 
@@ -1994,6 +1997,7 @@ async def _execute_external_operation(
     project_id: str,
     organization_id: str,
     dispatch_session: AsyncSession,
+    run_id: str = "",
 ) -> Dict[str, Any]:
     import asyncio
 
@@ -2126,6 +2130,7 @@ async def _execute_external_operation(
             dispatch_recorder=(
                 _record_draft_dispatch if tool_name == "create_draft" else None
             ),
+            run_id=run_id,
         )
     except BaseException:
         if dispatch_recorded:
@@ -2347,6 +2352,7 @@ async def _dispatch_tool(
     organization_id: str = "",
     defer_local_commit: bool = False,
     dispatch_recorder: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    run_id: str = "",
 ) -> Dict[str, Any]:
     """Route a tool call to its ``_tool_*`` implementation."""
     # Validation materializes every schema default, so an omitted optional
@@ -2399,7 +2405,12 @@ async def _dispatch_tool(
         return await _tool_get_graph_stats(args, current_user)
     if tool_name == "create_draft":
         return await _tool_create_draft(
-            args, db, current_user, dispatch_recorder=dispatch_recorder
+            args,
+            db,
+            current_user,
+            thread_id=thread_id,
+            run_id=run_id,
+            dispatch_recorder=dispatch_recorder,
         )
     if tool_name == "revise_draft":
         return await _tool_revise_draft(args, db, current_user)
@@ -4764,6 +4775,8 @@ async def _tool_create_draft(
     db: Optional[AsyncSession],
     current_user: Optional[User],
     *,
+    thread_id: str = "",
+    run_id: str = "",
     dispatch_recorder: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
     """Create a literature review draft for a project."""
@@ -4808,6 +4821,22 @@ async def _tool_create_draft(
 
         style = DraftGenerationService._normalize_style(style)
 
+        from src.core.config import settings
+
+        native_kwargs: Dict[str, Any] = {}
+        if settings.ARTIFACTS_ENABLED:
+            from src.services.artifacts.native import create_native_context
+
+            if current_user.organization_id is None:
+                return {"error": "Organization required"}
+            native_kwargs["artifact_context"] = create_native_context(
+                user_id=verified_user_id,
+                organization_id=current_user.organization_id,
+                project_id=verified_project_id,
+                thread_id=UUID(thread_id) if thread_id else None,
+                run_id=UUID(run_id) if run_id else None,
+            )
+
         # Background generation owns its own AsyncSessionLocal. This adapter's
         # session has no open transaction when generation starts and will not
         # be consulted while the task runs.
@@ -4819,6 +4848,7 @@ async def _tool_create_draft(
             document_ids=document_ids,
             instructions=instructions,
             style=style,
+            **native_kwargs,
         )
         if result.get("error_category") == "draft_generation_conflict":
             return {

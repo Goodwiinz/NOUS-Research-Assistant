@@ -48,9 +48,11 @@ from src.models.bridge_device import BridgeDevice
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.collection import Collection
 from src.models.conversation import Conversation
+from src.models.generated_draft import GeneratedDraft
 from src.models.integration_context_selection import IntegrationContextSelection
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.integration_handoff import IntegrationHandoff
+from src.models.native_artifact_intent import NativeArtifactIntent
 from src.models.organization import Organization
 from src.models.thread import Thread
 from src.models.tool_action import IntegrationToolAction
@@ -86,6 +88,8 @@ _MODELS: list[Any] = [
     ArtifactVersion,
     ArtifactReference,
     ArtifactLifecycleOutbox,
+    GeneratedDraft,
+    NativeArtifactIntent,
 ]
 
 # (table, column) -> pg_constraint.confdeltype: c = CASCADE, n = SET NULL.
@@ -241,6 +245,8 @@ def _bind_everything(
         version=uuid.uuid4(),
         reference=uuid.uuid4(),
         outbox=uuid.uuid4(),
+        draft=uuid.uuid4(),
+        native_intent=uuid.uuid4(),
     )
     message_id = db.scalar(
         select(ChatMessage.id).where(ChatMessage.thread_id == thread_id)
@@ -395,6 +401,32 @@ def _bind_everything(
         )
     )
     db.flush()
+    db.add(
+        GeneratedDraft(
+            id=ids.draft,
+            project_id=owner.project,
+            title="Saved",
+            content="Saved",
+            version=1,
+            themes=[],
+        )
+    )
+    db.flush()
+    db.add(
+        NativeArtifactIntent(
+            id=ids.native_intent,
+            draft_id=ids.draft,
+            organization_id=owner.org,
+            actor_user_id=owner.user,
+            project_id=owner.project,
+            thread_id=thread_id,
+            draft_sha256=_hex64(),
+            title="Saved",
+            status="pending",
+            attempts=0,
+        )
+    )
+    db.flush()
     return ids
 
 
@@ -443,6 +475,8 @@ def test_purge_deletes_a_chat_that_harness_and_artifact_rows_reference(
         # CASCADE: rows that mean nothing without the chat.
         assert _count(db, IntegrationHandoff) == 0
         assert db.get(IntegrationGrantRequest, ids.consent) is None
+        assert db.get(NativeArtifactIntent, ids.native_intent) is None
+        assert db.get(GeneratedDraft, ids.draft) is not None
         # The chat-bound consent is deleted, never left with a NULL chat, which
         # mint_integration_grant reads as a project-wide consent. The cascade
         # stops there: the project-wide consent keeps its memory selection.
