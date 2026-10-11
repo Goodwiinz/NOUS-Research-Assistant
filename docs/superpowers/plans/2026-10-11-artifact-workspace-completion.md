@@ -66,8 +66,7 @@
 **Files:** Generated API files and `docs/testing/artifact-workspace-completion-2026-10-11.md`; current engineering harness contract only for behavior actually implemented.
 
 - [x] Regenerate both API artifacts from application schema.
-- [x] Run changed Python lint/type checks, artifact suites, architecture/API/thread matrix, docs-lint and diff checks; preserve matrix skips and Python-version limits in the evidence record.
+- [x] Run changed Python lint/type checks, artifact suites, architecture/API/thread matrix, docs-lint and diff checks; rerun all 72 skipped thread cases against isolated PostgreSQL and record Python-version limits.
 - [x] Run fresh independent whole-branch review; reproduce and fix consequential findings.
-- [ ] Push feature branch and prepare PR against develop with actual verification and remaining live gates.
+- [x] Push feature branch and prepare [PR #1973](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/1973) against develop with actual verification and remaining live gates.
 - [x] Keep Plan 04 and Plan 05 implementation sequencing explicit: context migration first after this merge; recall migration after context merge; bounded profile changes only after configured-model baseline.
-

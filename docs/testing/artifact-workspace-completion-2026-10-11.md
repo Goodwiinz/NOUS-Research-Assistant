@@ -8,6 +8,8 @@ Source examined: `codex/linear-completion-20261011`, worktree
 `/home/clawdbot/rag-clean/.worktrees/linear-completion-20261011`, based on
 `ac693e63876b2b751712ae3f50926502e158e16c`. Frozen implementation revision:
 `f6b1b45fa0f7b0eb0dacfb95d1163e6d1df1f6db`. Subsequent commits update evidence and the plan.
+The review deliverable is [PR #1973](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/1973)
+against `develop`; it remains unmerged.
 
 The [October 11 implementation plan](../superpowers/plans/2026-10-11-artifact-workspace-completion.md)
 defines this sharing/native-completion slice. The earlier
@@ -261,6 +263,7 @@ not an additional mutation run.
 | Native completion on final restored/formatted source | **17 passed** | Included in the final joined artifact command below. |
 | Draft/tool regression suite | **81 passed** | [Regression log](/tmp/nous-completion-draft-regression.log) |
 | Required backend matrix under Python 3.13 | **1,715 passed / 72 skipped / 1 failed** | [Matrix log](/tmp/nous-completion-backend-matrix.log); this run is not a complete green matrix. |
+| Exact rerun of all 72 skipped thread cases | **72 passed**, zero skipped | [Thread PostgreSQL log](/tmp/nous-completion-thread-postgres.log); separate task-owned PostgreSQL 16 container, Python 3.13.12. |
 | Python 3.11 structural rerun | **5 passed** | [Structural log](/tmp/nous-completion-structural-py311.log) |
 | Initial isolated PostgreSQL completion/migration cases | **6 passed** | [Initial PostgreSQL log](/tmp/artifact-completion-postgres.log); superseded by the restored run below. |
 | Native guard restoration run | **9 passed**, comprising **7 PostgreSQL + 2 SQLite unit cases**, after eight expected mutant failures | [Restored log](/tmp/artifact-completion-restored-final.log); mutation table below. |
@@ -280,9 +283,28 @@ The sole Python 3.13 matrix failure was
 records a Python 3.11 AST fingerprint. The original and
 current `_tool_execute_code` AST matched; the isolated
 required-version Python 3.11 rerun passed all five structural tests. The 72
-skipped cases remain unverified in that matrix run; the log records unavailable
-PostgreSQL prerequisites for thread API cases. Separate successful PostgreSQL
-completion/retention runs do not turn those skips into passes.
+initial skips came from the thread fixture's unavailable PostgreSQL endpoint;
+all exact skipped node IDs were then rerun against an isolated PostgreSQL 16
+container and passed, with no skipped cases. This closes that prerequisite
+without changing the historical matrix result or claiming a single combined
+matrix run. The existing lint/mypy environment was left intact.
+
+The thread rerun used `postgres:16-alpine` in the task-owned
+`nous-thread-verification-20261011` container, with a random port bound only to
+loopback (observed `127.0.0.1:32779`). `TEST_PG_ASYNC_URL` bypassed the
+[existing thread fixture](../../backend/tests/db/conftest.py)'s default
+provisioning. Its `_bootstrap_schema_from_models` and
+`_ensure_required_columns_and_indexes` helpers prepared only that disposable
+database. Selection from the original matrix log produced the exact 54 service
+and 18 API node IDs; it did not substitute a different test group.
+The [exact provisioning/bootstrap/selection commands](/tmp/nous-completion-thread-postgres-evidence.md)
+and [node list](/tmp/nous-completion-thread-skipped-nodeids.txt) are local session
+evidence. The rerun examined `f54053bc21455ead8651172f9bb7d0e8b443c31d`, which
+adds only documentation to the frozen implementation revision above. After
+pytest exited, the container was stopped and removal was confirmed. Shared
+`meridian_test` rows, public schemas, cluster roles and the pinned lint
+environment were untouched. This ORM-schema fixture run does not establish
+Alembic migration acceptance; the separate migration checks do that.
 
 The new PostgreSQL cases are in
 [test_artifact_completion_postgres.py](../../backend/tests/integration/test_artifact_completion_postgres.py).
@@ -451,7 +473,8 @@ remain **NOT RUN**.
 | Local production-component Chromium sharing/PDF proof | **PASS**, four tests | Explicit mocked auth/context/HTTP boundary; no running-backend or global sandbox-security acceptance claim. |
 | Configured-provider/model baseline and live harness/golden replay | **NOT RUN** | Local fixture tests do not establish configured-provider behavior or performance. |
 | Expert/product acceptance | **NOT RUN** | No expert acceptance session was recorded. |
-| Deployment/hosted CI and release readiness | **NOT RUN** | No deployment was made by this task; local results are not hosted CI results. |
+| Hosted CI and automated PR review | **PENDING** | Started automatically on PR #1973; local verification does not establish the final head's hosted result. |
+| Production deployment and release readiness | **NOT RUN** | No production deployment was requested or initiated by this task. |
 
 Sequence after this completion slice merges remains the approved plan: fresh
 develop with one migration head before the context migration; recall migration
