@@ -34,7 +34,11 @@ def recovery(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
             job = db.get(ProcessingJob, env.job_id)
             job.status = JobStatus.RUNNING
             job.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
-            db.get(Document, env.doc_id).processing_status = ProcessingStatus.PROCESSING
+            document = db.get(Document, env.doc_id)
+            document.processing_status = ProcessingStatus.PROCESSING
+            # Explicit and tz-aware: the naive onupdate default must not decide
+            # whether the repair phase sees this document as fresh.
+            document.updated_at = datetime.now(timezone.utc)
             db.commit()
         monkeypatch.setattr(pt, "SessionLocal", env.Session)
         monkeypatch.setattr(
@@ -62,7 +66,14 @@ def _after_candidates(
         executemany: bool,
     ) -> None:
         nonlocal fired
-        if fired or "FROM processing_jobs" not in statement or "LIMIT" not in statement:
+        # Only the job candidate query: the repair phase's document query also
+        # mentions processing_jobs (EXISTS) and LIMIT, but selects FROM documents.
+        if (
+            fired
+            or "FROM processing_jobs" not in statement
+            or "FROM documents" in statement
+            or "LIMIT" not in statement
+        ):
             return
         fired = True
         with env.Session() as other:
@@ -550,14 +561,33 @@ def ended(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
 
 
 def test_sweep_repairs_document_whose_ingestion_already_ended(
-    ended: SimpleNamespace,
+    ended: SimpleNamespace, caplog: pytest.LogCaptureFixture
 ) -> None:
-    assert pt.sweep_stuck_processing_jobs() == {"swept": 0, "repaired_documents": 1}
+    with caplog.at_level("INFO", logger=pt.__name__):
+        assert pt.sweep_stuck_processing_jobs() == {
+            "swept": 0,
+            "repaired_documents": 1,
+        }
     with ended.Session() as db:
         job = db.get(ProcessingJob, ended.job_id)
         document = db.get(Document, ended.doc_id)
         assert document.processing_status == ProcessingStatus.FAILED
         assert document.processing_error == job.error_message
+    # A repair is an operator-visible event, and the early-return path
+    # reports its result like the normal path does.
+    repairs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "repairing document" in record.getMessage()
+    ]
+    assert len(repairs) == 1
+    assert str(ended.doc_id) in repairs[0]
+    assert str(ended.org_id) in repairs[0]
+    assert f"ingestion job {ended.job_id} ended failed" in repairs[0]
+    assert (
+        "sweep_stuck_processing_jobs: {'swept': 0, 'repaired_documents': 1}"
+        in caplog.text
+    )
 
 
 @pytest.mark.parametrize("kind", ["completed", "retried", "fresh", "deleted"])
@@ -589,3 +619,49 @@ def test_sweep_repair_leaves_documents_it_cannot_prove_ended(
             db.get(Document, ended.doc_id).processing_status
             == ProcessingStatus.PROCESSING
         )
+
+
+@pytest.mark.parametrize(
+    "older,newer,expected",
+    [
+        (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            {"swept": 0, "repaired_documents": 1},
+        ),
+        (JobStatus.FAILED, JobStatus.COMPLETED, {"swept": 0}),
+    ],
+    ids=["newer-failed", "newer-completed"],
+)
+def test_sweep_repair_follows_the_newest_ingestion_job(
+    ended: SimpleNamespace, older: JobStatus, newer: JobStatus, expected: dict
+) -> None:
+    """reprocess_document/reprocess_file insert a new ingestion row, so one
+    stuck document can own several; only the newest decides the repair."""
+    first_created = datetime.now(timezone.utc) - timedelta(hours=3)
+    with ended.Session() as db:
+        first = db.get(ProcessingJob, ended.job_id)
+        first.status = older
+        first.created_at = first_created
+        db.add(
+            ProcessingJob(
+                document_id=ended.doc_id,
+                organization_id=ended.org_id,
+                job_type=JobType.DOCUMENT_INGESTION,
+                status=newer,
+                error_message=(
+                    "newer attempt ended" if newer == JobStatus.FAILED else None
+                ),
+                created_at=first_created + timedelta(minutes=1),
+                updated_at=first_created + timedelta(minutes=1),
+            )
+        )
+        db.commit()
+    assert pt.sweep_stuck_processing_jobs() == expected
+    with ended.Session() as db:
+        document = db.get(Document, ended.doc_id)
+        if "repaired_documents" in expected:
+            assert document.processing_status == ProcessingStatus.FAILED
+            assert document.processing_error == "newer attempt ended"
+        else:
+            assert document.processing_status == ProcessingStatus.PROCESSING

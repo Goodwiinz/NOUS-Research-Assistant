@@ -1504,6 +1504,15 @@ def _repair_ended_ingestion_documents(db: Any, cutoff: datetime) -> int:
         ):
             db.rollback()
             continue
+        logger.warning(
+            "sweep_stuck_processing_jobs: repairing document %s (org %s): newest "
+            "ingestion job %s ended %s; document untouched since %s",
+            document.id,
+            document.organization_id,
+            newest.id,
+            newest.status.value,
+            document.updated_at.isoformat() if document.updated_at else "unknown",
+        )
         db.commit()
         repaired += 1
     return repaired
@@ -1570,7 +1579,9 @@ def sweep_stuck_processing_jobs() -> dict:
         )
         if not candidates:
             db.commit()
-            return _finish_sweep(db, cutoff, 0)
+            result = _finish_sweep(db, cutoff, 0)
+            logger.info("sweep_stuck_processing_jobs: %s", result)
+            return result
 
         # Lock the entire document batch before any jobs, including competing
         # attempts, so a bulk delete cannot deadlock with this batch. The first
