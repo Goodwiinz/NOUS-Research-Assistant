@@ -90,11 +90,38 @@ test("read_selected_context rejects anything but an integer offset from 0 to 25,
       { offset: null },
       { offset: Number.NaN },
     ])
-      await assert.rejects(tool.call(args), ToolRequestRejected, JSON.stringify(args));
+      await assert.rejects(
+        tool.call(args),
+        (error: unknown) =>
+          error instanceof ToolRequestRejected &&
+          error.message === "read_selected_context takes only an optional offset, an integer from 0 to 25",
+        JSON.stringify(args),
+      );
     assert.deepEqual(server.requests, []);
   } finally {
     await server.close();
   }
+});
+
+test("the context client itself refuses an offset that is not an integer from 0 to 25", async () => {
+  const urls: string[] = [];
+  const fetchFn: typeof fetch = async (input) => {
+    urls.push(String(input));
+    return new Response(JSON.stringify({ content: [], is_error: false, source_refs: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new ContextHttpClient("http://127.0.0.1:1234/api/v1", credentials, fetchFn);
+  for (const offset of [-1, 26, 1.5, Number.NaN, Number.POSITIVE_INFINITY])
+    await assert.rejects(client.read(offset), ToolRequestRejected, String(offset));
+  assert.deepEqual(urls, []);
+  await client.read(3);
+  await client.read();
+  assert.deepEqual(urls, [
+    "http://127.0.0.1:1234/api/v1/integrations/context?offset=3",
+    "http://127.0.0.1:1234/api/v1/integrations/context",
+  ]);
 });
 
 test("read_selected_context advertises its offset and tells the model to follow next_offset", () => {
