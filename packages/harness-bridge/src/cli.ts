@@ -8,6 +8,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseArgs, stripVTControlCharacters } from "node:util";
+import { createInterface } from "node:readline/promises";
 import { CredentialStore } from "./credentials.ts";
 import { GRANT_LIFETIME_MS, GrantExpired, GrantKeeper } from "./grants.ts";
 import { HandoffHttpClient, type Handoff } from "./handoffs/client.ts";
@@ -829,6 +830,57 @@ export async function rc(options: RcOptions): Promise<void> {
   );
   await options.run(options.stateDir);
 }
+/**
+ * A line prompt over a terminal for `rc`. Rejects with `Cancelled` when input
+ * ends (Ctrl-D) while a question is open, which a bare readline question never
+ * does; `close()` releases the terminal for the running bridge.
+ */
+export function terminalPrompt(
+  input: NodeJS.ReadableStream,
+  output: NodeJS.WritableStream,
+): {
+  prompt: (question: string) => Promise<string>;
+  close: () => void;
+} {
+  const rl = createInterface({
+    input,
+    output,
+    terminal: (output as { isTTY?: boolean }).isTTY === true,
+  });
+  let closed = false;
+  let cancel: ((error: Error) => void) | undefined;
+  // End of input, Ctrl-D and close() all land here; a question still open
+  // would otherwise never settle.
+  rl.on("close", () => {
+    closed = true;
+    const reject = cancel;
+    cancel = undefined;
+    reject?.(new Error("Cancelled"));
+  });
+  // Ctrl-C in a terminal reaches readline as a key, not a process signal.
+  rl.on("SIGINT", () => rl.close());
+  return {
+    prompt: (question) => {
+      if (closed) return Promise.reject(new Error("Cancelled"));
+      return new Promise<string>((resolve, reject) => {
+        cancel = reject;
+        rl.question(question).then(
+          (answer) => {
+            if (cancel === reject) cancel = undefined;
+            resolve(answer);
+          },
+          (error: unknown) => {
+            if (cancel === reject) cancel = undefined;
+            reject(closed ? new Error("Cancelled") : error);
+          },
+        );
+      });
+    },
+    close: () => {
+      if (!closed) rl.close();
+    },
+  };
+}
 /** One local reconciliation pass over the locked runs, without the network. */
 export async function reconcileLocal(
   journal: Journal,
@@ -1246,13 +1298,14 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list|discard ID
+const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | rc --api URL --root PATH [--label NAME] | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions. It always requests library:read, so list_library can name the projects its tools need.
   connect --library (needs --tools and --write) also requests library:read and library:write.
   connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, revoke this device's access at /integrations/devices (or disconnect), then connect.
   nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.
+  nous-harness rc --api URL --root PATH [--label NAME]    Interactive: sign in, pick or create a project, pair this computer (harness:execute + tools:read), register PATH as the folder Codex works in, and run. The repository's \`nous --rc\` launcher calls this with the current folder.
   nous-harness handoff show    Print the bound chat's latest handoff.
   nous-harness handoff save --file handoff.json [--parent N]    Journal the handoff locally, then save it; --parent sets expected_parent_version (default null, the first handoff).
   nous-harness handoff flush    Retry pending saves journaled for the current chat; a conflict (409) or rejection (403/422) is kept, never retried or merged.
@@ -1359,7 +1412,51 @@ async function main(): Promise<void> {
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
-  else if (positionals.join(" ") === "run") {
+  else if (positionals.join(" ") === "rc") {
+    if (!values.api || !values.root)
+      throw new Error("rc requires --api and --root");
+    // Refuse before probing Codex or touching the network.
+    if (!process.stdin.isTTY || !process.stdout.isTTY)
+      throw new Error("nous --rc needs an interactive terminal");
+    const terminal = terminalPrompt(process.stdin, process.stdout);
+    const controller = new AbortController();
+    try {
+      await rc({
+        stateDir,
+        apiUrl: values.api,
+        dir: resolve(values.root),
+        label: values.label,
+        prompt: terminal.prompt,
+        probe: async () => {
+          const adapter = new CodexAdapter();
+          try {
+            await adapter.probe();
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message === "Codex version probe failed"
+            )
+              throw new Error(
+                "Could not run `codex --version`; is Codex installed and on your PATH?",
+                { cause: error },
+              );
+            throw error;
+          }
+          return { version: adapter.version ?? "unknown" };
+        },
+        run: (dir) => {
+          // Hand the terminal back so Ctrl-C reaches the process while the
+          // bridge runs.
+          terminal.close();
+          process.once("SIGINT", () => controller.abort());
+          process.once("SIGTERM", () => controller.abort());
+          return runBridge(dir, controller.signal);
+        },
+      });
+    } finally {
+      terminal.close();
+    }
+  } else if (positionals.join(" ") === "run") {
     const controller = new AbortController();
     process.once("SIGINT", () => controller.abort());
     process.once("SIGTERM", () => controller.abort());
