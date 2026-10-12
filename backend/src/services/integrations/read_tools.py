@@ -44,7 +44,10 @@ from src.services.agent.tools_impl import (
     _tool_search_arxiv,
     _tool_search_external_database,
 )
-from src.services.artifacts.service import list_project_artifacts
+from src.services.artifacts.service import (
+    count_project_artifacts,
+    list_project_artifacts,
+)
 from src.services.integrations import arxiv_fulltext
 from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
 from src.services.integrations.context import (
@@ -290,13 +293,18 @@ _JSON_TYPES: dict[str, type | tuple[type, ...]] = {
 
 class _ListProjectArtifactsArgs(BaseModel):
     limit: int = Field(MAX_ARTIFACTS, ge=1, le=MAX_ARTIFACTS)
+    offset: int = Field(0, ge=0, le=MAX_OFFSET)
 
 
 # Gateway-native tools: not in the agent TOOL_REGISTRY, so they carry their own schema.
 _GATEWAY_TOOLS: dict[str, tuple[str, type[BaseModel]]] = {
     "list_project_artifacts": (
-        "List the current version of each artifact published to this project "
-        "(newest first), with sha256, size and the chat it came from, if any.",
+        "List the current version of each artifact published to this project, "
+        "newest first, with sha256, size and the chat it came from, if any. A "
+        "page holds at most limit artifacts and total counts them all; pass "
+        "next_offset as offset to read the next page (it is null on the last). "
+        "To publish a new version of a listed file, pass its artifact_id, and "
+        "its version_id as expected_parent_version_id, to artifacts_publish.",
         _ListProjectArtifactsArgs,
     )
 }
@@ -1082,9 +1090,14 @@ async def _args_only(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _project_artifacts(
-    db: AsyncSession, context: IntegrationContext, project_id: UUID, limit: int
+    db: AsyncSession,
+    context: IntegrationContext,
+    project_id: UUID,
+    limit: int,
+    offset: int,
 ) -> dict[str, Any]:
-    """Current versions in one project; identity never comes from args."""
+    """One page of current versions in one project; identity never comes from
+    args. ``total`` is the real count, so a harness knows when to page (AD-1)."""
     from src.services.agent._pii_redact import redact_pii
 
     try:
@@ -1093,10 +1106,18 @@ async def _project_artifacts(
             user_id=context.user_id,
             organization_id=context.organization_id,
             project_id=project_id,
-            limit=limit,
+            limit=limit + 1,
+            offset=offset,
+        )
+        total = await count_project_artifacts(
+            db,
+            user_id=context.user_id,
+            organization_id=context.organization_id,
+            project_id=project_id,
         )
     except ArtifactError:
         return {"error": "Project not found or access denied"}
+    page = rows[:limit]
     return {
         "artifacts": [
             {
@@ -1109,9 +1130,11 @@ async def _project_artifacts(
                 "created_at": row.current_version.created_at.isoformat(),
                 "thread_id": str(row.thread_id) if row.thread_id else None,
             }
-            for row in rows
+            for row in page
         ],
-        "total": len(rows),
+        "total": total,
+        "offset": offset,
+        "next_offset": offset + len(page) if len(rows) > limit else None,
     }
 
 
@@ -1379,6 +1402,7 @@ async def invoke_read(
             _clamp(
                 arguments.get("limit", MAX_ARTIFACTS), 1, MAX_ARTIFACTS, MAX_ARTIFACTS
             ),
+            _clamp(arguments.get("offset", 0), 0, MAX_OFFSET, 0),
         )
     else:
         payload = await _tool_get_current_draft(
