@@ -50,7 +50,7 @@ jobs:
       DO_KB_EMBEDDING_MODEL_UUID: ${{ secrets.EVAL_DO_KB_EMBEDDING_MODEL_UUID }}
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Resolve experiment prefix
         run: |
@@ -66,7 +66,7 @@ jobs:
       # `if [ ! -d .venv ]` guard skips the rebuild and pip finds everything
       # already satisfied — the ~49-package ML tree is no longer re-downloaded.
       - name: Cache pip + venv
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             ~/.cache/pip
