@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy import Select, and_, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +61,8 @@ from src.services.integrations.context import (
 logger = logging.getLogger(__name__)
 
 MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+# Largest page of GET /artifacts/projects/{id} (the Files tab's page size).
+MAX_PROJECT_ARTIFACTS_PAGE = 100
 PROJECT_QUOTA_BYTES = 100 * 1024 * 1024
 UPLOAD_TTL = timedelta(minutes=15)
 # Previewable or safely downloadable types; anything else is served as octet-stream.
@@ -609,25 +611,56 @@ async def list_thread_artifacts(
     return items
 
 
+def _live_project_artifacts(
+    *columns: Any, project_id: UUID, organization_id: UUID
+) -> Select[Any]:
+    """Live artifacts of one project, joined to their live current version.
+
+    ``list_project_artifacts`` and ``count_project_artifacts`` share it, so a
+    count never disagrees with the pages it describes.
+    """
+    return (
+        select(*columns)
+        .select_from(Artifact)
+        .join(ArtifactVersion, ArtifactVersion.id == Artifact.current_version_id)
+        .join(Collection, Collection.id == Artifact.project_id)
+        .join(Workspace, Workspace.id == Collection.workspace_id)
+        .where(
+            Artifact.project_id == project_id,
+            Artifact.organization_id == organization_id,
+            Artifact.is_deleted.is_(False),
+            ArtifactVersion.artifact_id == Artifact.id,
+            ArtifactVersion.is_deleted.is_(False),
+            Collection.is_deleted.is_(False),
+            Workspace.is_deleted.is_(False),
+        )
+    )
+
+
 async def list_project_artifacts(
     db: AsyncSession,
     *,
     user_id: UUID,
     organization_id: UUID,
     project_id: UUID,
-    limit: int = 100,
+    limit: int = MAX_PROJECT_ARTIFACTS_PAGE,
+    offset: int = 0,
 ) -> list[ProjectArtifactDTO]:
-    """Current version of each live artifact in a project, newest first."""
+    """One page of the current version of each live artifact in a project,
+    newest first."""
     try:
         await authorized_project(db, user_id, organization_id, project_id)
     except IntegrationAccessDenied as error:
         raise ArtifactNotFound() from error
     rows = (
         await db.execute(
-            select(Artifact, ArtifactVersion, Conversation.id)
-            .join(ArtifactVersion, ArtifactVersion.id == Artifact.current_version_id)
-            .join(Collection, Collection.id == Artifact.project_id)
-            .join(Workspace, Workspace.id == Collection.workspace_id)
+            _live_project_artifacts(
+                Artifact,
+                ArtifactVersion,
+                Conversation.id,
+                project_id=project_id,
+                organization_id=organization_id,
+            )
             # Soft-delete does not cascade: only surface the producing chat
             # while it is live and inside this project's workspace.
             .outerjoin(
@@ -645,16 +678,8 @@ async def list_project_artifacts(
                     Conversation.workspace_id == Collection.workspace_id,
                 ),
             )
-            .where(
-                Artifact.project_id == project_id,
-                Artifact.organization_id == organization_id,
-                Artifact.is_deleted.is_(False),
-                ArtifactVersion.artifact_id == Artifact.id,
-                ArtifactVersion.is_deleted.is_(False),
-                Collection.is_deleted.is_(False),
-                Workspace.is_deleted.is_(False),
-            )
             .order_by(ArtifactVersion.created_at.desc(), Artifact.id)
+            .offset(offset)
             .limit(limit)
         )
     ).all()
@@ -669,6 +694,24 @@ async def list_project_artifacts(
         )
         for artifact, version, conversation_id in rows
     ]
+
+
+async def count_project_artifacts(
+    db: AsyncSession, *, user_id: UUID, organization_id: UUID, project_id: UUID
+) -> int:
+    """How many artifacts ``list_project_artifacts`` pages through."""
+    try:
+        await authorized_project(db, user_id, organization_id, project_id)
+    except IntegrationAccessDenied as error:
+        raise ArtifactNotFound() from error
+    total = await db.scalar(
+        _live_project_artifacts(
+            func.count(Artifact.id),
+            project_id=project_id,
+            organization_id=organization_id,
+        )
+    )
+    return int(total or 0)
 
 
 async def list_versions(

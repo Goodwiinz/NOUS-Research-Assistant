@@ -300,6 +300,32 @@ async def test_limit_caps_rows(db: AsyncSession) -> None:
     assert len(await _list(db, limit=2)) == 2
 
 
+async def test_offset_pages_and_count_matches_the_listing(db: AsyncSession) -> None:
+    ids = []
+    for minute in range(3):
+        artifact_id, _ = await _artifact(db, title=f"a{minute}", versions=[minute])
+        ids.append(artifact_id)
+    # Rows the listing hides are not counted either.
+    await _artifact(db, title="unfinalized", versions=[9], current=None)
+    await _artifact(db, title="deleted", versions=[9], deleted=True)
+    await _artifact(db, title="sibling", versions=[9], project=SIBLING_PROJECT)
+    first = await _list(db, limit=2)
+    rest = await _list(db, limit=2, offset=2)
+    assert [r.artifact_id for r in first + rest] == list(reversed(ids))
+    total = await service.count_project_artifacts(
+        db, user_id=MEMBER, organization_id=ORG, project_id=PROJECT
+    )
+    assert total == 3
+
+
+async def test_count_refuses_an_outsider_like_the_listing(db: AsyncSession) -> None:
+    await _artifact(db, title="a", versions=[1])
+    with pytest.raises(ArtifactNotFound):
+        await service.count_project_artifacts(
+            db, user_id=FOREIGN_USER, organization_id=OTHER_ORG, project_id=PROJECT
+        )
+
+
 @pytest.mark.parametrize("case", ["owner", "member"])
 async def test_owner_and_member_can_list(db: AsyncSession, case: str) -> None:
     await _artifact(db, title="a", versions=[1])
