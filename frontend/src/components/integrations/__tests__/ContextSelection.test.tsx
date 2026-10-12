@@ -118,8 +118,11 @@ describe('ContextSelection', () => {
     await user.click(
       await screen.findByRole('button', { name: 'Save selection' })
     );
+    // The save refuses one memory too large for a read page, never a total.
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('was not saved')
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'The selection was not saved. A selected memory may be too large to share (64 KiB per read), or the page is out of date; reload and try again.'
+      )
     );
   });
 
