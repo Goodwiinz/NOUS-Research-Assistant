@@ -24,6 +24,7 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.artifact import ArtifactNotFound
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation
+from src.services.artifacts.service import MAX_PROJECT_ARTIFACTS_PAGE
 from src.services.integrations import read_tools
 from src.services.integrations.context import IntegrationAccessDenied
 from src.services.integrations.read_tools import (
@@ -662,6 +663,13 @@ async def test_list_project_artifacts_is_advertised_with_bounded_limit() -> None
     assert tool.input_schema["properties"]["limit"]["maximum"] == MAX_ARTIFACTS
     assert tool.input_schema["properties"]["offset"]["minimum"] == 0
     assert "next_offset" in tool.description
+
+
+def test_artifact_look_ahead_fits_under_the_service_page_cap() -> None:
+    # _project_artifacts fetches limit + 1 rows to decide next_offset, and the
+    # service clamps a request to MAX_PROJECT_ARTIFACTS_PAGE. A tool cap at or
+    # above it would lose the look-ahead row and never report a next page.
+    assert MAX_ARTIFACTS < MAX_PROJECT_ARTIFACTS_PAGE
 
 
 async def test_list_project_artifacts_denial_is_a_structured_error(

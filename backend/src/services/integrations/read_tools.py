@@ -88,7 +88,10 @@ MAX_RESULTS = 50
 MAX_OFFSET = 2**31 - 1
 MAX_DOCUMENT_IDS = 20
 # Every returned artifact row must carry a source ref, and _source_refs keeps
-# at most MAX_RESULTS, so the artifact page can never be larger.
+# at most MAX_RESULTS, so the artifact page can never be larger. It must also
+# stay below the service's MAX_PROJECT_ARTIFACTS_PAGE: _project_artifacts asks
+# for limit + 1 rows to decide next_offset, and the service clamps a request to
+# its own cap, which would silently drop that look-ahead row.
 MAX_ARTIFACTS = MAX_RESULTS
 MAX_EXTERNAL_RESULTS = 20
 MAX_RESULT_BYTES = 64 * 1024
@@ -1106,6 +1109,8 @@ async def _project_artifacts(
             user_id=context.user_id,
             organization_id=context.organization_id,
             project_id=project_id,
+            # One row past the page; fits only while
+            # MAX_ARTIFACTS < MAX_PROJECT_ARTIFACTS_PAGE.
             limit=limit + 1,
             offset=offset,
         )
