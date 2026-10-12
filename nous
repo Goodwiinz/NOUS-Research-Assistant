@@ -5,10 +5,32 @@
 # "just works" with `./nous login` and `./nous`. Override by exporting
 # NOUS_API_URL before invocation (e.g. NOUS_API_URL=http://localhost:8000/api/v1
 # ./nous) or by setting it in your shell rc.
+#
+# `nous --rc` pairs the current folder with a NOUS project for Local Codex
+# (packages/harness-bridge). Symlink this file into ~/.local/bin from a
+# checkout that tracks origin/develop to run it from any folder.
 set -euo pipefail
 export NOUS_DEFAULT_API_URL="https://dev-api.goodwiinz.tech/api/v1"
+# The checkout this script lives in, resolved through a symlink.
+self="${BASH_SOURCE[0]}"
+while [[ -L "$self" ]]; do
+  target="$(readlink "$self")"
+  [[ "$target" == /* ]] || target="$(cd "$(dirname "$self")" && pwd)/$target"
+  self="$target"
+done
+repo="$(cd "$(dirname "$self")" && pwd)"
+if [[ "${1:-}" == "--rc" ]]; then
+  shift
+  node_version="$(node --version 2>/dev/null || echo none)"
+  if [[ "$node_version" != v24.* ]]; then
+    echo "nous --rc needs Node 24 (found ${node_version#v})" >&2
+    exit 1
+  fi
+  exec pnpm --dir "$repo" --filter @nous/harness-bridge start rc \
+    --api "${NOUS_API_URL:-$NOUS_DEFAULT_API_URL}" --root "$PWD" "$@"
+fi
 if [[ $# -eq 0 || "${1:-}" == "--ink" || "${1:-}" == "--new" || "${1:-}" == "--help" ]]; then
   if [[ "${1:-}" == "--ink" ]]; then shift; fi
-  exec pnpm --prefix terminal start "$@"
+  exec pnpm --prefix "$repo/terminal" start "$@"
 fi
-exec pnpm --prefix frontend cli "$@"
+exec pnpm --prefix "$repo/frontend" cli "$@"
