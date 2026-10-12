@@ -27235,7 +27235,10 @@ export interface operations {
     };
     project_artifacts_api_v1_artifacts_projects__project_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path: {
                 project_id: string;
