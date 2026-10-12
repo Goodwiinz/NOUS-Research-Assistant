@@ -689,11 +689,24 @@ async function pickProject(
     announce("Not a listed choice.");
   }
 }
-/** poll()'s refusals: the browser approval was denied or timed out. */
-const NOT_APPROVED = [
-  "authorization denied or expired",
-  "authorization expired",
-];
+/**
+ * One browser approval step (sign-in or pairing consent); poll()'s refusal or
+ * timeout becomes the sentence `rc` prints.
+ */
+async function approved<T>(step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      ["authorization denied or expired", "authorization expired"].includes(
+        error.message,
+      )
+    )
+      throw new Error("Not approved; run nous --rc again", { cause: error });
+    throw error;
+  }
+}
 export type RcOptions = ClientOptions & {
   apiUrl: string;
   /** The folder Codex works in: the caller's current directory. */
@@ -744,7 +757,7 @@ export async function rc(options: RcOptions): Promise<void> {
   let page =
     token === undefined ? null : await listProjects(fetchFn, base, token);
   if (token === undefined || page === null) {
-    token = await login(base, options);
+    token = await approved(() => login(base, options));
     page = await listProjects(fetchFn, base, token);
     if (page === null) throw new Error("NOUS refused the new sign-in");
     // connect keeps a reused pairing's stored credential, which grant renewal
@@ -767,8 +780,8 @@ export async function rc(options: RcOptions): Promise<void> {
     createProject(fetchFn, base, signedIn, options.prompt, announce),
   );
   const label = options.label ?? hostname();
-  try {
-    await connect({
+  await approved(() =>
+    connect({
       stateDir: options.stateDir,
       fetchFn,
       announce,
@@ -778,12 +791,8 @@ export async function rc(options: RcOptions): Promise<void> {
       label,
       tools: true,
       accessToken: signedIn,
-    });
-  } catch (error) {
-    if (error instanceof Error && NOT_APPROVED.includes(error.message))
-      throw new Error("Not approved; run nous --rc again", { cause: error });
-    throw error;
-  }
+    }),
+  );
   // The new pairing replaced the stored one; its consent outlives it in NOUS.
   if (sameApi && previous !== null && previous.projectId !== project.id) {
     const until =

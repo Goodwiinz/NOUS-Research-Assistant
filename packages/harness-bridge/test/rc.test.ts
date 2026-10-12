@@ -360,6 +360,27 @@ test("a refused approval says to run nous --rc again", async () => {
   }
 });
 
+test("a refused sign-in says to run nous --rc again", async () => {
+  const calls: Call[] = [];
+  const fake = override(
+    fakeNous(calls),
+    (url) => url.includes("/cli-auth/status/"),
+    () => jsonResponse({ status: "denied" }),
+  );
+  const s = setup([], fake);
+  try {
+    await assert.rejects(rc(s.options), (error: Error) => {
+      assert.equal(error.message, "Not approved; run nous --rc again");
+      assert.equal((error.cause as Error | undefined)?.message, "authorization denied or expired");
+      return true;
+    });
+    assert.equal(existsSync(join(s.dir, "connection.json")), false);
+    assert.equal(s.runs.length, 0);
+  } finally {
+    s.cleanup();
+  }
+});
+
 test("creating a project fails closed on an unexpected API path or workspaces body", async () => {
   const odd = setup(["n"]);
   try {
