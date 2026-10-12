@@ -649,7 +649,9 @@ MAX_RERANK_PAGES = 100
 
 def _split_pages(content_text: str) -> list[tuple[int, str]]:
     """Preserve a leading preamble in the first marked page, never lose it."""
-    markers = list(re.finditer(r"\[Page (\d+)\]", content_text))
+    markers = list(
+        re.finditer(r"(?m)^[ \t]*\[Page[ \t]+(\d+)\][ \t]*\r?$", content_text)
+    )
     pages = []
     for index, marker in enumerate(markers):
         end = (
@@ -678,7 +680,7 @@ def _json_text_prefix(text: str, budget: int) -> str:
 
 
 def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
-    """Share the JSON byte budget across all accepted pages; retain every row."""
+    """Share the complete result's byte budget across pages; retain every row."""
     chunks = payload["chunks"]
     # Measure metadata with empty text, including every truncation indicator.
     originals = [chunk["text"] for chunk in chunks]
@@ -696,8 +698,15 @@ def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
                 chunk["title"] = _json_text_prefix(title, 256)
                 if chunk["title"] != title:
                     chunk["title_truncated"] = True
+    metadata = ToolResult(
+        content=[payload], is_error=False, source_refs=_source_refs(payload)
+    )
+    # Include the envelope and references that _finish adds. Each truncation
+    # flag may grow by one byte when true becomes false after adding text.
     budget = max(
-        0, (MAX_RESULT_BYTES - _wire_size(payload) - 1024) // max(1, len(chunks))
+        0,
+        (MAX_RESULT_BYTES - _wire_size(metadata.model_dump()) - len(chunks))
+        // max(1, len(chunks)),
     )
     for chunk, original in zip(chunks, originals):
         chunk["text"] = _json_text_prefix(original, budget)

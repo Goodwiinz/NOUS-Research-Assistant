@@ -3450,6 +3450,17 @@ def test_catalog_schemas_are_copies_of_the_local_table() -> None:
     [
         ("[Page 1]\nfirst\n[Page 2]\nsecond", [(1, "first"), (2, "second")]),
         ("no markers", []),
+        ("see [Page 12] for details", []),
+        ("[Page\n12]", []),
+        (
+            "[Page 1]\nsee [Page 12] for details\n[Page 2]\nsecond",
+            [(1, "see [Page 12] for details"), (2, "second")],
+        ),
+        (
+            "[Page 1]\nsee\n[Page\n12]\nfor details\n[Page 2]\nsecond",
+            [(1, "see\n[Page\n12]\nfor details"), (2, "second")],
+        ),
+        ("  [Page\t3]  \r\nfirst\r\n[Page 9]\r\nlast", [(3, "first"), (9, "last")]),
         ("preamble\n[Page 1]\nfirst", [(1, "preamble\nfirst")]),
         ("[Page 3]\n[Page 9]\nlast", [(3, ""), (9, "last")]),
     ],
@@ -3605,7 +3616,7 @@ async def test_page_filter_refuses_single_foreign_document(
     assert result.content[0]["error"] == "requested_documents_unavailable"
 
 
-# Mutation-verified: disabling read_tools.py:774 post-rerank membership
+# Mutation-verified: disabling read_tools.py:783 post-rerank membership
 # recheck returns a revoked page. Command (backend):
 # pytest -q tests/unit/services/integrations/test_read_tools.py
 # -k page_filter_revocation_during_rerank; fails without guard, passes restored.
@@ -3653,7 +3664,10 @@ async def test_page_filter_large_pages_preserves_rows_and_redacts_title(
         c["truncated"] and c["total_chars"] > len(c["text"]) for c in payload["chunks"]
     )
     assert "someone@example.test" not in payload["chunks"][0]["title"]
-    assert read_tools._wire_size(payload) <= read_tools.MAX_RESULT_BYTES
+    assert (
+        read_tools._wire_size(result.model_dump(mode="json"))
+        <= read_tools.MAX_RESULT_BYTES
+    )
 
 
 @pytest.mark.parametrize("mode", ["flag_off", "no_markers", "multiple", "implicit"])
@@ -3715,7 +3729,7 @@ async def test_page_filter_maximum_pages_and_unicode_title_fit_budget(
     assert not result.is_error
     assert len(result.content[0]["chunks"]) == 100
     assert result.content[0]["truncated"] is True
-    assert read_tools._wire_size(result.content[0]) <= 64 * 1024
+    assert read_tools._wire_size(result.model_dump(mode="json")) <= 64 * 1024
 
 
 async def test_page_filter_refuses_document_with_foreign_organization(
