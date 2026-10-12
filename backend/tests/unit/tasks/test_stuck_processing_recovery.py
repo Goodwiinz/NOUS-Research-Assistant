@@ -520,3 +520,72 @@ def test_reconciler_give_up_holds_document_then_job_locks(
         event.remove(engine, "before_cursor_execute", probe)
     assert locks[:2] == ["document", "job"]
     assert probes == ["Document", "ProcessingJob"]
+
+
+@pytest.fixture
+def ended(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
+    """A document left PROCESSING by a job-only terminal write (IN-1): its
+    only ingestion job is FAILED, so the job sweep never selects it."""
+    stale = datetime.now(timezone.utc) - timedelta(hours=2)
+    with _ingestion() as env:
+        with env.Session() as db:
+            job = db.get(ProcessingJob, env.job_id)
+            job.fail_job(
+                "Lost job: post-commit dispatch never reached a worker",
+                error_type="LostJobReconcileGaveUp",
+            )
+            job.updated_at = stale
+            document = db.get(Document, env.doc_id)
+            document.processing_status = ProcessingStatus.PROCESSING
+            document.updated_at = stale
+            db.commit()
+        monkeypatch.setattr(pt, "SessionLocal", env.Session)
+        monkeypatch.setattr(
+            "src.core.config.get_settings",
+            lambda: SimpleNamespace(
+                SWEEPERS_ENABLED=True, PROCESSING_JOB_STUCK_AFTER_SECONDS=1800
+            ),
+        )
+        yield env
+
+
+def test_sweep_repairs_document_whose_ingestion_already_ended(
+    ended: SimpleNamespace,
+) -> None:
+    assert pt.sweep_stuck_processing_jobs() == {"swept": 0, "repaired_documents": 1}
+    with ended.Session() as db:
+        job = db.get(ProcessingJob, ended.job_id)
+        document = db.get(Document, ended.doc_id)
+        assert document.processing_status == ProcessingStatus.FAILED
+        assert document.processing_error == job.error_message
+
+
+@pytest.mark.parametrize("kind", ["completed", "retried", "fresh", "deleted"])
+def test_sweep_repair_leaves_documents_it_cannot_prove_ended(
+    ended: SimpleNamespace, kind: str
+) -> None:
+    with ended.Session() as db:
+        document = db.get(Document, ended.doc_id)
+        if kind == "completed":
+            db.get(ProcessingJob, ended.job_id).status = JobStatus.COMPLETED
+        elif kind == "retried":
+            db.add(
+                ProcessingJob(
+                    document_id=ended.doc_id,
+                    organization_id=ended.org_id,
+                    job_type=JobType.DOCUMENT_INGESTION,
+                    status=JobStatus.QUEUED,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+        elif kind == "fresh":
+            document.updated_at = datetime.now(timezone.utc)
+        else:
+            document.soft_delete()
+        db.commit()
+    assert pt.sweep_stuck_processing_jobs() == {"swept": 0}
+    with ended.Session() as db:
+        assert (
+            db.get(Document, ended.doc_id).processing_status
+            == ProcessingStatus.PROCESSING
+        )

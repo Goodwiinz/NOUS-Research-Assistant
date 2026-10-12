@@ -35,8 +35,10 @@ from src.shared.enums import SatelliteSyncStatus
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
 from src.tasks.processing_lifecycle import (
+    ACTIVE_DOCUMENT_STATUSES,
     ProcessingStopped,
     end_processing_job,
+    fail_document_unless_owned,
     require_active_ingestion,
 )
 from src.tasks.replay_guard import claim_job_for_processing
@@ -1427,6 +1429,92 @@ _TERMINAL_PROCESSING_STATUSES = frozenset(
 _NON_TERMINAL_PROCESSING_STATUSES = [
     status for status in JobStatus if status not in _TERMINAL_PROCESSING_STATUSES
 ]
+_ENDED_INGESTION_STATUSES = (JobStatus.FAILED, JobStatus.CANCELLED)
+
+
+def _repair_ended_ingestion_documents(db: Any, cutoff: datetime) -> int:
+    """FAIL live documents whose newest ingestion job already ended (IN-1).
+
+    Writers that ended only the job (the lost-job give-up, on_failure and the
+    cancel route, before they shared end_processing_job) left such documents
+    pending forever: the job sweep selects only non-terminal jobs, re-upload
+    returns 409 on the checksum and the UI offers retry only for FAILED.
+    Documents with no ingestion job are left alone. Each document is
+    re-checked under the Document -> ProcessingJob locks and committed alone.
+    """
+    ingestion = and_(
+        ProcessingJob.document_id == Document.id,
+        ProcessingJob.organization_id == Document.organization_id,
+        ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+        ProcessingJob.is_deleted == False,  # noqa: E712
+    )
+    document_ids = [
+        row.id
+        for row in db.query(Document.id)
+        .filter(
+            Document.is_deleted == False,  # noqa: E712
+            Document.processing_status.in_(ACTIVE_DOCUMENT_STATUSES),
+            Document.updated_at < cutoff,
+            select(ProcessingJob.id).where(ingestion).exists(),
+            ~select(ProcessingJob.id)
+            .where(
+                ingestion,
+                ProcessingJob.status.in_(_NON_TERMINAL_PROCESSING_STATUSES),
+            )
+            .exists(),
+        )
+        .order_by(Document.id)
+        .limit(200)
+        .all()
+    ]
+    repaired = 0
+    for document_id in document_ids:
+        document = (
+            db.query(Document)
+            .filter(Document.id == document_id)
+            .populate_existing()
+            .with_for_update()
+            .first()
+        )
+        jobs = [
+            job
+            for job in db.query(ProcessingJob)
+            .filter(
+                ProcessingJob.document_id == document_id,
+                ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
+                ProcessingJob.is_deleted == False,  # noqa: E712
+            )
+            .order_by(ProcessingJob.id)
+            .populate_existing()
+            .with_for_update()
+            .all()
+            if document is not None and job.organization_id == document.organization_id
+        ]
+        newest = max(jobs, key=lambda job: job.created_at, default=None)
+        if (
+            newest is None
+            or newest.status not in _ENDED_INGESTION_STATUSES
+            or not fail_document_unless_owned(
+                document,
+                newest,
+                jobs,
+                newest.error_message
+                or "Processing ended before the document was updated",
+            )
+        ):
+            db.rollback()
+            continue
+        db.commit()
+        repaired += 1
+    return repaired
+
+
+def _finish_sweep(db: Any, cutoff: datetime, swept: int) -> dict:
+    result: dict[str, int] = {"swept": swept}
+    repaired = _repair_ended_ingestion_documents(db, cutoff)
+    if repaired:
+        result["repaired_documents"] = repaired
+    return result
 
 
 @current_app.task(name="src.tasks.processing_tasks.sweep_stuck_processing_jobs")
@@ -1448,6 +1536,8 @@ def sweep_stuck_processing_jobs() -> dict:
     Ingestion jobs and their still-active documents fail in one transaction,
     unless another active ingestion owns the document. Locks follow the
     document-then-job order used by deletion and worker stage commits.
+    It then fails stale live documents whose newest ingestion job already
+    ended FAILED/CANCELLED (IN-1 repair; see _repair_ended_ingestion_documents).
 
     Flag-gated by SWEEPERS_ENABLED (values-controllable kill switch).
     """
@@ -1480,7 +1570,7 @@ def sweep_stuck_processing_jobs() -> dict:
         )
         if not candidates:
             db.commit()
-            return {"swept": 0}
+            return _finish_sweep(db, cutoff, 0)
 
         # Lock the entire document batch before any jobs, including competing
         # attempts, so a bulk delete cannot deadlock with this batch. The first
@@ -1566,34 +1656,16 @@ def sweep_stuck_processing_jobs() -> dict:
                 error_type="StuckJobSweep",
             )
 
-            document = documents.get((job.document_id, job.organization_id))
-            if (
-                job.job_type == JobType.DOCUMENT_INGESTION
-                and document is not None
-                and not document.is_deleted
-                and document.processing_status
-                in (
-                    ProcessingStatus.PENDING,
-                    ProcessingStatus.PROCESSING,
-                    ProcessingStatus.RETRYING,
-                )
-                and not any(
-                    other.id != job.id
-                    and other.document_id == document.id
-                    and other.organization_id == document.organization_id
-                    and other.job_type == JobType.DOCUMENT_INGESTION
-                    and not other.is_deleted
-                    and other.status in _NON_TERMINAL_PROCESSING_STATUSES
-                    for other in locked_jobs
-                )
-            ):
-                document.update_processing_status(
-                    ProcessingStatus.FAILED, job.error_message
-                )
+            fail_document_unless_owned(
+                documents.get((job.document_id, job.organization_id)),
+                job,
+                locked_jobs,
+                job.error_message,
+            )
             swept += 1
 
         db.commit()
-        result = {"swept": swept}
+        result = _finish_sweep(db, cutoff, swept)
         logger.info("sweep_stuck_processing_jobs: %s", result)
         return result
     except Exception as e:
