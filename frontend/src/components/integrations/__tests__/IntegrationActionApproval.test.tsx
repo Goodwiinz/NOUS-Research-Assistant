@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/integrationActionService', () => ({
@@ -366,5 +366,61 @@ describe('IntegrationActionApproval for a library change', () => {
       await screen.findByText('Rename folder “Thesis” to “safe⟨U+202E⟩txt.exe”')
     ).toBeInTheDocument();
     expect(screen.getByText('safe⟨U+202E⟩txt.exe')).toBeInTheDocument();
+  });
+
+  it('says nothing changed and shows the receipt when every paper was skipped', async () => {
+    vi.mocked(integrationActionService.review).mockResolvedValue(
+      change('succeeded', {
+        result: {
+          content: [
+            {
+              ok: true,
+              tool_name: 'save_papers_to_folder',
+              project_id: 'p1',
+              document_ids: [],
+              skipped_document_ids: ['d1', 'd2'],
+              changed: false,
+            },
+          ],
+          is_error: false,
+          source_refs: [],
+        },
+      })
+    );
+    render(<IntegrationActionApproval invocationId={ID} />);
+    await screen.findByText(/Thesis \(p1\)/);
+    expect(screen.getByRole('status')).toHaveTextContent('Nothing changed.');
+    expect(screen.getByRole('status')).not.toHaveTextContent('Done.');
+    const result = within(screen.getByLabelText('Result'));
+    expect(result.getByText('skipped_document_ids')).toBeInTheDocument();
+    expect(result.getByText('“d1”')).toBeInTheDocument();
+    expect(result.getByText('“d2”')).toBeInTheDocument();
+    expect(result.getByText('(empty)')).toBeInTheDocument();
+  });
+
+  it('shows the receipt of a change that ran', async () => {
+    vi.mocked(integrationActionService.review).mockResolvedValue(
+      change('succeeded', {
+        result: {
+          content: [
+            {
+              ok: true,
+              tool_name: 'save_papers_to_folder',
+              project_id: 'p1',
+              document_ids: ['d1'],
+              skipped_document_ids: ['d2'],
+              changed: true,
+            },
+          ],
+          is_error: false,
+          source_refs: [],
+        },
+      })
+    );
+    render(<IntegrationActionApproval invocationId={ID} />);
+    await screen.findByText(/Thesis \(p1\)/);
+    expect(screen.getByRole('status')).toHaveTextContent('Done.');
+    const result = within(screen.getByLabelText('Result'));
+    expect(result.getByText('“d2”')).toBeInTheDocument();
   });
 });
