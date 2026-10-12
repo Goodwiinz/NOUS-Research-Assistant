@@ -31,11 +31,22 @@ The production pipeline is server-side. The sections "Code-level evidence" and "
 | `/api/search/keyword` | `keyword` (`limit` ignored) | `{results:[{universalId, paperTitle, votes, publicationDate, occurrences:[{pageNumber, snippet}]}]}` | Full-text match on page text, 50 rows, sorted strictly by votes descending. The QLoRA paper itself was not in the top 50 for `QLoRA`. |
 | `/api/page` | `universalId`, `pageNumber` | page text | Validation error only; not read. |
 
-**Assistant paper filter (web bundle).** The assistant request body carries `filterModel` and `customFilter {url, apiKey}`. An admin "Race Filter Models" lane sets `filterModel: "cohere"`, labelled "Cohere Rerank", and the stream has a `paper_filter_debug` event. So the assistant passes candidate papers through a swappable reranking filter, and Cohere Rerank is one of the options. Which filter `discover_papers` uses was not observed.
+**Assistant page filter (web bundle).** The assistant request body carries `filterModel` and `customFilter {url, apiKey}`. An admin "Race Filter Models" lane sets `filterModel: "cohere"`, labelled "Cohere Rerank". The matching `paper_filter_debug` stream event reports `acceptedPages`, `totalPages`, `acceptedPagePriorities` and `shortCircuited`, so this filter selects relevant **PDF pages** of one paper. It is not a paper reranker for `discover_papers`. alphaXiv's public `filter-*` models on Hugging Face (Qwen3.5) and its SkyRL fork's page-relevance training (dataset `alphaXiv/page-labels`) match this reading.
+
+**Public code and weights.** [`alphaXiv/retriever-sandbox`](https://github.com/alphaXiv/retriever-sandbox) (Bun, Hono, Postgres with pgvector) is public.
+
+- **Embedding search:** `gemini-embedding-001` vectors (3072 dimensions, `RETRIEVAL_QUERY`), cosine similarity on a halfvec HNSW index with `ef_search=1000`.
+- **Keyword search:** `to_tsvector('english')` with every term required, over-fetches ten times, then orders by votes descending.
+- **Parameters:** both searches take a `minPublicationDate`.
+- **Labelling agents:** `research.agent.ts` and `research-fast.agent.ts` (Claude Sonnet 4.5) produced the ground-truth labels, with the instruction "Your final list should be 5-10 papers, ranked by relevance".
+
+The trained agent's weights are public on Hugging Face as `alphaXiv/retrieve-8B-*` and `retrieve-4B-*` (Qwen3, MIT), and its dataset as `alphaXiv/retrieve`. In the post's sample rollouts the agent calls `embedding_search(query, limit)`, `keyword_search(query)`, `read_page(universal_id, page_number)` and `finish(answer)` in Qwen function-call format.
+
+**MCP docs page (web bundle).** The docs describe `discover_papers` as running "an agentic retrieval loop that combines keyword search, embedding search, and optional multi-round follow-up searches". They say higher difficulty triggers multi-round follow-up searches and document a "Ranked list of 5-15 papers". Live calls returned up to 25.
 
 **Agent traces (web bundle).** `GET /assistant/v2/messages/{messageId}/trace` and `GET /assistant/v2/trace/{trace}` feed an admin trace viewer that shows a tree of spans with nested model calls, subtree cost and depth. It recognises OpenAI, Anthropic, Google, DeepSeek, Qwen, Kimi, Grok and MiniMax models. Its route sits under `/admin`, so ordinary accounts presumably can't read traces.
 
-**Fit with the black-box results.** A small agent that calls keyword and semantic search, reads pages, and submits up to a capped list explains both the non-determinism and the result counts below. A keyword channel sorted by votes explains why popular papers win `historical` and why the 2020 RAG paper only appeared once its exact title terms were used. The production corpus is wider than the post's 150k AI papers: `discover_papers` returned 2014 mathematics papers. The production setup can therefore differ from the post.
+**Fit with the black-box results.** Production is a server pipeline over the full index, not the post's agent run as demoed. Its result counts (16–25) exceed both the agent's 10-document cap and the documented 5–15. For the post's own OmniDocBench example, it found 2 of the 9 ground-truth papers at difficulty 1 and at 10. The trained agent may still generate follow-up queries; that was not observed. A keyword channel sorted by votes explains why popular papers win `historical` and why the 2020 RAG paper only appeared once its exact title terms were used. The production corpus is wider than the post's 150k AI papers: `discover_papers` returned 2014 mathematics papers. The production setup can therefore differ from the post.
 
 The pipeline below is the black-box reading of `discover_papers` outputs.
 
@@ -75,4 +86,4 @@ The design keeps Slice 5 gated on a Harbor eval showing harnesses fumble the pri
 6. Treat it as a small agent loop, not a single query: keyword search, semantic search, page reads, then a capped submit list where every submitted paper must come from a tool result. NOUS already has the primitives (`search_arxiv`, `search_documents`, `retrieve_passages`), so the loop is the new part.
 7. Don't sort the keyword channel by votes alone. alphaXiv's sandbox does, and that is why an exact-topic paper can lose to popular papers that only mention the term.
 
-Not observed: the embedding model, which reranking filter `discover_papers` uses, whether production runs the fine-tuned Qwen3-8B agent, how `difficulty` maps to rounds, and per-call quota cost.
+Not observed: the production embedding model (the sandbox uses `gemini-embedding-001`), whether production runs the fine-tuned agent, how `difficulty` maps to rounds, and per-call quota cost.
