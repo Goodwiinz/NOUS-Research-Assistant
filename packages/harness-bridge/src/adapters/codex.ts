@@ -3,9 +3,9 @@ import { promisify } from "node:util";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Ajv } from "ajv";
-import commandSchema from "./protocol-0.153.4/CommandExecutionRequestApprovalParams.json" with { type: "json" };
-import fileSchema from "./protocol-0.153.4/FileChangeRequestApprovalParams.json" with { type: "json" };
-import inputSchema from "./protocol-0.153.4/ToolRequestUserInputParams.json" with { type: "json" };
+import commandSchema from "./protocol/CommandExecutionRequestApprovalParams.json" with { type: "json" };
+import fileSchema from "./protocol/FileChangeRequestApprovalParams.json" with { type: "json" };
+import inputSchema from "./protocol/ToolRequestUserInputParams.json" with { type: "json" };
 import type {
   AdapterEvent,
   Capabilities,
@@ -25,7 +25,14 @@ import {
   type RpcMessage,
 } from "../rpc.ts";
 
-export const SUPPORTED_CODEX_VERSION = "0.153.4";
+/**
+ * Codex versions this adapter has been run against. Add one only after the
+ * procedure in ./protocol/README.md, including one live run from a NOUS chat.
+ */
+export const SUPPORTED_CODEX_VERSIONS = ["0.153.4", "0.161.0"] as const;
+export type SupportedCodexVersion = (typeof SUPPORTED_CODEX_VERSIONS)[number];
+const isSupported = (v: string): v is SupportedCodexVersion =>
+  (SUPPORTED_CODEX_VERSIONS as readonly string[]).includes(v);
 // Leave 4 KiB for Task 4 durable envelope metadata within the 16 KiB limit.
 const MAX_SERIALIZED_DELTA_BYTES = 12 * 1024;
 const MAX_SEEN_CALLBACKS = 4096;
@@ -72,6 +79,8 @@ export class CodexAdapter implements HarnessAdapter {
   private seenRequestIds = new Set<NativeRequestId>();
   private seenRequestIdBytes = 0;
   private executable: { command: string; args?: string[] };
+  /** The tested version `probe()` found; undefined until it has run. */
+  version?: SupportedCodexVersion;
   constructor(
     executable: { command: string; args?: string[] } = {
       command: "codex",
@@ -93,8 +102,12 @@ export class CodexAdapter implements HarnessAdapter {
     } catch {
       throw new Error("Codex version probe failed");
     }
-    if (stdout.trim() !== `codex-cli ${SUPPORTED_CODEX_VERSION}`)
-      throw new Error("unsupported Codex version; expected 0.153.4");
+    const found = /^codex-cli (\S+)$/.exec(stdout.trim())?.[1];
+    if (found === undefined || !isSupported(found))
+      throw new Error(
+        `Codex ${found ?? "(unknown version)"} is not tested with NOUS; tested versions: ${SUPPORTED_CODEX_VERSIONS.join(", ")}`,
+      );
+    this.version = found;
     return {
       resume: true,
       stream: true,
@@ -126,7 +139,8 @@ export class CodexAdapter implements HarnessAdapter {
       if (
         !record(reply) ||
         !string(reply.userAgent) ||
-        !reply.userAgent.includes("/0.153.4")
+        this.version === undefined ||
+        !reply.userAgent.includes(`/${this.version}`)
       )
         throw new Error("unsupported Codex handshake");
       await this.rpc.notify("initialized");
@@ -210,10 +224,10 @@ export class CodexAdapter implements HarnessAdapter {
       reply.sandbox.networkAccess !== false ||
       reply.sandbox.excludeTmpdirEnvVar !== true ||
       reply.sandbox.excludeSlashTmp !== true ||
-      // Codex 0.153.4 reports only the *extra* writable roots; cwd is always
-      // writable under workspaceWrite and is omitted from the reply. Compare
-      // with cwd added so an exact-cwd policy is accepted and any widening
-      // beyond the policy is still refused.
+      // Codex (0.153.4 and 0.161.0) reports only the *extra* writable roots;
+      // cwd is always writable under workspaceWrite and is omitted from the
+      // reply. Compare with cwd added so an exact-cwd policy is accepted and
+      // any widening beyond the policy is still refused.
       !Array.isArray(reply.sandbox.writableRoots) ||
       !sameRoots(
         [...reply.sandbox.writableRoots, options.cwd],

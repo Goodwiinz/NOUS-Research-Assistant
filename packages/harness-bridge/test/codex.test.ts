@@ -18,7 +18,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { JsonRpcProcess, NativeExitUnconfirmed } from "../src/rpc.ts";
 import { Journal } from "../src/journal.ts";
 import type { BridgeCommand } from "../src/connection.ts";
-import { CodexAdapter } from "../src/adapters/codex.ts";
+import { CodexAdapter, SUPPORTED_CODEX_VERSIONS } from "../src/adapters/codex.ts";
 import { CredentialStore, integrationHeaders } from "../src/credentials.ts";
 import { connect, addWorkspace } from "../src/cli.ts";
 import type { SessionOptions } from "../src/contracts.ts";
@@ -38,7 +38,7 @@ const send = v => process.stdout.write(JSON.stringify(v)+'\n');
 for await (const line of readline.createInterface({input:process.stdin})) {
  const m = JSON.parse(line), c = config();
  fs.appendFileSync(root+'/calls.jsonl',JSON.stringify(m)+'\n');
- if (m.method === 'initialize') send({id:m.id,result:{userAgent:'codex/0.153.4',codexHome:root,platformFamily:'unix',platformOs:'macos'}});
+ if (m.method === 'initialize') send({id:m.id,result:{userAgent:'codex/'+(c.userAgentVersion || c.version || '0.153.4'),codexHome:root,platformFamily:'unix',platformOs:'macos'}});
  if (m.method === 'thread/start' || m.method === 'thread/resume') {
    send({id:m.id,result:{thread:{id:'s',turns:[]},cwd:root,approvalPolicy:'on-request',approvalsReviewer:'user',sandbox:{type:'workspaceWrite',writableRoots:[root],networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true},...c.effective}});
  }
@@ -186,11 +186,28 @@ test("rejects a malformed local model name", async (t) => {
   );
   assert.equal(server.calls("thread/start").length, 0);
 });
-test("exact pinned version only", async (t) => {
+for (const version of SUPPORTED_CODEX_VERSIONS)
+  test(`accepts tested Codex ${version} in the probe and the handshake`, async (t) => {
+    const { server, adapter, options } = setup(t);
+    server.configure({ version });
+    await adapter.probe();
+    assert.equal(adapter.version, version);
+    await adapter.startSession(options);
+    assert.equal(server.calls("initialize").length, 1);
+  });
+test("an untested Codex version is refused before any RPC", async (t) => {
   const { server, adapter } = setup(t);
-  server.configure({ version: "0.153.5" });
-  await assert.rejects(adapter.probe(), /unsupported Codex version/);
+  server.configure({ version: "0.158.0" });
+  await assert.rejects(
+    adapter.probe(),
+    /^Error: Codex 0\.158\.0 is not tested with NOUS; tested versions: 0\.153\.4, 0\.161\.0$/,
+  );
   assert.equal(server.calls("initialize").length, 0);
+});
+test("a handshake from a different version than the probe is refused", async (t) => {
+  const { server, adapter, options } = setup(t);
+  server.configure({ version: "0.161.0", userAgentVersion: "0.153.4" });
+  await assert.rejects(adapter.startSession(options), /unsupported Codex handshake/);
 });
 for (const mode of ["split", "malformed", "oversized", "exit", "eof"])
   test("transport " + mode, async (t) => {
