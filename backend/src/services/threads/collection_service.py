@@ -329,19 +329,11 @@ async def remove_documents_from_collection(
     if not collection.workspace.can_user_edit(str(user_id)):
         raise PermissionError("Insufficient permissions")
 
-    organization_id = await db.scalar(
-        select(User.organization_id).where(User.id == user_id)
-    )
+    # Unlinking reads no document: a link to a document deleted since, or to
+    # one another organization owns in a shared workspace, must stay
+    # removable (LA-1). Integration callers pass only live, owned ids
+    # (tool_actions._live_members).
     for doc_id in document_ids:
-        doc = (
-            await workspace_access.get_accessible_document_or_none(
-                db, doc_id, user_id, organization_id
-            )
-            if organization_id is not None
-            else None
-        )
-        if not doc:
-            continue
         collection_doc = (
             (
                 await db.execute(

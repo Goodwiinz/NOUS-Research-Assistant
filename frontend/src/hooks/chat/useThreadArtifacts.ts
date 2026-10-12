@@ -1,12 +1,16 @@
 import {
+  useInfiniteQuery,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef } from 'react';
 
 import {
   artifactService,
+  PROJECT_ARTIFACT_PAGE_SIZE,
   type ArtifactCapabilities,
   type ArtifactVersion,
   type ProjectArtifact,
@@ -96,12 +100,18 @@ export function useThreadArtifacts(
 
 export function useProjectArtifacts(
   projectId: string | null | undefined
-): UseQueryResult<ProjectArtifact[]> {
+): UseInfiniteQueryResult<InfiniteData<ProjectArtifact[], number>> {
   const scope = useArtifactScope(projectId ?? null, true);
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: [...projectArtifactsKey(projectId ?? ''), scope],
-    queryFn: ({ signal }) =>
-      artifactService.listProjectArtifacts(projectId ?? '', signal),
+    queryFn: ({ pageParam, signal }) =>
+      artifactService.listProjectArtifacts(projectId ?? '', pageParam, signal),
+    initialPageParam: 0,
+    // A full page may have more behind it; a short one is the last.
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.length === PROJECT_ARTIFACT_PAGE_SIZE
+        ? pages.reduce((count, page) => count + page.length, 0)
+        : undefined,
     enabled: Boolean(projectId && scope),
     staleTime: 5_000,
     retry: false,

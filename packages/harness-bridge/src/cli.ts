@@ -203,7 +203,11 @@ export async function connect(
     ...(options.publish ? ["artifacts:publish"] : []),
     ...(options.write ? ["tools:write"] : []),
     ...(options.handoff ? ["handoff:read", "handoff:write"] : []),
-    ...(options.library ? ["library:read", "library:write"] : []),
+    // A workspace grant's project tools all need a project_id, and only
+    // list_library (library:read) names them (WG-3). library:write, which
+    // auto-runs library changes, still needs --library.
+    ...(options.library || projectId === undefined ? ["library:read"] : []),
+    ...(options.library ? ["library:write"] : []),
     ...(options.context ? ["context:read"] : []),
   ];
   const fetchFn = options.fetchFn ?? fetch;
@@ -926,7 +930,7 @@ export function recoverInterrupt(
 const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
-  connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions.
+  connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions. It always requests library:read, so list_library can name the projects its tools need.
   connect --library (needs --tools and --write) also requests library:read and library:write.
   connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, revoke this device's access at /integrations/devices (or disconnect), then connect.
   nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.

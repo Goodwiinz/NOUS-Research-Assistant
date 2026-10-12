@@ -24,6 +24,7 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.artifact import ArtifactNotFound
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation
+from src.services.artifacts.service import MAX_PROJECT_ARTIFACTS_PAGE
 from src.services.integrations import read_tools
 from src.services.integrations.context import IntegrationAccessDenied
 from src.services.integrations.read_tools import (
@@ -206,6 +207,7 @@ def test_selected_context_is_not_a_gateway_read_tool() -> None:
         _invocation("list_project_documents", project_id=str(PROJECT)),
         _invocation("list_project_artifacts", project_id=str(PROJECT)),
         _invocation("list_project_artifacts", limit=MAX_ARTIFACTS + 1),
+        _invocation("list_project_artifacts", offset=-1),
         _invocation("search_documents", query="x", organization_id=str(ORG)),
         _invocation("search_documents", query="x", unexpected="y"),
         _invocation("search_documents"),
@@ -215,6 +217,7 @@ def test_selected_context_is_not_a_gateway_read_tool() -> None:
         "identity-project",
         "artifacts-identity-project",
         "artifacts-limit-over-max",
+        "artifacts-negative-offset",
         "identity-org",
         "extra-arg",
         "missing",
@@ -621,12 +624,52 @@ async def test_every_artifact_row_at_the_cap_has_a_source_ref(
     ]
 
 
+async def test_list_project_artifacts_pages_with_a_real_total(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    # One more than a page: the oldest artifact used to be unreachable, so a
+    # harness could not version it and published a duplicate (AD-1).
+    for minute in range(MAX_ARTIFACTS + 1):
+        await _artifact(db, PROJECT, f"a{minute}.md", minute)
+    first = await invoke_read(db, context, _invocation("list_project_artifacts"))
+    page = first.content[0]
+    assert len(page["artifacts"]) == MAX_ARTIFACTS
+    assert (page["total"], page["offset"], page["next_offset"]) == (
+        MAX_ARTIFACTS + 1,
+        0,
+        MAX_ARTIFACTS,
+    )
+    second = await invoke_read(
+        db,
+        context,
+        _invocation("list_project_artifacts", offset=page["next_offset"]),
+    )
+    rest = second.content[0]
+    assert [row["title"] for row in rest["artifacts"]] == ["a0.md"]
+    assert (rest["total"], rest["next_offset"]) == (MAX_ARTIFACTS + 1, None)
+    assert second.source_refs == [
+        {
+            "artifact_id": rest["artifacts"][0]["artifact_id"],
+            "version_id": rest["artifacts"][0]["version_id"],
+        }
+    ]
+
+
 async def test_list_project_artifacts_is_advertised_with_bounded_limit() -> None:
     tool = {t.name: t for t in list_read_tools()}["list_project_artifacts"]
     assert tool.input_schema["additionalProperties"] is False
-    assert set(tool.input_schema["properties"]) == {"limit"}
+    assert set(tool.input_schema["properties"]) == {"limit", "offset"}
     assert tool.input_schema["properties"]["limit"]["minimum"] == 1
     assert tool.input_schema["properties"]["limit"]["maximum"] == MAX_ARTIFACTS
+    assert tool.input_schema["properties"]["offset"]["minimum"] == 0
+    assert "next_offset" in tool.description
+
+
+def test_artifact_look_ahead_fits_under_the_service_page_cap() -> None:
+    # _project_artifacts fetches limit + 1 rows to decide next_offset, and the
+    # service clamps a request to MAX_PROJECT_ARTIFACTS_PAGE. A tool cap at or
+    # above it would lose the look-ahead row and never report a next page.
+    assert MAX_ARTIFACTS < MAX_PROJECT_ARTIFACTS_PAGE
 
 
 async def test_list_project_artifacts_denial_is_a_structured_error(

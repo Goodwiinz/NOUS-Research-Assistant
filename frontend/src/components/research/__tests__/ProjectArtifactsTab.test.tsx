@@ -3,7 +3,11 @@ import type { User } from '@/types/auth';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProjectArtifactsTab } from '@/components/research/ProjectArtifactsTab';
-import { artifactService, toProjectArtifact } from '@/services/artifactService';
+import {
+  artifactService,
+  PROJECT_ARTIFACT_PAGE_SIZE,
+  toProjectArtifact,
+} from '@/services/artifactService';
 import type { ApiProjectArtifact } from '@/types/api/artifact-contract';
 import { render, screen, waitFor } from '@/test/test-utils';
 
@@ -96,6 +100,75 @@ describe('ProjectArtifactsTab', () => {
     vi.mocked(artifactService.listProjectArtifacts).mockResolvedValue([]);
     render(<ProjectArtifactsTab projectId="p1" />);
     expect(await screen.findByText(/no files yet/i)).toBeInTheDocument();
+  });
+
+  it('loads older files a page at a time', async () => {
+    const page = Array.from({ length: PROJECT_ARTIFACT_PAGE_SIZE }, (_, i) =>
+      toProjectArtifact(row({ artifact_id: `art-${i}`, title: `File ${i}` }))
+    );
+    vi.mocked(artifactService.listProjectArtifacts)
+      .mockResolvedValueOnce(page)
+      .mockResolvedValueOnce([
+        toProjectArtifact(
+          row({ artifact_id: 'art-old', title: 'Oldest file' })
+        ),
+      ]);
+    const { user } = render(<ProjectArtifactsTab projectId="p1" />);
+    await screen.findByText('File 0');
+    expect(artifactService.listProjectArtifacts).toHaveBeenCalledWith(
+      'p1',
+      0,
+      expect.any(AbortSignal)
+    );
+    await user.click(screen.getByRole('button', { name: /load more files/i }));
+    expect(await screen.findByText('Oldest file')).toBeInTheDocument();
+    expect(artifactService.listProjectArtifacts).toHaveBeenLastCalledWith(
+      'p1',
+      PROJECT_ARTIFACT_PAGE_SIZE,
+      expect.any(AbortSignal)
+    );
+    // A short page is the last one.
+    expect(
+      screen.queryByRole('button', { name: /load more files/i })
+    ).toBeNull();
+  });
+
+  it('keeps the loaded files and says so when the next page fails', async () => {
+    const page = Array.from({ length: PROJECT_ARTIFACT_PAGE_SIZE }, (_, i) =>
+      toProjectArtifact(row({ artifact_id: `art-${i}`, title: `File ${i}` }))
+    );
+    vi.mocked(artifactService.listProjectArtifacts)
+      .mockResolvedValueOnce(page)
+      .mockRejectedValueOnce(new Error('boom'));
+    const { user } = render(<ProjectArtifactsTab projectId="p1" />);
+    await screen.findByText('File 0');
+    await user.click(screen.getByRole('button', { name: /load more files/i }));
+    expect(
+      await screen.findByText(/could not load more files/i)
+    ).toHaveAttribute('role', 'alert');
+    expect(screen.getByText('File 0')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /load more files/i })
+    ).toBeInTheDocument();
+  });
+
+  it('lists an artifact once when a page boundary repeats it', async () => {
+    const page = Array.from({ length: PROJECT_ARTIFACT_PAGE_SIZE }, (_, i) =>
+      toProjectArtifact(row({ artifact_id: `art-${i}`, title: `File ${i}` }))
+    );
+    vi.mocked(artifactService.listProjectArtifacts)
+      .mockResolvedValueOnce(page)
+      .mockResolvedValueOnce([
+        toProjectArtifact(row({ artifact_id: 'art-0', title: 'File 0' })),
+        toProjectArtifact(
+          row({ artifact_id: 'art-old', title: 'Oldest file' })
+        ),
+      ]);
+    const { user } = render(<ProjectArtifactsTab projectId="p1" />);
+    await screen.findByText('File 0');
+    await user.click(screen.getByRole('button', { name: /load more files/i }));
+    await screen.findByText('Oldest file');
+    expect(screen.getAllByText('File 0')).toHaveLength(1);
   });
 });
 

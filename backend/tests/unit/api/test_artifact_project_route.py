@@ -173,3 +173,45 @@ async def test_deleted_ancestor_is_404(
 def test_user_without_organization_is_403(app: FastAPI, client: TestClient) -> None:
     _as(app, MEMBER, None)
     assert _get(client).status_code == 403
+
+
+async def test_route_pages_newest_first_with_limit_and_offset(
+    app: FastAPI, session: AsyncSession
+) -> None:
+    newer, newer_version = uuid4(), uuid4()
+    await session.execute(
+        insert(ArtifactVersion).values(
+            id=newer_version,
+            artifact_id=newer,
+            upload_id=uuid4(),
+            title="newer.md",
+            mime_type="text/markdown",
+            byte_size=7,
+            sha256="b" * 64,
+            storage_key="private/newer",
+            producer="harness",
+            provenance={"producer": "harness"},
+            created_at=datetime(2026, 10, 2, tzinfo=timezone.utc),
+        )
+    )
+    await session.execute(
+        insert(Artifact).values(
+            id=newer,
+            organization_id=ORG,
+            project_id=PROJECT,
+            owner_id=OWNER,
+            title="newer.md",
+            current_version_id=newer_version,
+        )
+    )
+    await session.commit()
+    _as(app, MEMBER, ORG)
+    path = f"/api/v1/artifacts/projects/{PROJECT}"
+    with TestClient(app) as client:
+        first = client.get(path, params={"limit": 1})
+        second = client.get(path, params={"limit": 1, "offset": 1})
+        too_many = client.get(path, params={"limit": 101})
+        negative = client.get(path, params={"offset": -1})
+    assert [row["artifact_id"] for row in first.json()] == [str(newer)]
+    assert [row["artifact_id"] for row in second.json()] == [str(ARTIFACT)]
+    assert (too_many.status_code, negative.status_code) == (422, 422)

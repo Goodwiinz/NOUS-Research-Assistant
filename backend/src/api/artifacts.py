@@ -4,7 +4,7 @@ from typing import cast
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +41,7 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.artifacts.editing import edit_version
 from src.services.artifacts.service import (
     MAX_ARTIFACT_BYTES,
+    MAX_PROJECT_ARTIFACTS_PAGE,
     list_project_artifacts,
     list_thread_artifacts,
     list_versions,
@@ -168,13 +169,21 @@ async def thread_artifacts(
 @router.get("/projects/{project_id}", response_model=list[ProjectArtifactDTO])
 async def project_artifacts(
     project_id: UUID,
+    # Newest first, a page at a time; the Files tab loads more by offset.
+    limit: int = Query(MAX_PROJECT_ARTIFACTS_PAGE, ge=1, le=MAX_PROJECT_ARTIFACTS_PAGE),
+    offset: int = Query(0, ge=0, le=2**31 - 1),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProjectArtifactDTO]:
     user_id, organization_id = _identity(user)
     try:
         return await list_project_artifacts(
-            db, user_id=user_id, organization_id=organization_id, project_id=project_id
+            db,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
         )
     except ArtifactError as error:
         raise _http(error) from error

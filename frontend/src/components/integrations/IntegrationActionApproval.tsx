@@ -53,6 +53,10 @@ const APPROVE: Record<Kind, string> = {
   change: 'Approve',
 };
 const IN_FLIGHT = new Set<ActionState>(['approved', 'executing']);
+// A library change that ran but altered nothing (every paper skipped or
+// already in place) must not read like one that did (LA-2).
+const NOTHING_CHANGED =
+  'Nothing changed. The result above lists the papers NOUS skipped and any that were already in place.';
 
 // Bidi overrides/isolates, zero-width and BOM characters can make stored text
 // read differently from what will be written; show each one as a visible code.
@@ -155,16 +159,22 @@ function StoredValue({ value }: { value: unknown }): ReactElement {
 }
 
 /**
- * The stored arguments exactly as the action will run them, under their own
- * keys, so nothing the summary leaves out is hidden.
+ * Stored values under their own keys, so nothing the summary leaves out is
+ * hidden: the arguments the action runs with, and the receipt of what it did.
  */
-function ArgumentRows({ action }: { action: ApiActionReview }): ReactElement {
+function StoredRows({
+  label,
+  values,
+}: {
+  label: string;
+  values: Record<string, unknown>;
+}): ReactElement {
   return (
     <div>
-      <dt className="font-semibold">Arguments</dt>
+      <dt className="font-semibold">{label}</dt>
       <dd>
-        <dl className="space-y-1 font-mono text-sm">
-          {Object.entries(action.arguments).map(([key, value]) => (
+        <dl aria-label={label} className="space-y-1 font-mono text-sm">
+          {Object.entries(values).map(([key, value]) => (
             <div key={key} className="flex flex-wrap gap-2">
               <dt>{key}</dt>
               <dd>
@@ -215,6 +225,10 @@ export function IntegrationActionApproval({
   // race the first; the refetch shows the stored outcome.
   const canDecide = action?.state === 'awaiting_approval' && decision.isIdle;
   const canApprove = canDecide && action?.project_available === true;
+  // A library change's receipt: what NOUS did, including what it skipped.
+  const receipt = kind === 'change' ? action?.result?.content[0] : undefined;
+  const nothingChanged =
+    action?.state === 'succeeded' && receipt?.changed === false;
 
   return (
     <section className="mx-auto max-w-2xl space-y-6 p-6">
@@ -243,11 +257,12 @@ export function IntegrationActionApproval({
             {kind === 'note' ? (
               <NoteRows action={action} />
             ) : (
-              <ArgumentRows action={action} />
+              <StoredRows label="Arguments" values={action.arguments} />
             )}
+            {receipt && <StoredRows label="Result" values={receipt} />}
           </dl>
           <p role="status">
-            {STATE_TEXT[kind][action.state]}
+            {nothingChanged ? NOTHING_CHANGED : STATE_TEXT[kind][action.state]}
             {action.state === 'failed' && action.last_error
               ? ` ${action.last_error}.`
               : ''}

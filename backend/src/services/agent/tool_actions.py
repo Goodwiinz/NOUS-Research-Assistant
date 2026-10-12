@@ -1180,6 +1180,11 @@ async def _save_papers(
 ) -> dict[str, Any]:
     folder = UUID(row.arguments["project_id"])
     requested = list(row.arguments["document_ids"])
+    # Members before the link, so the receipt can say whether anything changed.
+    # ``before`` and ``held`` are separate reads under READ COMMITTED, so
+    # ``changed`` is best-effort under a concurrent edit of the same link; it
+    # only labels the receipt.
+    before = await _live_members(db, folder, requested, row.organization_id)
     saved = await collection_service.add_documents_to_collection(
         db,
         folder,
@@ -1196,6 +1201,9 @@ async def _save_papers(
         folder,
         document_ids=[d for d in requested if d in held],
         skipped_document_ids=[d for d in requested if d not in held],
+        # False when every paper was skipped or already in the folder: the
+        # approval page then says nothing changed, not "Done." (LA-2).
+        changed=bool(held - before),
     )
 
 
@@ -1219,6 +1227,7 @@ async def _remove_papers(
         folder,
         document_ids=[d for d in requested if d in held],
         skipped_document_ids=[d for d in requested if d not in held],
+        changed=bool(held),
     )
 
 
@@ -1255,6 +1264,7 @@ async def _move_papers(
         to_project_id=str(destination),
         document_ids=moving,
         skipped_document_ids=[d for d in requested if d not in held],
+        changed=bool(moving),
     )
 
 

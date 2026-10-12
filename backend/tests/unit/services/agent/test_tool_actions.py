@@ -1897,6 +1897,7 @@ async def test_library_write_grant_auto_runs_save_papers(
         "project_id": str(SECOND),
         "document_ids": [str(PAPER2)],
         "skipped_document_ids": [],
+        "changed": True,
     }
     assert status.result is not None
     assert status.result.source_refs == [{"document_id": str(PAPER2)}]
@@ -2208,6 +2209,7 @@ async def test_move_unlinks_and_links_in_one_effect(
         "to_project_id": str(SECOND),
         "document_ids": [str(PAPER)],
         "skipped_document_ids": [str(PAPER2)],
+        "changed": True,
     }
     row = await _row(db, status.invocation_id)
     assert (row.project_id, row.workspace_id) == (PROJECT, WORKSPACE)
@@ -2269,6 +2271,111 @@ async def test_rename_and_remove_run_without_a_decision(
         "project_id": P,
         "document_ids": [str(PAPER)],
         "skipped_document_ids": [str(PAPER2)],
+        "changed": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "kept"),
+    [
+        # PAPER is already in PROJECT: nothing to add.
+        (
+            "save_papers_to_folder",
+            {"document_ids": [str(PAPER)], "project_id": P},
+            [str(PAPER)],
+        ),
+        # PAPER2 is in no folder: nothing to remove or move.
+        (
+            "remove_papers_from_folder",
+            {"document_ids": [str(PAPER2)], "project_id": P},
+            [],
+        ),
+        (
+            "move_papers_between_folders",
+            {
+                "document_ids": [str(PAPER2)],
+                "from_project_id": P,
+                "to_project_id": str(SECOND),
+            },
+            [],
+        ),
+    ],
+    ids=["save-already-there", "remove-not-there", "move-not-in-source"],
+)
+async def test_a_library_action_that_changes_nothing_says_so(
+    db: AsyncSession,
+    library: None,
+    tool_name: str,
+    arguments: dict[str, Any],
+    kept: list[str],
+) -> None:
+    status = await request_action(
+        db, await _library_actor(db), _call(tool_name, **arguments)
+    )
+    assert status.state == "succeeded"
+    receipt = _receipt(status)
+    assert receipt["changed"] is False
+    assert receipt["document_ids"] == kept
+
+
+async def test_a_save_that_adds_one_paper_beside_one_already_there_changed(
+    db: AsyncSession, library: None
+) -> None:
+    # PAPER is already in PROJECT, PAPER2 is not: the save changed something,
+    # and both are members afterwards, so neither is skipped.
+    status = await request_action(
+        db,
+        await _library_actor(db),
+        _call(
+            "save_papers_to_folder",
+            document_ids=[str(PAPER), str(PAPER2)],
+            project_id=P,
+        ),
+    )
+    assert status.state == "succeeded"
+    assert await _linked(db, PROJECT, PAPER)
+    assert await _linked(db, PROJECT, PAPER2)
+    assert _receipt(status) == {
+        "ok": True,
+        "tool_name": "save_papers_to_folder",
+        "project_id": P,
+        "document_ids": [str(PAPER), str(PAPER2)],
+        "skipped_document_ids": [],
+        "changed": True,
+    }
+
+
+async def test_an_approved_save_of_papers_deleted_since_says_nothing_changed(
+    db: AsyncSession, library: None
+) -> None:
+    # tools:write without library:write: the save waits for the user (LA-2).
+    actor = await _library_actor(db, WRITE)
+    status = await request_action(
+        db,
+        actor,
+        _call(
+            "save_papers_to_folder",
+            document_ids=[str(PAPER2)],
+            project_id=str(SECOND),
+        ),
+    )
+    assert status.state == "awaiting_approval"
+    # Deleted while the review page was open.
+    await db.execute(
+        update(Document).where(Document.id == PAPER2).values(is_deleted=True)
+    )
+    await db.commit()
+    await _approve(db, status.invocation_id)
+    done = await execute_action(db, status.invocation_id)
+    assert done is not None and done.state == "succeeded"
+    assert not await _linked(db, SECOND, PAPER2)
+    assert _receipt(done) == {
+        "ok": True,
+        "tool_name": "save_papers_to_folder",
+        "project_id": str(SECOND),
+        "document_ids": [],
+        "skipped_document_ids": [str(PAPER2)],
+        "changed": False,
     }
 
 
@@ -3334,9 +3441,13 @@ async def test_collection_membership_writes_use_actor_organization(
         )
     assert collection is not None
     await db.commit()
-    expected_owned = (
-        operation != "remove" if identity == "active" else operation == "remove"
-    )
-    assert await _linked(db, collection.id, PAPER2) is expected_owned
+    if operation == "remove":
+        # Unlinking reads no document (LA-1): a link to a deleted or
+        # other-organization document stays removable, as before Slice 3.
+        # The library actions filter their ids first (_live_members).
+        for document_id in (PAPER2, foreign, retired):
+            assert not await _linked(db, collection.id, document_id)
+        return
+    assert await _linked(db, collection.id, PAPER2) is (identity == "active")
     for blocked in (foreign, retired):
-        assert await _linked(db, collection.id, blocked) is (operation == "remove")
+        assert not await _linked(db, collection.id, blocked)
