@@ -11,13 +11,13 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, select
 from sqlalchemy.exc import OperationalError
 
-from src.models.document import Document, ProcessingStatus
+from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.tasks import processing_tasks as pt
@@ -665,3 +665,55 @@ def test_sweep_repair_follows_the_newest_ingestion_job(
             assert document.processing_error == "newer attempt ended"
         else:
             assert document.processing_status == ProcessingStatus.PROCESSING
+
+
+def test_sweep_repair_batch_is_not_filled_by_completed_documents(
+    ended: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IN-1 review: the newest-job rule applies before the batch limit.
+
+    More stale active documents than one batch, whose newest ingestion job
+    COMPLETED, sort before the repairable one. If the selection let them fill
+    the batch, the locked re-check would reject every one, and each later
+    sweep would select the same batch and never reach the FAILED one."""
+    monkeypatch.setattr(pt, "_REPAIR_BATCH", 2)
+    stale = datetime.now(timezone.utc) - timedelta(hours=2)
+    completed_ids = [UUID(int=n) for n in range(1, 4)]
+    assert max(completed_ids) < ended.doc_id
+    with ended.Session() as db:
+        for document_id in completed_ids:
+            db.add(
+                Document(
+                    id=document_id,
+                    title="Done",
+                    filename="done.txt",
+                    file_path="local:///nonexistent/done.txt",
+                    file_size_bytes=10,
+                    mime_type="text/plain",
+                    document_type=DocumentType.TEXT,
+                    organization_id=ended.org_id,
+                    processing_status=ProcessingStatus.PROCESSING,
+                    updated_at=stale,
+                )
+            )
+            db.flush()
+            db.add(
+                ProcessingJob(
+                    document_id=document_id,
+                    organization_id=ended.org_id,
+                    job_type=JobType.DOCUMENT_INGESTION,
+                    status=JobStatus.COMPLETED,
+                    updated_at=stale,
+                )
+            )
+        db.commit()
+    assert pt.sweep_stuck_processing_jobs() == {"swept": 0, "repaired_documents": 1}
+    with ended.Session() as db:
+        assert (
+            db.get(Document, ended.doc_id).processing_status == ProcessingStatus.FAILED
+        )
+        for document_id in completed_ids:
+            assert (
+                db.get(Document, document_id).processing_status
+                == ProcessingStatus.PROCESSING
+            )

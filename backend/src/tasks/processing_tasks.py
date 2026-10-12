@@ -1430,6 +1430,8 @@ _NON_TERMINAL_PROCESSING_STATUSES = [
     status for status in JobStatus if status not in _TERMINAL_PROCESSING_STATUSES
 ]
 _ENDED_INGESTION_STATUSES = (JobStatus.FAILED, JobStatus.CANCELLED)
+# Documents the repair phase locks and re-checks per sweep.
+_REPAIR_BATCH = 200
 
 
 def _repair_ended_ingestion_documents(db: Any, cutoff: datetime) -> int:
@@ -1448,6 +1450,17 @@ def _repair_ended_ingestion_documents(db: Any, cutoff: datetime) -> int:
         ProcessingJob.job_type == JobType.DOCUMENT_INGESTION,
         ProcessingJob.is_deleted == False,  # noqa: E712
     )
+    # The newest live ingestion job's status, chosen as the locked re-check
+    # below chooses it: max created_at, ties to the first by id. Filtering on
+    # it before the LIMIT keeps documents the re-check would reject (newest
+    # job COMPLETED) from filling every batch. NULL (no job) never matches.
+    newest_ingestion_status = (
+        select(ProcessingJob.status)
+        .where(ingestion)
+        .order_by(ProcessingJob.created_at.desc(), ProcessingJob.id)
+        .limit(1)
+        .scalar_subquery()
+    )
     document_ids = [
         row.id
         for row in db.query(Document.id)
@@ -1455,7 +1468,7 @@ def _repair_ended_ingestion_documents(db: Any, cutoff: datetime) -> int:
             Document.is_deleted == False,  # noqa: E712
             Document.processing_status.in_(ACTIVE_DOCUMENT_STATUSES),
             Document.updated_at < cutoff,
-            select(ProcessingJob.id).where(ingestion).exists(),
+            newest_ingestion_status.in_(_ENDED_INGESTION_STATUSES),
             ~select(ProcessingJob.id)
             .where(
                 ingestion,
@@ -1464,7 +1477,7 @@ def _repair_ended_ingestion_documents(db: Any, cutoff: datetime) -> int:
             .exists(),
         )
         .order_by(Document.id)
-        .limit(200)
+        .limit(_REPAIR_BATCH)
         .all()
     ]
     repaired = 0
