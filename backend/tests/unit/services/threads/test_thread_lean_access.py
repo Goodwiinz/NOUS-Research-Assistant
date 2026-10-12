@@ -11,7 +11,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import event, insert, text, update
+from sqlalchemy import event, insert, inspect, text, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -45,6 +45,10 @@ _ROWS: dict[str, tuple[Any, UUID]] = {
 # (case id, viewer, row changes, readable)
 _CASES: list[tuple[str, UUID, dict[str, dict[str, Any]], bool]] = [
     ("owner", OWNER, {}, True),
+    # A legacy workspace created before organizations: the route resolves its
+    # org from the owner, so the lean read must still answer and carry the
+    # NULL through rather than filter the row out.
+    ("owner-legacy-null-org", OWNER, {"workspace": {"organization_id": None}}, True),
     ("member", MEMBER, {}, True),
     ("former-member", FORMER_MEMBER, {}, False),
     ("stranger", STRANGER, {}, False),
@@ -134,10 +138,11 @@ async def test_lean_read_gives_get_threads_answer(
             model, row_id = _ROWS[name]
             await db.execute(update(model).where(model.id == row_id).values(**values))
         await db.commit()
+    expected_org = changes.get("workspace", {}).get("organization_id", ORG)
     async with _session(engine) as db:
         lean = await workspace_access.get_thread_lean(db, THREAD, viewer)
         if lean is not None:
-            assert lean.conversation.workspace.organization_id == ORG
+            assert lean.conversation.workspace.organization_id == expected_org
     async with _session(engine) as db:
         full = await workspace_access.get_thread(
             db, THREAD, viewer, include_messages=False
@@ -159,7 +164,10 @@ async def test_lean_read_is_one_select_without_member_rows(
         async with _session(engine) as db:
             thread = await workspace_access.get_thread_lean(db, THREAD, MEMBER)
             assert thread is not None
-            organization_id = thread.conversation.workspace.organization_id
+            workspace = thread.conversation.workspace
+            organization_id = workspace.organization_id
+            # The member rows were neither selected nor lazy-loaded.
+            assert "members" in inspect(workspace).unloaded
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", record)
     assert organization_id == ORG

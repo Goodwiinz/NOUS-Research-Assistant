@@ -312,9 +312,12 @@ async def get_thread_lean(
     ``thread.conversation.workspace`` is loaded with its columns; workspace
     members, owner and thread messages are NOT, and touching them on the
     result lazy-loads, which an async session refuses. Use ``get_thread`` for
-    a caller that needs any of them. In particular, never feed the result to
-    ``thread_viewer_is_trusted``: it reads ``workspace.members`` and would fail
-    closed to the public projection.
+    a caller that needs any of them. In particular, never feed the result's
+    workspace to ``user_can_access_workspace`` or ``workspace_trust``, nor the
+    thread to ``thread_viewer_is_trusted``: all three read ``workspace.members``
+    (via ``Workspace.is_member``), which is not loaded here. The first two
+    would raise ``MissingGreenlet``; the third would fail closed to the public
+    projection.
     """
     stmt = (
         select(Thread)
