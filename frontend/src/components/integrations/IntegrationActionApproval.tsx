@@ -56,7 +56,7 @@ const IN_FLIGHT = new Set<ActionState>(['approved', 'executing']);
 // A library change that ran but altered nothing (every paper skipped or
 // already in place) must not read like one that did (LA-2).
 const NOTHING_CHANGED =
-  'Nothing changed. The result below lists the papers NOUS skipped and any that were already in place.';
+  'Nothing changed. The result above lists the papers NOUS skipped and any that were already in place.';
 
 // Bidi overrides/isolates, zero-width and BOM characters can make stored text
 // read differently from what will be written; show each one as a visible code.

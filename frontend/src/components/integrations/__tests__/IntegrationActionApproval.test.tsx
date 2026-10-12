@@ -423,4 +423,34 @@ describe('IntegrationActionApproval for a library change', () => {
     const result = within(screen.getByLabelText('Result'));
     expect(result.getByText('“d2”')).toBeInTheDocument();
   });
+
+  it('shows a refused receipt under Result without saying nothing changed', async () => {
+    vi.mocked(integrationActionService.review).mockResolvedValue(
+      change('failed', {
+        last_error: 'target not found',
+        result: {
+          content: [
+            {
+              ok: false,
+              tool_name: 'save_papers_to_folder',
+              error: 'target not found',
+            },
+          ],
+          is_error: true,
+          source_refs: [],
+        },
+      })
+    );
+    render(<IntegrationActionApproval invocationId={ID} />);
+    await screen.findByText(/Thesis \(p1\)/);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Not done. target not found.'
+    );
+    expect(screen.getByRole('status')).not.toHaveTextContent(
+      'Nothing changed.'
+    );
+    const result = within(screen.getByLabelText('Result'));
+    expect(result.getByText('error')).toBeInTheDocument();
+    expect(result.getByText('target not found')).toBeInTheDocument();
+  });
 });
