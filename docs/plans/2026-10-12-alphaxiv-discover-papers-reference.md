@@ -8,7 +8,36 @@
 - Parsed the alphaXiv web bundle statically with REA (291 scripts, logged out) to list the routes the web client calls.
 - Called the two public search routes the web client uses: `GET /search/v2/paper/fast` and `GET /v1/search/paper`.
 
-The pipeline below is an inference from outputs. The models, index and scoring code are server-side and were not observed.
+- Downloaded the remaining 384 code-split chunks of the web app (public static assets) and parsed them, which surfaced the paper-filter controls, the agent-trace viewer and the components of alphaXiv's engineering post on its retrieval agent.
+- Read that post and called the retriever sandbox API it documents (four GET requests).
+
+The production pipeline is server-side. The sections "Code-level evidence" and "Inferred pipeline" separate what alphaXiv's own code and writing state from what was inferred from outputs.
+
+## Code-level evidence
+
+**alphaXiv's retrieval agent.** alphaXiv's engineering post [Training retrieval agents for arXiv search](https://www.alphaxiv.org/blog/training-retrieval-agents-for-arxiv-search) describes:
+
+- **Model:** Qwen3-8B post-trained with GRPO on the SkyRL-Agent framework, with parallel tool calls.
+- **Tools:** `keyword_search` (arXiv id, date, upvotes, page snippets), `semantic_search` (arXiv id, date, upvotes, abstract), `read_page` (page text) and `finish` (submit a list of document IDs).
+- **Gates:** answers are capped at 10 documents, and a citation gate requires every submitted document to have come from a tool call.
+- **Rewards:** RLVR on recall (duplication, submission, citation and limit gates; failing a gate scores 0), and rubric rewards from an LLM judge (Gemini 3 Flash in the main run) scoring search diversity, thoroughness, thoughtfulness and relevance. The post reports that recall-only runs collapsed to a single search call, and that rubric rewards produced more thorough searches.
+- **Results and scope:** the post places its model just above GPT 5.4 on recall and below Opus 4.6 (0.58). The training corpus was about 150k AI papers. The post does not say this agent serves `discover_papers`.
+
+**Retriever sandbox.** The post's sample request names `https://retriever-sandbox-production.up.railway.app`. On 2026-10-12 it answered unauthenticated GETs:
+
+| Endpoint | Parameters | Response | Observed behaviour |
+| --- | --- | --- | --- |
+| `/api/search/embedding` | `query`, `limit` | `{results:[{title, abstract, universalId, votes, publicationDate, similarityDistance}], totalResults}` | Distances ~0.27 for a good match (cosine distance). |
+| `/api/search/keyword` | `keyword` (`limit` ignored) | `{results:[{universalId, paperTitle, votes, publicationDate, occurrences:[{pageNumber, snippet}]}]}` | Full-text match on page text, 50 rows, sorted strictly by votes descending. The QLoRA paper itself was not in the top 50 for `QLoRA`. |
+| `/api/page` | `universalId`, `pageNumber` | page text | Validation error only; not read. |
+
+**Assistant paper filter (web bundle).** The assistant request body carries `filterModel` and `customFilter {url, apiKey}`. An admin "Race Filter Models" lane sets `filterModel: "cohere"`, labelled "Cohere Rerank", and the stream has a `paper_filter_debug` event. So the assistant passes candidate papers through a swappable reranking filter, and Cohere Rerank is one of the options. Which filter `discover_papers` uses was not observed.
+
+**Agent traces (web bundle).** `GET /assistant/v2/messages/{messageId}/trace` and `GET /assistant/v2/trace/{trace}` feed an admin trace viewer that shows a tree of spans with nested model calls, subtree cost and depth. It recognises OpenAI, Anthropic, Google, DeepSeek, Qwen, Kimi, Grok and MiniMax models. Its route sits under `/admin`, so ordinary accounts presumably can't read traces.
+
+**Fit with the black-box results.** A small agent that calls keyword and semantic search, reads pages, and submits up to a capped list explains both the non-determinism and the result counts below. A keyword channel sorted by votes explains why popular papers win `historical` and why the 2020 RAG paper only appeared once its exact title terms were used. The production corpus is wider than the post's 150k AI papers: `discover_papers` returned 2014 mathematics papers. The production setup can therefore differ from the post.
+
+The pipeline below is the black-box reading of `discover_papers` outputs.
 
 ## Tool surface on 2026-10-12
 
@@ -43,5 +72,7 @@ The design keeps Slice 5 gated on a Harbor eval showing harnesses fumble the pri
 3. Apply date bounds and recency inside retrieval, not after it. This avoids the empty-window failure observed in step 3.
 4. Keep the one-line-per-paper output with date, organizations, votes or citation signal, and a snippet.
 5. Copy the tool-description rule that keywords are the user's own terms only.
+6. Treat it as a small agent loop, not a single query: keyword search, semantic search, page reads, then a capped submit list where every submitted paper must come from a tool result. NOUS already has the primitives (`search_arxiv`, `search_documents`, `retrieve_passages`), so the loop is the new part.
+7. Don't sort the keyword channel by votes alone. alphaXiv's sandbox does, and that is why an exact-topic paper can lose to popular papers that only mention the term.
 
-Not observed: embedding and re-ranking models, index coverage, the number of follow-up rounds per difficulty level, and per-call quota cost.
+Not observed: the embedding model, which reranking filter `discover_papers` uses, whether production runs the fine-tuned Qwen3-8B agent, how `difficulty` maps to rounds, and per-call quota cost.
