@@ -392,19 +392,33 @@ test("cleanup failure preserves the new binding and reports retryable local clea
 });
 
 test("connect with an access token skips the CLI login", async () => {
-  const { base, calls, deviceAuth, state } = setup();
-  await connect({ ...base, tools: true, accessToken: "cli-from-rc" });
-  assert.equal(calls.filter((u) => u.includes("/cli-auth/")).length, 0);
-  assert.equal(calls.filter((u) => u.endsWith("/integrations/devices")).length, 1);
-  // The device is registered with the given token, not a fresh login's.
-  assert.deepEqual(deviceAuth, ["Bearer cli-from-rc"]);
-  assert.equal(state().projectId, PROJECT);
-  assert.deepEqual(state().scopes, ["harness:execute", "tools:read"]);
+  const t = setup();
+  try {
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.equal(
+      (await new CredentialStore(t.dir).load(t.state().credentialHandle)).accessToken,
+      "cli-from-rc",
+    );
+    assert.ok(!t.messages.join("\n").includes("cli-from-rc"));
+    assert.equal(t.calls.filter((u) => u.includes("/cli-auth/")).length, 0);
+    assert.equal(t.calls.filter((u) => u.endsWith("/integrations/devices")).length, 1);
+    // The device is registered with the given token, not a fresh login's.
+    assert.deepEqual(t.deviceAuth, ["Bearer cli-from-rc"]);
+    assert.equal(t.state().projectId, PROJECT);
+    assert.deepEqual(t.state().scopes, ["harness:execute", "tools:read"]);
+  } finally {
+    t.cleanup();
+  }
 });
+
 test("login() returns the CLI token after browser approval", async () => {
-  const { base, calls, messages } = setup();
-  const token = await login("https://nous.test/api/v1", base);
-  assert.equal(token, "cli-secret");
-  assert.ok(calls.some((u) => u.endsWith("/cli-auth/start")));
-  assert.ok(messages.some((m) => m.includes("ABCD-1234")));
+  const t = setup();
+  try {
+    const token = await login("https://nous.test/api/v1", t.base);
+    assert.equal(token, "cli-secret");
+    assert.ok(t.calls.some((u) => u.endsWith("/cli-auth/start")));
+    assert.ok(t.messages.some((m) => m.includes("ABCD-1234")));
+  } finally {
+    t.cleanup();
+  }
 });

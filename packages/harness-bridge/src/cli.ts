@@ -144,9 +144,10 @@ async function poll(
  * types on that page, poll until approved. Returns the CLI access token.
  */
 export async function login(base: string, options: ClientOptions): Promise<string> {
+  const api = apiBase(base);
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
-  const started = await request(fetchFn, base, "/cli-auth/start", undefined, {});
+  const started = await request(fetchFn, api, "/cli-auth/start", undefined, {});
   if (
     typeof started.session_id !== "string" ||
     typeof started.poll_token !== "string" ||
@@ -169,7 +170,7 @@ export async function login(base: string, options: ClientOptions): Promise<strin
     () =>
       request(
         fetchFn,
-        base,
+        api,
         `/cli-auth/status/${encodeURIComponent(started.session_id)}`,
         undefined,
         undefined,
@@ -196,7 +197,7 @@ export async function connect(
     handoff?: boolean;
     library?: boolean;
     context?: boolean;
-    // A CLI access token obtained by login(); when set, no browser login runs.
+    // A CLI access token obtained by login(); when set, no browser login runs; ignored when the stored binding is reused.
     accessToken?: string;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
