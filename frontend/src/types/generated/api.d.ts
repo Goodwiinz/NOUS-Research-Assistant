@@ -31961,7 +31961,9 @@ export interface operations {
     };
     get_selected_context_api_v1_integrations_context_get: {
         parameters: {
-            query?: never;
+            query?: {
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -31975,6 +31977,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
