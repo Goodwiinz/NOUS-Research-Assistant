@@ -3589,6 +3589,64 @@ async def test_page_filter_reranks_in_page_order(
     assert payload["page_filter"]["total_pages"] > 100
 
 
+async def test_page_filter_omits_blank_rerank_candidates(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    monkeypatch.setattr(read_tools, "fulltext_search_service", _StubFulltext([]))
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="[Page 1]\n \n"
+            + "\n".join(f"[Page {i}]\npage {i}" for i in range(2, 10))
+        )
+    )
+    await db.commit()
+
+    async def rerank(query: str, documents: list[dict[str, Any]], **kwargs: Any) -> Any:
+        assert len(documents) == 8
+        assert all(doc["content"] for doc in documents)
+        assert documents[1] == {"id": "3", "content": "page 3"}
+        return [
+            RerankResult(
+                document_id="3", index=1, relevance_score=0.9, original_score=0.0
+            )
+        ]
+
+    monkeypatch.setattr(service, "rerank", rerank)
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert result.content[0]["page_filter"]["total_pages"] == 9
+    assert result.content[0]["page_filter"]["accepted_pages"] == [3]
+    assert result.content[0]["chunks"][0]["text"] == "page 3"
+
+
+async def test_page_filter_all_blank_candidates_use_fulltext(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _enable_page_filter(monkeypatch)
+    rerank = AsyncMock(return_value=[])
+    monkeypatch.setattr(service, "rerank", rerank)
+    monkeypatch.setattr(
+        read_tools,
+        "fulltext_search_service",
+        _StubFulltext([_search_result(DOC_IN_PROJECT, "fallback hit")]),
+    )
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(content_text="\n".join(f"[Page {i}]\n " for i in range(1, 10)))
+    )
+    await db.commit()
+    result = await _retrieve_one(db, context)
+    rerank.assert_not_awaited()
+    assert result.content[0]["chunks"][0]["text"] == "fallback hit"
+    assert "page_filter" not in result.content[0]
+
+
 @pytest.mark.parametrize("failure", ["raise", "timeout", "disabled", "outcome"])
 async def test_page_filter_failure_matches_fulltext(
     db: AsyncSession,
@@ -3645,7 +3703,7 @@ async def test_page_filter_refuses_single_foreign_document(
     assert result.content[0]["error"] == "requested_documents_unavailable"
 
 
-# Mutation-verified: disabling read_tools.py:819 post-rerank membership
+# Mutation-verified: disabling read_tools.py:827 post-rerank membership
 # recheck returns a revoked page. Command (backend):
 # pytest -q tests/unit/services/integrations/test_read_tools.py
 # -k page_filter_revocation_during_rerank; fails without guard, passes restored.
@@ -3672,7 +3730,7 @@ async def test_page_filter_revocation_during_rerank(
     assert result.content[0]["error"] == "requested_documents_unavailable"
 
 
-# Mutation-verified: replacing read_tools.py:816 caller authorization with only
+# Mutation-verified: replacing read_tools.py:824 caller authorization with only
 # Collection.id == project_id leaks page/FTS text in all four cases. Command
 # (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
 # -k rechecks_caller_after_rerank; fails without guard, passes restored.
@@ -3754,6 +3812,41 @@ async def test_page_filter_large_pages_preserves_rows_and_redacts_title(
         read_tools._wire_size(result.model_dump(mode="json"))
         <= read_tools.MAX_RESULT_BYTES
     )
+
+
+@pytest.mark.parametrize("repeats", [1000, 20000])
+async def test_page_filter_reuses_unused_text_budget(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    repeats: int,
+) -> None:
+    _enable_page_filter(monkeypatch)
+    texts = ["tiny"] * 7 + ['\\"漢😀' * repeats]
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="\n".join(
+                f"[Page {i}]\n{text}" for i, text in enumerate(texts, 1)
+            )
+        )
+    )
+    await db.commit()
+    result = await _retrieve_one(db, context)
+    payload = result.content[0]
+    assert not result.is_error
+    assert [c["page_number"] for c in payload["chunks"]] == list(range(1, 9))
+    assert [c["text"] for c in payload["chunks"][:7]] == texts[:7]
+    wire_size = read_tools._wire_size(result.model_dump(mode="json"))
+    assert wire_size <= read_tools.MAX_RESULT_BYTES
+    if repeats == 1000:
+        assert payload["chunks"][7]["text"] == texts[7]
+        assert not any(c["truncated"] for c in payload["chunks"])
+        assert "truncated" not in payload
+    else:
+        assert payload["chunks"][7]["truncated"]
+        assert wire_size > read_tools.MAX_RESULT_BYTES - 100
 
 
 @pytest.mark.parametrize("mode", ["flag_off", "no_markers", "multiple", "implicit"])

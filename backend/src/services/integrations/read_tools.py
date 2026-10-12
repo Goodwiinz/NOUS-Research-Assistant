@@ -731,13 +731,17 @@ def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
     )
     # Include the envelope and references that _finish adds. Each truncation
     # flag may grow by one byte when true becomes false after adding text.
-    budget = max(
-        0,
-        (MAX_RESULT_BYTES - _wire_size(metadata.model_dump()) - len(chunks))
-        // max(1, len(chunks)),
+    remaining = max(
+        0, MAX_RESULT_BYTES - _wire_size(metadata.model_dump()) - len(chunks)
     )
-    for chunk, original in zip(chunks, originals):
-        chunk["text"] = _json_text_prefix(original, budget)
+    # Allocate short pages first so unused shares remain available to longer
+    # pages. Keep the rows in their original order and account for JSON escaping.
+    by_size = sorted(range(len(chunks)), key=lambda i: _wire_size(originals[i]))
+    for position, index in enumerate(by_size):
+        chunk = chunks[index]
+        budget = remaining // (len(chunks) - position)
+        chunk["text"] = _json_text_prefix(originals[index], budget)
+        remaining -= _wire_size(chunk["text"]) - 2
         chunk["truncated"] = len(chunk["text"]) < chunk["total_chars"]
     # Candidate limiting is independently reported even if all text fits.
     if (
@@ -784,7 +788,11 @@ async def _retrieve_document_pages(
     else:
         if not cohere_rerank_service.is_enabled:
             return None
-        candidates = pages[:MAX_RERANK_PAGES]
+        # Blank extracted pages count toward pagination but Cohere rejects
+        # empty documents. Preserve the filtered list for response-index mapping.
+        candidates = [page for page in pages if page[1]]
+        if not candidates:
+            return None
         try:
             outcome = await asyncio.wait_for(
                 cohere_rerank_service.rerank_with_outcome(
@@ -1651,7 +1659,7 @@ async def invoke_read(
     return _finish(payload)
 
 
-def _wire_size(payload: dict[str, Any]) -> int:
+def _wire_size(payload: dict[str, Any] | str) -> int:
     """Bytes of a payload as FastAPI emits it (UTF-8, no ASCII escaping)."""
     return len(json.dumps(payload, default=str, ensure_ascii=False).encode())
 
