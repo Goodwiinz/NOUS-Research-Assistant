@@ -3534,14 +3534,28 @@ async def _retrieve_one(db: AsyncSession, context: IntegrationContext) -> Any:
     )
 
 
+@pytest.mark.parametrize("has_blank_page", [False, True])
 async def test_page_filter_short_circuit(
-    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    has_blank_page: bool,
 ) -> None:
     service = _enable_page_filter(monkeypatch)
     monkeypatch.setattr(
         service, "rerank", AsyncMock(side_effect=AssertionError("must not rerank"))
     )
     await _page_document(db, 8)
+    if has_blank_page:
+        await db.execute(
+            update(Document)
+            .where(Document.id == DOC_IN_PROJECT)
+            .values(
+                content_text="[Page 1]\npage 1\n"
+                + "\n".join(f"[Page {i}]\n " for i in range(2, 9))
+            )
+        )
+        await db.commit()
     result = await _retrieve_one(db, context)
     assert not result.is_error
     assert [c["page_number"] for c in result.content[0]["chunks"]] == list(range(1, 9))
@@ -3551,6 +3565,8 @@ async def test_page_filter_short_circuit(
         "short_circuited": True,
         "model": None,
     }
+    if has_blank_page:
+        assert [c["text"] for c in result.content[0]["chunks"]] == ["page 1"] + [""] * 7
 
 
 async def test_page_filter_scans_on_worker_thread(
@@ -3704,8 +3720,12 @@ async def test_page_filter_omits_blank_rerank_candidates(
     assert result.content[0]["chunks"][0]["text"] == "page 3"
 
 
+@pytest.mark.parametrize("page_count", [1, 8, 9])
 async def test_page_filter_all_blank_candidates_use_fulltext(
-    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    page_count: int,
 ) -> None:
     service = _enable_page_filter(monkeypatch)
     rerank = AsyncMock(return_value=[])
@@ -3718,7 +3738,9 @@ async def test_page_filter_all_blank_candidates_use_fulltext(
     await db.execute(
         update(Document)
         .where(Document.id == DOC_IN_PROJECT)
-        .values(content_text="\n".join(f"[Page {i}]\n " for i in range(1, 10)))
+        .values(
+            content_text="\n".join(f"[Page {i}]\n " for i in range(1, page_count + 1))
+        )
     )
     await db.commit()
     result = await _retrieve_one(db, context)

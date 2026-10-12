@@ -786,7 +786,7 @@ async def _retrieve_document_pages(
         max_pages=MAX_RERANK_PAGES,
         max_chars=MAX_RESULT_BYTES,
     )
-    short_circuited = bool(pages) and (
+    short_circuited = any(page[1] for page in pages) and (
         total_pages <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
     )
     model = None
