@@ -38,7 +38,7 @@ const send = v => process.stdout.write(JSON.stringify(v)+'\n');
 for await (const line of readline.createInterface({input:process.stdin})) {
  const m = JSON.parse(line), c = config();
  fs.appendFileSync(root+'/calls.jsonl',JSON.stringify(m)+'\n');
- if (m.method === 'initialize') send({id:m.id,result:{userAgent:'codex/0.153.4',codexHome:root,platformFamily:'unix',platformOs:'macos'}});
+ if (m.method === 'initialize') send({id:m.id,result:{userAgent:'codex/'+(c.userAgentVersion || c.version || '0.153.4'),codexHome:root,platformFamily:'unix',platformOs:'macos'}});
  if (m.method === 'thread/start' || m.method === 'thread/resume') {
    send({id:m.id,result:{thread:{id:'s',turns:[]},cwd:root,approvalPolicy:'on-request',approvalsReviewer:'user',sandbox:{type:'workspaceWrite',writableRoots:[root],networkAccess:false,excludeTmpdirEnvVar:true,excludeSlashTmp:true},...c.effective}});
  }
