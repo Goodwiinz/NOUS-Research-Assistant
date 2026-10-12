@@ -182,16 +182,17 @@ backend:
     - name: SEARCH_UPDATES_ENABLED
       value: "true"
     # Local Codex harness bridge (docs/engineering/harness-bridge.md):
-    # default-off in code; dev opts in for the first live acceptance run.
+    # default-off in code; dev opts in for the live acceptance run.
     # Celery beat dispatches harness runs and reads this merged backend.env.
-    # Revert this block to turn the bridge, NOUS MCP tools and artifact
-    # publication back off.
+    # Set these to "false" to turn the bridge and NOUS MCP tools back off.
     - name: HARNESS_BRIDGE_ENABLED
       value: "true"
     - name: NOUS_MCP_ENABLED
       value: "true"
+    # Phase 1 of docs/testing/harness-live-proof.md keeps artifact
+    # publication off; Phase 2 sets it to "true".
     - name: ARTIFACTS_ENABLED
-      value: "true"
+      value: "false"
     # TLS ends at the ALB (target-type ip), so uvicorn sees plain ws/http.
     # /harness/connect refuses any scheme but wss, and uvicorn applies
     # X-Forwarded-Proto only from trusted peers (gunicorn default 127.0.0.1).
