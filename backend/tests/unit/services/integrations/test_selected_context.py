@@ -18,11 +18,14 @@ from src.models.project_memory import ProjectMemory
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import IntegrationContext
+from src.schemas.integration_selected_context import MAX_SELECTED_MEMORIES
 from src.services.integrations import selected_context
 from src.services.integrations.selected_context import (
+    MAX_RESULT_BYTES,
     ContextNotFound,
     ContextSelectionInvalid,
     ContextSelectionTooLarge,
+    _wire_bytes,
     context_options,
     read_selected_context,
     save_selection,
@@ -143,6 +146,48 @@ def _grant_context(grant_id: UUID = GRANT) -> IntegrationContext:
 
 def _memory_ids(result: Any) -> list[str]:
     return [m["memory_id"] for m in result.content[0]["memories"]]
+
+
+async def _add_memories(db: AsyncSession, contents: list[str]) -> list[UUID]:
+    ids = [uuid4() for _ in contents]
+    for memory_id, content in zip(ids, contents):
+        await db.execute(
+            insert(ProjectMemory).values(
+                id=memory_id, project_id=PROJECT, user_id=USER, content=content
+            )
+        )
+    await db.commit()
+    return ids
+
+
+async def _read_every_page(db: AsyncSession) -> list[Any]:
+    """Follow next_offset from 0 until the read says nothing remains."""
+    pages: list[Any] = []
+    offset = 0
+    for _ in range(MAX_SELECTED_MEMORIES + 1):
+        page = await read_selected_context(db, _grant_context(), offset)
+        assert page.is_error is False
+        pages.append(page)
+        next_offset = page.content[0]["next_offset"]
+        if next_offset is None:
+            return pages
+        assert next_offset > offset, "the read did not advance"
+        offset = next_offset
+    raise AssertionError("the read never reached its last page")
+
+
+def _notice(offset: int) -> str:
+    return (
+        "More selected memories remain: call read_selected_context again with "
+        f"offset={offset}. If this tool takes no offset, update nous-harness to "
+        "read the rest."
+    )
+
+
+def _filling(memory_id: UUID) -> str:
+    """ASCII content that makes a lone, last memory fill one read exactly."""
+    empty = [{"memory_id": str(memory_id), "content": ""}]
+    return "x" * (MAX_RESULT_BYTES - selected_context._page_bytes(empty, [], None))
 
 
 async def test_options_list_only_the_owners_memories_in_the_consent_project(
@@ -379,32 +424,126 @@ async def test_deleted_memories_leave_the_saved_selection(db: AsyncSession) -> N
     assert options.selected_memory_ids == [THIRD]
 
 
-async def test_oversized_selection_is_refused_and_growth_is_truncated(
+async def test_a_selection_larger_than_one_read_is_saved_and_read_in_pages(
     db: AsyncSession,
 ) -> None:
-    # Multibyte text is measured in UTF-8 bytes, not escaped ASCII.
-    big = "\u6f22" * 12_000  # 36,000 bytes each in UTF-8
-    for memory_id in (KEEP, THIRD):
-        await db.execute(
-            update(ProjectMemory)
-            .where(ProjectMemory.id == memory_id)
-            .values(content=big)
-        )
-    await db.commit()
-    with pytest.raises(ContextSelectionTooLarge):
-        await save_selection(db, await _user(db), CONSENT, [KEEP, THIRD])
-    await save_selection(db, await _user(db), CONSENT, [KEEP])
-    # THIRD is small again when saved, then grows past the budget.
+    # Multibyte text is measured in UTF-8 bytes, not escaped ASCII: each memory
+    # is 30,001 bytes, 150,005 in all. Each fits a page, so the save accepts
+    # them and the read hands them out two per page.
+    contents = [f"{n}" + "\u6f22" * 10_000 for n in range(5)]
+    ids = await _add_memories(db, contents)
+    await save_selection(db, await _user(db), CONSENT, ids)
+    pages = await _read_every_page(db)
+    assert [_memory_ids(page) for page in pages] == [
+        [str(ids[0]), str(ids[1])],
+        [str(ids[2]), str(ids[3])],
+        [str(ids[4])],
+    ]
+    shared = [m for page in pages for m in page.content[0]["memories"]]
+    assert [m["content"] for m in shared] == contents
+    assert not any("content_truncated" in m for m in shared)
+    for page, next_offset in zip(pages, (2, 4, None)):
+        body = page.content[0]
+        assert _wire_bytes(page.model_dump(mode="json")) <= MAX_RESULT_BYTES
+        assert page.source_refs == [{"memory_id": i} for i in _memory_ids(page)]
+        assert "skills" not in body
+        assert body["next_offset"] == next_offset
+        if next_offset is None:
+            assert "truncated" not in body and "notice" not in body
+        else:
+            assert body["truncated"] is True
+            assert body["notice"] == _notice(next_offset)
+    past_the_end = await read_selected_context(db, _grant_context(), len(ids))
+    assert past_the_end.content == [{"memories": [], "next_offset": None}]
+    assert past_the_end.source_refs == []
+
+
+async def test_a_memory_deleted_between_page_reads_does_not_shift_the_next_page(
+    db: AsyncSession,
+) -> None:
+    ids = await _add_memories(db, [f"{n}" + "\u6f22" * 10_000 for n in range(5)])
+    await save_selection(db, await _user(db), CONSENT, ids)
+    first = await read_selected_context(db, _grant_context(), 0)
+    assert _memory_ids(first) == [str(ids[0]), str(ids[1])]
+    assert first.content[0]["next_offset"] == 2
+    # Between two reads the owner deletes a memory the harness already has and
+    # the one the next page starts at. The offset names a saved position, so
+    # the next page starts at the first live memory after ids[1]: nothing is
+    # skipped or repeated.
     await db.execute(
-        update(ProjectMemory).where(ProjectMemory.id == THIRD).values(content="short")
+        update(ProjectMemory)
+        .where(ProjectMemory.id.in_([ids[0], ids[2]]))
+        .values(is_deleted=True)
     )
     await db.commit()
-    await save_selection(db, await _user(db), CONSENT, [KEEP, THIRD])
+    second = await read_selected_context(db, _grant_context(), 2)
+    assert _memory_ids(second) == [str(ids[3]), str(ids[4])]
+    assert second.content[0]["next_offset"] is None
+
+
+async def test_a_memory_that_grew_past_a_page_is_cut_and_the_read_moves_on(
+    db: AsyncSession,
+) -> None:
+    await save_selection(db, await _user(db), CONSENT, [KEEP, THIRD, SECRET])
+    # THIRD was small when saved, then grew (rows edited directly) past what
+    # any page can hold.
+    big = "\u6f22" * 30_000  # 90,000 bytes in UTF-8
     await db.execute(
         update(ProjectMemory).where(ProjectMemory.id == THIRD).values(content=big)
     )
     await db.commit()
-    result = await read_selected_context(db, _grant_context())
-    assert result.is_error is False
-    assert _memory_ids(result) == [str(KEEP)]
-    assert result.content[0]["truncated"] is True
+    pages = await _read_every_page(db)
+    assert [_memory_ids(page) for page in pages] == [
+        [str(KEEP)],
+        [str(THIRD)],
+        [str(SECRET)],
+    ]
+    assert [page.content[0]["next_offset"] for page in pages] == [1, 2, None]
+    cut = pages[1].content[0]["memories"][0]
+    assert cut["content_truncated"] is True
+    assert cut["content"] and big.startswith(cut["content"])
+    # Cut as late as still fits: one more 3-byte character would not.
+    size = _wire_bytes(pages[1].model_dump(mode="json"))
+    assert MAX_RESULT_BYTES - 3 < size <= MAX_RESULT_BYTES
+    for page in (pages[0], pages[2]):
+        assert not any("content_truncated" in m for m in page.content[0]["memories"])
+
+
+async def test_the_save_refuses_only_a_memory_no_page_can_hold(
+    db: AsyncSession,
+) -> None:
+    exact = _filling(THIRD)
+    await db.execute(
+        update(ProjectMemory).where(ProjectMemory.id == THIRD).values(content=exact)
+    )
+    await db.commit()
+    # Alone, it fills one read to the byte and reads back whole.
+    await save_selection(db, await _user(db), CONSENT, [THIRD])
+    alone = await read_selected_context(db, _grant_context())
+    assert alone.content == [
+        {"memories": [{"memory_id": str(THIRD), "content": exact}], "next_offset": None}
+    ]
+    assert _wire_bytes(alone.model_dump(mode="json")) == MAX_RESULT_BYTES
+    # Last, it gets a page of its own and still reads back whole.
+    await save_selection(db, await _user(db), CONSENT, [KEEP, THIRD])
+    pages = await _read_every_page(db)
+    assert [_memory_ids(page) for page in pages] == [[str(KEEP)], [str(THIRD)]]
+    assert pages[1].content[0]["memories"] == [
+        {"memory_id": str(THIRD), "content": exact}
+    ]
+    # First with more to follow, its page also needs next_offset and the
+    # notice, so no page could hold it whole: refused.
+    with pytest.raises(ContextSelectionTooLarge):
+        await save_selection(db, await _user(db), CONSENT, [THIRD, KEEP])
+    # One byte more never fits.
+    await db.execute(
+        update(ProjectMemory)
+        .where(ProjectMemory.id == THIRD)
+        .values(content=exact + "x")
+    )
+    await db.commit()
+    with pytest.raises(ContextSelectionTooLarge):
+        await save_selection(db, await _user(db), CONSENT, [THIRD])
+    # A refused save leaves the previous selection in place.
+    options = await context_options(db, await _user(db), CONSENT)
+    assert options.selected_memory_ids == [KEEP, THIRD]

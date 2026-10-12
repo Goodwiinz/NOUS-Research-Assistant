@@ -25,6 +25,7 @@ from tests.unit.services.integrations.test_selected_context import (  # noqa: F4
     KEEP,
     PROJECT,
     RENEWED,
+    THIRD,
     USER,
     WORKSPACE,
     _grant_context,
@@ -477,22 +478,93 @@ async def test_result_budget_includes_catalog_and_all_provenance(
     await service.save_selection(
         db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen]
     )
+    # KEEP grows after the save (rows edited directly) past what fits beside
+    # the catalog and provenance: the page cuts it rather than dropping it.
+    grown = "x" * (service.MAX_RESULT_BYTES - 100)
     await db.execute(
-        update(ProjectMemory)
-        .where(ProjectMemory.id == KEEP)
-        .values(content="x" * (service.MAX_RESULT_BYTES - 100))
+        update(ProjectMemory).where(ProjectMemory.id == KEEP).values(content=grown)
     )
     await db.commit()
     result = await service.read_selected_context(db, _grant_context())
     assert (
         service._wire_bytes(result.model_dump(mode="json")) <= service.MAX_RESULT_BYTES
     )
-    assert result.content[0]["truncated"] is True
+    memory = result.content[0]["memories"][0]
+    assert memory["content_truncated"] is True
+    assert grown.startswith(memory["content"])
+    assert result.content[0]["next_offset"] is None
     assert result.source_refs == [
+        {"memory_id": str(KEEP)},
         {
             "version_id": str(chosen),
             "content_hash": result.content[0]["skills"][0]["content_hash"],
-        }
+        },
+    ]
+
+
+async def test_skills_are_shared_only_on_the_first_page(db: AsyncSession) -> None:
+    from src.models.project_memory import ProjectMemory
+
+    chosen = await skill(db)
+    await db.execute(
+        update(ProjectMemory)
+        .where(ProjectMemory.id.in_([KEEP, THIRD]))
+        .values(content="x" * 40_000)
+    )
+    await db.commit()
+    await service.save_selection(
+        db, await _user(db), CONSENT, [KEEP, THIRD], skill_version_ids=[chosen]
+    )
+    first = await service.read_selected_context(db, _grant_context(), 0)
+    assert _memory_ids(first) == [str(KEEP)]
+    assert [s["version_id"] for s in first.content[0]["skills"]] == [str(chosen)]
+    assert first.content[0]["next_offset"] == 1
+    assert first.source_refs == [
+        {"memory_id": str(KEEP)},
+        {
+            "version_id": str(chosen),
+            "content_hash": first.content[0]["skills"][0]["content_hash"],
+        },
+    ]
+    second = await service.read_selected_context(db, _grant_context(), 1)
+    assert _memory_ids(second) == [str(THIRD)]
+    assert "skills" not in second.content[0]
+    assert second.content[0]["next_offset"] is None
+    assert second.source_refs == [{"memory_id": str(THIRD)}]
+
+
+async def test_the_save_measures_each_memory_beside_the_frozen_skills(
+    db: AsyncSession,
+) -> None:
+    from src.models.project_memory import ProjectMemory
+
+    chosen = await skill(db)
+    empty = [{"memory_id": str(KEEP), "content": ""}]
+    # Without skills, KEEP alone fills one read exactly.
+    exact = "x" * (service.MAX_RESULT_BYTES - service._page_bytes(empty, [], None))
+    await db.execute(
+        update(ProjectMemory).where(ProjectMemory.id == KEEP).values(content=exact)
+    )
+    await db.commit()
+    await service.save_selection(db, await _user(db), CONSENT, [KEEP])
+    # Freezing a skill puts the catalog on page 0 beside it: refused, and the
+    # rollback keeps neither the skill choice nor its snapshot.
+    with pytest.raises(service.ContextSelectionTooLarge):
+        await service.save_selection(
+            db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen]
+        )
+    selection = await db.scalar(select(IntegrationContextSelection))
+    assert selection is not None
+    assert selection.skill_version_ids == [] and selection.runtime_snapshot_id is None
+    assert await db.scalar(select(func.count(AgentRuntimeSnapshot.id))) == 0
+    # A memory-only save measures against the catalog already frozen.
+    await service.save_selection(
+        db, await _user(db), CONSENT, [THIRD], skill_version_ids=[chosen]
+    )
+    with pytest.raises(service.ContextSelectionTooLarge):
+        await service.save_selection(db, await _user(db), CONSENT, [KEEP])
+    assert _memory_ids(await service.read_selected_context(db, _grant_context())) == [
+        str(THIRD)
     ]
 
 
