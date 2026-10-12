@@ -2318,6 +2318,33 @@ async def test_a_library_action_that_changes_nothing_says_so(
     assert receipt["document_ids"] == kept
 
 
+async def test_a_save_that_adds_one_paper_beside_one_already_there_changed(
+    db: AsyncSession, library: None
+) -> None:
+    # PAPER is already in PROJECT, PAPER2 is not: the save changed something,
+    # and both are members afterwards, so neither is skipped.
+    status = await request_action(
+        db,
+        await _library_actor(db),
+        _call(
+            "save_papers_to_folder",
+            document_ids=[str(PAPER), str(PAPER2)],
+            project_id=P,
+        ),
+    )
+    assert status.state == "succeeded"
+    assert await _linked(db, PROJECT, PAPER)
+    assert await _linked(db, PROJECT, PAPER2)
+    assert _receipt(status) == {
+        "ok": True,
+        "tool_name": "save_papers_to_folder",
+        "project_id": P,
+        "document_ids": [str(PAPER), str(PAPER2)],
+        "skipped_document_ids": [],
+        "changed": True,
+    }
+
+
 async def test_an_approved_save_of_papers_deleted_since_says_nothing_changed(
     db: AsyncSession, library: None
 ) -> None:

@@ -1181,6 +1181,9 @@ async def _save_papers(
     folder = UUID(row.arguments["project_id"])
     requested = list(row.arguments["document_ids"])
     # Members before the link, so the receipt can say whether anything changed.
+    # ``before`` and ``held`` are separate reads under READ COMMITTED, so
+    # ``changed`` is best-effort under a concurrent edit of the same link; it
+    # only labels the receipt.
     before = await _live_members(db, folder, requested, row.organization_id)
     saved = await collection_service.add_documents_to_collection(
         db,
