@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import event, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models import Base
@@ -55,6 +55,9 @@ class _FakeDB:
         self.deleted = []
 
     def add(self, _obj):  # sync in the SQLAlchemy async API
+        pass
+
+    async def flush(self):
         pass
 
     async def commit(self):
@@ -445,3 +448,67 @@ async def test_unrelated_integrity_error_is_not_mapped_to_409(quota_deltas):
         await svc.upload_file(_FakeUpload(b"hello world"), "Doc", user, org)
 
     svc._delete_stored_object.assert_called_once()
+
+
+class _AsyncpgDataError(Exception):
+    """What asyncpg's dialect puts in ``DBAPIError.orig`` for a varchar
+    overflow: a plain dbapi ``Error`` carrying SQLSTATE 22001."""
+
+    sqlstate = pgcode = "22001"
+
+
+class _StatementRejectingDB(_FakeDB):
+    """INSERTs run at the first flush, explicit or inside commit(); one model
+    is rejected the way PostgreSQL rejects a title longer than varchar(500)."""
+
+    def __init__(self, rejected: type) -> None:
+        super().__init__()
+        self.rejected = rejected
+        self.pending: list[object] = []
+
+    def add(self, obj: object) -> None:
+        self.pending.append(obj)
+
+    async def flush(self) -> None:
+        pending, self.pending = self.pending, []
+        if any(isinstance(obj, self.rejected) for obj in pending):
+            raise DBAPIError(
+                "INSERT ...",
+                {},
+                _AsyncpgDataError("value too long for type character varying(500)"),
+            )
+
+    async def commit(self) -> None:
+        await self.flush()
+        await super().commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected", [Document, ProcessingJob])
+async def test_rejected_insert_is_a_definite_failure(
+    quota_deltas: list, soft_deleted: list, rejected: type
+) -> None:
+    """IN-3: a statement PostgreSQL rejects never committed, so the stored
+    object is deleted and committed rows are reverted. #1864 treated it as an
+    unknown commit outcome (it is a DBAPIError, not an IntegrityError) and kept
+    one orphaned object per request, outside quota.
+
+    Mutation: delete the ``await self.db.flush()`` before the matching
+    ``commit_in_flight = True`` in FileService.upload_file; the matching case
+    fails on ``_delete_stored_object`` called 0 times. Run from backend/:
+    pytest -q tests/test_upload_compensating_delete.py -k rejected_insert
+    """
+    db = _StatementRejectingDB(rejected)
+    svc = _make_service(db)
+    org, user = _org_user()
+
+    with pytest.raises(FileStorageError):
+        await svc.upload_file(_FakeUpload(b"hello world"), "T" * 501, user, org)
+
+    svc._delete_stored_object.assert_called_once()
+    if rejected is Document:
+        assert soft_deleted == []
+        assert quota_deltas == []
+    else:
+        assert len(soft_deleted) == 1 and soft_deleted[0].is_deleted is True
+        assert quota_deltas == [1234, -1234]
