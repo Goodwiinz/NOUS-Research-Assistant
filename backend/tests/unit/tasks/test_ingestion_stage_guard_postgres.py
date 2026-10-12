@@ -189,9 +189,13 @@ def stubbed(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     return monkeypatch
 
 
-def _run(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> Any:
+def _run(
+    env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    task_id: str | None = None,
+) -> Any:
     monkeypatch.setattr(pt, "SessionLocal", env.Session)
-    return pt.process_document_ingestion.apply(args=(str(env.job_id),))
+    return pt.process_document_ingestion.apply(args=(str(env.job_id),), task_id=task_id)
 
 
 def _state(env: SimpleNamespace) -> tuple[JobStatus, ProcessingStatus, int]:
@@ -311,15 +315,26 @@ def test_failure_of_live_attempt_still_fails_job_and_document(
         assert doc_status == ProcessingStatus.FAILED
 
 
-@pytest.mark.parametrize("owner", [None, "newer-attempt"])
+@pytest.mark.parametrize("owner", [None, "own", "newer-attempt"])
 def test_failure_before_claim_ends_document_with_job(
     stubbed: pytest.MonkeyPatch, owner: str | None
 ) -> None:
     """IN-1 path B: a crash before this attempt owns the job (here the claim
     itself fails) reaches ProcessingTask.on_failure, which failed only the job
-    and left the document PENDING forever. A job a newer attempt owns stays."""
+    and left the document PENDING forever. A job queued under this attempt's
+    own task id ends too, even when the task body's own failure write fails
+    (the database is still down), so on_failure is the only writer; a job a
+    newer attempt owns stays."""
     with _ingestion() as env:
-        if owner:
+        task_id = None
+        if owner == "own":
+            task_id = "t-own"
+            with env.Session() as db:
+                job = db.get(ProcessingJob, env.job_id)
+                assert job.status == JobStatus.QUEUED
+                job.celery_task_id = task_id
+                db.commit()
+        elif owner:
             with env.Session() as db:
                 db.get(ProcessingJob, env.job_id).start_job(
                     worker_id="worker-2", celery_task_id=owner
@@ -330,13 +345,45 @@ def test_failure_before_claim_ends_document_with_job(
             raise RuntimeError("database unavailable during claim")
 
         stubbed.setattr(pt, "claim_job_for_processing", unavailable)
-        _run(env, stubbed)
+        if owner == "own":
+            # The body's except handler would otherwise record the failure
+            # itself (a QUEUED job with this task id still counts as owned).
+            stubbed.setattr(pt, "require_active_ingestion", unavailable)
+        _run(env, stubbed, task_id=task_id)
 
         status, doc_status, _ = _state(env)
-        if owner:
+        if owner == "newer-attempt":
             assert (status, doc_status) == (JobStatus.RUNNING, ProcessingStatus.PENDING)
         else:
             assert (status, doc_status) == (JobStatus.FAILED, ProcessingStatus.FAILED)
+
+
+@pytest.mark.parametrize(
+    "exc,message",
+    [(RuntimeError("x" * 1500), "x" * 1000), (RuntimeError(), "RuntimeError")],
+    ids=["long", "empty"],
+)
+def test_on_failure_names_and_bounds_the_error(
+    stubbed: pytest.MonkeyPatch, exc: Exception, message: str
+) -> None:
+    """on_failure records the exception class as error_type and a bounded
+    error_message, falling back to the class name when the exception has no
+    text (G3 review)."""
+    with _ingestion() as env:
+
+        def unavailable(*args: Any, **kwargs: Any) -> Any:
+            raise exc
+
+        stubbed.setattr(pt, "claim_job_for_processing", unavailable)
+        _run(env, stubbed)
+
+        with env.Session() as db:
+            job = db.get(ProcessingJob, env.job_id)
+            assert (job.status, job.error_type, job.error_message) == (
+                JobStatus.FAILED,
+                "RuntimeError",
+                message,
+            )
 
 
 def test_happy_path_still_completes(stubbed: pytest.MonkeyPatch) -> None:

@@ -327,10 +327,23 @@ class ProcessingTask(Task):
                 # Never overwrite a finished job (cancelled, swept, already
                 # failed by the task) or one a newer attempt has claimed. An
                 # ingestion job's document fails with it (IN-1).
-                end_processing_job(
-                    db, job_id, message=str(exc), expected_task_ids=(None, task_id)
+                ended = end_processing_job(
+                    db,
+                    job_id,
+                    message=(str(exc) or type(exc).__name__)[:1000],
+                    error_type=type(exc).__name__[:100],
+                    expected_task_ids=(None, task_id),
                 )
-                db.commit()
+                if ended:
+                    db.commit()
+                else:
+                    db.rollback()
+                    logger.info(
+                        "ProcessingTask.on_failure: job %s changed since task %s "
+                        "started; failure write skipped",
+                        job_id,
+                        task_id,
+                    )
             except Exception as e:
                 logger.error(f"Failed to update job status: {str(e)}")
             finally:
