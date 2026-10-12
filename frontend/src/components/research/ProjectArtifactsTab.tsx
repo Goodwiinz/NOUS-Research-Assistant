@@ -74,12 +74,35 @@ function ArtifactRow({ item }: { item: ProjectArtifact }): ReactElement {
   );
 }
 
+/**
+ * One row per artifact: one republished between two page loads moves to the
+ * top and would otherwise be listed twice.
+ */
+function uniqueArtifacts(
+  pages: ProjectArtifact[][] | undefined
+): ProjectArtifact[] {
+  const seen = new Set<string>();
+  return (pages ?? []).flat().filter((item) => {
+    if (seen.has(item.artifactId)) return false;
+    seen.add(item.artifactId);
+    return true;
+  });
+}
+
 export function ProjectArtifactsTab({
   projectId,
 }: {
   projectId: string;
 }): ReactElement {
-  const { data, isLoading, isError } = useProjectArtifacts(projectId);
+  const {
+    data,
+    isLoading,
+    isError,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useProjectArtifacts(projectId);
+  const items = uniqueArtifacts(data?.pages);
   if (isLoading) {
     return (
       <div
@@ -89,7 +112,8 @@ export function ProjectArtifactsTab({
       />
     );
   }
-  if (isError) {
+  // A failed later page keeps the files already shown; the button retries.
+  if (isError && !items.length) {
     return (
       <div
         role="alert"
@@ -99,7 +123,7 @@ export function ProjectArtifactsTab({
       </div>
     );
   }
-  if (!data?.length) {
+  if (!items.length) {
     return (
       <p className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
         No files yet. Files produced in this project&apos;s chats appear here.
@@ -107,10 +131,22 @@ export function ProjectArtifactsTab({
     );
   }
   return (
-    <ul className="space-y-2">
-      {data.map((item) => (
-        <ArtifactRow key={item.artifactId} item={item} />
-      ))}
-    </ul>
+    <div className="space-y-3">
+      <ul className="space-y-2">
+        {items.map((item) => (
+          <ArtifactRow key={item.artifactId} item={item} />
+        ))}
+      </ul>
+      {hasNextPage && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={isFetchingNextPage}
+          onClick={() => void fetchNextPage()}
+        >
+          {isFetchingNextPage ? 'Loading more files…' : 'Load more files'}
+        </Button>
+      )}
+    </div>
   );
 }

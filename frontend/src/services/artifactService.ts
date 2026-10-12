@@ -5,6 +5,7 @@ import type {
   ApiArtifactReference,
   ApiArtifactVersion,
   ApiProjectArtifact,
+  ApiProjectArtifactsQuery,
   ApiThreadArtifact,
 } from '@/types/api/artifact-contract';
 
@@ -103,6 +104,9 @@ export interface ArtifactEdit {
   text: string;
 }
 
+/** Files per page on the project Files tab: the route's maximum (AD-1). */
+export const PROJECT_ARTIFACT_PAGE_SIZE = 100;
+
 export const artifactService = {
   async capabilities(signal?: AbortSignal): Promise<ArtifactCapabilities> {
     const dto = await api.get<ApiArtifactCapabilities>(
@@ -141,12 +145,21 @@ export const artifactService = {
     );
     return rows.map(toThreadArtifact);
   },
+  /** One page, newest first; `offset` is how many rows are already shown. */
   async listProjectArtifacts(
     projectId: string,
+    offset = 0,
     signal?: AbortSignal
   ): Promise<ProjectArtifact[]> {
+    const query: ApiProjectArtifactsQuery = {
+      limit: PROJECT_ARTIFACT_PAGE_SIZE,
+      offset,
+    };
+    const search = new URLSearchParams(
+      Object.entries(query).map(([key, value]) => [key, String(value)])
+    );
     const rows = await api.get<ApiProjectArtifact[]>(
-      `/artifacts/projects/${encodeURIComponent(projectId)}`,
+      `/artifacts/projects/${encodeURIComponent(projectId)}?${search.toString()}`,
       { signal }
     );
     return rows.map(toProjectArtifact);
