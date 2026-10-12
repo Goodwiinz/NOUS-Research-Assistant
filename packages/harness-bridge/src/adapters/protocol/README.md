@@ -14,7 +14,7 @@ narrower session, callback and one-time approval restrictions.
 
 | Codex | Added | Schemas | Live run from a NOUS chat |
 | --- | --- | --- | --- |
-| `0.153.4` | 2026-09-27 | these files | 2026-10-05, local backend (`docs/testing/evidence/harness-live-proof-20261005/`) |
+| `0.153.4` | 2026-09-28 | these files | 2026-10-05, local backend (`docs/testing/evidence/harness-live-proof-20261005/`) |
 | `0.161.0` | 2026-10-12 | identical to `0.153.4` | NOT RUN |
 
 ## Adding a version
@@ -28,8 +28,11 @@ narrower session, callback and one-time approval restrictions.
    version's for the methods the adapter uses (`initialize`, `thread/start`,
    `thread/resume`, `thread/read`, `turn/start`, `turn/interrupt`,
    `serverRequest/resolved` and the `item/*`, `turn/*`, `thread/*`
-   notifications). Added optional fields are fine; a removed or renamed field,
-   or a new required one, needs an adapter change.
+   notifications). Added optional fields are fine; a removed, renamed or newly
+   required field *that the adapter sends or reads* needs an adapter change;
+   record any other removal in the PR. The previous version's output is not
+   vendored; regenerate it with that Codex (for example
+   `npx @openai/codex@<previous> app-server generate-json-schema --out <folder>`).
 4. Add the version to `SUPPORTED_CODEX_VERSIONS`, run
    `pnpm --filter @nous/harness-bridge test`, and do one live run from a NOUS
    chat with that Codex. A green test suite alone is not evidence: on

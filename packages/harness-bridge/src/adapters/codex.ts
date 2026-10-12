@@ -92,6 +92,7 @@ export class CodexAdapter implements HarnessAdapter {
     return this.queue.highWaterMark;
   }
   async probe(): Promise<Capabilities> {
+    this.version = undefined;
     let stdout: string;
     try {
       ({ stdout } = await exec(
@@ -103,9 +104,11 @@ export class CodexAdapter implements HarnessAdapter {
       throw new Error("Codex version probe failed");
     }
     const found = /^codex-cli (\S+)$/.exec(stdout.trim())?.[1];
-    if (found === undefined || !isSupported(found))
+    if (found === undefined)
+      throw new Error("Could not read a Codex version from `codex --version`");
+    if (!isSupported(found))
       throw new Error(
-        `Codex ${found ?? "(unknown version)"} is not tested with NOUS; tested versions: ${SUPPORTED_CODEX_VERSIONS.join(", ")}`,
+        `Codex ${found} is not tested with NOUS; tested versions: ${SUPPORTED_CODEX_VERSIONS.join(", ")}`,
       );
     this.version = found;
     return {
