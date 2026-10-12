@@ -436,8 +436,13 @@ test("connect --workspace --tools requests library:read so list_library can name
       assert.deepEqual(
         consent.body.scopes,
         write ? ["tools:read", "tools:write", "library:read"] : ["tools:read", "library:read"],
+        `write=${write}`,
       );
-      assert.equal((await mcpInstallCommand(dir, { announce: () => {} })).includes("'--library'"), false);
+      assert.equal(
+        (await mcpInstallCommand(dir, { announce: () => {} })).includes("'--library'"),
+        false,
+        `write=${write}`,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
