@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence, cast
@@ -175,7 +176,12 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         "matching passage. A document matches only when it contains every "
         "stemmed query word, ignoring English stop words and one-letter "
         "words, so pass a few key terms rather than a question. Omit "
-        "document_ids to search the whole project.",
+        "document_ids to search the whole project. With optional page "
+        "filtering enabled, exactly one explicit document_id with page "
+        "markers instead returns relevant pages in page order (all pages "
+        "for short documents), with page_filter metadata; its page count "
+        "uses server configuration rather than top_k. Provider failures "
+        "fall back to the full-text behavior described above.",
         {
             "type": "object",
             "properties": {
@@ -637,6 +643,161 @@ async def _document_content(
 
 
 _MARK_TAGS = ("<mark>", "</mark>")
+PAGE_RERANK_TIMEOUT_SECONDS = 10.0
+MAX_RERANK_PAGES = 100
+
+
+def _split_pages(content_text: str) -> list[tuple[int, str]]:
+    """Preserve a leading preamble in the first marked page, never lose it."""
+    markers = list(re.finditer(r"\[Page (\d+)\]", content_text))
+    pages = []
+    for index, marker in enumerate(markers):
+        end = (
+            markers[index + 1].start()
+            if index + 1 < len(markers)
+            else len(content_text)
+        )
+        text = content_text[marker.end() : end].strip()
+        if index == 0 and (preamble := content_text[: marker.start()].strip()):
+            text = f"{preamble}\n{text}".strip()
+        pages.append((int(marker.group(1)), text))
+    return pages
+
+
+def _json_text_prefix(text: str, budget: int) -> str:
+    """Longest prefix fitting an escaped UTF-8 JSON string's content budget."""
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        size = len(json.dumps(text[:mid], ensure_ascii=False).encode()) - 2
+        if size <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo]
+
+
+def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """Share the JSON byte budget across all accepted pages; retain every row."""
+    chunks = payload["chunks"]
+    # Measure metadata with empty text, including every truncation indicator.
+    originals = [chunk["text"] for chunk in chunks]
+    for chunk in chunks:
+        chunk["total_chars"] = len(chunk["text"])
+        chunk["text"] = ""
+        chunk["truncated"] = True
+    payload["truncated"] = True
+    # Up to 100 repeated 500-character Unicode titles can exceed the cap
+    # before any page text is included. Bound titles only when necessary.
+    if _wire_size(payload) > MAX_RESULT_BYTES // 2:
+        for chunk in chunks:
+            if chunk["title"]:
+                title = chunk["title"]
+                chunk["title"] = _json_text_prefix(title, 256)
+                if chunk["title"] != title:
+                    chunk["title_truncated"] = True
+    budget = max(
+        0, (MAX_RESULT_BYTES - _wire_size(payload) - 1024) // max(1, len(chunks))
+    )
+    for chunk, original in zip(chunks, originals):
+        chunk["text"] = _json_text_prefix(original, budget)
+        chunk["truncated"] = len(chunk["text"]) < len(original)
+    # Candidate limiting is independently reported even if all text fits.
+    if (
+        not any(c["truncated"] or c.get("title_truncated") for c in chunks)
+        and payload["page_filter"]["total_pages"] <= MAX_RERANK_PAGES
+    ):
+        payload.pop("truncated")
+    return payload
+
+
+async def _retrieve_document_pages(
+    db: AsyncSession,
+    context: IntegrationContext,
+    project_id: UUID,
+    document_id: str,
+    query: str,
+) -> dict[str, Any] | None:
+    """None means use FTS; unavailable means the document's access was revoked."""
+    from src.core.config import settings
+    from src.services.agent._pii_redact import redact_pii
+    from src.services.search.cohere_rerank_service import cohere_rerank_service
+
+    row = (
+        await db.execute(
+            _live_project_documents(project_id, context.organization_id)
+            .where(Document.id == UUID(document_id))
+            .with_only_columns(Document.title, Document.content_text)
+        )
+    ).first()
+    if row is None:
+        return _unavailable().content[0]
+    title, content_text = row
+    pages = _split_pages(content_text or "")
+    if not pages:
+        return None
+    short_circuited = len(pages) <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
+    model = None
+    if short_circuited:
+        accepted = [(number, text, 1.0) for number, text in pages]
+    else:
+        if not cohere_rerank_service.is_enabled:
+            return None
+        candidates = pages[:MAX_RERANK_PAGES]
+        try:
+            outcome = await asyncio.wait_for(
+                cohere_rerank_service.rerank_with_outcome(
+                    query,
+                    documents=[
+                        {"id": str(number), "content": text}
+                        for number, text in candidates
+                    ],
+                    top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
+                ),
+                timeout=PAGE_RERANK_TIMEOUT_SECONDS,
+            )
+            if not outcome.succeeded:
+                return None
+            scores = {
+                result.index: result.relevance_score for result in outcome.results
+            }
+            accepted = [
+                (number, text, scores[index])
+                for index, (number, text) in enumerate(candidates)
+                if index in scores
+            ]
+            model = cohere_rerank_service.model
+        except Exception:
+            logger.warning("retrieve_passages page rerank unavailable", exc_info=True)
+            return None
+    # Like FTS, re-check after the asynchronous provider call before returning content.
+    if document_id not in await _collection_document_ids(
+        db, project_id, context.organization_id
+    ):
+        return _unavailable().content[0]
+    accepted.sort(key=lambda page: page[0])
+    return _bound_page_result(
+        {
+            "chunks": [
+                {
+                    "document_id": document_id,
+                    "title": redact_pii(title) if title else title,
+                    "text": text,
+                    "score": score,
+                    "page_number": number,
+                }
+                for number, text, score in accepted
+            ],
+            "total": len(accepted),
+            "query": query,
+            "page_filter": {
+                "accepted_pages": [number for number, _, _ in accepted],
+                "total_pages": len(pages),
+                "short_circuited": short_circuited,
+                "model": model,
+            },
+        }
+    )
 
 
 async def _retrieve_passages(
@@ -663,6 +824,18 @@ async def _retrieve_passages(
     empty = {"chunks": [], "total": 0, "query": query}
     if not document_ids:
         return empty
+    from src.core.config import settings
+
+    if (
+        settings.AGENT_PAGE_FILTER
+        and "document_ids" in arguments
+        and len(document_ids) == 1
+    ):
+        page_result = await _retrieve_document_pages(
+            db, context, project_id, document_ids[0], query
+        )
+        if page_result is not None:
+            return page_result
     request = SearchQuery(
         query=query,
         search_type=SearchType.FULLTEXT,
