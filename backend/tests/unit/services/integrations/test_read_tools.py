@@ -3553,6 +3553,86 @@ async def test_page_filter_short_circuit(
     }
 
 
+async def test_page_filter_scans_on_worker_thread(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    _enable_page_filter(monkeypatch)
+    await _page_document(db, 1)
+    request_thread = threading.get_ident()
+    scan = read_tools._scan_pages
+    worker_threads = []
+
+    def record_scan(*args: Any, **kwargs: Any) -> Any:
+        worker_threads.append(threading.get_ident())
+        return scan(*args, **kwargs)
+
+    monkeypatch.setattr(read_tools, "_scan_pages", record_scan)
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert worker_threads and request_thread not in worker_threads
+
+
+# Mutation-verified: removing read_tools.py:774 SQL source bound exceeds 10 MiB.
+# Command (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k bounds_source_fetch; fails without the bound, passes after restoration.
+async def test_page_filter_bounds_source_fetch_before_parsing(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_page_filter(monkeypatch)
+    await _page_document(db, 1, "x" * 20_000_000)
+    monkeypatch.setattr(
+        read_tools,
+        "fulltext_search_service",
+        _StubFulltext([_search_result(DOC_IN_PROJECT, "bounded fallback")]),
+    )
+    tracemalloc.start()
+    try:
+        result = await _retrieve_one(db, context)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert not result.is_error
+    assert "page_filter" not in result.content[0]
+    assert result.content[0]["chunks"][0]["text"] == "bounded fallback"
+    assert peak < 10 * 1024 * 1024
+
+
+# Mutation-verified: removing read_tools.py:804 rollback leaves a transaction open.
+# Command (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k releases_read_transaction; both cases fail without rollback, pass restored.
+@pytest.mark.parametrize("provider_fails", [False, True])
+async def test_page_filter_releases_read_transaction_before_provider(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_fails: bool,
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await _page_document(db, 9)
+    transactions = []
+
+    async def rerank(*args: Any, **kwargs: Any) -> Any:
+        transactions.append(db.in_transaction())
+        if provider_fails:
+            raise RuntimeError("provider unavailable")
+        return [
+            RerankResult(
+                document_id="1", index=0, relevance_score=0.9, original_score=0.0
+            )
+        ]
+
+    monkeypatch.setattr(service, "rerank", rerank)
+    monkeypatch.setattr(read_tools, "fulltext_search_service", _StubFulltext([]))
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert transactions == [False]
+    assert db.in_transaction()  # Post-provider authorization reacquires a connection.
+
+
 async def test_page_filter_reranks_in_page_order(
     db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3703,7 +3783,7 @@ async def test_page_filter_refuses_single_foreign_document(
     assert result.content[0]["error"] == "requested_documents_unavailable"
 
 
-# Mutation-verified: disabling read_tools.py:827 post-rerank membership
+# Mutation-verified: disabling read_tools.py:836 post-rerank membership
 # recheck returns a revoked page. Command (backend):
 # pytest -q tests/unit/services/integrations/test_read_tools.py
 # -k page_filter_revocation_during_rerank; fails without guard, passes restored.
@@ -3730,7 +3810,7 @@ async def test_page_filter_revocation_during_rerank(
     assert result.content[0]["error"] == "requested_documents_unavailable"
 
 
-# Mutation-verified: replacing read_tools.py:824 caller authorization with only
+# Mutation-verified: replacing read_tools.py:833 caller authorization with only
 # Collection.id == project_id leaks page/FTS text in all four cases. Command
 # (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
 # -k rechecks_caller_after_rerank; fails without guard, passes restored.

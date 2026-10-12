@@ -645,6 +645,7 @@ async def _document_content(
 _MARK_TAGS = ("<mark>", "</mark>")
 PAGE_RERANK_TIMEOUT_SECONDS = 10.0
 MAX_RERANK_PAGES = 100
+MAX_PAGE_FILTER_SOURCE_CHARS = 1024 * 1024
 
 
 def _split_pages(content_text: str) -> list[tuple[int, str]]:
@@ -768,31 +769,39 @@ async def _retrieve_document_pages(
         await db.execute(
             _live_project_documents(project_id, context.organization_id)
             .where(Document.id == UUID(document_id))
-            .with_only_columns(Document.title, Document.content_text)
+            .with_only_columns(
+                Document.title,
+                func.substr(Document.content_text, 1, MAX_PAGE_FILTER_SOURCE_CHARS + 1),
+            )
         )
     ).first()
     if row is None:
         return _unavailable().content[0]
     title, content_text = row
-    pages, total_pages = _scan_pages(
-        content_text or "", max_pages=MAX_RERANK_PAGES, max_chars=MAX_RESULT_BYTES
-    )
-    if not pages:
+    if len(content_text or "") > MAX_PAGE_FILTER_SOURCE_CHARS:
         return None
-    short_circuited = total_pages <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
+    pages, total_pages = await run_in_threadpool(
+        _scan_pages,
+        content_text or "",
+        max_pages=MAX_RERANK_PAGES,
+        max_chars=MAX_RESULT_BYTES,
+    )
+    short_circuited = bool(pages) and (
+        total_pages <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
+    )
     model = None
     rerank_succeeded = short_circuited
     accepted = []
     if short_circuited:
         accepted = [(number, text, length, 1.0) for number, text, length in pages]
-    else:
-        if not cohere_rerank_service.is_enabled:
-            return None
+    elif cohere_rerank_service.is_enabled and any(page[1] for page in pages):
         # Blank extracted pages count toward pagination but Cohere rejects
         # empty documents. Preserve the filtered list for response-index mapping.
         candidates = [page for page in pages if page[1]]
-        if not candidates:
-            return None
+        # This endpoint owns a read-only request transaction. Copy scalar data
+        # above, then return its connection to the pool during the remote call.
+        # The post-provider authorization queries start a fresh transaction.
+        await db.rollback()
         try:
             outcome = await asyncio.wait_for(
                 cohere_rerank_service.rerank_with_outcome(
@@ -818,8 +827,8 @@ async def _retrieve_document_pages(
                 model = cohere_rerank_service.model
         except Exception:
             logger.warning("retrieve_passages page rerank unavailable", exc_info=True)
-    # Refresh caller authority as well as document liveness after awaiting the
-    # provider, including failures that would otherwise fall back to FTS.
+    # Refresh caller authority and document liveness after worker/provider
+    # awaits, including failures that would otherwise fall back to FTS.
     try:
         scope = await authorized_scope_filter(db, context)
     except IntegrationAccessDenied:
@@ -1539,6 +1548,11 @@ def _library_page(
 async def invoke_read(
     db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
 ) -> ToolResult:
+    """Consume a request-owned read session, with no caller's pending writes.
+
+    Page reranking may roll back its read transaction to release the connection
+    during provider I/O; it reauthorizes through a fresh transaction afterward.
+    """
     required_scope = TOOL_SCOPES.get(invocation.tool_name)
     if required_scope is not None and required_scope not in context.scopes:
         # The router only demands tools:read; a grant can hold that and still
