@@ -181,6 +181,24 @@ backend:
     # runs the tick and reads this merged backend.env.
     - name: SEARCH_UPDATES_ENABLED
       value: "true"
+    # Local Codex harness bridge (docs/engineering/harness-bridge.md):
+    # default-off in code; dev opts in for the first live acceptance run.
+    # Celery beat dispatches harness runs and reads this merged backend.env.
+    # Revert this block to turn the bridge, NOUS MCP tools and artifact
+    # publication back off.
+    - name: HARNESS_BRIDGE_ENABLED
+      value: "true"
+    - name: NOUS_MCP_ENABLED
+      value: "true"
+    - name: ARTIFACTS_ENABLED
+      value: "true"
+    # TLS ends at the ALB (target-type ip), so uvicorn sees plain ws/http.
+    # /harness/connect refuses any scheme but wss, and uvicorn applies
+    # X-Forwarded-Proto only from trusted peers (gunicorn default 127.0.0.1).
+    # Trust the VPC range the ALB nodes live in (Terraform vpc_cidr default).
+    # Client IP is still the rightmost untrusted X-Forwarded-For hop.
+    - name: FORWARDED_ALLOW_IPS
+      value: "10.0.0.0/16"
     - name: PROJECT_SKILL_SNAPSHOT_RETENTION_DAYS
       value: "30"
     - name: MALLOC_ARENA_MAX
