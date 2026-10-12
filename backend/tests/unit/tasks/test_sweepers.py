@@ -472,10 +472,13 @@ def test_sweep_stale_agent_runs_gated_by_flag():
 
 @pytest.fixture
 def sync_session_factory():
+    from src.models.document import Document
     from src.models.processing import ProcessingJob
 
     engine = create_engine("sqlite:///:memory:")
     ProcessingJob.__table__.create(engine)
+    # The sweep's document-repair phase (IN-1) reads documents too.
+    Document.__table__.create(engine)
     factory = sessionmaker(bind=engine)
     yield factory
     engine.dispose()

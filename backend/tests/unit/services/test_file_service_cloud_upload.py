@@ -51,6 +51,10 @@ class _UploadDB:
     def add(self, obj: Any) -> None:
         self.added.append(obj)
 
+    async def flush(self) -> None:
+        # upload_file flushes each INSERT before its COMMIT window (IN-3).
+        pass
+
     async def commit(self) -> None:
         self.commit_calls += 1
 

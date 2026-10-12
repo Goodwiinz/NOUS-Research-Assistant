@@ -16,9 +16,16 @@ from sqlalchemy.pool import StaticPool
 
 import src.models  # noqa: F401  register every table on Base.metadata
 from src.models.base import Base
-from src.models.document import Document, DocumentType
+from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.processing import JobStatus, JobType, ProcessingJob
-from src.tasks.processing_lifecycle import ProcessingStopped, require_active_ingestion
+from src.tasks.processing_lifecycle import (
+    ACTIVE_DOCUMENT_STATUSES,
+    ACTIVE_JOB_STATUSES,
+    NON_TERMINAL_JOB_STATUSES,
+    ProcessingStopped,
+    end_processing_job,
+    require_active_ingestion,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -143,3 +150,100 @@ def test_missing_job_is_stopped(db: Session) -> None:
     with pytest.raises(ProcessingStopped) as exc:
         require_active_ingestion(db, str(uuid4()), expected_task_id=TASK)
     assert exc.value.reason == "missing"
+
+
+@pytest.mark.parametrize(
+    "cancel,ended", [(False, JobStatus.FAILED), (True, JobStatus.CANCELLED)]
+)
+def test_end_processing_job_ends_the_document_with_its_job(
+    db: Session, cancel: bool, ended: JobStatus
+) -> None:
+    """IN-1: every writer that ends an ingestion job ends its document too."""
+    job_id, job, doc = _seed(db)
+    doc.processing_status = ProcessingStatus.PROCESSING
+    db.commit()
+
+    assert end_processing_job(db, job_id, message="worker lost", cancel=cancel)
+    db.commit()
+
+    assert (job.status, job.error_message) == (ended, "worker lost")
+    assert doc.processing_status == ProcessingStatus.FAILED
+    assert doc.processing_error == "worker lost"
+
+
+@pytest.mark.parametrize("change", ["finished", "newer_attempt", "deleted"])
+def test_end_processing_job_refuses_a_job_someone_else_moved(
+    db: Session, change: str
+) -> None:
+    job_id, job, doc = _seed(db)
+    doc.processing_status = ProcessingStatus.PROCESSING
+    db.commit()
+    # This session now holds the live attempt in memory...
+    assert (job.status, job.celery_task_id, job.is_deleted) == (
+        JobStatus.RUNNING,
+        TASK,
+        False,
+    )
+    # ...and someone else moves it and commits, leaving that snapshot stale.
+    other = Session(bind=db.get_bind())
+    moved: Any = other.get(ProcessingJob, job_id)
+    if change == "finished":
+        moved.status = JobStatus.COMPLETED
+    elif change == "newer_attempt":
+        moved.celery_task_id = "task-2"
+    else:
+        moved.soft_delete()
+    other.commit()
+    after = (moved.status, moved.celery_task_id, moved.is_deleted)
+    other.close()
+
+    assert not end_processing_job(
+        db, job_id, message="late", expected_task_ids=(None, TASK)
+    )
+    db.rollback()
+
+    assert (job.status, job.celery_task_id, job.is_deleted) == after
+    assert doc.processing_status == ProcessingStatus.PROCESSING
+
+
+@pytest.mark.parametrize("owner", ["active_sibling", "not_ingestion"])
+def test_end_processing_job_leaves_documents_it_does_not_own(
+    db: Session, owner: str
+) -> None:
+    job_id, job, doc = _seed(db)
+    doc.processing_status = ProcessingStatus.PROCESSING
+    if owner == "active_sibling":
+        db.add(
+            ProcessingJob(
+                job_type=JobType.DOCUMENT_INGESTION,
+                status=JobStatus.QUEUED,
+                organization_id=job.organization_id,
+                document_id=doc.id,
+                celery_task_id="task-2",
+                total_steps=5,
+            )
+        )
+    else:
+        job.job_type = JobType.GRAPH_INDEXING
+    db.commit()
+
+    assert end_processing_job(db, job_id, message="ended")
+    db.commit()
+
+    assert job.status == JobStatus.FAILED
+    assert doc.processing_status == ProcessingStatus.PROCESSING
+
+
+def test_status_sets_match_the_model_predicates() -> None:
+    """The helper's status sets stay in step with the models' own predicates."""
+    assert NON_TERMINAL_JOB_STATUSES == {
+        status for status in JobStatus if not ProcessingJob(status=status).is_finished
+    }
+    assert ACTIVE_JOB_STATUSES == {
+        status for status in JobStatus if ProcessingJob(status=status).is_active
+    }
+    assert set(ACTIVE_DOCUMENT_STATUSES) == {
+        status
+        for status in ProcessingStatus
+        if not Document(processing_status=status).is_processing_complete
+    }

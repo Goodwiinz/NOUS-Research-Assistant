@@ -59,6 +59,9 @@ _SAFE_FILE_VALIDATION_DETAILS = frozenset(
     }
 )
 
+# documents.title and documents.filename are String(500) (models/document.py).
+_MAX_DOCUMENT_NAME_CHARS = 500
+
 
 def _escape_like(value: str) -> str:
     """Escape SQL LIKE special characters."""
@@ -169,6 +172,19 @@ async def upload_file(
     file_service: FileService = Depends(get_file_service),
 ):
     """Upload a file to the system"""
+
+    # IN-3: reject names the database would refuse before the object is stored.
+    if (
+        len(title) > _MAX_DOCUMENT_NAME_CHARS
+        or len(file.filename or "") > _MAX_DOCUMENT_NAME_CHARS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Title and filename must be at most {_MAX_DOCUMENT_NAME_CHARS} "
+                "characters"
+            ),
+        )
 
     # Debug logging
     logger.info(f"📤 Upload Request Debug:")

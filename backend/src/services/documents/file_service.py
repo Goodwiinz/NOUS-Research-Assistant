@@ -639,6 +639,12 @@ class FileService:
 
             self.db.add(document)
             try:
+                # IN-3: run the INSERT before COMMIT. A statement the database
+                # rejects (title over varchar(500), duplicate checksum, any data
+                # or constraint error) proves nothing committed, so the stored
+                # object is compensated below. Only the bare COMMIT can have an
+                # unknown outcome (#1864).
+                await self.db.flush()
                 commit_in_flight = True
                 await self.db.commit()
             except IntegrityError as exc:
@@ -694,6 +700,7 @@ class FileService:
             )
 
             self.db.add(processing_job)
+            await self.db.flush()  # IN-3: a rejected INSERT is a definite failure
             commit_in_flight = True
             await self.db.commit()
             processing_job_committed = True

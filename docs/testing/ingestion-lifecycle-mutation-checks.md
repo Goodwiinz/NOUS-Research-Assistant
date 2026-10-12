@@ -365,3 +365,33 @@ retires it on its next run.
 | --- | --- | --- | --- |
 | G25 deleted documents are cleaned by key (`do_kb/ingest.py` `unsync_document_from_kb`) | key path disabled | `test_deleted_do_kb_cleanup_removes_duplicates_without_tokens` | `{'ds-B'} == {'ds-A','ds-B'}` |
 | G26 dedup stops at the first match (`do_kb/client.py` `find_data_source`) | full listing then match | `test_dedup_lookup_keeps_an_early_match_when_a_later_page_fails` | `None == 'ds-1'` |
+
+## IN-1 / IN-3: job-only terminal writers and rejected upload INSERTs (new-features audit, 2026-10-08)
+
+Verified against local PostgreSQL (`ORCHESTRATION_TEST_DATABASE_URL`) on
+2026-10-11. Run from `backend/`. Each proof disabled one guard, ran the focused
+test, read the failure, restored the file (`git diff` empty) and reran green.
+PG cases also run in CI's "Run ingestion recovery PostgreSQL tests" step.
+
+| Guard | Mutation | Focused test | Observed failure |
+| --- | --- | --- | --- |
+| M1 locked status re-check, `tasks/processing_lifecycle.py` `end_processing_job` | `job.status not in expected_statuses` → `False` | `tests/unit/tasks/test_stuck_processing_recovery.py::test_reconciler_give_up_keeps_a_job_the_sweep_ended_after_selection` | `assert {'reenqueued': 0, 'failed': 1, 'skipped': 0} == {'reenqueued': 0, 'failed': 0, 'skipped': 1}` (the swept job failed a second time) |
+| M2 Document lock, same function | `.with_for_update()` removed from the Document query | `::test_reconciler_give_up_holds_document_then_job_locks` | `Failed: DID NOT RAISE OperationalError` (Document not locked) |
+| M3 other active ingestion keeps the document, `fail_document_unless_owned` | `if any(...)` → `if False and any(...)` | `tests/unit/tasks/test_processing_lifecycle.py::test_end_processing_job_leaves_documents_it_does_not_own[active_sibling]` | `assert <ProcessingStatus.FAILED: 'failed'> == <ProcessingStatus.PROCESSING: 'processing'>` |
+| M4 `on_failure` ownership, `tasks/processing_tasks.py` | `expected_task_ids=(None, task_id)` removed | `tests/unit/tasks/test_ingestion_stage_guard_postgres.py::test_failure_before_claim_ends_document_with_job[newer-attempt]` | `assert (<JobStatus.FAILED: 'failed'>, <ProcessingStatus.FAILED: 'failed'>) == (<JobStatus.RUNNING: 'running'>, <ProcessingStatus.PENDING: 'pending'>)` |
+| M4b `on_failure` ends its own queued attempt, same call | `expected_task_ids=(None, task_id)` → `(None,)` | `::test_failure_before_claim_ends_document_with_job[own]` | `assert (<JobStatus.QUEUED: 'queued'>, <ProcessingStatus.PENDING: 'pending'>) == (<JobStatus.FAILED: 'failed'>, <ProcessingStatus.FAILED: 'failed'>)` |
+| M5 repair only ended ingestion, `_repair_ended_ingestion_documents` | `newest.status not in _ENDED_INGESTION_STATUSES` → `False` | `tests/unit/tasks/test_stuck_processing_recovery.py::test_sweep_repair_leaves_documents_it_cannot_prove_ended[completed]` | `assert {'swept': 0, 'repaired_documents': 1} == {'swept': 0}` |
+| M5b the newest ingestion job decides, same function | `max(jobs, key=...)` → `min(jobs, key=...)` | `::test_sweep_repair_follows_the_newest_ingestion_job[newer-failed]`, `[newer-completed]` | `assert {'swept': 0} == {'swept': 0, 'repaired_documents': 1}` / `assert {'swept': 0, 'repaired_documents': 1} == {'swept': 0}` |
+| M5c newest-job rule before the batch limit, same function's candidate SELECT (IN-1 review, 2026-10-12) | `newest_ingestion_status.in_(_ENDED_INGESTION_STATUSES),` removed from the filter | `::test_sweep_repair_batch_is_not_filled_by_completed_documents` (`_REPAIR_BATCH` monkeypatched to 2; three stale documents whose newest job COMPLETED sort first) | `AssertionError: assert {'swept': 0} == {'swept': 0, ...documents': 1}` (the COMPLETED documents filled the batch, the re-check rejected them, and the FAILED one was never reached) |
+| M6 INSERT before the in-flight COMMIT, `services/documents/file_service.py` `upload_file` | Document `await self.db.flush()` removed | `tests/test_upload_compensating_delete.py::test_rejected_insert_is_a_definite_failure[Document]`, `::test_real_session_rejects_the_insert_at_flush[Document]` | `AssertionError: Expected 'mock' to have been called once. Called 0 times.` (`_delete_stored_object` is an anonymous `MagicMock`) |
+| M6b same guard, ProcessingJob INSERT | ProcessingJob `await self.db.flush()` removed | the same two tests, `[ProcessingJob]` | `AssertionError: Expected 'mock' to have been called once. Called 0 times.` |
+
+Under M1, `::test_reconciler_give_up_keeps_a_job_claimed_after_selection` still
+passes: a claim sets the Celery task id, so the task-id check holds that case
+on its own. Under M4 (no task-id check at all) the `[own]` case still passes,
+which is why M4b narrows the set instead of removing it.
+
+The cancel route (G4) is a writer, not a race guard. Its regression is
+`tests/unit/api/test_cancel_upload_revokes_celery.py::test_processing_job_cancel_fails_document_with_job`
+(replacing the `end_processing_job` call with `job.cancel_job()` fails with
+`assert <ProcessingStatus.PROCESSING: 'processing'> == <ProcessingStatus.FAILED: 'failed'>`).

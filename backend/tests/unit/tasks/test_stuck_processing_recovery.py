@@ -11,16 +11,17 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, select
 from sqlalchemy.exc import OperationalError
 
-from src.models.document import Document, ProcessingStatus
+from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.organization import Organization
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.tasks import processing_tasks as pt
+from src.tasks import reconcile_jobs as rj
 from tests.unit.tasks.test_ingestion_stage_guard_postgres import _ingestion
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
@@ -33,7 +34,11 @@ def recovery(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
             job = db.get(ProcessingJob, env.job_id)
             job.status = JobStatus.RUNNING
             job.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
-            db.get(Document, env.doc_id).processing_status = ProcessingStatus.PROCESSING
+            document = db.get(Document, env.doc_id)
+            document.processing_status = ProcessingStatus.PROCESSING
+            # Explicit and tz-aware: the naive onupdate default must not decide
+            # whether the repair phase sees this document as fresh.
+            document.updated_at = datetime.now(timezone.utc)
             db.commit()
         monkeypatch.setattr(pt, "SessionLocal", env.Session)
         monkeypatch.setattr(
@@ -61,7 +66,14 @@ def _after_candidates(
         executemany: bool,
     ) -> None:
         nonlocal fired
-        if fired or "FROM processing_jobs" not in statement or "LIMIT" not in statement:
+        # Only the job candidate query: the repair phase's document query also
+        # mentions processing_jobs (EXISTS) and LIMIT, but selects FROM documents.
+        if (
+            fired
+            or "FROM processing_jobs" not in statement
+            or "FROM documents" in statement
+            or "LIMIT" not in statement
+        ):
             return
         fired = True
         with env.Session() as other:
@@ -371,3 +383,337 @@ def test_disabled_sweep_does_not_open_database(
 
     monkeypatch.setattr(pt, "SessionLocal", unexpected_session)
     assert pt.sweep_stuck_processing_jobs() == {"skipped": "sweepers-disabled"}
+
+
+@pytest.fixture
+def lost(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
+    """An upload job re-enqueued three times without a worker ever claiming it
+    (PENDING, no Celery task id), with its PENDING document."""
+    with _ingestion() as env:
+        with env.Session() as db:
+            job = db.get(ProcessingJob, env.job_id)
+            job.status = JobStatus.PENDING
+            job.retry_count = 3
+            job.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+            db.commit()
+        monkeypatch.setattr(rj, "SessionLocal", env.Session)
+        monkeypatch.setattr(
+            "src.core.config.get_settings",
+            lambda: SimpleNamespace(
+                LOST_JOB_RECONCILER_ENABLED=True,
+                LOST_JOB_RECONCILE_AFTER_MINUTES=10,
+                LOST_JOB_RECONCILE_MAX_ATTEMPTS=3,
+                LOST_JOB_RECONCILE_MAX_PER_RUN=100,
+            ),
+        )
+        yield env
+
+
+def test_reconciler_give_up_fails_document_with_job(lost: SimpleNamespace) -> None:
+    """IN-1 path A: the give-up failed only the job, leaving the document
+    PENDING forever (re-upload 409, no UI retry)."""
+    assert rj.reconcile_lost_processing_jobs() == {
+        "reenqueued": 0,
+        "failed": 1,
+        "skipped": 0,
+    }
+    with lost.Session() as db:
+        job = db.get(ProcessingJob, lost.job_id)
+        document = db.get(Document, lost.doc_id)
+        assert job.status == JobStatus.FAILED
+        assert job.error_type == "LostJobReconcileGaveUp"
+        assert document.processing_status == ProcessingStatus.FAILED
+        assert document.processing_error == job.error_message
+
+
+def test_reconciler_give_up_keeps_a_job_claimed_after_selection(
+    lost: SimpleNamespace, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Verifier V4 race: a worker claims the job between the reconciler's
+    unlocked SELECT and its give-up; the bare UPDATE ... WHERE id overwrote
+    RUNNING with FAILED and the worker then stopped at its next stage guard."""
+
+    def claim(db: Any) -> None:
+        db.get(ProcessingJob, lost.job_id).start_job(
+            worker_id="worker-A", celery_task_id="task-A"
+        )
+
+    engine, hook = _after_candidates(lost, claim)
+    try:
+        with caplog.at_level("INFO", logger=rj.__name__):
+            assert rj.reconcile_lost_processing_jobs() == {
+                "reenqueued": 0,
+                "failed": 0,
+                "skipped": 1,
+            }
+    finally:
+        event.remove(engine, "after_cursor_execute", hook)
+    assert f"job {lost.job_id} changed since selection; give-up skipped" in (
+        caplog.text
+    )
+    with lost.Session() as db:
+        job = db.get(ProcessingJob, lost.job_id)
+        assert (job.status, job.celery_task_id) == (JobStatus.RUNNING, "task-A")
+        assert (
+            db.get(Document, lost.doc_id).processing_status == ProcessingStatus.PENDING
+        )
+
+
+def test_reconciler_give_up_keeps_a_job_the_sweep_ended_after_selection(
+    lost: SimpleNamespace,
+) -> None:
+    """The stuck sweep also selects PENDING jobs and leaves the Celery task id
+    NULL, so only the locked status re-check stops the give-up from failing
+    the job a second time over the sweep's outcome."""
+
+    def sweep(db: Any) -> None:
+        db.get(ProcessingJob, lost.job_id).fail_job("swept", error_type="StuckJobSweep")
+        db.get(Document, lost.doc_id).update_processing_status(
+            ProcessingStatus.FAILED, "swept"
+        )
+
+    engine, hook = _after_candidates(lost, sweep)
+    try:
+        assert rj.reconcile_lost_processing_jobs() == {
+            "reenqueued": 0,
+            "failed": 0,
+            "skipped": 1,
+        }
+    finally:
+        event.remove(engine, "after_cursor_execute", hook)
+    with lost.Session() as db:
+        job = db.get(ProcessingJob, lost.job_id)
+        assert (job.status, job.error_type) == (JobStatus.FAILED, "StuckJobSweep")
+        assert db.get(Document, lost.doc_id).processing_error == "swept"
+
+
+def test_reconciler_give_up_holds_document_then_job_locks(
+    lost: SimpleNamespace,
+) -> None:
+    engine = lost.Session.kw["bind"]
+    locks: list[str] = []
+    probes: list[str] = []
+
+    def probe(
+        connection: Any,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
+    ) -> None:
+        if "FOR UPDATE" in statement:
+            if "FROM documents" in statement:
+                locks.append("document")
+            elif "FROM processing_jobs" in statement:
+                locks.append("job")
+        if not statement.startswith("UPDATE ") or probes:
+            return
+        for model, row_id in [
+            (Document, lost.doc_id),
+            (ProcessingJob, lost.job_id),
+        ]:
+            with lost.Session() as other:
+                with pytest.raises(OperationalError) as raised:
+                    other.execute(
+                        select(model.id)
+                        .where(model.id == row_id)
+                        .with_for_update(nowait=True)
+                    )
+                assert getattr(raised.value.orig, "pgcode", None) == "55P03"
+                probes.append(model.__name__)
+                other.rollback()
+
+    event.listen(engine, "before_cursor_execute", probe)
+    try:
+        assert rj.reconcile_lost_processing_jobs()["failed"] == 1
+    finally:
+        event.remove(engine, "before_cursor_execute", probe)
+    assert locks[:2] == ["document", "job"]
+    assert probes == ["Document", "ProcessingJob"]
+
+
+@pytest.fixture
+def ended(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
+    """A document left PROCESSING by a job-only terminal write (IN-1): its
+    only ingestion job is FAILED, so the job sweep never selects it."""
+    stale = datetime.now(timezone.utc) - timedelta(hours=2)
+    with _ingestion() as env:
+        with env.Session() as db:
+            job = db.get(ProcessingJob, env.job_id)
+            job.fail_job(
+                "Lost job: post-commit dispatch never reached a worker",
+                error_type="LostJobReconcileGaveUp",
+            )
+            job.updated_at = stale
+            document = db.get(Document, env.doc_id)
+            document.processing_status = ProcessingStatus.PROCESSING
+            document.updated_at = stale
+            db.commit()
+        monkeypatch.setattr(pt, "SessionLocal", env.Session)
+        monkeypatch.setattr(
+            "src.core.config.get_settings",
+            lambda: SimpleNamespace(
+                SWEEPERS_ENABLED=True, PROCESSING_JOB_STUCK_AFTER_SECONDS=1800
+            ),
+        )
+        yield env
+
+
+def test_sweep_repairs_document_whose_ingestion_already_ended(
+    ended: SimpleNamespace, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("INFO", logger=pt.__name__):
+        assert pt.sweep_stuck_processing_jobs() == {
+            "swept": 0,
+            "repaired_documents": 1,
+        }
+    with ended.Session() as db:
+        job = db.get(ProcessingJob, ended.job_id)
+        document = db.get(Document, ended.doc_id)
+        assert document.processing_status == ProcessingStatus.FAILED
+        assert document.processing_error == job.error_message
+    # A repair is an operator-visible event, and the early-return path
+    # reports its result like the normal path does.
+    repairs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "repairing document" in record.getMessage()
+    ]
+    assert len(repairs) == 1
+    assert str(ended.doc_id) in repairs[0]
+    assert str(ended.org_id) in repairs[0]
+    assert f"ingestion job {ended.job_id} ended failed" in repairs[0]
+    assert (
+        "sweep_stuck_processing_jobs: {'swept': 0, 'repaired_documents': 1}"
+        in caplog.text
+    )
+
+
+@pytest.mark.parametrize("kind", ["completed", "retried", "fresh", "deleted"])
+def test_sweep_repair_leaves_documents_it_cannot_prove_ended(
+    ended: SimpleNamespace, kind: str
+) -> None:
+    with ended.Session() as db:
+        document = db.get(Document, ended.doc_id)
+        if kind == "completed":
+            db.get(ProcessingJob, ended.job_id).status = JobStatus.COMPLETED
+        elif kind == "retried":
+            db.add(
+                ProcessingJob(
+                    document_id=ended.doc_id,
+                    organization_id=ended.org_id,
+                    job_type=JobType.DOCUMENT_INGESTION,
+                    status=JobStatus.QUEUED,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+        elif kind == "fresh":
+            document.updated_at = datetime.now(timezone.utc)
+        else:
+            document.soft_delete()
+        db.commit()
+    assert pt.sweep_stuck_processing_jobs() == {"swept": 0}
+    with ended.Session() as db:
+        assert (
+            db.get(Document, ended.doc_id).processing_status
+            == ProcessingStatus.PROCESSING
+        )
+
+
+@pytest.mark.parametrize(
+    "older,newer,expected",
+    [
+        (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            {"swept": 0, "repaired_documents": 1},
+        ),
+        (JobStatus.FAILED, JobStatus.COMPLETED, {"swept": 0}),
+    ],
+    ids=["newer-failed", "newer-completed"],
+)
+def test_sweep_repair_follows_the_newest_ingestion_job(
+    ended: SimpleNamespace, older: JobStatus, newer: JobStatus, expected: dict
+) -> None:
+    """reprocess_document/reprocess_file insert a new ingestion row, so one
+    stuck document can own several; only the newest decides the repair."""
+    first_created = datetime.now(timezone.utc) - timedelta(hours=3)
+    with ended.Session() as db:
+        first = db.get(ProcessingJob, ended.job_id)
+        first.status = older
+        first.created_at = first_created
+        db.add(
+            ProcessingJob(
+                document_id=ended.doc_id,
+                organization_id=ended.org_id,
+                job_type=JobType.DOCUMENT_INGESTION,
+                status=newer,
+                error_message=(
+                    "newer attempt ended" if newer == JobStatus.FAILED else None
+                ),
+                created_at=first_created + timedelta(minutes=1),
+                updated_at=first_created + timedelta(minutes=1),
+            )
+        )
+        db.commit()
+    assert pt.sweep_stuck_processing_jobs() == expected
+    with ended.Session() as db:
+        document = db.get(Document, ended.doc_id)
+        if "repaired_documents" in expected:
+            assert document.processing_status == ProcessingStatus.FAILED
+            assert document.processing_error == "newer attempt ended"
+        else:
+            assert document.processing_status == ProcessingStatus.PROCESSING
+
+
+def test_sweep_repair_batch_is_not_filled_by_completed_documents(
+    ended: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IN-1 review: the newest-job rule applies before the batch limit.
+
+    More stale active documents than one batch, whose newest ingestion job
+    COMPLETED, sort before the repairable one. If the selection let them fill
+    the batch, the locked re-check would reject every one, and each later
+    sweep would select the same batch and never reach the FAILED one."""
+    monkeypatch.setattr(pt, "_REPAIR_BATCH", 2)
+    stale = datetime.now(timezone.utc) - timedelta(hours=2)
+    completed_ids = [UUID(int=n) for n in range(1, 4)]
+    assert max(completed_ids) < ended.doc_id
+    with ended.Session() as db:
+        for document_id in completed_ids:
+            db.add(
+                Document(
+                    id=document_id,
+                    title="Done",
+                    filename="done.txt",
+                    file_path="local:///nonexistent/done.txt",
+                    file_size_bytes=10,
+                    mime_type="text/plain",
+                    document_type=DocumentType.TEXT,
+                    organization_id=ended.org_id,
+                    processing_status=ProcessingStatus.PROCESSING,
+                    updated_at=stale,
+                )
+            )
+            db.flush()
+            db.add(
+                ProcessingJob(
+                    document_id=document_id,
+                    organization_id=ended.org_id,
+                    job_type=JobType.DOCUMENT_INGESTION,
+                    status=JobStatus.COMPLETED,
+                    updated_at=stale,
+                )
+            )
+        db.commit()
+    assert pt.sweep_stuck_processing_jobs() == {"swept": 0, "repaired_documents": 1}
+    with ended.Session() as db:
+        assert (
+            db.get(Document, ended.doc_id).processing_status == ProcessingStatus.FAILED
+        )
+        for document_id in completed_ids:
+            assert (
+                db.get(Document, document_id).processing_status
+                == ProcessingStatus.PROCESSING
+            )
