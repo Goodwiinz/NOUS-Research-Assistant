@@ -20,6 +20,7 @@ from src.models.collection import Collection
 from src.models.conversation import Conversation
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
+from src.models.project_thread import ProjectThread
 from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
@@ -319,6 +320,21 @@ async def owned_device(
     return cast(BridgeDevice, device)
 
 
+async def _listed_under_project(
+    db: AsyncSession, project_id: UUID, thread_id: UUID
+) -> bool:
+    """A live project<->chat link: the row a project's Chat tab lists the chat
+    by (``project_chat.list_project_threads``)."""
+    link = await db.scalar(
+        select(ProjectThread.id).where(
+            ProjectThread.project_id == project_id,
+            ProjectThread.thread_id == thread_id,
+            ProjectThread.is_deleted.is_(False),
+        )
+    )
+    return link is not None
+
+
 async def validate_binding(
     db: AsyncSession,
     *,
@@ -330,8 +346,10 @@ async def validate_binding(
     run_id: UUID | str | None = None,
     device_id: UUID | None = None,
 ) -> None:
+    project_workspace_id: UUID | None = None
     if project_id is not None and workspace_id is None:
-        await authorized_project(db, user_id, organization_id, project_id)
+        project = await authorized_project(db, user_id, organization_id, project_id)
+        project_workspace_id = cast(UUID, project.workspace_id)
     elif workspace_id is not None and project_id is None:
         await authorized_workspace(db, user_id, organization_id, workspace_id)
         # A workspace has no single project for a chat or a run to belong to.
@@ -342,32 +360,42 @@ async def validate_binding(
     if device_id is not None:
         await owned_device(db, device_id, user_id, organization_id)
     if thread_id is not None:
-        thread = await db.scalar(
-            select(Thread.id)
-            .join(Conversation, Thread.conversation_id == Conversation.id)
-            .join(Workspace, Conversation.workspace_id == Workspace.id)
-            .where(
-                Thread.id == thread_id,
-                Thread.is_deleted.is_(False),
-                Conversation.is_deleted.is_(False),
-                Workspace.is_deleted.is_(False),
-                or_(
-                    Workspace.owner_id == user_id,
-                    exists().where(
-                        WorkspaceMember.workspace_id == Workspace.id,
-                        WorkspaceMember.user_id == user_id,
-                        WorkspaceMember.is_deleted.is_(False),
+        chat = (
+            await db.execute(
+                select(Thread.source_project_id, Conversation.workspace_id)
+                .join(Conversation, Thread.conversation_id == Conversation.id)
+                .join(Workspace, Conversation.workspace_id == Workspace.id)
+                .where(
+                    Thread.id == thread_id,
+                    Thread.is_deleted.is_(False),
+                    Conversation.is_deleted.is_(False),
+                    Workspace.is_deleted.is_(False),
+                    or_(
+                        Workspace.owner_id == user_id,
+                        exists().where(
+                            WorkspaceMember.workspace_id == Workspace.id,
+                            WorkspaceMember.user_id == user_id,
+                            WorkspaceMember.is_deleted.is_(False),
+                        ),
                     ),
-                ),
-                # The chat's workspace is in the grant's organization, by the
-                # same legacy rule as authorized_project: a legacy NULL-org
-                # workspace whose owner is in another organization is refused
-                # here, matching web access.
-                workspace_in_org(organization_id),
-                Thread.source_project_id == project_id,
+                    # The chat's workspace is in the grant's organization, by
+                    # the same legacy rule as authorized_project: a legacy
+                    # NULL-org workspace whose owner is in another organization
+                    # is refused here, matching web access.
+                    workspace_in_org(organization_id),
+                )
             )
-        )
-        if thread is None:
+        ).first()
+        if chat is None or project_id is None:
+            raise IntegrationAccessDenied()
+        # The chat's current project always counts. Linking a chat to another
+        # project is additive and only repoints the scalar, so a project that
+        # still lists the chat (a live link in the chat's own workspace) counts
+        # too; unlinking soft-deletes that row and ends the binding.
+        if chat.source_project_id != project_id and not (
+            chat.workspace_id == project_workspace_id
+            and await _listed_under_project(db, project_id, thread_id)
+        ):
             raise IntegrationAccessDenied()
     if run_id is not None:
         run = await db.scalar(

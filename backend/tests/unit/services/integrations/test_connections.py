@@ -17,6 +17,7 @@ from src.models.collection import Collection
 from src.models.conversation import Conversation
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
+from src.models.project_thread import ProjectThread
 from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
@@ -131,6 +132,7 @@ async def db(tmp_path: Path) -> AsyncIterator[AsyncSession]:
         Collection,
         Conversation,
         Thread,
+        ProjectThread,
         BridgeDevice,
         IntegrationGrantRequest,
         IntegrationGrant,
