@@ -1,6 +1,7 @@
 """Project-scoped artifact discovery, using a local SQLite database."""
 
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -318,12 +319,42 @@ async def test_offset_pages_and_count_matches_the_listing(db: AsyncSession) -> N
     assert total == 3
 
 
-async def test_count_refuses_an_outsider_like_the_listing(db: AsyncSession) -> None:
+def _page_bounds(statement: Any) -> tuple[int, int]:
+    """The LIMIT and OFFSET values a select binds, read off its compiled form."""
+    compiled = statement.compile()
+    match = re.search(r"LIMIT :(\w+) OFFSET :(\w+)", str(compiled))
+    assert match, str(compiled)
+    return compiled.params[match[1]], compiled.params[match[2]]
+
+
+@pytest.mark.parametrize(
+    ("page", "bounds"),
+    [
+        ({"offset": -5}, (service.MAX_PROJECT_ARTIFACTS_PAGE, 0)),
+        ({"limit": 10_000}, (service.MAX_PROJECT_ARTIFACTS_PAGE, 0)),
+        ({"limit": 0}, (1, 0)),
+    ],
+    ids=["negative-offset-reads-as-0", "oversized-limit-is-capped", "limit-floor-1"],
+)
+async def test_service_clamps_the_page_before_it_reaches_sql(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    page: dict[str, Any],
+    bounds: tuple[int, int],
+) -> None:
+    # The route and the MCP tool validate these; the service must not trust
+    # that (PostgreSQL rejects a negative OFFSET outright).
     await _artifact(db, title="a", versions=[1])
-    with pytest.raises(ArtifactNotFound):
-        await service.count_project_artifacts(
-            db, user_id=FOREIGN_USER, organization_id=OTHER_ORG, project_id=PROJECT
-        )
+    statements: list[Any] = []
+    real_execute = db.execute
+
+    async def spy(statement: Any, *args: Any, **kwargs: Any) -> Any:
+        statements.append(statement)
+        return await real_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", spy)
+    assert len(await _list(db, **page)) == 1
+    assert _page_bounds(statements[-1]) == bounds
 
 
 @pytest.mark.parametrize("case", ["owner", "member"])
@@ -332,13 +363,11 @@ async def test_owner_and_member_can_list(db: AsyncSession, case: str) -> None:
     assert len(await _list(db, user=USER if case == "owner" else MEMBER)) == 1
 
 
-@pytest.mark.parametrize(
-    "case", ["foreign_org", "same_org_non_member", "deleted_project", "deleted_ws"]
-)
-async def test_outsiders_and_deleted_ancestors_are_not_found(
-    db: AsyncSession, case: str
-) -> None:
-    await _artifact(db, title="a", versions=[1])
+DENIED_CASES = ["foreign_org", "same_org_non_member", "deleted_project", "deleted_ws"]
+
+
+async def _lock_out(db: AsyncSession, case: str) -> tuple[UUID, UUID]:
+    """Arrange one DENIED_CASES scenario; return the identity that must be refused."""
     user, org = MEMBER, ORG
     if case == "foreign_org":
         user, org = FOREIGN_USER, OTHER_ORG
@@ -354,8 +383,29 @@ async def test_outsiders_and_deleted_ancestors_are_not_found(
             update(Workspace).where(Workspace.id == WORKSPACE).values(is_deleted=True)
         )
         await db.commit()
+    return user, org
+
+
+@pytest.mark.parametrize("case", DENIED_CASES)
+async def test_outsiders_and_deleted_ancestors_are_not_found(
+    db: AsyncSession, case: str
+) -> None:
+    await _artifact(db, title="a", versions=[1])
+    user, org = await _lock_out(db, case)
     with pytest.raises(ArtifactNotFound):
         await _list(db, user=user, org=org)
+
+
+@pytest.mark.parametrize("case", DENIED_CASES)
+async def test_count_refuses_whom_the_listing_refuses(
+    db: AsyncSession, case: str
+) -> None:
+    await _artifact(db, title="a", versions=[1])
+    user, org = await _lock_out(db, case)
+    with pytest.raises(ArtifactNotFound):
+        await service.count_project_artifacts(
+            db, user_id=user, organization_id=org, project_id=PROJECT
+        )
 
 
 async def test_unscoped_publication_is_listed_and_hash_matches_bytes(

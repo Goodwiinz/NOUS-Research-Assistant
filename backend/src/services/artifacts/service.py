@@ -652,6 +652,9 @@ async def list_project_artifacts(
         await authorized_project(db, user_id, organization_id, project_id)
     except IntegrationAccessDenied as error:
         raise ArtifactNotFound() from error
+    # The route and the MCP tool bound these too; never trust that here.
+    offset = max(0, offset)
+    limit = max(1, min(limit, MAX_PROJECT_ARTIFACTS_PAGE))
     rows = (
         await db.execute(
             _live_project_artifacts(
