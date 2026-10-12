@@ -37,6 +37,48 @@ test("Ctrl-C while a question is open rejects with Cancelled", async () => {
   await assert.rejects(answer, { message: "Cancelled" });
 });
 
+test("Ctrl-C while a question is open also cancels the whole command, once", async () => {
+  const { input, output } = streams(true);
+  let interrupts = 0;
+  const terminal = terminalPrompt(input, output, () => (interrupts += 1));
+  const answer = terminal.prompt("Project number: ");
+  input.write("\x03");
+  await assert.rejects(answer, { message: "Cancelled" });
+  assert.equal(interrupts, 1);
+});
+
+test("Ctrl-C with no question open cancels the whole command, once", async () => {
+  const { input, output } = streams(true);
+  let interrupts = 0;
+  terminalPrompt(input, output, () => (interrupts += 1));
+  input.write("\x03");
+  await tick();
+  input.write("\x03");
+  await tick();
+  assert.equal(interrupts, 1);
+});
+
+test("a cancelled question ends its line so the caller's message starts on its own", async () => {
+  const { input, output } = streams();
+  let written = "";
+  output.on("data", (chunk) => (written += String(chunk)));
+  const terminal = terminalPrompt(input, output);
+  const answer = terminal.prompt("Project number: ");
+  input.end();
+  await assert.rejects(answer, { message: "Cancelled" });
+  await tick();
+  assert.equal(written, "Project number: \n");
+});
+
+test("close() with nothing pending writes nothing", async () => {
+  const { input, output } = streams();
+  let written = "";
+  output.on("data", (chunk) => (written += String(chunk)));
+  terminalPrompt(input, output).close();
+  await tick();
+  assert.equal(written, "");
+});
+
 test("close() with nothing pending causes no unhandled rejection", async () => {
   const unhandled: unknown[] = [];
   const listener = (reason: unknown) => unhandled.push(reason);

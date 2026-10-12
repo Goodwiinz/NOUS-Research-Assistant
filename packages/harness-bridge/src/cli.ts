@@ -833,11 +833,13 @@ export async function rc(options: RcOptions): Promise<void> {
 /**
  * A line prompt over a terminal for `rc`. Rejects with `Cancelled` when input
  * ends (Ctrl-D) while a question is open, which a bare readline question never
- * does; `close()` releases the terminal for the running bridge.
+ * does; `close()` releases the terminal for the running bridge. Ctrl-C, with or
+ * without a question open, closes the prompt and then calls `onInterrupt`.
  */
 export function terminalPrompt(
   input: NodeJS.ReadableStream,
   output: NodeJS.WritableStream,
+  onInterrupt?: () => void,
 ): {
   prompt: (question: string) => Promise<string>;
   close: () => void;
@@ -849,16 +851,23 @@ export function terminalPrompt(
   });
   let closed = false;
   let cancel: ((error: Error) => void) | undefined;
-  // End of input, Ctrl-D and close() all land here; a question still open
-  // would otherwise never settle.
+  // End of input, Ctrl-D, Ctrl-C and close() all land here; a question still
+  // open would otherwise never settle.
   rl.on("close", () => {
     closed = true;
     const reject = cancel;
     cancel = undefined;
-    reject?.(new Error("Cancelled"));
+    if (reject === undefined) return;
+    // End the question's line so the caller's message starts on its own.
+    output.write("\n");
+    reject(new Error("Cancelled"));
   });
-  // Ctrl-C in a terminal reaches readline as a key, not a process signal.
-  rl.on("SIGINT", () => rl.close());
+  // Ctrl-C in a terminal reaches readline as a key, not a process signal, even
+  // when no question is open: cancel the question, then the caller.
+  rl.on("SIGINT", () => {
+    rl.close();
+    onInterrupt?.();
+  });
   return {
     prompt: (question) => {
       if (closed) return Promise.reject(new Error("Cancelled"));
@@ -1418,7 +1427,12 @@ async function main(): Promise<void> {
     // Refuse before probing Codex or touching the network.
     if (!process.stdin.isTTY || !process.stdout.isTTY)
       throw new Error("nous --rc needs an interactive terminal");
-    const terminal = terminalPrompt(process.stdin, process.stdout);
+    // Ctrl-C before the bridge starts stops the whole command, even mid-wait.
+    const terminal = terminalPrompt(process.stdin, process.stdout, () => {
+      // Exiting is safe: connect writes state only after the grant exchange, and every write is atomic.
+      process.stderr.write("\nCancelled\n");
+      process.exit(130);
+    });
     const controller = new AbortController();
     try {
       await rc({
@@ -1437,7 +1451,7 @@ async function main(): Promise<void> {
               error.message === "Codex version probe failed"
             )
               throw new Error(
-                "Could not run `codex --version`; is Codex installed and on your PATH?",
+                "Could not run `codex --version`; check that Codex is installed, on your PATH and working",
                 { cause: error },
               );
             throw error;
