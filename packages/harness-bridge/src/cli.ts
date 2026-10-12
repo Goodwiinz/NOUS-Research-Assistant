@@ -2,7 +2,7 @@
 import { Journal } from "./journal.ts";
 import { connectBridge } from "./connection.ts";
 import { CodexAdapter } from "./adapters/codex.ts";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, basename, resolve } from "node:path";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -197,7 +197,8 @@ export async function connect(
     handoff?: boolean;
     library?: boolean;
     context?: boolean;
-    // A CLI access token obtained by login(); when set, no browser login runs; ignored when the stored binding is reused.
+    // A CLI access token obtained by login(); when set, no browser login runs;
+    // ignored when the stored binding is reused.
     accessToken?: string;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
@@ -522,6 +523,227 @@ export async function addWorkspace(
     "Registered local write/output root. Folder registration does not isolate reads of other local files.",
   );
   return { workspaceId, root };
+}
+/** One NOUS project as `rc` lists it. */
+type RcProject = { id: string; name: string; documentCount?: number };
+/** Terminal-safe display name: NOUS project names are user data. */
+const plain = (value: string): string =>
+  value
+    // Whole CSI sequences (colours, cursor moves), not just their ESC byte,
+    // then every remaining control or format character.
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
+/** A `/projects` page, or null when NOUS no longer accepts the CLI token. */
+async function listProjects(
+  fetchFn: typeof fetch,
+  base: string,
+  token: string,
+): Promise<RcProject[] | null> {
+  const response = await fetchFn(`${base}/projects?limit=50`, {
+    headers: { Authorization: `Bearer ${token}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status === 401) return null;
+  if (!response.ok)
+    throw new Error(`NOUS request failed (${response.status}) /projects`);
+  const data: unknown = await response.json().catch(() => null);
+  if (!record(data) || !Array.isArray(data.projects))
+    throw new Error("invalid NOUS response");
+  return data.projects.flatMap((p: unknown): RcProject[] =>
+    record(p) && uuid(p.id) && typeof p.name === "string"
+      ? [
+          {
+            id: p.id,
+            name: plain(p.name),
+            ...(typeof p.document_count === "number"
+              ? { documentCount: p.document_count }
+              : {}),
+          },
+        ]
+      : [],
+  );
+}
+/** Create a project, asking which workspace only when the user has several. */
+async function createProject(
+  fetchFn: typeof fetch,
+  base: string,
+  token: string,
+  prompt: (question: string) => Promise<string>,
+  announce: (message: string) => void,
+): Promise<RcProject> {
+  let name = "";
+  while (!name) name = plain(await prompt("Project name: ")).trim();
+  // Projects live in a NOUS workspace (not a local folder); v2 is a sibling
+  // of v1.
+  const workspaces = await fetchFn(
+    `${base.replace(/\/v1$/, "/v2")}/workspaces`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  if (!workspaces.ok)
+    throw new Error(`NOUS request failed (${workspaces.status}) /workspaces`);
+  const list: unknown = await workspaces.json().catch(() => null);
+  const choices = (Array.isArray(list) ? list : []).flatMap((w: unknown) =>
+    record(w) && uuid(w.id) && typeof w.name === "string"
+      ? [{ id: w.id, name: plain(w.name) }]
+      : [],
+  );
+  if (!choices.length)
+    throw new Error("no NOUS workspace to create the project in");
+  let workspace = choices[0];
+  if (choices.length > 1) {
+    announce(
+      [
+        "Workspaces:",
+        ...choices.map((w, i) => `  ${i + 1}) ${w.name}`),
+      ].join("\n"),
+    );
+    for (;;) {
+      const index = Number.parseInt(
+        await prompt(`Pick a workspace [1-${choices.length}]: `),
+        10,
+      );
+      if (Number.isInteger(index) && index >= 1 && index <= choices.length) {
+        workspace = choices[index - 1];
+        break;
+      }
+      announce("Not a listed choice.");
+    }
+  }
+  const created = await request(fetchFn, base, "/projects", token, {
+    workspace_id: workspace.id,
+    name,
+  });
+  if (!uuid(created.id)) throw new Error("invalid NOUS response");
+  return { id: created.id, name, documentCount: 0 };
+}
+/** Numbered picker: a listed project by number, or `n` for a new one. */
+async function pickProject(
+  projects: RcProject[],
+  prompt: (question: string) => Promise<string>,
+  announce: (message: string) => void,
+  create: () => Promise<RcProject>,
+): Promise<RcProject> {
+  announce(
+    [
+      "Your projects:",
+      ...projects.map(
+        (p, i) =>
+          `  ${i + 1}) ${p.name}${p.documentCount !== undefined ? `  ${p.documentCount} docs` : ""}`,
+      ),
+      "  n) New project",
+    ].join("\n"),
+  );
+  const range = projects.length ? `1-${projects.length}, n` : "n";
+  for (;;) {
+    const answer = (await prompt(`Pick a project [${range}]: `))
+      .trim()
+      .toLowerCase();
+    if (answer === "n") return create();
+    const index = Number.parseInt(answer, 10);
+    if (Number.isInteger(index) && index >= 1 && index <= projects.length)
+      return projects[index - 1];
+    announce("Not a listed choice.");
+  }
+}
+export type RcOptions = ClientOptions & {
+  apiUrl: string;
+  /** The folder Codex works in: the caller's current directory. */
+  dir: string;
+  label?: string;
+  prompt: (question: string) => Promise<string>;
+  /** Checks the local Codex before anything else; resolves with its version. */
+  probe: () => Promise<{ version: string }>;
+  /** Runs the bridge in the foreground until the caller stops it. */
+  run: (stateDir: string) => Promise<void>;
+};
+/**
+ * `nous --rc`: sign in, pick or create a project, pair this computer for
+ * harness runs with read access to the project's documents, register the
+ * current folder, run. Reuses the stored pairing when it is for the same
+ * project; a different project replaces it (one pairing per computer).
+ */
+export async function rc(options: RcOptions): Promise<void> {
+  const base = apiBase(options.apiUrl);
+  const fetchFn = options.fetchFn ?? fetch;
+  const announce = options.announce ?? console.log;
+  // Codex first, so the user never approves a pairing that cannot run.
+  const { version } = await options.probe();
+  announce(`NOUS: ${base}`);
+  const store = new CredentialStore(options.stateDir);
+  const previous = storedConnection(
+    await store.readLocal("connection").catch(() => null),
+  );
+  let sameApi = false;
+  try {
+    sameApi = previous !== null && apiBase(previous.apiUrl) === base;
+  } catch {
+    // An unparsable stored URL is a different NOUS.
+  }
+  // The stored CLI token first; a 401 means sign in again, once.
+  let token: string | undefined =
+    sameApi && previous !== null
+      ? await store
+          .load(previous.credentialHandle)
+          .then((c) => c.accessToken)
+          .catch(() => undefined)
+      : undefined;
+  let projects =
+    token === undefined ? null : await listProjects(fetchFn, base, token);
+  if (token === undefined || projects === null) {
+    token = await login(base, options);
+    projects = await listProjects(fetchFn, base, token);
+    if (projects === null) throw new Error("NOUS refused the new sign-in");
+  }
+  const signedIn = token;
+  announce("Signed in.");
+  const project = await pickProject(projects, options.prompt, announce, () =>
+    createProject(fetchFn, base, signedIn, options.prompt, announce),
+  );
+  if (
+    sameApi &&
+    previous?.projectId !== undefined &&
+    previous.projectId !== project.id
+  )
+    announce(
+      `Your approval for project ${previous.projectId} stays active until you revoke it under Settings → Connected devices (/integrations/devices) in NOUS.`,
+    );
+  try {
+    await connect({
+      stateDir: options.stateDir,
+      fetchFn,
+      announce,
+      delay: options.delay,
+      apiUrl: base,
+      projectId: project.id,
+      label: options.label ?? hostname(),
+      tools: true,
+      accessToken: signedIn,
+    });
+    await addWorkspace({
+      stateDir: options.stateDir,
+      fetchFn,
+      // addWorkspace's own notice is about write roots; rc prints its summary
+      // below.
+      announce: () => {},
+      root: options.dir,
+    });
+  } catch (error) {
+    // The harness and tools gateways answer 503 while the server flags are off.
+    if (error instanceof Error && /\(503\)/.test(error.message))
+      throw new Error("Local Codex is turned off on this NOUS server");
+    throw error;
+  }
+  const root = await realpath(options.dir);
+  announce(`Connected: "${project.name}" ↔ ${root}  (Codex ${version})`);
+  announce(
+    `In a chat for this project on NOUS, choose Local Codex → this computer → ${basename(root)}.\nPress Ctrl-C to stop.`,
+  );
+  await options.run(options.stateDir);
 }
 /** One local reconciliation pass over the locked runs, without the network. */
 export async function reconcileLocal(
