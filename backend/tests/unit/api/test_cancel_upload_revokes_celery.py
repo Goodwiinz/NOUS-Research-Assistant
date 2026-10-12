@@ -151,3 +151,28 @@ async def test_cancel_upload_skips_revoke_when_no_celery_task_id(cancel_db):
         assert (
             await observer.get(Organization, cancel_db.ids.org)
         ).storage_used_bytes == 0
+
+
+async def test_processing_job_cancel_fails_document_with_job(cancel_db) -> None:
+    """IN-1 path C: POST /processing/jobs/{id}/cancel cancelled only the job,
+    leaving its document PROCESSING forever (no UI retry, re-upload 409)."""
+    from src.api.documents.processing import cancel_processing_job
+
+    with patch("src.tasks.processing_tasks.current_app") as app:
+        async with cancel_db.factory() as db:
+            user = await db.get(User, cancel_db.ids.user)
+            organization = await db.get(Organization, cancel_db.ids.org)
+            result = await cancel_processing_job(
+                cancel_db.ids.job,
+                current_user=user,
+                organization=organization,
+                db=db,
+            )
+        app.control.revoke.assert_called_once_with(cancel_db.task_id, terminate=True)
+    assert result["status"] == JobStatus.CANCELLED.value
+    async with cancel_db.factory() as observer:
+        job = await observer.get(ProcessingJob, cancel_db.ids.job)
+        document = await observer.get(Document, cancel_db.ids.doc)
+        assert job.status == JobStatus.CANCELLED
+        assert document.processing_status == ProcessingStatus.FAILED
+        assert "cancel" in document.processing_error.lower()

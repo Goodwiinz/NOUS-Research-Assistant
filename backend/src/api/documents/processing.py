@@ -386,9 +386,24 @@ async def cancel_processing_job(
             detail="Can only cancel your own jobs or require admin role",
         )
 
+    from src.tasks.processing_lifecycle import ACTIVE_JOB_STATUSES, end_processing_job
+
     try:
-        # Cancel the job
-        job.cancel_job()
+        # IN-1: lock Document -> job (GOO-356 order), re-check the job is still
+        # active and fail its ingestion document with it, in one transaction.
+        cancelled = await db.run_sync(
+            end_processing_job,
+            job.id,
+            message="Processing cancelled by user",
+            cancel=True,
+            expected_statuses=ACTIVE_JOB_STATUSES,
+        )
+        if not cancelled:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Job is not active and cannot be cancelled",
+            )
         await db.commit()
 
         # Also try to cancel the Celery task if it exists
@@ -403,6 +418,8 @@ async def cancel_processing_job(
             "status": job.status.value,
         }
 
+    except HTTPException:
+        raise
     except Exception:
         await db.rollback()
         logger.error("Failed to cancel job", exc_info=True)
