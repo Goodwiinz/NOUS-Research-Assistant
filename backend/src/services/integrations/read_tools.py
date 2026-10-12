@@ -649,21 +649,49 @@ MAX_RERANK_PAGES = 100
 
 def _split_pages(content_text: str) -> list[tuple[int, str]]:
     """Preserve a leading preamble in the first marked page, never lose it."""
-    markers = list(
-        re.finditer(r"(?m)^[ \t]*\[Page[ \t]+(\d+)\][ \t]*\r?$", content_text)
-    )
-    pages = []
-    for index, marker in enumerate(markers):
-        end = (
-            markers[index + 1].start()
-            if index + 1 < len(markers)
-            else len(content_text)
-        )
-        text = content_text[marker.end() : end].strip()
-        if index == 0 and (preamble := content_text[: marker.start()].strip()):
-            text = f"{preamble}\n{text}".strip()
-        pages.append((int(marker.group(1)), text))
-    return pages
+    pages, _ = _scan_pages(content_text)
+    return [(number, text) for number, text, _ in pages]
+
+
+def _scan_pages(
+    source: str, *, max_pages: int | None = None, max_chars: int | None = None
+) -> tuple[list[tuple[int, str, int]], int]:
+    """Count all pages while copying only bounded candidates and text prefixes."""
+    pages: list[tuple[int, str, int]] = []
+    total = 0
+
+    def span_text(start: int, end: int) -> tuple[str, int]:
+        # Find stripped bounds without first allocating the entire page body.
+        while start < end and source[start].isspace():
+            start += 1
+        while end > start and source[end - 1].isspace():
+            end -= 1
+        stop = end if max_chars is None else min(end, start + max_chars)
+        return source[start:stop], end - start
+
+    def append_page(marker: re.Match[str], end: int) -> None:
+        nonlocal total
+        total += 1
+        if max_pages is not None and total > max_pages:
+            return
+        text, length = span_text(marker.end(), end)
+        if total == 1:
+            preamble, prefix_length = span_text(0, marker.start())
+            if prefix_length:
+                text = preamble + (f"\n{text}" if length else "")
+                length = prefix_length + (1 + length if length else 0)
+        pages.append((int(marker.group(1)), text[:max_chars], length))
+
+    previous = None
+    # Nine digits already allow implausibly large page counts. Longer markers
+    # remain text, avoiding both integer conversion failures and huge metadata.
+    for marker in re.finditer(r"(?m)^[ \t]*\[Page[ \t]+(\d{1,9})\][ \t]*\r?$", source):
+        if previous is not None:
+            append_page(previous, marker.start())
+        previous = marker
+    if previous is not None:
+        append_page(previous, len(source))
+    return pages, total
 
 
 def _json_text_prefix(text: str, budget: int) -> str:
@@ -685,7 +713,7 @@ def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
     # Measure metadata with empty text, including every truncation indicator.
     originals = [chunk["text"] for chunk in chunks]
     for chunk in chunks:
-        chunk["total_chars"] = len(chunk["text"])
+        chunk.setdefault("total_chars", len(chunk["text"]))
         chunk["text"] = ""
         chunk["truncated"] = True
     payload["truncated"] = True
@@ -710,7 +738,7 @@ def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
     )
     for chunk, original in zip(chunks, originals):
         chunk["text"] = _json_text_prefix(original, budget)
-        chunk["truncated"] = len(chunk["text"]) < len(original)
+        chunk["truncated"] = len(chunk["text"]) < chunk["total_chars"]
     # Candidate limiting is independently reported even if all text fits.
     if (
         not any(c["truncated"] or c.get("title_truncated") for c in chunks)
@@ -742,13 +770,17 @@ async def _retrieve_document_pages(
     if row is None:
         return _unavailable().content[0]
     title, content_text = row
-    pages = _split_pages(content_text or "")
+    pages, total_pages = _scan_pages(
+        content_text or "", max_pages=MAX_RERANK_PAGES, max_chars=MAX_RESULT_BYTES
+    )
     if not pages:
         return None
-    short_circuited = len(pages) <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
+    short_circuited = total_pages <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
     model = None
+    rerank_succeeded = short_circuited
+    accepted = []
     if short_circuited:
-        accepted = [(number, text, 1.0) for number, text in pages]
+        accepted = [(number, text, length, 1.0) for number, text, length in pages]
     else:
         if not cohere_rerank_service.is_enabled:
             return None
@@ -759,31 +791,42 @@ async def _retrieve_document_pages(
                     query,
                     documents=[
                         {"id": str(number), "content": text}
-                        for number, text in candidates
+                        for number, text, _ in candidates
                     ],
                     top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
                 ),
                 timeout=PAGE_RERANK_TIMEOUT_SECONDS,
             )
-            if not outcome.succeeded:
-                return None
-            scores = {
-                result.index: result.relevance_score for result in outcome.results
-            }
-            accepted = [
-                (number, text, scores[index])
-                for index, (number, text) in enumerate(candidates)
-                if index in scores
-            ]
-            model = cohere_rerank_service.model
+            rerank_succeeded = outcome.succeeded
+            if rerank_succeeded:
+                scores = {
+                    result.index: result.relevance_score for result in outcome.results
+                }
+                accepted = [
+                    (number, text, length, scores[index])
+                    for index, (number, text, length) in enumerate(candidates)
+                    if index in scores
+                ]
+                model = cohere_rerank_service.model
         except Exception:
             logger.warning("retrieve_passages page rerank unavailable", exc_info=True)
-            return None
-    # Like FTS, re-check after the asynchronous provider call before returning content.
-    if document_id not in await _collection_document_ids(
-        db, project_id, context.organization_id
+    # Refresh caller authority as well as document liveness after awaiting the
+    # provider, including failures that would otherwise fall back to FTS.
+    try:
+        scope = await authorized_scope_filter(db, context)
+    except IntegrationAccessDenied:
+        return _unavailable().content[0]
+    if (
+        await db.scalar(
+            _live_project_documents(project_id, context.organization_id)
+            .where(scope, Document.id == UUID(document_id))
+            .with_only_columns(Document.id)
+        )
+        is None
     ):
         return _unavailable().content[0]
+    if not rerank_succeeded:
+        return None
     accepted.sort(key=lambda page: page[0])
     return _bound_page_result(
         {
@@ -794,14 +837,15 @@ async def _retrieve_document_pages(
                     "text": text,
                     "score": score,
                     "page_number": number,
+                    "total_chars": length,
                 }
-                for number, text, score in accepted
+                for number, text, length, score in accepted
             ],
             "total": len(accepted),
             "query": query,
             "page_filter": {
-                "accepted_pages": [number for number, _, _ in accepted],
-                "total_pages": len(pages),
+                "accepted_pages": [number for number, _, _, _ in accepted],
+                "total_pages": total_pages,
                 "short_circuited": short_circuited,
                 "model": model,
             },

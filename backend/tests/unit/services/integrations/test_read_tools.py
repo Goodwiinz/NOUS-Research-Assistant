@@ -1,6 +1,7 @@
 """Scoped integration read gateway, using a local SQLite database."""
 
 import json
+import tracemalloc
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Iterable, Iterator
 from unittest.mock import AsyncMock
@@ -3469,6 +3470,34 @@ def test_split_pages(content: str, expected: list[tuple[int, str]]) -> None:
     assert read_tools._split_pages(content) == expected
 
 
+def test_split_pages_keeps_oversized_page_numbers_as_text() -> None:
+    marker = f"[Page {'9' * 5000}]"
+    assert read_tools._split_pages(marker) == []
+    assert read_tools._split_pages(f"[Page 1]\n{marker}\n[Page 2]\nend") == [
+        (1, marker),
+        (2, "end"),
+    ]
+
+
+@pytest.mark.parametrize(("page_count", "body_length"), [(300, 100_000), (100_000, 1)])
+def test_page_candidates_bound_memory_and_preserve_counts(
+    page_count: int, body_length: int
+) -> None:
+    body = "x" * body_length
+    source = "\n".join(f"[Page {i}]\n{body}" for i in range(1, page_count + 1))
+    tracemalloc.start()
+    try:
+        pages, total = read_tools._scan_pages(source, max_pages=100, max_chars=65536)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert total == page_count
+    assert len(pages) == 100
+    assert pages[0] == (1, body[:65536], len(body))
+    assert pages[-1][0] == 100
+    assert peak < 10 * 1024 * 1024
+
+
 async def _page_document(db: AsyncSession, pages: int, text: str = "page") -> None:
     await db.execute(
         update(Document)
@@ -3616,7 +3645,7 @@ async def test_page_filter_refuses_single_foreign_document(
     assert result.content[0]["error"] == "requested_documents_unavailable"
 
 
-# Mutation-verified: disabling read_tools.py:783 post-rerank membership
+# Mutation-verified: disabling read_tools.py:819 post-rerank membership
 # recheck returns a revoked page. Command (backend):
 # pytest -q tests/unit/services/integrations/test_read_tools.py
 # -k page_filter_revocation_during_rerank; fails without guard, passes restored.
@@ -3638,6 +3667,63 @@ async def test_page_filter_revocation_during_rerank(
         ]
 
     monkeypatch.setattr(service, "rerank", revoke)
+    result = await _retrieve_one(db, context)
+    assert result.is_error
+    assert result.content[0]["error"] == "requested_documents_unavailable"
+
+
+# Mutation-verified: replacing read_tools.py:816 caller authorization with only
+# Collection.id == project_id leaks page/FTS text in all four cases. Command
+# (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k rechecks_caller_after_rerank; fails without guard, passes restored.
+@pytest.mark.parametrize("revocation", ["membership", "disabled"])
+@pytest.mark.parametrize("provider_fails", [False, True])
+async def test_page_filter_rechecks_caller_after_rerank(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    revocation: str,
+    provider_fails: bool,
+) -> None:
+    from src.models.workspace import WorkspaceRole
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await _page_document(db, 9)
+    if revocation == "membership":
+        owner = await _add_user(db)
+        await db.execute(
+            update(Workspace).where(Workspace.id == WORKSPACE).values(owner_id=owner)
+        )
+        await db.execute(
+            insert(WorkspaceMember).values(
+                workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+            )
+        )
+        await db.commit()
+
+    async def revoke(*args: Any, **kwargs: Any) -> Any:
+        if revocation == "membership":
+            await db.execute(update(WorkspaceMember).values(is_deleted=True))
+        else:
+            await db.execute(
+                update(User).where(User.id == USER).values(is_active=False)
+            )
+        await db.commit()
+        if provider_fails:
+            raise RuntimeError("provider failure")
+        return [
+            RerankResult(
+                document_id="1", index=0, relevance_score=0.9, original_score=0.0
+            )
+        ]
+
+    monkeypatch.setattr(service, "rerank", revoke)
+    monkeypatch.setattr(
+        read_tools,
+        "fulltext_search_service",
+        _StubFulltext([_search_result(DOC_IN_PROJECT, "secret")]),
+    )
     result = await _retrieve_one(db, context)
     assert result.is_error
     assert result.content[0]["error"] == "requested_documents_unavailable"
