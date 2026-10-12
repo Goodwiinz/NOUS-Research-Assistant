@@ -414,6 +414,36 @@ test("connect --workspace --library requests a workspace binding and the library
   }
 });
 
+test("connect --workspace --tools requests library:read so list_library can name the projects, never library:write", async () => {
+  for (const write of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), "nous-mcp-workspace-read-"));
+    const calls: { url: string; body: any }[] = [];
+    try {
+      await connect({
+        stateDir: dir,
+        fetchFn: consentFetch(calls),
+        announce: () => {},
+        apiUrl: "https://nous.test/api/v1",
+        workspaceId: WORKSPACE,
+        label: "dev",
+        tools: true,
+        write,
+      });
+      const consent = calls.find((c) => c.url.endsWith("/grant-requests"))!;
+      // Every project tool of a workspace grant needs a project_id, and only
+      // list_library (library:read) names them. library:write (auto-run)
+      // still needs --library.
+      assert.deepEqual(
+        consent.body.scopes,
+        write ? ["tools:read", "tools:write", "library:read"] : ["tools:read", "library:read"],
+      );
+      assert.equal((await mcpInstallCommand(dir, { announce: () => {} })).includes("'--library'"), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("connect --project --library keeps harness:execute and puts the library scopes last", async () => {
   const dir = mkdtempSync(join(tmpdir(), "nous-mcp-project-library-"));
   const calls: { url: string; body: any }[] = [];
