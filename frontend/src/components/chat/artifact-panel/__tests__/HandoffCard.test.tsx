@@ -10,6 +10,7 @@ vi.mock('@/services/artifactService', () => ({
 }));
 
 import {
+  HANDOFF_IDLE_POLL_MS,
   HANDOFF_POLL_MS,
   threadHandoffKey,
   useThreadHandoff,
@@ -143,20 +144,35 @@ describe('handoff-only view', () => {
 });
 
 describe('useThreadHandoff', () => {
-  it('polls while mounted and refetches on focus', async () => {
-    get.mockResolvedValue(handoff);
+  beforeEach(() => get.mockReset());
+
+  it('polls every 30 s while the chat has a handoff and rarely while it has none', async () => {
+    get.mockResolvedValue(null);
     const client = createTestQueryClient();
     const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
     const { result } = renderHook(() => useThreadHandoff(THREAD), { wrapper });
-    await waitFor(() => expect(result.current.data).toEqual(handoff));
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
     const query = client
       .getQueryCache()
       .find({ queryKey: threadHandoffKey(THREAD) });
-    const options = query?.observers[0]?.options;
+    if (!query) throw new Error('handoff query not registered');
+    const options = query.observers[0]?.options;
+    const interval = options?.refetchInterval;
+    if (typeof interval !== 'function') {
+      throw new Error('refetchInterval must follow the data');
+    }
     expect(HANDOFF_POLL_MS).toBe(30_000);
-    expect(options?.refetchInterval).toBe(HANDOFF_POLL_MS);
+    expect(HANDOFF_IDLE_POLL_MS).toBe(300_000);
+    expect(interval(query)).toBe(HANDOFF_IDLE_POLL_MS);
+    act(() => {
+      client.setQueryData(threadHandoffKey(THREAD), handoff);
+    });
+    expect(interval(query)).toBe(HANDOFF_POLL_MS);
+    // A hidden tab never polls; focus still refreshes at once.
+    expect(options?.refetchIntervalInBackground).toBe(false);
     expect(options?.refetchOnWindowFocus).toBe(true);
   });
 });
@@ -182,6 +198,13 @@ describe('HandoffEntryButton', () => {
 
   it('is absent when the chat has no handoff', async () => {
     get.mockRejectedValue({ error: { status_code: 404 } });
+    const { container } = render(<HandoffEntryButton threadId={THREAD} />);
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('reads a null body as "no handoff yet"', async () => {
+    get.mockResolvedValue(null);
     const { container } = render(<HandoffEntryButton threadId={THREAD} />);
     await waitFor(() => expect(get).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
