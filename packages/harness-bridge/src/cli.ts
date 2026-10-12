@@ -139,6 +139,48 @@ async function poll(
   }
   throw new Error("authorization expired");
 }
+/**
+ * Browser CLI login: start a session, print the link and the code the user
+ * types on that page, poll until approved. Returns the CLI access token.
+ */
+export async function login(base: string, options: ClientOptions): Promise<string> {
+  const fetchFn = options.fetchFn ?? fetch;
+  const announce = options.announce ?? console.log;
+  const started = await request(fetchFn, base, "/cli-auth/start", undefined, {});
+  if (
+    typeof started.session_id !== "string" ||
+    typeof started.poll_token !== "string" ||
+    typeof started.browser_url !== "string"
+  )
+    throw new Error("invalid CLI login response");
+  // GOO-403: the link no longer carries the code; the user must type it on the
+  // approval page, so a login response without a printable code is unusable.
+  // The format check also keeps server-supplied text from injecting terminal
+  // control sequences.
+  if (
+    typeof started.verification_code !== "string" ||
+    !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(started.verification_code)
+  )
+    throw new Error("invalid CLI login response");
+  announce(
+    `Authorize CLI login in your browser: ${started.browser_url}\nType this code on that page: ${started.verification_code}`,
+  );
+  const auth = await poll(
+    () =>
+      request(
+        fetchFn,
+        base,
+        `/cli-auth/status/${encodeURIComponent(started.session_id)}`,
+        undefined,
+        undefined,
+        { "X-CLI-Poll-Token": started.poll_token },
+      ),
+    options,
+  );
+  if (typeof auth.token !== "string" || !auth.token)
+    throw new Error("missing CLI access token");
+  return auth.token;
+}
 /** Login uses the existing CLI device flow; only the browser can approve the grant. */
 export async function connect(
   options: ClientOptions & {
@@ -154,6 +196,8 @@ export async function connect(
     handoff?: boolean;
     library?: boolean;
     context?: boolean;
+    // A CLI access token obtained by login(); when set, no browser login runs.
+    accessToken?: string;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
@@ -254,44 +298,12 @@ export async function connect(
     );
     return { deviceId: previous.deviceId, credentialHandle: previous.credentialHandle };
   }
-  const login = await request(fetchFn, base, "/cli-auth/start", undefined, {});
-  if (
-    typeof login.session_id !== "string" ||
-    typeof login.poll_token !== "string" ||
-    typeof login.browser_url !== "string"
-  )
-    throw new Error("invalid CLI login response");
-  // GOO-403: the link no longer carries the code; the user must type it on the
-  // approval page, so a login response without a printable code is unusable.
-  // The format check also keeps server-supplied text from injecting terminal
-  // control sequences.
-  if (
-    typeof login.verification_code !== "string" ||
-    !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(login.verification_code)
-  )
-    throw new Error("invalid CLI login response");
-  announce(
-    `Authorize CLI login in your browser: ${login.browser_url}\nType this code on that page: ${login.verification_code}`,
-  );
-  const auth = await poll(
-    () =>
-      request(
-        fetchFn,
-        base,
-        `/cli-auth/status/${encodeURIComponent(login.session_id)}`,
-        undefined,
-        undefined,
-        { "X-CLI-Poll-Token": login.poll_token },
-      ),
-    options,
-  );
-  if (typeof auth.token !== "string" || !auth.token)
-    throw new Error("missing CLI access token");
+  const token = options.accessToken ?? (await login(base, options));
   const device = await request(
     fetchFn,
     base,
     "/integrations/devices",
-    auth.token,
+    token,
     { label: options.label },
   );
   if (!uuid(device.id)) throw new Error("invalid device ID");
@@ -299,7 +311,7 @@ export async function connect(
     fetchFn,
     base,
     "/integrations/grant-requests",
-    auth.token,
+    token,
     {
       ...(projectId !== undefined
         ? { project_id: projectId }
@@ -320,7 +332,7 @@ export async function connect(
         fetchFn,
         base,
         `/integrations/grant-requests/${consent.id}`,
-        auth.token,
+        token,
       ),
     options,
   );
@@ -328,11 +340,11 @@ export async function connect(
     fetchFn,
     base,
     `/integrations/grant-requests/${consent.id}/exchange`,
-    auth.token,
+    token,
     {},
   );
   const credentialHandle = await store.save({
-    accessToken: auth.token,
+    accessToken: token,
     grantToken: grant.token,
     ...(uuid(grant.grant_id)
       ? { grantId: grant.grant_id, renewedAt: Date.now() }
@@ -355,7 +367,7 @@ export async function connect(
         fetchFn,
         base,
         `/integrations/devices/${device.id}/workspaces`,
-        auth.token,
+        token,
         { workspace_id: workspaceId, label: old.label, project_id: projectId },
       );
       carried.push({ id: workspaceId, root, label: old.label, projectId });
