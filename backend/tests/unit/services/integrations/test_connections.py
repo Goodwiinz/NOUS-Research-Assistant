@@ -433,12 +433,14 @@ async def test_a_chat_bound_consent_names_its_chat(
     assert (unbound.thread_id, unbound.thread_label) == (None, None)
 
 
-@pytest.mark.parametrize("change", ["deleted", "moved"])
+@pytest.mark.parametrize("change", ["deleted", "repointed-unlinked"])
 async def test_a_consent_whose_chat_is_gone_stays_listed_without_a_label(
     db: AsyncSession, chat_bound: None, change: str
 ) -> None:
     # It can no longer mint (validate_binding refuses the chat) but stays
-    # listed, so the owner can still revoke it (DECISION C-1).
+    # listed, so the owner can still revoke it (DECISION C-1). The second
+    # case repoints the chat's project with no live project_threads link
+    # left to the consent's project, so no project lists it any more.
     values: dict[str, Any] = (
         {"is_deleted": True}
         if change == "deleted"

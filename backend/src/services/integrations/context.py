@@ -324,7 +324,10 @@ async def _listed_under_project(
     db: AsyncSession, project_id: UUID, thread_id: UUID
 ) -> bool:
     """A live project<->chat link: the row a project's Chat tab lists the chat
-    by (``project_chat.list_project_threads``)."""
+    by (``project_chat.list_project_threads``). This checks only the link row;
+    parity with that listing holds together with validate_binding's chat
+    query, which already requires a live thread and conversation and the
+    same workspace as the project."""
     link = await db.scalar(
         select(ProjectThread.id).where(
             ProjectThread.project_id == project_id,
