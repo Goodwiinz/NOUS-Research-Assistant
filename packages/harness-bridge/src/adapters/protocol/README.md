@@ -1,0 +1,38 @@
+# Pinned request schemas
+
+These three JSON Schema files are unmodified output of
+
+```sh
+codex app-server generate-json-schema --out <temporary-directory>
+```
+
+for every Codex version in `SUPPORTED_CODEX_VERSIONS` (`../codex.ts`). The
+adapter validates native requests against them with Ajv, then applies its
+narrower session, callback and one-time approval restrictions.
+
+## Tested versions
+
+| Codex | Added | Schemas | Live run from a NOUS chat |
+| --- | --- | --- | --- |
+| `0.153.4` | 2026-09-27 | these files | 2026-10-05, local backend (`docs/testing/evidence/harness-live-proof-20261005/`) |
+| `0.161.0` | 2026-10-12 | identical to `0.153.4` | NOT RUN |
+
+## Adding a version
+
+1. Install the new Codex and run the command above into a temporary folder.
+2. Compare its `CommandExecutionRequestApprovalParams.json`,
+   `FileChangeRequestApprovalParams.json` and `ToolRequestUserInputParams.json`
+   with these files. If they differ, the adapter's validation changes and
+   `test/codex.test.ts` must cover the difference before the version is listed.
+3. Compare `codex_app_server_protocol.v2.schemas.json` with the previous
+   version's for the methods the adapter uses (`initialize`, `thread/start`,
+   `thread/resume`, `thread/read`, `turn/start`, `turn/interrupt`,
+   `serverRequest/resolved` and the `item/*`, `turn/*`, `thread/*`
+   notifications). Added optional fields are fine; a removed or renamed field,
+   or a new required one, needs an adapter change.
+4. Add the version to `SUPPORTED_CODEX_VERSIONS`, run
+   `pnpm --filter @nous/harness-bridge test`, and do one live run from a NOUS
+   chat with that Codex. A green test suite alone is not evidence: on
+   2026-10-05 a reply shape the fixture did not model (`writableRoots`) broke
+   every run while the suite passed.
+5. Add the row above with the evidence location, or `NOT RUN`.

@@ -3,9 +3,9 @@ import { promisify } from "node:util";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Ajv } from "ajv";
-import commandSchema from "./protocol-0.153.4/CommandExecutionRequestApprovalParams.json" with { type: "json" };
-import fileSchema from "./protocol-0.153.4/FileChangeRequestApprovalParams.json" with { type: "json" };
-import inputSchema from "./protocol-0.153.4/ToolRequestUserInputParams.json" with { type: "json" };
+import commandSchema from "./protocol/CommandExecutionRequestApprovalParams.json" with { type: "json" };
+import fileSchema from "./protocol/FileChangeRequestApprovalParams.json" with { type: "json" };
+import inputSchema from "./protocol/ToolRequestUserInputParams.json" with { type: "json" };
 import type {
   AdapterEvent,
   Capabilities,
