@@ -75,8 +75,9 @@ function ArtifactRow({ item }: { item: ProjectArtifact }): ReactElement {
 }
 
 /**
- * One row per artifact: one republished between two page loads moves to the
- * top and would otherwise be listed twice.
+ * One row per artifact. A publication between two page loads shifts the
+ * offsets, so the row on the page boundary arrives twice; keep its first copy.
+ * (A row republished above the loaded window is missed until a refetch.)
  */
 function uniqueArtifacts(
   pages: ProjectArtifact[][] | undefined
@@ -100,6 +101,7 @@ export function ProjectArtifactsTab({
     isError,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
     fetchNextPage,
   } = useProjectArtifacts(projectId);
   const items = uniqueArtifacts(data?.pages);
@@ -138,14 +140,21 @@ export function ProjectArtifactsTab({
         ))}
       </ul>
       {hasNextPage && (
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={isFetchingNextPage}
-          onClick={() => void fetchNextPage()}
-        >
-          {isFetchingNextPage ? 'Loading more files…' : 'Load more files'}
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+          >
+            {isFetchingNextPage ? 'Loading more files…' : 'Load more files'}
+          </Button>
+          {isFetchNextPageError && (
+            <p role="alert" className="text-xs text-destructive">
+              Could not load more files. Try again.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

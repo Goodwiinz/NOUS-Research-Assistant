@@ -155,9 +155,10 @@ export const artifactService = {
       limit: PROJECT_ARTIFACT_PAGE_SIZE,
       offset,
     };
-    const search = new URLSearchParams(
-      Object.entries(query).map(([key, value]) => [key, String(value)])
-    );
+    const search = new URLSearchParams({
+      limit: String(query.limit),
+      offset: String(query.offset),
+    });
     const rows = await api.get<ApiProjectArtifact[]>(
       `/artifacts/projects/${encodeURIComponent(projectId)}?${search.toString()}`,
       { signal }
