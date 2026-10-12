@@ -202,31 +202,67 @@ def test_list_files_rejects_unknown_status():
     assert exc.value.status_code == 400
 
 
+class _StorageReached(BaseException):
+    """Sentinel raised by the stubbed service when the route reaches it.
+
+    It derives from ``BaseException`` because the route wraps any ``Exception``
+    from the upload block into a 400, which would hide where the call stopped.
+    """
+
+
+def _name_service() -> MagicMock:
+    service = MagicMock()
+    service.upload_file = AsyncMock(side_effect=_StorageReached("storage reached"))
+    return service
+
+
+def _upload_named(service: MagicMock, *, title: str, filename: str) -> None:
+    upload = MagicMock()
+    upload.filename = filename
+    asyncio.run(
+        files_mod.upload_file(
+            file=upload,
+            title=title,
+            description=None,
+            tags=None,
+            is_public=False,
+            processing_priority="normal",
+            enable_quality_check=True,
+            custom_metadata=None,
+            current_user=_user(),
+            db=MagicMock(),
+            file_service=service,
+        )
+    )
+
+
 @pytest.mark.parametrize("field", ["title", "filename"])
 def test_upload_rejects_names_longer_than_the_column(field: str) -> None:
     """IN-3: documents.title and documents.filename are varchar(500). A longer
     value reached object storage before PostgreSQL rejected the INSERT."""
-    upload = MagicMock()
-    upload.filename = ("f" * 501 + ".pdf") if field == "filename" else "paper.pdf"
-    service = MagicMock()
-    service.upload_file = AsyncMock(side_effect=AssertionError("storage reached"))
+    service = _name_service()
 
     with pytest.raises(HTTPException) as raised:
-        asyncio.run(
-            files_mod.upload_file(
-                file=upload,
-                title=("t" * 501) if field == "title" else "Paper",
-                description=None,
-                tags=None,
-                is_public=False,
-                processing_priority="normal",
-                enable_quality_check=True,
-                custom_metadata=None,
-                current_user=_user(),
-                db=MagicMock(),
-                file_service=service,
-            )
+        _upload_named(
+            service,
+            title=("t" * 501) if field == "title" else "Paper",
+            filename=("f" * 497 + ".pdf") if field == "filename" else "paper.pdf",
         )
 
     assert raised.value.status_code == 422
     service.upload_file.assert_not_awaited()
+
+
+@pytest.mark.parametrize("field", ["title", "filename"])
+def test_upload_accepts_names_at_the_column_boundary(field: str) -> None:
+    """Exactly 500 characters fits varchar(500), so the check lets it through."""
+    service = _name_service()
+
+    with pytest.raises(_StorageReached):
+        _upload_named(
+            service,
+            title=("t" * 500) if field == "title" else "Paper",
+            filename=("f" * 496 + ".pdf") if field == "filename" else "paper.pdf",
+        )
+
+    service.upload_file.assert_awaited_once()

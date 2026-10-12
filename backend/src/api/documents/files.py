@@ -179,7 +179,7 @@ async def upload_file(
         or len(file.filename or "") > _MAX_DOCUMENT_NAME_CHARS
     ):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"Title and filename must be at most {_MAX_DOCUMENT_NAME_CHARS} "
                 "characters"
