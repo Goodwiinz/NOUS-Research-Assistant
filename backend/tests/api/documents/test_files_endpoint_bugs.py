@@ -200,3 +200,33 @@ def test_list_files_rejects_unknown_status():
             )
         )
     assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize("field", ["title", "filename"])
+def test_upload_rejects_names_longer_than_the_column(field: str) -> None:
+    """IN-3: documents.title and documents.filename are varchar(500). A longer
+    value reached object storage before PostgreSQL rejected the INSERT."""
+    upload = MagicMock()
+    upload.filename = ("f" * 501 + ".pdf") if field == "filename" else "paper.pdf"
+    service = MagicMock()
+    service.upload_file = AsyncMock(side_effect=AssertionError("storage reached"))
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            files_mod.upload_file(
+                file=upload,
+                title=("t" * 501) if field == "title" else "Paper",
+                description=None,
+                tags=None,
+                is_public=False,
+                processing_priority="normal",
+                enable_quality_check=True,
+                custom_metadata=None,
+                current_user=_user(),
+                db=MagicMock(),
+                file_service=service,
+            )
+        )
+
+    assert raised.value.status_code == 422
+    service.upload_file.assert_not_awaited()
