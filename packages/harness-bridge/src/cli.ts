@@ -7,7 +7,7 @@ import { join, basename, resolve } from "node:path";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, stripVTControlCharacters } from "node:util";
 import { CredentialStore } from "./credentials.ts";
 import { GRANT_LIFETIME_MS, GrantExpired, GrantKeeper } from "./grants.ts";
 import { HandoffHttpClient, type Handoff } from "./handoffs/client.ts";
@@ -526,43 +526,77 @@ export async function addWorkspace(
 }
 /** One NOUS project as `rc` lists it. */
 type RcProject = { id: string; name: string; documentCount?: number };
-/** Terminal-safe display name: NOUS project names are user data. */
+/** The `/projects` page `rc` shows; `more` when NOUS has projects beyond it. */
+type RcProjectPage = { projects: RcProject[]; total?: number; more: boolean };
+/** `rc` lists one page of projects. */
+const PROJECT_PAGE = 50;
+/**
+ * Terminal-safe display name: NOUS project names are user data. Whole CSI
+ * sequences go first, as a terminal reads them: stripVTControlCharacters alone
+ * takes `ESC [31m name BEL` for one sequence and drops "name". It then removes
+ * OSC and the other escape sequences, and the last pass any stray control or
+ * format character.
+ */
 const plain = (value: string): string =>
-  value
-    // Whole CSI sequences (colours, cursor moves), not just their ESC byte,
-    // then every remaining control or format character.
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
-/** A `/projects` page, or null when NOUS no longer accepts the CLI token. */
-async function listProjects(
+  stripVTControlCharacters(
+    value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""),
+  ).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
+/** A GET signed with the CLI token; request()'s redirect and time limits. */
+function authorizedGet(
   fetchFn: typeof fetch,
-  base: string,
+  url: string,
   token: string,
-): Promise<RcProject[] | null> {
-  const response = await fetchFn(`${base}/projects?limit=50`, {
+): Promise<Response> {
+  return fetchFn(url, {
     headers: { Authorization: `Bearer ${token}` },
     redirect: "error",
     signal: AbortSignal.timeout(15_000),
   });
+}
+/** A 1-based menu answer: digits only, since parseInt takes "1abc" for 1. */
+function menuChoice(answer: string, count: number): number | null {
+  const trimmed = answer.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const index = Number.parseInt(trimmed, 10);
+  return index >= 1 && index <= count ? index - 1 : null;
+}
+/** The first `/projects` page, or null once NOUS rejects the CLI token. */
+async function listProjects(
+  fetchFn: typeof fetch,
+  base: string,
+  token: string,
+): Promise<RcProjectPage | null> {
+  const response = await authorizedGet(
+    fetchFn,
+    `${base}/projects?limit=${PROJECT_PAGE}`,
+    token,
+  );
   if (response.status === 401) return null;
   if (!response.ok)
     throw new Error(`NOUS request failed (${response.status}) /projects`);
   const data: unknown = await response.json().catch(() => null);
   if (!record(data) || !Array.isArray(data.projects))
     throw new Error("invalid NOUS response");
-  return data.projects.flatMap((p: unknown): RcProject[] =>
-    record(p) && uuid(p.id) && typeof p.name === "string"
-      ? [
-          {
-            id: p.id,
-            name: plain(p.name),
-            ...(typeof p.document_count === "number"
-              ? { documentCount: p.document_count }
-              : {}),
-          },
-        ]
-      : [],
-  );
+  const total = typeof data.total === "number" ? data.total : undefined;
+  return {
+    projects: data.projects.flatMap((p: unknown): RcProject[] =>
+      record(p) && uuid(p.id) && typeof p.name === "string"
+        ? [
+            {
+              id: p.id,
+              name: plain(p.name),
+              ...(typeof p.document_count === "number"
+                ? { documentCount: p.document_count }
+                : {}),
+            },
+          ]
+        : [],
+    ),
+    ...(total !== undefined ? { total } : {}),
+    more:
+      data.has_next === true ||
+      (total !== undefined && total > data.projects.length),
+  };
 }
 /** Create a project, asking which workspace only when the user has several. */
 async function createProject(
@@ -572,28 +606,28 @@ async function createProject(
   prompt: (question: string) => Promise<string>,
   announce: (message: string) => void,
 ): Promise<RcProject> {
-  let name = "";
-  while (!name) name = plain(await prompt("Project name: ")).trim();
-  // Projects live in a NOUS workspace (not a local folder); v2 is a sibling
-  // of v1.
-  const workspaces = await fetchFn(
-    `${base.replace(/\/v1$/, "/v2")}/workspaces`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    },
+  // Projects live in a NOUS workspace (not a local folder), listed by the v2
+  // API beside v1; any other API path fails closed instead of guessing.
+  if (!/\/api\/v1$/.test(base))
+    throw new Error(`cannot derive the workspaces endpoint from ${base}`);
+  const response = await authorizedGet(
+    fetchFn,
+    `${base.replace(/\/api\/v1$/, "/api/v2")}/workspaces`,
+    token,
   );
-  if (!workspaces.ok)
-    throw new Error(`NOUS request failed (${workspaces.status}) /workspaces`);
-  const list: unknown = await workspaces.json().catch(() => null);
-  const choices = (Array.isArray(list) ? list : []).flatMap((w: unknown) =>
+  if (!response.ok)
+    throw new Error(`NOUS request failed (${response.status}) /workspaces`);
+  const list: unknown = await response.json().catch(() => null);
+  if (!Array.isArray(list)) throw new Error("invalid NOUS response");
+  const choices = list.flatMap((w: unknown) =>
     record(w) && uuid(w.id) && typeof w.name === "string"
       ? [{ id: w.id, name: plain(w.name) }]
       : [],
   );
   if (!choices.length)
     throw new Error("no NOUS workspace to create the project in");
+  let name = "";
+  while (!name) name = plain(await prompt("Project name: ")).trim();
   let workspace = choices[0];
   if (choices.length > 1) {
     announce(
@@ -603,12 +637,12 @@ async function createProject(
       ].join("\n"),
     );
     for (;;) {
-      const index = Number.parseInt(
+      const index = menuChoice(
         await prompt(`Pick a workspace [1-${choices.length}]: `),
-        10,
+        choices.length,
       );
-      if (Number.isInteger(index) && index >= 1 && index <= choices.length) {
-        workspace = choices[index - 1];
+      if (index !== null) {
+        workspace = choices[index];
         break;
       }
       announce("Not a listed choice.");
@@ -623,11 +657,12 @@ async function createProject(
 }
 /** Numbered picker: a listed project by number, or `n` for a new one. */
 async function pickProject(
-  projects: RcProject[],
+  page: RcProjectPage,
   prompt: (question: string) => Promise<string>,
   announce: (message: string) => void,
   create: () => Promise<RcProject>,
 ): Promise<RcProject> {
+  const { projects } = page;
   announce(
     [
       "Your projects:",
@@ -636,20 +671,29 @@ async function pickProject(
           `  ${i + 1}) ${p.name}${p.documentCount !== undefined ? `  ${p.documentCount} docs` : ""}`,
       ),
       "  n) New project",
+      ...(page.more
+        ? [
+            page.total !== undefined
+              ? `Showing the first ${PROJECT_PAGE} of ${page.total} projects.`
+              : `Showing the first ${PROJECT_PAGE} projects.`,
+          ]
+        : []),
     ].join("\n"),
   );
   const range = projects.length ? `1-${projects.length}, n` : "n";
   for (;;) {
-    const answer = (await prompt(`Pick a project [${range}]: `))
-      .trim()
-      .toLowerCase();
-    if (answer === "n") return create();
-    const index = Number.parseInt(answer, 10);
-    if (Number.isInteger(index) && index >= 1 && index <= projects.length)
-      return projects[index - 1];
+    const answer = await prompt(`Pick a project [${range}]: `);
+    if (answer.trim().toLowerCase() === "n") return create();
+    const index = menuChoice(answer, projects.length);
+    if (index !== null) return projects[index];
     announce("Not a listed choice.");
   }
 }
+/** poll()'s refusals: the browser approval was denied or timed out. */
+const NOT_APPROVED = [
+  "authorization denied or expired",
+  "authorization expired",
+];
 export type RcOptions = ClientOptions & {
   apiUrl: string;
   /** The folder Codex works in: the caller's current directory. */
@@ -671,8 +715,12 @@ export async function rc(options: RcOptions): Promise<void> {
   const base = apiBase(options.apiUrl);
   const fetchFn = options.fetchFn ?? fetch;
   const announce = options.announce ?? console.log;
-  // Codex first, so the user never approves a pairing that cannot run.
+  // Codex and the folder first, so the user never approves a pairing that
+  // cannot run.
   const { version } = await options.probe();
+  const root = await realpath(options.dir).catch(() => null);
+  if (root === null || !(await stat(root)).isDirectory())
+    throw new Error(`${options.dir} is not a folder`);
   announce(`NOUS: ${base}`);
   const store = new CredentialStore(options.stateDir);
   const previous = storedConnection(
@@ -684,7 +732,8 @@ export async function rc(options: RcOptions): Promise<void> {
   } catch {
     // An unparsable stored URL is a different NOUS.
   }
-  // The stored CLI token first; a 401 means sign in again, once.
+  // The stored CLI token first, and only for the NOUS that issued it; a 401
+  // means sign in again, once.
   let token: string | undefined =
     sameApi && previous !== null
       ? await store
@@ -692,26 +741,32 @@ export async function rc(options: RcOptions): Promise<void> {
           .then((c) => c.accessToken)
           .catch(() => undefined)
       : undefined;
-  let projects =
+  let page =
     token === undefined ? null : await listProjects(fetchFn, base, token);
-  if (token === undefined || projects === null) {
+  if (token === undefined || page === null) {
     token = await login(base, options);
-    projects = await listProjects(fetchFn, base, token);
-    if (projects === null) throw new Error("NOUS refused the new sign-in");
+    page = await listProjects(fetchFn, base, token);
+    if (page === null) throw new Error("NOUS refused the new sign-in");
+    // connect keeps a reused pairing's stored credential, which grant renewal
+    // and folder registration sign with: give it the new sign-in.
+    if (sameApi && previous !== null) {
+      const stored = await store
+        .load(previous.credentialHandle)
+        .catch(() => null);
+      if (stored !== null)
+        await store.update(previous.credentialHandle, {
+          ...stored,
+          accessToken: token,
+        });
+    }
   }
   const signedIn = token;
+  const { projects } = page;
   announce("Signed in.");
-  const project = await pickProject(projects, options.prompt, announce, () =>
+  const project = await pickProject(page, options.prompt, announce, () =>
     createProject(fetchFn, base, signedIn, options.prompt, announce),
   );
-  if (
-    sameApi &&
-    previous?.projectId !== undefined &&
-    previous.projectId !== project.id
-  )
-    announce(
-      `Your approval for project ${previous.projectId} stays active until you revoke it under Settings → Connected devices (/integrations/devices) in NOUS.`,
-    );
+  const label = options.label ?? hostname();
   try {
     await connect({
       stateDir: options.stateDir,
@@ -720,28 +775,48 @@ export async function rc(options: RcOptions): Promise<void> {
       delay: options.delay,
       apiUrl: base,
       projectId: project.id,
-      label: options.label ?? hostname(),
+      label,
       tools: true,
       accessToken: signedIn,
     });
-    await addWorkspace({
-      stateDir: options.stateDir,
-      fetchFn,
-      // addWorkspace's own notice is about write roots; rc prints its summary
-      // below.
-      announce: () => {},
-      root: options.dir,
-    });
   } catch (error) {
-    // The harness and tools gateways answer 503 while the server flags are off.
-    if (error instanceof Error && /\(503\)/.test(error.message))
-      throw new Error("Local Codex is turned off on this NOUS server");
+    if (error instanceof Error && NOT_APPROVED.includes(error.message))
+      throw new Error("Not approved; run nous --rc again", { cause: error });
     throw error;
   }
-  const root = await realpath(options.dir);
+  // The new pairing replaced the stored one; its consent outlives it in NOUS.
+  if (sameApi && previous !== null && previous.projectId !== project.id) {
+    const until =
+      "stays active until you revoke it under Settings → Connected devices (/integrations/devices) in NOUS.";
+    if (previous.projectId !== undefined) {
+      const old = projects.find((p) => p.id === previous.projectId);
+      announce(
+        `Your approval for project ${old ? `"${old.name}" (${old.id})` : previous.projectId} ${until}`,
+      );
+    } else
+      announce(
+        `Your previous workspace connection (${previous.workspaceId}) ${until}`,
+      );
+  }
+  const { workspaceId } = await addWorkspace({
+    stateDir: options.stateDir,
+    fetchFn,
+    // addWorkspace's own notice is about write roots; rc prints its summary
+    // below.
+    announce: () => {},
+    root,
+  });
+  // Name the device and folder as the web chat lists them: the stored labels.
+  const stored = storedConnection(
+    await store.readLocal("connection").catch(() => null),
+  );
+  const device = stored?.label ?? label;
+  const folder =
+    stored?.workspaces.find((w) => w.id === workspaceId)?.label ??
+    basename(root);
   announce(`Connected: "${project.name}" ↔ ${root}  (Codex ${version})`);
   announce(
-    `In a chat for this project on NOUS, choose Local Codex → this computer → ${basename(root)}.\nPress Ctrl-C to stop.`,
+    `In a chat for this project on NOUS, choose Local Codex → ${device} → ${folder}.\nPress Ctrl-C to stop.`,
   );
   await options.run(options.stateDir);
 }

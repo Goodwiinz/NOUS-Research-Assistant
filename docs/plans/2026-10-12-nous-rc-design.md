@@ -92,7 +92,7 @@ Each failure prints one sentence and exits non-zero unless noted.
 | Node is not 24 | Launcher: `nous --rc needs Node 24 (found 22)`. |
 | Codex missing or untested | Before any network call: `Codex 0.158.0 is not tested with NOUS; tested versions: 0.153.4, 0.161.0`. |
 | Not a terminal | `nous --rc needs an interactive terminal`. |
-| NOUS answers 503 on `/projects` or `/integrations/*` | `Local Codex is turned off on this NOUS server` (the server-side flags from #1977). |
+| NOUS answers 503 | The request error passes through unchanged. (Amended 2026-10-12: the pairing endpoints are not gated by the server flags, so a 503 there is an outage, not "turned off"; with the flags off, pairing succeeds and the web chat reports it.) |
 | 401 with a stored token | Run `login()` and retry once; a second 401 is an error. |
 | No projects | The list shows only `n) New project`. |
 | Bad choice | Re-prompt; never exit. |
