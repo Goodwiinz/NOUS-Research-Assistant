@@ -597,29 +597,33 @@ async def save_selection(
     if len(ordered) > MAX_SELECTED_MEMORIES:
         raise ContextSelectionInvalid()
     try:
-        await _write_selection(
-            db,
-            user_id,
-            organization_id,
-            request_id,
-            ordered,
-            skill_version_ids,
-            refresh_skills,
-        )
-    except IntegrityError:
-        # A concurrent first save inserted the row; rerun the whole validated
-        # write once, now as an update. Only plain ids survive the rollback.
-        await db.rollback()
-        await _write_selection(
-            db,
-            user_id,
-            organization_id,
-            request_id,
-            ordered,
-            skill_version_ids,
-            refresh_skills,
-        )
+        try:
+            await _write_selection(
+                db,
+                user_id,
+                organization_id,
+                request_id,
+                ordered,
+                skill_version_ids,
+                refresh_skills,
+            )
+        except IntegrityError:
+            # A concurrent first save inserted the row; rerun the whole
+            # validated write once, now as an update. Only plain ids survive
+            # the rollback.
+            await db.rollback()
+            await _write_selection(
+                db,
+                user_id,
+                organization_id,
+                request_id,
+                ordered,
+                skill_version_ids,
+                refresh_skills,
+            )
     except Exception:
+        # Any failure, the rerun's included (a size refusal can follow a
+        # snapshot it already wrote), leaves nothing half-written.
         await db.rollback()
         raise
     return await _options(db, user_id, organization_id, request_id)
@@ -639,6 +643,8 @@ async def read_selected_context(
     from there that fit whole, the frozen skills only at offset 0, and the
     position to read next.
     """
+    # The route and the MCP tool bound offset too; never trust that here.
+    offset = max(offset, 0)
     # The project comes from the grant and never from the caller. A workspace
     # grant has none (and cannot hold context:read), so it reads nothing, and
     # the answer does not depend on which grant row it names.
@@ -671,8 +677,8 @@ async def read_selected_context(
         return _unavailable("skill_snapshot_unavailable")
     skills = _frozen_skills(snapshot) if offset == 0 else []
     ids = [UUID(i) for i in selection.memory_ids]
-    valid = {
-        memory.id: memory
+    valid: dict[UUID, ProjectMemory] = {
+        cast(UUID, memory.id): memory
         for memory in await _valid_selected(
             db, ids[offset:], project_id, context.user_id, context.organization_id
         )

@@ -458,6 +458,45 @@ async def test_a_selection_larger_than_one_read_is_saved_and_read_in_pages(
     assert past_the_end.source_refs == []
 
 
+async def test_a_page_is_measured_with_the_next_offset_it_will_carry(
+    db: AsyncSession,
+) -> None:
+    # m0 and m1 would fill one read to the byte if that page said nothing
+    # remains. m2 follows, so the page carries next_offset, truncated and the
+    # notice too, and m1 has to wait for the next page.
+    big = "a" * 40_000
+    ids = await _add_memories(db, [big, "pending", "small"])
+    pair = [
+        {"memory_id": str(ids[0]), "content": big},
+        {"memory_id": str(ids[1]), "content": ""},
+    ]
+    pair[1]["content"] = "x" * (
+        MAX_RESULT_BYTES - selected_context._page_bytes(pair, [], None)
+    )
+    assert selected_context._page_bytes(pair, [], None) == MAX_RESULT_BYTES
+    await db.execute(
+        update(ProjectMemory)
+        .where(ProjectMemory.id == ids[1])
+        .values(content=pair[1]["content"])
+    )
+    await db.commit()
+    await save_selection(db, await _user(db), CONSENT, ids)
+    pages = await _read_every_page(db)
+    assert [_memory_ids(page) for page in pages] == [
+        [str(ids[0])],
+        [str(ids[1]), str(ids[2])],
+    ]
+    for page in pages:
+        assert _wire_bytes(page.model_dump(mode="json")) <= MAX_RESULT_BYTES
+
+
+async def test_a_negative_offset_reads_the_first_page(db: AsyncSession) -> None:
+    await save_selection(db, await _user(db), CONSENT, [THIRD, KEEP])
+    first = await read_selected_context(db, _grant_context(), 0)
+    assert _memory_ids(first) == [str(THIRD), str(KEEP)]
+    assert await read_selected_context(db, _grant_context(), -1) == first
+
+
 async def test_a_memory_deleted_between_page_reads_does_not_shift_the_next_page(
     db: AsyncSession,
 ) -> None:

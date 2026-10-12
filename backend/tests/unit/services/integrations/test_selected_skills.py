@@ -568,6 +568,42 @@ async def test_the_save_measures_each_memory_beside_the_frozen_skills(
     ]
 
 
+async def test_a_refusal_on_the_first_save_retry_rolls_back_its_snapshot(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.models.project_memory import ProjectMemory
+
+    chosen = await skill(db)
+    empty = [{"memory_id": str(KEEP), "content": ""}]
+    exact = "x" * (service.MAX_RESULT_BYTES - service._page_bytes(empty, [], None))
+    await db.execute(
+        update(ProjectMemory).where(ProjectMemory.id == KEEP).values(content=exact)
+    )
+    await db.commit()
+    await service.save_selection(db, await _user(db), CONSENT, [KEEP])
+    # The loser of a first-save race misses the winner's row, collides on
+    # insert and reruns as an update. That rerun freezes a snapshot and is then
+    # refused for size: it must leave nothing behind either.
+    real = service._selection
+    calls = {"n": 0}
+
+    async def stale_once(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        return None if calls["n"] == 1 else await real(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_selection", stale_once)
+    with pytest.raises(service.ContextSelectionTooLarge):
+        await service.save_selection(
+            db, await _user(db), CONSENT, [KEEP], skill_version_ids=[chosen]
+        )
+    assert calls["n"] == 2, "the save did not take the retry path"
+    monkeypatch.setattr(service, "_selection", real)
+    assert await db.scalar(select(func.count(AgentRuntimeSnapshot.id))) == 0
+    selection = await db.scalar(select(IntegrationContextSelection))
+    assert selection is not None
+    assert selection.skill_version_ids == [] and selection.runtime_snapshot_id is None
+
+
 async def test_adding_a_skill_preserves_previously_frozen_version_after_activation_changes(
     db: AsyncSession,
 ) -> None:
