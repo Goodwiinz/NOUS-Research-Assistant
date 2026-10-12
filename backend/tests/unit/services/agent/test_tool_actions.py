@@ -3334,9 +3334,13 @@ async def test_collection_membership_writes_use_actor_organization(
         )
     assert collection is not None
     await db.commit()
-    expected_owned = (
-        operation != "remove" if identity == "active" else operation == "remove"
-    )
-    assert await _linked(db, collection.id, PAPER2) is expected_owned
+    if operation == "remove":
+        # Unlinking reads no document (LA-1): a link to a deleted or
+        # other-organization document stays removable, as before Slice 3.
+        # The library actions filter their ids first (_live_members).
+        for document_id in (PAPER2, foreign, retired):
+            assert not await _linked(db, collection.id, document_id)
+        return
+    assert await _linked(db, collection.id, PAPER2) is (identity == "active")
     for blocked in (foreign, retired):
-        assert await _linked(db, collection.id, blocked) is (operation == "remove")
+        assert not await _linked(db, collection.id, blocked)
