@@ -18,8 +18,10 @@ Lost commit acknowledgements preserve backing storage and the durable state.
 """
 
 import asyncio
+import sqlite3
 import uuid
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -400,6 +402,123 @@ async def test_refresh_compensation_survives_real_session_expiration(
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected", [Document, ProcessingJob])
+async def test_real_session_rejects_the_insert_at_flush(
+    rejected: type[Document] | type[ProcessingJob],
+) -> None:
+    """IN-3 on a real session: a statement error on the Document or
+    ProcessingJob INSERT surfaces at the explicit ``flush()``, before
+    ``commit_in_flight`` is set, so upload_file compensates instead of
+    preserving the object as an unknown commit outcome. The error is raised
+    from the dialect's ``do_execute`` hook, so SQLAlchemy wraps it the way it
+    wraps a driver rejection (a ``DBAPIError`` that is not an IntegrityError).
+
+    Mutation: delete the matching ``await self.db.flush()`` in
+    FileService.upload_file; the matching case fails on
+    ``_delete_stored_object`` called 0 times. Run from backend/:
+    pytest -q tests/test_upload_compensating_delete.py -k real_session_rejects
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    rejected_insert = f"INSERT INTO {rejected.__tablename__}".upper()
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def sqlite_functions(connection: Any, _record: Any) -> None:
+        connection.create_function("greatest", 2, max)
+
+    @event.listens_for(engine.sync_engine, "do_execute")
+    def reject_insert(
+        _cursor: Any, statement: str, _parameters: Any, _context: Any
+    ) -> None:
+        if statement.lstrip().upper().startswith(rejected_insert):
+            raise sqlite3.DataError("value too long for type character varying(500)")
+
+    organization_id = uuid.uuid4()
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                lambda conn: Base.metadata.create_all(
+                    conn,
+                    tables=[
+                        Organization.__table__,
+                        Document.__table__,
+                        ProcessingJob.__table__,
+                    ],
+                )
+            )
+        async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+            organization = Organization(
+                id=organization_id,
+                name="Test",
+                storage_limit_bytes=10_000,
+                storage_used_bytes=0,
+            )
+            db.add(organization)
+            await db.commit()
+            svc = _make_service(db)
+
+            with pytest.raises(FileStorageError):
+                await svc.upload_file(
+                    _FakeUpload(b"payload"),
+                    "T" * 501,
+                    MagicMock(id=uuid.uuid4()),
+                    organization,
+                )
+
+        async with async_sessionmaker(engine)() as check:
+            documents = (await check.scalars(select(Document))).all()
+            quota = await check.scalar(
+                select(Organization.storage_used_bytes).where(
+                    Organization.id == organization_id
+                )
+            )
+            jobs = (await check.scalars(select(ProcessingJob))).all()
+        svc._delete_stored_object.assert_called_once()  # type: ignore[attr-defined]
+        assert quota == 0
+        assert jobs == []
+        if rejected is Document:
+            assert documents == []
+        else:
+            assert len(documents) == 1 and documents[0].is_deleted is True
+    finally:
+        await engine.dispose()
+
+
+class _AsyncpgDataError(Exception):
+    """What asyncpg's dialect puts in ``DBAPIError.orig`` for a varchar
+    overflow: a plain dbapi ``Error`` carrying SQLSTATE 22001."""
+
+    sqlstate = pgcode = "22001"
+
+
+class _StatementRejectingDB(_FakeDB):
+    """INSERTs run at the first flush, explicit or inside commit(); one model
+    is rejected with ``error``, by default the way PostgreSQL rejects a title
+    longer than varchar(500)."""
+
+    def __init__(self, rejected: type, error: DBAPIError | None = None) -> None:
+        super().__init__()
+        self.rejected = rejected
+        self.error = error or DBAPIError(
+            "INSERT ...",
+            {},
+            _AsyncpgDataError("value too long for type character varying(500)"),
+        )
+        self.pending: list[object] = []
+
+    def add(self, obj: object) -> None:
+        self.pending.append(obj)
+
+    async def flush(self) -> None:
+        pending, self.pending = self.pending, []
+        if any(isinstance(obj, self.rejected) for obj in pending):
+            raise self.error
+
+    async def commit(self) -> None:
+        await self.flush()
+        await super().commit()
+
+
 def _integrity_error(constraint: str) -> IntegrityError:
     orig = Exception(f'duplicate key value violates unique constraint "{constraint}"')
     return IntegrityError("INSERT INTO documents ...", {}, orig)
@@ -410,16 +529,13 @@ async def test_racing_duplicate_unique_index_returns_409_and_cleans_object(
     quota_deltas, soft_deleted
 ):
     """Two identical uploads both pass the SELECT dup check; the loser's
-    Document commit hits uq_documents_org_checksum_live → 409 (not a 400
-    FileStorageError), object deleted, no quota touched."""
-    db = _FakeDB()
+    Document INSERT hits uq_documents_org_checksum_live at flush → 409 (not a
+    400 FileStorageError), object deleted, no quota touched."""
+    db = _StatementRejectingDB(
+        Document, _integrity_error("uq_documents_org_checksum_live")
+    )
     svc = _make_service(db)
     org, user = _org_user()
-
-    async def _commit():
-        raise _integrity_error("uq_documents_org_checksum_live")
-
-    db.commit = _commit
 
     with pytest.raises(HTTPException) as exc_info:
         await svc.upload_file(_FakeUpload(b"hello world"), "Doc", user, org)
@@ -435,52 +551,14 @@ async def test_racing_duplicate_unique_index_returns_409_and_cleans_object(
 async def test_unrelated_integrity_error_is_not_mapped_to_409(quota_deltas):
     """Only the checksum index maps to 409; other constraint failures stay
     on the generic FileStorageError path (still compensated)."""
-    db = _FakeDB()
+    db = _StatementRejectingDB(Document, _integrity_error("documents_pkey"))
     svc = _make_service(db)
     org, user = _org_user()
-
-    async def _commit():
-        raise _integrity_error("documents_pkey")
-
-    db.commit = _commit
 
     with pytest.raises(FileStorageError):
         await svc.upload_file(_FakeUpload(b"hello world"), "Doc", user, org)
 
     svc._delete_stored_object.assert_called_once()
-
-
-class _AsyncpgDataError(Exception):
-    """What asyncpg's dialect puts in ``DBAPIError.orig`` for a varchar
-    overflow: a plain dbapi ``Error`` carrying SQLSTATE 22001."""
-
-    sqlstate = pgcode = "22001"
-
-
-class _StatementRejectingDB(_FakeDB):
-    """INSERTs run at the first flush, explicit or inside commit(); one model
-    is rejected the way PostgreSQL rejects a title longer than varchar(500)."""
-
-    def __init__(self, rejected: type) -> None:
-        super().__init__()
-        self.rejected = rejected
-        self.pending: list[object] = []
-
-    def add(self, obj: object) -> None:
-        self.pending.append(obj)
-
-    async def flush(self) -> None:
-        pending, self.pending = self.pending, []
-        if any(isinstance(obj, self.rejected) for obj in pending):
-            raise DBAPIError(
-                "INSERT ...",
-                {},
-                _AsyncpgDataError("value too long for type character varying(500)"),
-            )
-
-    async def commit(self) -> None:
-        await self.flush()
-        await super().commit()
 
 
 @pytest.mark.asyncio
@@ -505,7 +583,7 @@ async def test_rejected_insert_is_a_definite_failure(
     with pytest.raises(FileStorageError):
         await svc.upload_file(_FakeUpload(b"hello world"), "T" * 501, user, org)
 
-    svc._delete_stored_object.assert_called_once()
+    svc._delete_stored_object.assert_called_once()  # type: ignore[attr-defined]
     if rejected is Document:
         assert soft_deleted == []
         assert quota_deltas == []
