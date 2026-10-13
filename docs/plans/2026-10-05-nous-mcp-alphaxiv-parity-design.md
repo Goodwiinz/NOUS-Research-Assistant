@@ -100,3 +100,7 @@ The approve page shows workspace name (or Collection name), a scope → label ma
 ## Out of scope
 
 GitHub repository reading, follow feeds, nested folders, abstract/author/BibTeX editing (no columns), remote OAuth MCP endpoint, per-grant metering, NOUS consuming alphaXiv's MCP.
+
+## Amendment 2026-10-12: Slice 5 reference
+
+Observed behaviour of alphaXiv's `discover_papers` (inputs, inferred collect → re-rank → filter pipeline, output shape) is recorded in [2026-10-12-alphaxiv-discover-papers-reference.md](2026-10-12-alphaxiv-discover-papers-reference.md). The Slice 5 gate above is unchanged. The live server listed 23 tools on that date, not nineteen.
