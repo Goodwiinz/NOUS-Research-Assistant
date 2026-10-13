@@ -68,11 +68,18 @@ the saved sign-in still works), lists your projects with `n) New project`,
 asks you to approve this computer in the browser when needed (see below),
 registers the current folder, and runs the bridge. Then, in a chat for that
 project on NOUS, choose **Local Codex**, this computer and the folder; the
-last lines `nous --rc` prints name both.
+last lines `nous --rc` prints name both. If NOUS cannot be reached, it says
+`Could not reach NOUS at <url> (<reason>)`.
+
+Before any network call, it refuses a folder that is too broad: `/`, your home
+folder, or any folder that contains its state folder
+(`<folder> is too broad for Codex to work in; run nous --rc in a project
+folder`), because Codex writes inside the registered folder without asking.
 
 Codex runs in that folder and can read the project's documents. Registering
-the folder is not read isolation: Codex writes only there, but it may read
-other files on this computer. A pairing `nous --rc` creates cannot publish
+the folder is not read isolation: Codex's sandbox writes only there (a command
+you approve in the chat may get more), but it may read other files on this
+computer. A pairing `nous --rc` creates cannot publish
 files or change your library; if it reuses a pairing made earlier with
 `nous-harness connect` and more scopes, it keeps them and names them.
 
@@ -80,16 +87,28 @@ Each computer holds one pairing. Running `nous --rc` again for the same
 project skips the browser only while that pairing is still live (it lapses 3
 to 15 minutes after the bridge stops), already allows reading documents, and
 is not bound to a single chat. Otherwise it asks you to approve again, and
-NOUS lists this computer as a new device: pick that entry in the chat
-composer. The old approval stays active until you revoke it under Settings →
-Connected devices (`/integrations/devices`); no note is printed for this case.
+NOUS lists this computer as a new device. The old approval stays active until
+you revoke it under Settings → Connected devices (`/integrations/devices`); no
+note is printed for this case. Revoking does not remove the old entry, and the
+chat composer shows both under the same name, so give the new device its own
+name when you approve again, for example
+`nous --rc --label "MacBook (paper)"`.
 Picking a different project also asks for approval (so does going back to an
 earlier one) and prints that the old project's approval stays active until
 you revoke it there. Folders you registered earlier move to the new pairing,
 also when you switch NOUS servers; a server switch prints no revoke note.
 
-Until the bridge starts, Ctrl-C, Ctrl-D or end of input cancels the whole
-command: it prints `Cancelled` and exits with status 130. Your pairing stays as
+Only one `nous --rc` or `nous-harness run` can use a state folder (by default
+`~/.nous/harness-bridge`) at a time; a second one is refused with
+`Another nous --rc or nous-harness run (pid N) is already using <folder>; stop
+it first`. To switch folders, Ctrl-C the running one and run `nous --rc` in
+the new folder. After a crash, the next start replaces the stale lock; if the
+crashed one's pid now belongs to another process, delete `bridge.lock` in the
+state folder.
+
+Until the bridge starts, Ctrl-C, Ctrl-D, end of input, closing the terminal or
+a kill (SIGTERM) cancels the whole command: it prints `Cancelled` and exits
+with status 130. Your pairing stays as
 it was (if you cancel just after approving, the new pairing is saved without
 the folder; run `nous --rc` again), though a refreshed sign-in may be kept.
 Ctrl-Z and `fg` work. Once the bridge runs, Ctrl-C stops it and keeps the
