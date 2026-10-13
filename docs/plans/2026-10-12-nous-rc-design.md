@@ -1,6 +1,6 @@
 # `nous --rc`: pair this folder with web NOUS in one command
 
-**Status:** Design, written 2026-10-12 against `origin/develop` `d8c5894d1`. Decisions were made by the owner in a brainstorming session the same day; the "Decisions" table records them. Nothing here is implemented yet. Amended 2026-10-12: implemented on `feat/nous-rc` (PR 1 is #1983); the live run is NOT RUN.
+**Status:** Design, written 2026-10-12 against `origin/develop` `d8c5894d1`. Decisions were made by the owner in a brainstorming session the same day; the "Decisions" table records them. Nothing here is implemented yet. Amended 2026-10-12: implemented on `feat/nous-rc`; PR 1 (#1983) is on `feat/codex-tested-versions`; the live run is NOT RUN. Amended 2026-10-13: the launcher and cancel behaviour changed after a second review, and skipping the browser for the same project holds only while the stored pairing is live (see the amendment lists under "Decisions").
 
 **Contracts touched:** [harness bridge](../engineering/harness-bridge.md), [bridge package](../../packages/harness-bridge/README.md), [terminal client](../../terminal/README.md), [live-proof runbook](../testing/harness-live-proof.md).
 
@@ -32,15 +32,16 @@ The pieces already exist: the bridge does the browser login, the consent, the fo
 - Switching to a different project carries the registered folders over to the new project (owner's decision), as `connect` already does on a reconnect.
 - A refused or expired browser sign-in prints `Not approved; run nous --rc again`, the same as a refused or expired approval.
 - The 503 "turned off" message was dropped: a 503 passes through as `NOUS request failed (503) <path>` (see the Errors table's own amendment).
-- The "What the user sees" transcript is illustrative. The real prompts are the bridge's existing `Authorize CLI login in your browser: <link>` / `Type this code on that page: <code>` and `Approve this device and project in your browser: <link>`, and the last line reads `In a chat for this project on NOUS, choose Local Codex → <device label> → <folder label>.`
+- The "What the user sees" transcript is illustrative. The real prompts are the bridge's existing `Authorize CLI login in your browser: <link>` / `Type this code on that page: <code>` and `Approve this device and project in your browser: <link>`, and the last lines read `In a chat for this project on NOUS, choose Local Codex → <device label> → <folder label>.` and `Press Ctrl-C to stop.`
 
-**Amendments 2026-10-13** (after a second review; these change Components → 3 and supersede the matching 2026-10-12 items above):
+**Amendments 2026-10-13** (after a second review). The first three items change Components → 3 (the launcher), and the first replaces the 2026-10-12 Node 24 item; the fourth replaces the 2026-10-12 Ctrl-C/Ctrl-D item; the fifth extends the 2026-10-12 folder carry-over item; the sixth limits the "Browser steps" decision; the sample transcript's folder is now written `<home>/code/my-paper`.
 
 - The launcher runs Node 24 directly (`<node> --import tsx src/cli.ts rc …` from `packages/harness-bridge`) instead of through `pnpm`, and leaves PATH untouched. Review finding: `pnpm --filter` could run a same-named package from the current folder when the launcher was copied, and the PATH prepend leaked Node 24 into the tools Codex runs. Node 24 is the default `node` if it is 24.x, else Homebrew's `node@24` binary; otherwise the launcher prints `nous --rc needs Node 24 (found <v>); switch your default node to 24 (for example nvm use 24) or install it with: brew install node@24`.
 - The launcher refuses a copied launcher (`nous: <dir> is not a NOUS checkout; link this launcher with ln -s instead of copying it`) and a checkout without dependencies (`nous --rc: dependencies are missing; run: pnpm --dir "<checkout>" install`).
 - The launcher's `--api` and `--root` come after the user's arguments, so they win (the CLI keeps the last value); other arguments, such as `--label`, pass through.
 - Until the bridge starts, any Ctrl-C, Ctrl-D or end of input cancels the whole command (`Cancelled`, exit 130), not only at an open prompt. The stored pairing is unchanged, except that a cancel just after the browser approval can leave the new pairing saved without the folder; a refreshed sign-in may be kept. Ctrl-Z and `fg` resume the prompt.
 - Registered folders are also carried over when the new pairing is on a different NOUS server (`connect` re-registers them whenever a previous connection exists); the revoke hint is still printed only for a project switch on the same server (see Risks).
+- The "approve once per project" decision holds only while the stored pairing is live. A grant lives 15 minutes, can be renewed only before it expires (backend `renew_grant`), and only a running bridge renews it, so a pairing lapses 3 to 15 minutes after the bridge stops; an outside client can get a new grant only through the browser approval. The same project skips the browser only while the pairing is live, already includes `tools:read`, and is not bound to a single chat (a `connect --chat` pairing is replaced). Otherwise `nous --rc` asks for approval again and NOUS lists this computer as a new device; the old approval stays active until revoked under Connected devices, and no hint is printed for this case. Going from project A to B and back to A also approves again. Re-issuing a grant from an existing approval needs a backend endpoint; it is deferred to a follow-up (owner's decision 2026-10-13).
 
 ## What the user sees
 
@@ -55,7 +56,7 @@ Your projects:
   n) New project
 Pick a project [1-2, n]: 1
 Approve this Mac in your browser: https://goodwiinz.tech/...   ← only when the pairing changes
-Connected: "Thesis lit review" ↔ /Users/me/code/my-paper  (Codex 0.161.0)
+Connected: "Thesis lit review" ↔ <home>/code/my-paper  (Codex 0.161.0)
 In a chat for this project on goodwiinz.tech, choose Local Codex → this computer → my-paper.
 Press Ctrl-C to stop.
 ```
@@ -137,14 +138,16 @@ Live acceptance (manual, after [#1978](https://github.com/Goodwiinz/NOUS-Researc
 - One pairing per project; automatic revocation of the replaced project's consent; workspace-wide pairings that can run Codex.
 - `tools:write`, `artifacts:publish`, `library:*`. Phase 2.
 - Reading the user's CLI token from `~/.nous/config.json` (the `./nous login` store). The bridge keeps its own sign-in; sharing the two is a later cleanup.
+- Re-issuing a grant from an existing approval, so a lapsed pairing for the same project needs no browser step and no new device. (Amended 2026-10-13: needs a backend endpoint; deferred to a follow-up by the owner's decision.)
 
 ## Risks
 
 - **Codex `0.161.0` at runtime.** The schema comparison covers what the bridge validates and the start/resume/turn shapes, not every reply. The 2026-10-05 proof found a reply shape (`writableRoots`) that the fixture tests did not model. The live run above is the only proof; the version list keeps `0.153.4` so the known-good path stays available.
 - **Conflicts.** [#1973](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/1973) (artifact sharing) also edits `packages/harness-bridge/src/cli.ts`; the `rc` work should land as small PRs and merge `develop` forward rather than rebase.
 - **The stale main checkout.** `~/development/RAG_system` is ~2,400 commits behind `develop` and has no `packages/harness-bridge`; the symlink must point at a current checkout, which the README says.
-- **Credential rewrite race.** When NOUS rejects the stored sign-in, `rc` writes the new token into the stored credential (`load`, then `update`), so a bridge renewing the grant from the same state directory between those two steps would have its new grant token overwritten with the old one; this is left as is because it needs both at once.
+- **Credential rewrite race.** (Amended 2026-10-12.) When NOUS rejects the stored sign-in, `rc` writes the new token into the stored credential (`load`, then `update`), so a bridge renewing the grant from the same state directory between those two steps would have its new grant token overwritten with the old one; this is left as is because it needs both at once.
 - **Switching NOUS servers.** (Amended 2026-10-12.) The revoke hint is printed only when the replaced pairing was on the same NOUS server; a pairing replaced on another server keeps its approval there with no hint.
+- **Re-approval after a break.** (Amended 2026-10-13.) Once the stored pairing has lapsed, every `nous --rc` for the same project asks for browser approval again and registers a new device, so approvals pile up in Connected devices until the user revokes them; no hint is printed. The fix is the deferred backend endpoint (see Out of scope).
 
 ## Delivery
 
