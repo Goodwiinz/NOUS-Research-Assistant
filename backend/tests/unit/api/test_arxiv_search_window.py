@@ -7,6 +7,15 @@ same arXiv ``submittedDate`` filter, with the caller's bounds, composed into the
 query the service sends: it narrows what arXiv returns instead of trimming a
 page that was already fetched. Pure unit tests; the arXiv service and Redis are
 replaced.
+
+Mutation checks (2026-10-13), each guard removed in turn, the named tests seen
+failing, the source restored byte-identical and the tests green again: leaving
+the window out of ``_arxiv_cache_key`` fails ``test_cached_results_are_keyed_by_
+window``, ``test_window_keys_differ_and_windowless_keys_keep_their_shape`` and
+``test_one_open_bound_uses_the_arxiv_floor_or_ceiling`` (a stale unbounded
+result answered the windowed call); ignoring the window in ``_tool_search_arxiv``
+fails the four tests that read the sent query. Focused command: ``pytest -q
+backend/tests/unit/api/test_arxiv_search_window.py``.
 """
 
 from __future__ import annotations
