@@ -33,9 +33,13 @@ narrower session, callback and one-time approval restrictions.
    record any other removal in the PR. The previous version's output is not
    vendored; regenerate it with that Codex (for example
    `npx @openai/codex@<previous> app-server generate-json-schema --out <folder>`).
-4. Add the version to `SUPPORTED_CODEX_VERSIONS`, run
-   `pnpm --filter @nous/harness-bridge test`, and do one live run from a NOUS
-   chat with that Codex. A green test suite alone is not evidence: on
-   2026-10-05 a reply shape the fixture did not model (`writableRoots`) broke
-   every run while the suite passed.
-5. Add the row above with the evidence location, or `NOT RUN`.
+4. On a branch, add the version to `SUPPORTED_CODEX_VERSIONS` (the bridge
+   refuses unlisted versions, so the live run needs it listed) and run
+   `pnpm --filter @nous/harness-bridge test`.
+5. From that branch, do one live run from a NOUS chat with that Codex: a turn
+   with streamed output and one command approval. A green test suite alone is
+   not evidence: on 2026-10-05 a reply shape the fixture did not model
+   (`writableRoots`) broke every run while the suite passed.
+6. Record the evidence location in the table above. A row that still says
+   `NOT RUN` may exist only on an unmerged branch: do not merge the PR that
+   lists a version until its live run is recorded.
