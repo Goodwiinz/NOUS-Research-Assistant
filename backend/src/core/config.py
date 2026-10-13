@@ -895,6 +895,12 @@ class Settings(BaseSettings):
     # answers with another length is skipped, never stored.
     DOCUMENT_EMBEDDINGS_ENABLED: bool = False
     SEMANTIC_SEARCH_ENABLED: bool = False
+    # discover_papers: the longest its one arXiv call waits for the shared arXiv
+    # rate gate (requests are spaced 3 s apart across all pods). A longer wait
+    # skips the call (status "unavailable", reason "rate_gated") instead of
+    # holding the whole round; cached arXiv results are served before the gate
+    # is asked. The gate's own queue cap (30 s) bounds any larger value.
+    DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS: float = 1.0
 
     # Processing Configuration
     MAX_CONCURRENT_JOBS: int = 5

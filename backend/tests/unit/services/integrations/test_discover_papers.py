@@ -54,6 +54,18 @@ again:
   seven;
 - arXiv syntax stripping (``_arxiv_terms``): returning the raw query fails
   ``test_arxiv_gets_plain_keywords_only``;
+- arXiv in one request and its time budget (2026-10-13, third pass):
+  ``_arxiv_keyword`` not mapping ``error_type="rate_gated"`` to
+  ``ChannelUnavailable`` (so a gated call reads as a failed one) fails
+  ``test_a_gated_arxiv_call_is_unavailable_rate_gated_and_the_library_still_
+  answers``, ``test_a_gated_arxiv_call_with_nothing_else_is_the_stable_error``
+  and ``test_a_busy_gate_through_the_real_tool_skips_arxiv_without_sending``;
+  not passing ``max_gate_wait_s`` fails ``test_the_arxiv_call_gets_the_budget_
+  from_settings``, ``test_the_acronyms_travel_in_the_one_arxiv_request``,
+  ``test_without_an_acronym_the_arxiv_call_has_no_or_part``, the gateway
+  options test and the real-tool test; the gate-level guards are in
+  ``tests/unit/services/arxiv/test_arxiv_gate_budget.py`` and
+  ``tests/unit/api/test_arxiv_search_combined_query.py``;
 - the missing-table test (``_embeddings_table_missing`` always false) fails
   ``test_a_missing_table_is_unavailable_logged_once_and_the_savepoint_isolates_it``
   and the parametrized sqlstate cases.
@@ -379,28 +391,25 @@ def test_acronym_recovery_rule(keywords: list[str], expected: list[str]) -> None
     assert acronym_terms(keywords) == expected
 
 
-async def test_an_acronym_among_other_words_adds_one_keyword_call_per_source(
+async def test_an_acronym_among_other_words_adds_one_library_call_and_no_second_arxiv_call(
     fakes: Fakes,
 ) -> None:
     payload = await run(fakes, request(keywords=["GRPO", "reward models"]))
 
+    # arXiv spaces requests 3 s apart across all pods: a second arXiv request
+    # for the acronyms would cost the round 3 s, so it is one OR-ed request.
     assert [call["name"] for call in payload["calls"]] == [
         "library_keyword",
         "library_semantic",
         "arxiv_keyword",
         "library_keyword_acronyms",
-        "arxiv_keyword_acronyms",
     ]
     queries = {call["name"]: call["query"] for call in payload["calls"]}
-    assert (
-        queries["library_keyword"] == queries["arxiv_keyword"] == "GRPO reward models"
-    )
-    assert (
-        queries["library_keyword_acronyms"]
-        == queries["arxiv_keyword_acronyms"]
-        == "GRPO"
-    )
+    assert queries["library_keyword"] == "GRPO reward models"
+    assert queries["library_keyword_acronyms"] == "GRPO"
+    assert queries["arxiv_keyword"] == "(GRPO reward models) OR (GRPO)"
     assert queries["library_semantic"] == "how do llm agents plan?"
+    assert len(fakes.named("arxiv")) == 1
 
 
 async def test_a_lone_acronym_triggers_no_recovery_call(fakes: Fakes) -> None:
@@ -419,13 +428,11 @@ async def test_recovery_calls_follow_the_requested_sources(fakes: Fakes) -> None
         fakes, request(keywords=["GRPO", "reward models"], sources=["arxiv"])
     )
 
-    assert [call["name"] for call in payload["calls"]] == [
-        "arxiv_keyword",
-        "arxiv_keyword_acronyms",
-    ]
+    assert [call["name"] for call in payload["calls"]] == ["arxiv_keyword"]
     assert (
         fakes.named("library_keyword") == [] and fakes.named("library_semantic") == []
     )
+    assert len(fakes.named("arxiv")) == 1
 
 
 async def test_papers_found_only_by_the_acronym_call_are_returned(fakes: Fakes) -> None:
@@ -435,6 +442,88 @@ async def test_papers_found_only_by_the_acronym_call_are_returned(fakes: Fakes) 
 
     assert ids(payload) == ["grpo-paper"]
     assert payload["papers"][0]["found_by"] == ["library_keyword_acronyms"]
+
+
+async def test_the_acronyms_travel_in_the_one_arxiv_request(fakes: Fakes) -> None:
+    await run(fakes, request(keywords=["GRPO", "reward models"]))
+
+    (arguments,) = fakes.named("arxiv")
+    # The main terms are the tool's query; the acronyms ride along as or_terms,
+    # which the tool composes as ((main) OR (acronyms)) AND the window.
+    assert arguments["query"] == "GRPO reward models"
+    assert fakes.arxiv_options == [
+        {
+            "max_gate_wait_s": settings.DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS,
+            "or_terms": "GRPO",
+        }
+    ]
+
+
+async def test_acronym_syntax_is_stripped_before_it_is_sent(fakes: Fakes) -> None:
+    await run(fakes, request(keywords=['GRPO") OR (all:secret', "agents"]))
+
+    (options,) = fakes.arxiv_options
+    for symbol in '"():[]':
+        assert symbol not in options.get("or_terms", "")
+
+
+async def test_without_an_acronym_the_arxiv_call_has_no_or_part(fakes: Fakes) -> None:
+    payload = await run(fakes, request(keywords=["reward models"]))
+
+    assert fakes.arxiv_options == [
+        {"max_gate_wait_s": settings.DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS}
+    ]
+    assert {c["name"]: c["query"] for c in payload["calls"]}["arxiv_keyword"] == (
+        "reward models"
+    )
+
+
+async def test_acronym_recovery_results_are_found_by_the_combined_arxiv_call(
+    fakes: Fakes,
+) -> None:
+    # The one arXiv answer holds a paper for the main terms and one that only
+    # the acronym matches; both are credited to the single arXiv channel.
+    fakes.arxiv["GRPO reward models"] = [
+        arxiv_row("2401.00001"),
+        arxiv_row("2401.00002"),
+    ]
+    payload = await run(
+        fakes, request(keywords=["GRPO", "reward models"], sources=["arxiv"])
+    )
+
+    assert ids(payload) == ["2401.00001", "2401.00002"]
+    assert [item["found_by"] for item in payload["papers"]] == [["arxiv_keyword"]] * 2
+    (call,) = payload["calls"]
+    assert (call["name"], call["status"], call["count"]) == ("arxiv_keyword", "ok", 2)
+
+
+async def test_scores_do_not_change_for_a_query_without_an_acronym(
+    fakes: Fakes,
+) -> None:
+    # Pinned by hand from the fusion formula, not from the code under test:
+    # a: ranks 1, 2, 1 in the three channels; b: ranks 2, 1 in two; c: rank 2
+    # in one. RRF k=60, +25 % per extra channel.
+    fakes.keyword["llm agents"] = [paper("a", arxiv_id="a"), paper("b")]
+    fakes.semantic = [paper("b"), paper("a")]
+    fakes.arxiv["llm agents"] = [arxiv_row("a"), arxiv_row("c")]
+    payload = await run(fakes)
+
+    top = (1 / 61 + 1 / 62 + 1 / 61) * 1.5
+    assert ids(payload) == ["a", "b"]
+    assert [item["score"] for item in payload["papers"]] == [
+        1.0,
+        round((1 / 62 + 1 / 61) * 1.25 / top, 3),
+    ]
+    assert payload["papers"][0]["found_by"] == [
+        "library_keyword",
+        "library_semantic",
+        "arxiv_keyword",
+    ]
+    assert [c["name"] for c in payload["calls"]] == [
+        "library_keyword",
+        "library_semantic",
+        "arxiv_keyword",
+    ]
 
 
 # --- the window and the depth reach every channel ------------------------------------
@@ -459,7 +548,7 @@ async def test_the_window_is_passed_into_every_channel(fakes: Fakes) -> None:
         assert arguments["limit"] == 30
         assert arguments["organization_id"] == ORG
     arxiv = fakes.named("arxiv")
-    assert len(arxiv) == 2
+    assert len(arxiv) == 1  # the acronym part is OR-ed into this one request
     for arguments in arxiv:
         # Applied in the arXiv query; recency_days=0 switches off the tool's
         # default twelve-month lookback.
@@ -499,7 +588,7 @@ async def test_every_call_reads_to_the_difficulty_depth_arxiv_included(
     reads = fakes.named("library_keyword") + fakes.named("library_semantic")
     assert [arguments["limit"] for arguments in reads] == [depth] * 3
     arxiv = fakes.named("arxiv")
-    assert [arguments["max_results"] for arguments in arxiv] == [depth] * 2
+    assert [arguments["max_results"] for arguments in arxiv] == [depth]
 
 
 async def test_the_gateway_lifts_the_arxiv_cap_for_discover_only(
@@ -511,7 +600,12 @@ async def test_the_gateway_lifts_the_arxiv_cap_for_discover_only(
 
     (arguments,) = gateway.named("arxiv")
     assert arguments["max_results"] == 30
-    assert gateway.arxiv_options == [{"max_results_cap": dp.MAX_DEPTH}]
+    assert gateway.arxiv_options == [
+        {
+            "max_results_cap": dp.MAX_DEPTH,
+            "max_gate_wait_s": settings.DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS,
+        }
+    ]
 
 
 class _RecordingArxiv:
@@ -698,6 +792,125 @@ async def test_an_arxiv_error_payload_is_a_failed_call_with_no_upstream_text(
     assert status_of(payload)["arxiv_keyword"] == "error"
     assert ids(payload) == ["doc-1"]
     assert "429" not in json.dumps(payload) and "abc" not in json.dumps(payload)
+
+
+# --- the arXiv time budget -------------------------------------------------------------
+
+_BUSY = {
+    "error": "arXiv is busy; its rate gate would delay this search.",
+    "error_type": "rate_gated",
+    "query": "internal query text",
+}
+
+
+async def test_a_gated_arxiv_call_is_unavailable_rate_gated_and_the_library_still_answers(
+    fakes: Fakes,
+) -> None:
+    fakes.keyword["llm agents"] = [paper("doc-1")]
+    fakes.arxiv["llm agents"] = dict(_BUSY)
+    payload = await run(fakes)
+
+    assert ids(payload) == ["doc-1"]
+    assert "error" not in payload
+    assert payload["calls"][2] == {
+        "name": "arxiv_keyword",
+        "query": "llm agents",
+        "status": "unavailable",
+        "count": 0,
+        "reason": "rate_gated",
+    }
+    # The harness can tell it from a failure, and no upstream text leaks.
+    assert "internal query text" not in json.dumps(payload)
+
+
+async def test_a_gated_arxiv_call_with_nothing_else_is_the_stable_error(
+    fakes: Fakes,
+) -> None:
+    fakes.arxiv["llm agents"] = dict(_BUSY)
+    payload = await run(fakes, request(sources=["arxiv"]))
+
+    assert payload["error"] == "upstream_unavailable"
+    assert payload["calls"] == [
+        {
+            "name": "arxiv_keyword",
+            "query": "llm agents",
+            "status": "unavailable",
+            "count": 0,
+            "reason": "rate_gated",
+        }
+    ]
+
+
+async def test_a_gated_arxiv_call_does_not_count_as_a_channel(fakes: Fakes) -> None:
+    # arXiv did not answer, so two channels answered and the raised cut applies
+    # (test_the_cut_rises_when_only_two_channels_answer), exactly as for a
+    # failed arXiv call.
+    fakes.keyword["llm agents"] = [paper("kw")]
+    fakes.semantic = [paper("kw"), paper("near")]
+    fakes.arxiv["llm agents"] = dict(_BUSY)
+    payload = await run(fakes)
+
+    assert ids(payload) == ["kw"]
+
+
+async def test_the_arxiv_call_gets_the_budget_from_settings(
+    fakes: Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS", 2.5)
+
+    await run(fakes)
+
+    assert [o["max_gate_wait_s"] for o in fakes.arxiv_options] == [2.5]
+
+
+def test_the_default_budget_is_one_second() -> None:
+    field = type(settings).model_fields["DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS"]
+    assert field.default == 1.0
+
+
+async def test_a_busy_gate_through_the_real_tool_skips_arxiv_without_sending(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    # The whole path with only the network and the gate replaced: discover ->
+    # _tool_search_arxiv -> search_papers -> _make_async_request -> the gate.
+    from src.services.agent import tools_impl
+    from src.services.arxiv import arxiv_service
+
+    tools_impl._ARXIV_SEARCH_CACHE.clear()
+    asked: list[float | None] = []
+
+    async def busy_gate(*, max_wait_s: float | None = None) -> float | None:
+        asked.append(max_wait_s)
+        raise arxiv_service.ArxivRateGated(max_wait_s or 0.0)
+
+    def no_network(**_kwargs: Any) -> None:
+        raise AssertionError("arXiv must not be contacted over budget")
+
+    async def no_redis() -> None:
+        return None
+
+    monkeypatch.setattr(arxiv_service, "_acquire_arxiv_rate_slot", busy_gate)
+    monkeypatch.setattr(arxiv_service.httpx, "AsyncClient", no_network)
+    monkeypatch.setattr(tools_impl, "_get_arxiv_redis", no_redis)
+    fakes.keyword["GRPO reward models"] = [paper("doc-1")]
+
+    result = await invoke_read(
+        db,
+        _context(project=True),
+        _invocation(keywords=["GRPO", "reward models"]),
+    )
+
+    assert result.is_error is False
+    content = result.content[0]
+    assert [p["id"] for p in content["papers"]] == ["doc-1"]
+    calls = {c["name"]: c for c in content["calls"]}
+    assert (calls["arxiv_keyword"]["status"], calls["arxiv_keyword"]["reason"]) == (
+        "unavailable",
+        "rate_gated",
+    )
+    assert calls["arxiv_keyword"]["query"] == "(GRPO reward models) OR (GRPO)"
+    assert asked == [settings.DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS]  # one ask
+    assert tools_impl._ARXIV_SEARCH_CACHE == {}  # a refusal is not cached
 
 
 async def test_stale_cached_arxiv_results_still_count(fakes: Fakes) -> None:
@@ -926,7 +1139,7 @@ def test_each_extra_channel_scales_the_score_by_a_quarter() -> None:
         _named(
             ("library_keyword", [a, b]),
             ("library_semantic", [a]),
-            ("arxiv_keyword_acronyms", [a]),
+            ("arxiv_keyword", [a]),
         ),
         "default",
         TODAY,

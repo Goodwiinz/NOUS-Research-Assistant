@@ -284,7 +284,10 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         "the results (fewer when one paper clearly dominates), and never an id no "
         "result returned. Run at most two such loops "
         "per user turn. calls[] lists every search with its status: check it for "
-        "one that was unavailable or failed.",
+        "one that was unavailable or failed. arXiv is one call (keywords AND-ed, "
+        "plus the acronyms among them OR-ed in); when it is unavailable with "
+        "reason rate_gated, arXiv's shared rate limit was busy and the library "
+        "results are still valid: call again shortly for the arXiv half.",
         {
             "type": "object",
             "properties": {

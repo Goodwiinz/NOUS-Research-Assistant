@@ -10,9 +10,12 @@ and returns a short ranked list for the model to read:
    ``document_embeddings`` was never created);
 3. arXiv keyword: the same ``search_arxiv`` implementation the read tool uses;
 4. acronym recovery: when the keywords mix acronyms with other words, one more
-   keyword call (library and arXiv) with only the acronyms, because an
-   all-terms-must-match query otherwise misses papers that use the acronym
-   alone.
+   library keyword call with only the acronyms, because an all-terms-must-match
+   query otherwise misses papers that use the acronym alone. arXiv gets the same
+   recovery inside its one call, as ``(<all keywords>) OR (<acronyms>)``: arXiv
+   spaces requests 3 s apart across all pods, so a second request would make
+   the round wait 3 s for nothing, and a paper that matches both parts ranks
+   above one that matches the acronyms only.
 
 Every call carries the same publication window, and it is applied where the
 data is read: as a predicate of the SQL statement for the library, as a
@@ -45,6 +48,13 @@ comes from a call that succeeded in this round (the citation gate;
 ``difficulty`` does not trigger server-side follow-ups. It sets how deep each
 call reads (10, 20 or 30 results, arXiv included) and is echoed back as
 ``followup_rounds_allowed`` for the harness.
+
+arXiv time budget. The arXiv API answers in about 0.3 s; what makes the call
+slow is the shared rate gate in front of it. The call therefore waits at most
+``settings.DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS`` for it. A busier gate skips
+the call (nothing is sent): it is recorded as ``unavailable`` with the reason
+``rate_gated`` so the harness can call again shortly, and the library results
+still return. A cached arXiv result is served before the gate is asked.
 """
 
 from __future__ import annotations
@@ -98,12 +108,12 @@ PRIORITY_WEIGHT = 0.15
 MAX_DEPTH = 30
 # Each search (channel) beyond the first that returned a paper scales its fused
 # score by this much: 3 channels = x1.5, 2 = x1.25. Calls on the same channel
-# (a keyword call and its acronym-only twin) are one vote, not two.
+# (the library keyword call and its acronym-only twin) are one vote, not two.
 AGREEMENT_BONUS = 0.25
 # How far above a lone channel's best possible share the cut sits when fewer
 # than three channels answered (see ``cut_ratio``).
 LONE_HIT_MARGIN = 1.15
-# Per-call budgets. arXiv waits on a shared rate gate (3 s apart), so it gets
+# Per-call budgets. arXiv can wait on a shared rate gate (3 s apart), so it gets
 # the longest; the whole round is bounded by the slowest call.
 LIBRARY_TIMEOUT_SECONDS = 20.0
 SEMANTIC_TIMEOUT_SECONDS = 25.0
@@ -116,7 +126,11 @@ PRIORITIES: tuple[str, ...] = ("default", "recency", "historical")
 SOURCES: tuple[str, ...] = ("library", "arxiv")
 _SOURCE_ORDER: tuple[Source, ...] = ("library", "arxiv")
 
-ArxivSearch = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+# ``search_arxiv``'s implementation: called with the tool arguments and, from
+# ``_arxiv_keyword``, the keyword arguments ``or_terms`` and ``max_gate_wait_s``.
+ArxivSearch = Callable[..., Awaitable[dict[str, Any]]]
+# ``reason`` of an arXiv call skipped because the shared rate gate was too busy.
+RATE_GATED = "rate_gated"
 
 
 class DiscoverArgumentError(ValueError):
@@ -303,7 +317,11 @@ class CallRecord:
 
     @property
     def channel(self) -> str:
-        """The search this call belongs to: an acronym call is its main call's twin."""
+        """The search this call belongs to: an acronym call is its main call's twin.
+
+        Only the library has one (``library_keyword_acronyms``); arXiv does the
+        acronym recovery inside its one ``arxiv_keyword`` call.
+        """
         return self.name.removesuffix("_acronyms")
 
     def as_dict(self) -> dict[str, Any]:
@@ -568,7 +586,15 @@ async def _arxiv_keyword(
     after: date | None,
     before: date | None,
     limit: int,
+    acronyms: str = "",
 ) -> list[Candidate]:
+    """One arXiv request: ``query``, or just ``acronyms`` (``or_terms``), in the window.
+
+    ``search_arxiv`` composes ``((<query>) OR (<acronyms>)) AND submittedDate:[..]``
+    with its own sanitizing and fielding helpers; both parts get the same
+    syntax stripping here first. Raises ``ChannelUnavailable("rate_gated")`` when
+    the shared rate gate would hold the call past its budget.
+    """
     terms = _arxiv_terms(query)
     if not terms:
         return []
@@ -582,7 +608,15 @@ async def _arxiv_keyword(
         arguments["published_after"] = after.isoformat()
     if before is not None:
         arguments["published_before"] = before.isoformat()
-    payload = await arxiv_search(arguments)
+    options: dict[str, Any] = {
+        "max_gate_wait_s": settings.DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS
+    }
+    alternative = _arxiv_terms(acronyms)
+    if alternative:
+        options["or_terms"] = alternative
+    payload = await arxiv_search(arguments, **options)
+    if payload.get("error_type") == RATE_GATED:
+        raise ChannelUnavailable(RATE_GATED)
     if payload.get("error") or payload.get("is_error"):
         logger.warning("discover_papers arxiv error payload: %s", payload.get("error"))
         raise ChannelFailed("arxiv returned an error")
@@ -661,13 +695,16 @@ def _plan(
         run = partial(_library_keyword, query=query, **library)
         return _CallSpec(name, query, LIBRARY_TIMEOUT_SECONDS, run)
 
-    def arxiv_keyword(name: str, query: str) -> _CallSpec:
-        run = partial(_arxiv_keyword, query=query, **arxiv)
-        return _CallSpec(name, query, ARXIV_TIMEOUT_SECONDS, run)
+    def arxiv_keyword(query: str, acronyms: str) -> _CallSpec:
+        # One request for both parts; the reported query shows them both.
+        shown = f"({query}) OR ({acronyms})" if acronyms else query
+        run = partial(_arxiv_keyword, query=query, acronyms=acronyms, **arxiv)
+        return _CallSpec("arxiv_keyword", shown, ARXIV_TIMEOUT_SECONDS, run)
 
     use_library = "library" in request.sources
     use_arxiv = "arxiv" in request.sources
     keywords = " ".join(request.keywords)
+    acronyms = " ".join(acronym_terms(request.keywords))
     specs: list[_CallSpec] = []
     if use_library:
         specs.append(library_keyword("library_keyword", keywords))
@@ -680,13 +717,9 @@ def _plan(
             )
         )
     if use_arxiv:
-        specs.append(arxiv_keyword("arxiv_keyword", keywords))
-    acronyms = " ".join(acronym_terms(request.keywords))
-    if acronyms:
-        if use_library:
-            specs.append(library_keyword("library_keyword_acronyms", acronyms))
-        if use_arxiv:
-            specs.append(arxiv_keyword("arxiv_keyword_acronyms", acronyms))
+        specs.append(arxiv_keyword(keywords, acronyms))
+    if acronyms and use_library:
+        specs.append(library_keyword("library_keyword_acronyms", acronyms))
     return specs
 
 

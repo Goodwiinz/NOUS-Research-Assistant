@@ -402,7 +402,7 @@ async def channels(async_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(dp, "tool_session", session)
 
 
-async def _arxiv(arguments: dict[str, Any]) -> dict[str, Any]:
+async def _arxiv(arguments: dict[str, Any], **_options: Any) -> dict[str, Any]:
     return {
         "papers": [
             {
