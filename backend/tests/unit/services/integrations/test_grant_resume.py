@@ -428,3 +428,113 @@ async def test_a_renewal_after_resume_keeps_the_consent(
     assert context.consent_id == consent
     with pytest.raises(IntegrationAccessDenied):
         await renew_grant(db, OWNER, resumed.grant_id)
+
+
+@pytest.mark.parametrize(
+    "model,values",
+    [
+        (IntegrationGrant, {"is_deleted": True}),
+        (IntegrationGrantRequest, {"is_deleted": True}),
+        (IntegrationGrantRequest, {"status": "approved"}),
+        (IntegrationGrantRequest, {"user_id": OTHER_USER}),
+    ],
+)
+async def test_resume_refuses_when_the_grant_or_consent_row_no_longer_matches(
+    db: AsyncSession,
+    paired: tuple[UUID, UUID, IssuedGrant],
+    model: Any,
+    values: dict[str, Any],
+) -> None:
+    _, _, issued = paired
+    await _lapse(db, issued.grant_id, timedelta(hours=1))
+    await db.execute(update(model).values(**values))
+    await db.commit()
+    await _refused(db, issued.grant_id, issued.token)
+
+
+async def test_resume_refuses_a_consent_of_another_device(
+    db: AsyncSession, paired: tuple[UUID, UUID, IssuedGrant]
+) -> None:
+    _, consent, issued = paired
+    other = await register_device(db, OWNER, DeviceCreate(label="Desktop"))
+    await _lapse(db, issued.grant_id, timedelta(hours=1))
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == consent)
+        .values(device_id=other.id)
+    )
+    await db.commit()
+    await _refused(db, issued.grant_id, issued.token)
+
+
+async def test_resume_never_widens_a_chat_bound_pairing_to_the_project(
+    db: AsyncSession,
+) -> None:
+    """A grant that lost its chat (threads SET NULL) while its consent is still
+    bound to that chat is refused, not resumed project-wide."""
+    _, _, issued = await _pair(db, thread_id=THREAD)
+    await _lapse(db, issued.grant_id, timedelta(hours=1))
+    await db.execute(
+        update(IntegrationGrant)
+        .where(IntegrationGrant.id == issued.grant_id)
+        .values(thread_id=None)
+    )
+    await db.commit()
+    await _refused(db, issued.grant_id, issued.token)
+
+
+async def _pair_workspace(db: AsyncSession) -> IssuedGrant:
+    """A workspace (MCP-only) pairing: tools over every project of WORKSPACE."""
+    device = await register_device(db, OWNER, DeviceCreate(label="Laptop"))
+    request = await create_request(
+        db,
+        OWNER,
+        GrantRequestCreate(
+            workspace_id=WORKSPACE,
+            device_id=device.id,
+            scopes={"tools:read", "library:read"},
+        ),
+    )
+    await decide_request(db, OWNER, request.id, True)
+    return await exchange_request(db, OWNER, request.id)
+
+
+async def test_a_workspace_pairing_resumes_with_its_workspace_binding(
+    db: AsyncSession,
+) -> None:
+    issued = await _pair_workspace(db)
+    await _lapse(db, issued.grant_id, timedelta(hours=1))
+    resumed = await resume_grant(db, OWNER, issued.grant_id, issued.token)
+    context = await resolve_integration_context(
+        db, resumed.token, required_scope="library:read"
+    )
+    assert context.workspace_id == WORKSPACE and context.project_id is None
+    assert context.scopes == frozenset({"tools:read", "library:read"})
+
+
+async def test_a_workspace_pairing_is_refused_once_its_workspace_is_gone(
+    db: AsyncSession,
+) -> None:
+    issued = await _pair_workspace(db)
+    await _lapse(db, issued.grant_id, timedelta(hours=1))
+    await db.execute(update(Workspace).values(is_deleted=True))
+    await db.commit()
+    await _refused(db, issued.grant_id, issued.token)
+
+
+async def test_a_resume_is_logged_for_audit_without_any_token(
+    db: AsyncSession,
+    paired: tuple[UUID, UUID, IssuedGrant],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    device, consent, issued = paired
+    await _lapse(db, issued.grant_id, timedelta(hours=1))
+    with caplog.at_level("INFO", logger="src.services.integrations.context"):
+        resumed = await resume_grant(db, OWNER, issued.grant_id, issued.token)
+    lines = [
+        r.getMessage() for r in caplog.records if "grant resumed" in r.getMessage()
+    ]
+    assert len(lines) == 1
+    for value in (issued.grant_id, resumed.grant_id, device, consent, USER):
+        assert str(value) in lines[0]
+    assert "nous_ig_" not in caplog.text

@@ -117,7 +117,8 @@ async def resume_grant(
     which pairing is resumed, and it works once. Refused (403) once the grant
     was renewed or revoked, its consent or device revoked, its project,
     workspace or chat out of reach, or 30 days after it expired; 409 when
-    another resume or renewal of the same grant won."""
+    the grant was replaced or revoked meanwhile (another resume or renewal
+    won, or a revoke landed)."""
     return await call(
         service.resume_grant(
             db, user, grant_id, request.headers.get("x-nous-integration-grant", "")

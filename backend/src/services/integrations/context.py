@@ -1,5 +1,6 @@
 """Restricted integration authority. Writes and transaction boundaries live here."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from hmac import compare_digest
@@ -33,6 +34,8 @@ from src.schemas.integration_context import (
     IssuedGrant,
     WorkspaceBindingCreate,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IntegrationAccessDenied(PermissionError):
@@ -795,6 +798,8 @@ async def resume_grant(
     disconnect under Connected devices), its consent or device revoked, its
     project, workspace or chat out of reach, or ``RESUME_WINDOW`` after it
     expired. Scopes come from the grant, never wider than its consent.
+    IntegrationConflict when the grant was replaced or revoked between the
+    checks and the swap.
     """
     grant = await owned_grant(db, user, grant_id)
     if (
@@ -838,7 +843,18 @@ async def resume_grant(
     )
     if consent is None or not set(grant.scopes) <= set(consent.scopes):
         raise IntegrationAccessDenied()
-    return await _replace_grant(db, grant)
+    issued = await _replace_grant(db, grant)
+    # Authority re-issued without a browser step: the line to audit when a
+    # credential file may have been copied. Never log the token.
+    logger.info(
+        "integration grant resumed: grant=%s successor=%s device=%s consent=%s user=%s",
+        grant.id,
+        issued.grant_id,
+        grant.device_id,
+        grant.request_id,
+        grant.user_id,
+    )
+    return issued
 
 
 async def _replace_grant(
