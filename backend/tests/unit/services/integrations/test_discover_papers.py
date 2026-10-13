@@ -184,11 +184,15 @@ class Fakes:
 
     async def library_keyword(self, **kwargs: Any) -> list[Candidate]:
         self.calls.append(("library_keyword", kwargs))
-        return await self._answer(self.keyword.get(kwargs["query"], []), kwargs)
+        found: list[Candidate] = await self._answer(
+            self.keyword.get(kwargs["query"], []), kwargs
+        )
+        return found
 
     async def library_semantic(self, **kwargs: Any) -> list[Candidate]:
         self.calls.append(("library_semantic", kwargs))
-        return await self._answer(self.semantic, kwargs)
+        found: list[Candidate] = await self._answer(self.semantic, kwargs)
+        return found
 
     async def arxiv_search(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("arxiv", arguments))
