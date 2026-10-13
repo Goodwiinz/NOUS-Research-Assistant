@@ -141,6 +141,20 @@ async function grantResumed(
     return false;
   }
 }
+/**
+ * How `connect` keeps a stored binding that matches the request: its grant
+ * still renews, or it has lapsed and resumes from its consent. Null runs the
+ * full flow.
+ */
+async function keptBinding(
+  store: CredentialStore,
+  handle: string,
+  base: string,
+  fetchFn: typeof fetch,
+): Promise<"Reusing" | "Resumed" | null> {
+  if (await grantIsLive(store, handle, base, fetchFn)) return "Reusing";
+  return (await grantResumed(store, handle, base, fetchFn)) ? "Resumed" : null;
+}
 async function poll(
   read: () => Promise<Record<string, any>>,
   options: ClientOptions,
@@ -247,15 +261,9 @@ export async function connect(
   // keep the binding while its grant still renews, or once it has lapsed
   // resume it from the browser consent, instead of a new login and consent.
   const kept =
-    previous === null ||
-    !sameBinding ||
-    !scopes.every((scope) => previous.scopes?.includes(scope))
-      ? null
-      : (await grantIsLive(store, previous.credentialHandle, base, fetchFn))
-        ? "Reusing"
-        : (await grantResumed(store, previous.credentialHandle, base, fetchFn))
-          ? "Resumed"
-          : null;
+    previous !== null && sameBinding && scopes.every((scope) => previous.scopes?.includes(scope))
+      ? await keptBinding(store, previous.credentialHandle, base, fetchFn)
+      : null;
   if (previous !== null && kept !== null) {
     // Reuse never narrows a grant (the documented superset rule): name any
     // stored scope this command did not ask for, and how to drop it (BR-3).
@@ -462,8 +470,10 @@ export async function disconnect(
     if (resumed.kind === "unavailable")
       throw new Error(`could not reach NOUS to revoke this device; nothing was removed (${resumed.reason})`);
     if (resumed.kind === "refused") {
+      // Revoked access is refused, but so are an ended CLI sign-in and a
+      // NOUS without resume, which leave the consent active.
       await forget();
-      announce(`This device's access had already ended; local credentials removed. Review devices in NOUS at /integrations/devices.`);
+      announce("NOUS would not resume this device's lapsed access, so it could not revoke it from here; local credentials removed. If this device is still listed in NOUS at /integrations/devices, revoke it there.");
       return { revoked: false };
     }
     credentials = resumed.credentials;

@@ -318,7 +318,7 @@ test("losing a resume race to another process picks up its grant", async () => {
   }
 });
 
-test("a connection from before renewal cannot resume, and a malformed reply is refused", async () => {
+test("a connection from before renewal cannot resume, and a malformed reply throws", async () => {
   const legacy = await setup({ grantId: undefined, renewedAt: undefined });
   try {
     assert.deepEqual(await legacy.keeper().resume(), { kind: "refused" });

@@ -120,7 +120,8 @@ export class GrantKeeper {
       return { kind: "resumed", credentials };
     }
     if (response.status === 409) {
-      // Another process sharing this handle resumed or renewed first.
+      // Another process sharing this handle resumed or renewed first, or the
+      // grant was revoked meanwhile (no other writer: refused).
       const latest = await this.writtenByAnother(stored);
       return latest ? { kind: "resumed", credentials: latest } : { kind: "refused" };
     }
