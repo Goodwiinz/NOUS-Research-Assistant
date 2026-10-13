@@ -44889,6 +44889,55 @@
         ]
       }
     },
+    "/api/v1/integrations/grants/{grant_id}/resume": {
+      "post": {
+        "description": "Re-issue this device's lapsed grant from the browser consent it was\nexchanged from, without a new approval or a new device.\n\nSend the stored grant token, even expired, in `X-NOUS-Integration-Grant`:\na CLI sign-in is not bound to a device, so the grant's own token proves\nwhich pairing is resumed, and it works once. Refused (403) once the grant\nwas renewed or revoked, its consent or device revoked, its project,\nworkspace or chat out of reach, or 30 days after it expired; 409 when\nanother resume or renewal of the same grant won.",
+        "operationId": "resume_grant_api_v1_integrations_grants__grant_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Resume Grant",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/handoffs": {
       "post": {
         "operationId": "save_handoff_api_v1_integrations_handoffs_post",
