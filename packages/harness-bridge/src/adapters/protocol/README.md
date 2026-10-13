@@ -14,7 +14,7 @@ narrower session, callback and one-time approval restrictions.
 
 | Codex | Added | Schemas | Live run from a NOUS chat |
 | --- | --- | --- | --- |
-| `0.153.4` | 2026-09-28 | these files | 2026-10-05, local backend (`docs/testing/evidence/harness-live-proof-20261005/`) |
+| `0.153.4` | 2026-09-28 | these files | 2026-10-05, local patched backend: chat runs completed; the approval scenario NOT RUN (`docs/testing/evidence/harness-live-proof-20261005/`) |
 | `0.161.0` | 2026-10-12 | identical to `0.153.4` | NOT RUN |
 
 ## Adding a version
@@ -37,7 +37,9 @@ narrower session, callback and one-time approval restrictions.
    refuses unlisted versions, so the live run needs it listed) and run
    `pnpm --filter @nous/harness-bridge test`.
 5. From that branch, do one live run from a NOUS chat with that Codex: a turn
-   with streamed output and one command approval. A green test suite alone is
+   with streamed output and one command approval. Ask for a write OUTSIDE the
+   registered folder: under `workspace-write` with `on-request`, a write inside
+   it never asks for approval. A green test suite alone is
    not evidence: on 2026-10-05 a reply shape the fixture did not model
    (`writableRoots`) broke every run while the suite passed.
 6. Record the evidence location in the table above. A row that still says
