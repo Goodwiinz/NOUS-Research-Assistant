@@ -9,6 +9,7 @@ import { CredentialStore } from "../src/credentials.ts";
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const DEVICE = "22222222-2222-4222-8222-222222222222";
 const GRANT = "33333333-3333-4333-8333-333333333333";
+const RESUMED = "44444444-4444-4444-8444-444444444444";
 const WORKSPACE = "77777777-7777-4777-8777-777777777777";
 const OTHER_WORKSPACE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CHAT = "99999999-9999-4999-8999-999999999999";
@@ -16,8 +17,11 @@ const OTHER_CHAT = "88888888-8888-4888-8888-888888888888";
 
 type Reply = { code: number; body: object };
 
-/** Fake NOUS: full login + consent, and a renew endpoint whose answer each test picks. */
-function fakeNous(calls: string[], renew: () => Reply): typeof fetch {
+/** NOUS before grant resume shipped: the route does not exist. */
+const noResume = (): Reply => ({ code: 404, body: { detail: "Not Found" } });
+
+/** Fake NOUS: full login + consent, and renew and resume endpoints whose answers each test picks. */
+function fakeNous(calls: string[], renew: () => Reply, resume: () => Reply = noResume): typeof fetch {
   let issued = 0;
   return (async (input: any) => {
     const url = String(input);
@@ -29,8 +33,8 @@ function fakeNous(calls: string[], renew: () => Reply): typeof fetch {
     else if (url.endsWith("/integrations/devices")) data = { id: DEVICE };
     else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: "https://nous.test/a" };
     else if (url.endsWith("/exchange")) data = { token: `grant-secret-${(issued += 1)}`, grant_id: GRANT };
-    else if (url.endsWith("/renew")) {
-      const { code, body } = renew();
+    else if (url.endsWith("/renew") || url.endsWith("/resume")) {
+      const { code, body } = (url.endsWith("/renew") ? renew : resume)();
       return new Response(JSON.stringify(body), { status: code });
     } else data = { status: "approved" };
     return new Response(JSON.stringify(data), { status: 200 });
@@ -40,13 +44,13 @@ function fakeNous(calls: string[], renew: () => Reply): typeof fetch {
 let renewals = 0;
 const renewed = (): Reply => ({ code: 200, body: { token: `renewed-secret-${(renewals += 1)}`, grant_id: GRANT } });
 
-function setup(renew: () => Reply = renewed) {
+function setup(renew: () => Reply = renewed, resume: () => Reply = noResume) {
   const dir = mkdtempSync(join(tmpdir(), "nous-reuse-"));
   const calls: string[] = [];
   const messages: string[] = [];
   const base = {
     stateDir: dir,
-    fetchFn: fakeNous(calls, renew),
+    fetchFn: fakeNous(calls, renew, resume),
     announce: (m: string) => messages.push(m),
     apiUrl: "https://nous.test/api/v1",
     projectId: PROJECT,
@@ -97,7 +101,7 @@ test("a different chat runs the full flow and removes the superseded credential"
     const mark = t.calls.length;
     const second = await connect({ ...t.base, threadId: OTHER_CHAT });
     assert.ok(t.since(mark).some((u) => u.endsWith("/cli-auth/start")));
-    assert.equal(t.since(mark).some((u) => u.endsWith("/renew")), false);
+    assert.equal(t.since(mark).some((u) => u.endsWith("/renew") || u.endsWith("/resume")), false);
     assert.notEqual(second.credentialHandle, first.credentialHandle);
     assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false);
     assert.equal(existsSync(join(t.dir, `${second.credentialHandle}.json`)), true);
@@ -136,6 +140,100 @@ test("a failed liveness probe falls back to the full login and consent flow", as
   }
 });
 
+/** A pairing whose grant lapsed after `connect`: renewal refused, resume answered by `resume`. */
+function lapsing(resume: () => Reply) {
+  let lapsed = false;
+  const t = setup(() => (lapsed ? { code: 403, body: { detail: "expired" } } : renewed()), resume);
+  return { ...t, lapse: () => (lapsed = true) };
+}
+const resumedGrant = (): Reply => ({ code: 200, body: { token: "resumed-secret", grant_id: RESUMED } });
+
+test("a lapsed grant resumes from its consent with no login, consent or new device", async () => {
+  const t = lapsing(resumedGrant);
+  try {
+    const first = await connect({ ...t.base, tools: true });
+    const before = t.state();
+    t.lapse();
+    const mark = t.calls.length;
+    const again = await connect({ ...t.base, tools: true });
+    assert.deepEqual(again, first);
+    // One failed liveness probe, then one resume of the stored grant: no
+    // /cli-auth/start, no /integrations/grant-requests, no new device.
+    assert.deepEqual(t.since(mark), [
+      `https://nous.test/api/v1/integrations/grants/${GRANT}/renew`,
+      `https://nous.test/api/v1/integrations/grants/${GRANT}/resume`,
+    ]);
+    assert.deepEqual(t.state(), before, "same device, folders and credential handle");
+    const stored = await new CredentialStore(t.dir).load(first.credentialHandle);
+    assert.equal(stored.grantToken, "resumed-secret");
+    assert.equal(stored.grantId, RESUMED);
+    assert.equal(stored.accessToken, "cli-secret");
+    assert.match(
+      t.messages.at(-1)!,
+      new RegExp(`^Resumed binding: project ${PROJECT}; your earlier approval still holds, so no new login or consent was needed\\.$`),
+    );
+    assert.ok(!t.messages.join("\n").includes("secret"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a resumed binding names the scopes it keeps, like a reused one", async () => {
+  const t = lapsing(resumedGrant);
+  try {
+    await connect({ ...t.base, threadId: CHAT, tools: true, handoff: true });
+    t.lapse();
+    await connect({ ...t.base, threadId: CHAT, tools: true });
+    assert.match(t.messages.at(-1)!, new RegExp(`^Resumed binding: project ${PROJECT}, chat ${CHAT};`));
+    assert.match(t.messages.at(-1)!, /It keeps scopes this command did not request: handoff:read, handoff:write\./);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a workspace binding resumes like a project one", async () => {
+  const t = lapsing(resumedGrant);
+  try {
+    const workspace = { ...t.base, projectId: undefined, workspaceId: WORKSPACE, tools: true };
+    const first = await connect(workspace);
+    t.lapse();
+    const mark = t.calls.length;
+    assert.deepEqual(await connect(workspace), first);
+    assert.equal(t.since(mark).some((u) => u.endsWith("/cli-auth/start")), false);
+    assert.match(t.messages.at(-1)!, new RegExp(`^Resumed binding: workspace ${WORKSPACE};`));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a refused or unavailable resume runs the full login and consent flow", async () => {
+  for (const reply of [
+    // Revoked, disconnected, out of reach, or more than 30 days lapsed.
+    { code: 403, body: { detail: "Integration access denied" } },
+    // The stored CLI sign-in ended.
+    { code: 401, body: { detail: "expired" } },
+    // A NOUS without the resume route.
+    { code: 404, body: { detail: "Not Found" } },
+    { code: 503, body: { detail: "down" } },
+  ]) {
+    const t = lapsing(() => reply);
+    try {
+      const first = await connect({ ...t.base, tools: true });
+      t.lapse();
+      const mark = t.calls.length;
+      const second = await connect({ ...t.base, tools: true });
+      const later = t.since(mark);
+      assert.ok(later.some((u) => u.endsWith("/resume")), `resume tried before ${reply.code}`);
+      assert.ok(later.some((u) => u.endsWith("/cli-auth/start")), `full flow after ${reply.code}`);
+      assert.ok(later.some((u) => u.endsWith("/integrations/grant-requests")));
+      assert.notEqual(second.credentialHandle, first.credentialHandle);
+      assert.equal(t.messages.some((m) => /^(Reusing|Resumed) binding/.test(m)), false);
+    } finally {
+      t.cleanup();
+    }
+  }
+});
+
 test("a requested scope missing from the stored binding runs the full flow", async () => {
   const t = setup();
   try {
@@ -145,8 +243,8 @@ test("a requested scope missing from the stored binding runs the full flow", asy
     assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false);
     assert.equal(t.state().credentialHandle, second.credentialHandle);
     const later = t.since(mark);
-    // No probe is spent when the scopes already rule reuse out.
-    assert.equal(later.some((u) => u.endsWith("/renew")), false);
+    // No probe or resume is spent when the scopes already rule reuse out.
+    assert.equal(later.some((u) => u.endsWith("/renew") || u.endsWith("/resume")), false);
     assert.ok(later.some((u) => u.endsWith("/cli-auth/start")));
     assert.ok(t.state().scopes.includes("handoff:write"));
   } finally {
