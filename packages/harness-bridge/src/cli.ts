@@ -430,9 +430,10 @@ export async function connect(
 }
 /**
  * Revoke this device's grant (and its consent) in NOUS, then forget the local
- * credentials. A grant NOUS already refuses is cleared locally with a pointer
- * to the browser page; a network or server failure keeps everything so the
- * command can be retried.
+ * credentials. An expired grant is first resumed from its consent, so it can
+ * still authorize the revoke. A grant NOUS already refuses (or will not
+ * resume) is cleared locally with a pointer to the browser page; a network or
+ * server failure keeps everything so the command can be retried.
  */
 export async function disconnect(
   options: ClientOptions,
@@ -449,14 +450,23 @@ export async function disconnect(
     await store.removeLocal(state.credentialHandle);
     await store.removeLocal("connection");
   };
+  const keeper = new GrantKeeper(store, state.credentialHandle, base, fetchFn);
   let credentials;
   try {
-    credentials = await new GrantKeeper(store, state.credentialHandle, base, fetchFn).current();
+    credentials = await keeper.current();
   } catch (error) {
     if (!(error instanceof GrantExpired)) throw error;
-    await forget();
-    announce(`This device's access had already ended; local credentials removed. Review devices in NOUS at /integrations/devices.`);
-    return { revoked: false };
+    // An expired grant cannot authorize the revoke: resume it from its
+    // consent first, so the consent is revoked in NOUS too.
+    const resumed = await keeper.resume();
+    if (resumed.kind === "unavailable")
+      throw new Error(`could not reach NOUS to revoke this device; nothing was removed (${resumed.reason})`);
+    if (resumed.kind === "refused") {
+      await forget();
+      announce(`This device's access had already ended; local credentials removed. Review devices in NOUS at /integrations/devices.`);
+      return { revoked: false };
+    }
+    credentials = resumed.credentials;
   }
   if (!uuid(credentials.grantId)) {
     await forget();
