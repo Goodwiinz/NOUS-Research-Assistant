@@ -36,6 +36,10 @@ backend/tests/integration/test_discover_papers_postgres.py -c backend/pytest.ini
 - the SAVEPOINT around ``semantic_search`` in ``_library_semantic``: with the table
   missing, ``test_a_missing_embeddings_table_leaves_the_session_usable`` fails on
   the follow-up query ("current transaction is aborted");
+- ``semantic_search_strict`` swallowing a provider failure, or ``_library_semantic``
+  not catching ``SemanticSearchUnavailable``:
+  ``test_a_failing_embedding_provider_is_unavailable_not_empty`` fails (the call is
+  ``empty`` or ``error`` instead of ``unavailable``/``embedding_failed``);
 - ``_embeddings_table_missing`` always false: the same test fails (the missing
   table is an error, not "unavailable").
 """
@@ -513,7 +517,7 @@ async def test_discover_papers_without_a_window_is_capped_and_scoped(
     )
 
     papers = payload["papers"]
-    assert 5 <= len(papers) <= 15
+    assert 1 <= len(papers) <= 15
     library = {p["id"] for p in papers if p["source"] == "library"}
     assert str(sid("disc-sibling")) not in library
     assert str(sid("disc-other-org")) not in library
@@ -597,6 +601,39 @@ async def test_a_missing_embeddings_table_leaves_the_session_usable(
             await check.execute(text("SELECT count(*) FROM document_embeddings"))
         ).scalar()
     assert count and count > 100
+
+
+async def test_a_failing_embedding_provider_is_unavailable_not_empty(
+    channels: None, seeded: dict[str, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Down(FakeEmbedder):
+        async def generate_embedding(self, request: Any) -> Any:
+            raise RuntimeError("provider 503 key=sk-secret")
+
+    monkeypatch.setattr(
+        semantic_search_service,
+        "document_embedding_service",
+        DocumentEmbeddingService(embedder=Down(QUERY_VECTOR)),
+    )
+    payload = await dp.discover(
+        _request(),
+        organization_id=seeded["org-a"],
+        project_ids=[seeded["alpha"]],
+        arxiv_search=_arxiv,
+        today=date(2026, 10, 13),
+    )
+
+    semantic = next(c for c in payload["calls"] if c["name"] == "library_semantic")
+    assert (semantic["status"], semantic["reason"], semantic["count"]) == (
+        "unavailable",
+        "embedding_failed",
+        0,
+    )
+    assert "sk-secret" not in str(payload)
+    # The other searches answered: this is a degraded round, not a failed one.
+    statuses = {c["name"]: c["status"] for c in payload["calls"]}
+    assert statuses["library_keyword"] == "ok" and statuses["arxiv_keyword"] == "ok"
+    assert payload["papers"] and "error" not in payload
 
 
 async def test_the_flag_off_is_unavailable_without_touching_the_database(

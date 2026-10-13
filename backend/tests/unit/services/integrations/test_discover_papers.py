@@ -27,9 +27,27 @@ again:
   ``test_one_open_bound_is_passed_as_open``; sending ``recency_days=365`` to
   arXiv fails ``test_the_window_is_passed_into_every_channel`` and
   ``test_without_a_window_nothing_is_cut_by_date``;
-- the relative cut (``RELATIVE_CUT = 0``): fails ``test_a_dominant_paper_cuts_
-  the_weak_tail_but_keeps_five``, ``test_the_cut_is_relative_to_the_best_score``
-  and ``test_an_exact_name_query_is_not_padded_to_fifteen``;
+- the relative cut and its minimum (2026-10-13, second pass): restoring a
+  minimum of five fails ``test_a_dominant_paper_is_returned_alone``,
+  ``test_the_cut_is_relative_to_the_best_score``,
+  ``test_an_empty_or_single_candidate_list`` and
+  ``test_an_exact_name_query_returns_the_one_paper``; ``AGREEMENT_BONUS = 0``
+  fails ``test_an_exact_name_query_returns_the_one_paper`` (plain RRF keeps six
+  neighbours), ``test_each_extra_channel_scales_the_score_by_a_quarter`` and
+  ``test_reciprocal_rank_fusion_across_calls``;
+- arXiv depth: reading arXiv to ``min(limit, 5)`` fails the nine depth tests
+  (``test_every_call_reads_to_the_difficulty_depth_arxiv_included`` and the two
+  that go through the gateway); dropping ``max_results_cap`` in
+  ``_discover_papers`` fails ``test_the_gateway_lifts_the_arxiv_cap_for_discover_
+  only`` and ``test_discover_reaches_the_arxiv_service_at_depth_and_the_public_
+  tool_stays_at_five``; raising the public ``_ARXIV_TOOL_MAX_RESULTS`` to 30
+  fails the latter and ``test_arxiv_search_window.py::test_the_public_tool_still_
+  returns_at_most_five_papers``;
+- embedding failure: ``semantic_search_strict`` swallowing the provider error
+  fails ``test_the_real_embedding_failure_path_reports_unavailable`` (and the PG
+  and ``test_semantic_search_service.py`` tests); ``_library_semantic`` not
+  catching ``SemanticSearchUnavailable`` fails ``test_a_failed_embedding_is_
+  unavailable_with_a_reason_not_empty`` (both reasons) and the PG test;
 - deduplication: dropping the arXiv id as an identity key fails
   ``test_an_arxiv_paper_already_in_the_library_is_shown_as_the_library_copy``
   and three more; preferring the last member over the library copy fails
@@ -91,6 +109,8 @@ from src.services.integrations.read_tools import (
     invoke_read,
     list_read_tools,
 )
+from src.services.search import semantic_search_service
+from src.services.search.semantic_search_service import SemanticSearchUnavailable
 
 pytestmark = pytest.mark.unit
 
@@ -172,6 +192,7 @@ class Fakes:
     semantic: Any = field(default_factory=list)
     arxiv: dict[str, Any] = field(default_factory=dict)
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    arxiv_options: list[dict[str, Any]] = field(default_factory=list)
 
     async def _answer(self, answer: Any, arguments: dict[str, Any]) -> Any:
         if callable(answer):
@@ -194,8 +215,11 @@ class Fakes:
         found: list[Candidate] = await self._answer(self.semantic, kwargs)
         return found
 
-    async def arxiv_search(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def arxiv_search(
+        self, arguments: dict[str, Any], **options: Any
+    ) -> dict[str, Any]:
         self.calls.append(("arxiv", arguments))
+        self.arxiv_options.append(options)
         answer = await self._answer(self.arxiv.get(arguments["query"], []), arguments)
         return answer if isinstance(answer, dict) else {"papers": answer}
 
@@ -440,7 +464,8 @@ async def test_the_window_is_passed_into_every_channel(fakes: Fakes) -> None:
         assert arguments["published_after"] == "2020-01-01"
         assert arguments["published_before"] == "2020-12-31"
         assert arguments["recency_days"] == 0
-        assert arguments["max_results"] == 5  # the tool's own cap
+        # arXiv is read to the difficulty depth too, not to the public tool's 5.
+        assert arguments["max_results"] == 30
 
 
 async def test_without_a_window_nothing_is_cut_by_date(fakes: Fakes) -> None:
@@ -459,6 +484,90 @@ async def test_one_open_bound_is_passed_as_open(fakes: Fakes) -> None:
     (arxiv,) = fakes.named("arxiv")
     assert arxiv["published_before"] == "2019-12-31" and "published_after" not in arxiv
     assert fakes.named("library_semantic")[0]["after"] is None
+
+
+@pytest.mark.parametrize(
+    ("difficulty", "depth"), [(1, 10), (3, 10), (4, 20), (7, 20), (8, 30), (10, 30)]
+)
+async def test_every_call_reads_to_the_difficulty_depth_arxiv_included(
+    fakes: Fakes, difficulty: int, depth: int
+) -> None:
+    await run(fakes, request(keywords=["GRPO", "reward models"], difficulty=difficulty))
+
+    reads = fakes.named("library_keyword") + fakes.named("library_semantic")
+    assert [arguments["limit"] for arguments in reads] == [depth] * 3
+    arxiv = fakes.named("arxiv")
+    assert [arguments["max_results"] for arguments in arxiv] == [depth] * 2
+
+
+async def test_the_gateway_lifts_the_arxiv_cap_for_discover_only(
+    db: AsyncSession, gateway: Fakes
+) -> None:
+    await invoke_read(
+        db, _context(project=True), _invocation(difficulty=9, sources=["arxiv"])
+    )
+
+    (arguments,) = gateway.named("arxiv")
+    assert arguments["max_results"] == 30
+    assert gateway.arxiv_options == [{"max_results_cap": dp.MAX_DEPTH}]
+
+
+class _RecordingArxiv:
+    """Stands in for the arXiv service under the real _tool_search_arxiv."""
+
+    sent: list[dict[str, Any]] = []
+
+    async def __aenter__(self) -> "_RecordingArxiv":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
+    async def search_papers(self, **kwargs: Any) -> list[dict[str, Any]]:
+        _RecordingArxiv.sent.append(kwargs)
+        return [
+            {"id": f"2401.{n:05d}", "title": f"Distinct arXiv paper number {n}"}
+            for n in range(kwargs["max_results"])
+        ]
+
+
+async def test_discover_reaches_the_arxiv_service_at_depth_and_the_public_tool_stays_at_five(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    from src.services.agent import tools_impl
+
+    _RecordingArxiv.sent = []
+    tools_impl._ARXIV_SEARCH_CACHE.clear()
+
+    async def no_redis() -> None:
+        return None
+
+    monkeypatch.setattr(tools_impl, "_get_arxiv_redis", no_redis)
+    monkeypatch.setattr(
+        "src.services.arxiv.arxiv_service.ArXivIngestionService", _RecordingArxiv
+    )
+
+    result = await invoke_read(
+        db, _context(project=True), _invocation(difficulty=9, sources=["arxiv"])
+    )
+    assert result.is_error is False
+    assert [call["max_results"] for call in _RecordingArxiv.sent] == [30]
+    assert len(result.content[0]["papers"]) == 15  # all 30 read, the cap applies after
+
+    tools_impl._ARXIV_SEARCH_CACHE.clear()
+    _RecordingArxiv.sent = []
+    public = await invoke_read(
+        db,
+        _context(project=True),
+        ToolInvocation(
+            tool_name="search_arxiv",
+            arguments={"query": "agents", "max_results": 20},
+            invocation_id=uuid4(),
+        ),
+    )
+    assert public.is_error is False
+    assert [call["max_results"] for call in _RecordingArxiv.sent] == [5]
+    assert len(public.content[0]["papers"]) == 5
 
 
 async def test_a_2020_window_returns_the_2020_paper_the_channels_found(
@@ -765,12 +874,69 @@ async def test_reciprocal_rank_fusion_across_calls(fakes: Fakes) -> None:
     fakes.semantic = [c, a]
     payload = await run(fakes)
 
+    # A is found by two channels: 1/61 + 1/62, scaled by 1 + 0.25.
+    fused_a = (1 / 61 + 1 / 62) * 1.25
     assert ids(payload) == ["A", "C", "B"]
     scores = {item["id"]: item["score"] for item in payload["papers"]}
-    fused_a, fused_c, fused_b = 1 / 61 + 1 / 62, 1 / 61, 1 / 62
     assert scores["A"] == 1.0
-    assert scores["C"] == pytest.approx(fused_c / fused_a, abs=1e-3)
-    assert scores["B"] == pytest.approx(fused_b / fused_a, abs=1e-3)
+    assert scores["C"] == pytest.approx((1 / 61) / fused_a, abs=1e-3)
+    assert scores["B"] == pytest.approx((1 / 62) / fused_a, abs=1e-3)
+
+
+def _named(*calls: tuple[str, list[Candidate]]) -> list[CallRecord]:
+    return [
+        CallRecord(name, "q", "ok", candidates=candidates) for name, candidates in calls
+    ]
+
+
+def test_one_channel_is_plain_reciprocal_rank_fusion_with_k_60() -> None:
+    a, b, c = paper("A"), paper("B"), paper("C")
+    ranked = rank_papers(
+        _named(("library_keyword", [a, b]), ("library_keyword_acronyms", [c, a])),
+        "default",
+        TODAY,
+    )
+
+    # A keyword call and its acronym-only twin are one channel: one vote.
+    assert [r.paper.id for r in ranked] == ["A", "C", "B"]
+    assert [round(r.score, 9) for r in ranked] == [
+        round(1 / 61 + 1 / 62, 9),
+        round(1 / 61, 9),
+        round(1 / 62, 9),
+    ]
+    assert ranked[0].found_by == ("library_keyword", "library_keyword_acronyms")
+
+
+def test_each_extra_channel_scales_the_score_by_a_quarter() -> None:
+    a, b = paper("A"), paper("B")
+    two = rank_papers(
+        _named(("library_keyword", [a, b]), ("arxiv_keyword", [a])), "default", TODAY
+    )
+    three = rank_papers(
+        _named(
+            ("library_keyword", [a, b]),
+            ("library_semantic", [a]),
+            ("arxiv_keyword_acronyms", [a]),
+        ),
+        "default",
+        TODAY,
+    )
+
+    assert two[0].score == pytest.approx(2 / 61 * 1.25)
+    assert three[0].score == pytest.approx(3 / 61 * 1.5)
+    assert two[1].score == pytest.approx(1 / 62)  # a single channel: no bonus
+
+
+async def test_semantic_hits_alone_are_returned_when_nothing_else_answers(
+    fakes: Fakes,
+) -> None:
+    # Half weight does not silence the semantic call: with no lexical match to
+    # dominate, its neighbours are all within the relative cut of each other.
+    fakes.semantic = [paper(f"near-{n}") for n in range(12)]
+    payload = await run(fakes)
+
+    assert ids(payload) == [f"near-{n}" for n in range(12)]
+    assert {item["found_by"][0] for item in payload["papers"]} == {"library_semantic"}
 
 
 def _records(*lists: list[Candidate]) -> list[CallRecord]:
@@ -847,46 +1013,56 @@ def _ranked(*scores: float) -> list[RankedPaper]:
     ]
 
 
-def test_a_dominant_paper_cuts_the_weak_tail_but_keeps_five() -> None:
+def test_a_dominant_paper_is_returned_alone() -> None:
     kept = select_papers(_ranked(1.0, *([0.05] * 20)))
 
-    assert [r.paper.id for r in kept] == ["p0", "p1", "p2", "p3", "p4"]
+    assert [r.paper.id for r in kept] == ["p0"]  # no minimum: the cut decides
 
 
 def test_the_cut_is_relative_to_the_best_score() -> None:
     kept = select_papers(_ranked(1.0, 0.9, 0.5, 0.31, 0.3, 0.29, 0.28, 0.1))
 
     assert len(kept) == 5  # 0.3 itself stays, 0.29 does not
+    assert len(select_papers(_ranked(0.5, 0.15, 0.149))) == 2  # relative, not absolute
 
 
-def test_fewer_than_five_candidates_are_all_returned() -> None:
-    assert len(select_papers(_ranked(1.0, 0.01, 0.01))) == 3
+def test_an_empty_or_single_candidate_list() -> None:
     assert select_papers([]) == []
     assert len(select_papers(_ranked(1.0))) == 1
+    assert len(select_papers(_ranked(1.0, 0.01, 0.01))) == 1
 
 
 def test_the_list_is_capped_at_fifteen() -> None:
     assert len(select_papers(_ranked(*([1.0] * 40)))) == 15
 
 
-async def test_an_exact_name_query_is_not_padded_to_fifteen(fakes: Fakes) -> None:
+async def test_an_exact_name_query_returns_the_one_paper(fakes: Fakes) -> None:
     # One paper dominates: the keyword search, the semantic search and arXiv all
-    # return it first. Thirty weak semantic neighbours follow.
+    # return it first. Thirty weak semantic neighbours follow. Three channels
+    # agreeing scale the star to 3/61 x 1.5; the best neighbour scores 1/62
+    # (a ratio of 0.22, under the 0.3 cut). Plain RRF would give 0.33 and keep
+    # six neighbours.
     star = paper("star", arxiv_id="2501.00001", title="Q2D-Web: a web agent benchmark")
     fakes.keyword["Q2D-Web"] = [star]
     fakes.semantic = [star] + [paper(f"weak-{n}") for n in range(30)]
     fakes.arxiv["Q2D-Web"] = [arxiv_row("2501.00001")]
     payload = await run(fakes, request(keywords=["Q2D-Web"]))
 
-    top = 3 / 61
-    expected = 1 + sum(1 for rank in range(2, 32) if 1 / (60 + rank) >= 0.3 * top)
-    assert len(payload["papers"]) == expected == 7
-    assert ids(payload)[0] == "star"
+    assert ids(payload) == ["star"]
     assert payload["papers"][0]["found_by"] == [
         "library_keyword",
         "library_semantic",
         "arxiv_keyword",
     ]
+    assert payload["papers"][0]["score"] == 1.0
+    assert status_of(payload)["library_semantic"] == "ok"  # it ran, it just lost
+
+
+async def test_several_comparable_papers_are_all_returned(fakes: Fakes) -> None:
+    fakes.keyword["llm agents"] = [paper(f"k-{n}") for n in range(6)]
+    payload = await run(fakes)
+
+    assert ids(payload) == [f"k-{n}" for n in range(6)]
 
 
 async def test_a_broad_query_is_capped_at_fifteen(fakes: Fakes) -> None:
@@ -1107,7 +1283,7 @@ async def test_a_missing_table_is_unavailable_logged_once_and_the_savepoint_isol
     monkeypatch.setattr(dp, "tool_session", _fake_tool_session(session))
     monkeypatch.setattr(
         dp,
-        "semantic_search",
+        "semantic_search_strict",
         AsyncMock(side_effect=_db_error(_FakeDbError(sqlstate="42P01"))),
     )
     with caplog.at_level(logging.DEBUG, logger=dp.logger.name):
@@ -1127,7 +1303,7 @@ async def test_any_other_database_error_is_an_error_not_unavailable(
     monkeypatch.setattr(dp, "tool_session", _fake_tool_session(_FakeSession()))
     monkeypatch.setattr(
         dp,
-        "semantic_search",
+        "semantic_search_strict",
         AsyncMock(side_effect=_db_error(_FakeDbError(sqlstate="57014"))),
     )
     record = await dp._run_call(
@@ -1140,6 +1316,66 @@ async def test_any_other_database_error_is_an_error_not_unavailable(
     )
 
     assert (record.status, record.reason) == ("error", "upstream_error")
+
+
+@pytest.mark.parametrize("reason", ["embedding_failed", "embedding_rejected"])
+async def test_a_failed_embedding_is_unavailable_with_a_reason_not_empty(
+    monkeypatch: pytest.MonkeyPatch, semantic_on: None, reason: str
+) -> None:
+    monkeypatch.setattr(dp, "tool_session", _fake_tool_session(_FakeSession()))
+    monkeypatch.setattr(
+        dp,
+        "semantic_search_strict",
+        AsyncMock(side_effect=SemanticSearchUnavailable(reason)),
+    )
+    fakes = Fakes()
+    monkeypatch.setattr(dp, "_library_keyword", fakes.library_keyword)
+    fakes.keyword["llm agents"] = [paper("doc-1")]
+    payload = await run(fakes, request(sources=["library"]))
+
+    semantic = payload["calls"][1]
+    assert (semantic["status"], semantic["reason"], semantic["count"]) == (
+        "unavailable",
+        reason,
+        0,
+    )
+    assert ids(payload) == ["doc-1"] and "error" not in payload
+
+
+async def test_the_real_embedding_failure_path_reports_unavailable(
+    monkeypatch: pytest.MonkeyPatch, semantic_on: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Through the real semantic_search_strict: only the provider is replaced.
+    class Down:
+        async def embed_text(self, text: str, *, for_query: bool) -> Any:
+            raise RuntimeError("cohere 503 key=sk-secret")
+
+    monkeypatch.setattr(semantic_search_service, "document_embedding_service", Down())
+    session = _FakeSession()
+    monkeypatch.setattr(dp, "tool_session", _fake_tool_session(session))
+    with caplog.at_level(logging.WARNING):
+        record = await dp._run_call(
+            dp._CallSpec(
+                "library_semantic",
+                "question",
+                5.0,
+                lambda: dp._library_semantic(**_semantic_kwargs()),
+            )
+        )
+
+    assert (record.status, record.reason) == ("unavailable", "embedding_failed")
+    assert record.candidates == []
+    # Detail stays in the log; the call record carries only the stable token.
+    assert "sk-secret" not in json.dumps(record.as_dict())
+    # The public search keeps its old contract for every other caller.
+    assert (
+        await semantic_search_service.semantic_search(
+            session,  # type: ignore[arg-type]
+            query="question",
+            organization_id=ORG,
+        )
+        == []
+    )
 
 
 async def test_arxiv_candidates_are_normalized() -> None:
@@ -1599,7 +1835,8 @@ def test_the_tool_is_in_the_catalogue_with_the_loop_rules() -> None:
         "followup_rounds_allowed",
         "ONE concrete gap",
         "never a rephrase",
-        "5-15 paper ids",
+        "up to 15 paper ids",
+        "fewer when one paper clearly dominates",
         "at most two such loops per user turn",
     ):
         assert phrase in description.replace("\n", " "), phrase

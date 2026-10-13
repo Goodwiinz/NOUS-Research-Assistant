@@ -18,6 +18,7 @@ import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Iterable, Sequence, cast
 from uuid import UUID
 
@@ -279,8 +280,9 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         "After reading the results, if coverage is thin, make at most "
         "followup_rounds_allowed more calls, each aimed at ONE concrete gap (a "
         "missing method, benchmark, acronym or title phrase), never a rephrase of "
-        "an earlier call. Then answer with 5-15 paper ids that appeared in the "
-        "results, and never an id no result returned. Run at most two such loops "
+        "an earlier call. Then answer with up to 15 paper ids that appeared in "
+        "the results (fewer when one paper clearly dominates), and never an id no "
+        "result returned. Run at most two such loops "
         "per user turn. calls[] lists every search with its status: check it for "
         "one that was unavailable or failed.",
         {
@@ -1447,7 +1449,11 @@ async def _discover_papers(
         request,
         organization_id=context.organization_id,
         project_ids=project_ids,
-        arxiv_search=_tool_search_arxiv,
+        # The public search_arxiv tool returns at most 5 papers; a discovery
+        # round reads arXiv to its difficulty depth through this internal cap.
+        arxiv_search=partial(
+            _tool_search_arxiv, max_results_cap=discover_papers.MAX_DEPTH
+        ),
     )
     if "papers" in payload:
         _fit_discover_to_cap(payload)

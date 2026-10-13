@@ -5,9 +5,9 @@ a single round. It runs every search it needs at once, merges what comes back
 and returns a short ranked list for the model to read:
 
 1. library keyword: PostgreSQL full-text search over the grant's scope;
-2. library semantic: pgvector nearest neighbours of the question (off unless
-   ``SEMANTIC_SEARCH_ENABLED``, and unavailable when ``document_embeddings`` was
-   never created);
+2. library semantic: pgvector nearest neighbours of the question (``unavailable``
+   when ``SEMANTIC_SEARCH_ENABLED`` is off, the embedding provider fails, or
+   ``document_embeddings`` was never created);
 3. arXiv keyword: the same ``search_arxiv`` implementation the read tool uses;
 4. acronym recovery: when the keywords mix acronyms with other words, one more
    keyword call (library and arXiv) with only the acronyms, because an
@@ -28,15 +28,21 @@ use); the caller's session is only used to resolve the grant's scope.
 
 Merging. Hits are deduplicated by exact id, then by arXiv id or DOI, then by
 normalized title; an arXiv paper that is already in the library is shown as the
-library copy. Calls are fused with reciprocal-rank fusion (k = 60). ``prioritize``
-then nudges the score by publication age (and a citation count when the
-document metadata has one); it reorders, it never excludes. Items scoring below
-0.3 x the best are dropped, at most 15 are returned, and at least
-``min(5, available)`` are kept. Every returned id comes from a call that
-succeeded in this round (the citation gate; ``_cite_gate`` enforces it).
+library copy. Calls are fused with reciprocal-rank fusion (k = 60). A paper
+that several independent searches found (library keyword, library semantic,
+arXiv) is scaled up by ``AGREEMENT_BONUS`` per extra search, the usual
+meta-search consensus bonus: a semantic search always returns its nearest
+neighbours whatever their distance, so without it nothing could ever dominate
+them. ``prioritize`` then nudges the score by publication age (and a citation
+count when the document metadata has one); it reorders, it never excludes.
+Items scoring below 0.3 x the best are dropped and at most 15 are returned, so
+a paper that all the searches agree on comes back alone. Every returned id
+comes from a call that succeeded in this round (the citation gate;
+``_cite_gate`` enforces it).
 
 ``difficulty`` does not trigger server-side follow-ups. It sets how deep each
-call reads and is echoed back as ``followup_rounds_allowed`` for the harness.
+call reads (10, 20 or 30 results, arXiv included) and is echoed back as
+``followup_rounds_allowed`` for the harness.
 """
 
 from __future__ import annotations
@@ -63,8 +69,9 @@ from src.services.agent._pii_redact import redact_pii
 from src.services.agent.tool_session import tool_session
 from src.services.search.keyword_search_service import keyword_search
 from src.services.search.semantic_search_service import (
+    SemanticSearchUnavailable,
     project_scope_condition,
-    semantic_search,
+    semantic_search_strict,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +80,6 @@ MAX_KEYWORDS = 8
 MAX_KEYWORD_CHARS = 100
 MAX_QUESTION_CHARS = 500
 MAX_PAPERS = 15
-MIN_PAPERS = 5
 RELATIVE_CUT = 0.3
 RRF_K = 60
 TITLE_CHARS = 300
@@ -84,8 +90,14 @@ AUTHOR_CHARS = 100
 # at most this much more than an otherwise identical one. About ten places in
 # one result list, so a nudge rather than a re-sort.
 PRIORITY_WEIGHT = 0.15
-# ``_tool_search_arxiv`` returns at most this many papers whatever is asked.
-ARXIV_MAX_RESULTS = 5
+# The deepest a call reads (difficulty 8-10). The public search_arxiv tool stays
+# at 5 papers; the caller of ``discover`` passes ``_tool_search_arxiv`` a cap of
+# this size instead (read_tools._discover_papers).
+MAX_DEPTH = 30
+# Each search (channel) beyond the first that returned a paper scales its fused
+# score by this much: 3 channels = x1.5, 2 = x1.25. Calls on the same channel
+# (a keyword call and its acronym-only twin) are one vote, not two.
+AGREEMENT_BONUS = 0.25
 # Per-call budgets. arXiv waits on a shared rate gate (3 s apart), so it gets
 # the longest; the whole round is bounded by the slowest call.
 LIBRARY_TIMEOUT_SECONDS = 20.0
@@ -134,7 +146,7 @@ class DiscoverRequest:
     @property
     def depth(self) -> int:
         """Results each call reads: 10, 20 or 30."""
-        return 10 if self.difficulty <= 3 else 20 if self.difficulty <= 7 else 30
+        return 10 if self.difficulty <= 3 else 20 if self.difficulty <= 7 else MAX_DEPTH
 
     @property
     def followup_rounds_allowed(self) -> int:
@@ -283,6 +295,11 @@ class CallRecord:
     status: CallStatus
     candidates: list[Candidate] = field(default_factory=list)
     reason: str | None = None
+
+    @property
+    def channel(self) -> str:
+        """The search this call belongs to: an acronym call is its main call's twin."""
+        return self.name.removesuffix("_acronyms")
 
     def as_dict(self) -> dict[str, Any]:
         entry: dict[str, Any] = {
@@ -490,7 +507,7 @@ async def _library_semantic(
             # A SAVEPOINT: a missing table aborts only the savepoint, so the
             # session (and the identity query below) stays usable.
             async with session.begin_nested():
-                hits = await semantic_search(
+                hits = await semantic_search_strict(
                     session,
                     query=query,
                     organization_id=organization_id,
@@ -499,6 +516,10 @@ async def _library_semantic(
                     published_before=before,
                     limit=limit,
                 )
+        except SemanticSearchUnavailable as unavailable:
+            # The provider failed or answered with an unusable vector: the
+            # channel cannot answer, which is not the same as no hits.
+            raise ChannelUnavailable(unavailable.reason) from unavailable
         except DBAPIError as error:
             if not _embeddings_table_missing(error):
                 raise
@@ -548,7 +569,7 @@ async def _arxiv_keyword(
         return []
     arguments: dict[str, Any] = {
         "query": terms,
-        "max_results": min(limit, ARXIV_MAX_RESULTS),
+        "max_results": limit,
         # Without a window the tool defaults to the last 12 months; 0 = unbounded.
         "recency_days": 0,
     }
@@ -764,16 +785,20 @@ def rank_papers(
 ) -> list[RankedPaper]:
     """Fuse, adjust and order every distinct paper (before the cut).
 
-    Reciprocal-rank fusion over the calls that succeeded, then ``prioritize``
-    scales each score by up to ``PRIORITY_WEIGHT``. Equal scores fall back to the
+    Reciprocal-rank fusion over the calls that succeeded, scaled by
+    ``AGREEMENT_BONUS`` per extra channel that found the paper, then
+    ``prioritize`` scales each score by up to ``PRIORITY_WEIGHT``. Equal scores fall back to the
     favoured age (newer for ``recency``, older for ``historical``, undated last),
     then to the order the papers were first returned.
     """
     call_order = {record.name: index for index, record in enumerate(records)}
+    channel_of = {record.name: record.channel for record in records}
     scored: list[tuple[RankedPaper, int]] = []
     for cluster in _cluster([r for r in records if r.status == "ok"]):
         paper = _representative(cluster.members)
         fused = sum(1.0 / (RRF_K + rank) for rank in cluster.ranks.values())
+        agreeing = len({channel_of[call] for call in cluster.ranks})
+        fused *= 1.0 + AGREEMENT_BONUS * (agreeing - 1)
         score = fused * (
             1.0 + PRIORITY_WEIGHT * _priority_factor(paper, prioritize, today)
         )
@@ -797,14 +822,14 @@ def rank_papers(
 
 
 def select_papers(ranked: Sequence[RankedPaper]) -> list[RankedPaper]:
-    """Relative cut (< 0.3 x the best), at least min(5, available), at most 15."""
+    """The relative cut (< 0.3 x the best) decides; at most 15.
+
+    There is no minimum: when one paper dominates it is the answer.
+    """
     if not ranked:
         return []
     top = ranked[0].score
     kept = [item for item in ranked if item.score >= RELATIVE_CUT * top]
-    floor = min(MIN_PAPERS, len(ranked))
-    if len(kept) < floor:
-        kept = list(ranked[:floor])
     return kept[:MAX_PAPERS]
 
 
