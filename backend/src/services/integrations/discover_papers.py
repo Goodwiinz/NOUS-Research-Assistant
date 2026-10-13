@@ -36,7 +36,9 @@ neighbours whatever their distance, so without it nothing could ever dominate
 them. ``prioritize`` then nudges the score by publication age (and a citation
 count when the document metadata has one); it reorders, it never excludes.
 Items scoring below 0.3 x the best are dropped and at most 15 are returned, so
-a paper that all the searches agree on comes back alone. Every returned id
+a paper that all the searches agree on comes back alone. When only two
+channels answer (``sources=["library"]``, or one channel failed), the cut rises
+so that a paper only one of them found still falls below it (``cut_ratio``). Every returned id
 comes from a call that succeeded in this round (the citation gate;
 ``_cite_gate`` enforces it).
 
@@ -98,6 +100,9 @@ MAX_DEPTH = 30
 # score by this much: 3 channels = x1.5, 2 = x1.25. Calls on the same channel
 # (a keyword call and its acronym-only twin) are one vote, not two.
 AGREEMENT_BONUS = 0.25
+# How far above a lone channel's best possible share the cut sits when fewer
+# than three channels answered (see ``cut_ratio``).
+LONE_HIT_MARGIN = 1.15
 # Per-call budgets. arXiv waits on a shared rate gate (3 s apart), so it gets
 # the longest; the whole round is bounded by the slowest call.
 LIBRARY_TIMEOUT_SECONDS = 20.0
@@ -821,15 +826,33 @@ def rank_papers(
     return [ranked for ranked, _ in sorted(scored, key=order)]
 
 
-def select_papers(ranked: Sequence[RankedPaper]) -> list[RankedPaper]:
-    """The relative cut (< 0.3 x the best) decides; at most 15.
+def cut_ratio(channels_answered: int) -> float:
+    """The relative cut for a round in which this many channels answered.
+
+    A paper only one channel found scores at most ``1 / (n x (1 + bonus x (n - 1)))``
+    of one that all ``n`` channels ranked first: 0.22 with three channels, 0.4
+    with two. ``RELATIVE_CUT`` drops it with three but not with two, so the cut
+    is raised to sit ``LONE_HIT_MARGIN`` above that ceiling. With one channel
+    nothing can agree, so only ``RELATIVE_CUT`` applies.
+    """
+    if channels_answered < 2:
+        return RELATIVE_CUT
+    agreement = channels_answered * (1.0 + AGREEMENT_BONUS * (channels_answered - 1))
+    return max(RELATIVE_CUT, LONE_HIT_MARGIN / agreement)
+
+
+def select_papers(
+    ranked: Sequence[RankedPaper], channels_answered: int = 3
+) -> list[RankedPaper]:
+    """The relative cut (``cut_ratio``) decides; at most 15.
 
     There is no minimum: when one paper dominates it is the answer.
     """
     if not ranked:
         return []
     top = ranked[0].score
-    kept = [item for item in ranked if item.score >= RELATIVE_CUT * top]
+    ratio = cut_ratio(channels_answered)
+    kept = [item for item in ranked if item.score >= ratio * top]
     return kept[:MAX_PAPERS]
 
 
@@ -891,8 +914,11 @@ async def discover(
     if not any(record.status in ("ok", "empty") for record in records):
         return {"error": "upstream_unavailable", "calls": calls}
     day = today or datetime.now(timezone.utc).date()
+    # Channels that returned something; an empty or failed one cannot agree.
+    answered = len({record.channel for record in records if record.status == "ok"})
     selected = _cite_gate(
-        select_papers(rank_papers(records, request.prioritize, day)), records
+        select_papers(rank_papers(records, request.prioritize, day), answered),
+        records,
     )
     top = selected[0].score if selected else 0.0
     return {

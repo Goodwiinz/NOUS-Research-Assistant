@@ -93,11 +93,13 @@ from src.services.integrations import discover_papers as dp
 from src.services.integrations import read_tools
 from src.services.integrations.context import IntegrationAccessDenied
 from src.services.integrations.discover_papers import (
+    RELATIVE_CUT,
     CallRecord,
     Candidate,
     DiscoverArgumentError,
     RankedPaper,
     acronym_terms,
+    cut_ratio,
     discover,
     parse_arguments,
     rank_papers,
@@ -874,9 +876,17 @@ async def test_reciprocal_rank_fusion_across_calls(fakes: Fakes) -> None:
     fakes.semantic = [c, a]
     payload = await run(fakes)
 
-    # A is found by two channels: 1/61 + 1/62, scaled by 1 + 0.25.
+    # A is found by two channels: 1/61 + 1/62, scaled by 1 + 0.25. C and B were
+    # each found by one channel only: about 0.40 of A, under the two-channel
+    # cut (cut_ratio(2) = 0.46), so A comes back alone.
+    assert ids(payload) == ["A"]
+    assert payload["papers"][0]["score"] == 1.0
+
+    # With a third channel answering, the plain 0.3 cut keeps C and B, and the
+    # fused scores show through.
+    fakes.arxiv["llm agents"] = [arxiv_row("2401.00009")]
+    payload = await run(fakes)
     fused_a = (1 / 61 + 1 / 62) * 1.25
-    assert ids(payload) == ["A", "C", "B"]
     scores = {item["id"]: item["score"] for item in payload["papers"]}
     assert scores["A"] == 1.0
     assert scores["C"] == pytest.approx((1 / 61) / fused_a, abs=1e-3)
@@ -1034,6 +1044,28 @@ def test_an_empty_or_single_candidate_list() -> None:
 
 def test_the_list_is_capped_at_fifteen() -> None:
     assert len(select_papers(_ranked(*([1.0] * 40)))) == 15
+
+
+def test_the_cut_rises_when_only_two_channels_answer() -> None:
+    assert cut_ratio(3) == RELATIVE_CUT
+    assert cut_ratio(1) == RELATIVE_CUT  # nothing can agree: no dominance
+    assert cut_ratio(2) == pytest.approx(1.15 / 2.5)  # above a lone hit's 0.4
+
+
+def test_a_paper_both_library_channels_agree_on_comes_back_alone() -> None:
+    # sources=["library"]: the exact-name paper tops both channels; semantic
+    # always returns neighbours, each found by that one channel only.
+    exact = paper("exact")
+    neighbours = [paper(f"n{i}") for i in range(9)]
+    records = _named(
+        ("library_keyword", [exact]),
+        ("library_semantic", [exact, *neighbours]),
+    )
+    ranked = rank_papers(records, "default", TODAY)
+
+    assert [r.paper.id for r in select_papers(ranked, 2)] == ["exact"]
+    # The three-channel cut would have let the neighbours through.
+    assert len(select_papers(ranked, 3)) > 1
 
 
 async def test_an_exact_name_query_returns_the_one_paper(fakes: Fakes) -> None:
