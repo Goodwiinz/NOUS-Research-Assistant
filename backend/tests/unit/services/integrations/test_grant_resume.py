@@ -22,7 +22,11 @@ from src.models.organization import Organization
 from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
-from src.schemas.integration_context import DeviceCreate, GrantRequestCreate, IssuedGrant
+from src.schemas.integration_context import (
+    DeviceCreate,
+    GrantRequestCreate,
+    IssuedGrant,
+)
 from src.services.integrations import connections
 from src.services.integrations.context import (
     RESUME_WINDOW,
@@ -171,7 +175,9 @@ async def test_lapsed_grant_resumes_under_the_same_consent_and_device(
     old = await db.get(IntegrationGrant, issued.grant_id, populate_existing=True)
     assert old is not None and old.revoked_at is not None
     # No new approval and no new device: the pairing is the same one.
-    assert await db.scalar(select(func.count()).select_from(IntegrationGrantRequest)) == 1
+    assert (
+        await db.scalar(select(func.count()).select_from(IntegrationGrantRequest)) == 1
+    )
     assert await db.scalar(select(func.count()).select_from(BridgeDevice)) == 1
 
 
@@ -294,9 +300,7 @@ async def test_resume_refuses_a_revoked_device_whose_grant_was_not_revoked(
     """validate_binding re-checks the device itself."""
     _, _, issued = paired
     await _lapse(db, issued.grant_id, timedelta(hours=1))
-    await db.execute(
-        update(BridgeDevice).values(revoked_at=datetime.now(timezone.utc))
-    )
+    await db.execute(update(BridgeDevice).values(revoked_at=datetime.now(timezone.utc)))
     await db.commit()
     await _refused(db, issued.grant_id, issued.token)
 
@@ -329,7 +333,9 @@ async def test_resume_refuses_a_chat_bound_grant_whose_chat_moved(
     _, _, issued = await _pair(db, thread_id=THREAD)
     await _lapse(db, issued.grant_id, timedelta(hours=1))
     await db.execute(
-        update(Thread).where(Thread.id == THREAD).values(source_project_id=OTHER_PROJECT)
+        update(Thread)
+        .where(Thread.id == THREAD)
+        .values(source_project_id=OTHER_PROJECT)
     )
     await db.commit()
     await _refused(db, issued.grant_id, issued.token)

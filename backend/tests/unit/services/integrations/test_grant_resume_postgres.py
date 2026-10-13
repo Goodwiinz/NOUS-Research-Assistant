@@ -92,7 +92,9 @@ async def factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
                 ),
                 {"id": USER, "org": ORG},
             )
-            db.add(Workspace(id=WORKSPACE, name="w", owner_id=USER, organization_id=ORG))
+            db.add(
+                Workspace(id=WORKSPACE, name="w", owner_id=USER, organization_id=ORG)
+            )
             await db.flush()
             db.add(Collection(id=PROJECT, name="p", workspace_id=WORKSPACE))
             await db.commit()
@@ -145,9 +147,7 @@ async def test_concurrent_resumes_of_one_grant_issue_one_successor(
 
     async def resume() -> IssuedGrant:
         async with factory() as db:
-            return await service.resume_grant(
-                db, OWNER, issued.grant_id, issued.token
-            )
+            return await service.resume_grant(db, OWNER, issued.grant_id, issued.token)
 
     results = await asyncio.wait_for(
         asyncio.gather(resume(), resume(), return_exceptions=True), timeout=30
