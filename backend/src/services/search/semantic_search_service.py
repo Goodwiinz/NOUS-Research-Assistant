@@ -118,7 +118,7 @@ def _as_day(value: date) -> date:
     return value.date() if isinstance(value, datetime) else value
 
 
-def _publication_text_expressions() -> tuple[Any, Any]:
+def publication_text_expressions() -> tuple[Any, Any]:
     """SQL for the effective publication day as ISO text, and where it came from."""
     raw = Document.document_metadata["publication_date"].as_string()
     from_metadata = case(
@@ -131,6 +131,25 @@ def _publication_text_expressions() -> tuple[Any, Any]:
     effective = func.coalesce(from_metadata, ingested)
     source = case((from_metadata.is_not(None), "metadata"), else_="created_at")
     return effective, source
+
+
+def project_scope_condition(project_ids: set[uuid.UUID]) -> Any:
+    """``Document`` is linked to one of ``project_ids``, every ancestor live.
+
+    The link, its Collection and the Collection's Workspace must all be live,
+    so a soft-deleted parent revokes its documents even though no cascade
+    touched them. Shared by the semantic and the keyword search, which must
+    scope a document identically.
+    """
+    return exists().where(
+        CollectionDocument.document_id == Document.id,
+        CollectionDocument.collection_id.in_(project_ids),
+        CollectionDocument.is_deleted.is_(False),
+        Collection.id == CollectionDocument.collection_id,
+        Collection.is_deleted.is_(False),
+        Workspace.id == Collection.workspace_id,
+        Workspace.is_deleted.is_(False),
+    )
 
 
 def build_semantic_search_statement(
@@ -148,7 +167,7 @@ def build_semantic_search_statement(
     ``exact`` writes the ordering so no ANN index can serve it (see the module
     docstring); the default leaves it index-eligible.
     """
-    published_on, published_source = _publication_text_expressions()
+    published_on, published_source = publication_text_expressions()
     distance = DocumentEmbedding.embedding.cosine_distance(query_vector)
 
     statement = (
@@ -172,17 +191,7 @@ def build_semantic_search_statement(
         )
     )
     if project_ids is not None:
-        statement = statement.where(
-            exists().where(
-                CollectionDocument.document_id == Document.id,
-                CollectionDocument.collection_id.in_(project_ids),
-                CollectionDocument.is_deleted.is_(False),
-                Collection.id == CollectionDocument.collection_id,
-                Collection.is_deleted.is_(False),
-                Workspace.id == Collection.workspace_id,
-                Workspace.is_deleted.is_(False),
-            )
-        )
+        statement = statement.where(project_scope_condition(project_ids))
     if published_after is not None:
         statement = statement.where(published_on >= published_after.isoformat())
     if published_before is not None:
@@ -196,7 +205,7 @@ def build_semantic_search_statement(
 _HEADING = re.compile(r"^\s*#+\s*abstract\s*", re.IGNORECASE)
 
 
-def _snippet(summary: str | None, description: str | None, head: str | None) -> str:
+def snippet_from(summary: str | None, description: str | None, head: str | None) -> str:
     """The first of summary, metadata description or text head, trimmed."""
     for candidate in (summary, description, head):
         text = " ".join(_HEADING.sub("", str(candidate or "")).split())
@@ -207,7 +216,7 @@ def _snippet(summary: str | None, description: str | None, head: str | None) -> 
     return ""
 
 
-def _parse_day(value: str | None) -> date | None:
+def parse_day(value: str | None) -> date | None:
     try:
         return date.fromisoformat(str(value)) if value else None
     except ValueError:
@@ -221,10 +230,10 @@ def _to_hit(row: Any) -> SemanticSearchHit:
     return SemanticSearchHit(
         document_id=str(row.document_id),
         title=str(row.title or ""),
-        publication_date=_parse_day(row.published_on),
+        publication_date=parse_day(row.published_on),
         publication_date_source=source,
         similarity=1.0 - float(row.distance),
-        snippet=_snippet(row.summary, row.description, row.head),
+        snippet=snippet_from(row.summary, row.description, row.head),
     )
 
 
