@@ -33,6 +33,43 @@ loading legacy credentials repairs their permissions.
   Enter to complete, and Esc to dismiss. Enter on a complete command runs it.
   Tab moves focus between controls.
 
+## `nous --rc`: run Local Codex here from a web chat
+
+```sh
+# Once, from the root of a checkout that tracks origin/develop, after pnpm install:
+ln -s "$PWD/nous" ~/.local/bin/nous
+# Then, from the folder Codex should work in:
+cd <folder> && nous --rc
+```
+
+`nous --rc` pairs this computer with a NOUS project so that a chat on NOUS can
+run Codex in the current folder. It needs Node 24 (if the default `node` is
+another version, it uses Homebrew's `node@24`) and Codex `0.153.4` or
+`0.161.0`. It checks Codex first, then signs you in (a browser link and a
+code, unless the saved sign-in still works), lists your projects with
+`n) New project`, asks you to approve this computer in the browser the first
+time you pick a project, registers the current folder, and runs until Ctrl-C.
+Then, in a chat for that project on NOUS, choose **Local Codex**, this
+computer and the folder; the last lines `nous --rc` prints name both.
+
+Codex runs in that folder and can read the project's documents. It cannot
+publish files or change your library through this pairing. Each computer holds
+one pairing. Picking the same project again reuses it with no browser step (if
+NOUS no longer accepts it, you approve again). Picking a different project
+asks for approval again, moves the registered folders to the new project, and
+prints that the old project's approval stays active until you revoke it under
+Settings → Connected devices (`/integrations/devices`).
+
+Ctrl-C at a prompt or while waiting for the browser, or Ctrl-D at a prompt,
+prints `Cancelled` and stops without pairing. Once the bridge runs, Ctrl-C
+stops it and keeps the pairing; run `nous --rc` again to resume. A refused or
+expired browser step prints `Not approved; run nous --rc again`. Chats can use
+Codex only on a server with `HARNESS_BRIDGE_ENABLED` on, and Codex can read
+documents only with `NOUS_MCP_ENABLED` on; pairing works either way.
+`nous --rc` keeps its own sign-in, separate from `./nous login`. The manual
+commands it replaces are in
+[`packages/harness-bridge/README.md`](../packages/harness-bridge/README.md).
+
 ## Keyboard
 
 | Key                        | Action                                                    |

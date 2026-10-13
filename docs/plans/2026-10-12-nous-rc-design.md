@@ -1,6 +1,6 @@
 # `nous --rc`: pair this folder with web NOUS in one command
 
-**Status:** Design, written 2026-10-12 against `origin/develop` `d8c5894d1`. Decisions were made by the owner in a brainstorming session the same day; the "Decisions" table records them. Nothing here is implemented yet.
+**Status:** Design, written 2026-10-12 against `origin/develop` `d8c5894d1`. Decisions were made by the owner in a brainstorming session the same day; the "Decisions" table records them. Nothing here is implemented yet. Amended 2026-10-12: implemented on `feat/nous-rc` (PR 1 is #1983); the live run is NOT RUN.
 
 **Contracts touched:** [harness bridge](../engineering/harness-bridge.md), [bridge package](../../packages/harness-bridge/README.md), [terminal client](../../terminal/README.md), [live-proof runbook](../testing/harness-live-proof.md).
 
@@ -22,6 +22,17 @@ The pieces already exist: the bridge does the browser login, the consent, the fo
 | Where does the code live? | A new `rc` subcommand in `packages/harness-bridge` (`nous-harness rc`); `nous --rc` execs it. | Fewest new parts: login, pairing reuse, folder registration and the runner are all in the bridge. The picker is a numbered list; a nicer picker can replace it later without touching anything underneath. |
 | Pairings per computer | One, as today. Picking a different project replaces the pairing and asks for Approve again. | Owner chose this over one pairing per project. |
 | The replaced project's consent | Print where to revoke it (`/integrations/devices`); do not revoke automatically. | `disconnect` also signs the user out of the CLI on every computer and drops registered folders, which is too heavy for switching projects. The old grant itself lapses within 15 minutes; the consent stays valid until revoked, which is the documented existing gap. |
+
+**Amendments 2026-10-12** (after implementation and review on `feat/nous-rc`; the sections below keep the original design):
+
+- The CLI flag is `--root`, not `--dir` (the same flag as `workspace add`); the launcher passes `--root "$PWD"`.
+- When the default `node` is not 24.x, the launcher uses Homebrew's `node@24` (`/opt/homebrew/opt/node@24/bin` or `/usr/local/opt/node@24/bin`) if present; otherwise it prints `nous --rc needs Node 24 (found <v>); install it with: brew install node@24`.
+- A missing or broken Codex prints ``Could not run `codex --version`; check that Codex is installed, on your PATH and working``; the "not tested" sentence is for a Codex that runs but is not listed.
+- Before the bridge starts, Ctrl-C (at a prompt or during a browser wait) or Ctrl-D at a prompt cancels with `Cancelled` and no pairing; once the bridge runs, Ctrl-C stops it and keeps the pairing.
+- Switching to a different project carries the registered folders over to the new project (owner's decision), as `connect` already does on a reconnect.
+- A refused or expired browser sign-in prints `Not approved; run nous --rc again`, the same as a refused or expired approval.
+- The 503 "turned off" message was dropped: a 503 passes through as `NOUS request failed (503) <path>` (see the Errors table's own amendment).
+- The "What the user sees" transcript is illustrative. The real prompts are the bridge's existing `Authorize CLI login in your browser: <link>` / `Type this code on that page: <code>` and `Approve this device and project in your browser: <link>`, and the last line reads `In a chat for this project on NOUS, choose Local Codex → <device label> → <folder label>.`
 
 ## What the user sees
 
@@ -105,7 +116,7 @@ Each failure prints one sentence and exits non-zero unless noted.
 
 Package tests (`pnpm --filter @nous/harness-bridge test`), fixture-backed like the existing `connect-reuse.test.ts` and `codex.test.ts`:
 
-- `rc`: picks project 2 and connects with `harness:execute` + `tools:read`; `n` creates a project (asserting the `POST /projects` body) and connects to it, asking which workspace only when there are several and re-prompting on a bad pick; an API path other than `/api/v1` or a malformed workspace list fails closed; the same project as the stored pairing makes no `/cli-auth/*` or `/grant-requests` call; a stored token that answers 401 triggers exactly one `login()` and the reused pairing keeps the new sign-in; a second 401 after that sign-in is an error; a stored sign-in is never sent to a different NOUS; an invalid choice, including `1abc`, re-prompts; a probe failure, a missing folder and a file in place of the folder each make zero network calls; a 503 passes through unchanged; a refused sign-in or approval prints `Not approved; run nous --rc again` and saves nothing; a different project than the stored one prints the revoke hint (after the new pairing, naming the old project) and replaces the pairing, and a previous workspace connection gets its own hint; a truncated project list says so; project names lose escape sequences and control characters; the folder is registered once across two runs.
+- `rc`: picks project 2 and connects with `harness:execute` + `tools:read`; `n` creates a project (asserting the `POST /projects` body) and connects to it, asking which workspace only when there are several and re-prompting on a bad pick; an API path other than `/api/v1` or a malformed workspace list fails closed; the same project as the stored pairing makes no `/cli-auth/*` or `/grant-requests` call; a stored token that answers 401 triggers exactly one `login()` and the reused pairing keeps the new sign-in; a second 401 after that sign-in is an error; a stored sign-in is never sent to a different NOUS; an invalid choice, including `1abc`, re-prompts; a probe failure, a missing folder and a file in place of the folder each make zero network calls; a 503 passes through unchanged; a refused sign-in or approval prints `Not approved; run nous --rc again` and saves nothing; a different project than the stored one prints the revoke hint (after the new pairing, naming the old project) and replaces the pairing, and a previous workspace connection gets its own hint; a truncated project list says so; project names lose escape sequences and control characters; the folder is registered once across two runs. (Amended 2026-10-12 after review.)
 - Versions: the fake app-server reports each listed version in turn and both pass `probe()` and the handshake; an unlisted version fails `probe()` with the sentence above; a handshake whose `userAgent` names a different listed version than the probe fails.
 - `pnpm --filter @nous/harness-bridge type-check`.
 
@@ -125,6 +136,7 @@ Live acceptance (manual, after [#1978](https://github.com/Goodwiinz/NOUS-Researc
 - **Conflicts.** [#1973](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/1973) (artifact sharing) also edits `packages/harness-bridge/src/cli.ts`; the `rc` work should land as small PRs and merge `develop` forward rather than rebase.
 - **The stale main checkout.** `~/development/RAG_system` is ~2,400 commits behind `develop` and has no `packages/harness-bridge`; the symlink must point at a current checkout, which the README says.
 - **Credential rewrite race.** When NOUS rejects the stored sign-in, `rc` writes the new token into the stored credential (`load`, then `update`), so a bridge renewing the grant from the same state directory between those two steps would have its new grant token overwritten with the old one; this is left as is because it needs both at once.
+- **Switching NOUS servers.** (Amended 2026-10-12.) The revoke hint is printed only when the replaced pairing was on the same NOUS server; a pairing replaced on another server keeps its approval there with no hint.
 
 ## Delivery
 

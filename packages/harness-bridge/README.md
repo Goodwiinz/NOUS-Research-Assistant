@@ -2,6 +2,16 @@
 
 `@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. It also ships an opt-in local MCP server that exposes NOUS project read tools to Codex and, when the matching scopes are approved, publication of a file from a registered workspace root and requests for notes and library changes in NOUS (see [NOUS read tools](#nous-read-tools-over-mcp) and [Note and library actions](#note-and-library-actions)). This package does not synchronize other conversations.
 
+## Quick start: `nous --rc`
+
+From the folder Codex should work in, on a computer with Node 24 and a tested Codex:
+
+```sh
+nous --rc
+```
+
+`nous --rc` is the repository launcher ([`terminal/README.md`](../../terminal/README.md) has the one-time symlink; without it, run `<checkout>/nous --rc` from that folder). It runs `nous-harness rc --api URL --root <current folder>`, which checks Codex before any network call, signs in (browser link and code unless the saved sign-in still works), shows a numbered project list with `n) New project`, pairs this computer with the chosen project (browser approval the first time per project; a different project replaces the pairing), registers the folder, and runs the bridge until Ctrl-C. It requests `harness:execute` and `tools:read` only. The commands below do the same steps by hand and expose the other scopes.
+
 ## Requirements and pairing
 
 - Node.js 24 and the repository-pinned pnpm version.
