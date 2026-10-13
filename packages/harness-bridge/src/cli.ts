@@ -2,7 +2,7 @@
 import { Journal } from "./journal.ts";
 import { connectBridge } from "./connection.ts";
 import { CodexAdapter } from "./adapters/codex.ts";
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, uptime } from "node:os";
 import {
   join,
   basename,
@@ -100,11 +100,8 @@ async function request(
   if (!record(data)) throw new Error("invalid NOUS response");
   return data;
 }
-/**
- * A server-supplied link as the terminal prints it: http(s) only, and
- * re-serialised so control characters arrive percent-encoded, never raw.
- */
-function printableUrl(value: string): string {
+/** An absolute http(s) link from NOUS, or `invalid NOUS response`. */
+function webUrl(value: string): URL {
   let url: URL;
   try {
     url = new URL(value);
@@ -113,7 +110,55 @@ function printableUrl(value: string): string {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:")
     throw new Error("invalid NOUS response");
-  return url.href;
+  return url;
+}
+/**
+ * A server-supplied link as the terminal prints it, re-serialised so control
+ * characters arrive percent-encoded, never raw. An absolute link must be
+ * http(s). A root-relative path (NOUS sends the pairing approval page that
+ * way) resolves on the NOUS website when its origin is known, and otherwise
+ * comes back as the bare path for the caller to label; a path the URL parser
+ * reads as another host (`/\host`, a stripped tab) is refused.
+ */
+function printableUrl(value: string, websiteOrigin?: string): string {
+  if (!value.startsWith("/") || value.startsWith("//"))
+    return webUrl(value).href;
+  const base = websiteOrigin ?? "https://x.invalid";
+  let url: URL;
+  try {
+    url = new URL(value, base);
+  } catch {
+    throw new Error("invalid NOUS response");
+  }
+  if (url.origin !== new URL(base).origin)
+    throw new Error("invalid NOUS response");
+  return websiteOrigin === undefined
+    ? url.pathname + url.search + url.hash
+    : url.href;
+}
+/**
+ * The NOUS website origin login() recorded for this API, if any: the place a
+ * root-relative link from NOUS opens.
+ */
+async function storedWebsiteOrigin(
+  store: CredentialStore,
+  base: string,
+): Promise<string | undefined> {
+  const value = await store.readLocal("website").catch(() => null);
+  if (
+    !record(value) ||
+    typeof value.apiUrl !== "string" ||
+    typeof value.origin !== "string"
+  )
+    return undefined;
+  try {
+    return apiBase(value.apiUrl) === base &&
+      webUrl(value.origin).origin === value.origin
+      ? value.origin
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 /** A stored connection with the fields the reuse check and `status` read. */
 function storedConnection(value: unknown): LocalState | null {
@@ -188,9 +233,15 @@ export async function login(base: string, options: ClientOptions): Promise<strin
     !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(started.verification_code)
   )
     throw new Error("invalid CLI login response");
-  const browserUrl = printableUrl(started.browser_url);
+  // The login page is on the NOUS website. Remember its origin for this API,
+  // so the root-relative pairing approval link can be printed in full, also
+  // on later runs that reuse this sign-in; only that link depends on it.
+  const browser = webUrl(started.browser_url);
+  await new CredentialStore(options.stateDir)
+    .writeLocal("website", { apiUrl: api, origin: browser.origin })
+    .catch(() => {});
   announce(
-    `Authorize CLI login in your browser: ${browserUrl}\nType this code on that page: ${started.verification_code}`,
+    `Authorize CLI login in your browser: ${browser.href}\nType this code on that page: ${started.verification_code}`,
   );
   const auth = await poll(
     () =>
@@ -226,6 +277,9 @@ export async function connect(
     // A CLI access token obtained by login(); when set, no browser login runs;
     // ignored when the stored binding is reused.
     accessToken?: string;
+    // The NOUS website origin, only to print the approval link in full;
+    // defaults to the one login() recorded for this API.
+    websiteOrigin?: string;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
@@ -351,8 +405,13 @@ export async function connect(
   );
   if (!uuid(consent.id) || typeof consent.approval_url !== "string")
     throw new Error("invalid grant request");
+  // NOUS sends the approval page as a root-relative path on its website.
+  const approval = printableUrl(
+    consent.approval_url,
+    options.websiteOrigin ?? (await storedWebsiteOrigin(store, base)),
+  );
   announce(
-    `Approve this device and ${target} in your browser: ${printableUrl(consent.approval_url)}`,
+    `Approve this device and ${target} in your browser: ${approval}${approval.startsWith("/") ? " (open this path on your NOUS website)" : ""}`,
   );
   await poll(
     () =>
@@ -859,6 +918,8 @@ export async function rc(options: RcOptions): Promise<void> {
     createProject(fetchFn, base, signedIn, options.prompt, announce),
   );
   const label = options.label ?? hostname();
+  // Recorded by this run's login(), or by the one whose sign-in it reuses.
+  const websiteOrigin = await storedWebsiteOrigin(store, base);
   await approved(() =>
     connect({
       stateDir: options.stateDir,
@@ -870,6 +931,7 @@ export async function rc(options: RcOptions): Promise<void> {
       label,
       tools: true,
       accessToken: signedIn,
+      websiteOrigin,
     }),
   );
   // The new pairing replaced the stored one; its consent outlives it in NOUS.
@@ -996,14 +1058,25 @@ export async function probeCodex(
   }
   return { version: adapter.version ?? "unknown" };
 }
-/** The pid a lock file names, or null when it names none. */
-function lockPid(text: string): number | null {
+/**
+ * The process a lock file names, or null when it names none; `startedAt` is
+ * NaN when the file does not say.
+ */
+function lockHolder(text: string): { pid: number; startedAt: number } | null {
   try {
-    const pid: unknown = JSON.parse(text)?.pid;
+    const value: unknown = JSON.parse(text);
+    if (!record(value)) return null;
+    const pid: unknown = value.pid;
     // process.kill reads 0 and negative pids as process groups.
-    return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
-      ? pid
-      : null;
+    if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0)
+      return null;
+    return {
+      pid,
+      startedAt:
+        typeof value.startedAt === "string"
+          ? Date.parse(value.startedAt)
+          : Number.NaN,
+    };
   } catch {
     return null;
   }
@@ -1047,7 +1120,7 @@ export async function acquireStateLock(
       const release = (): void => {
         process.off("exit", release);
         try {
-          if (lockPid(readFileSync(path, "utf8")) === process.pid)
+          if (lockHolder(readFileSync(path, "utf8"))?.pid === process.pid)
             unlinkSync(path);
         } catch {
           // Gone already, or unreadable: not this process's lock to remove.
@@ -1059,10 +1132,18 @@ export async function acquireStateLock(
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
     const seen = await readFile(path, "utf8").catch(() => null);
-    const pid = seen === null ? null : lockPid(seen);
-    if (pid !== null && pidAlive(pid))
+    const holder = seen === null ? null : lockHolder(seen);
+    // A lock taken before this boot is stale even when its pid is alive
+    // again (a crash, a reboot, the pid reused); 5 s absorbs clock and
+    // uptime rounding.
+    const bootedAt = Date.now() - uptime() * 1000 - 5_000;
+    if (
+      holder !== null &&
+      !(Number.isFinite(holder.startedAt) && holder.startedAt < bootedAt) &&
+      pidAlive(holder.pid)
+    )
       throw new Error(
-        `Another nous --rc or nous-harness run (pid ${pid}) is already using ${stateDir}; stop it first`,
+        `Another nous --rc or nous-harness run (pid ${holder.pid}) is already using ${stateDir}; stop it first (if no such process is running, delete ${path})`,
       );
     // Stale. Remove it only if it is still the file judged stale, so two
     // processes clearing one stale lock do not remove each other's new one.
@@ -1645,6 +1726,8 @@ async function main(): Promise<void> {
           for (const signal of signals) process.off(signal, cancelCommand);
           process.once("SIGINT", () => controller.abort());
           process.once("SIGTERM", () => controller.abort());
+          // Closing the terminal window stops the bridge cleanly too.
+          process.once("SIGHUP", () => controller.abort());
           return runBridge(stateDir, controller.signal);
         },
       });
@@ -1659,6 +1742,7 @@ async function main(): Promise<void> {
       const controller = new AbortController();
       process.once("SIGINT", () => controller.abort());
       process.once("SIGTERM", () => controller.abort());
+      process.once("SIGHUP", () => controller.abort());
       await runBridge(stateDir, controller.signal);
     } finally {
       await release();

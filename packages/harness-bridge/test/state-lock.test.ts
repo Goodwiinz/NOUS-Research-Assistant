@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, uptime } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireStateLock } from "../src/cli.ts";
@@ -46,7 +46,7 @@ test("a lock held by a live process refuses with its pid", async () => {
     // The test runner that spawned this file is alive for its whole run.
     writeFileSync(s.lock, JSON.stringify({ pid: process.ppid, startedAt: "x" }), { mode: 0o600 });
     await assert.rejects(acquireStateLock(s.dir), {
-      message: `Another nous --rc or nous-harness run (pid ${process.ppid}) is already using ${s.dir}; stop it first`,
+      message: `Another nous --rc or nous-harness run (pid ${process.ppid}) is already using ${s.dir}; stop it first (if no such process is running, delete ${s.lock})`,
     });
     assert.equal(s.holder(), process.ppid);
     // A second acquire in the holding process refuses the same way.
@@ -70,6 +70,20 @@ test("a lock whose process is gone, or that cannot be read, is replaced", async 
     const again = await acquireStateLock(s.dir);
     assert.equal(s.holder(), process.pid);
     await again();
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("a lock from before this boot is stale even if its pid is alive again", async () => {
+  const s = setup();
+  try {
+    // A crash, a reboot, and the old pid reused by some other live process.
+    const beforeBoot = new Date(Date.now() - uptime() * 1000 - 3_600_000).toISOString();
+    writeFileSync(s.lock, JSON.stringify({ pid: process.ppid, startedAt: beforeBoot }), { mode: 0o600 });
+    const release = await acquireStateLock(s.dir);
+    assert.equal(s.holder(), process.pid);
+    await release();
   } finally {
     s.cleanup();
   }

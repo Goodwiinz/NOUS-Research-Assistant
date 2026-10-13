@@ -45,7 +45,8 @@ function fakeNous(calls: Call[], { tokenOk = (_auth?: string): boolean => true, 
       return json({ session_id: "s", poll_token: "p", browser_url: "https://nous.test/l", verification_code: "ABCD-1234" });
     if (url.includes("/cli-auth/status/")) return json({ status: "approved", token: "cli-secret" });
     if (url.endsWith("/integrations/devices")) return json({ id: DEVICE });
-    if (url.endsWith("/grant-requests")) return json({ id: GRANT, approval_url: "https://nous.test/a" });
+    // NOUS sends the approval page root-relative (integrations/context.py).
+    if (url.endsWith("/grant-requests")) return json({ id: GRANT, approval_url: `/integrations/approve?request_id=${GRANT}` });
     if (url.endsWith("/exchange")) return json({ token: `grant-${(grants += 1)}`, grant_id: GRANT });
     if (url.endsWith("/renew")) return json({ token: `renewed-${(grants += 1)}`, grant_id: GRANT });
     if (url.includes("/workspaces") && init.method === "POST") return json({ ok: true });
@@ -109,6 +110,12 @@ test("picks a listed project, pairs with execute + read, registers the folder, r
     assert.deepEqual(s.runs, [s.dir]);
     assert.ok(s.messages.some((m) => m.includes('Connected: "RAG eval notes"') && m.includes("0.161.0")));
     assert.ok(s.messages.some((m) => m.includes("1) Thesis lit review") && m.includes("n) New project")));
+    // The root-relative approval page, resolved on the website login() saw.
+    assert.ok(
+      s.messages.includes(
+        `Approve this device and project in your browser: https://nous.test/integrations/approve?request_id=${GRANT}`,
+      ),
+    );
     // The summary names what the web chat shows: the device and folder labels.
     assert.ok(s.messages.some((m) => m.includes(`choose Local Codex → Laptop → ${basename(s.folder)}.`)));
     assert.ok(!s.messages.some((m) => m.includes("Showing the first")));
@@ -268,6 +275,29 @@ test("a different project than the stored pairing prints the revoke hint and rep
   }
 });
 
+test("a later run that reuses the stored sign-in still prints the full approval link", async () => {
+  const first = setup(["1"]);
+  try {
+    await rc(first.options);
+    const again = setup(["2"]);
+    try {
+      again.options.stateDir = first.dir;
+      await rc(again.options);
+      assert.equal(again.urls().filter((x) => x.includes("/cli-auth/")).length, 0, "no new sign-in");
+      assert.ok(
+        again.messages.includes(
+          `Approve this device and project in your browser: https://nous.test/integrations/approve?request_id=${GRANT}`,
+        ),
+        again.messages.join("\n"),
+      );
+    } finally {
+      again.cleanup();
+    }
+  } finally {
+    first.cleanup();
+  }
+});
+
 test("a previous workspace connection gets its own revoke hint", async () => {
   const s = setup(["1"]);
   try {
@@ -360,7 +390,12 @@ test("a server link that is not http(s) is refused", async () => {
       match: (url: string) => url.endsWith("/cli-auth/start"),
       reply: { session_id: "s", poll_token: "p", browser_url: "javascript:alert(1)", verification_code: "ABCD-1234" },
     },
-    { match: (url: string) => url.endsWith("/grant-requests"), reply: { id: GRANT, approval_url: "javascript:alert(1)" } },
+    // Not http(s), protocol-relative, and root-relative paths that the URL
+    // parser reads as another host (a backslash, a stripped tab).
+    ...["javascript:alert(1)", "//evil.example/x", "/\\evil.example/x", "/\t/evil.example/x"].map((link) => ({
+      match: (url: string) => url.endsWith("/grant-requests"),
+      reply: { id: GRANT, approval_url: link },
+    })),
   ];
   for (const { match, reply } of cases) {
     const calls: Call[] = [];

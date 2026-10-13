@@ -30,7 +30,8 @@ function fakeNous(calls: string[], renew: () => Reply, deviceAuth: (string | nul
       deviceAuth.push(new Headers(init?.headers).get("Authorization"));
       data = { id: DEVICE };
     }
-    else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: "https://nous.test/a" };
+    // NOUS sends the approval page root-relative (integrations/context.py).
+    else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: `/integrations/approve?request_id=${GRANT}` };
     else if (url.endsWith("/exchange")) data = { token: `grant-secret-${(issued += 1)}`, grant_id: GRANT };
     else if (url.endsWith("/renew")) {
       const { code, body } = renew();
@@ -406,6 +407,50 @@ test("connect with an access token skips the CLI login", async () => {
     assert.deepEqual(t.deviceAuth, ["Bearer cli-from-rc"]);
     assert.equal(t.state().projectId, PROJECT);
     assert.deepEqual(t.state().scopes, ["harness:execute", "tools:read"]);
+  } finally {
+    t.cleanup();
+  }
+});
+
+const APPROVE_PATH = `/integrations/approve?request_id=${GRANT}`;
+const approveLine = (link: string) => `Approve this device and project in your browser: ${link}`;
+
+test("the root-relative approval link prints in full on the website login() saw", async () => {
+  const t = setup();
+  try {
+    // The full flow signs in first; the fake's login page is https://nous.test/l.
+    await connect({ ...t.base, tools: true });
+    assert.ok(t.messages.includes(approveLine(`https://nous.test${APPROVE_PATH}`)), t.messages.join("\n"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("without a known website the approval link is the path, with a hint", async () => {
+  const t = setup();
+  try {
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.ok(
+      t.messages.includes(approveLine(`${APPROVE_PATH} (open this path on your NOUS website)`)),
+      t.messages.join("\n"),
+    );
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a website recorded for another API is ignored; an explicit one is used", async () => {
+  const t = setup();
+  try {
+    await new CredentialStore(t.dir).writeLocal("website", {
+      apiUrl: "https://elsewhere.test/api/v1",
+      origin: "https://elsewhere.test",
+    });
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.ok(t.messages.includes(approveLine(`${APPROVE_PATH} (open this path on your NOUS website)`)));
+    assert.ok(!t.messages.join("\n").includes("elsewhere"));
+    await connect({ ...t.base, tools: true, publish: true, accessToken: "cli-from-rc", websiteOrigin: "https://site.test" });
+    assert.ok(t.messages.includes(approveLine(`https://site.test${APPROVE_PATH}`)), t.messages.join("\n"));
   } finally {
     t.cleanup();
   }
