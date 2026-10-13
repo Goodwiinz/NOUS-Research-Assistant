@@ -132,9 +132,11 @@ function printableUrl(value: string, websiteOrigin?: string): string {
   }
   if (url.origin !== new URL(base).origin)
     throw new Error("invalid NOUS response");
-  return websiteOrigin === undefined
-    ? url.pathname + url.search + url.hash
-    : url.href;
+  if (websiteOrigin !== undefined) return url.href;
+  // A bare path that normalises to `//host` (e.g. `/..//host`) would read as
+  // another host once printed without its origin.
+  if (url.pathname.startsWith("//")) throw new Error("invalid NOUS response");
+  return url.pathname + url.search + url.hash;
 }
 /**
  * The NOUS website origin login() recorded for this API, if any: the place a

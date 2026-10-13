@@ -439,6 +439,23 @@ test("without a known website the approval link is the path, with a hint", async
   }
 });
 
+test("without a known website, a path that normalises to //host is refused", async () => {
+  const t = setup();
+  try {
+    const fetchFn = (async (input: any, init?: RequestInit) =>
+      String(input).endsWith("/grant-requests")
+        ? new Response(JSON.stringify({ id: GRANT, approval_url: "/..//evil.example/x" }), { status: 200 })
+        : t.base.fetchFn(input, init)) as typeof fetch;
+    await assert.rejects(
+      connect({ ...t.base, fetchFn, tools: true, accessToken: "cli-from-rc" }),
+      { message: "invalid NOUS response" },
+    );
+    assert.ok(!t.messages.join("\n").includes("evil.example"));
+  } finally {
+    t.cleanup();
+  }
+});
+
 test("a website recorded for another API is ignored; an explicit one is used", async () => {
   const t = setup();
   try {
