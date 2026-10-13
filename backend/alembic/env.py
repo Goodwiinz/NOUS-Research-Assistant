@@ -55,6 +55,7 @@ from src.models import (
 
 # Import models and database configuration
 from src.models.base import Base
+from src.models.document_embedding import MIGRATION_OWNED_TABLES
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -68,6 +69,17 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 target_metadata = Base.metadata
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    """Leave migration-owned tables (not on Base.metadata) out of autogenerate.
+
+    ``document_embeddings`` needs the pgvector extension, so only
+    ``jd01_document_embeddings`` creates it; without this the reflected table
+    would be reported as "removed" by ``alembic check``.
+    """
+    return not (type_ == "table" and name in MIGRATION_OWNED_TABLES)
+
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -279,6 +291,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
@@ -310,6 +323,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            include_object=include_object,
             compare_type=True,
             compare_server_default=True,
         )
