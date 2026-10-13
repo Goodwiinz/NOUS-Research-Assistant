@@ -2777,8 +2777,20 @@ def _arxiv_window(
     return bounds[0], bounds[1]
 
 
-async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Search arXiv for papers."""
+# The agent-facing tools return at most this many arXiv papers per search.
+_ARXIV_TOOL_MAX_RESULTS = 5
+
+
+async def _tool_search_arxiv(
+    args: Dict[str, Any], *, max_results_cap: int = _ARXIV_TOOL_MAX_RESULTS
+) -> Dict[str, Any]:
+    """Search arXiv for papers.
+
+    ``max_results_cap`` is the most papers one call may return. Every agent and
+    read-tool caller leaves it at ``_ARXIV_TOOL_MAX_RESULTS``; it is a Python
+    argument, not a tool argument, so a model cannot raise it. ``discover_papers``
+    passes a larger one to read arXiv to its difficulty depth.
+    """
     from datetime import datetime, timedelta, timezone
 
     from src.services.arxiv.arxiv_service import ArXivIngestionService
@@ -2806,7 +2818,7 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     # Hard cap at 5 papers + 250-char abstracts. Trace showed 10×500-char
     # results = 8087 chars feeding into the synthesis LLM call and triggering
     # 1536 reasoning tokens (~46s). Smaller payload = faster synthesis.
-    max_results = max(1, min(args.get("max_results", 5), 5))
+    max_results = max(1, min(args.get("max_results", 5), max_results_cap))
     categories = args.get("categories")
 
     # Recency window: default to last 12 months so "find recent X" actually

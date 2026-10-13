@@ -161,3 +161,37 @@ def test_window_keys_differ_and_windowless_keys_keep_their_shape() -> None:
     assert ti._arxiv_redis_key(
         "rag", 5, None, 0, False, ("2020-01-01", "2020-12-31")
     ) != ti._arxiv_redis_key("rag", 5, None, 0, False)
+
+
+async def test_the_public_tool_still_returns_at_most_five_papers() -> None:
+    result = await ti._tool_search_arxiv({"query": "rag", "max_results": 30})
+
+    assert "error" not in result
+    assert _FakeArxiv.sent[-1]["max_results"] == 5
+
+
+async def test_an_internal_cap_lets_a_caller_read_deeper_and_no_further() -> None:
+    await ti._tool_search_arxiv({"query": "rag", "max_results": 30}, max_results_cap=30)
+    assert _FakeArxiv.sent[-1]["max_results"] == 30
+    await ti._tool_search_arxiv(
+        {"query": "rag2", "max_results": 50}, max_results_cap=30
+    )
+    assert _FakeArxiv.sent[-1]["max_results"] == 30
+    await ti._tool_search_arxiv({"query": "rag3"}, max_results_cap=30)
+    assert _FakeArxiv.sent[-1]["max_results"] == 5  # the default request is unchanged
+
+
+def test_the_cap_is_a_python_argument_a_model_cannot_set() -> None:
+    import inspect
+
+    parameter = inspect.signature(ti._tool_search_arxiv).parameters["max_results_cap"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default == 5 == ti._ARXIV_TOOL_MAX_RESULTS
+
+
+async def test_results_of_different_depths_are_cached_apart() -> None:
+    await ti._tool_search_arxiv({"query": "rag", "max_results": 30}, max_results_cap=30)
+    await ti._tool_search_arxiv({"query": "rag", "max_results": 30})  # the public 5
+
+    assert [call["max_results"] for call in _FakeArxiv.sent] == [30, 5]
