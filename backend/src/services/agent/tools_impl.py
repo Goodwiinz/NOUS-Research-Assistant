@@ -2493,15 +2493,20 @@ def _arxiv_cache_key(
     categories: Optional[List[str]],
     recency_days: int,
     chronological: bool = False,
+    window: Optional[tuple[Optional[str], Optional[str]]] = None,
 ) -> tuple:
     cats = tuple(sorted(categories)) if categories else ()
-    return (
+    key = (
         query.strip(),
         int(max_results),
         cats,
         int(recency_days),
         bool(chronological),
     )
+    # An absolute window is part of the identity: with recency_days=0 it is the
+    # only thing that tells a 2020 search from an unbounded one. Left off the
+    # key when absent, so every windowless key keeps its old shape.
+    return key + (window,) if window else key
 
 
 def _arxiv_cache_get(key: tuple) -> Optional[Dict[str, Any]]:
@@ -2675,19 +2680,21 @@ def _arxiv_redis_key(
     categories: Optional[List[str]],
     recency_days: int,
     chronological: bool,
+    window: Optional[tuple[Optional[str], Optional[str]]] = None,
 ) -> str:
     import hashlib
 
     cats = ",".join(sorted(categories)) if categories else ""
-    raw = "|".join(
-        [
-            _normalize_cache_query(query),
-            str(int(max_results)),
-            cats,
-            str(int(recency_days)),
-            str(int(bool(chronological))),
-        ]
-    )
+    parts = [
+        _normalize_cache_query(query),
+        str(int(max_results)),
+        cats,
+        str(int(recency_days)),
+        str(int(bool(chronological))),
+    ]
+    if window:  # see _arxiv_cache_key: absent windows keep their old digest
+        parts.append(f"{window[0] or ''}..{window[1] or ''}")
+    raw = "|".join(parts)
     # usedforsecurity=False: this is a cache-key digest, not a security hash
     # (Bandit B324). Collision resistance is irrelevant for a cache bucket.
     digest = hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
@@ -2740,6 +2747,36 @@ async def _arxiv_redis_set(redis_key: str, payload: Dict[str, Any]) -> None:
         logger.debug("Failed to write arXiv cache entry to Redis", exc_info=True)
 
 
+# arXiv's earliest submissions are from 1991; an open lower bound for a
+# window that only has an upper one.
+_ARXIV_WINDOW_FLOOR = "199001010000"
+_ARXIV_WINDOW_CEILING = "999912312359"
+
+
+def _arxiv_window(
+    args: Dict[str, Any],
+) -> tuple[Optional[str], Optional[str]]:
+    """``(published_after, published_before)`` as ISO days, or ``None`` each.
+
+    A bound that is not a ``YYYY-MM-DD`` date is ignored (the tool contract is
+    advisory for the agent; the integration gateway validates its own
+    arguments before they get here).
+    """
+    from datetime import date
+
+    bounds: list[Optional[str]] = []
+    for key in ("published_after", "published_before"):
+        raw = args.get(key)
+        day: Optional[str] = None
+        if isinstance(raw, str) and len(raw) == 10:
+            try:
+                day = date.fromisoformat(raw).isoformat()
+            except ValueError:
+                day = None
+        bounds.append(day)
+    return bounds[0], bounds[1]
+
+
 async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     """Search arXiv for papers."""
     from datetime import datetime, timedelta, timezone
@@ -2789,7 +2826,20 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     # than in the tool wrapper so every caller is covered — the research
     # subgraph's direct-search fast path builds this args dict itself.
     recency_days = max(0, min(recency_days, _MAX_ARXIV_RECENCY_DAYS))
-    if recency_days > 0:
+    # An absolute window (``published_after`` / ``published_before``, ISO
+    # days, inclusive) replaces the relative lookback: it is the same arXiv
+    # ``submittedDate`` filter, with the caller's bounds instead of "now minus
+    # N days". It is applied in the arXiv query, never to the returned page.
+    after, before = _arxiv_window(args)
+    window = (after, before) if (after or before) else None
+    if window:
+        recency_days = 0
+        date_filter = "submittedDate:[{} TO {}]".format(
+            f"{after.replace('-', '')}0000" if after else _ARXIV_WINDOW_FLOOR,
+            f"{before.replace('-', '')}2359" if before else _ARXIV_WINDOW_CEILING,
+        )
+        query = f"({query}) AND {date_filter}" if query else date_filter
+    elif recency_days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=recency_days)
         cutoff_str = cutoff.strftime("%Y%m%d%H%M")
         # arxiv API supports the `submittedDate:[FROM TO]` filter inside
@@ -2809,10 +2859,10 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     # the window), NOT the date-filtered query whose minute-precision cutoff
     # changes every minute. (audit #14)
     cache_key = _arxiv_cache_key(
-        original_query, max_results, categories, recency_days, chronological
+        original_query, max_results, categories, recency_days, chronological, window
     )
     redis_key = _arxiv_redis_key(
-        original_query, max_results, categories, recency_days, chronological
+        original_query, max_results, categories, recency_days, chronological, window
     )
     # Fresh lookup: L1 (per-process) then L2 (shared Redis). An L2 hit warms L1.
     cached = _arxiv_cache_get(cache_key)
