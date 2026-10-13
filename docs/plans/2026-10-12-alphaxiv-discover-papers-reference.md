@@ -58,6 +58,31 @@ The server listed 23 tools, not the nineteen the design counted: the research, r
 
 Output: one line per paper with `[ID=…]`, title, link, first publication date, organizations, votes, views and an abstract snippet. "No papers found for the given query." when nothing survives.
 
+## Update 2026-10-13: production primitives and loop rules
+
+alphaXiv's open-source desktop harness [`alphaXiv/OpenResearch`](https://github.com/alphaXiv/OpenResearch) (commit `aa65fe4`) calls the production retrieval primitives directly, and its `agent-skills/orx-lit-review/SKILL.md` writes down the discovery loop.
+
+**Production primitives.** These are public and need no auth:
+
+| Endpoint | Parameters | Observed 2026-10-13 |
+| --- | --- | --- |
+| `GET https://api.alphaxiv.org/search/v2/paper/discover/keyword` | `q`, `prioritize`, `publishedAfter`, `publishedBefore` | 25 results with `paperId, title, abstract, publicationDate, votes, snippets` (~2.2 s) |
+| `GET https://api.alphaxiv.org/search/v2/paper/discover/embedding` | same | 15 results with `paperId, title, abstract, publicationDate, votes` (~0.4 s) |
+
+With `q=retrieval-augmented generation` and a 2020 window, both returned 0 results. The date filter is applied after a limited candidate set is gathered, inside the primitives themselves. That is the source of the empty-window behaviour in step 3 of the inferred pipeline.
+
+**Loop rules (from the skill, quoted in substance):**
+
+- `difficulty` sets a hard cap on follow-up rounds: 1–3 → 0, 4–7 → 1, 8–10 → 2.
+- Every call inherits one publication window and priority; neither changes during the loop.
+- Keyword queries use only the user's terms. When the terms mix in acronym tokens, an extra keyword call runs on just the acronyms.
+- Candidates are deduplicated by id, then by DOI or arXiv id, then by normalised title. The API order already blends relevance with the chosen priority, so it is not re-weighted.
+- With solid coverage, the loop stops and ranks 5–15 IDs. Otherwise each follow-up round targets one concrete gap, and rephrasing an existing search does not count as a round.
+- Any selected ID that no successful call returned is dropped (the citation gate). If none survive, the loop falls back to the first 15 unique IDs.
+- Each user turn allows at most two full loops, a third or fourth runs in shallow mode, and a fifth is refused. This matches the MCP description's "2 searches per message".
+
+These rules account for the remaining unknowns: the round count per difficulty, result counts above 15 (up to 25 keyword hits), and the empty date window. Still not observed: which model runs the loop behind the hosted MCP tool, and the embedding model behind the production primitive.
+
 ## Inferred pipeline
 
 | Step | Behaviour | Evidence |
