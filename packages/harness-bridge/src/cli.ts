@@ -3,8 +3,17 @@ import { Journal } from "./journal.ts";
 import { connectBridge } from "./connection.ts";
 import { CodexAdapter } from "./adapters/codex.ts";
 import { homedir, hostname } from "node:os";
-import { join, basename, resolve } from "node:path";
-import { readFile, realpath, stat } from "node:fs/promises";
+import {
+  join,
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
+import { readFileSync, unlinkSync } from "node:fs";
+import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { parseArgs, stripVTControlCharacters } from "node:util";
@@ -91,6 +100,21 @@ async function request(
   if (!record(data)) throw new Error("invalid NOUS response");
   return data;
 }
+/**
+ * A server-supplied link as the terminal prints it: http(s) only, and
+ * re-serialised so control characters arrive percent-encoded, never raw.
+ */
+function printableUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("invalid NOUS response");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:")
+    throw new Error("invalid NOUS response");
+  return url.href;
+}
 /** A stored connection with the fields the reuse check and `status` read. */
 function storedConnection(value: unknown): LocalState | null {
   if (
@@ -164,8 +188,9 @@ export async function login(base: string, options: ClientOptions): Promise<strin
     !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(started.verification_code)
   )
     throw new Error("invalid CLI login response");
+  const browserUrl = printableUrl(started.browser_url);
   announce(
-    `Authorize CLI login in your browser: ${started.browser_url}\nType this code on that page: ${started.verification_code}`,
+    `Authorize CLI login in your browser: ${browserUrl}\nType this code on that page: ${started.verification_code}`,
   );
   const auth = await poll(
     () =>
@@ -327,7 +352,7 @@ export async function connect(
   if (!uuid(consent.id) || typeof consent.approval_url !== "string")
     throw new Error("invalid grant request");
   announce(
-    `Approve this device and ${target} in your browser: ${consent.approval_url}`,
+    `Approve this device and ${target} in your browser: ${printableUrl(consent.approval_url)}`,
   );
   await poll(
     () =>
@@ -708,10 +733,52 @@ async function approved<T>(step: () => Promise<T>): Promise<T> {
     throw error;
   }
 }
+/** `fetchFn`, naming the NOUS it could not reach instead of "fetch failed". */
+function reaching(fetchFn: typeof fetch, base: string): typeof fetch {
+  return (async (...args: Parameters<typeof fetch>) => {
+    try {
+      return await fetchFn(...args);
+    } catch (error) {
+      // fetch rejects with a TypeError only when no response arrived at all;
+      // HTTP statuses and timeouts reach the caller unchanged.
+      if (!(error instanceof TypeError)) throw error;
+      const cause: unknown = error.cause;
+      const detail =
+        record(cause) && typeof cause.code === "string"
+          ? cause.code
+          : cause instanceof Error
+            ? cause.message
+            : error.message;
+      throw new Error(`Could not reach NOUS at ${base} (${detail})`, {
+        cause: error,
+      });
+    }
+  }) as typeof fetch;
+}
+/** The real path of `path`, resolved through its deepest existing ancestor. */
+async function existingRealpath(path: string): Promise<string> {
+  const absolute = resolve(path);
+  const real = await realpath(absolute).catch(() => null);
+  if (real !== null) return real;
+  const parent = dirname(absolute);
+  return parent === absolute
+    ? absolute
+    : join(await existingRealpath(parent), basename(absolute));
+}
+/** Whether `path` is `folder` itself or inside it. */
+function within(path: string, folder: string): boolean {
+  const rel = relative(folder, path);
+  return (
+    rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
+}
 export type RcOptions = ClientOptions & {
   apiUrl: string;
   /** The folder Codex works in: the caller's current directory. */
   dir: string;
+  /** The home folder, which is too broad to work in; defaults to homedir(). */
+  home?: string;
   label?: string;
   prompt: (question: string) => Promise<string>;
   /** Checks the local Codex before anything else; resolves with its version. */
@@ -727,7 +794,7 @@ export type RcOptions = ClientOptions & {
  */
 export async function rc(options: RcOptions): Promise<void> {
   const base = apiBase(options.apiUrl);
-  const fetchFn = options.fetchFn ?? fetch;
+  const fetchFn = reaching(options.fetchFn ?? fetch, base);
   const announce = options.announce ?? console.log;
   // Codex and the folder first, so the user never approves a pairing that
   // cannot run.
@@ -735,6 +802,17 @@ export async function rc(options: RcOptions): Promise<void> {
   const root = await realpath(options.dir).catch(() => null);
   if (root === null || !(await stat(root)).isDirectory())
     throw new Error(`${options.dir} is not a folder`);
+  // Codex may write anywhere in the folder: never the filesystem root, the
+  // home folder, or a folder holding this bridge's own credentials.
+  const home = await existingRealpath(options.home ?? homedir());
+  if (
+    dirname(root) === root ||
+    root === home ||
+    within(await existingRealpath(options.stateDir), root)
+  )
+    throw new Error(
+      `${root} is too broad for Codex to work in; run nous --rc in a project folder`,
+    );
   announce(`NOUS: ${base}`);
   const store = new CredentialStore(options.stateDir);
   const previous = storedConnection(
@@ -758,7 +836,7 @@ export async function rc(options: RcOptions): Promise<void> {
   let page =
     token === undefined ? null : await listProjects(fetchFn, base, token);
   if (token === undefined || page === null) {
-    token = await approved(() => login(base, options));
+    token = await approved(() => login(base, { ...options, fetchFn }));
     page = await listProjects(fetchFn, base, token);
     if (page === null) throw new Error("NOUS refused the new sign-in");
     // connect keeps a reused pairing's stored credential, which grant renewal
@@ -917,6 +995,81 @@ export async function probeCodex(
     throw error;
   }
   return { version: adapter.version ?? "unknown" };
+}
+/** The pid a lock file names, or null when it names none. */
+function lockPid(text: string): number | null {
+  try {
+    const pid: unknown = JSON.parse(text)?.pid;
+    // process.kill reads 0 and negative pids as process groups.
+    return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
+      ? pid
+      : null;
+  } catch {
+    return null;
+  }
+}
+/** Signal 0 only checks: EPERM means the process exists under another user. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+/**
+ * One bridge per state directory: a second `nous --rc` or `nous-harness run`
+ * would force-renew the running bridge's grant, reopen its journal and poll
+ * as the same device. Creates `<stateDir>/bridge.lock` (owner-only) naming
+ * this process; a lock whose process is gone, or that cannot be read, is
+ * stale and replaced. Resolves with the release, which removes the lock only
+ * while it still names this process; `process.exit` releases it too.
+ */
+export async function acquireStateLock(
+  stateDir: string,
+): Promise<() => Promise<void>> {
+  const path = join(stateDir, "bridge.lock");
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const handle = await open(path, "wx", 0o600);
+      try {
+        await handle.writeFile(
+          JSON.stringify({
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+          }),
+        );
+      } finally {
+        await handle.close();
+      }
+      // Synchronous, so an "exit" listener can run it.
+      const release = (): void => {
+        process.off("exit", release);
+        try {
+          if (lockPid(readFileSync(path, "utf8")) === process.pid)
+            unlinkSync(path);
+        } catch {
+          // Gone already, or unreadable: not this process's lock to remove.
+        }
+      };
+      process.on("exit", release);
+      return async () => release();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const seen = await readFile(path, "utf8").catch(() => null);
+    const pid = seen === null ? null : lockPid(seen);
+    if (pid !== null && pidAlive(pid))
+      throw new Error(
+        `Another nous --rc or nous-harness run (pid ${pid}) is already using ${stateDir}; stop it first`,
+      );
+    // Stale. Remove it only if it is still the file judged stale, so two
+    // processes clearing one stale lock do not remove each other's new one.
+    if ((await readFile(path, "utf8").catch(() => null)) === seen)
+      await unlink(path).catch(() => {});
+  }
+  throw new Error(`could not lock ${stateDir}; try again`);
 }
 /** One local reconciliation pass over the locked runs, without the network. */
 export async function reconcileLocal(
@@ -1455,17 +1608,22 @@ async function main(): Promise<void> {
     // Refuse before probing Codex or touching the network.
     if (!process.stdin.isTTY || !process.stdout.isTTY)
       throw new Error("nous --rc needs an interactive terminal");
+    // One bridge per state directory, also before Codex or the network.
+    const release = await acquireStateLock(stateDir);
     // Until the bridge starts, any Ctrl-C or end of input stops the whole
     // command, even mid-wait.
     const cancelCommand = () => {
       // connection.json is always the old or the new version (atomic rename);
       // the worst case of exiting mid-pairing is an orphaned owner-only
-      // credential file or one more browser approval.
+      // credential file or one more browser approval. The lock's "exit"
+      // listener removes it.
       process.stderr.write("\nCancelled\n");
       process.exit(130);
     };
-    // Backstop for a SIGINT that does not come through the prompt.
-    process.on("SIGINT", cancelCommand);
+    // Backstops for signals that do not come through the prompt: a SIGINT
+    // from outside, a kill, or the terminal closing.
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    for (const signal of signals) process.on(signal, cancelCommand);
     const terminal = terminalPrompt(
       process.stdin,
       process.stdout,
@@ -1484,7 +1642,7 @@ async function main(): Promise<void> {
           // Hand the terminal back so Ctrl-C reaches the process, and stops
           // the bridge gracefully, while it runs.
           terminal.close();
-          process.off("SIGINT", cancelCommand);
+          for (const signal of signals) process.off(signal, cancelCommand);
           process.once("SIGINT", () => controller.abort());
           process.once("SIGTERM", () => controller.abort());
           return runBridge(stateDir, controller.signal);
@@ -1492,13 +1650,19 @@ async function main(): Promise<void> {
       });
     } finally {
       terminal.close();
-      process.off("SIGINT", cancelCommand);
+      for (const signal of signals) process.off(signal, cancelCommand);
+      await release();
     }
   } else if (positionals.join(" ") === "run") {
-    const controller = new AbortController();
-    process.once("SIGINT", () => controller.abort());
-    process.once("SIGTERM", () => controller.abort());
-    await runBridge(stateDir, controller.signal);
+    const release = await acquireStateLock(stateDir);
+    try {
+      const controller = new AbortController();
+      process.once("SIGINT", () => controller.abort());
+      process.once("SIGTERM", () => controller.abort());
+      await runBridge(stateDir, controller.signal);
+    } finally {
+      await release();
+    }
   } else throw new Error(help);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

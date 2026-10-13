@@ -71,6 +71,8 @@ function setup(answers: string[], fake?: typeof fetch) {
     apiUrl: "https://nous.test/api/v1",
     dir: folder,
     label: "Laptop",
+    // Unset: the real home folder.
+    home: undefined as string | undefined,
     fetchFn: fake ?? fakeNous(calls),
     announce: (m: string) => messages.push(m),
     delay: async () => {},
@@ -310,6 +312,111 @@ test("a folder that does not exist fails before any network call", async () => {
     s.options.dir = file;
     await assert.rejects(rc(s.options), /notes\.txt is not a folder$/);
     assert.equal(s.calls.length, 0);
+    assert.equal(s.runs.length, 0);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("a folder too broad for Codex is refused before any network call", async () => {
+  const s = setup([]);
+  const tooBroad = (root: string) => ({
+    message: `${root} is too broad for Codex to work in; run nous --rc in a project folder`,
+  });
+  try {
+    // The home folder (a stand-in for it here).
+    s.options.home = s.folder;
+    await assert.rejects(rc(s.options), tooBroad(s.folder));
+    s.options.home = undefined;
+    // The filesystem root.
+    s.options.dir = "/";
+    await assert.rejects(rc(s.options), tooBroad("/"));
+    // A folder that holds the state directory, even one not created yet.
+    s.options.dir = s.folder;
+    s.options.stateDir = join(s.folder, "state");
+    await assert.rejects(rc(s.options), tooBroad(s.folder));
+    assert.equal(s.calls.length, 0);
+    assert.equal(s.runs.length, 0);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("a project folder inside the home folder still works", async () => {
+  const s = setup(["1"]);
+  try {
+    s.options.home = realpathSync(tmpdir());
+    await rc(s.options);
+    assert.equal(s.state().workspaces[0].root, s.folder);
+    assert.deepEqual(s.runs, [s.dir]);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("a server link that is not http(s) is refused", async () => {
+  const cases = [
+    {
+      match: (url: string) => url.endsWith("/cli-auth/start"),
+      reply: { session_id: "s", poll_token: "p", browser_url: "javascript:alert(1)", verification_code: "ABCD-1234" },
+    },
+    { match: (url: string) => url.endsWith("/grant-requests"), reply: { id: GRANT, approval_url: "javascript:alert(1)" } },
+  ];
+  for (const { match, reply } of cases) {
+    const calls: Call[] = [];
+    const s = setup(["1"], override(fakeNous(calls), match, () => jsonResponse(reply)));
+    try {
+      await assert.rejects(rc(s.options), { message: "invalid NOUS response" });
+      assert.ok(!s.messages.some((m) => m.includes("javascript:")));
+      assert.equal(s.runs.length, 0);
+    } finally {
+      s.cleanup();
+    }
+  }
+});
+
+test("control characters in a server link are percent-encoded", async () => {
+  const calls: Call[] = [];
+  const login = override(
+    fakeNous(calls),
+    (url) => url.endsWith("/cli-auth/start"),
+    () =>
+      jsonResponse({
+        session_id: "s",
+        poll_token: "p",
+        browser_url: "https://nous.test/l\u001b[31m",
+        verification_code: "ABCD-1234",
+      }),
+  );
+  const fake = override(
+    login,
+    (url) => url.endsWith("/grant-requests"),
+    () => jsonResponse({ id: GRANT, approval_url: "https://nous.test/a\u001b[31m" }),
+  );
+  const s = setup(["1"], fake);
+  try {
+    await rc(s.options);
+    assert.ok(s.messages.some((m) => m.includes("https://nous.test/l%1B[31m")));
+    assert.ok(s.messages.some((m) => m.includes("https://nous.test/a%1B[31m")));
+    assert.ok(!s.messages.some((m) => m.includes("\u001b")));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("an unreachable NOUS is named instead of a bare fetch failed", async () => {
+  const unreachable = (async () => {
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+  }) as typeof fetch;
+  const s = setup([], unreachable);
+  try {
+    await assert.rejects(rc(s.options), (error: Error) => {
+      assert.equal(error.message, "Could not reach NOUS at https://nous.test/api/v1 (ECONNREFUSED)");
+      assert.ok(error.cause instanceof TypeError);
+      return true;
+    });
     assert.equal(s.runs.length, 0);
   } finally {
     s.cleanup();
