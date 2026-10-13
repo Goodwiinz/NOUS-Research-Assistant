@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from hmac import compare_digest
 from secrets import token_urlsafe
 from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
@@ -63,6 +64,15 @@ def now() -> datetime:
 
 def live(value: datetime) -> bool:
     return value.replace(tzinfo=timezone.utc) > now()
+
+
+# A lapsed pairing may be resumed from its consent until this long after its
+# last grant expired (owner decision 2026-10-13); after that, approve again.
+RESUME_WINDOW = timedelta(days=30)
+
+
+def _grant_token_shape(token: str) -> bool:
+    return token.startswith("nous_ig_") and len(token) == 51
 
 
 # A grant never carries a library scope without the gateway scope the
@@ -536,7 +546,7 @@ async def resolve_integration_context(
     nothing.
     """
     accepted = (required_scope,) if isinstance(required_scope, str) else required_scope
-    if not token.startswith("nous_ig_") or len(token) != 51:
+    if not _grant_token_shape(token):
         raise IntegrationAccessDenied()
     grant = await db.scalar(
         select(IntegrationGrant)
@@ -768,13 +778,83 @@ async def renew_grant(db: AsyncSession, user: Any, grant_id: UUID) -> IssuedGran
     grant = await _validate_grant(db, grant)
     if grant.device_id is None:
         raise IntegrationAccessDenied()
+    return await _replace_grant(db, grant, IntegrationGrant.expires_at > now())
+
+
+async def resume_grant(
+    db: AsyncSession, user: Any, grant_id: UUID, token: str
+) -> IssuedGrant:
+    """Re-issue a device's lapsed grant from the consent it was exchanged
+    from, without a new browser approval.
+
+    The caller must present the grant's own token, expired or not: a CLI
+    sign-in is not bound to a device, so the token (kept in the bridge's
+    owner-only credential file) is what proves this is the paired computer.
+    The grant is replaced like a renewal, so its token works once. Refused
+    once the grant was renewed or revoked (CLI disconnect, Revoke or device
+    disconnect under Connected devices), its consent or device revoked, its
+    project, workspace or chat out of reach, or ``RESUME_WINDOW`` after it
+    expired. Scopes come from the grant, never wider than its consent.
+    """
+    grant = await owned_grant(db, user, grant_id)
+    if (
+        not _grant_token_shape(token)
+        or not compare_digest(grant.token_hash, sha256(token.encode()).hexdigest())
+        or grant.is_deleted
+        or grant.revoked_at is not None
+        # A pairing grant: bound to a device and its consent, never to a run.
+        or grant.device_id is None
+        or grant.request_id is None
+        or grant.run_id is not None
+        or grant.expires_at.replace(tzinfo=timezone.utc) <= now() - RESUME_WINDOW
+    ):
+        raise IntegrationAccessDenied()
+    check_scopes(grant.scopes, workspace_bound=grant.workspace_id is not None)
+    await validate_binding(
+        db,
+        user_id=grant.user_id,
+        organization_id=grant.organization_id,
+        project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
+        thread_id=grant.thread_id,
+        device_id=grant.device_id,
+    )
+    consent = await db.scalar(
+        select(IntegrationGrantRequest)
+        .where(
+            IntegrationGrantRequest.id == grant.request_id,
+            IntegrationGrantRequest.status == "consumed",
+            IntegrationGrantRequest.user_id == grant.user_id,
+            IntegrationGrantRequest.organization_id == grant.organization_id,
+            IntegrationGrantRequest.project_id == grant.project_id,
+            IntegrationGrantRequest.workspace_id == grant.workspace_id,
+            IntegrationGrantRequest.device_id == grant.device_id,
+            # The pairing's own chat binding: exchange and renewal copy it.
+            IntegrationGrantRequest.thread_id == grant.thread_id,
+            IntegrationGrantRequest.consent_revoked_at.is_(None),
+            IntegrationGrantRequest.is_deleted.is_(False),
+        )
+        .execution_options(populate_existing=True)
+    )
+    if consent is None or not set(grant.scopes) <= set(consent.scopes):
+        raise IntegrationAccessDenied()
+    return await _replace_grant(db, grant)
+
+
+async def _replace_grant(
+    db: AsyncSession, grant: IntegrationGrant, *conditions: ColumnElement[bool]
+) -> IssuedGrant:
+    """Revoke ``grant`` while it is unrevoked (and ``conditions`` hold) and
+    issue its successor with the same binding, scopes, device, chat, run and
+    consent. Of two concurrent callers one wins; the other gets
+    IntegrationConflict."""
     result = await db.execute(
         update(IntegrationGrant)
         .execution_options(synchronize_session="fetch")
         .where(
-            IntegrationGrant.id == grant_id,
+            IntegrationGrant.id == grant.id,
             IntegrationGrant.revoked_at.is_(None),
-            IntegrationGrant.expires_at > now(),
+            *conditions,
         )
         .values(revoked_at=now())
     )
