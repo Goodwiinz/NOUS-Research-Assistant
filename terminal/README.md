@@ -42,28 +42,42 @@ ln -s "$PWD/nous" ~/.local/bin/nous
 cd <folder> && nous --rc
 ```
 
+Link the launcher; do not copy it. A copy refuses to run (`not a NOUS
+checkout`), and a checkout without dependencies prints the
+`pnpm --dir … install` command to run.
+
 `nous --rc` pairs this computer with a NOUS project so that a chat on NOUS can
-run Codex in the current folder. It needs Node 24 (if the default `node` is
-another version, it uses Homebrew's `node@24`) and Codex `0.153.4` or
-`0.161.0`. It checks Codex first, then signs you in (a browser link and a
-code, unless the saved sign-in still works), lists your projects with
-`n) New project`, asks you to approve this computer in the browser the first
-time you pick a project, registers the current folder, and runs until Ctrl-C.
-Then, in a chat for that project on NOUS, choose **Local Codex**, this
-computer and the folder; the last lines `nous --rc` prints name both.
+run Codex in the current folder. It needs Node 24: the default `node` if it is
+24, otherwise Homebrew's `node@24`. It runs that Node directly and leaves your
+PATH alone, so Codex and the tools it runs in your folder keep your own Node
+and pnpm. It also needs Codex `0.153.4` or `0.161.0`. `NOUS_API_URL` picks the
+server. Extra arguments such as `--label NAME` are passed on, but the server
+and folder always come from the launcher.
+
+It checks Codex first, then signs you in (a browser link and a code, unless
+the saved sign-in still works), lists your projects with `n) New project`,
+asks you to approve this computer in the browser the first time you pick a
+project, registers the current folder, and runs until Ctrl-C. Then, in a chat
+for that project on NOUS, choose **Local Codex**, this computer and the
+folder; the last lines `nous --rc` prints name both.
 
 Codex runs in that folder and can read the project's documents. It cannot
 publish files or change your library through this pairing. Each computer holds
-one pairing. Picking the same project again reuses it with no browser step (if
-NOUS no longer accepts it, you approve again). Picking a different project
-asks for approval again, moves the registered folders to the new project, and
-prints that the old project's approval stays active until you revoke it under
-Settings → Connected devices (`/integrations/devices`).
+one pairing. Picking the same project again reuses it with no browser step,
+as long as it already allows reading documents and NOUS still accepts it;
+otherwise you approve again. Picking a different project asks for approval
+again and prints that the old project's approval stays active until you revoke
+it under Settings → Connected devices (`/integrations/devices`). Folders you
+registered earlier move to the new pairing, also when you switch NOUS servers;
+a server switch prints no revoke note.
 
-Ctrl-C at a prompt or while waiting for the browser, or Ctrl-D at a prompt,
-prints `Cancelled` and stops without pairing. Once the bridge runs, Ctrl-C
-stops it and keeps the pairing; run `nous --rc` again to resume. A refused or
-expired browser step prints `Not approved; run nous --rc again`. Chats can use
+Until the bridge starts, Ctrl-C, Ctrl-D or end of input cancels the whole
+command: it prints `Cancelled` and exits with status 130. Your pairing stays as
+it was (if you cancel just after approving, the new pairing is saved without
+the folder; run `nous --rc` again), though a refreshed sign-in may be kept.
+Ctrl-Z and `fg` work. Once the bridge runs, Ctrl-C stops it and keeps the
+pairing; run `nous --rc` again to resume. A refused or expired browser step
+prints `Not approved; run nous --rc again`. Chats can use
 Codex only on a server with `HARNESS_BRIDGE_ENABLED` on, and Codex can read
 documents only with `NOUS_MCP_ENABLED` on; pairing works either way.
 `nous --rc` keeps its own sign-in, separate from `./nous login`. The manual

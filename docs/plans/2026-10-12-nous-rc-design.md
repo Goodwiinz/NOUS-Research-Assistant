@@ -34,6 +34,14 @@ The pieces already exist: the bridge does the browser login, the consent, the fo
 - The 503 "turned off" message was dropped: a 503 passes through as `NOUS request failed (503) <path>` (see the Errors table's own amendment).
 - The "What the user sees" transcript is illustrative. The real prompts are the bridge's existing `Authorize CLI login in your browser: <link>` / `Type this code on that page: <code>` and `Approve this device and project in your browser: <link>`, and the last line reads `In a chat for this project on NOUS, choose Local Codex → <device label> → <folder label>.`
 
+**Amendments 2026-10-13** (after a second review; these change Components → 3 and supersede the matching 2026-10-12 items above):
+
+- The launcher runs Node 24 directly (`<node> --import tsx src/cli.ts rc …` from `packages/harness-bridge`) instead of through `pnpm`, and leaves PATH untouched. Review finding: `pnpm --filter` could run a same-named package from the current folder when the launcher was copied, and the PATH prepend leaked Node 24 into the tools Codex runs. Node 24 is the default `node` if it is 24.x, else Homebrew's `node@24` binary; otherwise the launcher prints `nous --rc needs Node 24 (found <v>); switch your default node to 24 (for example nvm use 24) or install it with: brew install node@24`.
+- The launcher refuses a copied launcher (`nous: <dir> is not a NOUS checkout; link this launcher with ln -s instead of copying it`) and a checkout without dependencies (`nous --rc: dependencies are missing; run: pnpm --dir "<checkout>" install`).
+- The launcher's `--api` and `--root` come after the user's arguments, so they win (the CLI keeps the last value); other arguments, such as `--label`, pass through.
+- Until the bridge starts, any Ctrl-C, Ctrl-D or end of input cancels the whole command (`Cancelled`, exit 130), not only at an open prompt. The stored pairing is unchanged, except that a cancel just after the browser approval can leave the new pairing saved without the folder; a refreshed sign-in may be kept. Ctrl-Z and `fg` resume the prompt.
+- Registered folders are also carried over when the new pairing is on a different NOUS server (`connect` re-registers them whenever a previous connection exists); the revoke hint is still printed only for a project switch on the same server (see Risks).
+
 ## What the user sees
 
 ```
