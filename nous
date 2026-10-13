@@ -23,10 +23,21 @@ if [[ "${1:-}" == "--rc" ]]; then
   shift
   node_version="$(node --version 2>/dev/null || echo none)"
   if [[ "$node_version" != v24.* ]]; then
-    echo "nous --rc needs Node 24 (found ${node_version#v})" >&2
+    # The default node is older: use Homebrew's keg-only node@24 if present.
+    for dir in /opt/homebrew/opt/node@24/bin /usr/local/opt/node@24/bin; do
+      [[ -x "$dir/node" ]] || continue
+      if [[ "$("$dir/node" --version 2>/dev/null)" == v24.* ]]; then
+        export PATH="$dir:$PATH"
+        node_version="$(node --version)"
+        break
+      fi
+    done
+  fi
+  if [[ "$node_version" != v24.* ]]; then
+    echo "nous --rc needs Node 24 (found ${node_version#v}); install it with: brew install node@24" >&2
     exit 1
   fi
-  exec pnpm --dir "$repo" --filter @nous/harness-bridge start rc \
+  exec pnpm --silent --dir "$repo" --filter @nous/harness-bridge start rc \
     --api "${NOUS_API_URL:-$NOUS_DEFAULT_API_URL}" --root "$PWD" "$@"
 fi
 if [[ $# -eq 0 || "${1:-}" == "--ink" || "${1:-}" == "--new" || "${1:-}" == "--help" ]]; then
