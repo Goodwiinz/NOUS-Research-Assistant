@@ -54,7 +54,7 @@ _MIN_WORD_CHARS = 2
 _NON_WORD = re.compile(r"[^\w\s]")
 # The regconfig ``documents.search_vector`` is built with (see
 # ``FullTextSearchService.update_document_search_vector``).
-_ENGLISH = literal_column("'english'::regconfig")
+_ENGLISH: Any = literal_column("'english'::regconfig")
 
 
 @dataclass(frozen=True)

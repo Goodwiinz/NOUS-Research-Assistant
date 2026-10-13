@@ -143,6 +143,7 @@ def test_the_order_is_rank_then_newest_then_id() -> None:
 
 async def test_an_invalid_organization_fails_closed() -> None:
     session = AsyncMock()
+    bad: Any
     for bad in (None, "", "not-a-uuid"):
         with pytest.raises(ValueError, match="organization"):
             await keyword_search(session, query="grpo", organization_id=bad)

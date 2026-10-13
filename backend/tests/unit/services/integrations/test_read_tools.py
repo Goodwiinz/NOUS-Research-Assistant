@@ -2297,6 +2297,7 @@ PROJECTLESS_TOOLS = {
     "search_external_database",
     "list_external_databases",
     "get_arxiv_paper_content",
+    "discover_papers",
 }
 
 
@@ -2416,6 +2417,13 @@ async def test_project_grant_still_refuses_the_selector_for_every_tool(
         _invocation("search_external_database", query="q", project_id=str(PROJECT)),
         _invocation("list_external_databases", project_id=str(PROJECT)),
         _invocation("get_arxiv_paper_content", arxiv_id="2401.00001", project_id="x"),
+        _invocation(
+            "discover_papers",
+            keywords=["llm"],
+            question="q",
+            difficulty=1,
+            project_id=str(PROJECT),
+        ),
     ],
     ids=sorted(PROJECTLESS_TOOLS, key=lambda name: name),
 )
@@ -2573,6 +2581,7 @@ EVERY_TOOL_CALL: dict[str, dict[str, Any]] = {
     "find_researchers": {"query": "a"},
     "get_researcher": {"researcher_id": "a"},
     "list_library": {},
+    "discover_papers": {"keywords": ["llm"], "question": "q", "difficulty": 1},
 }
 
 
@@ -2597,6 +2606,12 @@ def offline_tools(monkeypatch: pytest.MonkeyPatch) -> None:
         read_tools.arxiv_fulltext, "fetch_text", AsyncMock(return_value="text")
     )
     monkeypatch.setattr(read_tools, "fulltext_search_service", _StubFulltext([]))
+    # discover_papers: the library searches are PostgreSQL-only and open their
+    # own sessions; arXiv goes through read_tools._tool_search_arxiv above.
+    for channel in ("_library_keyword", "_library_semantic"):
+        monkeypatch.setattr(
+            read_tools.discover_papers, channel, AsyncMock(return_value=[])
+        )
 
 
 def _bound_values(parameters: Any) -> Iterable[Any]:
@@ -3388,10 +3403,11 @@ def _edge_values(spec: dict[str, Any]) -> tuple[list[Any], list[Any]]:
                 accepted.append("x" * spec[bound])
                 rejected.append("x" * (spec[bound] + step))
     else:  # arrays of strings, in every local schema
+        item = spec.get("items", {}).get("enum", ["x"])[0]  # a valid member
         for bound, step in (("minItems", -1), ("maxItems", 1)):
             if bound in spec:
-                accepted.append(["x"] * spec[bound])
-                rejected.append(["x"] * (spec[bound] + step))
+                accepted.append([item] * spec[bound])
+                rejected.append([item] * (spec[bound] + step))
     return accepted, rejected
 
 

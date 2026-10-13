@@ -48,7 +48,7 @@ from src.services.artifacts.service import (
     count_project_artifacts,
     list_project_artifacts,
 )
-from src.services.integrations import arxiv_fulltext
+from src.services.integrations import arxiv_fulltext, discover_papers
 from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
 from src.services.integrations.context import (
     IntegrationAccessDenied,
@@ -77,8 +77,12 @@ _ARGS_ONLY_TOOLS = frozenset(
 )
 # Tools that act on no single project. A workspace grant gives them no project
 # selector: there is nothing for it to select. list_library lists the grant's
-# whole scope.
-_PROJECTLESS_TOOLS = _ARGS_ONLY_TOOLS | {"get_arxiv_paper_content", "list_library"}
+# whole scope, and so does the library half of discover_papers.
+_PROJECTLESS_TOOLS = _ARGS_ONLY_TOOLS | {
+    "get_arxiv_paper_content",
+    "list_library",
+    "discover_papers",
+}
 IDENTITY_ARGUMENTS = frozenset(
     {"project_id", "user_id", "organization_id", "thread_id", "run_id", "grant_id"}
 )
@@ -253,6 +257,94 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
                 "researcher_id": {"type": "string", "minLength": 1, "maxLength": 200}
             },
             "required": ["researcher_id"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
+    "discover_papers": (
+        "Find papers for a research question: one round of searches over this "
+        "connection's library (keyword and semantic) and arXiv (keyword), merged "
+        "into a ranked list of 1-15 papers, each with its date, authors, a "
+        "snippet and the searches that found it. You run the loop; this tool is "
+        "one round of it.\n"
+        "keywords: only the user's own terms, never synonyms or expansions (keep "
+        "GRPO as GRPO, do not spell it out); a keyword search matches only papers "
+        "that contain every keyword term. question: the user's question in one "
+        "sentence, for the semantic search. Choose published_after, "
+        "published_before and prioritize once and send the same values in every "
+        "call of the loop: the window is applied inside each search, not "
+        "afterwards. difficulty (1-10) sets how deep each search reads and how "
+        "many follow-up calls you may spend (followup_rounds_allowed in the "
+        "result: 0, 1 or 2).\n"
+        "After reading the results, if coverage is thin, make at most "
+        "followup_rounds_allowed more calls, each aimed at ONE concrete gap (a "
+        "missing method, benchmark, acronym or title phrase), never a rephrase of "
+        "an earlier call. Then answer with 5-15 paper ids that appeared in the "
+        "results, and never an id no result returned. Run at most two such loops "
+        "per user turn. calls[] lists every search with its status: check it for "
+        "one that was unavailable or failed.",
+        {
+            "type": "object",
+            "properties": {
+                "keywords": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": discover_papers.MAX_KEYWORD_CHARS,
+                    },
+                    "minItems": 1,
+                    "maxItems": discover_papers.MAX_KEYWORDS,
+                    "description": "The user's own terms, one concept each.",
+                },
+                "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": discover_papers.MAX_QUESTION_CHARS,
+                    "description": "What the user wants to find, in one sentence.",
+                },
+                "difficulty": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": (
+                        "1-3: shallow, no follow-ups; 4-7: one follow-up call; "
+                        "8-10: deep, two follow-up calls."
+                    ),
+                },
+                "prioritize": {
+                    "type": "string",
+                    "enum": list(discover_papers.PRIORITIES),
+                    "default": "default",
+                    "description": (
+                        "recency favours newer papers, historical older and "
+                        "better-cited ones. It reorders; it never excludes."
+                    ),
+                },
+                "published_after": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 10,
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "description": "YYYY-MM-DD, inclusive.",
+                },
+                "published_before": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 10,
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "description": "YYYY-MM-DD, inclusive.",
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(discover_papers.SOURCES)},
+                    "minItems": 1,
+                    "maxItems": len(discover_papers.SOURCES),
+                    "uniqueItems": True,
+                    "default": list(discover_papers.SOURCES),
+                },
+            },
+            "required": ["keywords", "question", "difficulty"],
             "additionalProperties": False,
         },
         "tools:read",
@@ -432,6 +524,13 @@ def _validate_arguments(
             raise ToolArgumentError("unknown arguments")
         if set(schema["required"]) - set(arguments):
             raise ToolArgumentError("missing required arguments")
+        if name == "discover_papers":
+            # Specific, safe reasons (a bad date, a reversed window, too many
+            # keywords) instead of the generic shape error below.
+            try:
+                discover_papers.parse_arguments(arguments)
+            except discover_papers.DiscoverArgumentError as error:
+                raise ToolArgumentError(str(error)) from error
         # The selector, when advertised, is a plain string here;
         # _target_project checks it is a UUID inside the grant's scope.
         _check_local_arguments(schema, arguments)
@@ -1152,7 +1251,10 @@ def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
             refs.append(dict(ref))
     for paper in payload.get("papers") or []:
         if paper.get("id"):
-            refs.append({"arxiv_id": str(paper["id"])})
+            # discover_papers mixes library documents and arXiv papers; every
+            # other "papers" payload is an arXiv search.
+            key = "document_id" if paper.get("source") == "library" else "arxiv_id"
+            refs.append({key: str(paper["id"])})
     for hit in payload.get("results") or []:
         if hit.get("id"):
             # Per-result "source" is the connector that produced it.
@@ -1302,6 +1404,56 @@ def _library_page(
     }
 
 
+def _fit_discover_to_cap(payload: dict[str, Any]) -> None:
+    """Drop the lowest-ranked papers until the whole response fits the cap.
+
+    Measured as the ToolResult envelope (content plus the source_refs derived
+    from the papers), so the refs count against MAX_RESULT_BYTES too. The
+    fields are bounded, so 15 papers normally fit; multi-byte text can exceed it.
+    """
+
+    def wire() -> int:
+        return _wire_size(
+            {
+                "content": [payload],
+                "is_error": False,
+                "source_refs": _source_refs(payload),
+            }
+        )
+
+    while len(payload["papers"]) > 1 and wire() > MAX_RESULT_BYTES:
+        payload["papers"].pop()
+        payload["truncated"] = True
+
+
+async def _discover_papers(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> ToolResult:
+    """One discovery round over the grant's whole scope (library) and arXiv.
+
+    The library scope is ``authorized_scope`` of this call: re-checked access,
+    live Collections only, a project grant's one project or a workspace grant's
+    projects. The searches themselves run in their own sessions (see
+    ``discover_papers``); nothing outside ``project_ids`` can be read.
+    """
+    try:
+        request = discover_papers.parse_arguments(arguments)
+    except discover_papers.DiscoverArgumentError as error:
+        raise ToolArgumentError(str(error)) from error
+    project_ids: list[UUID] = []
+    if "library" in request.sources:
+        project_ids = sorted(await authorized_scope(db, context))
+    payload = await discover_papers.discover(
+        request,
+        organization_id=context.organization_id,
+        project_ids=project_ids,
+        arxiv_search=_tool_search_arxiv,
+    )
+    if "papers" in payload:
+        _fit_discover_to_cap(payload)
+    return _finish(payload)
+
+
 async def invoke_read(
     db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
 ) -> ToolResult:
@@ -1324,6 +1476,8 @@ async def invoke_read(
             return _finish(await _list_library(db, context, arguments))
         if name == "get_arxiv_paper_content":
             return await _arxiv_paper_content(arguments)
+        if name == "discover_papers":
+            return await _discover_papers(db, context, arguments)
         return _finish(await _args_only(name, arguments))
     target = await _target_project(db, context, arguments)
     if target is None:
