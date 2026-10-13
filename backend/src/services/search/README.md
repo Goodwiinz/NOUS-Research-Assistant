@@ -28,6 +28,7 @@ query
 | `vector_service.py`          | Thin Qdrant client wrapper: insert/search/delete, circuit-breaker guarded                                                                 |
 | `bm25_service.py`            | Produces `SparseVector` (k1=1.5, b=0.75, vocab=30 000) for BM25-dense hybrid inside `search_documents_hybrid()`                           |
 | `fulltext_search_service.py` | PostgreSQL `to_tsvector` / `ts_rank` search with `<mark>` snippet highlighting                                                            |
+| `semantic_search_service.py` | pgvector semantic primitive (GOO-435): `semantic_search()` over `document_embeddings`, org + Collection scoped, date window in the WHERE; off unless `SEMANTIC_SEARCH_ENABLED`. Embeddings come from `services/embedding/document_embedding_service.py` (`DOCUMENT_EMBEDDINGS_ENABLED`) |
 | `cohere_rerank_service.py`   | Azure-hosted Cohere rerank API; `rerank()` async + `rerank_sync()` sync; falls back to original order on failure                          |
 | `fusion.py`                  | `ResultFusion` — weighted RRF with multi-source boost (×1.2) used by `SearchOrchestrator`                                                 |
 | `reranker.py`                | Thin wrapper around `cohere_rerank_service` used by `SearchOrchestrator`                                                                  |
