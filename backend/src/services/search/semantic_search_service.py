@@ -4,6 +4,8 @@
 returns the nearest documents by cosine distance from ``document_embeddings``.
 It is a read-only primitive: it never commits, and it returns ``[]`` instead of
 raising when ``SEMANTIC_SEARCH_ENABLED`` is off or the query cannot be embedded.
+``semantic_search_strict`` is the same search for a caller that must tell those
+two cases from "no hits": it raises ``SemanticSearchUnavailable`` instead.
 
 Tenancy and scoping are all in the one SQL statement:
 
@@ -267,7 +269,21 @@ async def _prepare_index_scan(session: AsyncSession, limit: int) -> bool:
     return True
 
 
-async def semantic_search(
+class SemanticSearchUnavailable(Exception):
+    """The semantic channel cannot answer right now, as opposed to having no hits.
+
+    ``reason`` is a stable token: ``disabled`` (``SEMANTIC_SEARCH_ENABLED`` is
+    off), ``embedding_failed`` (the provider errored or timed out) or
+    ``embedding_rejected`` (it answered with a vector the column cannot hold).
+    Only ``semantic_search_strict`` raises it.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+async def semantic_search_strict(
     session: AsyncSession,
     *,
     query: str,
@@ -277,15 +293,16 @@ async def semantic_search(
     published_before: date | None = None,
     limit: int = DEFAULT_LIMIT,
 ) -> list[SemanticSearchHit]:
-    """Documents nearest to ``query``, best first; ``[]`` when the channel is off.
+    """``semantic_search``, but a channel that cannot answer raises.
 
-    ``published_after`` / ``published_before`` are inclusive day bounds on the
-    publication date described in the module docstring. ``limit`` is clamped
-    to ``MAX_LIMIT``. Raises ``ValueError`` for an invalid organization or
-    project id; database errors propagate. Never commits.
+    Same arguments, scoping and window as ``semantic_search``. The difference is
+    only the failure contract: a disabled flag or a query that could not be
+    embedded raises ``SemanticSearchUnavailable`` instead of returning ``[]``, so
+    a caller that reports per-channel status (``discover_papers``) can tell "the
+    provider is down" from "nothing matched". Zero hits is still ``[]``.
     """
     if not settings.SEMANTIC_SEARCH_ENABLED:
-        return []
+        raise SemanticSearchUnavailable("disabled")
     org = _org_scope(organization_id)
     projects = None if project_ids is None else _project_scope(project_ids)
     if projects is not None and not projects:
@@ -303,10 +320,10 @@ async def semantic_search(
         embedded = await document_embedding_service.embed_text(text, for_query=True)
     except EmbeddingRejected as rejected:
         logger.warning("semantic search query not embedded: %s", rejected)
-        return []
-    except Exception:  # noqa: BLE001 - a provider outage is "no semantic results"
+        raise SemanticSearchUnavailable("embedding_rejected") from rejected
+    except Exception as failure:  # noqa: BLE001 - reported as "unavailable"
         logger.warning("semantic search query embedding failed", exc_info=True)
-        return []
+        raise SemanticSearchUnavailable("embedding_failed") from failure
 
     index_allowed = await _prepare_index_scan(session, page)
     result = await session.execute(
@@ -321,3 +338,36 @@ async def semantic_search(
         )
     )
     return [_to_hit(row) for row in result]
+
+
+async def semantic_search(
+    session: AsyncSession,
+    *,
+    query: str,
+    organization_id: uuid.UUID | str,
+    project_ids: Sequence[uuid.UUID | str] | None = None,
+    published_after: date | None = None,
+    published_before: date | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> list[SemanticSearchHit]:
+    """Documents nearest to ``query``, best first; ``[]`` when the channel is off.
+
+    ``published_after`` / ``published_before`` are inclusive day bounds on the
+    publication date described in the module docstring. ``limit`` is clamped
+    to ``MAX_LIMIT``. Raises ``ValueError`` for an invalid organization or
+    project id; database errors propagate. Never commits. A disabled flag or a
+    query that cannot be embedded is ``[]`` here (use ``semantic_search_strict``
+    to be told which).
+    """
+    try:
+        return await semantic_search_strict(
+            session,
+            query=query,
+            organization_id=organization_id,
+            project_ids=project_ids,
+            published_after=published_after,
+            published_before=published_before,
+            limit=limit,
+        )
+    except SemanticSearchUnavailable:
+        return []

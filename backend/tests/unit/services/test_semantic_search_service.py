@@ -34,8 +34,10 @@ from src.services.search import semantic_search_service as svc
 from src.services.search.semantic_search_service import (
     MAX_LIMIT,
     SemanticSearchHit,
+    SemanticSearchUnavailable,
     build_semantic_search_statement,
     semantic_search,
+    semantic_search_strict,
 )
 
 pytestmark = pytest.mark.unit
@@ -279,6 +281,64 @@ async def test_a_non_storable_provider_returns_nothing(
 
     assert await semantic_search(session, query="graphs", organization_id=ORG) == []  # type: ignore[arg-type]
     assert channel_on.queries == [] and session.statements == []
+
+
+# --- semantic_search_strict: "cannot answer" is not "no hits" ----------------------
+
+
+async def test_strict_search_says_why_the_flag_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SEMANTIC_SEARCH_ENABLED", False)
+    session = FakeSession()
+
+    with pytest.raises(SemanticSearchUnavailable) as unavailable:
+        await semantic_search_strict(session, query="graphs", organization_id=ORG)  # type: ignore[arg-type]
+
+    assert unavailable.value.reason == "disabled"
+    assert session.statements == []
+
+
+async def test_strict_search_raises_when_the_provider_fails(
+    channel_on: FakeEmbedder,
+) -> None:
+    channel_on.fail = RuntimeError("cohere is down: key=sk-secret")
+    session = FakeSession()
+
+    with pytest.raises(SemanticSearchUnavailable) as unavailable:
+        await semantic_search_strict(session, query="graphs", organization_id=ORG)  # type: ignore[arg-type]
+
+    assert unavailable.value.reason == "embedding_failed"
+    assert "sk-secret" not in str(unavailable.value)  # only the stable token
+    assert session.statements == []
+    # The default contract is unchanged for every other caller.
+    assert await semantic_search(session, query="graphs", organization_id=ORG) == []  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("length", [384, DIM + 1])
+async def test_strict_search_raises_for_a_vector_the_column_cannot_hold(
+    channel_on: FakeEmbedder, length: int
+) -> None:
+    channel_on.vector = [0.2] * length
+    session = FakeSession()
+
+    with pytest.raises(SemanticSearchUnavailable) as unavailable:
+        await semantic_search_strict(session, query="graphs", organization_id=ORG)  # type: ignore[arg-type]
+
+    assert unavailable.value.reason == "embedding_rejected"
+    assert await semantic_search(session, query="graphs", organization_id=ORG) == []  # type: ignore[arg-type]
+
+
+async def test_strict_search_with_no_hits_is_an_empty_list_not_unavailable(
+    channel_on: FakeEmbedder,
+) -> None:
+    session = FakeSession(rows=[])
+
+    assert (
+        await semantic_search_strict(session, query="graphs", organization_id=ORG)  # type: ignore[arg-type]
+        == []
+    )
+    assert len(session.statements) >= 1  # it did search
 
 
 async def test_blank_query_and_inverted_window_return_nothing(
