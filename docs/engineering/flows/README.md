@@ -15,3 +15,4 @@ The contract for this directory is [../verification.md](../verification.md).
 | [hitl-approve-deny.md](hitl-approve-deny.md) | HITL approve and deny |
 | [document-upload.md](document-upload.md) | document upload and detail |
 | [project-creation-via-chat.md](project-creation-via-chat.md) | project creation via chat |
+| [alphaxiv-pdf-chat.md](alphaxiv-pdf-chat.md) | PDF chat compatibility; user-level QA planned |

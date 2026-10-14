@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence, cast
@@ -58,6 +57,14 @@ from src.services.integrations.context import (
     workspace_in_org,
 )
 from src.services.search.fulltext_search_service import fulltext_search_service
+from src.services.search.page_filter import (
+    MAX_PAGE_FILTER_SOURCE_CHARS,
+    MAX_RERANK_PAGES,
+    PAGE_RERANK_TIMEOUT_SECONDS,
+)
+from src.services.search.page_filter import json_text_prefix as _json_text_prefix
+from src.services.search.page_filter import rank_pages
+from src.services.search.page_filter import scan_pages as _scan_pages
 
 logger = logging.getLogger(__name__)
 
@@ -643,69 +650,12 @@ async def _document_content(
 
 
 _MARK_TAGS = ("<mark>", "</mark>")
-PAGE_RERANK_TIMEOUT_SECONDS = 10.0
-MAX_RERANK_PAGES = 100
-MAX_PAGE_FILTER_SOURCE_CHARS = 1024 * 1024
 
 
 def _split_pages(content_text: str) -> list[tuple[int, str]]:
     """Preserve a leading preamble in the first marked page, never lose it."""
     pages, _ = _scan_pages(content_text)
     return [(number, text) for number, text, _ in pages]
-
-
-def _scan_pages(
-    source: str, *, max_pages: int | None = None, max_chars: int | None = None
-) -> tuple[list[tuple[int, str, int]], int]:
-    """Count all pages while copying only bounded candidates and text prefixes."""
-    pages: list[tuple[int, str, int]] = []
-    total = 0
-
-    def span_text(start: int, end: int) -> tuple[str, int]:
-        # Find stripped bounds without first allocating the entire page body.
-        while start < end and source[start].isspace():
-            start += 1
-        while end > start and source[end - 1].isspace():
-            end -= 1
-        stop = end if max_chars is None else min(end, start + max_chars)
-        return source[start:stop], end - start
-
-    def append_page(marker: re.Match[str], end: int) -> None:
-        nonlocal total
-        total += 1
-        if max_pages is not None and total > max_pages:
-            return
-        text, length = span_text(marker.end(), end)
-        if total == 1:
-            preamble, prefix_length = span_text(0, marker.start())
-            if prefix_length:
-                text = preamble + (f"\n{text}" if length else "")
-                length = prefix_length + (1 + length if length else 0)
-        pages.append((int(marker.group(1)), text[:max_chars], length))
-
-    previous = None
-    # Nine digits already allow implausibly large page counts. Longer markers
-    # remain text, avoiding both integer conversion failures and huge metadata.
-    for marker in re.finditer(r"(?m)^[ \t]*\[Page[ \t]+(\d{1,9})\][ \t]*\r?$", source):
-        if previous is not None:
-            append_page(previous, marker.start())
-        previous = marker
-    if previous is not None:
-        append_page(previous, len(source))
-    return pages, total
-
-
-def _json_text_prefix(text: str, budget: int) -> str:
-    """Longest prefix fitting an escaped UTF-8 JSON string's content budget."""
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        size = len(json.dumps(text[:mid], ensure_ascii=False).encode()) - 2
-        if size <= budget:
-            lo = mid
-        else:
-            hi = mid - 1
-    return text[:lo]
 
 
 def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -763,7 +713,6 @@ async def _retrieve_document_pages(
     """None means use FTS; unavailable means the document's access was revoked."""
     from src.core.config import settings
     from src.services.agent._pii_redact import redact_pii
-    from src.services.search.cohere_rerank_service import cohere_rerank_service
 
     row = (
         await db.execute(
@@ -786,47 +735,15 @@ async def _retrieve_document_pages(
         max_pages=MAX_RERANK_PAGES,
         max_chars=MAX_RESULT_BYTES,
     )
-    short_circuited = any(page[1] for page in pages) and (
-        total_pages <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
+    selection = await rank_pages(
+        pages,
+        total_pages,
+        query,
+        top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
+        short_circuit=settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT,
+        timeout_seconds=PAGE_RERANK_TIMEOUT_SECONDS,
+        before_provider=db.rollback,
     )
-    model = None
-    rerank_succeeded = short_circuited
-    accepted = []
-    if short_circuited:
-        accepted = [(number, text, length, 1.0) for number, text, length in pages]
-    elif cohere_rerank_service.is_enabled and any(page[1] for page in pages):
-        # Blank extracted pages count toward pagination but Cohere rejects
-        # empty documents. Preserve the filtered list for response-index mapping.
-        candidates = [page for page in pages if page[1]]
-        # This endpoint owns a read-only request transaction. Copy scalar data
-        # above, then return its connection to the pool during the remote call.
-        # The post-provider authorization queries start a fresh transaction.
-        await db.rollback()
-        try:
-            outcome = await asyncio.wait_for(
-                cohere_rerank_service.rerank_with_outcome(
-                    query,
-                    documents=[
-                        {"id": str(number), "content": text}
-                        for number, text, _ in candidates
-                    ],
-                    top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
-                ),
-                timeout=PAGE_RERANK_TIMEOUT_SECONDS,
-            )
-            rerank_succeeded = outcome.succeeded
-            if rerank_succeeded:
-                scores = {
-                    result.index: result.relevance_score for result in outcome.results
-                }
-                accepted = [
-                    (number, text, length, scores[index])
-                    for index, (number, text, length) in enumerate(candidates)
-                    if index in scores
-                ]
-                model = cohere_rerank_service.model
-        except Exception:
-            logger.warning("retrieve_passages page rerank unavailable", exc_info=True)
     # Refresh caller authority and document liveness after worker/provider
     # awaits, including failures that would otherwise fall back to FTS.
     try:
@@ -842,9 +759,9 @@ async def _retrieve_document_pages(
         is None
     ):
         return _unavailable().content[0]
-    if not rerank_succeeded:
+    if selection is None:
         return None
-    accepted.sort(key=lambda page: page[0])
+    accepted = selection.pages
     return _bound_page_result(
         {
             "chunks": [
@@ -863,8 +780,8 @@ async def _retrieve_document_pages(
             "page_filter": {
                 "accepted_pages": [number for number, _, _, _ in accepted],
                 "total_pages": total_pages,
-                "short_circuited": short_circuited,
-                "model": model,
+                "short_circuited": selection.short_circuited,
+                "model": selection.model,
             },
         }
     )

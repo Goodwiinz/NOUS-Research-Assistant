@@ -9,6 +9,7 @@ import {
   TERMINAL_STREAM_EVENTS,
 } from '@/services/agentStreamEvents';
 import type { components } from '@/types/generated/api';
+import { parsePageFilter, type PageFilter } from '@/types/pdf-chat';
 import type {
   AgentProgressStep,
   AgentErrorCategory,
@@ -114,7 +115,10 @@ export interface AgentStreamCallbacks {
     isError: boolean,
     callId?: string
   ) => void;
-  onRagContext?: (contexts: Array<Record<string, unknown>>) => void;
+  onRagContext?: (
+    contexts: Array<Record<string, unknown>>,
+    pageFilter?: PageFilter
+  ) => void;
   onPlan?: (steps: Array<Record<string, unknown>>, reasoning: string) => void;
   onReflection?: (
     passed: boolean,
@@ -376,9 +380,12 @@ async function consumeSse(
             );
           }
           break;
-        case 'rag_context':
-          callbacks.onRagContext?.(data.contexts);
+        case 'rag_context': {
+          const pageFilter = parsePageFilter(data.page_filter);
+          if (pageFilter) callbacks.onRagContext?.(data.contexts, pageFilter);
+          else callbacks.onRagContext?.(data.contexts);
           break;
+        }
         case 'plan':
           callbacks.onPlan?.(data.steps, data.reasoning ?? '');
           break;

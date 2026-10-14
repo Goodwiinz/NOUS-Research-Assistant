@@ -5,6 +5,8 @@ import toast from 'react-hot-toast';
 import type { ChatPageMessage } from '@/components/chat/shared/cloudMessageView';
 import { enhancedDocumentService } from '@/services/enhancedDocumentService';
 import type { MessageAttachment, Workspace } from '@/types/workspace';
+import type { PdfBranchIntent } from '@/types/pdf-chat';
+import { useChatStore } from '@/store/chat-store';
 
 // ============================================
 // HOOK PARAMS
@@ -18,7 +20,8 @@ export interface UseChatComposerActionsParams {
     historyOverride?: ChatPageMessage[],
     supersedesClientMessageId?: string,
     attachmentIds?: string[],
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    branchIntent?: PdfBranchIntent
   ) => Promise<void>;
   isLoading: boolean;
   storeIsStreaming: boolean;
@@ -59,6 +62,28 @@ export interface UseChatComposerActionsReturn {
 // ============================================
 // HOOK
 // ============================================
+
+function branchIntentFor(
+  message: ChatPageMessage
+): PdfBranchIntent | null | undefined {
+  const state = useChatStore.getState();
+  const threadId = state.currentThreadId;
+  if (!threadId || !state.messagePagination[threadId]?.message_branching)
+    return undefined;
+  if (
+    !message.id ||
+    message.parentMessageId === undefined ||
+    state.messageFreshness[threadId] !== 'fresh' ||
+    state.messagePagination[threadId]?.selectingBranch
+  )
+    return null;
+  return {
+    parentMessageId: message.parentMessageId,
+    replacedMessageId: message.id,
+    selectedHeadMessageId:
+      state.messagePagination[threadId].selected_message_id ?? null,
+  };
+}
 
 /**
  * Composer-level actions: attach, retry, regenerate, and submit. Delegates
@@ -155,6 +180,11 @@ export function useChatComposerActions({
       // renders both answers after reconcile/reload. Omitted for legacy rows
       // with no persisted client_message_id (FE-only truncation, as before).
       const supersedes = priorUser.clientMessageId;
+      const branch = branchIntentFor(priorUser);
+      if (branch === null) {
+        toast.error('Wait for this branch to load before retrying.');
+        return;
+      }
       // Preserve attachments while fencing the deferred send to its account.
       const attachments = priorUser.attachments;
       const attachmentIds = attachments?.map((file) => file.document_id);
@@ -163,9 +193,10 @@ export function useChatComposerActions({
           void handleSubmit(
             contentToSend,
             regenerationHistory,
-            supersedes,
+            branch ? undefined : supersedes,
             attachmentIds,
-            attachments
+            attachments,
+            ...(branch ? ([branch] as const) : [])
           );
       }, 0);
     },
@@ -198,6 +229,11 @@ export function useChatComposerActions({
       // client_message_id — a legacy row or one that never reached the server;
       // the FE-only truncation is then the same behaviour as before.
       const supersedes = edited.clientMessageId;
+      const branch = branchIntentFor(edited);
+      if (branch === null) {
+        toast.error('Wait for this branch to load before editing.');
+        return;
+      }
       const attachments = edited.attachments;
       const attachmentIds = attachments?.map((file) => file.document_id);
       // Pass content explicitly — setInput only schedules an update, and the
@@ -207,9 +243,10 @@ export function useChatComposerActions({
           void handleSubmit(
             content,
             editedHistory,
-            supersedes,
+            branch ? undefined : supersedes,
             attachmentIds,
-            attachments
+            attachments,
+            ...(branch ? ([branch] as const) : [])
           );
       }, 0);
     },

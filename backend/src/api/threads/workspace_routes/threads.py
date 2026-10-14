@@ -38,8 +38,8 @@ from src.schemas.integration_handoff import HandoffDTO
 from src.services.integrations import handoffs
 from src.services.integrations.context import workspace_organization_id
 from src.services.threads import thread_service, workspace_access
+from src.services.threads.message_branches import BranchAccessError
 
-from .dependencies import _get_thread_or_404
 from .presenters import _thread_to_detail_response, _thread_to_response
 
 logger = logging.getLogger(__name__)
@@ -200,9 +200,19 @@ async def get_thread(
     current_user: User = Depends(get_current_user),
 ) -> ThreadDetailResponse:
     """Get thread details with messages"""
-    thread = await _get_thread_or_404(
-        db, workspace_id, conversation_id, thread_id, current_user
-    )
+    try:
+        thread = await thread_service.get_thread_detail(
+            db,
+            thread_id,
+            current_user.id,
+            include_messages=include_messages,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    if thread is None:
+        raise HTTPException(404, "Thread not found")
 
     return _thread_to_detail_response(
         thread,
@@ -308,9 +318,12 @@ async def get_thread_standalone(
     current_user: User = Depends(get_current_user),
 ) -> ThreadDetailResponse:
     """Get thread details with messages (standalone route)"""
-    thread = await workspace_access.get_thread(
-        db, thread_id, current_user.id, include_messages=include_messages
-    )
+    try:
+        thread = await thread_service.get_thread_detail(
+            db, thread_id, current_user.id, include_messages=include_messages
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 

@@ -364,18 +364,20 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
 
     sanitized = _sanitize_messages(state["messages"])
     direct_search = _direct_arxiv_search_message(sanitized, state)
-    if direct_search is not None:
+    if direct_search is not None and state.get("reasoning_effort") is None:
         return {"messages": [direct_search]}
 
     static_prompt = _build_research_system_prompt()
 
     settings = get_settings()
+    reasoning_effort = state.get("reasoning_effort")
     # Post-tool synthesis turn → use the lightweight deployment. Mirrors the
     # main graph.llm_node optimization. Trace 019e191a showed the main gpt-5
     # spending 70s + 4352 reasoning tokens on prose synthesis after a single
     # search_arxiv call. Lightweight handles that in ~5-10s.
     use_lightweight_synthesis = bool(
-        settings.AGENT_LIGHTWEIGHT_SYNTHESIS
+        reasoning_effort is None
+        and settings.AGENT_LIGHTWEIGHT_SYNTHESIS
         and sanitized
         and isinstance(sanitized[-1], ToolMessage)
     )
@@ -405,7 +407,14 @@ async def research_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         # to sit here only because the main deployment was model-router,
         # which hit the 30s cap (trace 019e1da5); that is no longer the
         # deployment, so the workaround goes with it.
-        llm = _build_llm(model_override=state.get("model") or None)
+        llm = _build_llm(
+            model_override=state.get("model") or None,
+            **(
+                {"reasoning_effort_override": reasoning_effort}
+                if reasoning_effort
+                else {}
+            ),
+        )
         from src.services.agent.llm_factory import resolve_chat_deployment
 
         resolved_model = resolve_chat_deployment(state.get("model") or None)

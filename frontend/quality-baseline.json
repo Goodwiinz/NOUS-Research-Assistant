@@ -21,8 +21,8 @@
     "src/utils/analytics/**/*"
   ],
   "eslint": {
-    "errors": 98,
-    "warnings": 1878,
+    "errors": 89,
+    "warnings": 1820,
     "byFile": {
       "app/(auth)/forgot-password/page.tsx": {
         "errors": 1,

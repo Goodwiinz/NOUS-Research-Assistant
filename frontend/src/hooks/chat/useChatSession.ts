@@ -209,8 +209,17 @@ export function useChatSession(): UseChatSessionReturn {
         localMessages: messages,
         storeMessages: activeThreadMessages ?? [],
         messageFreshness: activeMessageFreshness,
+        branching: activeThreadId
+          ? messagePagination[activeThreadId]?.message_branching
+          : false,
       }),
-    [messages, activeThreadMessages, activeMessageFreshness]
+    [
+      messages,
+      activeThreadMessages,
+      activeMessageFreshness,
+      activeThreadId,
+      messagePagination,
+    ]
   );
 
   // Skeleton gate: only an uncached switch into the active thread counts as

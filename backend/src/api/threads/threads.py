@@ -37,7 +37,9 @@ from src.schemas.chat import (  # Thread schemas; Bulk thread schemas; Message s
 )
 from src.services.agent._pii_redact import tool_executions_for_viewer
 from src.services.threads import workspace_access
+from src.services.threads.branch_reads import MessagePageMetadata
 from src.services.threads.chat_service import ChatService, get_chat_service
+from src.services.threads.message_branches import BranchAccessError
 from src.services.threads.thread_event_service import thread_event_service
 
 logger = logging.getLogger(__name__)
@@ -407,9 +409,15 @@ async def get_thread(
     Get thread details by ID, optionally including messages.
     """
     service = get_chat_service(db)
-    thread = await service.get_thread(
-        thread_id, current_user.id, include_messages=include_messages
-    )
+    try:
+        thread = await service.get_thread(
+            thread_id,
+            current_user.id,
+            include_messages=include_messages,
+            authorize_bound_document=True,
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
     if not thread:
         raise HTTPException(
@@ -443,6 +451,9 @@ async def get_thread(
         created_at=thread.created_at,
         updated_at=thread.updated_at,
         source_project_id=thread.source_project_id,
+        message_branching=thread.message_branching is True,
+        branch_document_id=thread.branch_document_id,
+        selected_message_id=thread.selected_message_id,
         messages=messages,
     )
 
@@ -787,6 +798,10 @@ async def list_messages(
         None,
         description="Sort order: asc (oldest first) or desc (newest first)",
     ),
+    selected_message_id: Optional[UUID] = Query(
+        None,
+        description="Pin continuation pages to the selected branch head; stale pins return 409.",
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -794,15 +809,21 @@ async def list_messages(
     List messages in a thread.
     """
     service = get_chat_service(db)
-    messages, total = await service.list_messages(
-        thread_id=thread_id,
-        user_id=current_user.id,
-        limit=limit,
-        offset=offset,
-        before_id=before_id,
-        since=since,
-        order=order or "asc",
-    )
+    metadata = MessagePageMetadata()
+    try:
+        messages, total = await service.list_messages(
+            thread_id=thread_id,
+            user_id=current_user.id,
+            limit=limit,
+            offset=offset,
+            before_id=before_id,
+            since=since,
+            order=order or "asc",
+            selected_message_id=selected_message_id,
+            branch_metadata=metadata,
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
 
     page = (offset // limit) + 1 if limit > 0 else 1
     has_more = (offset + len(messages)) < total
@@ -819,6 +840,7 @@ async def list_messages(
         page=page,
         limit=limit,
         has_more=has_more,
+        **metadata.response_fields(),
     )
 
 
@@ -1059,6 +1081,8 @@ def _format_message_response(message, *, trusted: bool = False) -> ChatMessageRe
     return ChatMessageResponse(
         id=message.id,
         thread_id=message.thread_id,
+        parent_message_id=message.parent_message_id,
+        sibling_user_message_ids=getattr(message, "sibling_user_message_ids", []),
         client_message_id=message.client_message_id,
         user_id=message.user_id,
         role=message.role,

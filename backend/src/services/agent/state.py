@@ -5,6 +5,8 @@ from typing import Annotated, Any, Literal
 from langgraph.graph import add_messages
 from typing_extensions import NotRequired, TypedDict
 
+from src.services.agent.reasoning import ReasoningEffort
+
 THREAD_PERSISTENCE_DURABLE = "durable"
 THREAD_PERSISTENCE_EPHEMERAL = "ephemeral"
 
@@ -26,6 +28,13 @@ class AgentState(TypedDict):
     # search; an empty list may resolve the latest thread-owned attachments on
     # a retrieval-enabled follow-up.
     attachment_ids: list
+    # Explicit zero-based PDF range is per-turn, never inherited by a follow-up.
+    selection_page_range: NotRequired[tuple[int, int] | None]
+    page_filter_model: NotRequired[Literal["cohere"] | None]
+    branch_document_id: NotRequired[str | None]
+    page_filter: NotRequired[dict[str, Any] | None]
+    document_only: NotRequired[bool]
+    reasoning_effort: NotRequired[ReasoningEffort | None]
     # Prompt-safe readiness records for explicitly requested attachments.
     attachment_status: list
     tool_executions: list

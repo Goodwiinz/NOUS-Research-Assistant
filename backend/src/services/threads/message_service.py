@@ -44,8 +44,14 @@ from src.models.chat_message import ChatMessage
 from src.models.citation import Citation
 from src.models.document import Document
 from src.models.message_attachment import MessageAttachment
+from src.models.thread import Thread
 from src.schemas.chat import ChatMessageUpdate
 from src.services.threads import workspace_access
+from src.services.threads.branch_reads import (
+    MessagePageMetadata,
+    read_thread,
+    selected_page,
+)
 
 
 async def get_message(
@@ -57,7 +63,7 @@ async def get_message(
 ) -> Optional[ChatMessage]:
     """Fetch a message the caller can access, or ``None``."""
     return await workspace_access.get_message(
-        db, message_id, user_id, thread_id=thread_id
+        db, message_id, user_id, thread_id=thread_id, authorize_bound_document=True
     )
 
 
@@ -73,6 +79,8 @@ async def list_messages(
     before_id: Optional[UUID] = None,
     since: Optional[datetime] = None,
     order: Literal["asc", "desc"] = "asc",
+    selected_message_id: Optional[UUID] = None,
+    branch_metadata: Optional[MessagePageMetadata] = None,
 ) -> Optional[Tuple[List[ChatMessage], int, bool]]:
     """List messages in a thread.
 
@@ -90,16 +98,24 @@ async def list_messages(
     offset/total-based (backward-compatible default); ``"desc"`` fetches
     ``limit + 1`` rows and trims, so a cursor page never needs the total.
     """
-    thread = await workspace_access.get_thread(
+    view = await read_thread(
         db,
-        thread_id,
-        user_id,
+        thread_id=thread_id,
+        actor_id=user_id,
         conversation_id=conversation_id,
         workspace_id=workspace_id,
-        include_messages=False,
     )
-    if not thread:
+    if view is None:
         return None
+    thread = view.thread
+    if branch_metadata is not None:
+        branch_metadata.message_branching = thread.message_branching is True
+        branch_metadata.branch_document_id = (
+            thread.branch_document_id if thread.message_branching is True else None
+        )
+        branch_metadata.selected_message_id = (
+            thread.selected_message_id if thread.message_branching is True else None
+        )
 
     base_conditions = [
         ChatMessage.thread_id == thread_id,
@@ -109,7 +125,20 @@ async def list_messages(
         ChatMessage.superseded_by_message_id.is_(None),
     ]
 
-    if before_id is not None:
+    branch_ids = None
+    if view.path is not None:
+        branch_ids, branch_total, branch_has_more = selected_page(
+            view,
+            selected_message_id=selected_message_id,
+            before_id=before_id,
+            since=since,
+            offset=offset,
+            limit=limit,
+            order=order,
+        )
+        base_conditions.append(ChatMessage.id.in_(branch_ids))
+
+    if before_id is not None and view.path is None:
         before_stmt = select(ChatMessage).where(
             ChatMessage.id == before_id, ChatMessage.thread_id == thread_id
         )
@@ -125,12 +154,17 @@ async def list_messages(
                 )
             )
 
-    if since is not None:
+    if since is not None and view.path is None:
         base_conditions.append(ChatMessage.created_at > since)
 
     total = (
-        await db.execute(select(func.count(ChatMessage.id)).where(*base_conditions))
-    ).scalar() or 0
+        branch_total
+        if branch_ids is not None
+        else (
+            await db.execute(select(func.count(ChatMessage.id)).where(*base_conditions))
+        ).scalar()
+        or 0
+    )
 
     # load_only: message responses render only title/type/mime of a cited/
     # attached Document — never content_text/content_summary/search_vector
@@ -147,7 +181,35 @@ async def list_messages(
         .load_only(Document.title, Document.document_type, Document.mime_type),
     ]
 
-    if order == "desc":
+    if branch_ids is not None:
+        rows = list(
+            (
+                await db.scalars(
+                    select(ChatMessage)
+                    .options(*options)
+                    .where(*base_conditions)
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+        )
+        by_id = {row.id: row for row in rows}
+        if set(by_id) != set(branch_ids):
+            from src.services.threads.message_branches import BranchAccessError
+
+            raise BranchAccessError(409, "The selected branch changed; reload messages")
+        messages = [by_id[identifier] for identifier in branch_ids]
+        has_more = branch_has_more
+        for message in messages:
+            setattr(
+                message,
+                "sibling_user_message_ids",
+                (
+                    view.siblings.get(message.parent_message_id, [])
+                    if message.role.value == "user"
+                    else []
+                ),
+            )
+    elif order == "desc":
         stmt = (
             select(ChatMessage)
             .options(*options)
@@ -260,6 +322,17 @@ async def delete_message(
     else:
         if not message.thread.conversation.workspace.can_user_edit(str(user_id)):
             raise PermissionError("Insufficient permissions")
+
+    # An individual deletion would leave surviving branch descendants with
+    # a missing ancestor. Serialize with branch writers and preserve the
+    # existing not-found signal until subtree deletion has its own contract.
+    branching = await db.scalar(
+        select(Thread.message_branching)
+        .where(Thread.id == message.thread_id, Thread.is_deleted.is_(False))
+        .with_for_update(of=Thread)
+    )
+    if branching is None or branching is True:
+        return None
 
     message.is_deleted = True
     message.updated_at = datetime.utcnow()
