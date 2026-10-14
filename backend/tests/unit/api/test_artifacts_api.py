@@ -382,7 +382,11 @@ def test_browser_capabilities_use_server_flags(
     monkeypatch.setattr(settings, "ARTIFACT_PREVIEW_ENABLED", enabled)
     response = client.get("/api/v1/artifacts/capabilities")
     assert response.status_code == 200
-    assert response.json() == {"editing_enabled": enabled, "preview_enabled": enabled}
+    assert response.json() == {
+        "editing_enabled": enabled,
+        "preview_enabled": enabled,
+        "sharing_enabled": False,
+    }
     assert response.headers["cache-control"] == "private, no-store"
 
 
@@ -419,7 +423,11 @@ def test_master_write_flag_disables_browser_edits_and_capability(
     assert response.status_code == 503
     assert CALLS == []
     capabilities = client.get("/api/v1/artifacts/capabilities")
-    assert capabilities.json() == {"editing_enabled": False, "preview_enabled": True}
+    assert capabilities.json() == {
+        "editing_enabled": False,
+        "preview_enabled": True,
+        "sharing_enabled": False,
+    }
     assert capabilities.headers["cache-control"] == "private, no-store"
 
 

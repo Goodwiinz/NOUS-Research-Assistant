@@ -32,6 +32,44 @@ NOUS-native chat remains the default provider. Provider/device/workspace selecti
 - **Handoff queue.** `handoff show|save|flush|list|discard` (`src/cli.ts`) and `save_nous_handoff` share `src/handoffs/queue.ts`. Each save is journaled as `handoff-<handoff_id>.json` (owner-only, through `CredentialStore`) before the POST, then deleted on 2xx, kept as `pending` on a network error, timeout, 5xx, 429, 401 or `GrantExpired` (with a reconnect hint for the last two), as `conflicted` with the 409 latest version (never merged), or as `rejected` on 403, 422 or another 4xx. `flush` is manual and has no daemon. It re-sends `pending` entries whose `thread_id`/`project_id` match the current binding with the same `handoff_id`, so the backend dedupes, and reports others as skipped. `handoff discard ID` removes one entry in any state and prints it. The MCP child journals only when `connection.json`'s `credentialHandle` equals its session handle, so a stale child cannot journal under, and later flush into, a newer chat binding. A pending MCP save names the queued `handoff_id`. A workspace connection has no chat, so the handoff commands refuse it. `handoff save` and `handoff flush` are intended hook targets; Codex hooks are **not wired** in v1 because per-harness hook support is unverified. Add a background retry only if pending entries are seen to accumulate.
 - **Tests.** `packages/harness-bridge/test/mcp.test.ts` spawns both the managed configuration and the standalone command against a recording HTTP server and asserts identical `source_refs`, correct grant headers, JSON-RPC-only stdout, no secrets in the config or install command, and no writes under `CODEX_HOME`. `test/actions.test.ts`, `test/grants.test.ts`, `test/disconnect.test.ts`, `test/connect-reuse.test.ts` and `test/handoff-queue.test.ts` cover note and library action requests, renewal, disconnect, binding reuse and the handoff queue against stubbed HTTP responses. The backend action tests run on SQLite, so the conditional row claim under concurrent PostgreSQL workers is **NOT RUN**. The library actions' own tests are listed under [Library actions](#library-actions). Live acceptance against a real Codex and NOUS deployment is **NOT RUN** by these suites. Workspace scope resolution, the project selector and `list_library` are covered on SQLite by `backend/tests/unit/services/integrations/test_context.py` and `test_read_tools.py` (which also pin that `read_selected_context` is not a gateway tool), the refusal of `context:read` for a workspace binding by `test_context.py` and the read of a workspace-bound context by `test_selected_context.py`; catalog filtering and per-tool scope refusal over HTTP by `backend/tests/unit/api/test_integration_tools.py`; the refusal of workspace grants by the harness socket, the artifact routes and `request_action` by `backend/tests/unit/api/test_harness_workspace_guard.py`, `test_artifacts_api.py` and `backend/tests/unit/services/agent/test_tool_actions.py`; the `--workspace`, `--library` and `--context` flags (and the refusal of `--workspace` with `--context`) by `packages/harness-bridge/test/mcp.test.ts`, and workspace binding reuse (never across two workspaces, and not from a stored connection that holds both a project and a workspace or neither), `status` and the handoff refusal by `test/connect-reuse.test.ts`; and the approval page by the Vitest suites `frontend/src/lib/integrations/__tests__/scopeLabels.test.ts` and `frontend/src/components/integrations/__tests__/IntegrationApprovalPage.test.tsx`. The binding CHECK constraints are exercised on SQLite through the model metadata, not through the migration. `backend/tests/unit/test_workspace_grants_migration.py` renders `alembic upgrade ic01_integration_context:hb03_workspace_grants --sql` and the matching downgrade offline and asserts the CHECK expressions, the `project_id` nullability flips, the indexes, and the downgrade's row removal and table order (it runs alembic in a child process and never imports it, so it still collects after the migration tests that stub `alembic`; `backend/tests/unit/ci/test_migration_tests_collect_together.py` guards that); that shows what the revision emits, not that PostgreSQL accepts it, and `scripts/ci/check_alembic.py` still only checks for a single Alembic head and revision-id length. Executing the revision on PostgreSQL is **NOT RUN** by any suite. It was run by hand on a scratch PostgreSQL 14 on 2026-10-06: `alembic upgrade head` from an empty database, a downgrade and a second upgrade, and, against a minimal pre-hb03 schema, the CHECK constraints refused rows with neither binding and request or grant rows with both (an action may carry both) while the downgrade deleted the workspace-bound rows and restored `NOT NULL`. After `origin/develop` at `664cee348` was merged, the revision chains after `ic01_integration_context`, and the first of those runs was repeated on the merged chain (`hb06_integration_handoffs`, `ic01_integration_context`, `hb03_workspace_grants`; scratch PostgreSQL 14.23, 2026-10-06): the upgrade from empty, `downgrade -1` and a second upgrade ran clean, `pg_constraint` showed the three CHECK expressions above and `project_id` nullable on all three tables, and `scripts/ci/run_local_ci.sh` passed its targeted evidence migration probe and its empty-database replay against it. The CHECKs were not exercised with rows on the merged chain. Its downgrade over production-shaped data and a deployed upgrade are **NOT RUN**.
 
+### Browser sharing and native draft completion
+
+**Source update: October 11, 2026.** The browser can share one immutable
+artifact version with an explicit audience of 1–100 active users in the same
+organization and an expiry of at most seven days. Share creation and revocation
+require an interactive browser session; the artifact owner must retain edit
+access to the live project. Creation requires both `ARTIFACTS_ENABLED` and
+`ARTIFACT_SHARING_ENABLED` (both default `false`). Existing shared reads and
+revocation remain available when these write flags are disabled.
+
+The authenticated page `/artifacts/shared/{share_id}` fetches only the shared
+version's title, MIME type, size, digest, identifiers and bytes. It does not
+expose provenance or storage paths. Every metadata/content request checks the
+audience, expiry, revocation, creator authority and live ancestors; content
+fetches repeat authorization after storage I/O. Browser refetches hide the
+previous preview until access is confirmed, and denied requests or account
+changes discard its cached private content. The page uses the existing bounded
+preview renderers. Sharing does not add an MCP tool or editing rights.
+
+With `ARTIFACTS_ENABLED` enabled, successful native draft generation writes a
+publication intent in the same transaction as its completed draft and result.
+The actor, organization, project, chat and run binding come from server state.
+The existing artifact worker drains these intents before announcements. It
+publishes the exact saved title/content with a deterministic publication ID,
+rechecks the source and live authority after storage I/O, and locks the current
+worker claim through publication commit. Claims and acknowledgements are
+conditional; stale claims are eligible after five minutes, with at most five
+attempts. Exhausted claims reconcile a committed receipt without another
+storage attempt. Disabling publication pauses pending intents. Thread/run hard
+deletion cascades their bound intents, so deletion cannot widen their scope.
+
+The [October 11 evidence record](../testing/artifact-workspace-completion-2026-10-11.md)
+lists local tests and mutation checks. Deployment acceptance, browser
+accessibility E2E and expert review remain **NOT RUN**. Plan 04 context and
+recall migrations still follow the serial migration rule in
+[gotchas](gotchas.md#database--environment); Plan 05's configured-model baseline
+remains a prerequisite for its restricted execution profile.
+
 ### Workspace connections and library scopes
 
 Plan 07 Slice 1 lets a grant bind one NOUS workspace instead of one project, and adds the `library:read` and `library:write` scopes; Slice 3 adds the library actions that `library:write` runs (see [Library actions](#library-actions)). This section describes what the code does today. The approved design is [the Plan 07 design](../plans/2026-10-05-nous-mcp-alphaxiv-parity-design.md), a dated record and not a contract.

@@ -25,16 +25,21 @@ from src.schemas.artifact import (
     ArtifactEditConflictError,
     ArtifactEditConflictResponse,
     ArtifactError,
+    ArtifactInvalidShareRequest,
     ArtifactNotFound,
     ArtifactQuotaExceeded,
+    ArtifactShareDTO,
+    ArtifactSharingDisabled,
     ArtifactStorageUnavailable,
     ArtifactTooLarge,
     ArtifactUploadDTO,
     ArtifactVersionDTO,
+    CreateArtifactShareRequest,
     EditArtifactVersionRequest,
     ProjectArtifactDTO,
     PublishVersionRequest,
     ReserveArtifactUploadRequest,
+    SharedArtifactVersionDTO,
     ThreadArtifactDTO,
 )
 from src.schemas.integration_context import IntegrationContext
@@ -49,6 +54,13 @@ from src.services.artifacts.service import (
     read_version_content,
     reserve_upload,
     store_upload,
+)
+from src.services.artifacts.sharing import (
+    create_share,
+    list_artifact_shares,
+    read_share,
+    read_share_content,
+    revoke_share,
 )
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
@@ -65,6 +77,8 @@ async def artifact_capabilities(
         editing_enabled=settings.ARTIFACTS_ENABLED
         and settings.ARTIFACT_EDITING_ENABLED,
         preview_enabled=settings.ARTIFACT_PREVIEW_ENABLED,
+        sharing_enabled=settings.ARTIFACTS_ENABLED
+        and settings.ARTIFACT_SHARING_ENABLED,
     )
 
 
@@ -88,12 +102,14 @@ _STATUS: dict[type[ArtifactError], tuple[int, str]] = {
     ArtifactTooLarge: (413, "Artifact exceeds the size limit"),
     ArtifactQuotaExceeded: (413, "Project artifact quota exceeded"),
     ArtifactStorageUnavailable: (503, "Artifact storage unavailable"),
+    ArtifactInvalidShareRequest: (422, "Invalid artifact share audience or expiry"),
+    ArtifactSharingDisabled: (503, "Artifact sharing is disabled"),
 }
 
 
 def _http(error: ArtifactError) -> HTTPException:
     status, detail = _STATUS.get(type(error), (500, "Artifact request failed"))
-    return HTTPException(status, detail)
+    return HTTPException(status, detail, headers={"Cache-Control": "private, no-store"})
 
 
 def _identity(user: User) -> tuple[UUID, UUID]:
@@ -106,6 +122,91 @@ def _identity(user: User) -> tuple[UUID, UUID]:
 def _require_publishing() -> None:
     if not settings.ARTIFACTS_ENABLED:
         raise HTTPException(503, "Artifact publication is disabled")
+
+
+def _require_sharing() -> None:
+    if not settings.ARTIFACTS_ENABLED or not settings.ARTIFACT_SHARING_ENABLED:
+        raise HTTPException(503, "Artifact sharing is disabled")
+
+
+@router.post("/shares", response_model=ArtifactShareDTO)
+async def create_artifact_share(
+    request: CreateArtifactShareRequest,
+    response: Response,
+    user: User = Depends(require_interactive_user),
+    db: AsyncSession = Depends(get_db),
+) -> ArtifactShareDTO:
+    _require_sharing()
+    user_id, organization_id = _identity(user)
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return await create_share(
+            db, user_id=user_id, organization_id=organization_id, **request.model_dump()
+        )
+    except ArtifactError as error:
+        raise _http(error) from error
+
+
+@router.get("/shares/{share_id}", response_model=SharedArtifactVersionDTO)
+async def shared_artifact(
+    share_id: UUID,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SharedArtifactVersionDTO:
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return await read_share(db, user_id=cast(UUID, user.id), share_id=share_id)
+    except ArtifactError as error:
+        raise _http(error) from error
+
+
+@router.get("/shares/{share_id}/content")
+async def shared_artifact_content(
+    share_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    try:
+        content, mime_type, title = await read_share_content(
+            db, user_id=cast(UUID, user.id), share_id=share_id
+        )
+    except ArtifactError as error:
+        raise _http(error) from error
+    return _download_response(content, mime_type, title)
+
+
+@router.delete("/shares/{share_id}", status_code=204)
+async def revoke_artifact_share(
+    share_id: UUID,
+    user: User = Depends(require_interactive_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    try:
+        await revoke_share(db, user_id=cast(UUID, user.id), share_id=share_id)
+    except ArtifactError as error:
+        raise _http(error) from error
+    return Response(status_code=204, headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/{artifact_id}/shares", response_model=list[ArtifactShareDTO])
+async def artifact_shares(
+    artifact_id: UUID,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ArtifactShareDTO]:
+    user_id, organization_id = _identity(user)
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return await list_artifact_shares(
+            db,
+            user_id=user_id,
+            organization_id=organization_id,
+            artifact_id=artifact_id,
+        )
+    except ArtifactError as error:
+        raise _http(error) from error
 
 
 @router.post("/uploads", response_model=ArtifactUploadDTO)
@@ -223,6 +324,10 @@ async def version_content(
         )
     except ArtifactError as error:
         raise _http(error) from error
+    return _download_response(content, mime_type, title)
+
+
+def _download_response(content: bytes, mime_type: str, title: str) -> Response:
     # ASCII fallback for the legacy parameter; the exact title goes in filename*.
     ascii_name = (
         "".join(

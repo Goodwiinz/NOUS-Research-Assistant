@@ -37,6 +37,8 @@ from src.models.peer_review import (
     PeerReviewRound,
 )
 from src.models.research_claim import ResearchClaimVersion
+from src.models.user import User
+from src.schemas.integration_context import IntegrationContext
 from src.services.agent.job_store import get_redis
 from src.services.research import peer_review_rules
 from src.services.research.bibliography_service import (
@@ -336,6 +338,7 @@ class DraftGenerationService:
         style: str = "academic",
         max_sections: int = 5,
         include_abstract: bool = True,
+        artifact_context: IntegrationContext | None = None,
     ) -> Dict[str, Any]:
         """
         Generate a literature review draft from project documents.
@@ -481,6 +484,7 @@ class DraftGenerationService:
                 style=style,
                 max_sections=max_sections,
                 include_abstract=include_abstract,
+                artifact_context=artifact_context,
             )
         )
         heartbeat_task = self._fire_and_forget(self._heartbeat_status(task_id))
@@ -590,6 +594,7 @@ class DraftGenerationService:
         instructions: Optional[str] = None,
         selection_mode: str = "project_snapshot",
         generation_request_hash: str = "",
+        artifact_context: IntegrationContext | None = None,
     ) -> None:
         """Background task for draft generation"""
         start_time = time.time()
@@ -845,6 +850,40 @@ class DraftGenerationService:
                     db, task_id=task_id, state="completed", artifact=draft
                 ):
                     raise DraftTaskNotRunning(task_id)
+                from src.core.config import settings
+
+                if settings.ARTIFACTS_ENABLED:
+                    from src.services.artifacts.native import (
+                        create_native_context,
+                        enqueue_native_artifact,
+                    )
+
+                    # The completion transaction owns the persisted bytes and
+                    # the server identity. Tool arguments cannot grant authority.
+                    native_context = artifact_context
+                    if native_context is None:
+                        organization_id = await db.scalar(
+                            select(User.organization_id).where(
+                                User.id == user_id,
+                                User.is_active.is_(True),
+                                User.is_deleted.is_(False),
+                            )
+                        )
+                        if organization_id is None:
+                            raise ValueError("Native draft actor unavailable")
+                        native_context = create_native_context(
+                            user_id=user_id,
+                            organization_id=organization_id,
+                            project_id=project_id,
+                        )
+                    if (
+                        native_context.user_id != user_id
+                        or native_context.project_id != project_id
+                    ):
+                        raise ValueError("Native draft context mismatch")
+                    await enqueue_native_artifact(
+                        db, draft_id=draft.id, context=native_context
+                    )
                 await db.commit()
 
                 # Mark complete
