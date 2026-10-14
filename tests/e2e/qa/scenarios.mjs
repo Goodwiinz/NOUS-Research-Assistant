@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { assertPdfPersistence, assertPdfQuoteRequest, assertPdfRequest, assertPdfStream, makeSelectionPdf, observePdfUi } from './pdf-chat.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_STREAM_EVENT_TYPES = new Set(['status', 'token', 'done', 'error', 'confirmation', 'tool_call', 'tool_result', 'metadata']);
@@ -865,6 +866,141 @@ const scenarios = [
           ]);
         }
         if (acceptedRunId && provenTerminal) session.markRunTerminal(acceptedRunId);
+      }
+    },
+  },
+  {
+    id: 'workflow.pdf-chat-selection-stream-reload',
+    title: 'PDF page selection scopes a real answer and its persisted citation after reload',
+    suite: 'workflow',
+    prerequisites: ['auth', 'writes', 'model', 'browser'],
+    createsFixtures: true,
+    callsModel: true,
+    mode: 'live-model',
+    async run(session, evidence) {
+      const page = await session.login();
+      const actor = await session.request('/api/v1/auth/me', { target: 'backend' });
+      const ownerUserId = actor.data?.user?.id;
+      assertThat(UUID.test(String(ownerUserId)), 'PDF QA requires the actual authenticated account identity');
+      // Only the workspace is created here. Ask about PDF must create its own
+      // conversation/thread through the real UI; passive POST receipts own them.
+      const workspace = await session.request('/api/v2/workspaces', {
+        target: 'backend', method: 'POST',
+        json: { name: `${evidence.fixturePrefix} PDF selection`, description: 'Synthetic PDF selection QA' },
+      });
+      const workspaceId = responseId(workspace);
+      session.registerFixture('workspace', workspaceId);
+      const fixture = makeSelectionPdf();
+      const filename = `pdf-selection-${randomUUID()}.pdf`;
+      const title = `${evidence.fixturePrefix} selected physical page`;
+      const form = new FormData();
+      form.append('file', new Blob([fixture.bytes], { type: 'application/pdf' }), filename);
+      form.append('title', title);
+      const uploaded = await session.request('/api/v1/files/upload', { target: 'backend', method: 'POST', body: form });
+      const documentId = responseId(uploaded, 'document_id');
+      session.registerFixture('document', documentId, { filename });
+      const processingDeadline = Date.now() + Math.min(120_000, session.config.timeoutMs);
+      let indexed = false;
+      while (Date.now() < processingDeadline) {
+        const detail = await session.request(`/api/v1/documents/${documentId}`, { target: 'backend' });
+        assertThat(detail.data?.id === documentId, 'PDF processing lookup changed document identity');
+        assertThat(detail.data?.processing_status !== 'failed', 'Real PDF ingestion failed');
+        if (detail.data?.processing_status === 'indexed') { indexed = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      assertThat(indexed, 'Real PDF ingestion did not become indexed within the bound');
+      // Select a real owned workspace using the account-stamped cache contract.
+      // No PDF intent, selection, transcript, or application store is injected.
+      // The application reauthorizes this workspace through its normal GET.
+      const previousCache = await page.evaluate(({ owner, workspace: value }) => {
+        const keys = ['default-workspace-object', 'default-workspace-cached-at', 'default-workspace-id', 'default-conversation-id'];
+        const previous = Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)]));
+        keys.forEach((key) => localStorage.removeItem(key));
+        localStorage.setItem('default-workspace-object', JSON.stringify({ version: 1, ownerUserId: owner, cachedAt: Date.now(), workspace: value }));
+        return previous;
+      }, { owner: ownerUserId, workspace: workspace.data });
+      const observer = observePdfUi(session, workspaceId);
+      try {
+        await session.goto(`/documents/${documentId}`);
+        await page.getByRole('heading', { name: title, exact: true }).waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await page.getByRole('tab', { name: 'Preview', exact: true }).click();
+        const preview = page.getByRole('region', { name: `PDF preview: ${filename}`, exact: true });
+        await preview.waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await evidence.checkpoint('pdf-chat.preview');
+        assertThat(await page.getByLabel('First page', { exact: true }).inputValue() === '' && await page.getByLabel('Last page', { exact: true }).inputValue() === '', 'Fresh PDF preview unexpectedly had a page range');
+        const selectedPage = preview.locator('[data-pdf-page="2"]');
+        await selectedPage.scrollIntoViewIfNeeded();
+        // Select a neutral heading word, so quoting it cannot reveal the fact
+        // the provider must retrieve. Read the genuine browser selection only.
+        const heading = selectedPage.getByText('Physical page 2', { exact: true });
+        await heading.waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await heading.dblclick();
+        const quote = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+        assertThat(['Physical', 'page', '2'].includes(quote), 'PDF page-2 heading did not produce a neutral word selection');
+        assertThat(await page.getByLabel('First page', { exact: true }).inputValue() === '' && await page.getByLabel('Last page', { exact: true }).inputValue() === '', 'Quoting PDF text unexpectedly restricted retrieval pages');
+        assertThat(await page.getByLabel('Selected PDF passage', { exact: true }).textContent() === `> ${quote}`, 'PDF viewer did not show the selected quote');
+        // Text quotes carry provenance only. Restrict this retrieval probe
+        // through the user's explicit page controls, independently of the quote.
+        await page.getByLabel('First page', { exact: true }).fill('2');
+        await page.getByLabel('Last page', { exact: true }).fill('2');
+        await evidence.checkpoint('pdf-chat.selection');
+        await page.getByRole('button', { name: 'Ask about PDF', exact: true }).click();
+        await messageComposer(page).waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await waitForCondition(async () => {
+          observer.check();
+          return !(new URL(page.url()).searchParams.has('pdfDocumentId')) && await messageComposer(page).isEnabled();
+        }, session.config.timeoutMs, 'PDF route intent did not reach the composer');
+        assertThat(await page.getByLabel('Selected PDF passage', { exact: true }).textContent() === `> ${quote}`, 'PDF route lost the quote before submission');
+        const question = 'What is the exact signal token in the selected pages? Reply with only that token and its source citation using [Doc N]. Do not discuss other pages.';
+        // Reserve before clicking Send: even an uncertain submission spends a turn.
+        evidence.reserveModelTurn();
+        await sendFromComposer(page, question);
+        await waitForCondition(() => {
+          observer.check();
+          return observer.state.payload && observer.state.threadId;
+        }, session.config.timeoutMs, 'PDF UI produced no owned native submission');
+        const { threadId, payload } = observer.state;
+        assertPdfRequest(payload, { documentId, workspaceId, threadId });
+        const prompt = assertPdfQuoteRequest(payload, { quote, question, tokens: fixture.tokens });
+        await waitForCondition(() => {
+          observer.check();
+          return observer.state.events;
+        }, session.config.timeoutMs, 'PDF native stream did not finish');
+        const streamed = assertPdfStream(observer.state.events, { documentId, threadId, tokens: fixture.tokens });
+        await waitForCondition(async () => {
+          const job = await session.request(`/api/v1/agent/jobs/${streamed.runId}`, { target: 'backend' });
+          return job.data?.status === 'completed';
+        }, session.config.timeoutMs, 'PDF accepted run did not durably complete');
+        session.markRunTerminal(streamed.runId);
+        await assertAssistantContains(page, fixture.tokens[1], 'Selected PDF answer', session.config.timeoutMs);
+        await page.getByLabel('Selected PDF passage', { exact: true }).waitFor({ state: 'hidden', timeout: session.config.timeoutMs });
+        assertThat(await page.getByRole('button', { name: 'Remove PDF scope', exact: true }).isVisible(), 'Sending the quote removed the PDF scope');
+        await evidence.checkpoint('pdf-chat.answer');
+        const history = await session.request(`/api/v2/threads/${threadId}/messages?limit=50`, { target: 'backend' });
+        assertPdfPersistence(history.data?.messages, { ...streamed, documentId, threadId, tokens: fixture.tokens, prompt });
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: session.config.timeoutMs });
+        assertThat(new URL(page.url()).searchParams.get('thread') === threadId, 'PDF reload left the actual UI-created thread');
+        await assertAssistantContains(page, fixture.tokens[1], 'Reloaded PDF answer', session.config.timeoutMs);
+        await evidence.checkpoint('pdf-chat.reloaded');
+        const assistant = page.locator('[data-role="assistant"]').filter({ hasText: fixture.tokens[1] });
+        await assistant.getByRole('button', { name: new RegExp(`^Source ${streamed.sourcePosition}:`) }).first().click();
+        await page.getByRole('button', { name: 'Open page 2', exact: true }).first().click();
+        const reopened = page.getByRole('region', { name: `PDF preview: ${filename}`, exact: true });
+        const pageTwo = reopened.locator('[data-pdf-page="2"]');
+        await pageTwo.locator('[data-pdf-text-page="1"]').waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+        await waitForCondition(async () => {
+          const rootBox = await reopened.boundingBox();
+          const pageBox = await pageTwo.boundingBox();
+          return rootBox && pageBox && pageBox.y >= rootBox.y - 5 && pageBox.y < rootBox.y + rootBox.height / 2;
+        }, session.config.timeoutMs, 'Persisted citation did not navigate the viewer to physical page 2');
+        await evidence.checkpoint('pdf-chat.citation');
+        return {
+          assertion: 'Real PDF text selection quoted a neutral page-2 word exactly once; a separate retrieved fact and citation persisted and reopened that page after reload',
+          evidence: [{ documentId, workspaceId, threadId, runId: streamed.runId, selectionPageRange: [1, 1], physicalCitationPage: 2, selectedQuote: quote, nativeUiOnly: true }],
+        };
+      } finally {
+        observer.dispose();
+        await restoreDefaultWorkspaceCache(page, previousCache).catch(() => {});
       }
     },
   },

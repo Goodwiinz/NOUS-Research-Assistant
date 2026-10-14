@@ -10,7 +10,7 @@
  */
 import { ChatMessage, ChatMessageUpdate } from '@/types/workspace';
 import { workspaceService } from '@/services/workspaceService';
-import { captureChatSession } from '../requestCoordinator';
+import { captureChatSession, onChatSessionReset } from '../requestCoordinator';
 import type { ChatSliceCreator, RefreshExpectation } from '../types';
 import { removeItemFromRecord } from '../recordIndex';
 import { MAX_CACHED_THREADS, INITIAL_MESSAGE_PAGE_SIZE } from '../initialState';
@@ -29,6 +29,10 @@ export interface MessageSlice {
     expected?: RefreshExpectation
   ) => Promise<boolean>;
   loadOlderMessages: (threadId: string) => Promise<void>;
+  selectMessageBranch: (
+    threadId: string,
+    messageId: string
+  ) => Promise<boolean>;
   sendMessage: (
     content: string,
     threadId?: string
@@ -51,6 +55,11 @@ export interface MessageSlice {
 // (not counters): the latest request deletes its entry on settle, and object
 // identity can't be recycled the way a reset counter can.
 const olderPageRequestTokens = new Map<string, object>();
+const branchSelectionTokens = new Map<string, object>();
+onChatSessionReset(() => {
+  olderPageRequestTokens.clear();
+  branchSelectionTokens.clear();
+});
 
 function compareMessageOrder(left: ChatMessage, right: ChatMessage): number {
   const timestampOrder = left.created_at.localeCompare(right.created_at);
@@ -86,6 +95,23 @@ function mergeNewestMessagePage(
   };
 }
 
+function mergeBranchMessagePage(
+  existing: ChatMessage[],
+  canonical: ChatMessage[]
+): { messages: ChatMessage[]; retainedOlderCount: number } {
+  // Parent-chain order is authoritative, including equal or out-of-order
+  // timestamps. Only retain a previously loaded prefix when this same-head
+  // page overlaps it at an exact canonical identity.
+  const boundary = canonical.length
+    ? existing.findIndex((message) => message.id === canonical[0].id)
+    : -1;
+  const prefix = boundary > 0 ? existing.slice(0, boundary) : [];
+  return {
+    messages: [...prefix, ...canonical],
+    retainedOlderCount: prefix.length,
+  };
+}
+
 export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
   set,
   get
@@ -99,6 +125,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
     // If that older response committed, it could mark the pre-turn page
     // fresh and hide the optimistic overlay before terminal reconciliation.
     abortNewestPageRequest(threadId);
+    olderPageRequestTokens.delete(threadId);
     set((state) => {
       state.messageFreshness[threadId] = 'stale';
       if (state.loadingThreadId === threadId) {
@@ -106,6 +133,54 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
         state.loadingThreadId = null;
       }
     });
+  },
+
+  selectMessageBranch: async (threadId, messageId) => {
+    const snapshot = get();
+    const page = snapshot.messagePagination[threadId];
+    const source = snapshot.messages[threadId]?.find((message) =>
+      message.sibling_user_message_ids?.includes(messageId)
+    );
+    if (
+      snapshot.currentThreadId !== threadId ||
+      snapshot.isStreaming ||
+      snapshot.messageFreshness[threadId] !== 'fresh' ||
+      !page?.message_branching ||
+      page.selectingBranch ||
+      !source
+    )
+      return false;
+    const isCurrentSession = captureChatSession();
+    const token = {};
+    branchSelectionTokens.set(threadId, token);
+    get().markMessagesStale(threadId);
+    set((state) => {
+      state.messagePagination[threadId].selectingBranch = true;
+    });
+    let selected = false;
+    try {
+      await workspaceService.selectMessageBranch(threadId, messageId);
+      selected = true;
+    } catch {
+      // A failed response can follow a committed selection. Re-read the
+      // canonical head rather than guessing which branch the server kept.
+    }
+    if (
+      !isCurrentSession() ||
+      branchSelectionTokens.get(threadId) !== token ||
+      deletedThreadIds.has(threadId) ||
+      !get().messagePagination[threadId]
+    )
+      return false;
+    const refreshed = await get().refreshMessages(threadId);
+    if (!isCurrentSession() || branchSelectionTokens.get(threadId) !== token)
+      return false;
+    branchSelectionTokens.delete(threadId);
+    set((state) => {
+      if (state.messagePagination[threadId])
+        state.messagePagination[threadId].selectingBranch = false;
+    });
+    return selected && refreshed;
   },
 
   refreshMessages: async (threadId, expected) => {
@@ -151,6 +226,9 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
       }
 
       const canonicalAscending = [...response.messages].reverse();
+      if (response.message_branching && !response.branch_document_id) {
+        throw new Error('Invalid PDF branch metadata');
+      }
       const expectationIds = [
         expected?.persistedId,
         expected?.runtimeId,
@@ -173,8 +251,16 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
         }
         const existing = state.messages[threadId] || [];
         const existingPagination = state.messagePagination[threadId];
-        const { messages, retainedOlderCount } = mergeNewestMessagePage(
-          existing,
+        const sameBranch =
+          !!existingPagination?.message_branching ===
+            !!response.message_branching &&
+          (existingPagination?.selected_message_id ?? null) ===
+            (response.selected_message_id ?? null);
+        const mergePage = response.message_branching
+          ? mergeBranchMessagePage
+          : mergeNewestMessagePage;
+        const { messages, retainedOlderCount } = mergePage(
+          sameBranch ? existing : [],
           canonicalAscending
         );
 
@@ -186,6 +272,10 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
           state.messageToThread[message.id] = threadId;
         }
         state.messagePagination[threadId] = {
+          message_branching: response.message_branching ?? false,
+          branch_document_id: response.branch_document_id ?? null,
+          selected_message_id: response.selected_message_id ?? null,
+          selectingBranch: existingPagination?.selectingBranch,
           hasMore:
             retainedOlderCount > 0 && existingPagination
               ? existingPagination.hasMore
@@ -193,6 +283,15 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
           loadingOlder: false,
           loadedCount: messages.length,
         };
+        const conversationId = state.threadToConversation[threadId];
+        const thread = conversationId
+          ? state.threads[conversationId]?.find((item) => item.id === threadId)
+          : undefined;
+        if (thread) {
+          thread.message_branching = response.message_branching ?? false;
+          thread.branch_document_id = response.branch_document_id ?? null;
+          thread.selected_message_id = response.selected_message_id ?? null;
+        }
         state.messageFreshness[threadId] = expectationMet ? 'fresh' : 'stale';
 
         const threadKeys = Object.keys(state.messages);
@@ -306,6 +405,9 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
         limit: 100,
         order: 'desc',
         before_id: oldestLoaded.id,
+        ...(pagination.message_branching && pagination.selected_message_id
+          ? { selected_message_id: pagination.selected_message_id }
+          : {}),
       });
       if (!isCurrentSession()) return;
 
@@ -331,7 +433,11 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
         if (
           !currentPagination ||
           !currentPagination.loadingOlder ||
-          olderPageRequestTokens.get(threadId) !== requestToken
+          olderPageRequestTokens.get(threadId) !== requestToken ||
+          currentPagination.selected_message_id !==
+            pagination.selected_message_id ||
+          (pagination.message_branching &&
+            response.selected_message_id !== pagination.selected_message_id)
         ) {
           return;
         }
@@ -352,6 +458,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
           }
         }
         state.messagePagination[threadId] = {
+          ...currentPagination,
           // Empty page (or none new) means we've reached the start — stop,
           // even if the server still reports has_more, to avoid re-fetching
           // the same cursor forever.
@@ -362,6 +469,15 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
       });
     } catch (error) {
       if (!isCurrentSession()) return;
+      // A branch head advanced while this cursor was in flight. The first
+      // page is authoritative; never retry an older cursor against a new path.
+      if (
+        pagination.message_branching &&
+        olderPageRequestTokens.get(threadId) === requestToken
+      ) {
+        await get().refreshMessages(threadId);
+        return;
+      }
       console.error('[ChatStore] Error loading older messages:', error);
       set((state) => {
         // Same guard as the commit: a superseded request failing against an

@@ -17,6 +17,7 @@ import {
   ThreadCreate,
   ThreadUpdate,
   ChatMessage,
+  ChatMessageListResponse,
   ChatMessageUpdate,
 } from '@/types/workspace';
 import type { ActivityStep } from '@/components/chat/shared/cloudMessageView';
@@ -25,6 +26,7 @@ import type {
   AgentStreamPhase,
 } from '@/services/agentStreamEvents';
 import type { PlanStep } from '@/types/agent-chat';
+import type { PageFilter } from '@/types/pdf-chat';
 
 export interface ChatState {
   // Current selections
@@ -68,7 +70,18 @@ export interface ChatState {
   // Pagination state per thread
   messagePagination: Record<
     string,
-    { hasMore: boolean; loadingOlder: boolean; loadedCount: number }
+    Partial<
+      Pick<
+        ChatMessageListResponse,
+        'message_branching' | 'branch_document_id' | 'selected_message_id'
+      >
+    > & {
+      hasMore: boolean;
+      loadingOlder: boolean;
+      loadedCount: number;
+      /** Selection is a UI operation; binding fields come from the API page. */
+      selectingBranch?: boolean;
+    }
   >;
 
   // Reinitialization guard for 404 recovery
@@ -101,6 +114,8 @@ export interface ChatState {
   streamingContent: string;
   streamingMessageId: string | null;
   streamingCitations: Array<Record<string, unknown>>;
+  /** Public page selection diagnostics for the owning live turn only. */
+  streamingPageFilter: PageFilter | null;
   streamingDiagnosticsTraceId: string | null;
   // True only while RAG retrieval is in flight (set at stream start, cleared on
   // the first token or rag_context event). Drives the composer's
@@ -208,6 +223,10 @@ export interface ChatActions {
     expected?: RefreshExpectation
   ) => Promise<boolean>;
   loadOlderMessages: (threadId: string) => Promise<void>;
+  selectMessageBranch: (
+    threadId: string,
+    messageId: string
+  ) => Promise<boolean>;
   sendMessage: (
     content: string,
     threadId?: string

@@ -112,6 +112,8 @@ export interface ChatPageMessage {
    * for legacy rows — edit-and-resend needs the unambiguous value because the
    * backend looks the superseded turn up BY client_message_id. */
   clientMessageId?: string;
+  parentMessageId?: string | null;
+  siblingUserMessageIds?: string[];
   /** Transient edit/regenerate ownership marker. The server's canonical rows
    * remain untouched while this replacement is in flight. */
   replacesClientMessageId?: string;
@@ -186,6 +188,8 @@ export function mapDbMessageToChatPageMessage(
       ? { clientMessageId: dbMsg.client_message_id }
       : {}),
     source: 'canonical',
+    parentMessageId: dbMsg.parent_message_id,
+    siblingUserMessageIds: dbMsg.sibling_user_message_ids,
     role:
       dbMsg.role === MessageRole.USER
         ? ('user' as const)
@@ -239,6 +243,7 @@ interface SelectDisplayedMessagesParams {
   localMessages: ChatPageMessage[];
   storeMessages?: ChatMessage[];
   messageFreshness?: 'fresh' | 'stale' | 'refreshing';
+  branching?: boolean;
 }
 
 /**
@@ -326,11 +331,15 @@ export function selectDisplayedMessages({
   localMessages,
   storeMessages = [],
   messageFreshness,
+  branching = false,
 }: SelectDisplayedMessagesParams): ChatPageMessage[] {
   const canonical = mergeLocalProvenance(
     mapStoreMessagesToChatMessages(storeMessages),
     localMessages
   );
+  // A selected branch is a complete canonical path. Completed overlays from
+  // its siblings must not reappear when the user selects another alternative.
+  if (branching && messageFreshness === 'fresh') return canonical;
   const replacement = [...localMessages]
     .reverse()
     .find(

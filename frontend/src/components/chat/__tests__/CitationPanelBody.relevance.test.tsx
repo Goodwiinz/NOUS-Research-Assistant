@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CitationPanelBody } from '../CitationPanelBody';
@@ -26,6 +26,23 @@ function fillsFor(container: HTMLElement): { bg: string; opacity: number }[] {
 }
 
 describe('CitationPanelBody relevance meter', () => {
+  it('opens the clicked citation page even when another passage has a higher score', () => {
+    const first = citation({ documentId: 'doc-1', pageNumber: 1, score: 0.5 });
+    const third = citation({ documentId: 'doc-1', pageNumber: 3, score: 0.9 });
+    const onOpen = vi.fn();
+    render(
+      <CitationPanelBody
+        citations={[first, third]}
+        activeCitationId="doc-1"
+        activeCitationPage={1}
+        onCitationClick={onOpen}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open document' }));
+    expect(onOpen).toHaveBeenLastCalledWith(first);
+    fireEvent.click(screen.getByRole('button', { name: 'Open page 3' }));
+    expect(onOpen).toHaveBeenLastCalledWith(third);
+  });
   it('tiers the bar fill so a stronger score is never fainter', () => {
     // Rendered one at a time: a group can auto-expand and repeat its top
     // score on a chunk bar, so a single render's bars are not one-per-score.

@@ -90,6 +90,13 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.agent.run_event_store import RunAlreadyTerminalError, append_event
 from src.services.agent.run_event_types import RunEventType
+from src.services.threads.message_branches import (
+    BranchAccessError,
+    attach_user_branch,
+    get_branch_path,
+    prepare_branch_submission,
+    reserve_branch_reply_capacity,
+)
 from src.shared.enums import TERMINAL_JOB_STATUSES, AgentOutboxStatus, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -245,6 +252,24 @@ async def _replayed_submission(
             or binding.workspace_id != request.workspace_id
         ):
             raise ActiveRunConflict("Idempotency key belongs to another submission.")
+    if getattr(request, "branch_document_id", None) is not None:
+        path = await get_branch_path(
+            db,
+            thread_id=thread_id,
+            head_message_id=_coerce_uuid(existing.user_message_id),
+        )
+        last_user = next(
+            (m for m in reversed(request.messages) if m.role == "user"), None
+        )
+        if (
+            not path
+            or last_user is None
+            or path[-1].role != MessageRole.USER
+            or path[-1].parent_message_id
+            != _coerce_uuid(getattr(request, "parent_message_id", None))
+            or path[-1].content != last_user.content
+        ):
+            raise BranchAccessError(409, "Idempotency key belongs to another branch")
     return AcceptedSubmission(
         run_id=str(existing.job_id),
         thread_id=str(thread_id),
@@ -289,6 +314,7 @@ async def _insert_user_message(
     content: str,
     client_message_id: Optional[UUID],
     attachment_ids: Optional[Sequence[Any]] = None,
+    require_all_attachments: bool = False,
 ) -> tuple[Optional[str], bool]:
     """Insert the turn's user row idempotently. Does NOT commit.
 
@@ -355,6 +381,12 @@ async def _insert_user_message(
         owned_ids = await workspace_access.filter_owned_document_ids(
             db, list(attachment_ids), user_id
         )
+        if require_all_attachments and {
+            _coerce_uuid(value) for value in attachment_ids
+        } != set(owned_ids):
+            from src.services.threads.message_branches import BranchAccessError
+
+            raise BranchAccessError(404, "Attached file not found")
         for doc_id in owned_ids:
             db.add(MessageAttachment(message_id=message.id, document_id=doc_id))
         await db.flush()
@@ -820,6 +852,46 @@ async def accept_submission(
         raise ValueError("accept_submission requires a user message")
     client_message_id = _coerce_uuid(getattr(last_user, "client_message_id", None))
 
+    branch_binding = None
+    try:
+        # Selection and all submission paths serialize on the same thread.
+        # The later run index remains the independent active-writer guard.
+        locked_thread = (
+            await db.execute(
+                select(Thread)
+                .where(Thread.id == thread_uuid)
+                .with_for_update(of=Thread)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if locked_thread is None:
+            raise BranchAccessError(404, "Chat not found")
+        branch_document_id = _coerce_uuid(getattr(request, "branch_document_id", None))
+        if branch_document_id is not None:
+            if (
+                provider != "nous"
+                or getattr(request, "supersedes_client_message_id", None) is not None
+            ):
+                raise BranchAccessError(422, "Unsupported PDF branch submission")
+            branch_binding = await prepare_branch_submission(
+                db,
+                actor_id=_coerce_uuid(current_user.id),
+                thread_id=thread_uuid,
+                document_id=branch_document_id,
+                parent_message_id=_coerce_uuid(
+                    getattr(request, "parent_message_id", None)
+                ),
+            )
+            if branch_binding.organization_id != _coerce_uuid(organization_id):
+                raise BranchAccessError(
+                    404, "Chat authority changed; retry the request"
+                )
+        elif locked_thread.message_branching:
+            raise BranchAccessError(409, "This PDF chat requires explicit branch scope")
+    except Exception:
+        await db.rollback()
+        raise
+
     if idempotency_key is not None:
         existing = await _find_by_idempotency_key(
             db,
@@ -861,6 +933,12 @@ async def accept_submission(
                         integration_context=integration_context,
                     )
             raise
+        if branch_binding is not None:
+            await reserve_branch_reply_capacity(
+                db,
+                thread_id=thread_uuid,
+                client_message_id=client_message_id,
+            )
         user_message_id, user_row_inserted = await _insert_user_message(
             db,
             thread_id=thread_uuid,
@@ -868,7 +946,20 @@ async def accept_submission(
             content=last_user.content,
             client_message_id=client_message_id,
             attachment_ids=getattr(request, "attachment_ids", None),
+            require_all_attachments=branch_binding is not None,
         )
+        if branch_binding is not None:
+            if user_message_id is None:
+                raise BranchAccessError(
+                    409, "Accepted question could not be identified"
+                )
+            await attach_user_branch(
+                db,
+                branch_binding,
+                user_message_id=UUID(user_message_id),
+                inserted=user_row_inserted,
+                content=last_user.content,
+            )
         tombstones = await _apply_tombstones(
             db,
             current_user=current_user,

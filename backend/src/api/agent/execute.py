@@ -512,6 +512,10 @@ async def execute_agent(
         raise HTTPException(
             status_code=422, detail="Local Codex requires /api/v1/agent/stream."
         )
+    if request.branch_document_id is not None:
+        raise HTTPException(
+            status_code=422, detail="Message branches require /api/v1/agent/stream."
+        )
     await _enforce_rate_limit(
         _agent_rate_limiter, str(current_user.id), _AGENT_TURN_PREFIX
     )

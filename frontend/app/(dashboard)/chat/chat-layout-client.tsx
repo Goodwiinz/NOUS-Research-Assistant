@@ -11,6 +11,7 @@ import { useChatPersistence } from '@/hooks';
 import { cn } from '@/lib/utils';
 import { useArtifactPanelStore } from '@/store/artifactPanelStore';
 import { useArtifactPanelScope } from '@/hooks/chat/useArtifactScope';
+import { usePdfChatRoute } from '@/hooks/chat/usePdfChatRoute';
 import {
   resolveBoundProjectId,
   selectCurrentThreadProjectId,
@@ -356,6 +357,14 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const { currentThreadId, currentWorkspaceId } = useChatPersistence();
+  const { error: pdfRouteError, dismiss: dismissPdfRequest } = usePdfChatRoute(
+    Boolean(
+      isAuthenticated &&
+      currentWorkspaceId &&
+      !currentThreadId &&
+      searchParams.get('new') === '1'
+    )
+  );
   // The binding's source of truth is the thread row (source_project_id) —
   // the ?projectId= param is only the initial intent and is dropped by
   // thread navigation (getSelectedThreadUrl builds /chat?thread=… with no
@@ -498,6 +507,20 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
         <div className="flex-1 flex overflow-hidden relative">
           {/* Main Content */}
           <main className="flex-1 flex flex-col overflow-hidden">
+            {pdfRouteError && (
+              <p role="alert" className="px-4 py-2 text-sm text-destructive">
+                {pdfRouteError}
+              </p>
+            )}
+            {searchParams.get('pdfDocumentId') != null && (
+              <button
+                type="button"
+                className="min-h-11 px-4 text-left text-xs underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)"
+                onClick={dismissPdfRequest}
+              >
+                Dismiss PDF request
+              </button>
+            )}
             {children}
           </main>
 
@@ -585,6 +608,21 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ChatLayoutProviders({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.ReactElement {
+  const searchParams = useSearchParams();
+  return (
+    <ChatRagProvider
+      pdfIntentPending={searchParams.get('pdfDocumentId') != null}
+    >
+      <ChatLayoutContent>{children}</ChatLayoutContent>
+    </ChatRagProvider>
+  );
+}
+
 export default function ChatLayout({
   children,
 }: {
@@ -592,9 +630,7 @@ export default function ChatLayout({
 }) {
   return (
     <Suspense>
-      <ChatRagProvider>
-        <ChatLayoutContent>{children}</ChatLayoutContent>
-      </ChatRagProvider>
+      <ChatLayoutProviders>{children}</ChatLayoutProviders>
     </Suspense>
   );
 }

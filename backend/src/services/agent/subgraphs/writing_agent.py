@@ -146,6 +146,7 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     # research_llm_node + main llm_node. Trace 019e191a showed gpt-5
     # spending 70s on prose synthesis after a tool result.
     settings = get_settings()
+    reasoning_effort = state.get("reasoning_effort")
     last_user_query = next(
         (
             message.content
@@ -159,7 +160,7 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     grounded_direct_synthesis = bool(
         retrieved and _is_grounded_summary_flow(last_user_query)
     )
-    use_synthesis = bool(
+    use_synthesis = reasoning_effort is None and bool(
         mixed_pending_create
         or (
             settings.AGENT_LIGHTWEIGHT_SYNTHESIS
@@ -186,7 +187,14 @@ async def writing_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         # research_agent.research_llm_node. Multi-step function calling is the
         # job small tiers are worst at, and create_draft / create_project_note
         # are destructive, so a wrong call costs a confirmation round trip.
-        llm = _build_llm(model_override=state.get("model") or None)
+        llm = _build_llm(
+            model_override=state.get("model") or None,
+            **(
+                {"reasoning_effort_override": reasoning_effort}
+                if reasoning_effort
+                else {}
+            ),
+        )
         from src.services.agent.llm_factory import resolve_chat_deployment
 
         resolved_model = resolve_chat_deployment(state.get("model") or None)

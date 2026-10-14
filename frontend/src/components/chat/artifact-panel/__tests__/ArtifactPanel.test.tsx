@@ -24,6 +24,24 @@ import {
 } from '@/store/artifactPanelStore';
 import { documentService } from '@/services/documentService';
 import { projectService } from '@/services/projectService';
+import { useChatStore } from '@/store/chat-store';
+import type { PdfAskHandler } from '@/types/pdf-chat';
+
+const quoteFlow = vi.hoisted(() => ({
+  ask: undefined as PdfAskHandler | undefined,
+  setContext: vi.fn(),
+  push: vi.fn(),
+  stage: vi.fn(() => 'intent-token'),
+}));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: quoteFlow.push }),
+}));
+vi.mock('@/lib/pdf/chat-intent', () => ({
+  stagePdfQuoteIntent: (...args: unknown[]) => quoteFlow.stage(...args),
+}));
+vi.mock('@/components/chat/ChatRagContext', () => ({
+  useChatRag: () => ({ setPdfContext: quoteFlow.setContext }),
+}));
 
 vi.mock('@/services/documentService', () => ({
   documentService: {
@@ -42,9 +60,16 @@ vi.mock('@/services/projectService', () => ({
 // The inline viewer fetches blob URLs through the api client; its behavior is
 // covered by its own extraction source. Stub it to isolate panel wiring.
 vi.mock('@/components/documents/DocumentInlineViewer', () => ({
-  DocumentInlineViewer: ({ filename }: { filename: string }) => (
-    <div data-testid="inline-viewer">{filename}</div>
-  ),
+  DocumentInlineViewer: ({
+    filename,
+    onAskAboutPdf,
+  }: {
+    filename: string;
+    onAskAboutPdf?: PdfAskHandler;
+  }) => {
+    quoteFlow.ask = onAskAboutPdf;
+    return <div data-testid="inline-viewer">{filename}</div>;
+  },
 }));
 
 const mockGetDocument = vi.mocked(documentService.getDocument);
@@ -86,6 +111,7 @@ function ArtifactWithRadixPalette(): React.ReactElement {
 describe('ArtifactPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useChatStore.getState().reset();
     vi.mocked(projectService.getDraftCitations).mockResolvedValue({
       citations: [],
       total: 0,
@@ -124,6 +150,53 @@ describe('ArtifactPanel', () => {
     );
     expect(mockGetDocument).toHaveBeenCalledWith('doc-1');
   });
+
+  it.each([undefined, [0, 4]])(
+    'keeps quote origin separate from explicit scope %s',
+    async (range) => {
+      render(<ArtifactPanel artifact={docArtifact} />);
+      await screen.findByTestId('inline-viewer');
+      act(() => {
+        quoteFlow.ask?.(range, '> selected', [1, 1]);
+      });
+      expect(quoteFlow.setContext).toHaveBeenCalledExactlyOnceWith({
+        documentId: 'doc-1',
+        title: 'RLHF Survey',
+        selectionQuote: '> selected',
+        selectionQuoteRange: [1, 1],
+        ...(range ? { selectionPageRange: range } : {}),
+      });
+    }
+  );
+
+  it.each([false, true])(
+    'starts a new chat when Ask targets another or a linear document (branch=%s)',
+    async (branching) => {
+      useChatStore.setState({
+        currentThreadId: 'existing',
+        messagePagination: {
+          existing: {
+            hasMore: false,
+            loadingOlder: false,
+            loadedCount: 2,
+            message_branching: branching,
+            branch_document_id: branching ? 'other-pdf' : null,
+            selected_message_id: 'old-answer',
+          },
+        },
+      });
+      render(<ArtifactPanel artifact={docArtifact} />);
+      await screen.findByTestId('inline-viewer');
+      act(() => {
+        quoteFlow.ask?.(undefined, '> Selected', [1, 1]);
+      });
+      expect(quoteFlow.setContext).not.toHaveBeenCalled();
+      expect(useChatStore.getState().currentThreadId).toBeNull();
+      expect(quoteFlow.push).toHaveBeenCalledWith(
+        '/chat?new=1&pdfDocumentId=doc-1&pdfQuoteIntent=intent-token&pdfQuoteStartIndex=1&pdfQuoteEndIndex=1'
+      );
+    }
+  );
 
   it('shows an error state when the document fetch fails', async () => {
     mockGetDocument.mockRejectedValue(new Error('403'));

@@ -9,7 +9,9 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '@/services/api-client';
-import { APIErrorClass } from '@/types';
+import { useAuthStore } from '@/stores/authStore';
+import { PdfDocumentViewer } from './PdfDocumentViewer';
+import type { PdfAskHandler } from '@/types/pdf-chat';
 
 interface DocumentInlineViewerProps {
   documentId: string;
@@ -17,6 +19,9 @@ interface DocumentInlineViewerProps {
   /** Frontend `file_type` or backend `document_type`, whichever is present. */
   kind?: string;
   mimeType?: string;
+  /** One-based physical page requested by a citation; no highlight is inferred. */
+  targetPage?: number;
+  onAskAboutPdf?: PdfAskHandler;
 }
 
 type ViewerKind = 'pdf' | 'image' | 'audio' | 'video' | 'unsupported';
@@ -39,6 +44,7 @@ interface LoadState {
   key: string;
   status: 'loading' | 'ready' | 'error';
   objectUrl?: string;
+  blob?: Blob;
   message?: string;
 }
 
@@ -53,10 +59,20 @@ export function DocumentInlineViewer({
   filename,
   kind,
   mimeType,
+  targetPage,
+  onAskAboutPdf,
 }: DocumentInlineViewerProps): React.ReactElement {
   const viewerKind = resolveViewerKind(kind, mimeType);
+  const user = useAuthStore((state) => state.user);
+  const authenticated = useAuthStore((state) => state.isAuthenticated);
   const [attempt, setAttempt] = useState(0);
-  const requestKey = `${documentId}:${attempt}`;
+  const requestKey = JSON.stringify([
+    user?.id,
+    user?.organization_id,
+    authenticated,
+    documentId,
+    attempt,
+  ]);
 
   // "Adjust state when a prop changes" pattern (not an effect): a document
   // switch resets to loading during render, so no synchronous setState in an
@@ -76,23 +92,26 @@ export function DocumentInlineViewer({
 
     let cancelled = false;
     let createdUrl: string | null = null;
+    const controller = new AbortController();
 
     api
-      .fetchObjectUrl(`/files/${documentId}/download`)
-      .then(({ objectUrl }) => {
-        createdUrl = objectUrl;
-        if (cancelled) return; // cleanup below revokes createdUrl
-        setLoad({ key: requestKey, status: 'ready', objectUrl });
+      .fetchBlob(`/files/${documentId}/download`, controller.signal)
+      .then((blob) => {
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(blob);
+        setLoad({
+          key: requestKey,
+          status: 'ready',
+          objectUrl: createdUrl,
+          blob,
+        });
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (cancelled) return;
         setLoad({
           key: requestKey,
           status: 'error',
-          message:
-            err instanceof APIErrorClass
-              ? err.error.message || 'Failed to load preview'
-              : 'Could not load this file for preview.',
+          message: 'Could not load this file for preview.',
         });
       });
 
@@ -100,6 +119,7 @@ export function DocumentInlineViewer({
     // unmount, and releases the blob URL this effect instance created.
     return () => {
       cancelled = true;
+      controller.abort();
       if (createdUrl) window.URL.revokeObjectURL(createdUrl);
     };
   }, [documentId, viewerKind, requestKey]);
@@ -186,6 +206,10 @@ export function DocumentInlineViewer({
   }
 
   const objectUrl = load.objectUrl;
+  const pdfUrl =
+    Number.isSafeInteger(targetPage) && (targetPage ?? 0) > 0
+      ? `${objectUrl}#page=${targetPage}`
+      : objectUrl;
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xs">
@@ -199,7 +223,7 @@ export function DocumentInlineViewer({
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <a
-            href={objectUrl}
+            href={viewerKind === 'pdf' ? pdfUrl : objectUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -219,11 +243,13 @@ export function DocumentInlineViewer({
       </div>
 
       {/* Viewer surface */}
-      {viewerKind === 'pdf' && (
-        <iframe
-          src={objectUrl}
-          title={`Preview of ${filename}`}
-          className="h-[70vh] min-h-[400px] w-full bg-muted/20"
+      {viewerKind === 'pdf' && load.blob && (
+        <PdfDocumentViewer
+          key={requestKey}
+          blob={load.blob}
+          title={filename}
+          targetPage={targetPage}
+          onAsk={onAskAboutPdf}
         />
       )}
 

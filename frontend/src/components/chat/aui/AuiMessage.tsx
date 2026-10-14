@@ -1,6 +1,7 @@
 'use client';
 
 import { GeneratedArtifactCards } from '@/components/chat/aui/GeneratedArtifactCards';
+import { MessageBranchControls } from './MessageBranchControls';
 import React, {
   createContext,
   useContext,
@@ -33,6 +34,7 @@ import {
 
 import { ToolFallback } from '@/components/assistant-ui/tool-fallback';
 import { CitationRenderer } from '@/components/chat/CitationRenderer';
+import { PageFilterDetails } from '@/components/chat/PageFilterDetails';
 import { MessageTiming } from '@/components/elements/message-timing';
 import { ReasoningPanel } from '@/components/elements/reasoning-panel';
 import { RetrievalChunks } from '@/components/elements/retrieval-chunks';
@@ -441,6 +443,9 @@ export function AuiUserMessage({
               </div>
               <MessageError />
             </div>
+            {/* The action bar mounts on hover; keep persistent alternatives
+                ahead of it so revealing Edit cannot move their click target. */}
+            <MessageBranchControls message={message} />
             <MessageActions
               onEdit={canEdit ? startEdit : undefined}
               editButtonRef={editButtonRef}
@@ -583,6 +588,7 @@ function AuiStreamingBody(): ReactElement {
   const streamingPhase = useChatStore((s) => s.streamingPhase);
   const statusDetail = useChatStore((s) => s.streamingStatusDetail);
   const streamingCitations = useChatStore((s) => s.streamingCitations);
+  const pageFilter = useChatStore((s) => s.streamingPageFilter);
   const normalizedStreamingCitations = useMemo(
     () => streamingCitations.map(normalizeCitation),
     [streamingCitations]
@@ -598,7 +604,9 @@ function AuiStreamingBody(): ReactElement {
           {
             id: `${sourceId}-${index + 1}`,
             source: citation.title,
-            locator: `passage ${index + 1}`,
+            locator: citation.pageNumber
+              ? `p. ${citation.pageNumber}`
+              : `passage ${index + 1}`,
             score,
             text: citation.content ?? '',
           },
@@ -626,6 +634,7 @@ function AuiStreamingBody(): ReactElement {
     <>
       <InlineAgentSummary threadId={threadId} />
       <StreamingReasoningSection label={thinkingLabel} />
+      {pageFilter && <PageFilterDetails filter={pageFilter} />}
       {(isRetrievingRag || retrievalChunks.length > 0) && (
         <RetrievalChunks
           query="Relevant project sources"

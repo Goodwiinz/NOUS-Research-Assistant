@@ -26,6 +26,7 @@ Document resolution / project-scope filtering is delegated to
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -457,6 +458,246 @@ def _attachment_status(
     return result
 
 
+def _bound_attachment_pages(contexts: list[dict], metadata: dict) -> None:
+    """Keep native page contexts and metadata within a complete 64 KiB budget."""
+    from src.services.search.page_filter import json_text_prefix
+
+    originals = [context["content"] for context in contexts]
+    for context in contexts:
+        context["content"] = ""
+        context["title"] = json_text_prefix(context["title"], 128, ensure_ascii=True)
+        context["truncated"] = True
+    remaining = (
+        64 * 1024
+        - len(json.dumps({"contexts": contexts, "page_filter": metadata}).encode())
+        - len(contexts)
+    )
+    if remaining < 0:
+        raise ValueError("page metadata exceeds response budget")
+    for position, index in enumerate(
+        sorted(range(len(contexts)), key=lambda i: len(json.dumps(originals[i])))
+    ):
+        context = contexts[index]
+        context["content"] = json_text_prefix(
+            originals[index], remaining // (len(contexts) - position), ensure_ascii=True
+        )
+        remaining -= len(json.dumps(context["content"]).encode()) - 2
+        context["truncated"] = len(context["content"]) < context["total_chars"]
+
+
+async def _load_page_filtered_attachment(
+    *,
+    document_id: UUID,
+    thread_id: str | None,
+    user_id: str,
+    organization_id: str,
+    query: str,
+    selection_page_range: tuple[int, int] | None,
+    page_filter_out: dict | None,
+) -> tuple[list[dict], list[dict]]:
+    """Read bounded scalars, release the session, then select and reauthorize.
+
+    Explicit ranges are a NOUS constraint: missing or blank selected pages
+    fail closed. They never widen into whole-document fallback content.
+    """
+    from sqlalchemy import func, select
+    from starlette.concurrency import run_in_threadpool
+
+    from src.core.config import settings
+    from src.models.document import Document, ProcessingStatus
+    from src.services.agent._pii_redact import redact_pii
+    from src.services.agent.tool_session import resolve_tool_user, tool_session
+    from src.services.search.page_filter import (
+        MAX_PAGE_FILTER_SOURCE_CHARS,
+        MAX_RERANK_PAGES,
+        PageSelection,
+        rank_pages,
+        scan_pages,
+    )
+    from src.services.threads import workspace_access
+
+    unavailable = ([], [_attachment_status(document_id, "unavailable")])
+    organization_uuid = UUID(organization_id)
+
+    async def authorized(session) -> bool:
+        actor = await resolve_tool_user(session, user_id, organization_id)
+        if actor is None:
+            return False
+        if (
+            thread_id
+            and await workspace_access.get_thread(
+                session, UUID(thread_id), actor.id, include_messages=False
+            )
+            is None
+        ):
+            return False
+        return document_id in await workspace_access.filter_owned_document_ids(
+            session, [document_id], actor.id
+        )
+
+    async with tool_session() as session:
+        if not await authorized(session):
+            return unavailable
+        row = (
+            await session.execute(
+                select(
+                    Document.title,
+                    Document.processing_status,
+                    func.substr(
+                        Document.content_text, 1, MAX_PAGE_FILTER_SOURCE_CHARS + 1
+                    ),
+                ).where(
+                    Document.id == document_id,
+                    Document.organization_id == organization_uuid,
+                    Document.is_deleted == False,  # noqa: E712
+                )
+            )
+        ).first()
+        if row is None:
+            return unavailable
+        title, raw_status, source = row
+        processing_status = getattr(raw_status, "value", raw_status)
+        if processing_status in _ATTACHMENT_PROCESSING_STATUSES:
+            return [], [_attachment_status(document_id, "processing", title)]
+        if processing_status != ProcessingStatus.COMPLETED.value:
+            return unavailable
+
+    # No connection is retained through the parser worker or provider await.
+    source = source or ""
+    selection = None
+    if len(source) <= MAX_PAGE_FILTER_SOURCE_CHARS:
+        page_range = None
+        if selection_page_range is not None:
+            first, last = selection_page_range
+            if first < 0 or last < first or last - first >= MAX_RERANK_PAGES:
+                return unavailable
+            page_range = first + 1, last + 1
+        pages, total = await run_in_threadpool(
+            scan_pages,
+            source,
+            max_pages=MAX_RERANK_PAGES,
+            max_chars=64 * 1024,
+            page_range=page_range,
+        )
+        if page_range is not None:
+            expected = list(range(page_range[0], page_range[1] + 1))
+            if sorted(page[0] for page in pages) != expected or not all(
+                page[1] for page in pages
+            ):
+                return unavailable
+            selection = PageSelection(
+                [(number, text, length, 1.0) for number, text, length in pages],
+                total,
+                True,
+            )
+        else:
+            selection = await rank_pages(
+                pages,
+                total,
+                query,
+                top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
+                short_circuit=settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT,
+            )
+    if selection_page_range is not None and selection is None:
+        return unavailable
+
+    # A caller, document, or ancestor revoked during parsing/reranking must
+    # lose access even when the provider failed and we'd use an excerpt.
+    async with tool_session() as session:
+        if not await authorized(session):
+            return unavailable
+        if (
+            await session.scalar(
+                select(Document.id).where(
+                    Document.id == document_id,
+                    Document.organization_id == organization_uuid,
+                    Document.is_deleted == False,  # noqa: E712
+                    Document.processing_status == ProcessingStatus.COMPLETED,
+                )
+            )
+            is None
+        ):
+            return unavailable
+
+    safe_title = redact_pii(title or "Untitled")[:500]
+    base = {
+        "document_id": str(document_id),
+        "title": safe_title,
+        "context_origin": "attachment",
+    }
+    if selection is None:
+        excerpt = _attachment_excerpt(source[:MAX_PAGE_FILTER_SOURCE_CHARS], query)
+        if not excerpt.strip():
+            return unavailable
+        return [
+            {**base, "content": excerpt, "score": 1.0, "score_source": "attachment"}
+        ], [_attachment_status(document_id, "ready", title)]
+    metadata = {"document_id": str(document_id), **selection.metadata()}
+    if selection_page_range is not None:
+        metadata["selection_page_range"] = list(selection_page_range)
+    contexts = [
+        {
+            **base,
+            "content": redact_pii(text),
+            "page_number": number,
+            "total_chars": length,
+            "score": score,
+            "score_source": "cohere" if selection.model else "attachment",
+        }
+        for number, text, length, score in selection.pages
+    ]
+    _bound_attachment_pages(contexts, metadata)
+    if page_filter_out is not None:
+        page_filter_out.update(metadata)
+    return contexts, [_attachment_status(document_id, "ready", title)]
+
+
+async def _attachment_scope_still_ready(
+    document_ids: list[UUID],
+    *,
+    thread_id: str | None,
+    user_id: str,
+    organization_id: str,
+) -> bool:
+    """Reauthorize the combined scope after all supplementary reads finish."""
+    from sqlalchemy import select
+
+    from src.models.document import Document, ProcessingStatus
+    from src.services.agent.tool_session import resolve_tool_user, tool_session
+    from src.services.threads import workspace_access
+
+    try:
+        async with tool_session() as session:
+            actor = await resolve_tool_user(session, user_id, organization_id)
+            if actor is None:
+                return False
+            if (
+                thread_id
+                and await workspace_access.get_thread(
+                    session, UUID(thread_id), actor.id, include_messages=False
+                )
+                is None
+            ):
+                return False
+            owned = await workspace_access.filter_owned_document_ids(
+                session, document_ids, actor.id
+            )
+            if set(owned) != set(document_ids):
+                return False
+            ready = await session.scalars(
+                select(Document.id).where(
+                    Document.id.in_(document_ids),
+                    Document.organization_id == UUID(organization_id),
+                    Document.is_deleted == False,  # noqa: E712
+                    Document.processing_status == ProcessingStatus.COMPLETED,
+                )
+            )
+            return set(ready.all()) == set(document_ids)
+    except Exception:
+        logger.warning("combined attachment scope is unavailable", exc_info=True)
+        return False
+
+
 async def _load_attachment_contexts(
     *,
     attachment_ids: Sequence[Any] | None,
@@ -464,6 +705,11 @@ async def _load_attachment_contexts(
     user_id: str,
     organization_id: str,
     query: str,
+    selection_page_range: tuple[int, int] | None = None,
+    page_filter_model: str | None = None,
+    branch_document_id: str | None = None,
+    allow_auto_page_filter: bool = True,
+    page_filter_out: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Load only authorized attached documents for the current graph turn.
 
@@ -477,6 +723,56 @@ async def _load_attachment_contexts(
     requested_ids = _normalize_attachment_ids(attachment_ids)
     if explicit_ids and not requested_ids:
         return [], []
+
+    # A bound paper is distinct from files uploaded alongside a question.
+    # Restrict physical-page selection to that paper, then load the remaining
+    # authorized files independently; a second PDF must never inherit its range.
+    if branch_document_id is not None and len(requested_ids) > 1:
+        if str(requested_ids[0]) != branch_document_id:
+            return [], [
+                _attachment_status(document_id, "unavailable")
+                for document_id in requested_ids
+            ]
+        metadata: dict = {}
+        contexts, statuses = await _load_attachment_contexts(
+            attachment_ids=requested_ids[:1],
+            thread_id=thread_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            query=query,
+            selection_page_range=selection_page_range,
+            page_filter_model=page_filter_model,
+            page_filter_out=metadata,
+        )
+        # A failed selected-paper constraint may not turn into an answer from
+        # supplementary files alone.
+        if not contexts:
+            return [], statuses
+        extras, extra_statuses = await _load_attachment_contexts(
+            attachment_ids=requested_ids[1:],
+            thread_id=thread_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            query=query,
+            allow_auto_page_filter=False,
+        )
+        if not await _attachment_scope_still_ready(
+            requested_ids,
+            thread_id=thread_id,
+            user_id=user_id,
+            organization_id=organization_id,
+        ):
+            return [], [
+                _attachment_status(document_id, "unavailable")
+                for document_id in requested_ids
+            ]
+        contexts.extend(extras)
+        for context in contexts:
+            context.setdefault("total_chars", len(context["content"]))
+        _bound_attachment_pages(contexts, metadata)
+        if page_filter_out is not None:
+            page_filter_out.update(metadata)
+        return contexts, statuses + extra_statuses
 
     try:
         user_uuid = UUID(str(user_id))
@@ -572,76 +868,136 @@ async def _load_attachment_contexts(
             owned_ids = await workspace_access.filter_owned_document_ids(
                 session, requested_ids, actor.id
             )
-            documents_result = await session.execute(
-                select(Document).where(
-                    Document.id.in_(owned_ids),
-                    Document.organization_id == organization_uuid,
-                    Document.is_deleted == False,  # noqa: E712
-                )
+            from src.core.config import settings
+
+            if (
+                selection_page_range is not None or page_filter_model is not None
+            ) and len(requested_ids) != 1:
+                return [], [
+                    _attachment_status(document_id, "unavailable")
+                    for document_id in requested_ids
+                ]
+            page_filter_eligible = len(requested_ids) == 1 and (
+                (allow_auto_page_filter and settings.AGENT_PAGE_FILTER)
+                or selection_page_range is not None
+                or page_filter_model == "cohere"
             )
-            documents = {
-                document.id: document for document in documents_result.scalars().all()
-            }
+            if page_filter_eligible and requested_ids[0] not in owned_ids:
+                return [], [_attachment_status(requested_ids[0], "unavailable")]
+            if not page_filter_eligible:
+                if not allow_auto_page_filter:
+                    from sqlalchemy import func
 
-            contexts: list[dict] = []
-            statuses: list[dict] = []
-            for document_id in requested_ids:
-                document = documents.get(document_id)
-                if document is None:
-                    statuses.append(_attachment_status(document_id, "unavailable"))
-                    continue
+                    from src.services.search.page_filter import (
+                        MAX_PAGE_FILTER_SOURCE_CHARS,
+                    )
 
-                raw_processing_status = getattr(document, "processing_status", None)
-                raw_processing_status = getattr(
-                    raw_processing_status, "value", raw_processing_status
-                )
-                processing_status = str(raw_processing_status).lower()
-                if processing_status in _ATTACHMENT_PROCESSING_STATUSES:
-                    statuses.append(
-                        _attachment_status(
-                            document_id, "processing", getattr(document, "title", None)
+                    # Supplemental files need a bounded excerpt, not a full
+                    # ORM content_text hydration for every uploaded document.
+                    documents_result = await session.execute(
+                        select(
+                            Document.id,
+                            Document.title,
+                            Document.processing_status,
+                            func.substr(
+                                Document.content_text, 1, MAX_PAGE_FILTER_SOURCE_CHARS
+                            ).label("content_text"),
+                        ).where(
+                            Document.id.in_(owned_ids),
+                            Document.organization_id == organization_uuid,
+                            Document.is_deleted == False,  # noqa: E712
                         )
                     )
-                    continue
-                if processing_status != ProcessingStatus.COMPLETED.value:
-                    statuses.append(
-                        _attachment_status(
-                            document_id, "unavailable", getattr(document, "title", None)
-                        )
-                    )
-                    continue
-
-                content = _attachment_excerpt(
-                    getattr(document, "content_text", None) or "", query
-                )
-                if not content.strip():
-                    statuses.append(
-                        _attachment_status(
-                            document_id, "unavailable", getattr(document, "title", None)
-                        )
-                    )
-                    continue
-
-                from src.services.agent._pii_redact import redact_pii
-
-                contexts.append(
-                    {
-                        "document_id": str(document_id),
-                        "title": redact_pii(
-                            getattr(document, "title", None) or "Untitled"
-                        )[:500],
-                        "content": content,
-                        "score": 1.0,
-                        "score_source": "attachment",
-                        "context_origin": "attachment",
+                    documents = {
+                        document.id: document for document in documents_result.all()
                     }
-                )
-                statuses.append(
-                    _attachment_status(
-                        document_id, "ready", getattr(document, "title", None)
+                else:
+                    documents_result = await session.execute(
+                        select(Document).where(
+                            Document.id.in_(owned_ids),
+                            Document.organization_id == organization_uuid,
+                            Document.is_deleted == False,  # noqa: E712
+                        )
                     )
-                )
-            return contexts, statuses
+                    documents = {
+                        document.id: document
+                        for document in documents_result.scalars().all()
+                    }
+
+                contexts: list[dict] = []
+                statuses: list[dict] = []
+                for document_id in requested_ids:
+                    document = documents.get(document_id)
+                    if document is None:
+                        statuses.append(_attachment_status(document_id, "unavailable"))
+                        continue
+
+                    raw_processing_status = getattr(document, "processing_status", None)
+                    raw_processing_status = getattr(
+                        raw_processing_status, "value", raw_processing_status
+                    )
+                    processing_status = str(raw_processing_status).lower()
+                    if processing_status in _ATTACHMENT_PROCESSING_STATUSES:
+                        statuses.append(
+                            _attachment_status(
+                                document_id,
+                                "processing",
+                                getattr(document, "title", None),
+                            )
+                        )
+                        continue
+                    if processing_status != ProcessingStatus.COMPLETED.value:
+                        statuses.append(
+                            _attachment_status(
+                                document_id,
+                                "unavailable",
+                                getattr(document, "title", None),
+                            )
+                        )
+                        continue
+
+                    content = _attachment_excerpt(
+                        getattr(document, "content_text", None) or "", query
+                    )
+                    if not content.strip():
+                        statuses.append(
+                            _attachment_status(
+                                document_id,
+                                "unavailable",
+                                getattr(document, "title", None),
+                            )
+                        )
+                        continue
+
+                    from src.services.agent._pii_redact import redact_pii
+
+                    contexts.append(
+                        {
+                            "document_id": str(document_id),
+                            "title": redact_pii(
+                                getattr(document, "title", None) or "Untitled"
+                            )[:500],
+                            "content": content,
+                            "score": 1.0,
+                            "score_source": "attachment",
+                            "context_origin": "attachment",
+                        }
+                    )
+                    statuses.append(
+                        _attachment_status(
+                            document_id, "ready", getattr(document, "title", None)
+                        )
+                    )
+                return contexts, statuses
+        return await _load_page_filtered_attachment(
+            document_id=requested_ids[0],
+            thread_id=thread_id,
+            user_id=str(user_uuid),
+            organization_id=str(organization_uuid),
+            query=query,
+            selection_page_range=selection_page_range,
+            page_filter_out=page_filter_out,
+        )
     except Exception:  # noqa: BLE001 - attachment reads fail closed
         logger.warning(
             "attachment context load failed; returning no content", exc_info=True
@@ -1164,21 +1520,38 @@ async def rag_node(state: AgentState, config: RunnableConfig) -> dict:
         and not is_bare_greeting_text(last_user_msg or "")
     )
     if should_load_attachment_scope:
+        page_filter_metadata: dict = {}
         attachment_contexts, attachment_status = await _load_attachment_contexts(
             attachment_ids=explicit_attachment_ids,
             thread_id=str(configurable.get("thread_id") or ""),
             user_id=user_id,
             organization_id=organization_id,
             query=last_user_msg or "",
+            selection_page_range=state.get("selection_page_range"),
+            page_filter_model=state.get("page_filter_model"),
+            branch_document_id=state.get("branch_document_id"),
+            page_filter_out=page_filter_metadata,
         )
         if explicit_attachment_ids or attachment_contexts or attachment_status:
             state_update: Dict[str, Any] = {
                 "retrieved_contexts": attachment_contexts,
                 "attachment_status": attachment_status,
+                "page_filter": page_filter_metadata or None,
             }
             if existing_project_id:
                 state_update["current_project_id"] = existing_project_id
             return state_update
+
+    if (
+        state.get("document_only")
+        or state.get("selection_page_range") is not None
+        or state.get("page_filter_model") is not None
+    ):
+        return {
+            "retrieved_contexts": [],
+            "attachment_status": [{"status": "unavailable"}],
+            "page_filter": None,
+        }
 
     if state.get("use_rag", True) is False:
         logger.debug("rag_node: retrieval disabled by request")

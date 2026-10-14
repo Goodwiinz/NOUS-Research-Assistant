@@ -59,6 +59,88 @@ function setup(overrides: Record<string, unknown> = {}): {
 describe('useChatComposerActions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useChatStore.getState().reset();
+  });
+
+  it.each(['edit', 'retry'])(
+    'creates a sibling for a canonical PDF %s without supersedes',
+    async (kind) => {
+      useChatStore.setState({
+        currentThreadId: 'branch-thread',
+        messageFreshness: { 'branch-thread': 'fresh' },
+        messagePagination: {
+          'branch-thread': {
+            hasMore: false,
+            loadingOlder: false,
+            loadedCount: 2,
+            message_branching: true,
+            branch_document_id: 'pdf',
+            selected_message_id: 'answer',
+          },
+        },
+      });
+      const { result, handleSubmit } = setup({
+        displayedMessages: [
+          makeChatPageMessage({
+            id: 'user',
+            clientMessageId: 'runtime-user',
+            role: 'user',
+            content: 'Original',
+            parentMessageId: null,
+          }),
+          makeChatPageMessage({
+            id: 'answer',
+            role: 'assistant',
+            content: 'Answer',
+          }),
+        ],
+      });
+      act(() => {
+        if (kind === 'edit') result.current.handleEditUserMessage(0, 'Edited');
+        else result.current.handleRegenerate(1);
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(handleSubmit).toHaveBeenCalledWith(
+        kind === 'edit' ? 'Edited' : 'Original',
+        [],
+        undefined,
+        undefined,
+        undefined,
+        {
+          parentMessageId: null,
+          replacedMessageId: 'user',
+          selectedHeadMessageId: 'answer',
+        }
+      );
+    }
+  );
+
+  it('does not reinterpret an unhydrated PDF edit as an ordinary follow-up', async () => {
+    useChatStore.setState({
+      currentThreadId: 'branch-thread',
+      messageFreshness: { 'branch-thread': 'fresh' },
+      messagePagination: {
+        'branch-thread': {
+          hasMore: false,
+          loadingOlder: false,
+          loadedCount: 2,
+          message_branching: true,
+          branch_document_id: 'pdf',
+          selected_message_id: 'answer',
+        },
+      },
+    });
+    const { result, handleSubmit } = setup();
+    act(() => result.current.handleEditUserMessage(0, 'Edited'));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(handleSubmit).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      expect.stringContaining('branch')
+    );
   });
 
   it('handleRegenerate is a no-op while a turn is streaming', () => {

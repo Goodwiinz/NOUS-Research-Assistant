@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@/test/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ChatLayoutClient from '../../../../app/(dashboard)/chat/chat-layout-client';

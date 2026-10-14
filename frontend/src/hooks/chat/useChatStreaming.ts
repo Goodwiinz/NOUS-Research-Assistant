@@ -63,9 +63,21 @@ import type {
 } from '@/types/workspace';
 import type { PlanStep } from '@/types/agent-chat';
 import { normalizeCitation } from '@/utils/citationNormalizer';
+import type {
+  PdfChatContext,
+  PageFilter,
+  PdfBranchIntent,
+} from '@/types/pdf-chat';
+import { composePdfQuestion } from '@/types/pdf-chat';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useProjectStore } from '@/store/projectStore';
 import { useAuthStore } from '@/stores/authStore';
 import { v5 as uuidv5 } from 'uuid';
@@ -220,6 +232,7 @@ function resetStreamingTurnState(): void {
     isStreaming: false,
     streamingContent: '',
     streamingCitations: [],
+    streamingPageFilter: null,
     streamingSteps: [],
     streamingPlan: [],
     streamingPlanReasoning: '',
@@ -266,6 +279,7 @@ export interface PendingConfirmation {
   /** RAG citations retrieved before the interrupt — the interrupt exit
    * clears streamingCitations, so they must ride the confirmation. */
   citations?: Array<Record<string, unknown>>;
+  pageFilter?: PageFilter;
   /** Stable identities for reconciliation across the interrupt/resume split. */
   userRuntimeId?: string;
   assistantRuntimeId?: string;
@@ -412,6 +426,10 @@ export interface UseChatStreamingParams {
   /** Active workspace scopes durable thread creation and agent authorization. */
   workspace?: Workspace | null;
   enableRAG: boolean;
+  pdfContext?: PdfChatContext | null;
+  pdfSubmissionBlocked?: boolean;
+  onPdfSelectionConsumed?: (expected: PdfChatContext) => void;
+  onPdfThreadCreated?: (threadId: string, projectId: string | null) => void;
   /** Embedded surfaces may own URL synchronization without navigating away.
    * The production chat defaults to the canonical `/chat` route. */
   navigateToThread?: (threadId: string) => void;
@@ -438,7 +456,8 @@ export interface UseChatStreamingReturn {
     /** Edit/regenerate: the replaced turn's attachment metadata, rendered on
      * the optimistic replacement until the canonical row arrives. Never sent;
      * the server only receives `attachmentIds`. */
-    attachments?: MessageAttachment[]
+    attachments?: MessageAttachment[],
+    branchIntent?: PdfBranchIntent
   ) => Promise<void>;
   handleStop: () => void;
   pendingConfirmation: PendingConfirmation | null;
@@ -472,9 +491,17 @@ export function useChatStreaming(
     dbConversation,
     workspace,
     enableRAG,
+    pdfContext,
+    pdfSubmissionBlocked = false,
+    onPdfSelectionConsumed,
+    onPdfThreadCreated,
     navigateToThread,
     authRecoveryRoute,
   } = params;
+  const pdfContextRef = useRef(pdfContext);
+  useLayoutEffect(() => {
+    pdfContextRef.current = pdfContext;
+  }, [pdfContext]);
 
   // ---- Project context (for agent page_context) ----
   const searchParams = useSearchParams();
@@ -1225,6 +1252,7 @@ export function useChatStreaming(
         useChatStore.setState({
           isStreaming: true,
           streamingContent: '',
+          streamingPageFilter: null,
           streamingSteps: [],
           streamingPlan: [],
           streamingPlanReasoning: '',
@@ -1471,11 +1499,12 @@ export function useChatStreaming(
                 ),
               });
             },
-            onRagContext: (contexts) => {
+            onRagContext: (contexts, pageFilter) => {
               if (!isCurrentSession()) return;
               console.log('[Agent] RAG contexts:', contexts.length);
               useChatStore.setState({
                 streamingCitations: contexts,
+                streamingPageFilter: pageFilter ?? null,
                 isRetrievingRag: false,
                 streamingStatusDetail: `Reading ${contexts.length} ${
                   contexts.length === 1 ? 'source' : 'sources'
@@ -1547,6 +1576,8 @@ export function useChatStreaming(
                 // Snapshot NOW — the streamHadConfirmation exit below clears
                 // streamingCitations before the confirm stream starts.
                 citations: useChatStore.getState().streamingCitations,
+                pageFilter:
+                  useChatStore.getState().streamingPageFilter ?? undefined,
                 userRuntimeId,
                 assistantRuntimeId,
                 runId: confirmationRunId,
@@ -1983,11 +2014,78 @@ export function useChatStreaming(
       historyOverride?: ChatPageMessage[],
       supersedesClientMessageId?: string,
       attachmentIds?: string[],
-      attachments?: MessageAttachment[]
+      attachments?: MessageAttachment[],
+      branchIntent?: PdfBranchIntent
     ) => {
       // This identity must be captured before the stream's token refresh can
       // synchronously emit SIGNED_OUT and clear the auth store.
       if (!ownsRenderedSession()) return;
+      if (pdfSubmissionBlocked) {
+        toast.error(
+          'Wait for PDF access and branch history to load before sending.'
+        );
+        return;
+      }
+      const branchState = useChatStore.getState();
+      const branchThreadId = branchState.currentThreadId;
+      const branchPage = branchThreadId
+        ? branchState.messagePagination[branchThreadId]
+        : undefined;
+      if (
+        branchPage?.message_branching &&
+        (!pdfContext ||
+          pdfContext.documentId !== branchPage.branch_document_id ||
+          branchPage.selectingBranch ||
+          branchState.messageFreshness[branchThreadId!] !== 'fresh')
+      ) {
+        toast.error('Reload this PDF chat before sending.');
+        return;
+      }
+      if (
+        pdfContext &&
+        branchThreadId &&
+        (!branchPage ||
+          (!branchPage.message_branching &&
+            (branchState.messages[branchThreadId]?.length ?? 0) > 0))
+      ) {
+        toast.error('Start a new PDF chat to use this document.');
+        return;
+      }
+      if (
+        branchIntent &&
+        (!branchPage?.message_branching ||
+          branchIntent.selectedHeadMessageId !==
+            branchPage.selected_message_id ||
+          !branchState.messages[branchThreadId!]?.some(
+            (message) =>
+              message.id === branchIntent.replacedMessageId &&
+              message.parent_message_id === branchIntent.parentMessageId
+          ))
+      ) {
+        toast.error('Reload this branch before editing or retrying.');
+        return;
+      }
+      const branchParent = branchIntent
+        ? branchIntent.parentMessageId
+        : (branchPage?.selected_message_id ?? null);
+      if (searchParams.get('pdfDocumentId') != null) {
+        toast.error('Resolve or dismiss the PDF request before sending.');
+        return;
+      }
+      if (pdfContext && harnessConnection.executionProvider !== 'nous') {
+        toast.error('Select NOUS to ask about this PDF.');
+        return;
+      }
+      if (
+        pdfContext &&
+        attachmentIds?.some((id) => id !== pdfContext.documentId)
+      ) {
+        toast.error('Remove other attachments before asking about one PDF.');
+        return;
+      }
+      const turnAttachmentIds = pdfContext
+        ? [pdfContext.documentId]
+        : attachmentIds;
       const ownerUserId = useAuthStore.getState().user?.id;
       const isCurrentSession = captureChatSession();
       if (submitLockRef.current) {
@@ -1996,9 +2094,16 @@ export function useChatStreaming(
       }
       const rawContent =
         typeof contentOverride === 'string' ? contentOverride : input;
-      const content = rawContent.trim();
+      // Edit/regenerate already contains the persisted quotation. Only a new
+      // composer turn owns the current transient PDF selection.
+      const quoteContext =
+        !historyOverride && pdfContext?.selectionQuote ? pdfContext : null;
+      const content = quoteContext
+        ? composePdfQuestion(rawContent, quoteContext.selectionQuote!)
+        : rawContent.trim();
+      const originalDraft = quoteContext ? rawContent : content;
       if (
-        !content ||
+        !rawContent.trim() ||
         isLoading ||
         storeIsStreaming ||
         !harnessConnection.canSend
@@ -2051,11 +2156,26 @@ export function useChatStreaming(
         setMessages(messages);
         pendingPreflightDraftsRef.current.delete(preflightDraftContextKey);
         pendingPreflightDraftsRef.current.delete(preflightOwner.contextKey);
-        setInput(content);
+        setInput(originalDraft);
         abandonPreflight();
       };
       const preflightWasSuperseded = (): boolean => {
         if (preflightAbort.signal.aborted) return true;
+        if (pdfContextRef.current !== pdfContext) {
+          rollbackPreflight();
+          return true;
+        }
+        if (
+          pdfContext &&
+          branchThreadId &&
+          (useChatStore.getState().messagePagination[branchThreadId]
+            ?.selectingBranch ||
+            useChatStore.getState().messagePagination[branchThreadId]
+              ?.selected_message_id !== branchPage?.selected_message_id)
+        ) {
+          rollbackPreflight();
+          return true;
+        }
         if (ownsPreflight()) return false;
         abandonPreflight();
         return true;
@@ -2083,8 +2203,15 @@ export function useChatStreaming(
           role: 'user',
           content,
           timestamp: Date.now(),
-          ...(supersedesClientMessageId
-            ? { replacesClientMessageId: supersedesClientMessageId }
+          ...(supersedesClientMessageId || branchIntent
+            ? {
+                replacesClientMessageId:
+                  supersedesClientMessageId ??
+                  branchState.messages[branchThreadId!]?.find(
+                    (message) => message.id === branchIntent?.replacedMessageId
+                  )?.client_message_id ??
+                  branchIntent?.replacedMessageId,
+              }
             : {}),
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
         };
@@ -2117,7 +2244,7 @@ export function useChatStreaming(
         // switch to another context never reads this entry.
         pendingPreflightDraftsRef.current.set(
           preflightDraftContextKey,
-          content
+          originalDraft
         );
         setIsLoading(true);
         preflightAbort.signal.addEventListener('abort', rollbackPreflight, {
@@ -2196,6 +2323,8 @@ export function useChatStreaming(
             };
 
             setConversations((prev) => [newConv, ...prev]);
+            if (pdfContext)
+              onPdfThreadCreated?.(newThread.id, boundProjectId ?? null);
             useChatStore.getState().setCurrentThread(newConv.id);
             queueMicrotask(() => {
               if (
@@ -2248,7 +2377,7 @@ export function useChatStreaming(
             attemptId: authRecoveryAttempt.attemptId,
             ownerUserId,
             threadId: currentThreadId,
-            prompt: content,
+            prompt: originalDraft,
           });
         }
         authRecoveryAttemptRef.current = authRecoveryAttempt;
@@ -2269,6 +2398,9 @@ export function useChatStreaming(
             .startRun(currentThreadId, deriveAgentName(), deriveTask(content));
         }
 
+        let accepted = false;
+        let completed = false;
+        let failed = false;
         try {
           await runStreamTurn({
             currentThreadId,
@@ -2276,64 +2408,111 @@ export function useChatStreaming(
             newMessages,
             assistantRuntimeId,
             authRecoveryAttempt,
-            start: (streamCallbacks, signal) =>
-              agentChatService.streamMessage(
-                {
-                  messages: requestMessages
-                    .filter((message) => message.source !== 'local-only')
-                    .map((m, i, agentMessages) => ({
-                      role: m.role,
-                      content: m.content,
-                      // Idempotency key rides on the user turn being sent (the
-                      // last message) — server-canonical only.
-                      ...(turnClientMessageId &&
-                      i === agentMessages.length - 1 &&
-                      m.role === 'user'
-                        ? { client_message_id: turnClientMessageId }
-                        : {}),
-                    })),
-                  page_context: {
-                    type: boundProjectId ? 'project' : 'chat',
-                    ...(activeWorkspaceId && {
-                      workspace_id: activeWorkspaceId,
+            start: async (streamCallbacks, signal) => {
+              try {
+                await agentChatService.streamMessage(
+                  {
+                    messages: requestMessages
+                      .filter((message) => message.source !== 'local-only')
+                      .map((m, i, agentMessages) => ({
+                        role: m.role,
+                        content: m.content,
+                        // Idempotency key rides on the user turn being sent (the
+                        // last message) — server-canonical only.
+                        ...(turnClientMessageId &&
+                        i === agentMessages.length - 1 &&
+                        m.role === 'user'
+                          ? { client_message_id: turnClientMessageId }
+                          : {}),
+                      })),
+                    page_context: {
+                      type: boundProjectId ? 'project' : 'chat',
+                      ...(activeWorkspaceId && {
+                        workspace_id: activeWorkspaceId,
+                      }),
+                      ...(boundProjectId && {
+                        project_id: boundProjectId,
+                        project_name: resolvedProjectName || '',
+                      }),
+                      // The project is bound to the WORKSPACE thread, but this
+                      // stream runs on a separate agent thread. The backend uses
+                      // this id to resolve (and durably adopt) the bound project
+                      // when the URL param has been dropped by thread navigation.
+                      ...(currentThreadId && {
+                        metadata: { workspace_thread_id: currentThreadId },
+                      }),
+                    },
+                    use_rag: pdfContext ? true : enableRAG,
+                    ...(pdfContext
+                      ? {
+                          document_only: true,
+                          branch_document_id: pdfContext.documentId,
+                          parent_message_id: branchParent,
+                          ...(!branchIntent && pdfContext.selectionPageRange
+                            ? {
+                                selection_page_range:
+                                  pdfContext.selectionPageRange,
+                              }
+                            : { page_filter_model: 'cohere' }),
+                        }
+                      : {}),
+                    thread_id: existingAgentThreadId,
+                    ...(harnessConnection.executionProvider === 'codex' && {
+                      execution_provider: 'codex',
+                      device_id: harnessConnection.deviceId,
+                      workspace_id: harnessConnection.workspaceId,
                     }),
-                    ...(boundProjectId && {
-                      project_id: boundProjectId,
-                      project_name: resolvedProjectName || '',
-                    }),
-                    // The project is bound to the WORKSPACE thread, but this
-                    // stream runs on a separate agent thread. The backend uses
-                    // this id to resolve (and durably adopt) the bound project
-                    // when the URL param has been dropped by thread navigation.
-                    ...(currentThreadId && {
-                      metadata: { workspace_thread_id: currentThreadId },
-                    }),
+                    // Documents the composer uploaded for this turn. The server
+                    // links them to the user row it persists and drops any the
+                    // caller's org does not own.
+                    ...(turnAttachmentIds && turnAttachmentIds.length > 0
+                      ? { attachment_ids: turnAttachmentIds }
+                      : {}),
+                    // Edit-and-resend turns only: omitted entirely otherwise (and
+                    // when the edited turn was never persisted with a cmid).
+                    ...(supersedesClientMessageId && !pdfContext
+                      ? {
+                          supersedes_client_message_id:
+                            supersedesClientMessageId,
+                        }
+                      : {}),
                   },
-                  use_rag: enableRAG,
-                  thread_id: existingAgentThreadId,
-                  ...(harnessConnection.executionProvider === 'codex' && {
-                    execution_provider: 'codex',
-                    device_id: harnessConnection.deviceId,
-                    workspace_id: harnessConnection.workspaceId,
-                  }),
-                  // Documents the composer uploaded for this turn. The server
-                  // links them to the user row it persists and drops any the
-                  // caller's org does not own.
-                  ...(attachmentIds && attachmentIds.length > 0
-                    ? { attachment_ids: attachmentIds }
-                    : {}),
-                  // Edit-and-resend turns only: omitted entirely otherwise (and
-                  // when the edited turn was never persisted with a cmid).
-                  ...(supersedesClientMessageId
-                    ? {
-                        supersedes_client_message_id: supersedesClientMessageId,
-                      }
-                    : {}),
-                },
-                streamCallbacks,
-                signal
-              ),
+                  {
+                    ...streamCallbacks,
+                    onRunId: (id) => {
+                      accepted = true;
+                      streamCallbacks.onRunId?.(id);
+                    },
+                    onDone: (payload) => {
+                      completed = true;
+                      streamCallbacks.onDone?.(payload);
+                    },
+                    onError: (...args) => {
+                      failed = true;
+                      streamCallbacks.onError?.(...args);
+                    },
+                  },
+                  signal
+                );
+              } catch (error) {
+                failed = true;
+                throw error;
+              }
+            },
           });
+          if (quoteContext && ownsPreflight()) {
+            // Durable acceptance means the canonical user turn already owns
+            // this quote, including when generation subsequently stops/fails.
+            if (accepted || (completed && !failed)) {
+              onPdfSelectionConsumed?.(quoteContext);
+            } else if (
+              !accepted &&
+              pdfContextRef.current === quoteContext &&
+              !inputValueRef.current
+            ) {
+              setInput(originalDraft);
+            }
+          }
         } finally {
           if (isCurrentSession()) submitLockRef.current = false;
         }
@@ -2370,6 +2549,11 @@ export function useChatStreaming(
       router,
       navigateToThread,
       enableRAG,
+      pdfContext,
+      pdfSubmissionBlocked,
+      onPdfSelectionConsumed,
+      onPdfThreadCreated,
+      searchParams,
       boundProjectId,
       resolvedProjectName,
       runStreamTurn,
@@ -2836,6 +3020,7 @@ export function useChatStreaming(
           streamingProgress: [...confirmProgress],
           streamingReasoning: confirmReasoning,
           streamingCitations: confirmCitations,
+          streamingPageFilter: pendingConfirmation.pageFilter ?? null,
           streamingElapsedMs: null,
           streamingPhase: 'accepted',
           streamingStatusDetail: null,
@@ -3126,11 +3311,12 @@ export function useChatStreaming(
                   ),
                 });
               },
-              onRagContext: (contexts) => {
+              onRagContext: (contexts, pageFilter) => {
                 if (!isCurrentSession()) return;
                 confirmCitations = contexts;
                 useChatStore.setState({
                   streamingCitations: confirmCitations,
+                  streamingPageFilter: pageFilter ?? null,
                   isRetrievingRag: false,
                   streamingStatusDetail: `Reading ${contexts.length} ${
                     contexts.length === 1 ? 'source' : 'sources'
@@ -3163,6 +3349,8 @@ export function useChatStreaming(
                   steps: confirmSteps.filter((s) => s.status !== 'running'),
                   plan: [...confirmPlan],
                   planReasoning: confirmPlanReasoning || undefined,
+                  pageFilter:
+                    useChatStore.getState().streamingPageFilter ?? undefined,
                   reasoningSummary: confirmReasoning || undefined,
                   citations: [...confirmCitations],
                   progress: [...confirmProgress],

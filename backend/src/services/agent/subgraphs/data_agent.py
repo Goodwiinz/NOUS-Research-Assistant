@@ -78,8 +78,10 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
     sanitized = _sanitize_messages(state["messages"])
 
     settings = get_settings()
+    reasoning_effort = state.get("reasoning_effort")
     use_synthesis = bool(
-        settings.AGENT_LIGHTWEIGHT_SYNTHESIS
+        reasoning_effort is None
+        and settings.AGENT_LIGHTWEIGHT_SYNTHESIS
         and sanitized
         and isinstance(sanitized[-1], ToolMessage)
     )
@@ -102,7 +104,14 @@ async def data_llm_node(state: AgentState, config: RunnableConfig) -> dict:
         # research_agent.research_llm_node. KG traversal chains several calls
         # (search → neighborhood → paths), which is exactly the multi-step
         # shape small tiers degrade on.
-        llm = _build_llm(model_override=state.get("model") or None)
+        llm = _build_llm(
+            model_override=state.get("model") or None,
+            **(
+                {"reasoning_effort_override": reasoning_effort}
+                if reasoning_effort
+                else {}
+            ),
+        )
         from src.services.agent.llm_factory import resolve_chat_deployment
 
         resolved_model = resolve_chat_deployment(state.get("model") or None)

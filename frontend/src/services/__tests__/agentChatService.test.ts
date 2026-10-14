@@ -92,6 +92,31 @@ describe('agentChatService.streamMessage SSE parsing', () => {
     expect(onToken).toHaveBeenCalledWith('The answer');
   });
 
+  it('preserves optional typed page-filter metadata beside cumulative contexts', async () => {
+    const pageFilter = {
+      document_id: 'doc-1',
+      accepted_pages: [1, 3],
+      total_pages: 8,
+      short_circuited: false,
+      model: 'reranker',
+      priorities: [{ page: 3, score: 0.8 }],
+      timing_ms: null,
+    };
+    const contexts = [{ document_id: 'doc-1', page_number: 3 }];
+    global.fetch = fetchWith([
+      `event: rag_context\ndata: ${JSON.stringify({ contexts, page_filter: pageFilter })}\n\n`,
+      'event: rag_context\ndata: {"contexts":[]}\n\n',
+      'event: done\ndata: {}\n\n',
+    ]);
+    const onRagContext = vi.fn();
+    await agentChatService.streamMessage(request, { onRagContext });
+    expect(onRagContext).toHaveBeenNthCalledWith(1, contexts, {
+      ...pageFilter,
+      selection_page_range: null,
+    });
+    expect(onRagContext).toHaveBeenNthCalledWith(2, []);
+  });
+
   it('ignores non-string answer and reasoning deltas', async () => {
     global.fetch = fetchWith([
       'event: token\ndata: {"content":"ok"}\n\n',

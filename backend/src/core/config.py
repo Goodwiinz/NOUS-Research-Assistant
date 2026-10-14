@@ -211,7 +211,9 @@ class Settings(BaseSettings):
         "Last-Event-ID"
     )
     CORS_ALLOWED_METHODS: str = "GET,POST,PUT,DELETE,PATCH,OPTIONS,HEAD"
-    CORS_EXPOSE_HEADERS: str = "X-Request-ID,X-Correlation-ID,X-Process-Time"
+    CORS_EXPOSE_HEADERS: str = (
+        "X-Request-ID,X-Correlation-ID,X-Process-Time,llm-chat-id"
+    )
     CORS_MAX_AGE: int = 86400  # 24 hours preflight cache
 
     # R4-M13: gate the process-wide X-Forwarded-For patch (security.py
@@ -867,6 +869,14 @@ class Settings(BaseSettings):
     # 1.0-0.05*rank); this replaces them with calibrated relevance. Requires
     # COHERE_RERANK_ENDPOINT + COHERE_RERANK_API_KEY (already provisioned).
     AGENT_DOKB_COHERE_RERANK: bool = True
+
+    # Opt-in page relevance for an explicitly selected single document.
+    AGENT_PAGE_FILTER: bool = False
+    # Trusted public NOUS API origin for compatibility file references. Empty
+    # accepts canonical relative references only; never infer it from Host.
+    ALPHAXIV_FILE_BASE_URL: str = ""
+    RETRIEVE_PASSAGES_PAGE_TOP_N: int = Field(6, ge=1, le=100)
+    RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT: int = Field(8, ge=0, le=100)
 
     # PaperQA2-style gather-evidence inside do_kb_retrieve: rerank-ordered
     # chunks get per-chunk contextual relevance summaries + verbatim quotes
