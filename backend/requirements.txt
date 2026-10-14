@@ -54,7 +54,7 @@ pypdf>=6.6.2
 PyMuPDF==1.28.2
 weasyprint==70.0
 pytesseract==0.3.13
-pillow>=12.2.0
+pillow>=12.3.0
 opencv-python==4.13.0.92
 setuptools>=70.0.0,<72.0.0  # pkg_resources removed in 72+, needed by pybtex
 camelot-py[cv]>=0.11.0

@@ -35,7 +35,7 @@ neo4j==6.3.0
 
 # Basic File Processing
 PyMuPDF==1.28.2
-Pillow>=12.2.0
+Pillow>=12.3.0
 python-magic==0.4.27
 aiofiles==23.2.1
 
