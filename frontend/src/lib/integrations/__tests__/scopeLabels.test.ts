@@ -57,3 +57,56 @@ describe.each([
     }
   );
 });
+
+describe('account wording', () => {
+  it('says Codex can run from a chat in any project in the account', () => {
+    expect(scopeLabel('harness:execute', 'account')).toMatch(
+      /any project in your account/
+    );
+    expect(scopeSummary('harness:execute', 'account')).toBe(
+      'run Local Codex from any chat'
+    );
+  });
+  it('reaches every project in the account for library:write, and keeps what still asks', () => {
+    const label = scopeLabel('library:write', 'account');
+    expect(label).toMatch(/any project in your account/);
+    expect(label).toMatch(/without asking each time/);
+    expect(label).toMatch(
+      /Deleting folders and ingesting papers still require your approval/
+    );
+    expect(label).not.toMatch(/this workspace/);
+  });
+  it('lists the workspaces and projects of the account for library:read', () => {
+    expect(scopeLabel('library:read', 'account')).toBe(
+      'List the workspaces and projects in your account'
+    );
+  });
+});
+
+describe('project and workspace wording', () => {
+  it.each(STANDARD_SCOPES)('is unchanged for %s', (scope) => {
+    expect(scopeLabel(scope, 'project')).toBe(scopeLabel(scope));
+    expect(scopeLabel(scope, 'workspace')).toBe(scopeLabel(scope));
+    expect(scopeSummary(scope, 'workspace')).toBe(scopeSummary(scope));
+  });
+  it('still names the workspace for library:write', () => {
+    expect(scopeLabel('library:write', 'workspace')).toMatch(
+      /items in this workspace/
+    );
+  });
+});
+
+describe.each([
+  ['scopeLabel', scopeLabel],
+  ['scopeSummary', scopeSummary],
+] as const)('%s for an account', (_name, describeScope) => {
+  it.each(STANDARD_SCOPES)('labels %s in words', (scope) => {
+    expect(describeScope(scope, 'account')).not.toBe(scope);
+  });
+  it.each(['weird:scope', 'constructor', '__proto__'])(
+    'falls back to the raw name for %s',
+    (scope) => {
+      expect(describeScope(scope, 'account')).toBe(scope);
+    }
+  );
+});

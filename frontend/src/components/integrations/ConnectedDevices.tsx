@@ -158,7 +158,9 @@ export function ConnectedDevices(): ReactElement {
                         </p>
                       )}
                       <p className="text-sm text-muted-foreground">
-                        {consent.scopes.map(scopeSummary).join(', ')}
+                        {consent.scopes
+                          .map((scope) => scopeSummary(scope, consent.kind))
+                          .join(', ')}
                       </p>
                       {consent.scopes.includes('context:read') && (
                         <p className="text-sm">
