@@ -624,7 +624,11 @@ async def _arxiv_keyword(
     candidates: list[Candidate] = []
     for paper in payload.get("papers") or []:
         identifier = str(paper.get("id") or "").strip()
-        if not identifier:
+        # arXiv reports a bad query as an HTTP 200 Atom feed whose one entry
+        # keeps its full "http://arxiv.org/api/errors#..." URL as the id
+        # (search_papers does not drop it; get_papers_by_ids does). A real
+        # paper id never has a scheme, so that entry is not a paper.
+        if not identifier or "://" in identifier:
             continue
         published = _iso_day(paper.get("published"))
         candidates.append(

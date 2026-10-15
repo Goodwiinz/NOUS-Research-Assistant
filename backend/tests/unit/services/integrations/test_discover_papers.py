@@ -1651,6 +1651,28 @@ async def test_arxiv_candidates_are_normalized() -> None:
     assert (second.published, second.date_source) == (None, None)
 
 
+async def test_an_arxiv_error_entry_is_not_ranked_as_a_paper() -> None:
+    """Review P3 on #1984: a bad query comes back as a 200 Atom feed whose one
+    entry is the error, with its full URL as the id; ``search_papers`` returns it."""
+    search = AsyncMock(
+        return_value={
+            "papers": [
+                arxiv_row(
+                    "http://arxiv.org/api/errors#incorrect_id_format_for_1234",
+                    title="Error",
+                    abstract="incorrect id format for 1234",
+                ),
+                arxiv_row("2005.11401v4"),
+            ]
+        }
+    )
+    found = await dp._arxiv_keyword(
+        arxiv_search=search, query="rag", after=None, before=None, limit=10
+    )
+
+    assert [c.id for c in found] == ["2005.11401v4"]
+
+
 async def test_arxiv_with_no_usable_keyword_is_not_called() -> None:
     search = AsyncMock()
 
@@ -1861,6 +1883,28 @@ async def test_a_workspace_grant_scope_is_one_condition_not_an_id_list(
         compiled = gateway.named(name)[0]["library_scope"].compile()
         assert "collections.workspace_id = " in str(compiled)
         assert list(compiled.params.values()) == [WORKSPACE]
+
+
+async def test_the_request_session_is_released_before_the_searches_run(
+    db: AsyncSession, gateway: Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review P3 on #1984: the searches open their own sessions, so the request
+    session must not keep a pooled connection checked out through the round."""
+    in_transaction: list[bool] = []
+    discover = read_tools.discover_papers.discover
+
+    async def watched(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        in_transaction.append(db.in_transaction())
+        return await discover(*args, **kwargs)
+
+    monkeypatch.setattr(read_tools.discover_papers, "discover", watched)
+    result = await invoke_read(db, _context(project=False), _invocation())
+
+    assert result.is_error is False
+    assert in_transaction == [False]
+    # The scope is a condition, not loaded rows: it still selects after the release.
+    scope = gateway.named("library_semantic")[0]["library_scope"]
+    assert await _live_projects(db, scope) == sorted([PROJECT, OTHER_PROJECT])
 
 
 async def test_an_arxiv_only_round_reads_no_library_scope(

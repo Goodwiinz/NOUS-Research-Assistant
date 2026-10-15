@@ -1684,8 +1684,8 @@ async def _discover_papers(
     a workspace grant's projects) that each library statement applies together
     with the live-ancestor checks. It is never expanded into an id list, which a
     large workspace would push past the bind-parameter limit. The searches run
-    in their own sessions (see ``discover_papers``); nothing outside the scope
-    can be read.
+    in their own sessions (see ``discover_papers``), so the request session is
+    released before they start; nothing outside the scope can be read.
     """
     try:
         request = discover_papers.parse_arguments(arguments)
@@ -1695,6 +1695,11 @@ async def _discover_papers(
     library_scope: ColumnElement[bool] = false()
     if "library" in request.sources:
         library_scope = await authorized_scope_filter(db, context)
+    # Nothing below reads ``db``: the scope is a SQL condition, not loaded rows,
+    # and each search opens its own session. End the read-only request
+    # transaction now so its pooled connection is not held for the whole round
+    # beside the three the searches check out.
+    await db.rollback()
     payload = await discover_papers.discover(
         request,
         organization_id=context.organization_id,
