@@ -227,3 +227,111 @@ test("the keeper's fetch sends the current grant and keeps the caller's request"
     s.cleanup();
   }
 });
+
+test("resume re-issues a lapsed grant under the same handle with the stored credentials", async () => {
+  const s = await setup();
+  try {
+    s.advance(GRANT_LIFETIME_MS * 4);
+    const outcome = await s.keeper().resume();
+    assert.equal(outcome.kind, "resumed");
+    assert.equal(s.calls.length, 1);
+    assert.equal(s.calls[0]?.url, `${API}/integrations/grants/${OLD_GRANT}/resume`);
+    assert.equal(s.calls[0]?.method, "POST");
+    // The expired grant's own token proves which pairing is resumed.
+    assert.equal(s.calls[0]?.headers.get("x-nous-integration-grant"), "grant-old");
+    assert.equal(s.calls[0]?.headers.get("authorization"), "Bearer cli-jwt");
+    const stored = await s.store.load(s.handle);
+    assert.deepEqual(stored, {
+      accessToken: "cli-jwt",
+      grantToken: "grant-new",
+      grantId: NEW_GRANT,
+      renewedAt: T0 + GRANT_LIFETIME_MS * 4,
+    });
+    assert.deepEqual(outcome.kind === "resumed" && outcome.credentials, stored);
+    // The resumed grant is fresh: no renewal is due.
+    assert.equal((await s.keeper().current()).grantToken, "grant-new");
+    assert.equal(s.calls.length, 1);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("resume is refused when NOUS refuses it, lacks the route or the CLI sign-in ended", async () => {
+  for (const status of [401, 403, 404]) {
+    const s = await setup();
+    try {
+      s.setReply(() => new Response("{}", { status }));
+      assert.deepEqual(await s.keeper().resume(), { kind: "refused" });
+      assert.equal((await s.store.load(s.handle)).grantToken, "grant-old");
+    } finally {
+      s.cleanup();
+    }
+  }
+});
+
+test("resume is unavailable on a network error, 429 or 5xx, and keeps the stored grant", async () => {
+  for (const reply of [
+    () => new Response("{}", { status: 503 }),
+    () => new Response("{}", { status: 429 }),
+    () => {
+      throw new TypeError("fetch failed");
+    },
+  ]) {
+    const s = await setup();
+    try {
+      s.setReply(reply);
+      const outcome = await s.keeper().resume();
+      assert.equal(outcome.kind, "unavailable");
+      assert.equal((await s.store.load(s.handle)).grantToken, "grant-old");
+    } finally {
+      s.cleanup();
+    }
+  }
+});
+
+test("losing a resume race to another process picks up its grant", async () => {
+  const s = await setup();
+  try {
+    s.setReply(async () => {
+      // The other process resumed first and wrote its grant back.
+      await s.store.update(s.handle, {
+        accessToken: "cli-jwt",
+        grantToken: "grant-other",
+        grantId: NEW_GRANT,
+        renewedAt: T0,
+      });
+      return new Response("{}", { status: 409 });
+    });
+    const outcome = await s.keeper().resume();
+    assert.equal(outcome.kind, "resumed");
+    assert.equal(outcome.kind === "resumed" && outcome.credentials.grantToken, "grant-other");
+  } finally {
+    s.cleanup();
+  }
+  const lost = await setup();
+  try {
+    // Nobody else resumed: the conflict is a refusal.
+    lost.setReply(() => new Response("{}", { status: 409 }));
+    assert.deepEqual(await lost.keeper().resume(), { kind: "refused" });
+  } finally {
+    lost.cleanup();
+  }
+});
+
+test("a connection from before renewal cannot resume, and a malformed reply throws", async () => {
+  const legacy = await setup({ grantId: undefined, renewedAt: undefined });
+  try {
+    assert.deepEqual(await legacy.keeper().resume(), { kind: "refused" });
+    assert.equal(legacy.calls.length, 0);
+  } finally {
+    legacy.cleanup();
+  }
+  const s = await setup();
+  try {
+    s.setReply(() => new Response(JSON.stringify({ token: "" }), { status: 200 }));
+    await assert.rejects(s.keeper().resume(), /invalid NOUS grant resume/);
+    assert.equal((await s.store.load(s.handle)).grantToken, "grant-old");
+  } finally {
+    s.cleanup();
+  }
+});

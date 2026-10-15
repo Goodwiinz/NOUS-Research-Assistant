@@ -196,6 +196,37 @@ async function grantIsLive(
     return false;
   }
 }
+/**
+ * For binding reuse once the grant has lapsed: re-issue it from its browser
+ * consent, with no new approval and the same device. Only a new grant counts;
+ * a refusal or no answer means the full flow runs.
+ */
+async function grantResumed(
+  store: CredentialStore,
+  handle: string,
+  base: string,
+  fetchFn: typeof fetch,
+): Promise<boolean> {
+  try {
+    return (await new GrantKeeper(store, handle, base, fetchFn).resume()).kind === "resumed";
+  } catch {
+    return false;
+  }
+}
+/**
+ * How `connect` keeps a stored binding that matches the request: its grant
+ * still renews, or it has lapsed and resumes from its consent. Null runs the
+ * full flow.
+ */
+async function keptBinding(
+  store: CredentialStore,
+  handle: string,
+  base: string,
+  fetchFn: typeof fetch,
+): Promise<"Reusing" | "Resumed" | null> {
+  if (await grantIsLive(store, handle, base, fetchFn)) return "Reusing";
+  return (await grantResumed(store, handle, base, fetchFn)) ? "Resumed" : null;
+}
 async function poll(
   read: () => Promise<Record<string, any>>,
   options: ClientOptions,
@@ -354,19 +385,23 @@ export async function connect(
     previous.projectId === options.projectId &&
     previous.workspaceId === options.workspaceId &&
     (previous.threadId ?? undefined) === (options.threadId ?? undefined);
-  // Same API, project and chat, every requested scope already granted, and the
-  // grant still renews: keep it instead of a new browser login and consent.
-  if (
-    previous !== null &&
-    sameBinding &&
-    scopes.every((scope) => previous.scopes?.includes(scope)) &&
-    (await grantIsLive(store, previous.credentialHandle, base, fetchFn))
-  ) {
+  // Same API, project and chat, and every requested scope already granted:
+  // keep the binding while its grant still renews, or once it has lapsed
+  // resume it from the browser consent, instead of a new login and consent.
+  const kept =
+    previous !== null && sameBinding && scopes.every((scope) => previous.scopes?.includes(scope))
+      ? await keptBinding(store, previous.credentialHandle, base, fetchFn)
+      : null;
+  if (previous !== null && kept !== null) {
     // Reuse never narrows a grant (the documented superset rule): name any
     // stored scope this command did not ask for, and how to drop it (BR-3).
     const retained = (previous.scopes ?? []).filter((scope) => !scopes.includes(scope));
     announce(
-      `Reusing binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; no new login or consent needed.` +
+      `${kept} binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; ${
+        kept === "Reusing"
+          ? "no new login or consent needed."
+          : "your earlier approval still holds, so no new login or consent was needed."
+      }` +
         (retained.length
           ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also ${
               // Only a project connection runs Codex on the device and has
@@ -504,9 +539,10 @@ export async function connect(
 }
 /**
  * Revoke this device's grant (and its consent) in NOUS, then forget the local
- * credentials. A grant NOUS already refuses is cleared locally with a pointer
- * to the browser page; a network or server failure keeps everything so the
- * command can be retried.
+ * credentials. An expired grant is first resumed from its consent, so it can
+ * still authorize the revoke. A grant NOUS already refuses (or will not
+ * resume) is cleared locally with a pointer to the browser page; a network or
+ * server failure keeps everything so the command can be retried.
  */
 export async function disconnect(
   options: ClientOptions,
@@ -523,14 +559,25 @@ export async function disconnect(
     await store.removeLocal(state.credentialHandle);
     await store.removeLocal("connection");
   };
+  const keeper = new GrantKeeper(store, state.credentialHandle, base, fetchFn);
   let credentials;
   try {
-    credentials = await new GrantKeeper(store, state.credentialHandle, base, fetchFn).current();
+    credentials = await keeper.current();
   } catch (error) {
     if (!(error instanceof GrantExpired)) throw error;
-    await forget();
-    announce(`This device's access had already ended; local credentials removed. Review devices in NOUS at /integrations/devices.`);
-    return { revoked: false };
+    // An expired grant cannot authorize the revoke: resume it from its
+    // consent first, so the consent is revoked in NOUS too.
+    const resumed = await keeper.resume();
+    if (resumed.kind === "unavailable")
+      throw new Error(`could not reach NOUS to revoke this device; nothing was removed (${resumed.reason})`);
+    if (resumed.kind === "refused") {
+      // Revoked access is refused, but so are an ended CLI sign-in and a
+      // NOUS without resume, which leave the consent active.
+      await forget();
+      announce("NOUS would not resume this device's lapsed access, so it could not revoke it from here; local credentials removed. If this device is still listed in NOUS at /integrations/devices, revoke it there.");
+      return { revoked: false };
+    }
+    credentials = resumed.credentials;
   }
   if (!uuid(credentials.grantId)) {
     await forget();
@@ -1576,7 +1623,7 @@ const help = `Usage: nous-harness connect --api https://host/api/v1 (--project U
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions. It always requests library:read, so list_library can name the projects its tools need.
   connect --library (needs --tools and --write) also requests library:read and library:write.
-  connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, revoke this device's access at /integrations/devices (or disconnect), then connect.
+  connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews or, once lapsed, resumes from its browser consent (same device; refused once revoked or 30 days after it lapsed); otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, revoke this device's access at /integrations/devices (or disconnect), then connect.
   nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.
   nous-harness rc --api URL --root PATH [--label NAME]    Interactive: sign in, pick or create a project, pair this computer (harness:execute + tools:read), register PATH as the folder Codex works in, and run. The repository's \`nous --rc\` launcher calls this with the current folder.
   nous-harness handoff show    Print the bound chat's latest handoff.
