@@ -50,6 +50,9 @@ test("slow arXiv tools get the long bound; other reads time out as upstream_time
   const client = new CapabilityClient(origin, credentials, slowNous, { readMs: 30, slowReadMs: 1000 });
   assert.deepEqual(await client.invokeRead(invocation("search_arxiv")), readResult);
   assert.deepEqual(await client.invokeRead(invocation("get_arxiv_paper_content")), readResult);
+  // One discovery round waits on the arXiv rate gate for up to ~45 s. Without
+  // discover_papers in SLOW_READ_TOOLS this line gets upstream_timeout (checked).
+  assert.deepEqual(await client.invokeRead(invocation("discover_papers")), readResult);
   assert.deepEqual(await client.invokeRead(invocation("search_documents")), upstreamTimeout);
   // Over MCP it is a tool result the model can act on, not a protocol error.
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

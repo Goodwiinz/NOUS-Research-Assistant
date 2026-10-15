@@ -651,12 +651,21 @@ async def persist_arxiv_documents(
             kb_sync_failed = True
             logger.warning("do_kb dual-write skipped for arxiv ingest: %s", exc)
 
+    persisted_document_ids = [
+        document_id for document_id in document_ids_by_index if document_id is not None
+    ]
+    # GOO-435: the rows are committed (COMPLETED); queue their pgvector
+    # embeddings. The flag is checked here so the Celery modules are not even
+    # imported while it is off; a broker error is logged inside the helper,
+    # never raised. Reused rows are queued too: embedding skips text it already
+    # embedded.
+    if settings.DOCUMENT_EMBEDDINGS_ENABLED and persisted_document_ids:
+        from src.tasks.document_embedding_tasks import enqueue_document_embeddings
+
+        enqueue_document_embeddings(organization_id, persisted_document_ids)
+
     return ArxivPersistenceResult(
-        document_ids=[
-            document_id
-            for document_id in document_ids_by_index
-            if document_id is not None
-        ],
+        document_ids=persisted_document_ids,
         reused_document_ids=reused_document_ids,
         kb_sync_failed=kb_sync_failed,
         failed_papers=failed_papers,

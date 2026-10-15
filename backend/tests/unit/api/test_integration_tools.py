@@ -141,6 +141,7 @@ def test_catalog_offers_the_project_selector_only_to_workspace_grants(
         "search_external_database",
         "list_external_databases",
         "get_arxiv_paper_content",
+        "discover_papers",
     }
 
 
