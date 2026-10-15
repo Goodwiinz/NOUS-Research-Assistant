@@ -23,7 +23,7 @@ from src.schemas.integration_context import BindingKind, IntegrationContext
 from src.services.agent.agent_submission_service import finalize_submission
 from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
-from src.services.harness.account import run_project
+from src.services.harness.account import account_projects, run_project
 from src.services.harness.prompt_context import build_harness_prompt, prompt_is_current
 from src.services.harness.runs import (
     authorize_external_submission,
@@ -240,6 +240,31 @@ async def dispatch_pending(db: AsyncSession) -> int:
         raise
 
 
+def _lease_scope(context: IntegrationContext) -> list[Any]:
+    """Which of the device's locked runs this grant may lease (the caller
+    filters the device). A project grant leases its own project's runs; an
+    account pairing grant leases runs in any project the account rule admits
+    on this call. Each run is authorized again in _authorize."""
+    project: Any
+    if context.binding_kind == "account":
+        project = AgentRun.project_id.in_(
+            account_projects(context.user_id, context.organization_id)
+        )
+    else:
+        project = AgentRun.project_id == context.project_id
+    return [
+        AgentRun.user_id == context.user_id,
+        AgentRun.organization_id == context.organization_id,
+        project,
+        *([] if context.run_id is None else [AgentRun.job_id == str(context.run_id)]),
+        *(
+            []
+            if context.thread_id is None
+            else [AgentRun.thread_id == context.thread_id]
+        ),
+    ]
+
+
 async def lease_commands(
     db: AsyncSession, context: IntegrationContext, device_id: UUID
 ) -> list[BridgeCommand]:
@@ -256,20 +281,8 @@ async def lease_commands(
                 .join(AgentRun, AgentRun.job_id == HarnessSession.run_id)
                 .where(
                     HarnessSession.device_id == device_id,
-                    AgentRun.user_id == context.user_id,
-                    AgentRun.organization_id == context.organization_id,
-                    AgentRun.project_id == context.project_id,
                     HarnessSession.workspace_locked.is_(True),
-                    *(
-                        []
-                        if context.run_id is None
-                        else [AgentRun.job_id == str(context.run_id)]
-                    ),
-                    *(
-                        []
-                        if context.thread_id is None
-                        else [AgentRun.thread_id == context.thread_id]
-                    ),
+                    *_lease_scope(context),
                 )
                 .order_by(HarnessSession.run_id)
                 .limit(100)
@@ -364,6 +377,12 @@ async def lease_commands(
                         generation=session.generation,
                         expiresAt=utc(command.expires_at),
                         body=cast(Any, command.body),
+                        projectId=(
+                            run.project_id
+                            if context.binding_kind == "account"
+                            and command.kind == "start"
+                            else None
+                        ),
                     )
                 )
         await db.commit()
@@ -686,19 +705,7 @@ async def lease_runs(
                 .where(
                     HarnessSession.device_id == device_id,
                     HarnessSession.workspace_locked.is_(True),
-                    AgentRun.user_id == context.user_id,
-                    AgentRun.organization_id == context.organization_id,
-                    AgentRun.project_id == context.project_id,
-                    *(
-                        []
-                        if context.run_id is None
-                        else [AgentRun.job_id == str(context.run_id)]
-                    ),
-                    *(
-                        []
-                        if context.thread_id is None
-                        else [AgentRun.thread_id == context.thread_id]
-                    ),
+                    *_lease_scope(context),
                 )
                 .limit(100)
             )

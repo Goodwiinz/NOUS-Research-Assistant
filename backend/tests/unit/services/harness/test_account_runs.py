@@ -44,6 +44,7 @@ from src.models.harness_session import (
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.thread import Thread
 from src.models.workspace import Workspace
+from src.schemas.harness import BridgeEvent
 from src.schemas.integration_context import GrantRequestCreate, IntegrationContext
 from src.services.agent.agent_submission_service import accept_submission
 from src.services.agent.schemas import AgentExecuteRequest, AgentMessage
@@ -187,6 +188,22 @@ async def start(
         integration_context=run_context,
     )
     return str(accepted.run_id)
+
+
+def event_for(command: Any, seq: int = 1, body: Any = None) -> BridgeEvent:
+    values = command.model_dump(exclude={"expiresAt", "body", "projectId"})
+    values.update(
+        sourceId=f"source-{command.runId}",
+        sourceSeq=seq,
+        body=body
+        or {
+            "kind": "event",
+            "eventType": "assistant.delta",
+            "payload": {"text": "answer"},
+        },
+    )
+    event: BridgeEvent = BridgeEvent.model_validate(values)
+    return event
 
 
 async def leave_account(db: AsyncSession, workspace_id: UUID = WORKSPACE_B) -> None:
@@ -764,3 +781,107 @@ async def test_a_run_grant_names_only_its_own_project(
             workspace_id=FOLDER_A,
             thread_id=THREAD,
         )
+
+
+async def test_one_account_bridge_leases_runs_in_two_projects(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import (
+        dispatch_pending,
+        lease_commands,
+        lease_runs,
+    )
+
+    run_a = await start(db, THREAD, FOLDER_A)
+    run_b = await start(db, THREAD_B, FOLDER_B)
+    assert await dispatch_pending(db) == 2
+    commands = await lease_commands(db, account, ACCOUNT_DEVICE)
+    assert {(str(c.runId), c.projectId) for c in commands} == {
+        (run_a, PROJECT),
+        (run_b, PROJECT_B),
+    }
+    assert set(await lease_runs(db, account, ACCOUNT_DEVICE)) == {run_a, run_b}
+    # The long-run swap: both sessions now hold the bridge's pairing grant.
+    sessions = (await db.scalars(select(HarnessSession))).all()
+    assert {s.grant_id for s in sessions} == {account.grant_id}
+
+
+# Mutation MA10 (Task 7): replace `context.binding_kind == "account"` in the
+# BridgeCommand(projectId=...) expression with `True`; this test must fail.
+async def test_a_start_command_names_its_project_only_under_an_account_pairing(
+    db: AsyncSession, context: IntegrationContext, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import dispatch_pending, lease_commands
+    from tests.unit.services.harness.test_runs import accept
+
+    await accept(db, context)  # a project pairing's run on DEVICE / LOCAL
+    await start(db, THREAD_B, FOLDER_A)
+    assert await dispatch_pending(db) == 2
+    (project_command,) = await lease_commands(db, context, DEVICE)
+    assert project_command.projectId is None
+    assert "projectId" not in project_command.wire()  # old bridges refuse the key
+    (account_command,) = await lease_commands(db, account, ACCOUNT_DEVICE)
+    assert account_command.wire()["projectId"] == str(PROJECT_B)
+
+
+async def test_a_run_whose_project_leaves_the_account_is_refused_at_the_next_command(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import (
+        dispatch_pending,
+        ingest_bridge_event,
+        lease_commands,
+        lease_runs,
+    )
+
+    run_a = await start(db, THREAD, FOLDER_A)
+    run_b = await start(db, THREAD_B, FOLDER_B)
+    assert await dispatch_pending(db) == 2
+    commands = {
+        str(c.runId): c for c in await lease_commands(db, account, ACCOUNT_DEVICE)
+    }
+    await leave_account(db)
+    await db.execute(update(HarnessCommand).values(lease_until=None))
+    await db.commit()
+    assert [
+        str(c.runId) for c in await lease_commands(db, account, ACCOUNT_DEVICE)
+    ] == [run_a]
+    assert set(await lease_runs(db, account, ACCOUNT_DEVICE)) == {run_a}
+    with pytest.raises(IntegrationAccessDenied):
+        await ingest_bridge_event(db, account, event_for(commands[run_b]))
+    assert await ingest_bridge_event(db, account, event_for(commands[run_a])) >= 1
+
+
+async def test_a_project_pairing_still_cannot_lease_another_projects_run(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    """Regression: a project pairing reaches its own project's runs only.
+
+    Three independent guards hold it (the lease query's project filter,
+    run_project in _authorize and the thread binding in validate_binding), so
+    no single-line mutation makes it pass; see Task 7.
+    """
+    from src.services.harness.delivery import (
+        dispatch_pending,
+        ingest_bridge_event,
+        lease_commands,
+        lease_runs,
+    )
+
+    # DEVICE also holds a project approval for PROJECT_B and a folder tied to it.
+    other_folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=DEVICE, workspace_id=other_folder, project_id=PROJECT_B, label="b"
+        )
+    )
+    await db.commit()
+    pairing_b = await pair_project(db, PROJECT_B, DEVICE)
+    run_b = await start(db, THREAD_B, other_folder, device=DEVICE)
+    assert await dispatch_pending(db) == 1
+    assert await lease_commands(db, context, DEVICE) == []
+    assert await lease_runs(db, context, DEVICE) == {}
+    (command,) = await lease_commands(db, pairing_b, DEVICE)
+    assert str(command.runId) == run_b and command.projectId is None
+    with pytest.raises(IntegrationAccessDenied):
+        await ingest_bridge_event(db, context, event_for(command))
