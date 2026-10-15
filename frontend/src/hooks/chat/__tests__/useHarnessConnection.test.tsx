@@ -652,6 +652,41 @@ describe('useHarnessConnection', () => {
     expect(view.canSend()).toBe(false);
   });
 
+  it('disables the folder picker for a remembered computer that was filtered out', async () => {
+    listDevices.mockResolvedValue([accountLaptop, otherDesk]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => view.result.current.selectDevice('device-other'));
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+    expect(
+      screen.getByRole('combobox', { name: 'Project workspace' })
+    ).toBeDisabled();
+  });
+
+  it('keeps the folder picker open for a computer the chat can use', async () => {
+    listDevices.mockResolvedValue([accountLaptop, otherDesk]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => view.result.current.selectDevice('device-account'));
+    await waitFor(() => expect(view.result.current.workspaces).toHaveLength(2));
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+    expect(
+      screen.getByRole('combobox', { name: 'Project workspace' })
+    ).toBeEnabled();
+  });
+
   it('needs a chat in a project before Codex can run', async () => {
     listDevices.mockResolvedValue([accountLaptop]);
     const view = renderConnectedHarness('thread-a', null);
