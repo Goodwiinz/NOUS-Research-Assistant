@@ -920,8 +920,10 @@ async def _selected_folder_names(
     Only within the row's own workspace: request_action let a workspace grant
     select its own workspace's Collections and a project grant only its
     project, whose name the review's own join already carries. An account row
-    names only Collections its user's account covers now. A soft-deleted
-    Collection keeps its name, as the target's label does.
+    names only Collections its user's account covers now; any other id (one
+    outside the account, soft-deleted or archived) is left unnamed, so the
+    review shows its id. For project and workspace rows a soft-deleted
+    Collection of the workspace keeps its name, as the target's label does.
     """
     if _row_kind(row) == "account":
         within: ColumnElement[bool] = account_scope_condition(
@@ -1079,6 +1081,9 @@ def _binding_matches(grant: IntegrationGrant, row: IntegrationToolAction) -> boo
     """
     if _row_kind(row) == "account":
         return grant.binding_kind == "account"
+    # The kind tests below repeat the binding CHECK of the grants table on
+    # purpose: an account grant (no project, no workspace) must never satisfy
+    # a project or workspace row even if the CHECK were relaxed or bypassed.
     if row.workspace_id is not None:
         return (
             grant.binding_kind == "workspace"

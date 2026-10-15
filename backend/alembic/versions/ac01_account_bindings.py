@@ -72,9 +72,10 @@ ACCOUNT_RUNS = (
 
 def upgrade() -> None:
     for table in (REQUESTS, GRANTS, ACTIONS):
-        # The default exists only to backfill. Writers rely on the model default
-        # (derived_binding_kind: project or workspace); an account writer must
-        # pass binding_kind='account'.
+        # The default exists only to backfill and is dropped below. The two
+        # request/grant tables derive their kind in the model (project or
+        # workspace); integration_tool_actions has no model default, so every
+        # writer passes binding_kind. An account writer passes 'account'.
         op.add_column(
             table,
             sa.Column(

@@ -3752,6 +3752,72 @@ async def test_an_account_action_rechecks_the_account_when_it_runs(
     assert await _linked(db, PROJECT, PAPER) and not await _linked(db, ELSEWHERE, PAPER)
 
 
+MEMBER_WORKSPACE, MEMBER_FOLDER = uuid4(), uuid4()
+
+
+# SECURITY-CRITICAL: every other re-check of the account at execution.
+@pytest.mark.parametrize(
+    "change", ["consent-revoked", "organization", "user", "membership"]
+)
+async def test_an_account_action_fails_when_the_account_changes_before_it_runs(
+    db: AsyncSession, library: None, change: str
+) -> None:
+    # A folder of a workspace USER is a member of but does not own: only a
+    # membership puts it in the account.
+    await db.execute(
+        insert(Workspace).values(
+            id=MEMBER_WORKSPACE, name="Shared", owner_id=OTHER_USER, organization_id=ORG
+        )
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            id=uuid4(),
+            workspace_id=MEMBER_WORKSPACE,
+            user_id=USER,
+            role=WorkspaceRole.EDITOR,
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            id=MEMBER_FOLDER, name="Shared", workspace_id=MEMBER_WORKSPACE
+        )
+    )
+    await db.commit()
+    actor = await _account_actor(db, WRITE)
+    target = MEMBER_FOLDER if change == "membership" else ELSEWHERE
+    status = await request_action(
+        db, actor, _call("rename_folder", project_id=str(target), name="Renamed")
+    )
+    assert status.state == "awaiting_approval"
+    await _approve(db, status.invocation_id)
+    change_it = {
+        "consent-revoked": update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == actor.consent_id)
+        .values(consent_revoked_at=datetime.now(timezone.utc)),
+        "organization": update(Organization)
+        .where(Organization.id == ORG)
+        .values(is_active=False),
+        "user": update(User).where(User.id == USER).values(is_active=False),
+        "membership": update(WorkspaceMember)
+        .where(
+            WorkspaceMember.workspace_id == MEMBER_WORKSPACE,
+            WorkspaceMember.user_id == USER,
+        )
+        .values(is_deleted=True),
+    }[change]
+    await db.execute(change_it)
+    await db.commit()
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert await _last_error(db, status.invocation_id) == {
+        "consent-revoked": "consent revoked",
+        "user": "requesting user is not active",
+    }.get(change, "grant no longer authorizes this action")
+    assert (await _collection(db, target)).name == (
+        "Shared" if change == "membership" else "Elsewhere"
+    )
+
+
 # SECURITY-CRITICAL: approval and grant kinds must match at execution.
 @pytest.mark.parametrize("other", ["project", "workspace"])
 async def test_an_account_action_needs_an_account_grant(
