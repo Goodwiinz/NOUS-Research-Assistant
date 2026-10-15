@@ -61,6 +61,19 @@ class DeviceBoundToAnotherChat(IntegrationAccessDenied):
     )
 
 
+class DeviceNotConnectedToProject(IntegrationAccessDenied):
+    """This computer cannot run Codex for the chat's project: it holds neither
+    an account approval covering the project nor an approval for the project,
+    or the chosen folder is not usable from this project.
+
+    One message for every such cause, including a device or folder id that is
+    not the caller's, so the text reveals nothing a guess could not. Still an
+    IntegrationAccessDenied, so every caller that maps denials keeps doing so.
+    """
+
+    client_message: ClassVar[str] = "This computer isn't connected to this project."
+
+
 class IntegrationConflict(Exception):
     """A request was already decided, consumed or expired."""
 
