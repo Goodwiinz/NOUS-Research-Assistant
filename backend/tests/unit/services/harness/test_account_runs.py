@@ -524,9 +524,10 @@ async def test_the_run_consent_kind_is_decided_before_any_grant_is_minted(
     assert await kind(THREAD, ACCOUNT_DEVICE, FOLDER_A) == "account"
 
 
-# Mutation MA1c: pass `consent_kind=None` in create_chat_context's mint; this
-# test must fail (the account approval would win the precedence).
-async def test_a_project_folder_runs_under_its_project_approval_on_an_account_device(
+# Mutation MA1c: return "project" for every folder tied to a project in
+# harness_streaming._run_consent_kind (the pre-review behaviour); this test and
+# test_a_project_folder_runs_under_the_account_approval_alone must fail.
+async def test_a_project_folder_on_a_device_with_both_approvals_runs_under_the_account_one(
     db: AsyncSession, account: IntegrationContext
 ) -> None:
     project_approval = await pair_project(db, PROJECT, ACCOUNT_DEVICE)
@@ -541,10 +542,9 @@ async def test_a_project_folder_runs_under_its_project_approval_on_an_account_de
         )
     )
     await db.commit()
-    for folder_id, expected in (
-        (folder, project_approval.consent_id),
-        (FOLDER_A, account.consent_id),
-    ):
+    # The bridge holds the account pairing, so the account lineage is the one
+    # every folder's run is minted under (PR 1's _single_lineage precedence).
+    for folder_id in (folder, FOLDER_A):
         run_context = await create_chat_context(
             db,
             current_user=OWNER,
@@ -553,7 +553,121 @@ async def test_a_project_folder_runs_under_its_project_approval_on_an_account_de
             workspace_id=folder_id,
         )
         grant = await db.get(IntegrationGrant, run_context.grant_id)
-        assert grant is not None and grant.request_id == expected
+        assert grant is not None and grant.request_id == account.consent_id
+
+
+# Review scenario A: after `nous --rc` a device holds only the account approval.
+async def test_a_project_folder_runs_under_the_account_approval_alone(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder,
+            project_id=PROJECT_B,
+            label="repo",
+        )
+    )
+    await db.commit()
+    run_context = await create_chat_context(
+        db,
+        current_user=OWNER,
+        thread=await db.get(Thread, THREAD_B),
+        device_id=ACCOUNT_DEVICE,
+        workspace_id=folder,
+    )
+    grant = await db.get(IntegrationGrant, run_context.grant_id)
+    assert grant is not None and grant.request_id == account.consent_id
+    # A chat in another project still cannot use the folder.
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD),
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder,
+        )
+
+
+# Review scenario B: both approvals live and the bridge holds the account
+# pairing; the project folder's run must lease (lineage = the account one).
+async def test_a_project_folder_run_leases_under_the_account_pairing(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import (
+        dispatch_pending,
+        ingest_bridge_event,
+        lease_commands,
+    )
+
+    await pair_project(db, PROJECT_B, ACCOUNT_DEVICE)
+    folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder,
+            project_id=PROJECT_B,
+            label="repo",
+        )
+    )
+    await db.commit()
+    run_id = await start(db, THREAD_B, folder)
+    assert await dispatch_pending(db) == 1
+    (command,) = await lease_commands(db, account, ACCOUNT_DEVICE)
+    assert str(command.runId) == run_id and command.projectId == PROJECT_B
+    assert await ingest_bridge_event(db, account, event_for(command)) >= 1
+
+
+# Mutation MA1d: return "account" for every project folder; this test must fail.
+async def test_a_project_folder_falls_back_to_its_project_approval_when_the_account_lacks_it(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    project_approval = await pair_project(db, PROJECT_B, ACCOUNT_DEVICE)
+    folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder,
+            project_id=PROJECT_B,
+            label="repo",
+        )
+    )
+    await db.commit()
+    await leave_account(db)  # PROJECT_B is no longer in the account
+    run_context = await create_chat_context(
+        db,
+        current_user=OWNER,
+        thread=await db.get(Thread, THREAD_B),
+        device_id=ACCOUNT_DEVICE,
+        workspace_id=folder,
+    )
+    grant = await db.get(IntegrationGrant, run_context.grant_id)
+    assert grant is not None and grant.request_id == project_approval.consent_id
+
+
+async def test_a_project_folder_with_no_approval_covering_its_project_is_refused(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder,
+            project_id=PROJECT_B,
+            label="repo",
+        )
+    )
+    await db.commit()
+    await leave_account(db)  # no project approval either
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD_B),
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder,
+        )
 
 
 async def test_an_unknown_or_deleted_folder_is_denied(

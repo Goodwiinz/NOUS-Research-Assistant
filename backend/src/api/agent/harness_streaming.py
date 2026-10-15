@@ -44,9 +44,13 @@ async def _run_consent_kind(
 ) -> Literal["project", "account"]:
     """Which approval a chat's Codex run on this folder is minted under.
 
-    A folder tied to the chat's project uses that project's approval. An
-    account folder (no project) serves any chat whose project the device's
-    account approval covers on this call. Every refusal is an opaque
+    An account folder (no project) needs the device's account approval to cover
+    the chat's project on this call. A folder tied to the chat's project uses
+    the account approval too when the device holds one that covers the
+    project: that is the lineage the bridge's account pairing holds and leases
+    runs under (``delivery._authorize``), and it wins over a project approval
+    as in ``_single_lineage``. Otherwise it uses the project's own approval,
+    which the mint then requires. Every refusal is an opaque
     IntegrationAccessDenied.
     """
     binding = await db.scalar(
@@ -58,22 +62,26 @@ async def _run_consent_kind(
     )
     if binding is None:
         raise IntegrationAccessDenied()
-    if binding.project_id is None:
-        consent = await live_account_consent(
-            db,
-            user_id=current_user.id,
-            organization_id=current_user.organization_id,
-            device_id=device_id,
-        )
-        if consent is None or not await project_in_account(
-            db,
-            user_id=current_user.id,
-            organization_id=current_user.organization_id,
-            project_id=thread.source_project_id,
-        ):
-            raise IntegrationAccessDenied()
+    if (
+        binding.project_id is not None
+        and binding.project_id != thread.source_project_id
+    ):
+        raise IntegrationAccessDenied()
+    consent = await live_account_consent(
+        db,
+        user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        device_id=device_id,
+    )
+    covered = consent is not None and await project_in_account(
+        db,
+        user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        project_id=thread.source_project_id,
+    )
+    if covered:
         return "account"
-    if binding.project_id != thread.source_project_id:
+    if binding.project_id is None:
         raise IntegrationAccessDenied()
     return "project"
 
