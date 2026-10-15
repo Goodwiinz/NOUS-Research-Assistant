@@ -3,9 +3,18 @@
 SQLite unit evidence. The PostgreSQL twin is
 backend/tests/integration/test_harness_account_postgres.py.
 
-Mutation verification (2026-10-14, PR 2 Tasks 1-3): for each guard named in a
-``# Mutation`` comment below, the line was broken in a throwaway copy of the
-backend, the named tests were observed FAIL, and the source was restored.
+Mutation verification (2026-10-15, SQLite; the PostgreSQL twin re-checked
+MA3+MA15, MA5 and MA1c): MA1, MA1b, MA1c, MA1d, MA1e, MA2, MA2b, MA3, MA4, MA5,
+MA6, MA7, MA8, MA9, MA10, MA10b (in test_harness_workspace_guard.py), MA11 and
+the live-consent filter drops each observed FAIL, with the source restored
+after each. Two guards are redundant by design and are caught only in pairs:
+the account lease filter (``_lease_scope``) behind ``ProjectOutsideAccount``
+(MA15+MA3), and
+``test_a_project_pairing_still_cannot_lease_another_projects_run``, which holds
+through five independent guards (the lease project filter, the run-project
+comparison in ``_authorize``, the thread-to-project check in
+``validate_binding``, the folder predicate in ``authorize_external_submission``
+and the consent-lineage check) and fails only when all five are removed.
 """
 
 from datetime import datetime, timedelta, timezone
