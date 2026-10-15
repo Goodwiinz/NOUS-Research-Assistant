@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
 class ArtifactError(Exception):
@@ -39,6 +39,14 @@ class ArtifactQuotaExceeded(ArtifactError):
 
 class ArtifactStorageUnavailable(ArtifactError):
     """Object storage failed or the committed blob is missing."""
+
+
+class ArtifactInvalidShareRequest(ArtifactError):
+    """Audience or expiry does not satisfy the authenticated sharing policy."""
+
+
+class ArtifactSharingDisabled(ArtifactError):
+    """New sharing mutations are disabled; committed reads remain available."""
 
 
 class ArtifactProvenance(BaseModel):
@@ -118,6 +126,37 @@ class EditArtifactVersionRequest(BaseModel):
 class ArtifactCapabilitiesDTO(BaseModel):
     editing_enabled: bool
     preview_enabled: bool
+    sharing_enabled: bool = False
+
+
+class CreateArtifactShareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version_id: UUID
+    audience_user_ids: list[UUID] = Field(min_length=1, max_length=100)
+    expires_at: AwareDatetime
+
+    @field_validator("audience_user_ids")
+    @classmethod
+    def unique_audience(cls, values: list[UUID]) -> list[UUID]:
+        if len(set(values)) != len(values):
+            raise ValueError("Audience must contain unique users")
+        return values
+
+
+class ArtifactShareDTO(BaseModel):
+    id: UUID
+    version_id: UUID
+    expires_at: datetime
+    revoked_at: datetime | None
+
+
+class SharedArtifactVersionDTO(BaseModel):
+    artifact_id: UUID
+    version_id: UUID
+    title: str
+    mime_type: str
+    byte_size: int
+    sha256: str
 
 
 class ArtifactEditConflictDetail(BaseModel):

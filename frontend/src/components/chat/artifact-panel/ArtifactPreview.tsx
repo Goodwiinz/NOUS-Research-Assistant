@@ -11,6 +11,7 @@ import { useArtifactScope } from '@/hooks/chat/useArtifactScope';
 import {
   artifactService,
   type ArtifactVersion,
+  type SharedArtifactVersion,
 } from '@/services/artifactService';
 
 import { InteractiveHtmlPreview } from './InteractiveHtmlPreview';
@@ -41,7 +42,9 @@ const NO_REMOTE_IMAGES: React.ComponentProps<
   img: ({ alt }) => <span>{alt ? `[image: ${alt}]` : '[image]'}</span>,
 };
 
-export function previewKindFor(version: ArtifactVersion): PreviewKind {
+export function previewKindFor(
+  version: Pick<ArtifactVersion, 'mimeType' | 'byteSize'>
+): PreviewKind {
   const mime = version.mimeType.toLowerCase().split(';')[0].trim();
   if (mime === 'application/pdf')
     return version.byteSize <= MAX_PDF_PREVIEW_BYTES ? 'pdf' : 'download';
@@ -86,8 +89,42 @@ export function ArtifactPreview({
   // One load per (version, attempt); a stale `loaded` for another key renders
   // as loading, so no synchronous setState is needed when the key changes.
   const key = `${scope}:${version.versionId}:${attempt}`;
+  return (
+    <ArtifactBlobPreview
+      key={key}
+      version={version}
+      blob={content.data}
+      isError={content.isError}
+      identity={key}
+      onRetry={() => {
+        setAttempt((n) => n + 1);
+        void content.refetch();
+      }}
+      onDownload={() => artifactService.downloadVersion(version)}
+    />
+  );
+}
+
+/** Bounded read-only renderer shared by owner and audience-authorized reads. */
+export function ArtifactBlobPreview({
+  version,
+  blob,
+  isError = false,
+  identity,
+  onRetry,
+  onDownload,
+}: {
+  version: SharedArtifactVersion;
+  blob?: Blob;
+  isError?: boolean;
+  identity: string;
+  onRetry: () => void;
+  onDownload: () => Promise<void>;
+}): ReactElement {
+  const kind = previewKindFor(version);
+  const key = identity;
   const [loaded, setLoaded] = useState<LoadState | null>(null);
-  const state: LoadState | { status: 'loading' } = content.isError
+  const state: LoadState | { status: 'loading' } = isError
     ? { key, status: 'error' }
     : loaded && loaded.key === key
       ? loaded
@@ -97,7 +134,6 @@ export function ArtifactPreview({
     if (kind === 'download') return;
     let cancelled = false;
     let objectUrl: string | null = null;
-    const blob = content.data;
     if (!blob) return;
     const prepare = async (): Promise<void> => {
       if (
@@ -128,14 +164,12 @@ export function ArtifactPreview({
       cancelled = true;
       if (objectUrl) window.URL.revokeObjectURL(objectUrl);
     };
-  }, [kind, key, version.versionId, version.mimeType, content.data]);
+  }, [kind, key, version.versionId, version.mimeType, blob]);
 
   const [downloadFailed, setDownloadFailed] = useState(false);
   const download = (): void => {
     setDownloadFailed(false);
-    artifactService
-      .downloadVersion(version)
-      .catch(() => setDownloadFailed(true));
+    onDownload().catch(() => setDownloadFailed(true));
   };
 
   if (kind === 'download') {
@@ -184,10 +218,7 @@ export function ArtifactPreview({
         <button
           type="button"
           className="mt-3 rounded-md border px-3 py-2 text-sm"
-          onClick={() => {
-            setAttempt((n) => n + 1);
-            void content.refetch();
-          }}
+          onClick={onRetry}
         >
           Retry
         </button>
