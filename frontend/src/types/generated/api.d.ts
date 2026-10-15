@@ -4378,6 +4378,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/grants/{grant_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Grant
+         * @description Re-issue this device's lapsed grant from the browser consent it was
+         *     exchanged from, without a new approval or a new device.
+         *
+         *     Send the stored grant token, even expired, in `X-NOUS-Integration-Grant`:
+         *     a CLI sign-in is not bound to a device, so the grant's own token proves
+         *     which pairing is resumed, and it works once. Refused (403) once the grant
+         *     was renewed or revoked, its consent or device revoked, its project,
+         *     workspace or chat out of reach, or 30 days after it expired; 409 when
+         *     the grant was replaced or revoked meanwhile (another resume or renewal
+         *     won, or a revoke landed).
+         */
+        post: operations["resume_grant_api_v1_integrations_grants__grant_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/handoffs": {
         parameters: {
             query?: never;
@@ -11235,6 +11264,16 @@ export interface components {
             /** Rate Limit Per Hour */
             rate_limit_per_hour: number;
         };
+        /**
+         * AccountSummaryDTO
+         * @description What an account approval covers at the moment it is shown.
+         */
+        AccountSummaryDTO: {
+            /** Project Count */
+            project_count: number;
+            /** Workspace Count */
+            workspace_count: number;
+        };
         /** ActionDecision */
         ActionDecision: {
             /** Approved */
@@ -14155,7 +14194,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "project" | "workspace";
+            kind: "project" | "workspace" | "account";
             /** Project Id */
             project_id: string | null;
             /** Project Label */
@@ -15107,8 +15146,13 @@ export interface components {
         /**
          * DeviceListItemDTO
          * @description A paired computer as the chat composer lists it.
+         *
+         *     All three lists come from the device's live run consents: consumed, not
+         *     revoked, holding harness:execute. The mint stays the authority.
          */
         DeviceListItemDTO: {
+            /** Account Wide */
+            account_wide: boolean;
             /** Bound Thread Ids */
             bound_thread_ids: string[];
             /**
@@ -15118,6 +15162,8 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Project Ids */
+            project_ids: string[];
         };
         /** DiffHunk */
         DiffHunk: {
@@ -16923,6 +16969,11 @@ export interface components {
         /** GrantRequestCreate */
         GrantRequestCreate: {
             /**
+             * Account
+             * @default false
+             */
+            account: boolean;
+            /**
              * Device Id
              * Format: uuid
              */
@@ -16938,8 +16989,14 @@ export interface components {
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
+            account_summary?: components["schemas"]["AccountSummaryDTO"] | null;
             /** Approval Url */
             approval_url: string;
+            /**
+             * Binding Kind
+             * @enum {string}
+             */
+            binding_kind: "project" | "workspace" | "account";
             /**
              * Device Id
              * Format: uuid
@@ -24291,11 +24348,8 @@ export interface components {
         WorkspaceBindingCreate: {
             /** Label */
             label: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id?: string | null;
             /**
              * Workspace Id
              * Format: uuid
@@ -24306,11 +24360,8 @@ export interface components {
         WorkspaceBindingDTO: {
             /** Label */
             label: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id?: string | null;
             /**
              * Workspace Id
              * Format: uuid
@@ -32391,6 +32442,37 @@ export interface operations {
         };
     };
     renew_grant_api_v1_integrations_grants__grant_id__renew_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedGrant"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_grant_api_v1_integrations_grants__grant_id__resume_post: {
         parameters: {
             query?: never;
             header?: never;

@@ -456,3 +456,102 @@ async def test_an_untitled_bound_chat_is_labelled_untitled_chat(
     await db.commit()
     listed = (await _consents(db, LAPTOP))[CONSENT_A]
     assert (listed.thread_id, listed.thread_label) == (CHAT, "Untitled chat")
+
+
+async def _account_approval(db: AsyncSession) -> tuple[UUID, dict[str, str]]:
+    """A consumed account approval on DESKTOP with a pairing grant (account)
+    and a run grant (project) minted under it."""
+    account = uuid4()
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=account,
+            user_id=USER,
+            organization_id=ORG,
+            binding_kind="account",
+            device_id=DESKTOP,
+            scopes=["harness:execute", "tools:read"],
+            status="consumed",
+            expires_at=SOON,
+        )
+    )
+    tokens = {name: "nous_ig_" + name.ljust(43, "x") for name in ("pairing", "run")}
+    for name, kind, project, scopes in (
+        ("pairing", "account", None, ["harness:execute", "tools:read"]),
+        ("run", "project", PROJECT, ["harness:execute"]),
+    ):
+        await db.execute(
+            insert(IntegrationGrant).values(
+                id=uuid4(),
+                user_id=USER,
+                organization_id=ORG,
+                binding_kind=kind,
+                project_id=project,
+                device_id=DESKTOP,
+                request_id=account,
+                scopes=scopes,
+                token_hash=sha256(tokens[name].encode()).hexdigest(),
+                expires_at=SOON,
+                consented_at=datetime.now(timezone.utc),
+            )
+        )
+    await db.commit()
+    return account, tokens
+
+
+async def test_an_account_approval_is_listed_and_revoked_with_every_grant_under_it(
+    db: AsyncSession,
+) -> None:
+    account, tokens = await _account_approval(db)
+    listed = await _consents(db, DESKTOP)
+    assert listed[account] == ConnectionConsent(
+        request_id=account,
+        kind="account",
+        project_id=None,
+        project_label=None,
+        workspace_id=None,
+        workspace_label=None,
+        thread_id=None,
+        thread_label=None,
+        scopes=["harness:execute", "tools:read"],
+        status="consumed",
+        approved_at=None,
+    )
+    for name, scope in (("pairing", "tools:read"), ("run", "harness:execute")):
+        await resolve_integration_context(db, tokens[name], required_scope=scope)
+    await revoke_consent(db, await _user(db), account)
+    for name, scope in (("pairing", "tools:read"), ("run", "harness:execute")):
+        with pytest.raises(IntegrationAccessDenied):
+            await resolve_integration_context(db, tokens[name], required_scope=scope)
+    assert account not in await _consents(db, DESKTOP)
+    # The run grant is ended on its own row too, not only through its request.
+    ended = (
+        await db.scalars(
+            select(IntegrationGrant.revoked_at).where(
+                IntegrationGrant.request_id == account
+            )
+        )
+    ).all()
+    assert len(ended) == 2 and all(at is not None for at in ended)
+
+
+async def test_revoking_an_account_approval_leaves_other_consents_working(
+    db: AsyncSession,
+) -> None:
+    account, _ = await _account_approval(db)
+    await revoke_consent(db, await _user(db), account)
+    # The same device's own project consent is a different approval.
+    assert await _works(db, "d")
+    assert (await _consents(db, DESKTOP))[CONSENT_DESKTOP].kind == "project"
+
+
+async def test_an_account_approval_is_owner_only_and_listed_only_to_its_owner(
+    db: AsyncSession,
+) -> None:
+    account, tokens = await _account_approval(db)
+    other = await _user(db, OTHER_USER)
+    assert await list_connections(db, other) == []
+    with pytest.raises(ConnectionNotFound):
+        await revoke_consent(db, other, account)
+    await resolve_integration_context(
+        db, tokens["run"], required_scope="harness:execute"
+    )

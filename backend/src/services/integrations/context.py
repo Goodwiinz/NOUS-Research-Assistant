@@ -1,17 +1,20 @@
 """Restricted integration authority. Writes and transaction boundaries live here."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from hmac import compare_digest
 from secrets import token_urlsafe
 from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, exists, false, or_, select, update
+from sqlalchemy import ColumnElement, and_, exists, false, func, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from src.core.cli_token_revocation import revoke_user_cli_tokens
+from src.core.config import settings
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.collection import Collection
@@ -23,6 +26,8 @@ from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import (
     STANDARD_SCOPES,
+    AccountSummaryDTO,
+    BindingKind,
     DeviceCreate,
     DeviceListItemDTO,
     GrantRequestCreate,
@@ -31,7 +36,10 @@ from src.schemas.integration_context import (
     IntegrationContext,
     IssuedGrant,
     WorkspaceBindingCreate,
+    derive_binding_kind,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IntegrationAccessDenied(PermissionError):
@@ -57,12 +65,25 @@ class IntegrationConflict(Exception):
     """A request was already decided, consumed or expired."""
 
 
+class AccountConnectionsDisabled(Exception):
+    """ACCOUNT_CONNECTIONS_ENABLED is off: no new account approval request."""
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def live(value: datetime) -> bool:
     return value.replace(tzinfo=timezone.utc) > now()
+
+
+# A lapsed pairing may be resumed from its consent until this long after its
+# last grant expired (owner decision 2026-10-13); after that, approve again.
+RESUME_WINDOW = timedelta(days=30)
+
+
+def _grant_token_shape(token: str) -> bool:
+    return token.startswith("nous_ig_") and len(token) == 51
 
 
 # A grant never carries a library scope without the gateway scope the
@@ -86,7 +107,28 @@ _PROJECT_ONLY_SCOPES = frozenset(
 )
 
 
-def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> None:
+# An account approval spans many projects. Everything bound to one project or
+# one chat (artifact publication, selected memories, chat handoffs) stays with
+# project pairings; Local Codex runs get a project grant per run (PR 2).
+ACCOUNT_SCOPES = frozenset(
+    {"harness:execute", "tools:read", "tools:write", "library:read", "library:write"}
+)
+
+
+def check_scopes(
+    scopes: Iterable[str],
+    *,
+    binding_kind: BindingKind = "project",
+    workspace_bound: bool = False,
+) -> None:
+    """Refuse a scope set no grant of ``binding_kind`` may hold.
+
+    ``workspace_bound=True`` is the older spelling of
+    ``binding_kind="workspace"`` and is kept for its callers.
+    """
+    if workspace_bound and binding_kind != "project":
+        raise ValueError("pass binding_kind or workspace_bound, not both")
+    kind: BindingKind = "workspace" if workspace_bound else binding_kind
     held = set(scopes)
     if not held or not held <= STANDARD_SCOPES:
         raise IntegrationAccessDenied()
@@ -94,7 +136,9 @@ def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> Non
         not needed <= held for scope, needed in _SCOPE_REQUIRES.items() if scope in held
     ):
         raise IntegrationAccessDenied()
-    if workspace_bound and held & _PROJECT_ONLY_SCOPES:
+    if kind == "workspace" and held & _PROJECT_ONLY_SCOPES:
+        raise IntegrationAccessDenied()
+    if kind == "account" and not held <= ACCOUNT_SCOPES:
         raise IntegrationAccessDenied()
 
 
@@ -169,6 +213,142 @@ def _workspace_organization_admits(
             owning.is_active.is_(True),
         ),
         _legacy_workspace_in_org(organization_id),
+    )
+
+
+# --- The account rule (account connections) ---------------------------------
+#
+# An account approval covers the Collections of the workspaces in the user's
+# organization that they own or are a live member of, neither workspace nor
+# Collection archived or deleted, while the user is active in that live
+# organization. It is the organization rule of /projects
+# (research_engine.project_access.accessible_research_workspace_ids_query),
+# written with workspace_in_org (rule (c) of test_integration_boundaries.py)
+# plus "not archived". It is stricter than authorized_project, which keeps an
+# explicit member of another organization's workspace: such a workspace is
+# reachable through a project pairing, never through the account. Always a
+# SQL condition, never an id list: a statement must not bind one value per
+# Collection (see authorized_scope_filter).
+
+
+def _account_identity_live(user_id: UUID, organization_id: UUID) -> ColumnElement[bool]:
+    """The user is active in ``organization_id``, and that organization is
+    live. Aliased so an enclosing statement that joins users or
+    organizations cannot correlate these subqueries onto its own rows."""
+    actor = aliased(User)
+    organization = aliased(Organization)
+    return and_(
+        exists().where(
+            actor.id == user_id,
+            actor.organization_id == organization_id,
+            actor.is_active.is_(True),
+            actor.is_deleted.is_(False),
+        ),
+        exists().where(
+            organization.id == organization_id,
+            organization.is_deleted.is_(False),
+            organization.is_active.is_(True),
+        ),
+    )
+
+
+def account_workspace_condition(
+    user_id: UUID, organization_id: UUID
+) -> ColumnElement[bool]:
+    """``Workspace`` is in the account of ``user_id`` in ``organization_id``.
+
+    Names the unaliased ``Workspace``: the caller's FROM must contain it
+    (``select(Workspace...)``, or a join to it). Otherwise SQLAlchemy adds an
+    unjoined ``workspaces`` to the statement, a cross product the condition is
+    true for on every row."""
+    membership = aliased(WorkspaceMember)
+    return and_(
+        Workspace.is_deleted.is_(False),
+        Workspace.is_archived.is_(False),
+        or_(
+            Workspace.owner_id == user_id,
+            exists().where(
+                membership.workspace_id == Workspace.id,
+                membership.user_id == user_id,
+                membership.is_deleted.is_(False),
+            ),
+        ),
+        workspace_in_org(organization_id),
+        _account_identity_live(user_id, organization_id),
+    )
+
+
+def account_scope_condition(
+    user_id: UUID, organization_id: UUID
+) -> ColumnElement[bool]:
+    """``Collection`` is in the account: live, not archived, in an account
+    workspace.
+
+    Names the unaliased ``Collection``: the caller's FROM must contain it
+    (``select(Collection...)``, or a join to it). Otherwise SQLAlchemy adds an
+    unjoined ``collections`` to the statement, a cross product the condition
+    is true for on every row. The workspace subquery never correlates (``correlate(None)``),
+    so a statement that also joins ``Workspace`` (``_library_folders``) cannot
+    turn it into a test of its own row."""
+    workspaces = (
+        select(Workspace.id)
+        .where(account_workspace_condition(user_id, organization_id))
+        .correlate(None)
+    )
+    return and_(
+        Collection.is_deleted.is_(False),
+        Collection.research_status != "archived",
+        Collection.workspace_id.in_(workspaces),
+    )
+
+
+async def authorized_account(
+    db: AsyncSession, user_id: UUID, organization_id: UUID
+) -> None:
+    """The account binding's own check: the user is active in the live
+    organization. What the account covers is account_scope_condition."""
+    found = await db.scalar(
+        select(User.id).where(
+            User.id == user_id, _account_identity_live(user_id, organization_id)
+        )
+    )
+    if found is None:
+        raise IntegrationAccessDenied()
+
+
+async def authorized_account_workspace(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, workspace_id: UUID
+) -> Row[Any]:
+    """``(id, name)`` of one workspace in the account, else a denial."""
+    row = (
+        await db.execute(
+            select(Workspace.id, Workspace.name).where(
+                Workspace.id == workspace_id,
+                account_workspace_condition(user_id, organization_id),
+            )
+        )
+    ).first()
+    if row is None:
+        raise IntegrationAccessDenied()
+    return row
+
+
+async def account_summary(
+    db: AsyncSession, user_id: UUID, organization_id: UUID
+) -> AccountSummaryDTO:
+    """How many workspaces and projects the account covers right now."""
+    workspaces = await db.scalar(
+        select(func.count())
+        .select_from(Workspace)
+        .where(account_workspace_condition(user_id, organization_id))
+    )
+    projects = await db.scalar(
+        select(func.count())
+        .select_from(Collection)
+        .where(account_scope_condition(user_id, organization_id))
+    )
+    return AccountSummaryDTO(
+        workspace_count=int(workspaces or 0), project_count=int(projects or 0)
     )
 
 
@@ -263,8 +443,12 @@ async def authorized_scope_filter(
     statement may bind (asyncpg refuses more than 32,767 parameters, and the
     collection routes put no cap on a workspace), so an ``IN`` list of its ids
     is an outage waiting for that many folders. The condition does not exclude
-    soft-deleted Collections or Workspaces: the caller's statement must.
+    soft-deleted Collections or Workspaces: the caller's statement must. An
+    account condition excludes deleted and archived rows itself.
     """
+    if context.binding_kind == "account":
+        await authorized_account(db, context.user_id, context.organization_id)
+        return account_scope_condition(context.user_id, context.organization_id)
     if context.project_id is not None:
         await authorized_project(
             db, context.user_id, context.organization_id, context.project_id
@@ -316,13 +500,27 @@ async def validate_binding(
     thread_id: UUID | None = None,
     run_id: UUID | str | None = None,
     device_id: UUID | None = None,
+    binding_kind: BindingKind | None = None,
 ) -> None:
-    if project_id is not None and workspace_id is None:
+    # Without a stated kind the columns decide, and both NULL is no binding:
+    # only binding_kind="account" makes it the account.
+    kind = (
+        binding_kind
+        if binding_kind is not None
+        else derive_binding_kind(project_id, workspace_id)
+    )
+    if kind == "project" and project_id is not None and workspace_id is None:
         await authorized_project(db, user_id, organization_id, project_id)
-    elif workspace_id is not None and project_id is None:
+    elif kind == "workspace" and workspace_id is not None and project_id is None:
         await authorized_workspace(db, user_id, organization_id, workspace_id)
         # A workspace has no single project for a chat or a run to belong to.
         if thread_id is not None or run_id is not None:
+            raise IntegrationAccessDenied()
+    elif kind == "account" and project_id is None and workspace_id is None:
+        await authorized_account(db, user_id, organization_id)
+        # An account approval belongs to one device and to no chat or run;
+        # each run gets a project grant of its own (PR 2).
+        if device_id is None or thread_id is not None or run_id is not None:
             raise IntegrationAccessDenied()
     else:
         raise IntegrationAccessDenied()
@@ -370,10 +568,50 @@ async def validate_binding(
             raise IntegrationAccessDenied()
 
 
+def _consent_admits(
+    kind: BindingKind,
+    project_id: UUID | None,
+    workspace_id: UUID | None,
+    user_id: UUID,
+    organization_id: UUID,
+) -> ColumnElement[bool]:
+    """The consent requests that may stand behind a grant with this binding.
+
+    account: an account consent. workspace: a consent of that workspace.
+    project: a consent of that project, or an account consent while the
+    project is in the account. That is evaluated in the same statement, so a
+    project that leaves the account ends every grant under the account consent
+    at its next use.
+    """
+    if kind == "account":
+        return IntegrationGrantRequest.binding_kind == "account"
+    if kind == "workspace" and workspace_id is not None:
+        return and_(
+            IntegrationGrantRequest.binding_kind == "workspace",
+            IntegrationGrantRequest.workspace_id == workspace_id,
+        )
+    if kind == "project" and project_id is not None:
+        return or_(
+            and_(
+                IntegrationGrantRequest.binding_kind == "project",
+                IntegrationGrantRequest.project_id == project_id,
+            ),
+            and_(
+                IntegrationGrantRequest.binding_kind == "account",
+                exists().where(
+                    Collection.id == project_id,
+                    account_scope_condition(user_id, organization_id),
+                ),
+            ),
+        )
+    return false()
+
+
 def _new_grant(
     *,
     user_id: UUID,
     organization_id: UUID,
+    binding_kind: BindingKind,
     project_id: UUID | None = None,
     workspace_id: UUID | None = None,
     scopes: Iterable[str],
@@ -387,6 +625,7 @@ def _new_grant(
         id=uuid4(),
         user_id=user_id,
         organization_id=organization_id,
+        binding_kind=binding_kind,
         project_id=project_id,
         workspace_id=workspace_id,
         scopes=sorted(scopes),
@@ -401,6 +640,28 @@ def _new_grant(
     return grant, IssuedGrant(token=token, grant_id=grant.id)
 
 
+def _single_lineage(
+    matching: list[IntegrationGrantRequest],
+) -> IntegrationGrantRequest | None:
+    """The one consent a device's grant may be minted under, else None.
+
+    ``matching`` holds only the consents that admit the binding and hold the
+    requested scopes, so precedence counts only those: an account consent
+    without ``harness:execute`` does not win a run grant over a project
+    consent that has it. Among them an account consent wins over project
+    consents. ``nous --rc`` replaces a project pairing with an account pairing
+    and leaves the project consent live until the user revokes it; the account
+    lineage is the one the running bridge holds and renews. Two account
+    consents holding the scopes, or no account consent and more than one
+    project consent, are ambiguous: fail closed. Picking the first row would be
+    nondeterministic and could mint authority the paired bridge cannot renew.
+    """
+    accounts = [consent for consent in matching if consent.binding_kind == "account"]
+    if accounts:
+        return accounts[0] if len(accounts) == 1 else None
+    return matching[0] if len(matching) == 1 else None
+
+
 async def mint_integration_grant(
     db: AsyncSession,
     *,
@@ -412,9 +673,24 @@ async def mint_integration_grant(
     thread_id: UUID | None = None,
     run_id: UUID | None = None,
     device_id: UUID | None = None,
+    consent_kind: BindingKind | None = None,
 ) -> IssuedGrant:
-    """Trusted internal API. External issuance must use the consent exchange."""
-    check_scopes(scopes, workspace_bound=workspace_id is not None)
+    """Trusted internal API. External issuance must use the consent exchange.
+
+    ``consent_kind`` (PR 2's run path is intended to pass it) restricts the device's
+    consents to that kind. Among them exactly one must match. Without it, an
+    account consent wins over project consents (_single_lineage).
+
+    Mints a project or workspace grant, never an account grant: that exists
+    only as a device's pairing (exchange_request). With a device, the grant's
+    consent is the device's one live consent that admits the binding
+    (_consent_admits, _single_lineage). For a project that is a consent of the
+    project, or an account consent while the project is in the account.
+    """
+    kind = derive_binding_kind(project_id, workspace_id)
+    if kind is None:
+        raise IntegrationAccessDenied()
+    check_scopes(scopes, binding_kind=kind)
     await validate_binding(
         db,
         user_id=user_id,
@@ -424,6 +700,7 @@ async def mint_integration_grant(
         thread_id=thread_id,
         run_id=run_id,
         device_id=device_id,
+        binding_kind=kind,
     )
     request_id = None
     if device_id is not None:
@@ -433,31 +710,34 @@ async def mint_integration_grant(
                 .where(
                     IntegrationGrantRequest.user_id == user_id,
                     IntegrationGrantRequest.organization_id == organization_id,
-                    IntegrationGrantRequest.project_id == project_id,
-                    IntegrationGrantRequest.workspace_id == workspace_id,
+                    _consent_admits(
+                        kind, project_id, workspace_id, user_id, organization_id
+                    ),
                     IntegrationGrantRequest.device_id == device_id,
                     IntegrationGrantRequest.status == "consumed",
                     IntegrationGrantRequest.consent_revoked_at.is_(None),
                     IntegrationGrantRequest.is_deleted.is_(False),
+                    *(
+                        ()
+                        if consent_kind is None
+                        else (IntegrationGrantRequest.binding_kind == consent_kind,)
+                    ),
                 )
                 .execution_options(populate_existing=True)
             )
         ).all()
-        # A chat-bound consent authorizes only its chat; a project-wide
-        # consent (thread_id NULL) authorizes any chat in the project.
+        # A chat-bound consent authorizes only its chat; a project-wide or
+        # account consent (thread_id NULL) authorizes any chat it covers.
         matching_consents = [
             consent
             for consent in consents
             if scopes <= set(consent.scopes) and consent.thread_id in (None, thread_id)
         ]
-        # A device may have more than one consumed consent lineage. Selecting
-        # the first database row is nondeterministic and can mint run authority
-        # that the currently paired bridge credential cannot renew. Fail closed
-        # until the owner leaves one unambiguous active consent for this device.
-        if len(matching_consents) != 1:
+        chosen = _single_lineage(matching_consents)
+        if chosen is None:
             # Name the one cause the owner can fix from the chat: a consent
             # with enough scopes exists but is bound to another chat. No
-            # consent, too few scopes or two lineages stay opaque.
+            # consent, too few scopes or an ambiguous lineage stay opaque.
             if not matching_consents and any(
                 scopes <= set(consent.scopes)
                 and consent.thread_id not in (None, thread_id)
@@ -465,10 +745,11 @@ async def mint_integration_grant(
             ):
                 raise DeviceBoundToAnotherChat()
             raise IntegrationAccessDenied()
-        request_id = matching_consents[0].id
+        request_id = chosen.id
     grant, issued = _new_grant(
         user_id=user_id,
         organization_id=organization_id,
+        binding_kind=kind,
         project_id=project_id,
         workspace_id=workspace_id,
         scopes=scopes,
@@ -492,7 +773,11 @@ async def _validate_grant(
         or not live(grant.expires_at)
     ):
         raise IntegrationAccessDenied()
-    check_scopes(grant.scopes, workspace_bound=grant.workspace_id is not None)
+    kind = cast(BindingKind, grant.binding_kind)
+    check_scopes(grant.scopes, binding_kind=kind)
+    # An account grant exists only as one device's pairing, from its consent.
+    if kind == "account" and grant.request_id is None:
+        raise IntegrationAccessDenied()
     await validate_binding(
         db,
         user_id=grant.user_id,
@@ -502,6 +787,7 @@ async def _validate_grant(
         thread_id=grant.thread_id,
         run_id=grant.run_id,
         device_id=grant.device_id,
+        binding_kind=kind,
     )
     if grant.device_id is not None:
         consent = await db.scalar(
@@ -511,8 +797,13 @@ async def _validate_grant(
                 IntegrationGrantRequest.status == "consumed",
                 IntegrationGrantRequest.user_id == grant.user_id,
                 IntegrationGrantRequest.organization_id == grant.organization_id,
-                IntegrationGrantRequest.project_id == grant.project_id,
-                IntegrationGrantRequest.workspace_id == grant.workspace_id,
+                _consent_admits(
+                    kind,
+                    grant.project_id,
+                    grant.workspace_id,
+                    grant.user_id,
+                    grant.organization_id,
+                ),
                 IntegrationGrantRequest.device_id == grant.device_id,
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
                 IntegrationGrantRequest.is_deleted.is_(False),
@@ -536,7 +827,7 @@ async def resolve_integration_context(
     nothing.
     """
     accepted = (required_scope,) if isinstance(required_scope, str) else required_scope
-    if not token.startswith("nous_ig_") or len(token) != 51:
+    if not _grant_token_shape(token):
         raise IntegrationAccessDenied()
     grant = await db.scalar(
         select(IntegrationGrant)
@@ -556,6 +847,7 @@ async def resolve_integration_context(
         grant_id=grant.id,
         consent_id=grant.request_id,
         scopes=frozenset(grant.scopes),
+        binding_kind=cast(BindingKind, grant.binding_kind),
     )
 
 
@@ -594,7 +886,10 @@ async def revoke_integration_grant(
 async def create_request(
     db: AsyncSession, user: Any, data: GrantRequestCreate
 ) -> GrantRequestDTO:
-    check_scopes(data.scopes, workspace_bound=data.workspace_id is not None)
+    kind = data.binding_kind
+    if kind == "account" and not settings.ACCOUNT_CONNECTIONS_ENABLED:
+        raise AccountConnectionsDisabled()
+    check_scopes(data.scopes, binding_kind=kind)
     await validate_binding(
         db,
         user_id=user.id,
@@ -603,11 +898,13 @@ async def create_request(
         workspace_id=data.workspace_id,
         device_id=data.device_id,
         thread_id=data.thread_id,
+        binding_kind=kind,
     )
     request = IntegrationGrantRequest(
         id=uuid4(),
         user_id=user.id,
         organization_id=user.organization_id,
+        binding_kind=kind,
         project_id=data.project_id,
         workspace_id=data.workspace_id,
         device_id=data.device_id,
@@ -644,6 +941,7 @@ async def owned_request(
         workspace_id=request.workspace_id,
         device_id=request.device_id,
         thread_id=request.thread_id,
+        binding_kind=cast(BindingKind, request.binding_kind),
     )
     return cast(IntegrationGrantRequest, request)
 
@@ -651,7 +949,10 @@ async def owned_request(
 async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantRequestDTO:
     request = await owned_request(db, user, request_id)
     project_label = workspace_label = None
-    if request.project_id is not None:
+    summary: AccountSummaryDTO | None = None
+    if request.binding_kind == "account":
+        summary = await account_summary(db, user.id, user.organization_id)
+    elif request.project_id is not None:
         project = await authorized_project(
             db, user.id, user.organization_id, request.project_id
         )
@@ -678,6 +979,7 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         status=cast(GrantRequestStatus, status),
         expires_at=request.expires_at,
         approval_url=f"/integrations/approve?request_id={request.id}",
+        binding_kind=cast(BindingKind, request.binding_kind),
         project_id=request.project_id,
         workspace_id=request.workspace_id,
         device_id=request.device_id,
@@ -687,6 +989,7 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         device_label=device.label,
         thread_id=request.thread_id,
         thread_label=thread_label,
+        account_summary=summary,
     )
 
 
@@ -736,6 +1039,7 @@ async def exchange_request(
     grant, issued = _new_grant(
         user_id=user.id,
         organization_id=user.organization_id,
+        binding_kind=cast(BindingKind, request.binding_kind),
         project_id=request.project_id,
         workspace_id=request.workspace_id,
         device_id=request.device_id,
@@ -768,13 +1072,103 @@ async def renew_grant(db: AsyncSession, user: Any, grant_id: UUID) -> IssuedGran
     grant = await _validate_grant(db, grant)
     if grant.device_id is None:
         raise IntegrationAccessDenied()
+    return await _replace_grant(db, grant, IntegrationGrant.expires_at > now())
+
+
+async def resume_grant(
+    db: AsyncSession, user: Any, grant_id: UUID, token: str
+) -> IssuedGrant:
+    """Re-issue a device's lapsed grant from the consent it was exchanged
+    from, without a new browser approval.
+
+    The caller must present the grant's own token, expired or not: a CLI
+    sign-in is not bound to a device, so the token (kept in the bridge's
+    owner-only credential file) is what proves this is the paired computer.
+    The grant is replaced like a renewal, so its token works once. Refused
+    once the grant was renewed or revoked (CLI disconnect, Revoke or device
+    disconnect under Connected devices), its consent or device revoked, its
+    project, workspace or chat out of reach, or ``RESUME_WINDOW`` after it
+    expired. Scopes come from the grant, never wider than its consent.
+    IntegrationConflict when the grant was replaced or revoked between the
+    checks and the swap.
+    """
+    grant = await owned_grant(db, user, grant_id)
+    if (
+        not _grant_token_shape(token)
+        or not compare_digest(grant.token_hash, sha256(token.encode()).hexdigest())
+        or grant.is_deleted
+        or grant.revoked_at is not None
+        # A pairing grant: bound to a device and its consent, never to a run.
+        or grant.device_id is None
+        or grant.request_id is None
+        or grant.run_id is not None
+        or grant.expires_at.replace(tzinfo=timezone.utc) <= now() - RESUME_WINDOW
+    ):
+        raise IntegrationAccessDenied()
+    kind = cast(BindingKind, grant.binding_kind)
+    check_scopes(grant.scopes, binding_kind=kind)
+    await validate_binding(
+        db,
+        user_id=grant.user_id,
+        organization_id=grant.organization_id,
+        project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
+        thread_id=grant.thread_id,
+        device_id=grant.device_id,
+        binding_kind=kind,
+    )
+    consent = await db.scalar(
+        select(IntegrationGrantRequest)
+        .where(
+            IntegrationGrantRequest.id == grant.request_id,
+            IntegrationGrantRequest.status == "consumed",
+            IntegrationGrantRequest.user_id == grant.user_id,
+            IntegrationGrantRequest.organization_id == grant.organization_id,
+            _consent_admits(
+                kind,
+                grant.project_id,
+                grant.workspace_id,
+                grant.user_id,
+                grant.organization_id,
+            ),
+            IntegrationGrantRequest.device_id == grant.device_id,
+            # The pairing's own chat binding: exchange and renewal copy it.
+            IntegrationGrantRequest.thread_id == grant.thread_id,
+            IntegrationGrantRequest.consent_revoked_at.is_(None),
+            IntegrationGrantRequest.is_deleted.is_(False),
+        )
+        .execution_options(populate_existing=True)
+    )
+    if consent is None or not set(grant.scopes) <= set(consent.scopes):
+        raise IntegrationAccessDenied()
+    issued = await _replace_grant(db, grant)
+    # Authority re-issued without a browser step: the line to audit when a
+    # credential file may have been copied. Never log the token.
+    logger.info(
+        "integration grant resumed: grant=%s successor=%s device=%s consent=%s user=%s",
+        grant.id,
+        issued.grant_id,
+        grant.device_id,
+        grant.request_id,
+        grant.user_id,
+    )
+    return issued
+
+
+async def _replace_grant(
+    db: AsyncSession, grant: IntegrationGrant, *conditions: ColumnElement[bool]
+) -> IssuedGrant:
+    """Revoke ``grant`` while it is unrevoked (and ``conditions`` hold) and
+    issue its successor with the same binding, scopes, device, chat, run and
+    consent. Of two concurrent callers one wins; the other gets
+    IntegrationConflict."""
     result = await db.execute(
         update(IntegrationGrant)
         .execution_options(synchronize_session="fetch")
         .where(
-            IntegrationGrant.id == grant_id,
+            IntegrationGrant.id == grant.id,
             IntegrationGrant.revoked_at.is_(None),
-            IntegrationGrant.expires_at > now(),
+            *conditions,
         )
         .values(revoked_at=now())
     )
@@ -784,6 +1178,7 @@ async def renew_grant(db: AsyncSession, user: Any, grant_id: UUID) -> IssuedGran
     replacement, issued = _new_grant(
         user_id=grant.user_id,
         organization_id=grant.organization_id,
+        binding_kind=cast(BindingKind, grant.binding_kind),
         project_id=grant.project_id,
         workspace_id=grant.workspace_id,
         device_id=grant.device_id,
@@ -809,6 +1204,32 @@ async def register_device(
     db.add(device)
     await db.commit()
     return device
+
+
+async def _holds_account_run_consent(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, device_id: UUID
+) -> bool:
+    """The device holds a live account approval that can run Codex: consumed,
+    not revoked, with harness:execute, while the user is active in the live
+    organization."""
+    try:
+        await authorized_account(db, user_id, organization_id)
+    except IntegrationAccessDenied:
+        return False
+    held = (
+        await db.scalars(
+            select(IntegrationGrantRequest.scopes).where(
+                IntegrationGrantRequest.user_id == user_id,
+                IntegrationGrantRequest.organization_id == organization_id,
+                IntegrationGrantRequest.device_id == device_id,
+                IntegrationGrantRequest.binding_kind == "account",
+                IntegrationGrantRequest.status == "consumed",
+                IntegrationGrantRequest.consent_revoked_at.is_(None),
+                IntegrationGrantRequest.is_deleted.is_(False),
+            )
+        )
+    ).all()
+    return any("harness:execute" in (scopes or []) for scopes in held)
 
 
 async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
@@ -838,10 +1259,25 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
             )
         )
     ).all()
+    try:
+        await authorized_account(db, user.id, user.organization_id)
+        account_live = True
+    except IntegrationAccessDenied:
+        # The user is no longer active in a live organization: an account
+        # approval still on file covers nothing (see _holds_account_run_consent).
+        account_live = False
     run_chats: dict[UUID, list[UUID | None]] = {d.id: [] for d in devices}
+    account_wide: dict[UUID, bool] = {d.id: False for d in devices}
+    project_ids: dict[UUID, set[UUID]] = {d.id: set() for d in devices}
     for consent in consents:
-        if "harness:execute" in (consent.scopes or []):
-            run_chats[consent.device_id].append(consent.thread_id)
+        if "harness:execute" not in (consent.scopes or []):
+            continue
+        run_chats[consent.device_id].append(consent.thread_id)
+        if consent.binding_kind == "account":
+            if account_live:
+                account_wide[consent.device_id] = True
+        elif consent.binding_kind == "project" and consent.project_id is not None:
+            project_ids[consent.device_id].add(consent.project_id)
     return [
         DeviceListItemDTO(
             id=device.id,
@@ -854,6 +1290,8 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
                     key=str,
                 )
             ),
+            account_wide=account_wide[device.id],
+            project_ids=sorted(project_ids[device.id], key=str),
         )
         for device in devices
     ]
@@ -863,7 +1301,15 @@ async def bind_workspace(
     db: AsyncSession, user: Any, device_id: UUID, data: WorkspaceBindingCreate
 ) -> WorkspaceBinding:
     await owned_device(db, device_id, user.id, user.organization_id)
-    await authorized_project(db, user.id, user.organization_id, data.project_id)
+    if data.project_id is None:
+        # An account folder belongs to no project: only a live account
+        # approval of this device that can run Codex may register one.
+        if not await _holds_account_run_consent(
+            db, user.id, user.organization_id, device_id
+        ):
+            raise IntegrationAccessDenied()
+    else:
+        await authorized_project(db, user.id, user.organization_id, data.project_id)
     binding = await db.scalar(
         select(WorkspaceBinding).where(
             WorkspaceBinding.device_id == device_id,
@@ -897,8 +1343,16 @@ async def list_workspaces(
             )
         )
     ).all()
+    account = await _holds_account_run_consent(
+        db, user.id, user.organization_id, device_id
+    )
     authorized = []
     for binding in bindings:
+        if binding.project_id is None:
+            # An account folder: listed while the account approval lives.
+            if account:
+                authorized.append(binding)
+            continue
         try:
             await authorized_project(
                 db, user.id, user.organization_id, binding.project_id

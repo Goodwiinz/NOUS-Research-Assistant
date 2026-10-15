@@ -175,6 +175,25 @@
         "title": "APIKeyResponse",
         "type": "object"
       },
+      "AccountSummaryDTO": {
+        "description": "What an account approval covers at the moment it is shown.",
+        "properties": {
+          "project_count": {
+            "title": "Project Count",
+            "type": "integer"
+          },
+          "workspace_count": {
+            "title": "Workspace Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "workspace_count",
+          "project_count"
+        ],
+        "title": "AccountSummaryDTO",
+        "type": "object"
+      },
       "ActionDecision": {
         "additionalProperties": false,
         "properties": {
@@ -7338,7 +7357,8 @@
           "kind": {
             "enum": [
               "project",
-              "workspace"
+              "workspace",
+              "account"
             ],
             "title": "Kind",
             "type": "string"
@@ -9525,8 +9545,12 @@
       },
       "DeviceListItemDTO": {
         "additionalProperties": false,
-        "description": "A paired computer as the chat composer lists it.",
+        "description": "A paired computer as the chat composer lists it.\n\nAll three lists come from the device's live run consents: consumed, not\nrevoked, holding harness:execute. The mint stays the authority.",
         "properties": {
+          "account_wide": {
+            "title": "Account Wide",
+            "type": "boolean"
+          },
           "bound_thread_ids": {
             "items": {
               "format": "uuid",
@@ -9545,12 +9569,22 @@
             "minLength": 1,
             "title": "Label",
             "type": "string"
+          },
+          "project_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Project Ids",
+            "type": "array"
           }
         },
         "required": [
           "label",
           "id",
-          "bound_thread_ids"
+          "bound_thread_ids",
+          "account_wide",
+          "project_ids"
         ],
         "title": "DeviceListItemDTO",
         "type": "object"
@@ -13845,6 +13879,11 @@
       "GrantRequestCreate": {
         "additionalProperties": false,
         "properties": {
+          "account": {
+            "default": false,
+            "title": "Account",
+            "type": "boolean"
+          },
           "device_id": {
             "format": "uuid",
             "title": "Device Id",
@@ -13904,8 +13943,27 @@
       },
       "GrantRequestDTO": {
         "properties": {
+          "account_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountSummaryDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "approval_url": {
             "title": "Approval Url",
+            "type": "string"
+          },
+          "binding_kind": {
+            "enum": [
+              "project",
+              "workspace",
+              "account"
+            ],
+            "title": "Binding Kind",
             "type": "string"
           },
           "device_id": {
@@ -14021,6 +14079,7 @@
           "status",
           "expires_at",
           "approval_url",
+          "binding_kind",
           "project_id",
           "device_id",
           "scopes",
@@ -30970,9 +31029,16 @@
             "type": "string"
           },
           "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "workspace_id": {
             "format": "uuid",
@@ -30982,8 +31048,7 @@
         },
         "required": [
           "label",
-          "workspace_id",
-          "project_id"
+          "workspace_id"
         ],
         "title": "WorkspaceBindingCreate",
         "type": "object"
@@ -30998,9 +31063,16 @@
             "type": "string"
           },
           "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "workspace_id": {
             "format": "uuid",
@@ -31010,8 +31082,7 @@
         },
         "required": [
           "label",
-          "workspace_id",
-          "project_id"
+          "workspace_id"
         ],
         "title": "WorkspaceBindingDTO",
         "type": "object"
@@ -45231,6 +45302,55 @@
           }
         ],
         "summary": "Renew Grant",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grants/{grant_id}/resume": {
+      "post": {
+        "description": "Re-issue this device's lapsed grant from the browser consent it was\nexchanged from, without a new approval or a new device.\n\nSend the stored grant token, even expired, in `X-NOUS-Integration-Grant`:\na CLI sign-in is not bound to a device, so the grant's own token proves\nwhich pairing is resumed, and it works once. Refused (403) once the grant\nwas renewed or revoked, its consent or device revoked, its project,\nworkspace or chat out of reach, or 30 days after it expired; 409 when\nthe grant was replaced or revoked meanwhile (another resume or renewal\nwon, or a revoke landed).",
+        "operationId": "resume_grant_api_v1_integrations_grants__grant_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Resume Grant",
         "tags": [
           "integrations"
         ]

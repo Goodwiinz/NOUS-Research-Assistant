@@ -1,4 +1,4 @@
-"""Harness runs stay bound to one Collection: a workspace grant never connects."""
+"""Harness runs stay bound to one Collection: a workspace or account grant never connects."""
 
 import json
 from types import SimpleNamespace
@@ -121,6 +121,30 @@ async def test_plain_ws_exception_is_loopback_only(
         if host in {"127.0.0.1", "::1"} and environment in {"development", "local"}
         else 0
     )
+    socket.accept.assert_not_awaited()
+    socket.close.assert_awaited_once_with(
+        code=4403, reason="Bridge authorization denied"
+    )
+
+
+async def test_connect_refuses_an_account_grant_until_account_runs_exist(
+    transport: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        transport,
+        "resolve_integration_context",
+        AsyncMock(
+            return_value=IntegrationContext(
+                user_id=USER,
+                organization_id=ORG,
+                binding_kind="account",
+                grant_id=GRANT,
+                scopes=frozenset({"harness:execute"}),
+            )
+        ),
+    )
+    socket = _socket()
+    await transport.connect(socket)
     socket.accept.assert_not_awaited()
     socket.close.assert_awaited_once_with(
         code=4403, reason="Bridge authorization denied"

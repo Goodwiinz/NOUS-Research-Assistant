@@ -32,6 +32,8 @@ router = APIRouter()
 async def call(operation: Awaitable[T]) -> T:
     try:
         return await operation
+    except service.AccountConnectionsDisabled as error:
+        raise HTTPException(503, "Account connections are disabled") from error
     except service.IntegrationAccessDenied as error:
         raise HTTPException(403, "Integration access denied") from error
     except service.IntegrationConflict as error:
@@ -100,6 +102,30 @@ async def renew_grant(
     ):
         raise HTTPException(403, "Integration access denied")
     return await call(service.renew_grant(db, user, grant_id))
+
+
+@router.post("/grants/{grant_id}/resume", response_model=IssuedGrant)
+async def resume_grant(
+    grant_id: UUID,
+    request: Request,
+    user: User = Depends(require_cli_user),
+    db: AsyncSession = Depends(get_db),
+) -> IssuedGrant:
+    """Re-issue this device's lapsed grant from the browser consent it was
+    exchanged from, without a new approval or a new device.
+
+    Send the stored grant token, even expired, in `X-NOUS-Integration-Grant`:
+    a CLI sign-in is not bound to a device, so the grant's own token proves
+    which pairing is resumed, and it works once. Refused (403) once the grant
+    was renewed or revoked, its consent or device revoked, its project,
+    workspace or chat out of reach, or 30 days after it expired; 409 when
+    the grant was replaced or revoked meanwhile (another resume or renewal
+    won, or a revoke landed)."""
+    return await call(
+        service.resume_grant(
+            db, user, grant_id, request.headers.get("x-nous-integration-grant", "")
+        )
+    )
 
 
 @router.delete("/grants/{grant_id}", status_code=204)
