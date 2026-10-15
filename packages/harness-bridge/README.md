@@ -5,7 +5,7 @@
 ## Requirements and pairing
 
 - Node.js 24 and the repository-pinned pnpm version.
-- Codex CLI exactly `0.153.4` for this adapter. The adapter refuses other versions.
+- A Codex CLI version the adapter has been tested with: `0.153.4` or `0.161.0` (`SUPPORTED_CODEX_VERSIONS` in `src/adapters/codex.ts`; the procedure for adding one is in `src/adapters/protocol/README.md`). The adapter refuses other versions before it starts anything. `0.161.0` has passed the package tests, a schema comparison and an adapter start against the real binary; its live run from a NOUS chat is NOT RUN.
 - A project-bound NOUS chat, an organization-backed account, and a NOUS server with `HARNESS_BRIDGE_ENABLED=true`.
 
 Start `nous-harness connect` from the repository-pinned package runtime. The CLI opens the existing NOUS browser authorization flow, registers the local computer, and waits for a browser-approved `harness:execute` grant for the selected project. Then register a workspace root and run the local bridge:
