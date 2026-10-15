@@ -1,5 +1,5 @@
-import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/integrationConnectionsService', () => ({
   integrationConnectionsService: {
@@ -8,10 +8,14 @@ vi.mock('@/services/integrationConnectionsService', () => ({
     disconnect: vi.fn(),
   },
 }));
+vi.mock('@/services/harnessService', () => ({
+  harnessService: { listWorkspaces: vi.fn() },
+}));
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: (): { user: { id: string } } => ({ user: { id: 'u1' } }),
 }));
 
+import { harnessService } from '@/services/harnessService';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
 import { render } from '@/test/test-utils';
 import type {
@@ -77,7 +81,16 @@ const accountConsent: ApiConnectionConsent = {
   approved_at: null,
 };
 
+const accountLaptop: ApiConnectedDevice = {
+  ...laptop,
+  consents: [accountConsent],
+};
+
 describe('ConnectedDevices', () => {
+  beforeEach(() => {
+    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([]);
+  });
+
   it('lists devices with plain-language access', async () => {
     vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
     render(<ConnectedDevices />);
@@ -366,5 +379,60 @@ describe('ConnectedDevices', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/Only from chat/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Workspace/)).not.toBeInTheDocument();
+  });
+
+  it('lists the account folders of a computer with account access', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      accountLaptop,
+    ]);
+    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([
+      { workspace_id: 'f1', project_id: null, label: 'thesis-code' },
+      { workspace_id: 'f2', project_id: 'p1', label: 'project-only' },
+    ]);
+    render(<ConnectedDevices />);
+    const folders = await screen.findByRole('list', {
+      name: 'Account folders on Laptop (d1)',
+    });
+    expect(
+      within(folders)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual(['thesis-code']);
+    expect(screen.queryByText('project-only')).not.toBeInTheDocument();
+    expect(harnessService.listWorkspaces).toHaveBeenCalledWith('d1');
+  });
+
+  it('does not look up folders for a computer without account access', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
+    render(<ConnectedDevices />);
+    expect(await screen.findByText('Thesis (p1)')).toBeInTheDocument();
+    expect(screen.queryByText('Account folders')).not.toBeInTheDocument();
+    expect(harnessService.listWorkspaces).not.toHaveBeenCalled();
+  });
+
+  it('says when a computer has no account folders yet', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      accountLaptop,
+    ]);
+    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([
+      { workspace_id: 'f2', project_id: 'p1', label: 'project-only' },
+    ]);
+    render(<ConnectedDevices />);
+    expect(
+      await screen.findByText('No account folders on this computer yet.')
+    ).toBeInTheDocument();
+  });
+
+  it('reports account folders that could not be loaded', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      accountLaptop,
+    ]);
+    vi.mocked(harnessService.listWorkspaces).mockRejectedValue(
+      new Error('500')
+    );
+    render(<ConnectedDevices />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Account folders could not be loaded.'
+    );
   });
 });

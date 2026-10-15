@@ -2,11 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useState, type ReactElement } from 'react';
+import { useId, useState, type ReactElement } from 'react';
 
 import { getSelectedThreadUrl } from '@/components/chat/shared/chatNavigation';
 import { useAuth } from '@/hooks/useAuth';
 import { scopeSummary } from '@/lib/integrations/scopeLabels';
+import { harnessService } from '@/services/harnessService';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
 import type { ApiConnectionConsent } from '@/types/api/integration-connections-contract';
 
@@ -35,6 +36,62 @@ const consentName = (consent: ApiConnectionConsent): string => {
     ? `${target}, only from chat ${consent.thread_label}`
     : `${target}, only from a chat that is no longer available`;
 };
+
+/**
+ * Folders on this computer that belong to no project (account folders): any
+ * chat in the account can run Codex in them. Read through the same query key
+ * as the chat composer's folder list, so the folder list has one cache.
+ */
+function AccountFolders({
+  deviceId,
+  deviceLabel,
+  userId,
+}: {
+  deviceId: string;
+  deviceLabel: string;
+  userId: string | undefined;
+}): ReactElement {
+  const headingId = useId();
+  const folders = useQuery({
+    queryKey: ['harness', 'workspaces', userId, deviceId],
+    enabled: Boolean(userId),
+    queryFn: () => harnessService.listWorkspaces(deviceId),
+    retry: false,
+    staleTime: 0,
+  });
+  const accountFolders =
+    folders.data?.filter((folder) => folder.project_id === null) ?? [];
+  return (
+    <div className="space-y-1">
+      <h3 id={headingId} className="text-sm font-semibold">
+        Account folders
+        <span className="sr-only">{` on ${deviceLabel} (${deviceId})`}</span>
+      </h3>
+      {folders.isPending && (
+        <p role="status" className="text-sm">
+          Loading folders…
+        </p>
+      )}
+      {folders.isError && (
+        <p role="alert" className="text-sm">
+          Account folders could not be loaded.
+        </p>
+      )}
+      {folders.isSuccess && accountFolders.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No account folders on this computer yet.
+        </p>
+      )}
+      {accountFolders.length > 0 && (
+        <ul aria-labelledby={headingId} className="list-disc pl-5 text-sm">
+          {accountFolders.map((folder) => (
+            <li key={folder.workspace_id}>{folder.label}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /**
  * Connected coding devices and what each may do. Revoking takes effect on
@@ -192,6 +249,13 @@ export function ConnectedDevices(): ReactElement {
                   </li>
                 ))}
               </ul>
+            )}
+            {device.consents.some((consent) => consent.kind === 'account') && (
+              <AccountFolders
+                deviceId={device.device_id}
+                deviceLabel={device.device_label}
+                userId={user?.id}
+              />
             )}
           </li>
         ))}
