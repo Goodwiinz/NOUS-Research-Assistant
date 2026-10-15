@@ -56,6 +56,27 @@ const workspaceConsent: ApiConnectionConsent = {
   approved_at: null,
 };
 
+// An account consent binds neither a project nor a workspace (PR 1).
+const accountConsent: ApiConnectionConsent = {
+  request_id: 'r4',
+  kind: 'account',
+  project_id: null,
+  project_label: null,
+  workspace_id: null,
+  workspace_label: null,
+  thread_id: null,
+  thread_label: null,
+  scopes: [
+    'harness:execute',
+    'library:read',
+    'library:write',
+    'tools:read',
+    'tools:write',
+  ],
+  status: 'consumed',
+  approved_at: null,
+};
+
 describe('ConnectedDevices', () => {
   it('lists devices with plain-language access', async () => {
     vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
@@ -64,6 +85,37 @@ describe('ConnectedDevices', () => {
     expect(
       screen.getByText('run coding sessions, read project documents')
     ).toBeInTheDocument();
+  });
+
+  it('lists an account consent as the whole account and revokes it on its own', async () => {
+    vi.mocked(integrationConnectionsService.list)
+      .mockResolvedValueOnce([
+        { ...laptop, consents: [...laptop.consents, accountConsent] },
+      ])
+      .mockResolvedValue([laptop]);
+    vi.mocked(integrationConnectionsService.revokeConsent).mockResolvedValue();
+    const { user } = render(<ConnectedDevices />);
+    expect(await screen.findByText('Whole account')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'run Local Codex from any chat, list your workspaces and projects, change folders and paper details in any project without asking each time, read documents in every project, request notes in any project (you approve each one)'
+      )
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to your whole account',
+      })
+    );
+    expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledTimes(
+      1
+    );
+    expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledWith(
+      'r4'
+    );
+    await waitFor(() =>
+      expect(screen.queryByText('Whole account')).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();
   });
 
   it('revokes one project and refreshes the list', async () => {

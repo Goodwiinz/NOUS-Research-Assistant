@@ -10,20 +10,26 @@ import { scopeSummary } from '@/lib/integrations/scopeLabels';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
 import type { ApiConnectionConsent } from '@/types/api/integration-connections-contract';
 
-// A consent reaches one project, or every project of one workspace (Plan 07).
+// A consent reaches one project, every project of one workspace (Plan 07),
+// or every project in the account (account connections).
 const consentTarget = (consent: ApiConnectionConsent): string =>
-  consent.kind === 'workspace'
-    ? `Workspace ${consent.workspace_label ?? ''} (${consent.workspace_id ?? ''}), every project in it`
-    : `${consent.project_label ?? ''} (${consent.project_id ?? ''})`;
+  consent.kind === 'account'
+    ? 'Whole account'
+    : consent.kind === 'workspace'
+      ? `Workspace ${consent.workspace_label ?? ''} (${consent.workspace_id ?? ''}), every project in it`
+      : `${consent.project_label ?? ''} (${consent.project_id ?? ''})`;
 
 // Names a consent apart from its siblings in control labels: two consents of
 // one device for the same project differ only by the chat they are bound to.
 // Truthiness, not `!== null`: a backend older than this page omits thread_id.
+// An account consent is never chat-bound.
 const consentName = (consent: ApiConnectionConsent): string => {
   const target =
-    consent.kind === 'workspace'
-      ? `workspace ${consent.workspace_label ?? ''}`
-      : (consent.project_label ?? '');
+    consent.kind === 'account'
+      ? 'your whole account'
+      : consent.kind === 'workspace'
+        ? `workspace ${consent.workspace_label ?? ''}`
+        : (consent.project_label ?? '');
   if (!consent.thread_id) return target;
   return consent.thread_label
     ? `${target}, only from chat ${consent.thread_label}`
