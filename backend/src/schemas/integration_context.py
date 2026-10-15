@@ -180,18 +180,26 @@ class DeviceDTO(DeviceCreate):
 
 
 class DeviceListItemDTO(DeviceDTO):
-    """A paired computer as the chat composer lists it."""
+    """A paired computer as the chat composer lists it.
 
-    # Chats this computer can run Codex in when every live run consent
-    # (harness:execute) it holds is bound to a chat (Plan 06 slice 2). Empty
-    # when one of them is project-wide, or when it holds none: the composer
-    # then does not restrict it. The mint stays the authority.
+    All three lists come from the device's live run consents: consumed, not
+    revoked, holding harness:execute. The mint stays the authority."""
+
+    # Chats this computer can run Codex in when every live run consent it
+    # holds is bound to a chat (Plan 06 slice 2). Empty when one of them is
+    # project-wide or account-wide, or when it holds none.
     bound_thread_ids: list[UUID]
+    # It holds a live account run consent: any project in the account.
+    account_wide: bool
+    # Projects of its live project run consents, chat-bound ones included.
+    project_ids: list[UUID]
 
 
 class WorkspaceBindingCreate(DeviceCreate):
     workspace_id: UUID
-    project_id: UUID
+    # None or omitted: an account folder (needs a live account run consent
+    # on the device; bind_workspace refuses it otherwise).
+    project_id: UUID | None = None
 
 
 class WorkspaceBindingDTO(WorkspaceBindingCreate):

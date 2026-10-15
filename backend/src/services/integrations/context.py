@@ -1203,6 +1203,32 @@ async def register_device(
     return device
 
 
+async def _holds_account_run_consent(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, device_id: UUID
+) -> bool:
+    """The device holds a live account approval that can run Codex: consumed,
+    not revoked, with harness:execute, while the user is active in the live
+    organization."""
+    try:
+        await authorized_account(db, user_id, organization_id)
+    except IntegrationAccessDenied:
+        return False
+    held = (
+        await db.scalars(
+            select(IntegrationGrantRequest.scopes).where(
+                IntegrationGrantRequest.user_id == user_id,
+                IntegrationGrantRequest.organization_id == organization_id,
+                IntegrationGrantRequest.device_id == device_id,
+                IntegrationGrantRequest.binding_kind == "account",
+                IntegrationGrantRequest.status == "consumed",
+                IntegrationGrantRequest.consent_revoked_at.is_(None),
+                IntegrationGrantRequest.is_deleted.is_(False),
+            )
+        )
+    ).all()
+    return any("harness:execute" in (scopes or []) for scopes in held)
+
+
 async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
     devices = (
         await db.scalars(
@@ -1231,9 +1257,16 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
         )
     ).all()
     run_chats: dict[UUID, list[UUID | None]] = {d.id: [] for d in devices}
+    account_wide: dict[UUID, bool] = {d.id: False for d in devices}
+    project_ids: dict[UUID, set[UUID]] = {d.id: set() for d in devices}
     for consent in consents:
-        if "harness:execute" in (consent.scopes or []):
-            run_chats[consent.device_id].append(consent.thread_id)
+        if "harness:execute" not in (consent.scopes or []):
+            continue
+        run_chats[consent.device_id].append(consent.thread_id)
+        if consent.binding_kind == "account":
+            account_wide[consent.device_id] = True
+        elif consent.binding_kind == "project" and consent.project_id is not None:
+            project_ids[consent.device_id].add(consent.project_id)
     return [
         DeviceListItemDTO(
             id=device.id,
@@ -1246,6 +1279,8 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
                     key=str,
                 )
             ),
+            account_wide=account_wide[device.id],
+            project_ids=sorted(project_ids[device.id], key=str),
         )
         for device in devices
     ]
@@ -1255,7 +1290,15 @@ async def bind_workspace(
     db: AsyncSession, user: Any, device_id: UUID, data: WorkspaceBindingCreate
 ) -> WorkspaceBinding:
     await owned_device(db, device_id, user.id, user.organization_id)
-    await authorized_project(db, user.id, user.organization_id, data.project_id)
+    if data.project_id is None:
+        # An account folder belongs to no project: only a live account
+        # approval of this device that can run Codex may register one.
+        if not await _holds_account_run_consent(
+            db, user.id, user.organization_id, device_id
+        ):
+            raise IntegrationAccessDenied()
+    else:
+        await authorized_project(db, user.id, user.organization_id, data.project_id)
     binding = await db.scalar(
         select(WorkspaceBinding).where(
             WorkspaceBinding.device_id == device_id,
@@ -1289,8 +1332,16 @@ async def list_workspaces(
             )
         )
     ).all()
+    account = await _holds_account_run_consent(
+        db, user.id, user.organization_id, device_id
+    )
     authorized = []
     for binding in bindings:
+        if binding.project_id is None:
+            # An account folder: listed while the account approval lives.
+            if account:
+                authorized.append(binding)
+            continue
         try:
             await authorized_project(
                 db, user.id, user.organization_id, binding.project_id

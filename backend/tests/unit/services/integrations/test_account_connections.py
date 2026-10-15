@@ -35,6 +35,7 @@ from src.schemas.integration_context import (
     GrantRequestCreate,
     IntegrationContext,
     IssuedGrant,
+    WorkspaceBindingCreate,
 )
 from src.schemas.tool_actions import ActionActor
 from src.services.integrations import context as service
@@ -802,3 +803,204 @@ async def test_the_mint_never_issues_an_account_grant(db: AsyncSession) -> None:
         await service.mint_integration_grant(
             db, user_id=USER, organization_id=ORG, scopes=RUN, device_id=DEVICE
         )
+
+
+# --- devices and folders (Task 10) -------------------------------------------------
+
+
+def test_an_omitted_folder_project_is_an_account_folder() -> None:
+    assert WorkspaceBindingCreate(label="repo", workspace_id=uuid4()).project_id is None
+    assert (
+        WorkspaceBindingCreate(
+            label="repo", workspace_id=uuid4(), project_id=None
+        ).project_id
+        is None
+    )
+
+
+async def _consent_row(
+    db: AsyncSession,
+    *,
+    device: UUID,
+    binding: dict[str, Any],
+    scopes: list[str],
+    revoked: bool = False,
+    thread: UUID | None = None,
+) -> UUID:
+    """A consumed consent written directly, for shapes create_request refuses
+    to make here (a chat-bound one needs a real chat)."""
+    consent = uuid4()
+    if thread is not None:
+        await db.execute(
+            text("INSERT INTO threads (id) VALUES (:id)"), {"id": str(thread)}
+        )
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=consent,
+            user_id=USER,
+            organization_id=ORG,
+            device_id=device,
+            scopes=scopes,
+            status="consumed",
+            expires_at=SOON,
+            thread_id=thread,
+            consent_revoked_at=datetime.now(timezone.utc) if revoked else None,
+            **binding,
+        )
+    )
+    await db.commit()
+    return consent
+
+
+async def test_list_devices_reports_account_and_project_run_consents(
+    db: AsyncSession,
+) -> None:
+    run = ["harness:execute", "tools:read"]
+    await _consent_row(
+        db, device=DEVICE, binding={"binding_kind": "account"}, scopes=run
+    )
+    await _consent_row(
+        db, device=OTHER_DEVICE, binding={"project_id": P_OWNED}, scopes=run
+    )
+    chat = uuid4()
+    await _consent_row(
+        db,
+        device=OTHER_DEVICE,
+        binding={"project_id": P_OWNED_2},
+        scopes=run,
+        thread=chat,
+    )
+    # Ignored: no harness:execute, and a revoked account consent.
+    await _consent_row(
+        db, device=OTHER_DEVICE, binding={"project_id": P_MEMBER}, scopes=["tools:read"]
+    )
+    await _consent_row(
+        db,
+        device=OTHER_DEVICE,
+        binding={"binding_kind": "account"},
+        scopes=run,
+        revoked=True,
+    )
+    listed = {device.id: device for device in await service.list_devices(db, OWNER)}
+    assert (listed[DEVICE].account_wide, listed[DEVICE].project_ids) == (True, [])
+    assert listed[DEVICE].bound_thread_ids == []
+    assert listed[OTHER_DEVICE].account_wide is False
+    assert listed[OTHER_DEVICE].project_ids == sorted([P_OWNED, P_OWNED_2], key=str)
+    # A project-wide run consent beside the chat-bound one: not restricted.
+    assert listed[OTHER_DEVICE].bound_thread_ids == []
+
+
+# SECURITY-CRITICAL: an account folder needs a live account approval.
+async def test_an_account_folder_needs_a_live_account_run_consent(
+    db: AsyncSession,
+) -> None:
+    folder = WorkspaceBindingCreate(label="repo", workspace_id=uuid4(), project_id=None)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.bind_workspace(db, OWNER, DEVICE, folder)
+    await _approve(db, scopes=frozenset({"tools:read"}))  # cannot run Codex
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.bind_workspace(db, OWNER, DEVICE, folder)
+    await _approve(db, device=OTHER_DEVICE)  # another computer's approval
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.bind_workspace(db, OWNER, DEVICE, folder)
+    consent, _ = await _approve(db)
+    bound = await service.bind_workspace(db, OWNER, DEVICE, folder)
+    assert bound.project_id is None
+    assert (await service.bind_workspace(db, OWNER, DEVICE, folder)).id == bound.id
+    await _revoke(db, consent)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.bind_workspace(
+            db,
+            OWNER,
+            DEVICE,
+            WorkspaceBindingCreate(
+                label="other", workspace_id=uuid4(), project_id=None
+            ),
+        )
+
+
+async def test_list_workspaces_keeps_account_folders_while_the_approval_lives(
+    db: AsyncSession,
+) -> None:
+    consent, _ = await _approve(db)
+    account_folder = await service.bind_workspace(
+        db,
+        OWNER,
+        DEVICE,
+        WorkspaceBindingCreate(label="any", workspace_id=uuid4(), project_id=None),
+    )
+    project_folder = await service.bind_workspace(
+        db,
+        OWNER,
+        DEVICE,
+        WorkspaceBindingCreate(
+            label="thesis", workspace_id=uuid4(), project_id=P_OWNED
+        ),
+    )
+    listed = {
+        binding.id for binding in await service.list_workspaces(db, OWNER, DEVICE)
+    }
+    assert listed == {account_folder.id, project_folder.id}
+    await _revoke(db, consent)
+    listed = {
+        binding.id for binding in await service.list_workspaces(db, OWNER, DEVICE)
+    }
+    assert listed == {project_folder.id}
+
+
+async def test_a_folder_keeps_its_kind_and_a_project_folder_its_project(
+    db: AsyncSession,
+) -> None:
+    await _approve(db)
+    workspace_id = uuid4()
+    await service.bind_workspace(
+        db,
+        OWNER,
+        DEVICE,
+        WorkspaceBindingCreate(
+            label="repo", workspace_id=workspace_id, project_id=None
+        ),
+    )
+    with pytest.raises(service.IntegrationConflict):
+        await service.bind_workspace(
+            db,
+            OWNER,
+            DEVICE,
+            WorkspaceBindingCreate(
+                label="repo", workspace_id=workspace_id, project_id=P_OWNED
+            ),
+        )
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.bind_workspace(
+            db,
+            OWNER,
+            DEVICE,
+            WorkspaceBindingCreate(label="x", workspace_id=uuid4(), project_id=uuid4()),
+        )
+
+
+async def test_account_folders_need_the_user_active_in_a_live_organization(
+    db: AsyncSession,
+) -> None:
+    await _approve(db)
+    folder = await service.bind_workspace(
+        db,
+        OWNER,
+        DEVICE,
+        WorkspaceBindingCreate(label="any", workspace_id=uuid4(), project_id=None),
+    )
+    await db.execute(
+        update(Organization).where(Organization.id == ORG).values(is_active=False)
+    )
+    await db.commit()
+    # The consent row still reads live; the account itself no longer does.
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.bind_workspace(
+            db,
+            OWNER,
+            DEVICE,
+            WorkspaceBindingCreate(label="more", workspace_id=uuid4(), project_id=None),
+        )
+    assert folder.id not in {
+        binding.id for binding in await service.list_workspaces(db, OWNER, DEVICE)
+    }
