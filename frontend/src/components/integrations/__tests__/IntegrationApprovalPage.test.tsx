@@ -222,4 +222,66 @@ describe('IntegrationApprovalPage', () => {
     expect(screen.queryByText('Covers')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+  describe('a request it cannot describe', () => {
+    const cannotShow = "This request can't be shown here.";
+
+    it.each([
+      ['an unknown binding kind', { ...request, binding_kind: 'organization' }],
+      [
+        'a project request without its project',
+        {
+          ...request,
+          binding_kind: 'project',
+          project_id: null,
+          project_label: null,
+        },
+      ],
+      [
+        'a workspace request without its workspace',
+        {
+          ...workspaceRequest,
+          binding_kind: 'workspace',
+          workspace_id: null,
+          workspace_label: null,
+        },
+      ],
+    ])('refuses %s and cannot be approved', async (_name, body) => {
+      mockGet.mockResolvedValue(body);
+      render(<IntegrationApprovalPage />);
+      expect(await screen.findByText(cannotShow)).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Approve access' })
+      ).toBeDisabled();
+      expect(screen.queryByText('Project')).not.toBeInTheDocument();
+      expect(screen.queryByText(/null/)).not.toBeInTheDocument();
+    });
+
+    it('treats a request with no binding kind and no ids as the whole account', async () => {
+      const { binding_kind: _kind, ...legacy } = accountRequest;
+      mockGet.mockResolvedValue(legacy);
+      render(<IntegrationApprovalPage />);
+      expect(
+        await screen.findByRole('heading', {
+          name: 'Laptop wants access to your whole NOUS account',
+        })
+      ).toBeInTheDocument();
+      expect(screen.getByText('Covers')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'This device can change your library without asking.'
+      );
+      expect(screen.queryByText(cannotShow)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Approve access' })
+      ).toBeEnabled();
+    });
+
+    it('still approves a project request an older backend sent without a kind', async () => {
+      mockGet.mockResolvedValue(request);
+      render(<IntegrationApprovalPage />);
+      expect(await screen.findByText('Thesis (project-1)')).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Approve access' })
+      ).toBeEnabled();
+    });
+  });
 });
