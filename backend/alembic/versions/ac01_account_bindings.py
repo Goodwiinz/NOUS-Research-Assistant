@@ -24,7 +24,7 @@ point at deleted rows (neither column is a foreign key). Old code reads the
 missing consent as a refusal.
 
 Revision ID: ac01_account_bindings
-Revises: aw03_artifact_completion
+Revises: jd01_document_embeddings
 """
 
 import sqlalchemy as sa
@@ -32,7 +32,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "ac01_account_bindings"
-down_revision = "aw03_artifact_completion"
+down_revision = "jd01_document_embeddings"
 branch_labels = None
 depends_on = None
 

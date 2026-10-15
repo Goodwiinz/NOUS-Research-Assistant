@@ -21,7 +21,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-PARENT = "aw03_artifact_completion"
+PARENT = "jd01_document_embeddings"
 REVISION = "ac01_account_bindings"
 REQUESTS, GRANTS, ACTIONS = (
     "integration_grant_requests",
