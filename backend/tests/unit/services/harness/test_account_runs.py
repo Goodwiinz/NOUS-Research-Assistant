@@ -55,10 +55,12 @@ from src.services.harness.account import (
     run_project,
 )
 from src.services.integrations.context import (
+    DeviceNotConnectedToProject,
     IntegrationAccessDenied,
     create_request,
     decide_request,
     exchange_request,
+    list_devices,
     mint_integration_grant,
     resolve_integration_context,
 )
@@ -739,6 +741,143 @@ async def test_an_unknown_or_deleted_folder_is_denied(
             device_id=ACCOUNT_DEVICE,
             workspace_id=FOLDER_A,
         )
+
+
+async def test_every_refusal_of_a_device_or_folder_is_one_named_message(
+    db: AsyncSession, context: IntegrationContext, account: IntegrationContext
+) -> None:
+    """The chat names the refusal, and it names the same thing whatever the
+    cause, so a guessed device or folder id learns nothing."""
+    await pair_project(db, PROJECT_B, DEVICE)
+    await leave_account(db)
+    thread = await db.get(Thread, THREAD)
+    thread_b = await db.get(Thread, THREAD_B)
+    cases = [
+        (thread, uuid4(), FOLDER_A),  # unknown device
+        (thread, ACCOUNT_DEVICE, uuid4()),  # unknown folder
+        (thread, ACCOUNT_DEVICE, LOCAL),  # a folder of another device
+        (thread_b, DEVICE, LOCAL),  # a project folder of another project
+        (thread_b, ACCOUNT_DEVICE, FOLDER_A),  # a project outside the account
+    ]
+    messages = set()
+    for chat, device_id, folder in cases:
+        with pytest.raises(DeviceNotConnectedToProject) as raised:
+            await create_chat_context(
+                db,
+                current_user=OWNER,
+                thread=chat,
+                device_id=device_id,
+                workspace_id=folder,
+            )
+        messages.add(
+            (type(raised.value), raised.value.client_message, str(raised.value))
+        )
+    assert len(messages) == 1
+
+
+async def test_two_account_approvals_still_serve_a_project_folder_with_its_own_approval(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    """The composer's lists agree with the mint. Two runnable account approvals
+    are ambiguous, so the device is not account-wide and its account folders
+    are refused; a project folder of a project it holds an approval for still
+    mints under that approval (consent_kind restricts the mint to project
+    approvals), so the project stays listed."""
+    second = await pair_account(db)
+    assert second.consent_id != account.consent_id
+    project_approval = await pair_project(db, PROJECT, ACCOUNT_DEVICE)
+    project_folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=project_folder,
+            project_id=PROJECT,
+            label="p",
+        )
+    )
+    await db.commit()
+    listed = {d.id: d for d in await list_devices(db, OWNER)}[ACCOUNT_DEVICE]
+    assert listed.account_wide is False
+    assert listed.project_ids == [PROJECT]
+    thread = await db.get(Thread, THREAD)
+    with pytest.raises(DeviceNotConnectedToProject):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=thread,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+        )
+    run_context = await create_chat_context(
+        db,
+        current_user=OWNER,
+        thread=thread,
+        device_id=ACCOUNT_DEVICE,
+        workspace_id=project_folder,
+    )
+    grant = await db.get(IntegrationGrant, run_context.grant_id)
+    assert grant is not None and grant.request_id == project_approval.consent_id
+
+
+async def test_a_chat_bound_approval_does_not_offer_the_computer_to_other_chats(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    """An unbound approval for PROJECT beside one for PROJECT_B bound to a
+    single chat: the composer must not list PROJECT_B for the project's other
+    chats, which the mint refuses."""
+    bound_chat, other_chat = uuid4(), uuid4()
+    for chat in (bound_chat, other_chat):
+        db.add(
+            Thread(
+                id=chat,
+                conversation_id=CONVERSATION_B,
+                source_project_id=PROJECT_B,
+                title="t",
+                created_by_id=USER,
+                message_count=0,
+            )
+        )
+    await db.commit()
+    db.add(
+        IntegrationGrantRequest(
+            id=uuid4(),
+            user_id=USER,
+            organization_id=ORG,
+            binding_kind="project",
+            project_id=PROJECT_B,
+            device_id=DEVICE,
+            thread_id=bound_chat,
+            scopes=["harness:execute"],
+            status="consumed",
+            expires_at=datetime.now(timezone.utc),
+        )
+    )
+    folder_b = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=DEVICE, workspace_id=folder_b, project_id=PROJECT_B, label="b"
+        )
+    )
+    await db.commit()
+    listed = {d.id: d for d in await list_devices(db, OWNER)}[DEVICE]
+    assert listed.project_ids == [PROJECT]
+    assert listed.bound_thread_ids == []
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, other_chat),
+            device_id=DEVICE,
+            workspace_id=folder_b,
+        )
+    ok = await create_chat_context(
+        db,
+        current_user=OWNER,
+        thread=await db.get(Thread, bound_chat),
+        device_id=DEVICE,
+        workspace_id=folder_b,
+    )
+    assert ok.project_id == PROJECT_B
 
 
 async def _run_and_session(db: AsyncSession, run_id: str) -> tuple[Any, HarnessSession]:

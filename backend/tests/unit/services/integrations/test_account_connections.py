@@ -983,9 +983,32 @@ async def test_list_devices_reports_account_and_project_run_consents(
     assert (listed[DEVICE].account_wide, listed[DEVICE].project_ids) == (True, [])
     assert listed[DEVICE].bound_thread_ids == []
     assert listed[OTHER_DEVICE].account_wide is False
-    assert listed[OTHER_DEVICE].project_ids == sorted([P_OWNED, P_OWNED_2], key=str)
+    # Only the chat-unbound project approval: the one bound to a chat serves
+    # that chat alone, which bound_thread_ids cannot say beside an unbound one.
+    assert listed[OTHER_DEVICE].project_ids == [P_OWNED]
     # A project-wide run consent beside the chat-bound one: not restricted.
     assert listed[OTHER_DEVICE].bound_thread_ids == []
+
+
+async def test_list_devices_lists_no_project_for_a_chat_bound_approval(
+    db: AsyncSession,
+) -> None:
+    """A project approval bound to one chat serves that chat only: it names no
+    project for every chat of the project (the server would refuse the rest);
+    bound_thread_ids names the chat instead."""
+    run = ["harness:execute", "tools:read"]
+    chat = uuid4()
+    await _consent_row(
+        db, device=DEVICE, binding={"project_id": P_OWNED_2}, scopes=run, thread=chat
+    )
+    listed = {d.id: d for d in await service.list_devices(db, OWNER)}
+    assert listed[DEVICE].project_ids == []
+    assert listed[DEVICE].bound_thread_ids == [chat]
+    # An unbound approval of another project does not widen the bound one.
+    await _consent_row(db, device=DEVICE, binding={"project_id": P_OWNED}, scopes=run)
+    listed = {d.id: d for d in await service.list_devices(db, OWNER)}
+    assert listed[DEVICE].project_ids == [P_OWNED]
+    assert listed[DEVICE].bound_thread_ids == []
 
 
 # SECURITY-CRITICAL: an account folder needs a live account approval.
