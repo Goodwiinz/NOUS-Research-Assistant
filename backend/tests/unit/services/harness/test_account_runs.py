@@ -560,3 +560,205 @@ async def test_an_unknown_or_deleted_folder_is_denied(
             device_id=ACCOUNT_DEVICE,
             workspace_id=FOLDER_A,
         )
+
+
+async def _run_and_session(db: AsyncSession, run_id: str) -> tuple[Any, HarnessSession]:
+    run = await db.get(AgentRun, run_id, populate_existing=True)
+    session = await db.scalar(
+        select(HarnessSession).where(HarnessSession.run_id == run_id)
+    )
+    assert run is not None and session is not None
+    return run, session
+
+
+async def test_an_account_folder_run_is_bound_to_its_chats_project(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    run_id = await start(db, THREAD_B, FOLDER_A)
+    run, session = await _run_and_session(db, run_id)
+    assert run.project_id == PROJECT_B and run.execution_provider == "codex"
+    grant = await db.get(IntegrationGrant, session.grant_id)
+    assert grant is not None and grant.binding_kind == "project"
+    assert grant.request_id == account.consent_id
+
+
+async def test_the_run_stream_context_keeps_the_grants_binding_kind(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.api.agent.harness_streaming import context_for_accepted_run
+
+    run_id = await start(db, THREAD_B, FOLDER_A)
+    streamed = await context_for_accepted_run(
+        db, run_id=UUID(run_id), current_user=OWNER
+    )
+    assert streamed.binding_kind == "project"
+    assert streamed.project_id == PROJECT_B
+
+
+async def test_the_account_pairing_grant_authorizes_each_run_by_its_project(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import _authorize
+
+    for thread_id, folder in ((THREAD, FOLDER_A), (THREAD_B, FOLDER_B)):
+        run, session = await _run_and_session(db, await start(db, thread_id, folder))
+        granted = await _authorize(db, account, run, session)
+        assert granted.id == account.grant_id
+
+
+async def test_a_grant_context_carries_the_grants_binding_kind(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import grant_context
+
+    pairing = await db.get(IntegrationGrant, account.grant_id)
+    assert pairing is not None
+    rebuilt = grant_context(pairing)
+    assert (rebuilt.binding_kind, rebuilt.project_id) == ("account", None)
+    _run, session = await _run_and_session(db, await start(db, THREAD, FOLDER_A))
+    run_grant = await db.get(IntegrationGrant, session.grant_id)
+    assert run_grant is not None
+    assert grant_context(run_grant).binding_kind == "project"
+
+
+# Mutation MA3: delete the `if under_account and not await
+# project_in_account(...)` raise in authorize_external_submission; this test
+# and test_a_run_grant_names_only_its_own_project must fail.
+async def test_an_account_grant_refuses_a_run_whose_project_left_the_account(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.account import ProjectOutsideAccount
+    from src.services.harness.delivery import _authorize
+
+    run, session = await _run_and_session(db, await start(db, THREAD_B, FOLDER_A))
+    await leave_account(db)
+    with pytest.raises(ProjectOutsideAccount):
+        await _authorize(db, account, run, session)
+
+
+async def test_a_project_grant_cannot_authorize_another_projects_account_run(
+    db: AsyncSession, context: IntegrationContext, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import _authorize
+
+    run, session = await _run_and_session(db, await start(db, THREAD_B, FOLDER_A))
+    with pytest.raises(IntegrationAccessDenied):
+        await _authorize(db, context, run, session)
+
+
+async def test_a_project_pairing_cannot_authorize_an_account_folder_run(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    """Same device, same project: the project pairing is another lineage and
+    an account folder is not its own."""
+    from src.services.harness.delivery import _authorize
+
+    project_pairing = await pair_project(db, PROJECT_B, ACCOUNT_DEVICE)
+    run, session = await _run_and_session(db, await start(db, THREAD_B, FOLDER_A))
+    with pytest.raises(IntegrationAccessDenied):
+        await _authorize(db, project_pairing, run, session)
+
+
+async def test_another_devices_account_pairing_cannot_authorize_the_run(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import _authorize
+
+    other_device = uuid4()
+    db.add(
+        BridgeDevice(id=other_device, user_id=USER, organization_id=ORG, label="two")
+    )
+    await db.commit()
+    elsewhere = await pair_account(db, other_device)
+    run, session = await _run_and_session(db, await start(db, THREAD_B, FOLDER_A))
+    with pytest.raises(IntegrationAccessDenied):
+        await _authorize(db, elsewhere, run, session)
+
+
+# Mutation R7: drop `grant.device_id != device_id` in
+# authorize_external_submission; this test must fail. (The lineage check in
+# delivery._authorize refuses the same call, so the first layer is tested
+# directly.)
+async def test_an_account_pairing_authorizes_only_runs_on_its_own_device(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.runs import authorize_external_submission
+
+    other_device = uuid4()
+    db.add(
+        BridgeDevice(id=other_device, user_id=USER, organization_id=ORG, label="two")
+    )
+    await db.commit()
+    elsewhere = await pair_account(db, other_device)
+
+    async def authorize(context: IntegrationContext) -> None:
+        await authorize_external_submission(
+            db,
+            context=context,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+            thread_id=THREAD_B,
+            project_id=PROJECT_B,
+        )
+
+    await authorize(account)
+    with pytest.raises(IntegrationAccessDenied):
+        await authorize(elsewhere)
+
+
+# Mutation MA4: add the `WorkspaceBinding.project_id.is_(None)` alternative to
+# authorize_external_submission's folder predicates unconditionally (drop
+# `if under_account`); this test must fail.
+async def test_a_project_approval_never_runs_in_an_account_folder(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    from tests.unit.services.harness.test_runs import accept, request
+
+    loose = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=DEVICE, workspace_id=loose, project_id=None, label="x"
+        )
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await accept(db, context, request().model_copy(update={"workspace_id": loose}))
+
+
+async def test_a_run_grant_names_only_its_own_project(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    """A caller-supplied project is honoured only for an account pairing grant."""
+    from src.services.harness.runs import authorize_external_submission
+
+    run_context = await create_chat_context(
+        db,
+        current_user=OWNER,
+        thread=await db.get(Thread, THREAD),
+        device_id=ACCOUNT_DEVICE,
+        workspace_id=FOLDER_A,
+    )
+
+    async def authorize(project_id: UUID | None) -> None:
+        await authorize_external_submission(
+            db,
+            context=run_context,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+            thread_id=THREAD,
+            project_id=project_id,
+        )
+
+    await authorize(None)
+    await authorize(PROJECT)
+    with pytest.raises(IntegrationAccessDenied):
+        await authorize(PROJECT_B)
+    # An account pairing grant needs the run's project, and only a covered one.
+    with pytest.raises(IntegrationAccessDenied):
+        await authorize_external_submission(
+            db,
+            context=account,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+            thread_id=THREAD,
+        )

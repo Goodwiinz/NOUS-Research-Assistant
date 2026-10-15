@@ -19,10 +19,11 @@ from src.models.chat_message import ChatMessage, MessageRole
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
 from src.models.integration_grant import IntegrationGrant
 from src.schemas.harness import BridgeCommand, BridgeEvent, Observation, ProducerEvent
-from src.schemas.integration_context import IntegrationContext
+from src.schemas.integration_context import BindingKind, IntegrationContext
 from src.services.agent.agent_submission_service import finalize_submission
 from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
+from src.services.harness.account import run_project
 from src.services.harness.prompt_context import build_harness_prompt, prompt_is_current
 from src.services.harness.runs import (
     authorize_external_submission,
@@ -51,6 +52,7 @@ def grant_context(grant: IntegrationGrant) -> IntegrationContext:
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        binding_kind=cast(BindingKind, grant.binding_kind),
         thread_id=grant.thread_id,
         run_id=UUID(grant.run_id) if grant.run_id else None,
         grant_id=grant.id,
@@ -64,9 +66,14 @@ async def _authorize(
         run.execution_provider != "codex"
         or run.user_id != context.user_id
         or run.organization_id != context.organization_id
-        or run.project_id != context.project_id
         or (context.run_id and str(context.run_id) != run.job_id)
     ):
+        raise IntegrationAccessDenied()
+    # An account pairing grant (the bridge's, after lease_commands swapped it
+    # in) names no project: the run's own is used, and
+    # authorize_external_submission checks it against the account.
+    project_id = run_project(context, run)
+    if project_id is None or run.project_id != project_id:
         raise IntegrationAccessDenied()
     await authorize_external_submission(
         db,
@@ -74,6 +81,7 @@ async def _authorize(
         device_id=session.device_id,
         workspace_id=session.workspace_id,
         thread_id=run.thread_id,
+        project_id=project_id,
     )
     grant = await db.get(IntegrationGrant, context.grant_id, populate_existing=True)
     assert grant is not None
