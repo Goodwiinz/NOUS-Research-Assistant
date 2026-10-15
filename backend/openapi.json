@@ -17485,6 +17485,165 @@
         "title": "PaginationInfo",
         "type": "object"
       },
+      "PaperMetadata": {
+        "properties": {
+          "abstract": {
+            "title": "Abstract",
+            "type": "string"
+          },
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Authors",
+            "type": "array"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "latest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Id"
+          },
+          "latest_withdrawn": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Withdrawn"
+          },
+          "pdf_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Url"
+          },
+          "published": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published"
+          },
+          "source": {
+            "enum": [
+              "arxiv_atom",
+              "arxiv_abstract_page",
+              "arxiv_atom+abstract_page"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated"
+          },
+          "withdrawn": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until this revision's withdrawal status is checked",
+            "title": "Withdrawn"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "authors",
+          "abstract",
+          "source",
+          "checked_at"
+        ],
+        "title": "PaperMetadata",
+        "type": "object"
+      },
+      "PaperRequest": {
+        "properties": {
+          "paper_id": {
+            "maxLength": 64,
+            "title": "Paper Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "paper_id"
+        ],
+        "title": "PaperRequest",
+        "type": "object"
+      },
       "PendingReviewResponse": {
         "additionalProperties": false,
         "description": "Pending review state for a run the caller can view, with bounded stage output.",
@@ -20145,6 +20304,59 @@
           "document_id"
         ],
         "title": "RealtimeStatusSubscription",
+        "type": "object"
+      },
+      "RecentImportRequest": {
+        "properties": {
+          "categories": {
+            "items": {
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9-]*(?:\\.[A-Za-z][A-Za-z0-9-]*)?$",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Categories",
+            "type": "array"
+          },
+          "days": {
+            "default": 1,
+            "maximum": 7.0,
+            "minimum": 1.0,
+            "title": "Days",
+            "type": "integer"
+          },
+          "max_results": {
+            "default": 20,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Max Results",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "categories"
+        ],
+        "title": "RecentImportRequest",
+        "type": "object"
+      },
+      "RecentImportResponse": {
+        "properties": {
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "RecentImportResponse",
         "type": "object"
       },
       "ReferenceMapping": {
@@ -38358,6 +38570,187 @@
           }
         ],
         "summary": "Process Batch Local Papers"
+      }
+    },
+    "/api/v1/arxiv/papers/metadata": {
+      "get": {
+        "operationId": "metadata_api_v1_arxiv_papers_metadata_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "paper_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "title": "Paper Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Metadata",
+        "tags": [
+          "arxiv-papers"
+        ]
+      }
+    },
+    "/api/v1/arxiv/papers/pdf": {
+      "get": {
+        "operationId": "pdf_api_v1_arxiv_papers_pdf_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "paper_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "title": "Paper Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Pdf",
+        "tags": [
+          "arxiv-papers"
+        ]
+      }
+    },
+    "/api/v1/arxiv/papers/recent": {
+      "post": {
+        "operationId": "recent_api_v1_arxiv_papers_recent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecentImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Recent",
+        "tags": [
+          "arxiv-papers"
+        ]
+      }
+    },
+    "/api/v1/arxiv/papers/sync": {
+      "post": {
+        "operationId": "sync_api_v1_arxiv_papers_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync",
+        "tags": [
+          "arxiv-papers"
+        ]
       }
     },
     "/api/v1/arxiv/search": {
