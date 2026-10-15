@@ -1309,7 +1309,15 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
         run_chats[consent.device_id].append(consent.thread_id)
         if consent.binding_kind == "account":
             account_runs[consent.device_id] += 1
-        elif consent.binding_kind == "project" and consent.project_id is not None:
+        elif (
+            consent.binding_kind == "project"
+            and consent.project_id is not None
+            and consent.thread_id is None
+        ):
+            # Only a chat-unbound approval serves every chat of its project.
+            # One bound to a chat serves that chat alone (mint_integration_grant
+            # skips it for any other), so it is named by bound_thread_ids, not
+            # offered here for the project's other chats.
             project_ids[consent.device_id].add(consent.project_id)
     return [
         DeviceListItemDTO(
