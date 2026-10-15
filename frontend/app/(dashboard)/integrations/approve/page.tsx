@@ -5,13 +5,40 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuth } from '@/hooks/useAuth';
 import { scopeLabel } from '@/lib/integrations/scopeLabels';
 import { api } from '@/services/api-client';
+import type { ApiBindingKind } from '@/types/api/integration-connections-contract';
 import type { components } from '@/types/generated/api';
 
 type GrantRequest = components['schemas']['GrantRequestDTO'];
 type GrantDecision = components['schemas']['GrantDecision'];
+type AccountSummary = NonNullable<GrantRequest['account_summary']>;
+
+const counted = (count: number, one: string, many: string): string =>
+  `${count} ${count === 1 ? one : many}`;
+
+/** What an account approval reaches: the rule the server applies on every
+ * call (design §2), and today's counts under it. */
+function AccountCoverage({
+  summary,
+}: {
+  summary: AccountSummary | null | undefined;
+}): React.JSX.Element {
+  return (
+    <dd className="space-y-1">
+      <p>
+        Every project in the workspaces you own or belong to in your
+        organization, including projects added later. Archived and deleted
+        workspaces and projects are not included.
+      </p>
+      {summary && (
+        <p>{`Today: ${counted(summary.workspace_count, 'workspace', 'workspaces')} and ${counted(summary.project_count, 'project', 'projects')}.`}</p>
+      )}
+    </dd>
+  );
+}
 
 function ApprovalContent(): React.JSX.Element {
   const requestId = useSearchParams().get('request_id');
@@ -43,6 +70,12 @@ function ApprovalContent(): React.JSX.Element {
   const expired = consent?.status === 'expired';
   const canDecide =
     consent?.status === 'pending' && !expired && !decision.isPending;
+  // A backend older than account connections sends no binding_kind; its
+  // requests are a workspace or a project, told apart as before.
+  const wireKind: ApiBindingKind | undefined = consent?.binding_kind;
+  const isAccount = wireKind === 'account';
+  const kind: ApiBindingKind =
+    wireKind ?? (consent?.workspace_id ? 'workspace' : 'project');
 
   return (
     <section className="mx-auto max-w-xl space-y-6 p-6">
@@ -68,6 +101,9 @@ function ApprovalContent(): React.JSX.Element {
       )}
       {consent && (
         <>
+          {isAccount && (
+            <h2 className="text-xl font-semibold">{`${consent.device_label} wants access to your whole NOUS account`}</h2>
+          )}
           <dl className="space-y-3 break-words">
             <div>
               <dt className="font-semibold">Device</dt>
@@ -75,7 +111,12 @@ function ApprovalContent(): React.JSX.Element {
                 {consent.device_label} ({consent.device_id})
               </dd>
             </div>
-            {consent.workspace_id ? (
+            {isAccount ? (
+              <div>
+                <dt className="font-semibold">Covers</dt>
+                <AccountCoverage summary={consent.account_summary} />
+              </div>
+            ) : consent.workspace_id ? (
               <div>
                 <dt className="font-semibold">Workspace</dt>
                 <dd>
@@ -108,7 +149,7 @@ function ApprovalContent(): React.JSX.Element {
                 <ul>
                   {consent.scopes.map((scope) => (
                     <li key={scope}>
-                      {scopeLabel(scope)} <code>{scope}</code>
+                      {scopeLabel(scope, kind)} <code>{scope}</code>
                     </li>
                   ))}
                 </ul>
@@ -119,6 +160,23 @@ function ApprovalContent(): React.JSX.Element {
               <dd>{new Date(consent.expires_at).toLocaleString()}</dd>
             </div>
           </dl>
+          {isAccount && consent.scopes.includes('library:write') && (
+            <Alert variant="destructive">
+              <AlertDescription className="space-y-2">
+                <p className="font-medium">
+                  This device can change your library without asking.
+                </p>
+                <p>
+                  It can make reversible changes in every project in your
+                  account without asking you first: adding, removing, moving and
+                  renaming items, and changing a paper&apos;s title and tags.
+                  Deleting folders and ingesting papers still ask you first. You
+                  can revoke this access at any time from Manage connected
+                  devices.
+                </p>
+              </AlertDescription>
+            </Alert>
+          )}
           <p role="status">
             {expired && consent.status === 'pending'
               ? 'expired'
