@@ -6,3 +6,7 @@ import type { components } from '@/types/generated/api';
 
 export type ApiConnectedDevice = components['schemas']['ConnectedDevice'];
 export type ApiConnectionConsent = components['schemas']['ConnectionConsent'];
+
+/** What one approval reaches: one project, one workspace, or the whole
+ * account. GrantRequestDTO.binding_kind carries the same values. */
+export type ApiBindingKind = ApiConnectionConsent['kind'];

@@ -127,25 +127,95 @@ async def test_plain_ws_exception_is_loopback_only(
     )
 
 
-async def test_connect_refuses_an_account_grant_until_account_runs_exist(
+async def test_grant_context_accepts_an_account_grant_and_still_refuses_a_workspace_one(
     transport: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from src.services.integrations.context import IntegrationAccessDenied
+
+    account = IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        binding_kind="account",
+        grant_id=GRANT,
+        scopes=frozenset({"harness:execute"}),
+    )
+    monkeypatch.setattr(
+        transport, "resolve_integration_context", AsyncMock(return_value=account)
+    )
+    assert (
+        await transport._grant_context(object(), "opaque", {"sub": str(USER)})
+        is account
+    )
+    with pytest.raises(IntegrationAccessDenied):
+        await transport._grant_context(object(), "opaque", {"sub": str(uuid4())})
     monkeypatch.setattr(
         transport,
         "resolve_integration_context",
-        AsyncMock(
-            return_value=IntegrationContext(
-                user_id=USER,
-                organization_id=ORG,
-                binding_kind="account",
-                grant_id=GRANT,
-                scopes=frozenset({"harness:execute"}),
-            )
-        ),
+        AsyncMock(return_value=_context(workspace=True)),
     )
-    socket = _socket()
-    await transport.connect(socket)
-    socket.accept.assert_not_awaited()
-    socket.close.assert_awaited_once_with(
-        code=4403, reason="Bridge authorization denied"
+    with pytest.raises(IntegrationAccessDenied):
+        await transport._grant_context(object(), "opaque", {"sub": str(USER)})
+
+
+# Mutation MA10b: send `command.model_dump(mode="json")` instead of
+# `command.wire()` in the poll branch of src/api/harness.py; this test must fail.
+async def test_a_poll_frame_names_the_project_only_for_an_account_pairing(
+    transport: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi import WebSocketDisconnect
+
+    from src.schemas.harness import BridgeCommand
+
+    expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+    def command(project_id: Any) -> BridgeCommand:
+        return BridgeCommand(
+            deviceId=DEVICE,
+            runId=uuid4(),
+            commandId=uuid4(),
+            workspaceId=uuid4(),
+            generation=1,
+            expiresAt=expires,
+            body={"kind": "start", "input": "hello"},  # type: ignore[arg-type]
+            projectId=project_id,
+        )
+
+    class _Db(_Session):
+        async def get(self, *_args: Any, **_kwargs: Any) -> Any:
+            return SimpleNamespace(device_id=DEVICE, expires_at=expires)
+
+    monkeypatch.setattr(transport, "AsyncSessionLocal", lambda: _Db())
+    account = IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        binding_kind="account",
+        grant_id=GRANT,
+        scopes=frozenset({"harness:execute"}),
     )
+    monkeypatch.setattr(
+        transport, "resolve_integration_context", AsyncMock(return_value=account)
+    )
+    monkeypatch.setattr(transport, "lease_runs", AsyncMock(return_value={}))
+    for project_id in (PROJECT, None):
+        monkeypatch.setattr(
+            transport,
+            "lease_commands",
+            AsyncMock(return_value=[command(project_id)]),
+        )
+        socket = _socket()
+        socket.receive_text = AsyncMock(
+            side_effect=[
+                json.dumps({"poll": True, "deviceId": str(DEVICE)}),
+                WebSocketDisconnect(),
+            ]
+        )
+        await transport.connect(socket)
+        socket.accept.assert_awaited_once()
+        (frame,) = [call.args[0] for call in socket.send_json.await_args_list]
+        (sent,) = frame["commands"]
+        if project_id is None:
+            assert "projectId" not in sent  # bridges before accounts refuse the key
+        else:
+            assert sent["projectId"] == str(project_id)
