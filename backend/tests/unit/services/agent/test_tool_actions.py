@@ -1473,7 +1473,7 @@ async def test_workspace_level_action_never_runs_without_a_project(
         ("consent", {"workspace_id": uuid4()}, "consent revoked"),
         (
             "consent",
-            {"workspace_id": None, "project_id": uuid4()},
+            {"binding_kind": "project", "workspace_id": None, "project_id": uuid4()},
             "consent revoked",
         ),
     ],
