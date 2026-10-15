@@ -97,12 +97,34 @@ _arxiv_gate_redis: Any = None
 _arxiv_gate_disabled = False
 
 
-async def _acquire_arxiv_rate_slot() -> Optional[float]:
+class ArxivRateGated(Exception):
+    """The rate gate would make a budgeted caller wait longer than its budget.
+
+    Raised only for a caller that passed ``max_gate_wait_s`` (``discover_papers``
+    does; every other caller keeps the unbudgeted behaviour). Nothing was
+    reserved and nothing was sent to arXiv, so the caller may retry later.
+    """
+
+    def __init__(self, budget_s: float) -> None:
+        super().__init__(f"arXiv rate gate wait exceeds the {budget_s:g}s budget")
+        self.budget_s = budget_s
+
+
+async def _acquire_arxiv_rate_slot(
+    *, max_wait_s: Optional[float] = None
+) -> Optional[float]:
     """Reserve the next shared arXiv request slot across all pods.
 
     Returns the seconds to sleep before firing (0.0 = now), or ``None`` when the
     shared gate is unavailable (no REDIS_URL, or a transient Redis error) so the
-    caller falls back to the per-process gate. Never raises.
+    caller falls back to the per-process gate.
+
+    ``max_wait_s`` is an optional budget. Without one this never raises, and a
+    queue deeper than ``_ARXIV_MAX_WAIT_MS`` proceeds now (see below). With one,
+    the budget is handed to the Lua script as that call's ``maxwait``, so the
+    script itself refuses a slot that is too deep and returns -1 WITHOUT writing
+    the key: nothing is reserved that this caller then would not use. -1 then
+    means "over budget" and raises ``ArxivRateGated``.
     """
     global _arxiv_gate_redis, _arxiv_gate_disabled
     if _arxiv_gate_disabled:
@@ -122,6 +144,9 @@ async def _acquire_arxiv_rate_slot() -> Optional[float]:
         import time
 
         now_ms = int(time.time() * 1000)
+        max_wait_ms = _ARXIV_MAX_WAIT_MS
+        if max_wait_s is not None:
+            max_wait_ms = min(_ARXIV_MAX_WAIT_MS, int(max(0.0, max_wait_s) * 1000))
         # NOTE: this is Redis' server-side Lua EVAL (not Python eval) — the
         # script is a module constant and every ARGV is an int, so there is no
         # code-injection surface.
@@ -131,16 +156,21 @@ async def _acquire_arxiv_rate_slot() -> Optional[float]:
             _ARXIV_RATE_KEY,
             now_ms,
             _ARXIV_MIN_INTERVAL_MS,
-            _ARXIV_MAX_WAIT_MS,
+            max_wait_ms,
             _ARXIV_GATE_TTL_MS,
         )
         wait_ms = int(res)
+        if wait_ms < 0 and max_wait_s is not None:
+            # Over the caller's budget; the script reserved nothing.
+            raise ArxivRateGated(max_wait_s)
         # -1 (queue deeper than the cap) => proceed now rather than pile up.
         # Deliberate, and pinned by test_deep_queue_proceeds_now: the caller
         # sits inside AGENT_LLM_TIMEOUT_SECONDS (50s), so waiting the cap would
         # spend the whole budget and time out — a worse failure than a 429,
         # which at least surfaces a clean "rate limited, try again" to the user.
         return 0.0 if wait_ms < 0 else wait_ms / 1000.0
+    except ArxivRateGated:
+        raise
     except Exception:
         # Transient Redis error: fall back to the per-process gate THIS call
         # (don't permanently disable — Redis may recover).
@@ -263,14 +293,22 @@ class ArXivIngestionService:
     # ArXiv requires >= 3 seconds between API requests.
     _last_request_time: float = 0.0
 
-    async def _make_async_request(self, url: str, params: Dict) -> str:
-        """Make asynchronous request using httpx with rate limiting and 429 retry"""
+    async def _make_async_request(
+        self, url: str, params: Dict, *, max_gate_wait_s: Optional[float] = None
+    ) -> str:
+        """Make asynchronous request using httpx with rate limiting and 429 retry
+
+        ``max_gate_wait_s`` bounds the time spent waiting for the rate gate
+        (shared or per-process). A wait longer than that raises
+        ``ArxivRateGated`` before anything is reserved, slept or sent. ``None``
+        (every existing caller) waits as long as the gate says.
+        """
         # Enforce arXiv's minimum 3-second gap between requests. Prefer the
         # shared cross-pod gate; fall back to the per-process gate when Redis
         # is unavailable (same behavior as before this change).
         import time
 
-        slot_wait = await _acquire_arxiv_rate_slot()
+        slot_wait = await _acquire_arxiv_rate_slot(max_wait_s=max_gate_wait_s)
         if slot_wait is not None:
             if slot_wait > 0:
                 await asyncio.sleep(slot_wait)
@@ -278,7 +316,12 @@ class ArXivIngestionService:
             now = time.monotonic()
             elapsed = now - ArXivIngestionService._last_request_time
             if elapsed < 3.0:
-                await asyncio.sleep(3.0 - elapsed)
+                pause = 3.0 - elapsed
+                if max_gate_wait_s is not None and pause > max(0.0, max_gate_wait_s):
+                    # Over budget: do not sleep, and leave the clock alone so
+                    # the call that is not made does not delay the next one.
+                    raise ArxivRateGated(max_gate_wait_s)
+                await asyncio.sleep(pause)
             ArXivIngestionService._last_request_time = time.monotonic()
 
         logger.info(f"Async request to: {url}")
@@ -365,6 +408,8 @@ class ArXivIngestionService:
         categories: Optional[List[str]] = None,
         sort_by: str = "submittedDate",
         sort_order: str = "descending",
+        *,
+        max_gate_wait_s: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search for papers on arXiv using the API
@@ -377,6 +422,10 @@ class ArXivIngestionService:
             categories: List of categories to include
             sort_by: Field to sort by (submittedDate, lastUpdatedDate, relevance)
             sort_order: Sort order (ascending, descending)
+            max_gate_wait_s: Longest the caller will wait for the arXiv rate
+                gate, per request. Over that, ``ArxivRateGated`` is raised (or,
+                when an earlier page was already read, those papers are
+                returned). ``None`` waits as long as the gate says.
 
         Returns:
             List of paper metadata dictionaries
@@ -423,9 +472,16 @@ class ArXivIngestionService:
                     f"Making request to arXiv API... (offset={api_offset}, have {len(papers)} papers)"
                 )
 
-                # Use async httpx directly
+                # Use async httpx directly. The budget is passed only when one
+                # was asked for, so a replaced ``_make_async_request`` that
+                # predates it keeps working.
+                gate = (
+                    {}
+                    if max_gate_wait_s is None
+                    else {"max_gate_wait_s": max_gate_wait_s}
+                )
                 response_text = await self._make_async_request(
-                    self.ARXIV_API_BASE, params
+                    self.ARXIV_API_BASE, params, **gate
                 )
 
                 if not response_text:
@@ -521,6 +577,14 @@ class ArXivIngestionService:
                     logger.info(f"No entries in batch, stopping")
                     break
 
+            except ArxivRateGated:
+                # Not a failure of the search: the gate is busy. A later page
+                # that cannot get a slot in budget must not throw away the
+                # pages already read.
+                if not papers:
+                    raise
+                logger.info("arXiv rate gate busy; returning %d papers", len(papers))
+                break
             except Exception as e:
                 logger.error(f"Error fetching arXiv papers: {e}")
                 raise IngestionError(f"Failed to fetch papers from arXiv: {e}")

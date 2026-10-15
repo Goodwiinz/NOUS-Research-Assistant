@@ -34,6 +34,7 @@ from src.services.search.fulltext_search_service import fulltext_search_service
 from src.shared.enums import SatelliteSyncStatus
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
+from src.tasks.document_embedding_tasks import enqueue_document_embeddings
 from src.tasks.processing_lifecycle import (
     ACTIVE_DOCUMENT_STATUSES,
     ProcessingStopped,
@@ -656,6 +657,11 @@ def process_document_ingestion(self, job_id: str):
         db.commit()
 
         logger.info(f"Successfully processed document {document.id}")
+
+        # GOO-435: queue the pgvector embedding only now that the document is
+        # COMPLETED and committed. A no-op unless DOCUMENT_EMBEDDINGS_ENABLED,
+        # and a broker error is logged inside the helper, never raised here.
+        enqueue_document_embeddings(document_ids[1], [str(document_ids[0])])
 
         return {
             "status": "completed",
