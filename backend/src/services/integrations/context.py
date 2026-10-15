@@ -8,7 +8,7 @@ from secrets import token_urlsafe
 from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, exists, false, or_, select, update
+from sqlalchemy import ColumnElement, and_, exists, false, func, or_, select, update
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -25,6 +25,8 @@ from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import (
     STANDARD_SCOPES,
+    AccountSummaryDTO,
+    BindingKind,
     DeviceCreate,
     DeviceListItemDTO,
     GrantRequestCreate,
@@ -182,6 +184,132 @@ def _workspace_organization_admits(
             owning.is_active.is_(True),
         ),
         _legacy_workspace_in_org(organization_id),
+    )
+
+
+# --- The account rule (account connections) ---------------------------------
+#
+# An account approval covers the Collections of the workspaces in the user's
+# organization that they own or are a live member of, neither workspace nor
+# Collection archived or deleted, while the user is active in that live
+# organization. It is the organization rule of /projects
+# (research_engine.project_access.accessible_research_workspace_ids_query),
+# written with workspace_in_org (rule (c) of test_integration_boundaries.py)
+# plus "not archived". It is stricter than authorized_project, which keeps an
+# explicit member of another organization's workspace: such a workspace is
+# reachable through a project pairing, never through the account. Always a
+# SQL condition, never an id list: a statement must not bind one value per
+# Collection (see authorized_scope_filter).
+
+
+def _account_identity_live(user_id: UUID, organization_id: UUID) -> ColumnElement[bool]:
+    """The user is active in ``organization_id``, and that organization is
+    live. Aliased so an enclosing statement that joins users or
+    organizations cannot correlate these subqueries onto its own rows."""
+    actor = aliased(User)
+    organization = aliased(Organization)
+    return and_(
+        exists().where(
+            actor.id == user_id,
+            actor.organization_id == organization_id,
+            actor.is_active.is_(True),
+            actor.is_deleted.is_(False),
+        ),
+        exists().where(
+            organization.id == organization_id,
+            organization.is_deleted.is_(False),
+            organization.is_active.is_(True),
+        ),
+    )
+
+
+def account_workspace_condition(
+    user_id: UUID, organization_id: UUID
+) -> ColumnElement[bool]:
+    """``Workspace`` is in the account of ``user_id`` in ``organization_id``."""
+    membership = aliased(WorkspaceMember)
+    return and_(
+        Workspace.is_deleted.is_(False),
+        Workspace.is_archived.is_(False),
+        or_(
+            Workspace.owner_id == user_id,
+            exists().where(
+                membership.workspace_id == Workspace.id,
+                membership.user_id == user_id,
+                membership.is_deleted.is_(False),
+            ),
+        ),
+        workspace_in_org(organization_id),
+        _account_identity_live(user_id, organization_id),
+    )
+
+
+def account_scope_condition(
+    user_id: UUID, organization_id: UUID
+) -> ColumnElement[bool]:
+    """``Collection`` is in the account: live, not archived, in an account
+    workspace. The workspace subquery never correlates (``correlate(None)``),
+    so a statement that also joins ``Workspace`` (``_library_folders``) cannot
+    turn it into a test of its own row."""
+    workspaces = (
+        select(Workspace.id)
+        .where(account_workspace_condition(user_id, organization_id))
+        .correlate(None)
+    )
+    return and_(
+        Collection.is_deleted.is_(False),
+        Collection.research_status != "archived",
+        Collection.workspace_id.in_(workspaces),
+    )
+
+
+async def authorized_account(
+    db: AsyncSession, user_id: UUID, organization_id: UUID
+) -> None:
+    """The account binding's own check: the user is active in the live
+    organization. What the account covers is account_scope_condition."""
+    found = await db.scalar(
+        select(User.id).where(
+            User.id == user_id, _account_identity_live(user_id, organization_id)
+        )
+    )
+    if found is None:
+        raise IntegrationAccessDenied()
+
+
+async def authorized_account_workspace(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, workspace_id: UUID
+) -> Row[Any]:
+    """``(id, name)`` of one workspace in the account, else a denial."""
+    row = (
+        await db.execute(
+            select(Workspace.id, Workspace.name).where(
+                Workspace.id == workspace_id,
+                account_workspace_condition(user_id, organization_id),
+            )
+        )
+    ).first()
+    if row is None:
+        raise IntegrationAccessDenied()
+    return row
+
+
+async def account_summary(
+    db: AsyncSession, user_id: UUID, organization_id: UUID
+) -> AccountSummaryDTO:
+    """How many workspaces and projects the account covers right now."""
+    workspaces = await db.scalar(
+        select(func.count())
+        .select_from(Workspace)
+        .where(account_workspace_condition(user_id, organization_id))
+    )
+    projects = await db.scalar(
+        select(func.count())
+        .select_from(Collection)
+        .where(account_scope_condition(user_id, organization_id))
+    )
+    return AccountSummaryDTO(
+        workspace_count=int(workspaces or 0), project_count=int(projects or 0)
     )
 
 
