@@ -29,6 +29,9 @@ export type McpSession = {
   // Grant carries library:write (which needs tools:write); also enables
   // request_action / get_action_status.
   library?: boolean;
+  // The run's NOUS project (account pairings only): every tool call is held
+  // to it (mcp/pin.ts). Absent for a project connection and a standalone install.
+  project?: string;
 };
 export const REAUTH_MESSAGE =
   "NOUS session expired or revoked; reconnect this device (nous-harness connect --tools)";

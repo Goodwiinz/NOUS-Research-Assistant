@@ -1720,6 +1720,8 @@ async function main(): Promise<void> {
   else if (positionals.join(" ") === "mcp") {
     if (!values.session || !values.api)
       throw new Error("mcp requires --api and --session");
+    if (values.project !== undefined && !uuid(values.project))
+      throw new Error("--project must be a project UUID");
     await runStdioMcp({
       apiOrigin: apiBase(values.api),
       credentialHandle: values.session,
@@ -1729,6 +1731,7 @@ async function main(): Promise<void> {
       ...(values.handoff ? { handoff: true } : {}),
       ...(values.library ? { library: true } : {}),
       ...(values.context ? { context: true } : {}),
+      ...(values.project ? { project: values.project } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
