@@ -3910,7 +3910,10 @@ async def test_an_account_grant_edits_a_papers_metadata_in_any_workspace_folder(
     db.add(outsider)
     await db.flush()
     db.add(CollectionDocument(collection_id=OUTSIDE, document_id=outsider.id))
-    db.add(CollectionDocument(collection_id=ELSEWHERE, document_id=PAPER2))
+    # PAPER2 sits in two folders of the account (two workspaces) and in one
+    # outside it.
+    for folder in (ELSEWHERE, SECOND, OUTSIDE):
+        db.add(CollectionDocument(collection_id=folder, document_id=PAPER2))
     await db.commit()
     actor = await _account_actor(db)
     status = await request_action(
@@ -3920,6 +3923,8 @@ async def test_an_account_grant_edits_a_papers_metadata_in_any_workspace_folder(
     )
     assert status.state == "succeeded"
     assert (await _row(db, status.invocation_id)).project_id == ELSEWHERE
+    # The receipt lists the folders of the account only, the target first.
+    assert _receipt(status)["project_ids"] == [str(ELSEWHERE), str(SECOND)]
     with pytest.raises(IntegrationAccessDenied):
         await request_action(
             db,
