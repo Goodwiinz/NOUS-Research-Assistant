@@ -714,7 +714,7 @@ async def test_a_project_grant_never_outgrows_the_account_consent_it_stands_on(
 
 async def _expire_grant(db: AsyncSession, token: str) -> UUID:
     """Lapse the stored grant behind ``token`` (inside the resume window)."""
-    grant_id = await db.scalar(
+    grant_id: UUID | None = await db.scalar(
         select(IntegrationGrant.id).where(
             IntegrationGrant.token_hash == sha256(token.encode()).hexdigest()
         )
