@@ -1,4 +1,3 @@
-# backend/tests/unit/test_account_bindings_migration.py
 """Offline checks of the ac01_account_bindings migration (account connections).
 
 ``alembic upgrade FROM:TO --sql`` renders the revision's DDL without a

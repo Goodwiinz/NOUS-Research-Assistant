@@ -1,4 +1,3 @@
-# backend/alembic/versions/ac01_account_bindings.py
 """Account-wide harness connections: a third binding kind.
 
 A consent request and a grant now carry ``binding_kind``. ``project`` binds
@@ -18,6 +17,11 @@ Downgrade deletes account approvals, account grants and the project grants
 minted under an account approval, account actions and account folders. It
 refuses while a harness session cites any of them: those runs belong to their
 users and are not deleted by a migration.
+
+After a downgrade, project-kind actions created under a project grant that was
+minted from an account consent keep ``consent_id`` and ``grant_id`` values that
+point at deleted rows (neither column is a foreign key). Old code reads the
+missing consent as a refusal.
 
 Revision ID: ac01_account_bindings
 Revises: aw03_artifact_completion
@@ -68,7 +72,9 @@ ACCOUNT_RUNS = (
 
 def upgrade() -> None:
     for table in (REQUESTS, GRANTS, ACTIONS):
-        # The default exists only to backfill: every writer names the kind.
+        # The default exists only to backfill. Writers rely on the model default
+        # (derived_binding_kind: project or workspace); an account writer must
+        # pass binding_kind='account'.
         op.add_column(
             table,
             sa.Column(

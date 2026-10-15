@@ -1,4 +1,3 @@
-# backend/tests/integration/test_account_bindings_migration_postgres.py
 """ac01_account_bindings on real PostgreSQL: backfill, CHECKs and downgrade.
 
 Run with ORCHESTRATION_TEST_DATABASE_URL set (docs/testing/harness-live-proof.md
@@ -74,7 +73,7 @@ def _run(connection: Connection, direction: str) -> None:
 
 def _raw(connection: Connection, table: str, **values: Any) -> UUID:
     """Insert one row the way a pre-ac01 writer would (no binding_kind)."""
-    row_id = values.pop("id", uuid4())
+    row_id: UUID = values.pop("id", uuid4())
     now = datetime.now(timezone.utc)
     columns = {
         "id": row_id,
@@ -294,7 +293,7 @@ def test_upgrade_backfills_kinds_and_enforces_one_check_per_kind(
             expires_at=SOON,
             binding_kind="project",
         )
-        for binding in (
+        bad_actions: tuple[dict[str, Any], ...] = (
             {"binding_kind": "account"},
             {
                 "binding_kind": "account",
@@ -306,7 +305,8 @@ def test_upgrade_backfills_kinds_and_enforces_one_check_per_kind(
                 "project_id": PROJECT,
                 "target_workspace_id": WORKSPACE,
             },
-        ):
+        )
+        for binding in bad_actions:
             _refused(
                 connection,
                 "integration_tool_actions",
@@ -334,6 +334,18 @@ def test_downgrade_removes_account_rows_restores_the_old_rules_and_round_trips(
             connection, project_request, project_id=PROJECT, binding_kind="project"
         )
         project_action = _action(connection, project_id=PROJECT, binding_kind="project")
+        workspace_request = _request(
+            connection, workspace_id=WORKSPACE, binding_kind="workspace"
+        )
+        workspace_grant = _grant(
+            connection,
+            workspace_request,
+            workspace_id=WORKSPACE,
+            binding_kind="workspace",
+        )
+        workspace_action = _action(
+            connection, workspace_id=WORKSPACE, binding_kind="workspace"
+        )
         account = _request(connection, binding_kind="account")
         _grant(connection, account, binding_kind="account")
         _grant(connection, account, binding_kind="project", project_id=PROJECT)
@@ -351,9 +363,12 @@ def test_downgrade_removes_account_rows_restores_the_old_rules_and_round_trips(
             UUID(str(row_id))
             for (row_id,) in connection.execute(text(f"SELECT id FROM {table}")).all()
         }
-        assert ids("integration_grant_requests") == {project_request}
-        assert ids("integration_grants") == {project_grant}
-        assert ids("integration_tool_actions") == {project_action}
+        assert ids("integration_grant_requests") == {
+            project_request,
+            workspace_request,
+        }
+        assert ids("integration_grants") == {project_grant, workspace_grant}
+        assert ids("integration_tool_actions") == {project_action, workspace_action}
         assert (
             connection.execute(
                 text("SELECT count(*) FROM bridge_workspace_bindings")
@@ -374,26 +389,46 @@ def test_downgrade_removes_account_rows_restores_the_old_rules_and_round_trips(
         for table in ("integration_grant_requests", "integration_grants"):
             assert f"ck_{table}_one_binding" in _constraints(connection, table)
         _run(connection, "upgrade")  # the round trip applies again
-        assert _kinds(connection, "integration_grants") == {project_grant: "project"}
+        assert _kinds(connection, "integration_grants") == {
+            project_grant: "project",
+            workspace_grant: "workspace",
+        }
 
 
-def test_downgrade_refuses_while_a_harness_session_uses_an_account_folder(
-    pre_ac01: Connection,
+@pytest.mark.parametrize(
+    "case",
+    ["account-folder-with-a-project-grant", "project-folder-with-an-account-grant"],
+)
+def test_downgrade_refuses_while_a_harness_session_cites_account_state(
+    pre_ac01: Connection, case: str
 ) -> None:
+    """Each guard clause is proved alone: the session cites exactly one thing
+    the downgrade would delete (an account folder, or a project grant minted
+    under an account request), never both."""
     connection = pre_ac01
     with connection.begin():
         _run(connection, "upgrade")
     folder = uuid4()
     with connection.begin():
-        account = _request(connection, binding_kind="account")
-        grant = _grant(connection, account, binding_kind="account")
+        if case == "account-folder-with-a-project-grant":
+            request = _request(connection, project_id=PROJECT, binding_kind="project")
+            grant = _grant(
+                connection, request, project_id=PROJECT, binding_kind="project"
+            )
+            folder_project: UUID | None = None
+        else:
+            request = _request(connection, binding_kind="account")
+            grant = _grant(
+                connection, request, project_id=PROJECT, binding_kind="project"
+            )
+            folder_project = PROJECT
         _raw(
             connection,
             "bridge_workspace_bindings",
             device_id=DEVICE,
             workspace_id=folder,
-            project_id=None,
-            label="account folder",
+            project_id=folder_project,
+            label="folder",
         )
         run_id = str(uuid4())
         connection.execute(
