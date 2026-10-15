@@ -66,6 +66,10 @@ async def authorize_external_submission(
         .execution_options(populate_existing=True)
     )
     grant = await _validate_grant(db, grant)
+    # The binding_kind comparison here, and the account-without-approval raise
+    # below, are defense in depth behind _validate_grant (which already ties an
+    # account grant to an account approval): they keep a mismatched context
+    # from being trusted if that validation ever loosens.
     if (
         grant.user_id != context.user_id
         or grant.organization_id != context.organization_id
@@ -79,6 +83,10 @@ async def authorize_external_submission(
         raise IntegrationAccessDenied()
     target: UUID | None
     if grant.binding_kind == "account":
+        # Naming no project is a caller bug, not a project that left the
+        # account: refuse plainly so it is not reported as unreachable.
+        if project_id is None:
+            raise IntegrationAccessDenied()
         target = project_id
     elif grant.binding_kind == "project" and project_id in (None, grant.project_id):
         target = grant.project_id

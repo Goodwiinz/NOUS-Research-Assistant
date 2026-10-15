@@ -331,6 +331,40 @@ async def test_the_live_account_consent_must_be_one_runnable_approval(
     await db.commit()
     found = await live()
     assert found is not None and found.id == account.consent_id
+
+    # Each of these would be a second runnable approval but for one property,
+    # so each must be ignored (dropping its filter makes the lineage ambiguous).
+    def lookalike(**changes: Any) -> IntegrationGrantRequest:
+        values: dict[str, Any] = {
+            "id": uuid4(),
+            "user_id": USER,
+            "organization_id": ORG,
+            "binding_kind": "account",
+            "device_id": ACCOUNT_DEVICE,
+            "scopes": ["harness:execute"],
+            "status": "consumed",
+            "expires_at": datetime.now(timezone.utc),
+        }
+        values.update(changes)
+        return IntegrationGrantRequest(**values)
+
+    ignored = [
+        lookalike(status="pending"),
+        lookalike(status="denied"),
+        lookalike(is_deleted=True),
+        lookalike(organization_id=uuid4()),
+        lookalike(user_id=uuid4()),
+        lookalike(thread_id=THREAD_B),
+        lookalike(device_id=uuid4()),
+        lookalike(binding_kind="project", project_id=PROJECT),
+    ]
+    db.add_all(ignored)
+    await db.commit()
+    found = await live()
+    assert found is not None and found.id == account.consent_id
+    for row in ignored:
+        await db.delete(row)
+    await db.commit()
     # Two runnable approvals are ambiguous: fail closed.
     other.scopes = ["harness:execute"]
     await db.commit()
@@ -1250,4 +1284,34 @@ async def test_account_folders_need_the_one_approval_every_run_would_use(
             OWNER,
             ACCOUNT_DEVICE,
             WorkspaceBindingCreate(workspace_id=uuid4(), label="d"),
+        )
+
+
+# Mutation MA11: drop the `account and project_id is None` refusal in
+# authorize_external_submission; this test must fail.
+async def test_an_account_caller_that_names_no_project_is_a_plain_denial(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    """A caller bug is not shown as "project no longer reachable"."""
+    from src.services.harness.account import ProjectOutsideAccount
+    from src.services.harness.runs import authorize_external_submission
+
+    with pytest.raises(IntegrationAccessDenied) as refused:
+        await authorize_external_submission(
+            db,
+            context=account,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+            thread_id=THREAD_B,
+        )
+    assert not isinstance(refused.value, ProjectOutsideAccount)
+    await leave_account(db)
+    with pytest.raises(ProjectOutsideAccount):
+        await authorize_external_submission(
+            db,
+            context=account,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+            thread_id=THREAD_B,
+            project_id=PROJECT_B,
         )
