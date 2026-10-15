@@ -7,9 +7,11 @@ from src.tasks.celery_app import celery_app
 async def _drain() -> int:
     from src.core.database import AsyncSessionLocal
     from src.services.artifacts.lifecycle import drain_artifact_outbox
+    from src.services.artifacts.native import drain_native_artifacts
 
     async with AsyncSessionLocal() as db:
-        return await drain_artifact_outbox(db)
+        native_count = await drain_native_artifacts(db)
+        return native_count + await drain_artifact_outbox(db)
 
 
 async def _sweep() -> int:

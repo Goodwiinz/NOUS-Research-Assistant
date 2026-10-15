@@ -692,6 +692,13 @@ async def _execute_single_tool(
                 }
                 if operation_key is not None:
                     execute_kwargs["operation_key"] = operation_key
+                if tool_name == "create_draft":
+                    # Correlation comes from server-created graph metadata,
+                    # never the model's arguments. Native publication verifies
+                    # the retained run's actor/project/chat binding again.
+                    run_id = config.get("metadata", {}).get("agent_run_id")
+                    if run_id:
+                        execute_kwargs["run_id"] = str(run_id)
                 # IN-2: a tool that must time out before this limit cancels it
                 # reads the deadline instead of restarting the clock at dispatch.
                 with tool_call_deadline_scope(timeout):

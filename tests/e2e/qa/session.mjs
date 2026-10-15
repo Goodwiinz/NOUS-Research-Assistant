@@ -923,7 +923,10 @@ export class QASession {
         return;
       }
       retainResource(resource);
-      if (resource.kind === 'conversation') {
+      if (resource.kind === 'document') {
+        const project = this.ledger.list().find((item) => item.kind === 'project' && item.id === resource.metadata?.projectId);
+        retainResourceTree(project);
+      } else if (resource.kind === 'conversation' || resource.kind === 'project') {
         const workspace = this.ledger.list().find((item) => item.kind === 'workspace' && item.id === resource.metadata?.workspaceId);
         retainResource(workspace);
       } else if (resource.kind === 'workspace') {

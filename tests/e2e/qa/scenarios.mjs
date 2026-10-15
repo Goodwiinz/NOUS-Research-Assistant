@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SAFE_STREAM_EVENT_TYPES = new Set(['status', 'token', 'done', 'error', 'confirmation', 'tool_call', 'tool_result', 'metadata']);
@@ -224,6 +224,196 @@ async function waitForVisibleUnique(locator, label, timeoutMs) {
     throw new Error(`${label} is missing or not visible`);
   }
   assertThat(await locator.count() === 1, `${label} is missing or not unique`);
+}
+
+async function waitForArtifactFixture(check, timeoutMs, message) {
+  const deadline = Date.now() + Math.min(timeoutMs, 60_000);
+  // Await asynchronous fixture processing, without retrying assertion or HTTP
+  // failures. At most 120 reads are made; neither polling nor model work is
+  // open ended.
+  for (let attempt = 0; attempt < 120 && Date.now() < deadline; attempt += 1) {
+    const result = await check();
+    if (result) return result;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, Math.max(1, deadline - Date.now()))));
+  }
+  throw new Error(message);
+}
+
+async function assertShareDenied(session, path, options, allowed, message) {
+  let status;
+  try {
+    status = (await session.request(path, { target: 'backend', ...options })).status;
+  } catch (error) {
+    status = error.status;
+  }
+  assertThat(allowed.includes(status), message);
+  return status;
+}
+
+const DRAFT_TERMINAL = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+
+async function artifactVersionSharing(session, evidence) {
+  const page = await session.login();
+  const capability = await session.request('/api/v1/artifacts/capabilities', { target: 'backend' });
+  if (capability.data?.enabled !== true || capability.data?.sharing_enabled !== true) {
+    return { status: 'BLOCKED', reason: 'Artifact publication and sharing capability flags must be enabled', assertion: 'Enabled artifact capabilities are required before fixtures or generation' };
+  }
+  const identity = await session.request('/api/v1/auth/me', { target: 'backend' });
+  const userId = responseId({ data: identity.data?.user });
+  const organizationId = identity.data?.user?.organization_id ?? identity.data?.organization?.id;
+  assertThat(typeof organizationId === 'string' && UUID.test(organizationId), 'The authenticated fixture actor has no organization identity');
+  const protectedSubmission = async (risk, path, options) => {
+    // Acceptance can outlive the HTTP request. Reserve protection before
+    // submission, including when a successful response has no usable ID.
+    session.pendingMutations.set(risk, { method: 'POST', path: path.split('?')[0], startedAt: new Date().toISOString() });
+    try {
+      return await session.request(path, options);
+    } catch (error) {
+      // A timeout status may be synthesized by the client; it is not proof
+      // that the server rejected the mutation. Keep ambiguous results.
+      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && error.status !== 408) session.pendingMutations.delete(risk);
+      throw error;
+    }
+  };
+  const createOwnedFixture = async (kind, path, options, metadata, key = 'id') => {
+    const risk = randomUUID();
+    const response = await protectedSubmission(risk, path, options);
+    const id = responseId(response, key);
+    session.registerFixture(kind, id, metadata);
+    session.pendingMutations.delete(risk);
+    return id;
+  };
+
+  const workspaceId = await createOwnedFixture('workspace', '/api/v2/workspaces', {
+    target: 'backend', method: 'POST', json: { name: `${evidence.fixturePrefix} share workspace`, description: 'Synthetic sharing QA fixture' },
+  }, {});
+  const projectName = `${evidence.fixturePrefix} share project`;
+  const projectId = await createOwnedFixture('project', '/api/v1/projects', {
+    target: 'backend', method: 'POST', json: { workspace_id: workspaceId, name: projectName, description: 'Synthetic sharing QA fixture', is_private: true },
+  }, { workspaceId });
+  const form = new FormData();
+  form.append('file', new Blob([fixtureText(evidence.fixturePrefix)], { type: 'text/plain' }), `${evidence.fixturePrefix.replace(/[^A-Za-z0-9_-]/g, '_')}.txt`);
+  form.append('title', `${evidence.fixturePrefix} share document`);
+  const documentId = await createOwnedFixture('document', '/api/v1/files/upload', { target: 'backend', method: 'POST', body: form }, { projectId }, 'document_id');
+  // This association endpoint performs no automatic extraction or KG work.
+  // The project attachment endpoint can enqueue unrelated background jobs.
+  await session.request(`/api/v2/workspaces/${workspaceId}/collections/${projectId}/documents`, { target: 'backend', method: 'POST', json: { document_ids: [documentId] } });
+  await waitForArtifactFixture(async () => {
+    const document = await session.request(`/api/v1/documents/${documentId}?include_content=true`, { target: 'backend' });
+    assertThat(!['failed', 'cancelled'].includes(document.data?.processing_status), 'Synthetic sharing document processing failed');
+    return typeof document.data?.content_text === 'string' && document.data.content_text.includes(evidence.fixturePrefix);
+  }, session.config.timeoutMs, 'Synthetic sharing document did not finish processing within the bound');
+
+  let taskId = null;
+  let taskTerminal = false;
+  let shareId = null;
+  let revoked = false;
+  const taskRisk = randomUUID();
+  const shareRisk = randomUUID();
+  const draftBase = `/api/v1/projects/${projectId}/drafts`;
+  const observeTerminalTask = async (internal = false) => {
+    const response = await session.request(`${draftBase}/status/${encodeURIComponent(taskId)}`, { target: 'backend', internal });
+    if (DRAFT_TERMINAL.has(response.data?.status)) {
+      taskTerminal = true;
+      session.pendingMutations.delete(taskRisk);
+    }
+    return response.data;
+  };
+  const revokeOwnedShare = async (internal = false) => {
+    await session.ledger.deleteOwned('artifact-share', shareId, async () => {
+      const response = await session.request(`/api/v1/artifacts/shares/${shareId}`, { target: 'backend', method: 'DELETE', internal });
+      assertThat(response.status === 204, 'Owned share revocation did not complete');
+    });
+    revoked = true;
+    session.pendingMutations.delete(shareRisk);
+  };
+  try {
+    // The campaign budget reserves one generation submission. The generator
+    // may make several provider calls internally: those calls are unmeasured,
+    // while its source selection and maximum section count are bounded here.
+    evidence.reserveModelTurn();
+    const query = new URLSearchParams({ themes: 'Synthetic Kestrel fixture control number 7314', document_ids: documentId, max_sections: '2', include_abstract: 'false', style: 'summary' });
+    const generated = await protectedSubmission(taskRisk, `${draftBase}?${query}`, { target: 'backend', method: 'POST' });
+    assertThat(generated.status === 202, 'Synthetic draft generation was not accepted');
+    const acceptedTaskId = generated.data?.task_id;
+    assertThat(typeof acceptedTaskId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(acceptedTaskId), 'Draft generation returned an invalid exact task identity');
+    taskId = acceptedTaskId;
+    session.pendingMutations.set(taskRisk, { method: 'POST', path: `${draftBase}/status/${taskId}`, startedAt: new Date().toISOString() });
+    const completed = await waitForArtifactFixture(async () => {
+      const task = await observeTerminalTask();
+      assertThat(!taskTerminal || task.status === 'completed', 'Synthetic draft generation ended without a completed version');
+      return task.status === 'completed' ? task : null;
+    }, session.config.timeoutMs, 'Synthetic draft generation did not complete within the bound');
+    const draftId = responseId({ data: { id: completed.draft_id } });
+    const version = await waitForArtifactFixture(async () => {
+      const listed = await session.request(`/api/v1/artifacts/projects/${projectId}`, { target: 'backend' });
+      assertThat(Array.isArray(listed.data), 'Native project artifacts did not return the documented list');
+      const matches = listed.data.filter((item) => item?.current_version?.provenance?.native_item_id === draftId);
+      assertThat(matches.length <= 1, 'Synthetic draft publication returned multiple artifacts');
+      return matches[0]?.current_version ?? null;
+    }, session.config.timeoutMs, 'Native draft worker did not publish the committed fixture within the bound');
+    const versionId = responseId({ data: { id: version.version_id } });
+    const artifactId = responseId({ data: { id: version.artifact_id } });
+    const original = await session.request(`/api/v1/artifacts/versions/${versionId}/content`, { target: 'backend', maxResponseBytes: 128 * 1024 });
+    assertThat(original.bytes?.byteLength > 0 && original.bytes.byteLength === version.byte_size, 'Synthetic saved artifact bytes were missing or outside the bound');
+    assertThat(createHash('sha256').update(original.bytes).digest('hex') === version.sha256, 'Synthetic saved artifact digest did not match its metadata');
+    const previewHeading = new TextDecoder().decode(original.bytes).split('\n').find((line) => /^#{1,6}\s+\S/.test(line))?.replace(/^#{1,6}\s+/, '').trim();
+    assertThat(version.mime_type === 'text/markdown' && previewHeading?.length > 0, 'Synthetic native fixture did not contain a bounded markdown heading');
+    await session.goto(`/projects/${projectId}`);
+    await page.getByRole('heading', { name: projectName, exact: true }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+    await evidence.checkpoint('artifact.fixture');
+
+    const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    const shared = await protectedSubmission(shareRisk, '/api/v1/artifacts/shares', {
+      target: 'backend', method: 'POST', json: { version_id: versionId, audience_user_ids: [userId], expires_at: expiresAt },
+    });
+    shareId = responseId(shared);
+    session.registerFixture('artifact-share', shareId, { projectId, artifactId });
+    session.pendingMutations.set(shareRisk, { method: 'DELETE', path: `/api/v1/artifacts/shares/${shareId}`, startedAt: new Date().toISOString() });
+    assertThat(shared.data.version_id === versionId && shared.data.revoked_at === null && Date.parse(shared.data.expires_at) === Date.parse(expiresAt), 'Created share did not pin the requested version and expiry');
+    await evidence.checkpoint('artifact.share-created');
+    const sharePath = `/api/v1/artifacts/shares/${shareId}`;
+    const metadata = await session.request(sharePath, { target: 'backend' });
+    assertThat(Object.keys(metadata.data ?? {}).sort().join('|') === 'artifact_id|byte_size|mime_type|sha256|title|version_id', 'Shared metadata exposed private provenance or an unexpected contract');
+    assertThat(metadata.data.version_id === versionId && metadata.data.artifact_id === artifactId && metadata.data.sha256 === version.sha256 && metadata.data.title === version.title && metadata.data.mime_type === version.mime_type && metadata.data.byte_size === version.byte_size, 'Shared metadata did not identify the pinned version');
+    const content = await session.request(`${sharePath}/content`, { target: 'backend', maxResponseBytes: 128 * 1024 });
+    assertThat(Buffer.from(content.bytes).equals(Buffer.from(original.bytes)), 'Shared content did not equal the exact saved bytes');
+    assertThat(metadata.headers.get('cache-control') === 'private, no-store' && content.headers.get('cache-control') === 'private, no-store', 'Shared content did not disable public caching');
+    const anonymousStatuses = [];
+    for (const suffix of ['', '/content']) anonymousStatuses.push(await assertShareDenied(session, `${sharePath}${suffix}`, { forwardAuth: false }, [401, 403], 'Anonymous share access disclosed private content'));
+    await session.goto(`/artifacts/shared/${shareId}`);
+    await page.getByRole('heading', { name: version.title, exact: true }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+    const preview = page.locator('main .nous-prose');
+    await preview.getByText(previewHeading, { exact: true }).first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+    await evidence.checkpoint('artifact.shared-ready');
+
+    await revokeOwnedShare();
+    await evidence.checkpoint('artifact.revoked');
+    await page.getByRole('button', { name: 'Refresh shared version', exact: true }).click();
+    await page.getByRole('alert').first().waitFor({ state: 'visible', timeout: session.config.timeoutMs });
+    for (const suffix of ['', '/content']) await assertShareDenied(session, `${sharePath}${suffix}`, {}, [404], 'Revoked share access disclosed private content');
+    assertThat(await preview.count() === 0 && await page.getByRole('heading', { name: version.title, exact: true }).count() === 0 && await page.getByRole('button', { name: /^Download\b/ }).count() === 0, 'Revoked viewer retained private content or download controls');
+    assertThat(!(await page.innerText('body')).includes(previewHeading), 'Revoked viewer retained private content in the document');
+    await evidence.checkpoint('artifact.no-private-content');
+    return {
+      assertion: 'An explicit authenticated audience reads the exact saved version; revocation denies metadata and bytes and removes private content on refetch',
+      evidence: [{ projectId, artifactId, versionId, shareId, anonymousStatuses, revokedStatus: 404, generationRequests: 1, maxSections: 2, providerCalls: 'unmeasured', budgetSemantics: 'one pre-submission generation reservation; internal provider calls unmeasured' }],
+    };
+  } finally {
+    // Internal requests remain available during runner quarantine. Keep the
+    // existing pending-mutation risk until exact child cleanup is proven;
+    // failed cleanup retains every parent fixture in the private report.
+    if (shareId && !revoked) await revokeOwnedShare(true);
+    if (taskId && !taskTerminal) {
+      try {
+        await session.request(`${draftBase}/cancel/${encodeURIComponent(taskId)}`, { target: 'backend', method: 'POST', internal: true });
+      } catch (error) {
+        if (error.status !== 409) throw error;
+      }
+      const task = await observeTerminalTask(true);
+      assertThat(DRAFT_TERMINAL.has(task?.status), 'Exact draft task cancellation was not proven terminal; fixtures retained');
+    }
+  }
 }
 
 function fixtureText(prefix) {
@@ -867,6 +1057,16 @@ const scenarios = [
         if (acceptedRunId && provenTerminal) session.markRunTerminal(acceptedRunId);
       }
     },
+  },
+  {
+    id: 'workflow.artifact-version-sharing',
+    title: 'Exact saved artifact sharing denies revoked refetch and clears private preview content',
+    suite: 'workflow',
+    prerequisites: ['auth', 'writes', 'model', 'browser'],
+    createsFixtures: true,
+    callsModel: true,
+    mode: 'live-model',
+    run: artifactVersionSharing,
   },
   {
     id: 'workflow.document-upload-and-attachment',

@@ -20,3 +20,8 @@ export type ApiArtifactCapabilities =
   components['schemas']['ArtifactCapabilitiesDTO'];
 export type ApiArtifactEditRequest =
   components['schemas']['EditArtifactVersionRequest'];
+export type ApiArtifactShare = components['schemas']['ArtifactShareDTO'];
+export type ApiSharedArtifactVersion =
+  components['schemas']['SharedArtifactVersionDTO'];
+export type ApiCreateArtifactShareRequest =
+  components['schemas']['CreateArtifactShareRequest'];

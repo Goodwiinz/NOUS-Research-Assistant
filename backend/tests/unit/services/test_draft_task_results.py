@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import (
 
 from src.models.draft_task_result import DraftTaskResult
 from src.models.generated_draft import GeneratedDraft
+from src.models.native_artifact_intent import NativeArtifactIntent
 from src.services.research.draft_generation_service import (
     DraftGenerationService,
     _generation_status,
@@ -41,6 +42,32 @@ pytestmark = pytest.mark.unit
 
 # The pipeline fixture mocks asyncio.sleep; race tests need the real one.
 _real_sleep = asyncio.sleep
+
+
+async def test_pipeline_commits_native_intent_with_completed_draft(
+    pipeline: tuple[async_sessionmaker[AsyncSession], UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "ARTIFACTS_ENABLED", True)
+    factory, document_id = pipeline
+    await _accept_running(factory, "native-completion")
+    await _run("native-completion", document_id)
+    async with factory() as db:
+        draft = await db.scalar(select(GeneratedDraft))
+        intent = await db.scalar(select(NativeArtifactIntent))
+        result = await db.get(DraftTaskResult, "native-completion")
+        assert result is not None and result.state == "completed"
+        assert draft is not None and intent is not None
+        assert intent.draft_id == draft.id
+        assert (
+            intent.draft_sha256
+            == result.artifact_hash
+            == _sha("A seeded finding [Doc 1].")
+        )
+        assert intent.actor_user_id == ACTOR and intent.project_id == PROJECT
+        assert intent.status == "pending"
 
 
 @pytest.fixture
@@ -248,6 +275,8 @@ _PIPELINE_TABLES = (
     "draft_citations",
     "draft_reviews",
     "draft_task_results",
+    "workspace_members",
+    "native_artifact_intents",
 )
 
 
@@ -292,6 +321,7 @@ async def pipeline(
     from src.models import Base
     from src.models.collection import Collection, CollectionDocument
     from src.models.document import Document, DocumentType, ProcessingStatus
+    from src.models.organization import Organization
     from src.models.workspace import Workspace
 
     eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'drafts.db'}")
@@ -303,6 +333,8 @@ async def pipeline(
     workspace_id = uuid4()
     org_id = uuid4()
     async with factory() as db:
+        db.add(Organization(id=org_id, name="Draft test", storage_limit_bytes=1000000))
+        await db.flush()
         # project_documents_query joins the workspace owner (users) and
         # requires the document to share the workspace organization.
         await db.execute(

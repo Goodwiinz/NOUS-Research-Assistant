@@ -1,8 +1,12 @@
 'use client';
 
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
-import { useArtifactVersions } from '@/hooks/chat/useThreadArtifacts';
+import {
+  useArtifactCapabilities,
+  useArtifactVersions,
+} from '@/hooks/chat/useThreadArtifacts';
+import { useArtifactScope } from '@/hooks/chat/useArtifactScope';
 import {
   artifactService,
   type ArtifactVersion,
@@ -14,6 +18,7 @@ import {
 
 import { ArtifactFileView } from './ArtifactFileView';
 import { formatBytes } from './ArtifactPreview';
+import { ArtifactShareDialog } from './ArtifactShareDialog';
 
 type GeneratedArtifact = Extract<Artifact, { kind: 'generated' }>;
 
@@ -31,6 +36,11 @@ export function GeneratedArtifactBody({
     artifact.artifactId
   );
   const openArtifact = useArtifactPanelStore((s) => s.openArtifact);
+  const capabilities = useArtifactCapabilities();
+  const scope = useArtifactScope();
+  const [sharingFor, setSharingFor] = useState<string | null>(null);
+  const shareTrigger = useRef<HTMLButtonElement>(null);
+  const sharingIdentity = `${scope}:${artifact.versionId}`;
   // Keyed by version so a failure never carries over to another file.
   const [downloadFailedFor, setDownloadFailedFor] = useState<string | null>(
     null
@@ -117,7 +127,26 @@ export function GeneratedArtifactBody({
           Download
         </button>
         {downloadFailed && <span role="alert">Download failed.</span>}
+        {scope && capabilities.data?.sharingEnabled === true && (
+          <button
+            ref={shareTrigger}
+            type="button"
+            className="rounded-md border px-2 py-1 text-xs text-foreground"
+            onClick={() => setSharingFor(sharingIdentity)}
+          >
+            Share version
+          </button>
+        )}
       </div>
+      {scope &&
+        capabilities.data?.sharingEnabled === true &&
+        sharingFor === sharingIdentity && (
+          <ArtifactShareDialog
+            version={selected}
+            triggerRef={shareTrigger}
+            onClose={() => setSharingFor(null)}
+          />
+        )}
       <div className="min-h-0 flex-1 overflow-auto">
         <ArtifactFileView version={selected} />
       </div>
