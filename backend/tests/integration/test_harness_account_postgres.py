@@ -20,34 +20,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from tests.unit.services.harness.test_account_runs import (
-    ACCOUNT_DEVICE,
-    CONVERSATION_B,
-    FOLDER_A,
-    FOLDER_B,
-    OWNER,
-    PROJECT_B,
-    THREAD_B,
-    WORKSPACE_B,
-    event_for,
-    expire_run_grants,
-    leave_account,
-    native_request_event,
-    pair_account,
-    pair_project,
-    running_event,
-    start,
-)
-from tests.unit.services.harness.test_runs import (
-    CONVERSATION,
-    DEVICE,
-    LOCAL,
-    ORG,
-    PROJECT,
-    THREAD,
-    USER,
-    WORKSPACE,
-)
 
 from src.core.config import settings
 from src.models.agent_outbox import AgentOutbox
@@ -84,6 +56,34 @@ from src.services.integrations.context import (
     IntegrationAccessDenied,
     renew_grant,
     resolve_integration_context,
+)
+from tests.unit.services.harness.test_account_runs import (
+    ACCOUNT_DEVICE,
+    CONVERSATION_B,
+    FOLDER_A,
+    FOLDER_B,
+    OWNER,
+    PROJECT_B,
+    THREAD_B,
+    WORKSPACE_B,
+    event_for,
+    expire_run_grants,
+    leave_account,
+    native_request_event,
+    pair_account,
+    pair_project,
+    running_event,
+    start,
+)
+from tests.unit.services.harness.test_runs import (
+    CONVERSATION,
+    DEVICE,
+    LOCAL,
+    ORG,
+    PROJECT,
+    THREAD,
+    USER,
+    WORKSPACE,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
