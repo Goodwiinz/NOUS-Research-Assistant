@@ -84,6 +84,23 @@ features:
       - "frontend/app/(dashboard)/projects/**"
       - "backend/src/api/research/projects.py"
       - "backend/src/services/agent/tools.py"
+  - id: artifact-version-sharing
+    status: covered
+    surfaces:
+      web: ["/artifacts/shared/<shareId>"]
+      api: ["POST /api/v1/artifacts/shares", "GET /api/v1/artifacts/shares/{share_id}", "GET /api/v1/artifacts/shares/{share_id}/content", "DELETE /api/v1/artifacts/shares/{share_id}"]
+      cli: []
+    states: [loading, ready, unavailable, revoked]
+    pass_criteria:
+      - "An explicit active same-organization audience can read the exact saved version until expiry or revocation."
+      - "Denied refetch and account changes remove private content from the viewer."
+    scenarios: [workflow.artifact-version-sharing]
+    owns:
+      - "frontend/app/(dashboard)/artifacts/**"
+      - "backend/src/api/artifacts.py"
+      - "frontend/src/hooks/chat/useArtifactSharing.ts"
+      - "frontend/src/services/artifactService.ts"
+      - "backend/src/services/artifacts/**"
 ignore:
   # Shrink-only. Remove a path when a feature claims it; the checker fails on
   # entries that no longer exist, that a feature also claims, or (with --base)
@@ -127,7 +144,6 @@ ignore:
     - "backend/src/api/analytics/metrics.py"
     - "backend/src/api/analytics/realtime.py"
     - "backend/src/api/analytics/reports.py"
-    - "backend/src/api/artifacts.py"
     - "backend/src/api/arxiv/arxiv_bulk.py"
     - "backend/src/api/arxiv/arxiv_change_tracking.py"
     - "backend/src/api/arxiv/arxiv_extraction.py"

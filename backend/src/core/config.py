@@ -868,6 +868,11 @@ class Settings(BaseSettings):
     # COHERE_RERANK_ENDPOINT + COHERE_RERANK_API_KEY (already provisioned).
     AGENT_DOKB_COHERE_RERANK: bool = True
 
+    # Opt-in page relevance for an explicitly selected single document.
+    AGENT_PAGE_FILTER: bool = False
+    RETRIEVE_PASSAGES_PAGE_TOP_N: int = Field(6, ge=1, le=100)
+    RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT: int = Field(8, ge=0, le=100)
+
     # PaperQA2-style gather-evidence inside do_kb_retrieve: rerank-ordered
     # chunks get per-chunk contextual relevance summaries + verbatim quotes
     # from the lightweight LLM, enabling narrow-then-broad iteration within

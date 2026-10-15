@@ -1939,6 +1939,11 @@
           "preview_enabled": {
             "title": "Preview Enabled",
             "type": "boolean"
+          },
+          "sharing_enabled": {
+            "default": false,
+            "title": "Sharing Enabled",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2132,6 +2137,45 @@
           "message_id"
         ],
         "title": "ArtifactReferenceDTO",
+        "type": "object"
+      },
+      "ArtifactShareDTO": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version_id",
+          "expires_at",
+          "revoked_at"
+        ],
+        "title": "ArtifactShareDTO",
         "type": "object"
       },
       "ArtifactUploadDTO": {
@@ -8299,6 +8343,38 @@
           "not_searched"
         ],
         "title": "CoverageResponse",
+        "type": "object"
+      },
+      "CreateArtifactShareRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "audience_user_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Audience User Ids",
+            "type": "array"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version_id",
+          "audience_user_ids",
+          "expires_at"
+        ],
+        "title": "CreateArtifactShareRequest",
         "type": "object"
       },
       "CreateEntityRequest": {
@@ -26981,6 +27057,46 @@
         "title": "SelectedSkillLoad",
         "type": "object"
       },
+      "SharedArtifactVersionDTO": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "mime_type": {
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version_id": {
+            "format": "uuid",
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "version_id",
+          "title",
+          "mime_type",
+          "byte_size",
+          "sha256"
+        ],
+        "title": "SharedArtifactVersionDTO",
+        "type": "object"
+      },
       "SkillDiffResponse": {
         "properties": {
           "diff": {
@@ -36712,6 +36828,185 @@
         ]
       }
     },
+    "/api/v1/artifacts/shares": {
+      "post": {
+        "operationId": "create_artifact_share_api_v1_artifacts_shares_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateArtifactShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactShareDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Artifact Share",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/shares/{share_id}": {
+      "delete": {
+        "operationId": "revoke_artifact_share_api_v1_artifacts_shares__share_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "share_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Share Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Artifact Share",
+        "tags": [
+          "artifacts"
+        ]
+      },
+      "get": {
+        "operationId": "shared_artifact_api_v1_artifacts_shares__share_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "share_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Share Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedArtifactVersionDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Shared Artifact",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/shares/{share_id}/content": {
+      "get": {
+        "operationId": "shared_artifact_content_api_v1_artifacts_shares__share_id__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "share_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Share Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Shared Artifact Content",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/api/v1/artifacts/threads/{thread_id}": {
       "get": {
         "operationId": "thread_artifacts_api_v1_artifacts_threads__thread_id__get",
@@ -37006,6 +37301,58 @@
           }
         ],
         "summary": "Edit Artifact",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/api/v1/artifacts/{artifact_id}/shares": {
+      "get": {
+        "operationId": "artifact_shares_api_v1_artifacts__artifact_id__shares_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactShareDTO"
+                  },
+                  "title": "Response Artifact Shares Api V1 Artifacts  Artifact Id  Shares Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Artifact Shares",
         "tags": [
           "artifacts"
         ]

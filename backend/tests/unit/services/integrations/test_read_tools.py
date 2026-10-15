@@ -1,6 +1,7 @@
 """Scoped integration read gateway, using a local SQLite database."""
 
 import json
+import tracemalloc
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Iterable, Iterator
 from unittest.mock import AsyncMock
@@ -3459,3 +3460,592 @@ def test_catalog_schemas_are_copies_of_the_local_table() -> None:
         read_tools.LOCAL_TOOLS["list_library"][1]["properties"]["limit"]["maximum"]
         == 50
     )
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("[Page 1]\nfirst\n[Page 2]\nsecond", [(1, "first"), (2, "second")]),
+        ("no markers", []),
+        ("see [Page 12] for details", []),
+        ("[Page\n12]", []),
+        (
+            "[Page 1]\nsee [Page 12] for details\n[Page 2]\nsecond",
+            [(1, "see [Page 12] for details"), (2, "second")],
+        ),
+        (
+            "[Page 1]\nsee\n[Page\n12]\nfor details\n[Page 2]\nsecond",
+            [(1, "see\n[Page\n12]\nfor details"), (2, "second")],
+        ),
+        ("  [Page\t3]  \r\nfirst\r\n[Page 9]\r\nlast", [(3, "first"), (9, "last")]),
+        ("preamble\n[Page 1]\nfirst", [(1, "preamble\nfirst")]),
+        ("[Page 3]\n[Page 9]\nlast", [(3, ""), (9, "last")]),
+    ],
+)
+def test_split_pages(content: str, expected: list[tuple[int, str]]) -> None:
+    assert read_tools._split_pages(content) == expected
+
+
+def test_split_pages_keeps_oversized_page_numbers_as_text() -> None:
+    marker = f"[Page {'9' * 5000}]"
+    assert read_tools._split_pages(marker) == []
+    assert read_tools._split_pages(f"[Page 1]\n{marker}\n[Page 2]\nend") == [
+        (1, marker),
+        (2, "end"),
+    ]
+
+
+@pytest.mark.parametrize(("page_count", "body_length"), [(300, 100_000), (100_000, 1)])
+def test_page_candidates_bound_memory_and_preserve_counts(
+    page_count: int, body_length: int
+) -> None:
+    body = "x" * body_length
+    source = "\n".join(f"[Page {i}]\n{body}" for i in range(1, page_count + 1))
+    tracemalloc.start()
+    try:
+        pages, total = read_tools._scan_pages(source, max_pages=100, max_chars=65536)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert total == page_count
+    assert len(pages) == 100
+    assert pages[0] == (1, body[:65536], len(body))
+    assert pages[-1][0] == 100
+    assert peak < 10 * 1024 * 1024
+
+
+async def _page_document(db: AsyncSession, pages: int, text: str = "page") -> None:
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="\n".join(
+                f"[Page {i}]\n{text} {i}" for i in range(1, pages + 1)
+            )
+        )
+    )
+    await db.commit()
+
+
+def _enable_page_filter(monkeypatch: pytest.MonkeyPatch) -> Any:
+    from src.core.config import settings
+    from src.services.search.cohere_rerank_service import cohere_rerank_service
+
+    monkeypatch.setattr(settings, "AGENT_PAGE_FILTER", True, raising=False)
+    monkeypatch.setattr(settings, "RETRIEVE_PASSAGES_PAGE_TOP_N", 6, raising=False)
+    monkeypatch.setattr(
+        settings, "RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT", 8, raising=False
+    )
+    monkeypatch.setattr(cohere_rerank_service, "_enabled", True)
+    return cohere_rerank_service
+
+
+async def _retrieve_one(db: AsyncSession, context: IntegrationContext) -> Any:
+    return await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages", query="question", document_ids=[str(DOC_IN_PROJECT)]
+        ),
+    )
+
+
+@pytest.mark.parametrize("has_blank_page", [False, True])
+async def test_page_filter_short_circuit(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    has_blank_page: bool,
+) -> None:
+    service = _enable_page_filter(monkeypatch)
+    monkeypatch.setattr(
+        service, "rerank", AsyncMock(side_effect=AssertionError("must not rerank"))
+    )
+    await _page_document(db, 8)
+    if has_blank_page:
+        await db.execute(
+            update(Document)
+            .where(Document.id == DOC_IN_PROJECT)
+            .values(
+                content_text="[Page 1]\npage 1\n"
+                + "\n".join(f"[Page {i}]\n " for i in range(2, 9))
+            )
+        )
+        await db.commit()
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert [c["page_number"] for c in result.content[0]["chunks"]] == list(range(1, 9))
+    assert result.content[0]["page_filter"] == {
+        "accepted_pages": list(range(1, 9)),
+        "total_pages": 8,
+        "short_circuited": True,
+        "model": None,
+    }
+    if has_blank_page:
+        assert [c["text"] for c in result.content[0]["chunks"]] == ["page 1"] + [""] * 7
+
+
+async def test_page_filter_scans_on_worker_thread(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    _enable_page_filter(monkeypatch)
+    await _page_document(db, 1)
+    request_thread = threading.get_ident()
+    scan = read_tools._scan_pages
+    worker_threads = []
+
+    def record_scan(*args: Any, **kwargs: Any) -> Any:
+        worker_threads.append(threading.get_ident())
+        return scan(*args, **kwargs)
+
+    monkeypatch.setattr(read_tools, "_scan_pages", record_scan)
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert worker_threads and request_thread not in worker_threads
+
+
+# Mutation-verified: removing read_tools.py:774 SQL source bound exceeds 10 MiB.
+# Command (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k bounds_source_fetch; fails without the bound, passes after restoration.
+async def test_page_filter_bounds_source_fetch_before_parsing(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_page_filter(monkeypatch)
+    await _page_document(db, 1, "x" * 20_000_000)
+    monkeypatch.setattr(
+        read_tools,
+        "fulltext_search_service",
+        _StubFulltext([_search_result(DOC_IN_PROJECT, "bounded fallback")]),
+    )
+    tracemalloc.start()
+    try:
+        result = await _retrieve_one(db, context)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert not result.is_error
+    assert "page_filter" not in result.content[0]
+    assert result.content[0]["chunks"][0]["text"] == "bounded fallback"
+    assert peak < 10 * 1024 * 1024
+
+
+# Mutation-verified: removing read_tools.py:804 rollback leaves a transaction open.
+# Command (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k releases_read_transaction; both cases fail without rollback, pass restored.
+@pytest.mark.parametrize("provider_fails", [False, True])
+async def test_page_filter_releases_read_transaction_before_provider(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_fails: bool,
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await _page_document(db, 9)
+    transactions = []
+
+    async def rerank(*args: Any, **kwargs: Any) -> Any:
+        transactions.append(db.in_transaction())
+        if provider_fails:
+            raise RuntimeError("provider unavailable")
+        return [
+            RerankResult(
+                document_id="1", index=0, relevance_score=0.9, original_score=0.0
+            )
+        ]
+
+    monkeypatch.setattr(service, "rerank", rerank)
+    monkeypatch.setattr(read_tools, "fulltext_search_service", _StubFulltext([]))
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert transactions == [False]
+    assert db.in_transaction()  # Post-provider authorization reacquires a connection.
+
+
+async def test_page_filter_reranks_in_page_order(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await _page_document(db, 101)
+
+    async def rerank(query: str, documents: list[dict[str, Any]], **kwargs: Any) -> Any:
+        assert query == "question"
+        assert len(documents) == 100
+        assert kwargs["top_n"] == 6
+        return [
+            RerankResult(
+                document_id="9", index=8, relevance_score=0.9, original_score=0.0
+            ),
+            RerankResult(
+                document_id="2", index=1, relevance_score=0.8, original_score=0.0
+            ),
+        ]
+
+    monkeypatch.setattr(service, "rerank", rerank)
+    result = await _retrieve_one(db, context)
+    payload = result.content[0]
+    assert [c["page_number"] for c in payload["chunks"]] == [2, 9]
+    assert [c["text"] for c in payload["chunks"]] == ["page 2", "page 9"]
+    assert payload["page_filter"] == {
+        "accepted_pages": [2, 9],
+        "total_pages": 101,
+        "short_circuited": False,
+        "model": service.model,
+    }
+    assert payload["truncated"] is True
+    assert payload["page_filter"]["total_pages"] > 100
+
+
+async def test_page_filter_omits_blank_rerank_candidates(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    monkeypatch.setattr(read_tools, "fulltext_search_service", _StubFulltext([]))
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="[Page 1]\n \n"
+            + "\n".join(f"[Page {i}]\npage {i}" for i in range(2, 10))
+        )
+    )
+    await db.commit()
+
+    async def rerank(query: str, documents: list[dict[str, Any]], **kwargs: Any) -> Any:
+        assert len(documents) == 8
+        assert all(doc["content"] for doc in documents)
+        assert documents[1] == {"id": "3", "content": "page 3"}
+        return [
+            RerankResult(
+                document_id="3", index=1, relevance_score=0.9, original_score=0.0
+            )
+        ]
+
+    monkeypatch.setattr(service, "rerank", rerank)
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert result.content[0]["page_filter"]["total_pages"] == 9
+    assert result.content[0]["page_filter"]["accepted_pages"] == [3]
+    assert result.content[0]["chunks"][0]["text"] == "page 3"
+
+
+@pytest.mark.parametrize("page_count", [1, 8, 9])
+async def test_page_filter_all_blank_candidates_use_fulltext(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    page_count: int,
+) -> None:
+    service = _enable_page_filter(monkeypatch)
+    rerank = AsyncMock(return_value=[])
+    monkeypatch.setattr(service, "rerank", rerank)
+    monkeypatch.setattr(
+        read_tools,
+        "fulltext_search_service",
+        _StubFulltext([_search_result(DOC_IN_PROJECT, "fallback hit")]),
+    )
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="\n".join(f"[Page {i}]\n " for i in range(1, page_count + 1))
+        )
+    )
+    await db.commit()
+    result = await _retrieve_one(db, context)
+    rerank.assert_not_awaited()
+    assert result.content[0]["chunks"][0]["text"] == "fallback hit"
+    assert "page_filter" not in result.content[0]
+
+
+@pytest.mark.parametrize("failure", ["raise", "timeout", "disabled", "outcome"])
+async def test_page_filter_failure_matches_fulltext(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from src.core.config import settings
+
+    stub = _StubFulltext([_search_result(DOC_IN_PROJECT, "a <mark>hit</mark>")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    service = _enable_page_filter(monkeypatch)
+    await _page_document(db, 9)
+    monkeypatch.setattr(settings, "AGENT_PAGE_FILTER", False)
+    old = await _retrieve_one(db, context)
+    monkeypatch.setattr(settings, "AGENT_PAGE_FILTER", True)
+
+    async def fail(*args: Any, **kwargs: Any) -> Any:
+        if failure == "timeout":
+            import asyncio
+
+            await asyncio.sleep(10)
+        if failure == "outcome":
+            service.last_failure = {"reason": "upstream_http_error", "error": "private"}
+            return []
+        raise RuntimeError("private exception")
+
+    monkeypatch.setattr(service, "rerank", fail)
+    if failure == "disabled":
+        monkeypatch.setattr(service, "_enabled", False)
+    monkeypatch.setattr(read_tools, "PAGE_RERANK_TIMEOUT_SECONDS", 0.01, raising=False)
+    result = await _retrieve_one(db, context)
+    assert result == old
+
+
+# Mutation-verified: removing Collection.id == project_id from
+# read_tools.py:487 (_live_project_documents) returns the sibling project's page.
+# Command (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k page_filter_refuses_single_foreign_document; fails without guard, passes restored.
+async def test_page_filter_refuses_single_foreign_document(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_page_filter(monkeypatch)
+    await db.execute(update(Document).values(content_text="[Page 1]\nsecret"))
+    await db.commit()
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages", query="q", document_ids=[str(DOC_OUTSIDE_PROJECT)]
+        ),
+    )
+    assert result.is_error
+    assert result.content[0]["error"] == "requested_documents_unavailable"
+
+
+# Mutation-verified: disabling read_tools.py:836 post-rerank membership
+# recheck returns a revoked page. Command (backend):
+# pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k page_filter_revocation_during_rerank; fails without guard, passes restored.
+async def test_page_filter_revocation_during_rerank(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await _page_document(db, 9)
+
+    async def revoke(*args: Any, **kwargs: Any) -> Any:
+        await db.execute(update(CollectionDocument).values(is_deleted=True))
+        await db.commit()
+        return [
+            RerankResult(
+                document_id="1", index=0, relevance_score=0.9, original_score=0.0
+            )
+        ]
+
+    monkeypatch.setattr(service, "rerank", revoke)
+    result = await _retrieve_one(db, context)
+    assert result.is_error
+    assert result.content[0]["error"] == "requested_documents_unavailable"
+
+
+# Mutation-verified: replacing read_tools.py:833 caller authorization with only
+# Collection.id == project_id leaks page/FTS text in all four cases. Command
+# (backend): pytest -q tests/unit/services/integrations/test_read_tools.py
+# -k rechecks_caller_after_rerank; fails without guard, passes restored.
+@pytest.mark.parametrize("revocation", ["membership", "disabled"])
+@pytest.mark.parametrize("provider_fails", [False, True])
+async def test_page_filter_rechecks_caller_after_rerank(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    revocation: str,
+    provider_fails: bool,
+) -> None:
+    from src.models.workspace import WorkspaceRole
+    from src.services.search.cohere_rerank_service import RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await _page_document(db, 9)
+    if revocation == "membership":
+        owner = await _add_user(db)
+        await db.execute(
+            update(Workspace).where(Workspace.id == WORKSPACE).values(owner_id=owner)
+        )
+        await db.execute(
+            insert(WorkspaceMember).values(
+                workspace_id=WORKSPACE, user_id=USER, role=WorkspaceRole.VIEWER
+            )
+        )
+        await db.commit()
+
+    async def revoke(*args: Any, **kwargs: Any) -> Any:
+        if revocation == "membership":
+            await db.execute(update(WorkspaceMember).values(is_deleted=True))
+        else:
+            await db.execute(
+                update(User).where(User.id == USER).values(is_active=False)
+            )
+        await db.commit()
+        if provider_fails:
+            raise RuntimeError("provider failure")
+        return [
+            RerankResult(
+                document_id="1", index=0, relevance_score=0.9, original_score=0.0
+            )
+        ]
+
+    monkeypatch.setattr(service, "rerank", revoke)
+    monkeypatch.setattr(
+        read_tools,
+        "fulltext_search_service",
+        _StubFulltext([_search_result(DOC_IN_PROJECT, "secret")]),
+    )
+    result = await _retrieve_one(db, context)
+    assert result.is_error
+    assert result.content[0]["error"] == "requested_documents_unavailable"
+
+
+async def test_page_filter_large_pages_preserves_rows_and_redacts_title(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_page_filter(monkeypatch)
+    await _page_document(db, 8, '\\"漢😀' * 20_000)
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(title="contact someone@example.test")
+    )
+    await db.commit()
+    result = await _retrieve_one(db, context)
+    payload = result.content[0]
+    assert not result.is_error
+    assert len(payload["chunks"]) == 8
+    assert payload["total"] == 8
+    assert payload["truncated"] is True
+    assert all(
+        c["truncated"] and c["total_chars"] > len(c["text"]) for c in payload["chunks"]
+    )
+    assert "someone@example.test" not in payload["chunks"][0]["title"]
+    assert (
+        read_tools._wire_size(result.model_dump(mode="json"))
+        <= read_tools.MAX_RESULT_BYTES
+    )
+
+
+@pytest.mark.parametrize("repeats", [1000, 20000])
+async def test_page_filter_reuses_unused_text_budget(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    repeats: int,
+) -> None:
+    _enable_page_filter(monkeypatch)
+    texts = ["tiny"] * 7 + ['\\"漢😀' * repeats]
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="\n".join(
+                f"[Page {i}]\n{text}" for i, text in enumerate(texts, 1)
+            )
+        )
+    )
+    await db.commit()
+    result = await _retrieve_one(db, context)
+    payload = result.content[0]
+    assert not result.is_error
+    assert [c["page_number"] for c in payload["chunks"]] == list(range(1, 9))
+    assert [c["text"] for c in payload["chunks"][:7]] == texts[:7]
+    wire_size = read_tools._wire_size(result.model_dump(mode="json"))
+    assert wire_size <= read_tools.MAX_RESULT_BYTES
+    if repeats == 1000:
+        assert payload["chunks"][7]["text"] == texts[7]
+        assert not any(c["truncated"] for c in payload["chunks"])
+        assert "truncated" not in payload
+    else:
+        assert payload["chunks"][7]["truncated"]
+        assert wire_size > read_tools.MAX_RESULT_BYTES - 100
+
+
+@pytest.mark.parametrize("mode", ["flag_off", "no_markers", "multiple", "implicit"])
+async def test_page_filter_ineligible_keeps_fulltext(
+    db: AsyncSession,
+    context: IntegrationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    from src.core.config import settings
+
+    service = _enable_page_filter(monkeypatch)
+    monkeypatch.setattr(
+        service, "rerank", AsyncMock(side_effect=AssertionError("ineligible"))
+    )
+    await _page_document(db, 9)
+    if mode == "flag_off":
+        monkeypatch.setattr(settings, "AGENT_PAGE_FILTER", False)
+    if mode == "no_markers":
+        await db.execute(update(Document).values(content_text="plain text"))
+        await db.commit()
+    ids = [str(DOC_IN_PROJECT)]
+    if mode == "multiple":
+        # Duplicate explicit ids still have length two: no single-document path.
+        ids *= 2
+    args: dict[str, Any] = {"query": "question"}
+    if mode != "implicit":
+        args["document_ids"] = ids
+    stub = _StubFulltext([_search_result(DOC_IN_PROJECT, "hit")])
+    monkeypatch.setattr(read_tools, "fulltext_search_service", stub)
+    result = await invoke_read(db, context, _invocation("retrieve_passages", **args))
+    assert result.content[0] == {
+        "chunks": [
+            {
+                "document_id": str(DOC_IN_PROJECT),
+                "title": "retrieval-eval",
+                "text": "hit",
+                "score": 1.5,
+            }
+        ],
+        "total": 1,
+        "query": "question",
+    }
+
+
+async def test_page_filter_maximum_pages_and_unicode_title_fit_budget(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.core.config import settings
+
+    _enable_page_filter(monkeypatch)
+    monkeypatch.setattr(settings, "RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT", 100)
+    await _page_document(db, 100, "漢😀" * 1000)
+    await db.execute(
+        update(Document).where(Document.id == DOC_IN_PROJECT).values(title="😀" * 500)
+    )
+    await db.commit()
+    result = await _retrieve_one(db, context)
+    assert not result.is_error
+    assert len(result.content[0]["chunks"]) == 100
+    assert result.content[0]["truncated"] is True
+    assert read_tools._wire_size(result.model_dump(mode="json")) <= 64 * 1024
+
+
+async def test_page_filter_refuses_document_with_foreign_organization(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_page_filter(monkeypatch)
+    await _page_document(db, 1)
+    foreign_org = uuid4()
+    await db.execute(
+        insert(Organization).values(
+            id=foreign_org, name="Foreign", storage_limit_bytes=1000000
+        )
+    )
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(organization_id=foreign_org)
+    )
+    await db.commit()
+    result = await _retrieve_one(db, context)
+    assert result.is_error
+    assert result.content[0]["error"] == "requested_documents_unavailable"
