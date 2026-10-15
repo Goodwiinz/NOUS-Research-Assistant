@@ -9,6 +9,16 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.unit.services.harness.test_runs import (  # noqa: F401
+    DEVICE,
+    LOCAL,
+    ORG,
+    THREAD,
+    USER,
+    context,
+    db,
+    external_run,
+)
 
 from src.core.config import settings
 from src.models.agent_outbox import AgentOutbox
@@ -36,16 +46,6 @@ from src.services.integrations.context import (
     resolve_integration_context,
 )
 from src.shared.enums import AgentOutboxStatus, JobStatus
-from tests.unit.services.harness.test_runs import (  # noqa: F401
-    DEVICE,
-    LOCAL,
-    ORG,
-    THREAD,
-    USER,
-    context,
-    db,
-    external_run,
-)
 
 pytestmark = pytest.mark.unit
 
@@ -807,10 +807,11 @@ async def test_sweeper_unknown_cannot_erase_committed_terminal_evidence(
 async def test_lease_renewal_is_limited_to_authorized_run_scope(
     db: AsyncSession, context: IntegrationContext, command: Any
 ) -> None:
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
+
     from src.models.bridge_device import WorkspaceBinding
     from src.models.thread import Thread
     from src.services.harness.delivery import lease_runs
-    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
 
     other_thread, other_workspace = uuid4(), uuid4()
     db.add_all(
@@ -870,11 +871,12 @@ async def test_poll_skips_session_that_fails_authorization(
 ) -> None:
     from types import SimpleNamespace
 
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
+
     from src.models.bridge_device import WorkspaceBinding
     from src.models.thread import Thread
     from src.services.agent.agent_submission_service import accept_submission
     from src.services.harness.delivery import lease_runs
-    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
 
     other_thread, other_workspace = uuid4(), uuid4()
     db.add_all(
@@ -985,10 +987,11 @@ async def test_socket_rejects_a_denied_run_event_and_keeps_serving_the_device(
 ) -> None:
     from types import SimpleNamespace
 
+    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
+
     from src.models.bridge_device import WorkspaceBinding
     from src.models.thread import Thread
     from src.services.agent.agent_submission_service import accept_submission
-    from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT, request
 
     other_thread, other_workspace = uuid4(), uuid4()
     db.add_all(
@@ -1166,8 +1169,9 @@ async def test_chat_bound_grant_leases_only_runs_in_its_chat(
     db: AsyncSession, context: IntegrationContext, external_run: Any
 ) -> None:
     """A device connected with --chat runs harness work only in that chat."""
-    from src.models.thread import Thread
     from tests.unit.services.harness.test_runs import CONVERSATION, PROJECT
+
+    from src.models.thread import Thread
 
     other_chat = uuid4()
     db.add(
@@ -1200,8 +1204,9 @@ async def test_chat_bound_grant_leases_only_runs_in_its_chat(
 async def test_stop_after_dispatch_before_delivery_releases_ownership(
     db, context, external_run, monkeypatch, enabled
 ):
-    from src.services.harness.runs import record_observation
     from tests.unit.services.harness.test_runs import accept
+
+    from src.services.harness.runs import record_observation
 
     assert await dispatch_pending(db) == 1
     monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", enabled)

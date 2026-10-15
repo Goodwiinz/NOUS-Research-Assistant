@@ -811,8 +811,9 @@ async def test_one_account_bridge_leases_runs_in_two_projects(
 async def test_a_start_command_names_its_project_only_under_an_account_pairing(
     db: AsyncSession, context: IntegrationContext, account: IntegrationContext
 ) -> None:
-    from src.services.harness.delivery import dispatch_pending, lease_commands
     from tests.unit.services.harness.test_runs import accept
+
+    from src.services.harness.delivery import dispatch_pending, lease_commands
 
     await accept(db, context)  # a project pairing's run on DEVICE / LOCAL
     await start(db, THREAD_B, FOLDER_A)
