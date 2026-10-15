@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -13,10 +13,14 @@ from src.models.agent_run import AgentRun
 from src.models.bridge_device import WorkspaceBinding
 from src.models.harness_session import HarnessSession
 from src.models.integration_grant import IntegrationGrant
-from src.schemas.integration_context import IntegrationContext
+from src.schemas.integration_context import BindingKind, IntegrationContext
 from src.services.agent.run_event_store import read_events
 from src.services.agent.run_event_types import TERMINAL_RUN_EVENTS, RunEventType
-from src.services.integrations.context import mint_integration_grant
+from src.services.harness.account import live_account_consent, project_in_account
+from src.services.integrations.context import (
+    IntegrationAccessDenied,
+    mint_integration_grant,
+)
 from src.shared.enums import AgentStreamEvent
 
 _POLL_INTERVAL_SECONDS = 0.25
@@ -28,6 +32,50 @@ def external_resume_cursor(after_seq: int, stream_id: str | None, run_id: UUID) 
     if stream_id is None or stream_id.casefold() != str(run_id).casefold():
         return 0
     return after_seq
+
+
+async def _run_consent_kind(
+    db: Any,
+    *,
+    current_user: Any,
+    thread: Any,
+    device_id: UUID,
+    workspace_id: UUID,
+) -> Literal["project", "account"]:
+    """Which approval a chat's Codex run on this folder is minted under.
+
+    A folder tied to the chat's project uses that project's approval. An
+    account folder (no project) serves any chat whose project the device's
+    account approval covers on this call. Every refusal is an opaque
+    IntegrationAccessDenied.
+    """
+    binding = await db.scalar(
+        select(WorkspaceBinding).where(
+            WorkspaceBinding.device_id == device_id,
+            WorkspaceBinding.workspace_id == workspace_id,
+            WorkspaceBinding.is_deleted.is_(False),
+        )
+    )
+    if binding is None:
+        raise IntegrationAccessDenied()
+    if binding.project_id is None:
+        consent = await live_account_consent(
+            db,
+            user_id=current_user.id,
+            organization_id=current_user.organization_id,
+            device_id=device_id,
+        )
+        if consent is None or not await project_in_account(
+            db,
+            user_id=current_user.id,
+            organization_id=current_user.organization_id,
+            project_id=thread.source_project_id,
+        ):
+            raise IntegrationAccessDenied()
+        return "account"
+    if binding.project_id != thread.source_project_id:
+        raise IntegrationAccessDenied()
+    return "project"
 
 
 async def create_chat_context(
@@ -51,16 +99,13 @@ async def create_chat_context(
         raise ValueError("Codex runs require a project-bound NOUS chat thread")
     if current_user.organization_id is None:
         raise ValueError("Codex runs require an organization-backed account")
-    binding = await db.scalar(
-        select(WorkspaceBinding).where(
-            WorkspaceBinding.device_id == device_id,
-            WorkspaceBinding.workspace_id == workspace_id,
-            WorkspaceBinding.project_id == thread.source_project_id,
-            WorkspaceBinding.is_deleted.is_(False),
-        )
+    kind = await _run_consent_kind(
+        db,
+        current_user=current_user,
+        thread=thread,
+        device_id=device_id,
+        workspace_id=workspace_id,
     )
-    if binding is None:
-        raise ValueError("The selected workspace is not bound to this chat project")
     issued = await mint_integration_grant(
         db,
         user_id=current_user.id,
@@ -69,6 +114,7 @@ async def create_chat_context(
         scopes=frozenset({"harness:execute"}),
         thread_id=thread.id,
         device_id=device_id,
+        consent_kind=kind,
     )
     # Re-resolve through the same validation gate used by the bridge transport.
     grant = await db.get(IntegrationGrant, issued.grant_id, populate_existing=True)
@@ -78,6 +124,7 @@ async def create_chat_context(
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        binding_kind=cast(BindingKind, grant.binding_kind),
         thread_id=grant.thread_id,
         run_id=None,
         grant_id=grant.id,
@@ -107,6 +154,7 @@ async def context_for_accepted_run(
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        binding_kind=cast(BindingKind, grant.binding_kind),
         thread_id=grant.thread_id,
         run_id=run_id,
         grant_id=grant.id,

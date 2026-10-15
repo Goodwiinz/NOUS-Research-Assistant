@@ -349,3 +349,214 @@ def test_run_project_takes_the_project_from_the_run_only_under_an_account_grant(
     # A workspace grant never runs Codex.
     with pytest.raises(IntegrationAccessDenied):
         run_project(IntegrationContext(workspace_id=WORKSPACE, **ids), run)
+
+
+async def test_an_account_folder_serves_chats_in_every_project_of_the_account(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    for thread_id, project_id in ((THREAD, PROJECT), (THREAD_B, PROJECT_B)):
+        run_context = await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, thread_id),
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+        )
+        assert run_context.binding_kind == "project"
+        assert run_context.project_id == project_id
+        grant = await db.get(IntegrationGrant, run_context.grant_id)
+        assert grant is not None and grant.request_id == account.consent_id
+        assert grant.thread_id == thread_id and grant.device_id == ACCOUNT_DEVICE
+
+
+# End to end, two layers refuse this: _run_consent_kind and the mint's own
+# account check (_consent_admits, MA2). Mutation MA1 (delete `or not await
+# project_in_account(...)` in harness_streaming._run_consent_kind) is therefore
+# caught by test_the_run_consent_kind_is_decided_before_any_grant_is_minted,
+# which calls the first layer directly, not by this one.
+async def test_an_account_folder_refuses_a_project_outside_the_account(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    await leave_account(db)
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD_B),
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+        )
+
+
+async def test_an_account_folder_needs_a_live_account_approval_on_its_device(
+    db: AsyncSession, context: IntegrationContext, account: IntegrationContext
+) -> None:
+    # DEVICE holds a project approval only; give it an account folder anyway.
+    loose = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=DEVICE, workspace_id=loose, project_id=None, label="x"
+        )
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD),
+            device_id=DEVICE,
+            workspace_id=loose,
+        )
+    # A revoked account approval no longer serves its folders.
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == account.consent_id)
+        .values(consent_revoked_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD),
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+        )
+
+
+async def test_a_project_folder_still_serves_only_its_own_project(
+    db: AsyncSession, context: IntegrationContext
+) -> None:
+    # The device also holds an approval for PROJECT_B, so only the folder check
+    # keeps LOCAL (tied to PROJECT) away from a chat in PROJECT_B.
+    await pair_project(db, PROJECT_B, DEVICE)
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD_B),
+            device_id=DEVICE,
+            workspace_id=LOCAL,
+        )
+    ok = await create_chat_context(
+        db,
+        current_user=OWNER,
+        thread=await db.get(Thread, THREAD),
+        device_id=DEVICE,
+        workspace_id=LOCAL,
+    )
+    assert ok.project_id == PROJECT
+
+
+# Mutation MA1b: drop the `WorkspaceBinding.device_id == device_id` predicate in
+# _run_consent_kind; this test must fail.
+async def test_a_folder_of_another_device_is_not_this_devices(
+    db: AsyncSession, context: IntegrationContext, account: IntegrationContext
+) -> None:
+    # ACCOUNT_DEVICE holds a project approval for PROJECT, and LOCAL is a
+    # folder of DEVICE for PROJECT: only the device predicate refuses it.
+    await pair_project(db, PROJECT, ACCOUNT_DEVICE)
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD),
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=LOCAL,
+        )
+
+
+async def test_the_run_consent_kind_is_decided_before_any_grant_is_minted(
+    db: AsyncSession, context: IntegrationContext, account: IntegrationContext
+) -> None:
+    """The folder check refuses on its own: the mint's own account check is a
+    second layer, so exercise the first one directly."""
+    from src.api.agent.harness_streaming import _run_consent_kind
+
+    async def kind(thread_id: UUID, device: UUID, folder: UUID) -> str:
+        return await _run_consent_kind(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, thread_id),
+            device_id=device,
+            workspace_id=folder,
+        )
+
+    assert await kind(THREAD, DEVICE, LOCAL) == "project"
+    assert await kind(THREAD, ACCOUNT_DEVICE, FOLDER_A) == "account"
+    assert await kind(THREAD_B, ACCOUNT_DEVICE, FOLDER_B) == "account"
+    # An account folder on a device without an account approval.
+    loose = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=DEVICE, workspace_id=loose, project_id=None, label="x"
+        )
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await kind(THREAD, DEVICE, loose)
+    # A project the account no longer covers.
+    await leave_account(db)
+    with pytest.raises(IntegrationAccessDenied):
+        await kind(THREAD_B, ACCOUNT_DEVICE, FOLDER_A)
+    assert await kind(THREAD, ACCOUNT_DEVICE, FOLDER_A) == "account"
+
+
+# Mutation MA1c: pass `consent_kind=None` in create_chat_context's mint; this
+# test must fail (the account approval would win the precedence).
+async def test_a_project_folder_runs_under_its_project_approval_on_an_account_device(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    project_approval = await pair_project(db, PROJECT, ACCOUNT_DEVICE)
+    assert project_approval.consent_id != account.consent_id
+    folder = uuid4()
+    db.add(
+        WorkspaceBinding(
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder,
+            project_id=PROJECT,
+            label="repo",
+        )
+    )
+    await db.commit()
+    for folder_id, expected in (
+        (folder, project_approval.consent_id),
+        (FOLDER_A, account.consent_id),
+    ):
+        run_context = await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=await db.get(Thread, THREAD),
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=folder_id,
+        )
+        grant = await db.get(IntegrationGrant, run_context.grant_id)
+        assert grant is not None and grant.request_id == expected
+
+
+async def test_an_unknown_or_deleted_folder_is_denied(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    thread = await db.get(Thread, THREAD)
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=thread,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=uuid4(),
+        )
+    await db.execute(
+        update(WorkspaceBinding)
+        .where(WorkspaceBinding.workspace_id == FOLDER_A)
+        .values(is_deleted=True)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await create_chat_context(
+            db,
+            current_user=OWNER,
+            thread=thread,
+            device_id=ACCOUNT_DEVICE,
+            workspace_id=FOLDER_A,
+        )
