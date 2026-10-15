@@ -587,3 +587,90 @@ test("login() returns the CLI token after browser approval", async () => {
     t.cleanup();
   }
 });
+
+test("an account binding is reused like a project one, and never reuses a project binding or is reused by one", async () => {
+  const t = setup();
+  try {
+    const { projectId: _project, ...noProject } = t.base;
+    await connect({ ...noProject, account: true });
+    assert.equal(t.state().account, true);
+    assert.deepEqual(t.state().scopes, ["harness:execute", "tools:read", "library:read"]);
+    let mark = t.calls.length;
+    await connect({ ...noProject, account: true });
+    assert.deepEqual(t.since(mark), [`https://nous.test/api/v1/integrations/grants/${GRANT}/renew`]);
+    assert.match(t.messages.at(-1)!, /^Reusing binding: your NOUS account; no new login or consent needed\.$/);
+    mark = t.calls.length;
+    await connect({ ...t.base, tools: true });
+    assert.ok(t.since(mark).some((u) => u.endsWith("/cli-auth/start")), "account never stands in for a project");
+    mark = t.calls.length;
+    await connect({ ...noProject, account: true });
+    assert.ok(t.since(mark).some((u) => u.endsWith("/cli-auth/start")), "a project never stands in for the account");
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a lapsed account grant resumes from its consent with no login, consent or new device", async () => {
+  const t = lapsing(resumedGrant);
+  try {
+    const account = { ...t.base, projectId: undefined, account: true };
+    const first = await connect(account);
+    t.lapse();
+    const mark = t.calls.length;
+    assert.deepEqual(await connect(account), first);
+    assert.equal(t.since(mark).some((u) => u.endsWith("/cli-auth/start") || u.endsWith("/grant-requests")), false);
+    assert.match(t.messages.at(-1)!, /^Resumed binding: your NOUS account; your earlier approval still holds/);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a stored account connection loads; one that also names a project, or says account: false, is not connected", async () => {
+  for (const [name, binding, connected] of [
+    ["account", { account: true }, true],
+    ["account and project", { account: true, projectId: PROJECT }, false],
+    ["account false", { account: false }, false],
+  ] as const) {
+    const t = setup();
+    try {
+      await connect({ ...t.base, tools: true });
+      const { projectId: _project, ...rest } = t.state();
+      await new CredentialStore(t.dir).writeLocal("connection", { ...rest, ...binding });
+      const lines: string[] = [];
+      await status({ stateDir: t.dir, announce: (m) => lines.push(m) });
+      assert.equal(/not connected/i.test(lines.join("\n")), !connected, name);
+    } finally {
+      t.cleanup();
+    }
+  }
+});
+
+test("status names an account binding and shows neither a project nor a chat", async () => {
+  const t = setup();
+  try {
+    await connect({ ...t.base, projectId: undefined, account: true });
+    const lines: string[] = [];
+    await status({ stateDir: t.dir, announce: (m) => lines.push(m) });
+    const out = lines.join("\n");
+    assert.match(out, /^Account: your whole NOUS account \(every project you own or belong to in your organization\)$/m);
+    assert.doesNotMatch(out, /Project:|Chat:|Workspace:/);
+    assert.match(out, /Scopes: harness:execute tools:read library:read/);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("handoff commands refuse an account connection and say how to get a chat one", async () => {
+  const t = setup();
+  try {
+    await connect({ ...t.base, projectId: undefined, account: true });
+    const mark = t.calls.length;
+    const refusal = /whole NOUS account, which has no chat handoff.*connect --project UUID --chat UUID --tools --handoff/;
+    const options = { stateDir: t.dir, fetchFn: t.base.fetchFn };
+    await assert.rejects(handoffShow(options), refusal);
+    await assert.rejects(handoffFlush(options), refusal);
+    assert.equal(t.calls.length, mark);
+  } finally {
+    t.cleanup();
+  }
+});

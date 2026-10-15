@@ -504,10 +504,14 @@ test("connect refuses contradictory binding and scope flags before any request",
     );
     // Without tools:read a workspace grant could do nothing, and NOUS refuses an empty scope set.
     await assert.rejects(connect({ ...workspace }), /--workspace requires --tools/);
-    await assert.rejects(connect({ ...base, tools: true }), /--project or --workspace \(not both\) required/);
+    await assert.rejects(connect({ ...base, tools: true }), /--project, --workspace or --account \(exactly one\) required/);
     await assert.rejects(
       connect({ ...base, projectId: PROJECT, workspaceId: WORKSPACE, tools: true }),
-      /--project or --workspace \(not both\) required/,
+      /--project, --workspace or --account \(exactly one\) required/,
+    );
+    await assert.rejects(
+      connect({ ...base, projectId: PROJECT, account: true, tools: true }),
+      /--project, --workspace or --account \(exactly one\) required/,
     );
     await assert.rejects(
       connect({ ...workspace, workspaceId: "not-a-uuid", tools: true }),
@@ -698,7 +702,7 @@ test("the nous-harness CLI parses --workspace and --library into the consent req
   try {
     const both = await cli("connect", "--project", PROJECT, "--workspace", WORKSPACE, "--label", "dev", "--tools");
     assert.equal(both.code, 1);
-    assert.match(both.stderr, /--project or --workspace \(not both\) required/);
+    assert.match(both.stderr, /--project, --workspace or --account \(exactly one\) required/);
     assert.equal(requests.length, 0);
 
     const withContext = await cli("connect", "--workspace", WORKSPACE, "--label", "dev", "--tools", "--context");
@@ -717,6 +721,21 @@ test("the nous-harness CLI parses --workspace and --library into the consent req
     const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
     assert.equal(state.workspaceId, WORKSPACE);
     assert.equal("projectId" in state, false);
+
+    const withChat = await cli("connect", "--account", "--chat", CHAT, "--label", "dev");
+    assert.equal(withChat.code, 1);
+    assert.match(withChat.stderr, /--account cannot be combined with --chat/);
+
+    const mark = requests.length;
+    const account = await cli("connect", "--account", "--label", "dev", "--write", "--library");
+    assert.equal(account.code, 0, account.stderr);
+    const accountConsent = requests.slice(mark).find((r) => r.path.endsWith("/grant-requests"))!;
+    assert.deepEqual(accountConsent.body, {
+      account: true,
+      device_id: DEVICE,
+      scopes: ["harness:execute", "tools:read", "tools:write", "library:read", "library:write"],
+    });
+    assert.equal(JSON.parse(readFileSync(join(dir, "connection.json"), "utf8")).account, true);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
@@ -995,4 +1014,91 @@ test("only HTTPS or the loopback development origin is accepted", () => {
   assert.equal(apiBase("http://localhost:8000/api/v1"), "http://localhost:8000/api/v1");
   assert.throws(() => apiBase("http://nous.example/api/v1"));
   assert.throws(() => apiBase("https://user:pw@nous.example/api/v1"));
+});
+
+test("connect --account asks for the whole account with execute, read and library:read; --write and --library add theirs", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-account-"));
+  const calls: { url: string; body: any }[] = [];
+  const base = { stateDir: dir, fetchFn: consentFetch(calls), announce: () => {}, apiUrl: "https://nous.test/api/v1", label: "dev" };
+  const consent = () => calls.filter((c) => c.url.endsWith("/grant-requests")).at(-1)!.body;
+  try {
+    await connect({ ...base, account: true });
+    assert.deepEqual(consent(), {
+      account: true,
+      device_id: DEVICE,
+      scopes: ["harness:execute", "tools:read", "library:read"],
+    });
+    await connect({ ...base, account: true, write: true, library: true });
+    assert.deepEqual(consent().scopes, ["harness:execute", "tools:read", "tools:write", "library:read", "library:write"]);
+    const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
+    assert.equal(state.account, true);
+    assert.equal("projectId" in state || "workspaceId" in state, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("connect --account refuses --publish, --context, --chat and --handoff before any request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-account-flags-"));
+  const calls: { url: string; body: any }[] = [];
+  const account = { stateDir: dir, fetchFn: consentFetch(calls), announce: () => {}, apiUrl: "https://nous.test/api/v1", label: "dev", account: true };
+  try {
+    await assert.rejects(connect({ ...account, tools: true, publish: true }), /--account cannot be combined with --publish/);
+    await assert.rejects(connect({ ...account, tools: true, context: true }), /--account cannot be combined with --context/);
+    await assert.rejects(connect({ ...account, threadId: CHAT }), /--account cannot be combined with --chat/);
+    await assert.rejects(connect({ ...account, tools: true, handoff: true }), /--account cannot be combined with --handoff/);
+    await assert.rejects(connect({ ...account, library: true }), /--library requires --write/);
+    assert.equal(calls.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an account connection registers folders without a project, and carries a project pairing's folders as account folders", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-account-folders-"));
+  const keep = realpathSync(mkdtempSync(join(tmpdir(), "nous-keep-")));
+  const added = realpathSync(mkdtempSync(join(tmpdir(), "nous-add-")));
+  const calls: { url: string; body: any }[] = [];
+  try {
+    await new CredentialStore(dir).writeLocal("connection", {
+      apiUrl: "https://nous.test/api/v1",
+      deviceId: "44444444-4444-4444-8444-444444444444",
+      projectId: PROJECT,
+      credentialHandle: "55555555-5555-4555-8555-555555555555",
+      scopes: ["harness:execute", "tools:read"],
+      workspaces: [{ id: "66666666-6666-4666-8666-666666666666", root: keep, label: "Kept", projectId: PROJECT }],
+    } satisfies LocalState);
+    await connect({ stateDir: dir, fetchFn: consentFetch(calls), announce: () => {}, apiUrl: "https://nous.test/api/v1", label: "dev", account: true });
+    const carried = calls.filter((c) => /\/devices\/[^/]+\/workspaces$/.test(c.url));
+    assert.equal(carried.length, 1);
+    assert.equal(carried[0]!.body.label, "Kept");
+    assert.equal("project_id" in carried[0]!.body, false);
+    await addWorkspace({ stateDir: dir, fetchFn: consentFetch(calls), announce: () => {}, root: added });
+    const registered = calls.filter((c) => /\/devices\/[^/]+\/workspaces$/.test(c.url)).at(-1)!;
+    assert.equal("project_id" in registered.body, false);
+    const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
+    assert.deepEqual(state.workspaces.map((w: any) => [w.root, "projectId" in w]), [[keep, false], [added, false]]);
+  } finally {
+    for (const path of [dir, keep, added]) rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("mcp install for an account connection never pins a project and says its tools take a project_id", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-mcp-account-install-"));
+  const messages: string[] = [];
+  try {
+    await new CredentialStore(dir).writeLocal("connection", {
+      apiUrl: "https://nous.test/api/v1",
+      deviceId: DEVICE,
+      account: true,
+      credentialHandle: "55555555-5555-4555-8555-555555555555",
+      scopes: ["harness:execute", "tools:read", "library:read"],
+      workspaces: [],
+    } satisfies LocalState);
+    const command = await mcpInstallCommand(dir, { announce: (m) => messages.push(m) });
+    assert.equal(command.includes("'--project'"), false);
+    assert.ok(messages.some((m) => /every project in your NOUS account.*project_id.*list_library/.test(m)), messages.join("\n"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

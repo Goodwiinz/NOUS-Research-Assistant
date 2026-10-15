@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseCommand } from "../src/connection.ts";
+import { sessionOptionsFor, type LocalState } from "../src/cli.ts";
 import { Journal } from "../src/journal.ts";
 import type { HarnessAdapter, SessionOptions } from "../src/contracts.ts";
 
@@ -68,6 +69,31 @@ test("the journal gives the start's projectId to the session options and never u
     for (const event of events) assert.equal("projectId" in event, false);
   } finally {
     journal.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an account connection pins each run's MCP child to the start's project; a project connection never gets --project", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nous-run-project-state-"));
+  const folder = { id: randomUUID(), root: dir, label: "w" };
+  const account: LocalState = {
+    apiUrl: "https://nous.example/api/v1",
+    deviceId: randomUUID(),
+    account: true,
+    credentialHandle: randomUUID(),
+    scopes: ["harness:execute", "tools:read"],
+    workspaces: [folder],
+  };
+  try {
+    const args = sessionOptionsFor(dir, account, folder.id, PROJECT).mcpConfig?.nous?.args ?? [];
+    assert.equal(args[args.indexOf("--project") + 1], PROJECT);
+    // Without the run's project an account run gets no NOUS tools rather than unpinned ones.
+    assert.equal("mcpConfig" in sessionOptionsFor(dir, account, folder.id), false);
+    const { account: _account, ...rest } = account;
+    const project: LocalState = { ...rest, projectId: PROJECT, workspaces: [{ ...folder, projectId: PROJECT }] };
+    const plain = sessionOptionsFor(dir, project, folder.id, randomUUID()).mcpConfig?.nous?.args ?? [];
+    assert.equal(plain.includes("--project"), false);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
