@@ -17,11 +17,8 @@ const OTHER_CHAT = "88888888-8888-4888-8888-888888888888";
 
 type Reply = { code: number; body: object };
 
-/** NOUS before grant resume shipped: the route does not exist. */
-const noResume = (): Reply => ({ code: 404, body: { detail: "Not Found" } });
-
-/** Fake NOUS: full login + consent, and renew and resume endpoints whose answers each test picks. */
-function fakeNous(calls: string[], renew: () => Reply, resume: () => Reply = noResume): typeof fetch {
+/** Fake NOUS: full login + consent, and a renew endpoint whose answer each test picks. */
+function fakeNous(calls: string[], renew: () => Reply): typeof fetch {
   let issued = 0;
   return (async (input: any) => {
     const url = String(input);
@@ -33,10 +30,13 @@ function fakeNous(calls: string[], renew: () => Reply, resume: () => Reply = noR
     else if (url.endsWith("/integrations/devices")) data = { id: DEVICE };
     else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: "https://nous.test/a" };
     else if (url.endsWith("/exchange")) data = { token: `grant-secret-${(issued += 1)}`, grant_id: GRANT };
-    else if (url.endsWith("/renew") || url.endsWith("/resume")) {
-      const { code, body } = (url.endsWith("/renew") ? renew : resume)();
+    else if (url.endsWith("/renew")) {
+      const { code, body } = renew();
       return new Response(JSON.stringify(body), { status: code });
-    } else data = { status: "approved" };
+    } else if (url.endsWith("/resume"))
+      // A NOUS before grant resume shipped; `lapsing` answers it instead.
+      return new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 });
+    else data = { status: "approved" };
     return new Response(JSON.stringify(data), { status: 200 });
   }) as typeof fetch;
 }
@@ -44,13 +44,13 @@ function fakeNous(calls: string[], renew: () => Reply, resume: () => Reply = noR
 let renewals = 0;
 const renewed = (): Reply => ({ code: 200, body: { token: `renewed-secret-${(renewals += 1)}`, grant_id: GRANT } });
 
-function setup(renew: () => Reply = renewed, resume: () => Reply = noResume) {
+function setup(renew: () => Reply = renewed) {
   const dir = mkdtempSync(join(tmpdir(), "nous-reuse-"));
   const calls: string[] = [];
   const messages: string[] = [];
   const base = {
     stateDir: dir,
-    fetchFn: fakeNous(calls, renew, resume),
+    fetchFn: fakeNous(calls, renew),
     announce: (m: string) => messages.push(m),
     apiUrl: "https://nous.test/api/v1",
     projectId: PROJECT,
@@ -143,7 +143,15 @@ test("a failed liveness probe falls back to the full login and consent flow", as
 /** A pairing whose grant lapsed after `connect`: renewal refused, resume answered by `resume`. */
 function lapsing(resume: () => Reply) {
   let lapsed = false;
-  const t = setup(() => (lapsed ? { code: 403, body: { detail: "expired" } } : renewed()), resume);
+  const t = setup(() => (lapsed ? { code: 403, body: { detail: "expired" } } : renewed()));
+  const inner = t.base.fetchFn;
+  t.base.fetchFn = (async (input: any, init?: RequestInit) => {
+    const url = String(input);
+    if (!url.endsWith("/resume")) return inner(input, init);
+    t.calls.push(url);
+    const { code, body } = resume();
+    return new Response(JSON.stringify(body), { status: code });
+  }) as typeof fetch;
   return { ...t, lapse: () => (lapsed = true) };
 }
 const resumedGrant = (): Reply => ({ code: 200, body: { token: "resumed-secret", grant_id: RESUMED } });
