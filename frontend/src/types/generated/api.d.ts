@@ -11264,6 +11264,16 @@ export interface components {
             /** Rate Limit Per Hour */
             rate_limit_per_hour: number;
         };
+        /**
+         * AccountSummaryDTO
+         * @description What an account approval covers at the moment it is shown.
+         */
+        AccountSummaryDTO: {
+            /** Project Count */
+            project_count: number;
+            /** Workspace Count */
+            workspace_count: number;
+        };
         /** ActionDecision */
         ActionDecision: {
             /** Approved */
@@ -14184,7 +14194,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "project" | "workspace";
+            kind: "project" | "workspace" | "account";
             /** Project Id */
             project_id: string | null;
             /** Project Label */
@@ -15136,8 +15146,13 @@ export interface components {
         /**
          * DeviceListItemDTO
          * @description A paired computer as the chat composer lists it.
+         *
+         *     All three lists come from the device's live run consents: consumed, not
+         *     revoked, holding harness:execute. The mint stays the authority.
          */
         DeviceListItemDTO: {
+            /** Account Wide */
+            account_wide: boolean;
             /** Bound Thread Ids */
             bound_thread_ids: string[];
             /**
@@ -15147,6 +15162,8 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Project Ids */
+            project_ids: string[];
         };
         /** DiffHunk */
         DiffHunk: {
@@ -16952,6 +16969,11 @@ export interface components {
         /** GrantRequestCreate */
         GrantRequestCreate: {
             /**
+             * Account
+             * @default false
+             */
+            account: boolean;
+            /**
              * Device Id
              * Format: uuid
              */
@@ -16967,8 +16989,14 @@ export interface components {
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
+            account_summary?: components["schemas"]["AccountSummaryDTO"] | null;
             /** Approval Url */
             approval_url: string;
+            /**
+             * Binding Kind
+             * @enum {string}
+             */
+            binding_kind: "project" | "workspace" | "account";
             /**
              * Device Id
              * Format: uuid
@@ -24320,11 +24348,8 @@ export interface components {
         WorkspaceBindingCreate: {
             /** Label */
             label: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id?: string | null;
             /**
              * Workspace Id
              * Format: uuid
@@ -24335,11 +24360,8 @@ export interface components {
         WorkspaceBindingDTO: {
             /** Label */
             label: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
+            /** Project Id */
+            project_id?: string | null;
             /**
              * Workspace Id
              * Format: uuid
