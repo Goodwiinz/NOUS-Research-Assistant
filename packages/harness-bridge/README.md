@@ -2,6 +2,20 @@
 
 `@nous/harness-bridge` connects a paired local Codex CLI to a NOUS chat run. The chat remains the user-facing conversation; Codex runs on the paired computer in a project workspace, and NOUS stores the accepted run and its transcript events. It also ships an opt-in local MCP server that exposes NOUS project read tools to Codex and, when the matching scopes are approved, publication of a file from a registered workspace root and requests for notes and library changes in NOUS (see [NOUS read tools](#nous-read-tools-over-mcp) and [Note and library actions](#note-and-library-actions)). This package does not synchronize other conversations.
 
+## Quick start: `nous --rc`
+
+From the folder Codex should work in, on a computer with Node 24 and a tested Codex:
+
+```sh
+nous --rc
+```
+
+`nous --rc` is the repository launcher ([`terminal/README.md`](../../terminal/README.md) has the one-time symlink; a copied launcher refuses to run; without the symlink, run `<checkout>/nous --rc` from that folder). It runs Node 24 directly, without pnpm or a PATH change, on `src/cli.ts rc … --api URL --root <current folder>` (its `--api` and `--root` override any you pass). That command checks Codex before any network call, signs in (browser link and code unless the saved sign-in still works), shows a numbered project list with `n) New project`, pairs this computer with the chosen project, registers the folder, and runs the bridge.
+
+The browser approval is skipped only when the stored pairing is for the same project, is still live (grants last 15 minutes and only a running bridge, or a standalone `nous-harness mcp` sharing the pairing, renews them; without one, it lapses 3 to 15 minutes after the bridge stops), already has `tools:read` and is not bound to a chat; otherwise `connect` registers this computer as a new device (with the same label unless you pass `--label`) and asks for approval, and the old approval stays active until revoked (the old device stays listed even then; see [Binding reuse](#binding-reuse-status-and-chat-handoffs)). A different project replaces the pairing and keeps the registered folders. NOUS sends the approval link as a root-relative path; the bridge prints it in full on the NOUS website origin that a sign-in to the same server recorded (`<state>/website.json`), and otherwise prints the path with `(open this path on your NOUS website)`.
+
+Only one `nous --rc` or `nous-harness run` may use a state folder at a time (`<state>/bridge.lock`; a second one is refused with a hint to delete that file if no such process is running, and a lock left by a dead process or from before the last reboot is replaced). It refuses `/`, the home folder and any folder that contains the state folder (`… is too broad for Codex to work in`) before any network call, because Codex writes inside the registered folder without asking. When NOUS cannot be reached it prints `Could not reach NOUS at <url> (<reason>)`. Until the bridge starts, Ctrl-C, Ctrl-D, end of input, SIGTERM or SIGHUP cancels the command (exit 130); after that, Ctrl-C, SIGTERM or SIGHUP (closing the terminal window) stops the bridge cleanly and keeps the pairing. It requests `harness:execute` and `tools:read` only; a reused pairing keeps any other scopes it already had and names them. The commands below do the same steps by hand and expose the other scopes.
+
 ## Requirements and pairing
 
 - Node.js 24 and the repository-pinned pnpm version.

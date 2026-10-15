@@ -3,7 +3,7 @@ import { mock, test } from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect, handoffFlush, handoffShow, status } from "../src/cli.ts";
+import { connect, handoffFlush, handoffShow, login, status } from "../src/cli.ts";
 import { CredentialStore } from "../src/credentials.ts";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
@@ -17,17 +17,21 @@ const OTHER_CHAT = "88888888-8888-4888-8888-888888888888";
 type Reply = { code: number; body: object };
 
 /** Fake NOUS: full login + consent, and a renew endpoint whose answer each test picks. */
-function fakeNous(calls: string[], renew: () => Reply): typeof fetch {
+function fakeNous(calls: string[], renew: () => Reply, deviceAuth: (string | null)[] = []): typeof fetch {
   let issued = 0;
-  return (async (input: any) => {
+  return (async (input: any, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
     let data: object;
     if (url.endsWith("/cli-auth/start"))
       data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l", verification_code: "ABCD-1234" };
     else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
-    else if (url.endsWith("/integrations/devices")) data = { id: DEVICE };
-    else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: "https://nous.test/a" };
+    else if (url.endsWith("/integrations/devices")) {
+      deviceAuth.push(new Headers(init?.headers).get("Authorization"));
+      data = { id: DEVICE };
+    }
+    // NOUS sends the approval page root-relative (integrations/context.py).
+    else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: `/integrations/approve?request_id=${GRANT}` };
     else if (url.endsWith("/exchange")) data = { token: `grant-secret-${(issued += 1)}`, grant_id: GRANT };
     else if (url.endsWith("/renew")) {
       const { code, body } = renew();
@@ -44,9 +48,10 @@ function setup(renew: () => Reply = renewed) {
   const dir = mkdtempSync(join(tmpdir(), "nous-reuse-"));
   const calls: string[] = [];
   const messages: string[] = [];
+  const deviceAuth: (string | null)[] = [];
   const base = {
     stateDir: dir,
-    fetchFn: fakeNous(calls, renew),
+    fetchFn: fakeNous(calls, renew, deviceAuth),
     announce: (m: string) => messages.push(m),
     apiUrl: "https://nous.test/api/v1",
     projectId: PROJECT,
@@ -56,6 +61,7 @@ function setup(renew: () => Reply = renewed) {
     dir,
     calls,
     messages,
+    deviceAuth,
     base,
     state: () => JSON.parse(readFileSync(join(dir, "connection.json"), "utf8")),
     since: (mark: number) => calls.slice(mark),
@@ -381,6 +387,99 @@ test("cleanup failure preserves the new binding and reports retryable local clea
     } finally {
       remove.mock.restore();
     }
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("connect with an access token skips the CLI login", async () => {
+  const t = setup();
+  try {
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.equal(
+      (await new CredentialStore(t.dir).load(t.state().credentialHandle)).accessToken,
+      "cli-from-rc",
+    );
+    assert.ok(!t.messages.join("\n").includes("cli-from-rc"));
+    assert.equal(t.calls.filter((u) => u.includes("/cli-auth/")).length, 0);
+    assert.equal(t.calls.filter((u) => u.endsWith("/integrations/devices")).length, 1);
+    // The device is registered with the given token, not a fresh login's.
+    assert.deepEqual(t.deviceAuth, ["Bearer cli-from-rc"]);
+    assert.equal(t.state().projectId, PROJECT);
+    assert.deepEqual(t.state().scopes, ["harness:execute", "tools:read"]);
+  } finally {
+    t.cleanup();
+  }
+});
+
+const APPROVE_PATH = `/integrations/approve?request_id=${GRANT}`;
+const approveLine = (link: string) => `Approve this device and project in your browser: ${link}`;
+
+test("the root-relative approval link prints in full on the website login() saw", async () => {
+  const t = setup();
+  try {
+    // The full flow signs in first; the fake's login page is https://nous.test/l.
+    await connect({ ...t.base, tools: true });
+    assert.ok(t.messages.includes(approveLine(`https://nous.test${APPROVE_PATH}`)), t.messages.join("\n"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("without a known website the approval link is the path, with a hint", async () => {
+  const t = setup();
+  try {
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.ok(
+      t.messages.includes(approveLine(`${APPROVE_PATH} (open this path on your NOUS website)`)),
+      t.messages.join("\n"),
+    );
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("without a known website, a path that normalises to //host is refused", async () => {
+  const t = setup();
+  try {
+    const fetchFn = (async (input: any, init?: RequestInit) =>
+      String(input).endsWith("/grant-requests")
+        ? new Response(JSON.stringify({ id: GRANT, approval_url: "/..//evil.example/x" }), { status: 200 })
+        : t.base.fetchFn(input, init)) as typeof fetch;
+    await assert.rejects(
+      connect({ ...t.base, fetchFn, tools: true, accessToken: "cli-from-rc" }),
+      { message: "invalid NOUS response" },
+    );
+    assert.ok(!t.messages.join("\n").includes("evil.example"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a website recorded for another API is ignored; an explicit one is used", async () => {
+  const t = setup();
+  try {
+    await new CredentialStore(t.dir).writeLocal("website", {
+      apiUrl: "https://elsewhere.test/api/v1",
+      origin: "https://elsewhere.test",
+    });
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.ok(t.messages.includes(approveLine(`${APPROVE_PATH} (open this path on your NOUS website)`)));
+    assert.ok(!t.messages.join("\n").includes("elsewhere"));
+    await connect({ ...t.base, tools: true, publish: true, accessToken: "cli-from-rc", websiteOrigin: "https://site.test" });
+    assert.ok(t.messages.includes(approveLine(`https://site.test${APPROVE_PATH}`)), t.messages.join("\n"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("login() returns the CLI token after browser approval", async () => {
+  const t = setup();
+  try {
+    const token = await login("https://nous.test/api/v1", t.base);
+    assert.equal(token, "cli-secret");
+    assert.ok(t.calls.some((u) => u.endsWith("/cli-auth/start")));
+    assert.ok(t.messages.some((m) => m.includes("ABCD-1234")));
   } finally {
     t.cleanup();
   }

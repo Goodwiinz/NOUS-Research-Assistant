@@ -4,7 +4,7 @@
 
 ## User workflow
 
-1. An owner runs `nous-harness connect` on the computer that will execute Codex. The CLI completes NOUS browser authorization, registers the device, and waits for browser consent to a project-scoped `harness:execute` grant.
+1. An owner runs `nous-harness connect` on the computer that will execute Codex. The CLI completes NOUS browser authorization, registers the device, and waits for browser consent to a project-scoped `harness:execute` grant. `nous --rc` (the repository launcher; `nous-harness rc`) performs step 1, and the folder registration and `run` of step 2, for the current folder with `harness:execute` and `tools:read`; the owner still selects Local Codex in the chat composer.
 2. The owner registers a local workspace root, starts `nous-harness run`, and selects **Local Codex**, the paired computer, and its workspace in the NOUS chat composer.
 3. NOUS durably accepts the chat message and run before dispatch. The local bridge receives a fenced command over authenticated WSS and starts the pinned Codex app-server with the verified local policy. Persisted events flow back to the existing chat transcript.
 4. Exact, one-time Codex command approvals and required input are shown in NOUS. The browser re-reads the saved request before a decision and sends only the decision plus the displayed target hash. The local CLI grant token never enters the browser.

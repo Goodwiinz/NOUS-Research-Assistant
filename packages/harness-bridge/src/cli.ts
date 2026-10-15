@@ -2,12 +2,22 @@
 import { Journal } from "./journal.ts";
 import { connectBridge } from "./connection.ts";
 import { CodexAdapter } from "./adapters/codex.ts";
-import { homedir } from "node:os";
-import { join, basename, resolve } from "node:path";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { homedir, hostname, uptime } from "node:os";
+import {
+  join,
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
+import { readFileSync, unlinkSync } from "node:fs";
+import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, stripVTControlCharacters } from "node:util";
+import { createInterface } from "node:readline/promises";
 import { CredentialStore } from "./credentials.ts";
 import { GRANT_LIFETIME_MS, GrantExpired, GrantKeeper } from "./grants.ts";
 import { HandoffHttpClient, type Handoff } from "./handoffs/client.ts";
@@ -90,6 +100,68 @@ async function request(
   if (!record(data)) throw new Error("invalid NOUS response");
   return data;
 }
+/** An absolute http(s) link from NOUS, or `invalid NOUS response`. */
+function webUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("invalid NOUS response");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:")
+    throw new Error("invalid NOUS response");
+  return url;
+}
+/**
+ * A server-supplied link as the terminal prints it, re-serialised so control
+ * characters arrive percent-encoded, never raw. An absolute link must be
+ * http(s). A root-relative path (NOUS sends the pairing approval page that
+ * way) resolves on the NOUS website when its origin is known, and otherwise
+ * comes back as the bare path for the caller to label; a path the URL parser
+ * reads as another host (`/\host`, a stripped tab) is refused.
+ */
+function printableUrl(value: string, websiteOrigin?: string): string {
+  if (!value.startsWith("/") || value.startsWith("//"))
+    return webUrl(value).href;
+  const base = websiteOrigin ?? "https://x.invalid";
+  let url: URL;
+  try {
+    url = new URL(value, base);
+  } catch {
+    throw new Error("invalid NOUS response");
+  }
+  if (url.origin !== new URL(base).origin)
+    throw new Error("invalid NOUS response");
+  if (websiteOrigin !== undefined) return url.href;
+  // A bare path that normalises to `//host` (e.g. `/..//host`) would read as
+  // another host once printed without its origin.
+  if (url.pathname.startsWith("//")) throw new Error("invalid NOUS response");
+  return url.pathname + url.search + url.hash;
+}
+/**
+ * The NOUS website origin login() recorded for this API, if any: the place a
+ * root-relative link from NOUS opens.
+ */
+async function storedWebsiteOrigin(
+  store: CredentialStore,
+  base: string,
+): Promise<string | undefined> {
+  const value = await store.readLocal("website").catch(() => null);
+  if (
+    !record(value) ||
+    typeof value.apiUrl !== "string" ||
+    typeof value.origin !== "string"
+  )
+    return undefined;
+  try {
+    return apiBase(value.apiUrl) === base &&
+      webUrl(value.origin).origin === value.origin
+      ? value.origin
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 /** A stored connection with the fields the reuse check and `status` read. */
 function storedConnection(value: unknown): LocalState | null {
   if (
@@ -139,6 +211,56 @@ async function poll(
   }
   throw new Error("authorization expired");
 }
+/**
+ * Browser CLI login: start a session, print the link and the code the user
+ * types on that page, poll until approved. Returns the CLI access token.
+ */
+export async function login(base: string, options: ClientOptions): Promise<string> {
+  const api = apiBase(base);
+  const fetchFn = options.fetchFn ?? fetch;
+  const announce = options.announce ?? console.log;
+  const started = await request(fetchFn, api, "/cli-auth/start", undefined, {});
+  if (
+    typeof started.session_id !== "string" ||
+    typeof started.poll_token !== "string" ||
+    typeof started.browser_url !== "string"
+  )
+    throw new Error("invalid CLI login response");
+  // GOO-403: the link no longer carries the code; the user must type it on the
+  // approval page, so a login response without a printable code is unusable.
+  // The format check also keeps server-supplied text from injecting terminal
+  // control sequences.
+  if (
+    typeof started.verification_code !== "string" ||
+    !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(started.verification_code)
+  )
+    throw new Error("invalid CLI login response");
+  // The login page is on the NOUS website. Remember its origin for this API,
+  // so the root-relative pairing approval link can be printed in full, also
+  // on later runs that reuse this sign-in; only that link depends on it.
+  const browser = webUrl(started.browser_url);
+  await new CredentialStore(options.stateDir)
+    .writeLocal("website", { apiUrl: api, origin: browser.origin })
+    .catch(() => {});
+  announce(
+    `Authorize CLI login in your browser: ${browser.href}\nType this code on that page: ${started.verification_code}`,
+  );
+  const auth = await poll(
+    () =>
+      request(
+        fetchFn,
+        api,
+        `/cli-auth/status/${encodeURIComponent(started.session_id)}`,
+        undefined,
+        undefined,
+        { "X-CLI-Poll-Token": started.poll_token },
+      ),
+    options,
+  );
+  if (typeof auth.token !== "string" || !auth.token)
+    throw new Error("missing CLI access token");
+  return auth.token;
+}
 /** Login uses the existing CLI device flow; only the browser can approve the grant. */
 export async function connect(
   options: ClientOptions & {
@@ -154,6 +276,12 @@ export async function connect(
     handoff?: boolean;
     library?: boolean;
     context?: boolean;
+    // A CLI access token obtained by login(); when set, no browser login runs;
+    // ignored when the stored binding is reused.
+    accessToken?: string;
+    // The NOUS website origin, only to print the approval link in full;
+    // defaults to the one login() recorded for this API.
+    websiteOrigin?: string;
   },
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
@@ -254,44 +382,12 @@ export async function connect(
     );
     return { deviceId: previous.deviceId, credentialHandle: previous.credentialHandle };
   }
-  const login = await request(fetchFn, base, "/cli-auth/start", undefined, {});
-  if (
-    typeof login.session_id !== "string" ||
-    typeof login.poll_token !== "string" ||
-    typeof login.browser_url !== "string"
-  )
-    throw new Error("invalid CLI login response");
-  // GOO-403: the link no longer carries the code; the user must type it on the
-  // approval page, so a login response without a printable code is unusable.
-  // The format check also keeps server-supplied text from injecting terminal
-  // control sequences.
-  if (
-    typeof login.verification_code !== "string" ||
-    !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(login.verification_code)
-  )
-    throw new Error("invalid CLI login response");
-  announce(
-    `Authorize CLI login in your browser: ${login.browser_url}\nType this code on that page: ${login.verification_code}`,
-  );
-  const auth = await poll(
-    () =>
-      request(
-        fetchFn,
-        base,
-        `/cli-auth/status/${encodeURIComponent(login.session_id)}`,
-        undefined,
-        undefined,
-        { "X-CLI-Poll-Token": login.poll_token },
-      ),
-    options,
-  );
-  if (typeof auth.token !== "string" || !auth.token)
-    throw new Error("missing CLI access token");
+  const token = options.accessToken ?? (await login(base, options));
   const device = await request(
     fetchFn,
     base,
     "/integrations/devices",
-    auth.token,
+    token,
     { label: options.label },
   );
   if (!uuid(device.id)) throw new Error("invalid device ID");
@@ -299,7 +395,7 @@ export async function connect(
     fetchFn,
     base,
     "/integrations/grant-requests",
-    auth.token,
+    token,
     {
       ...(projectId !== undefined
         ? { project_id: projectId }
@@ -311,8 +407,13 @@ export async function connect(
   );
   if (!uuid(consent.id) || typeof consent.approval_url !== "string")
     throw new Error("invalid grant request");
+  // NOUS sends the approval page as a root-relative path on its website.
+  const approval = printableUrl(
+    consent.approval_url,
+    options.websiteOrigin ?? (await storedWebsiteOrigin(store, base)),
+  );
   announce(
-    `Approve this device and ${target} in your browser: ${consent.approval_url}`,
+    `Approve this device and ${target} in your browser: ${approval}${approval.startsWith("/") ? " (open this path on your NOUS website)" : ""}`,
   );
   await poll(
     () =>
@@ -320,7 +421,7 @@ export async function connect(
         fetchFn,
         base,
         `/integrations/grant-requests/${consent.id}`,
-        auth.token,
+        token,
       ),
     options,
   );
@@ -328,11 +429,11 @@ export async function connect(
     fetchFn,
     base,
     `/integrations/grant-requests/${consent.id}/exchange`,
-    auth.token,
+    token,
     {},
   );
   const credentialHandle = await store.save({
-    accessToken: auth.token,
+    accessToken: token,
     grantToken: grant.token,
     ...(uuid(grant.grant_id)
       ? { grantId: grant.grant_id, renewedAt: Date.now() }
@@ -355,7 +456,7 @@ export async function connect(
         fetchFn,
         base,
         `/integrations/devices/${device.id}/workspaces`,
-        auth.token,
+        token,
         { workspace_id: workspaceId, label: old.label, project_id: projectId },
       );
       carried.push({ id: workspaceId, root, label: old.label, projectId });
@@ -509,6 +610,549 @@ export async function addWorkspace(
     "Registered local write/output root. Folder registration does not isolate reads of other local files.",
   );
   return { workspaceId, root };
+}
+/** One NOUS project as `rc` lists it. */
+type RcProject = { id: string; name: string; documentCount?: number };
+/** The `/projects` page `rc` shows; `more` when NOUS has projects beyond it. */
+type RcProjectPage = { projects: RcProject[]; total?: number; more: boolean };
+/** `rc` lists one page of projects. */
+const PROJECT_PAGE = 50;
+/**
+ * Terminal-safe display name: NOUS project names are user data. Whole CSI
+ * sequences go first, as a terminal reads them: stripVTControlCharacters alone
+ * takes `ESC [31m name BEL` for one sequence and drops "name". It then removes
+ * OSC and the other escape sequences, and the last pass any stray control or
+ * format character.
+ */
+const plain = (value: string): string =>
+  stripVTControlCharacters(
+    value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""),
+  ).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
+/** A GET signed with the CLI token; request()'s redirect and time limits. */
+function authorizedGet(
+  fetchFn: typeof fetch,
+  url: string,
+  token: string,
+): Promise<Response> {
+  return fetchFn(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+}
+/** A 1-based menu answer: digits only, since parseInt takes "1abc" for 1. */
+function menuChoice(answer: string, count: number): number | null {
+  const trimmed = answer.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const index = Number.parseInt(trimmed, 10);
+  return index >= 1 && index <= count ? index - 1 : null;
+}
+/** The first `/projects` page, or null once NOUS rejects the CLI token. */
+async function listProjects(
+  fetchFn: typeof fetch,
+  base: string,
+  token: string,
+): Promise<RcProjectPage | null> {
+  const response = await authorizedGet(
+    fetchFn,
+    `${base}/projects?limit=${PROJECT_PAGE}`,
+    token,
+  );
+  if (response.status === 401) return null;
+  if (!response.ok)
+    throw new Error(`NOUS request failed (${response.status}) /projects`);
+  const data: unknown = await response.json().catch(() => null);
+  if (!record(data) || !Array.isArray(data.projects))
+    throw new Error("invalid NOUS response");
+  const total = typeof data.total === "number" ? data.total : undefined;
+  return {
+    projects: data.projects.flatMap((p: unknown): RcProject[] =>
+      record(p) && uuid(p.id) && typeof p.name === "string"
+        ? [
+            {
+              id: p.id,
+              name: plain(p.name),
+              ...(typeof p.document_count === "number"
+                ? { documentCount: p.document_count }
+                : {}),
+            },
+          ]
+        : [],
+    ),
+    ...(total !== undefined ? { total } : {}),
+    more:
+      data.has_next === true ||
+      (total !== undefined && total > data.projects.length),
+  };
+}
+/** Create a project, asking which workspace only when the user has several. */
+async function createProject(
+  fetchFn: typeof fetch,
+  base: string,
+  token: string,
+  prompt: (question: string) => Promise<string>,
+  announce: (message: string) => void,
+): Promise<RcProject> {
+  // Projects live in a NOUS workspace (not a local folder), listed by the v2
+  // API beside v1; any other API path fails closed instead of guessing.
+  if (!/\/api\/v1$/.test(base))
+    throw new Error(`cannot derive the workspaces endpoint from ${base}`);
+  const response = await authorizedGet(
+    fetchFn,
+    `${base.replace(/\/api\/v1$/, "/api/v2")}/workspaces`,
+    token,
+  );
+  if (!response.ok)
+    throw new Error(`NOUS request failed (${response.status}) /workspaces`);
+  const list: unknown = await response.json().catch(() => null);
+  if (!Array.isArray(list)) throw new Error("invalid NOUS response");
+  const choices = list.flatMap((w: unknown) =>
+    record(w) && uuid(w.id) && typeof w.name === "string"
+      ? [{ id: w.id, name: plain(w.name) }]
+      : [],
+  );
+  if (!choices.length)
+    throw new Error("no NOUS workspace to create the project in");
+  let name = "";
+  while (!name) name = plain(await prompt("Project name: ")).trim();
+  let workspace = choices[0];
+  if (choices.length > 1) {
+    announce(
+      [
+        "Workspaces:",
+        ...choices.map((w, i) => `  ${i + 1}) ${w.name}`),
+      ].join("\n"),
+    );
+    for (;;) {
+      const index = menuChoice(
+        await prompt(`Pick a workspace [1-${choices.length}]: `),
+        choices.length,
+      );
+      if (index !== null) {
+        workspace = choices[index];
+        break;
+      }
+      announce("Not a listed choice.");
+    }
+  }
+  const created = await request(fetchFn, base, "/projects", token, {
+    workspace_id: workspace.id,
+    name,
+  });
+  if (!uuid(created.id)) throw new Error("invalid NOUS response");
+  return { id: created.id, name, documentCount: 0 };
+}
+/** Numbered picker: a listed project by number, or `n` for a new one. */
+async function pickProject(
+  page: RcProjectPage,
+  prompt: (question: string) => Promise<string>,
+  announce: (message: string) => void,
+  create: () => Promise<RcProject>,
+): Promise<RcProject> {
+  const { projects } = page;
+  announce(
+    [
+      "Your projects:",
+      ...projects.map(
+        (p, i) =>
+          `  ${i + 1}) ${p.name}${p.documentCount !== undefined ? `  ${p.documentCount} docs` : ""}`,
+      ),
+      "  n) New project",
+      ...(page.more
+        ? [
+            page.total !== undefined
+              ? `Showing the first ${PROJECT_PAGE} of ${page.total} projects.`
+              : `Showing the first ${PROJECT_PAGE} projects.`,
+          ]
+        : []),
+    ].join("\n"),
+  );
+  const range = projects.length ? `1-${projects.length}, n` : "n";
+  for (;;) {
+    const answer = await prompt(`Pick a project [${range}]: `);
+    if (answer.trim().toLowerCase() === "n") return create();
+    const index = menuChoice(answer, projects.length);
+    if (index !== null) return projects[index];
+    announce("Not a listed choice.");
+  }
+}
+/**
+ * One browser approval step (sign-in or pairing consent); poll()'s refusal or
+ * timeout becomes the sentence `rc` prints.
+ */
+async function approved<T>(step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      ["authorization denied or expired", "authorization expired"].includes(
+        error.message,
+      )
+    )
+      throw new Error("Not approved; run nous --rc again", { cause: error });
+    throw error;
+  }
+}
+/** `fetchFn`, naming the NOUS it could not reach instead of "fetch failed". */
+function reaching(fetchFn: typeof fetch, base: string): typeof fetch {
+  return (async (...args: Parameters<typeof fetch>) => {
+    try {
+      return await fetchFn(...args);
+    } catch (error) {
+      // fetch rejects with a TypeError only when no response arrived at all;
+      // HTTP statuses and timeouts reach the caller unchanged.
+      if (!(error instanceof TypeError)) throw error;
+      const cause: unknown = error.cause;
+      const detail =
+        record(cause) && typeof cause.code === "string"
+          ? cause.code
+          : cause instanceof Error
+            ? cause.message
+            : error.message;
+      throw new Error(`Could not reach NOUS at ${base} (${detail})`, {
+        cause: error,
+      });
+    }
+  }) as typeof fetch;
+}
+/** The real path of `path`, resolved through its deepest existing ancestor. */
+async function existingRealpath(path: string): Promise<string> {
+  const absolute = resolve(path);
+  const real = await realpath(absolute).catch(() => null);
+  if (real !== null) return real;
+  const parent = dirname(absolute);
+  return parent === absolute
+    ? absolute
+    : join(await existingRealpath(parent), basename(absolute));
+}
+/** Whether `path` is `folder` itself or inside it. */
+function within(path: string, folder: string): boolean {
+  const rel = relative(folder, path);
+  return (
+    rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
+}
+export type RcOptions = ClientOptions & {
+  apiUrl: string;
+  /** The folder Codex works in: the caller's current directory. */
+  dir: string;
+  /** The home folder, which is too broad to work in; defaults to homedir(). */
+  home?: string;
+  label?: string;
+  prompt: (question: string) => Promise<string>;
+  /** Checks the local Codex before anything else; resolves with its version. */
+  probe: () => Promise<{ version: string }>;
+  /** Runs the bridge in the foreground until the caller stops it. */
+  run: (stateDir: string) => Promise<void>;
+};
+/**
+ * `nous --rc`: sign in, pick or create a project, pair this computer for
+ * harness runs with read access to the project's documents, register the
+ * current folder, run. Reuses the stored pairing when it is for the same
+ * project; a different project replaces it (one pairing per computer).
+ */
+export async function rc(options: RcOptions): Promise<void> {
+  const base = apiBase(options.apiUrl);
+  const fetchFn = reaching(options.fetchFn ?? fetch, base);
+  const announce = options.announce ?? console.log;
+  // Codex and the folder first, so the user never approves a pairing that
+  // cannot run.
+  const { version } = await options.probe();
+  const root = await realpath(options.dir).catch(() => null);
+  if (root === null || !(await stat(root)).isDirectory())
+    throw new Error(`${options.dir} is not a folder`);
+  // Codex may write anywhere in the folder: never the filesystem root, the
+  // home folder, or a folder holding this bridge's own credentials.
+  const home = await existingRealpath(options.home ?? homedir());
+  if (
+    dirname(root) === root ||
+    root === home ||
+    within(await existingRealpath(options.stateDir), root)
+  )
+    throw new Error(
+      `${root} is too broad for Codex to work in; run nous --rc in a project folder`,
+    );
+  announce(`NOUS: ${base}`);
+  const store = new CredentialStore(options.stateDir);
+  const previous = storedConnection(
+    await store.readLocal("connection").catch(() => null),
+  );
+  let sameApi = false;
+  try {
+    sameApi = previous !== null && apiBase(previous.apiUrl) === base;
+  } catch {
+    // An unparsable stored URL is a different NOUS.
+  }
+  // The stored CLI token first, and only for the NOUS that issued it; a 401
+  // means sign in again, once.
+  let token: string | undefined =
+    sameApi && previous !== null
+      ? await store
+          .load(previous.credentialHandle)
+          .then((c) => c.accessToken)
+          .catch(() => undefined)
+      : undefined;
+  let page =
+    token === undefined ? null : await listProjects(fetchFn, base, token);
+  if (token === undefined || page === null) {
+    token = await approved(() => login(base, { ...options, fetchFn }));
+    page = await listProjects(fetchFn, base, token);
+    if (page === null) throw new Error("NOUS refused the new sign-in");
+    // connect keeps a reused pairing's stored credential, which grant renewal
+    // and folder registration sign with: give it the new sign-in.
+    if (sameApi && previous !== null) {
+      const stored = await store
+        .load(previous.credentialHandle)
+        .catch(() => null);
+      if (stored !== null)
+        await store.update(previous.credentialHandle, {
+          ...stored,
+          accessToken: token,
+        });
+    }
+  }
+  const signedIn = token;
+  const { projects } = page;
+  announce("Signed in.");
+  const project = await pickProject(page, options.prompt, announce, () =>
+    createProject(fetchFn, base, signedIn, options.prompt, announce),
+  );
+  const label = options.label ?? hostname();
+  // Recorded by this run's login(), or by the one whose sign-in it reuses.
+  const websiteOrigin = await storedWebsiteOrigin(store, base);
+  await approved(() =>
+    connect({
+      stateDir: options.stateDir,
+      fetchFn,
+      announce,
+      delay: options.delay,
+      apiUrl: base,
+      projectId: project.id,
+      label,
+      tools: true,
+      accessToken: signedIn,
+      websiteOrigin,
+    }),
+  );
+  // The new pairing replaced the stored one; its consent outlives it in NOUS.
+  if (sameApi && previous !== null && previous.projectId !== project.id) {
+    const until =
+      "stays active until you revoke it under Settings → Connected devices (/integrations/devices) in NOUS.";
+    if (previous.projectId !== undefined) {
+      const old = projects.find((p) => p.id === previous.projectId);
+      announce(
+        `Your approval for project ${old ? `"${old.name}" (${old.id})` : previous.projectId} ${until}`,
+      );
+    } else
+      announce(
+        `Your previous workspace connection (${previous.workspaceId}) ${until}`,
+      );
+  }
+  const { workspaceId } = await addWorkspace({
+    stateDir: options.stateDir,
+    fetchFn,
+    // addWorkspace's own notice is about write roots; rc prints its summary
+    // below.
+    announce: () => {},
+    root,
+  });
+  // Name the device and folder as the web chat lists them: the stored labels.
+  const stored = storedConnection(
+    await store.readLocal("connection").catch(() => null),
+  );
+  const device = stored?.label ?? label;
+  const folder =
+    stored?.workspaces.find((w) => w.id === workspaceId)?.label ??
+    basename(root);
+  announce(`Connected: "${project.name}" ↔ ${root}  (Codex ${version})`);
+  announce(
+    `In a chat for this project on NOUS, choose Local Codex → ${device} → ${folder}.\nPress Ctrl-C to stop.`,
+  );
+  await options.run(options.stateDir);
+}
+/**
+ * A line prompt over a terminal for `rc`. An open question rejects with
+ * `Cancelled` whenever the prompt closes: on Node 24 a bare `rl.question()`
+ * rejects on Ctrl-D in terminal mode, but stays pending on end of input, on
+ * `close()`, and on Ctrl-C when a SIGINT listener exists. Ctrl-C, Ctrl-D or end
+ * of input, with or without a question open, then calls `onInterrupt` to cancel
+ * the whole command; `close()` releases the terminal for the running bridge
+ * without calling it.
+ */
+export function terminalPrompt(
+  input: NodeJS.ReadableStream,
+  output: NodeJS.WritableStream,
+  onInterrupt?: () => void,
+): {
+  prompt: (question: string) => Promise<string>;
+  close: () => void;
+} {
+  const rl = createInterface({
+    input,
+    output,
+    terminal: (output as { isTTY?: boolean }).isTTY === true,
+    // readline redraws its prompt on a terminal resize even with no question
+    // open; the default would print a stray "> ".
+    prompt: "",
+  });
+  let closed = false;
+  // close() was called: the caller is done with the prompt, nothing to cancel.
+  let released = false;
+  let cancel: ((error: Error) => void) | undefined;
+  // End of input, Ctrl-D, Ctrl-C and close() all land here; readline has
+  // already left raw mode.
+  rl.on("close", () => {
+    closed = true;
+    const reject = cancel;
+    cancel = undefined;
+    if (reject !== undefined) {
+      // End the question's line so the caller's message starts on its own.
+      output.write("\n");
+      reject(new Error("Cancelled"));
+    }
+    if (!released) onInterrupt?.();
+  });
+  // Ctrl-C in a terminal reaches readline as a key, not a process signal, even
+  // when no question is open.
+  rl.on("SIGINT", () => rl.close());
+  // After Ctrl-Z and fg readline pauses its input and resumes only if asked;
+  // paused, an open question lets the process exit 0 and Ctrl-C is lost.
+  rl.on("SIGCONT", () => rl.resume());
+  return {
+    prompt: (question) => {
+      if (closed) return Promise.reject(new Error("Cancelled"));
+      return new Promise<string>((resolve, reject) => {
+        cancel = reject;
+        rl.question(question).then(
+          (answer) => {
+            if (cancel === reject) cancel = undefined;
+            resolve(answer);
+          },
+          (error: unknown) => {
+            if (cancel === reject) cancel = undefined;
+            reject(closed ? new Error("Cancelled") : error);
+          },
+        );
+      });
+    },
+    close: () => {
+      released = true;
+      if (!closed) rl.close();
+    },
+  };
+}
+/** `rc`'s Codex check: the tested version, or a hint when Codex cannot run. */
+export async function probeCodex(
+  adapter: CodexAdapter = new CodexAdapter(),
+): Promise<{ version: string }> {
+  try {
+    await adapter.probe();
+  } catch (error) {
+    // Also a non-zero exit or the 5 s timeout, not only a missing binary.
+    if (error instanceof Error && error.message === "Codex version probe failed")
+      throw new Error(
+        "Could not run `codex --version`; check that Codex is installed, on your PATH and working",
+        { cause: error },
+      );
+    throw error;
+  }
+  return { version: adapter.version ?? "unknown" };
+}
+/**
+ * The process a lock file names, or null when it names none; `startedAt` is
+ * NaN when the file does not say.
+ */
+function lockHolder(text: string): { pid: number; startedAt: number } | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!record(value)) return null;
+    const pid: unknown = value.pid;
+    // process.kill reads 0 and negative pids as process groups.
+    if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0)
+      return null;
+    return {
+      pid,
+      startedAt:
+        typeof value.startedAt === "string"
+          ? Date.parse(value.startedAt)
+          : Number.NaN,
+    };
+  } catch {
+    return null;
+  }
+}
+/** Signal 0 only checks: EPERM means the process exists under another user. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+/**
+ * One bridge per state directory: a second `nous --rc` or `nous-harness run`
+ * would force-renew the running bridge's grant, reopen its journal and poll
+ * as the same device. Creates `<stateDir>/bridge.lock` (owner-only) naming
+ * this process; a lock whose process is gone, or that cannot be read, is
+ * stale and replaced. Resolves with the release, which removes the lock only
+ * while it still names this process; `process.exit` releases it too.
+ */
+export async function acquireStateLock(
+  stateDir: string,
+): Promise<() => Promise<void>> {
+  const path = join(stateDir, "bridge.lock");
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const handle = await open(path, "wx", 0o600);
+      try {
+        await handle.writeFile(
+          JSON.stringify({
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+          }),
+        );
+      } finally {
+        await handle.close();
+      }
+      // Synchronous, so an "exit" listener can run it.
+      const release = (): void => {
+        process.off("exit", release);
+        try {
+          if (lockHolder(readFileSync(path, "utf8"))?.pid === process.pid)
+            unlinkSync(path);
+        } catch {
+          // Gone already, or unreadable: not this process's lock to remove.
+        }
+      };
+      process.on("exit", release);
+      return async () => release();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const seen = await readFile(path, "utf8").catch(() => null);
+    const holder = seen === null ? null : lockHolder(seen);
+    // A lock taken before this boot is stale even when its pid is alive
+    // again (a crash, a reboot, the pid reused); 5 s absorbs clock and
+    // uptime rounding.
+    const bootedAt = Date.now() - uptime() * 1000 - 5_000;
+    if (
+      holder !== null &&
+      !(Number.isFinite(holder.startedAt) && holder.startedAt < bootedAt) &&
+      pidAlive(holder.pid)
+    )
+      throw new Error(
+        `Another nous --rc or nous-harness run (pid ${holder.pid}) is already using ${stateDir}; stop it first (if no such process is running, delete ${path})`,
+      );
+    // Stale. Remove it only if it is still the file judged stale, so two
+    // processes clearing one stale lock do not remove each other's new one.
+    if ((await readFile(path, "utf8").catch(() => null)) === seen)
+      await unlink(path).catch(() => {});
+  }
+  throw new Error(`could not lock ${stateDir}; try again`);
 }
 /** One local reconciliation pass over the locked runs, without the network. */
 export async function reconcileLocal(
@@ -927,13 +1571,14 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | status | handoff show|save|flush|list|discard ID
+const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | rc --api URL --root PATH [--label NAME] | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or moved, reconnect. Reconnect without --chat to unbind.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions. It always requests library:read, so list_library can name the projects its tools need.
   connect --library (needs --tools and --write) also requests library:read and library:write.
   connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews; otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, revoke this device's access at /integrations/devices (or disconnect), then connect.
   nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.
+  nous-harness rc --api URL --root PATH [--label NAME]    Interactive: sign in, pick or create a project, pair this computer (harness:execute + tools:read), register PATH as the folder Codex works in, and run. The repository's \`nous --rc\` launcher calls this with the current folder.
   nous-harness handoff show    Print the bound chat's latest handoff.
   nous-harness handoff save --file handoff.json [--parent N]    Journal the handoff locally, then save it; --parent sets expected_parent_version (default null, the first handoff).
   nous-harness handoff flush    Retry pending saves journaled for the current chat; a conflict (409) or rejection (403/422) is kept, never retried or merged.
@@ -1040,11 +1685,70 @@ async function main(): Promise<void> {
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
-  else if (positionals.join(" ") === "run") {
+  else if (positionals.join(" ") === "rc") {
+    if (!values.api || !values.root)
+      throw new Error("rc requires --api and --root");
+    // Refuse before probing Codex or touching the network.
+    if (!process.stdin.isTTY || !process.stdout.isTTY)
+      throw new Error("nous --rc needs an interactive terminal");
+    // One bridge per state directory, also before Codex or the network.
+    const release = await acquireStateLock(stateDir);
+    // Until the bridge starts, any Ctrl-C or end of input stops the whole
+    // command, even mid-wait.
+    const cancelCommand = () => {
+      // connection.json is always the old or the new version (atomic rename);
+      // the worst case of exiting mid-pairing is an orphaned owner-only
+      // credential file or one more browser approval. The lock's "exit"
+      // listener removes it.
+      process.stderr.write("\nCancelled\n");
+      process.exit(130);
+    };
+    // Backstops for signals that do not come through the prompt: a SIGINT
+    // from outside, a kill, or the terminal closing.
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    for (const signal of signals) process.on(signal, cancelCommand);
+    const terminal = terminalPrompt(
+      process.stdin,
+      process.stdout,
+      cancelCommand,
+    );
     const controller = new AbortController();
-    process.once("SIGINT", () => controller.abort());
-    process.once("SIGTERM", () => controller.abort());
-    await runBridge(stateDir, controller.signal);
+    try {
+      await rc({
+        stateDir,
+        apiUrl: values.api,
+        dir: resolve(values.root),
+        label: values.label,
+        prompt: terminal.prompt,
+        probe: () => probeCodex(),
+        run: (stateDir) => {
+          // Hand the terminal back so Ctrl-C reaches the process, and stops
+          // the bridge gracefully, while it runs.
+          terminal.close();
+          for (const signal of signals) process.off(signal, cancelCommand);
+          process.once("SIGINT", () => controller.abort());
+          process.once("SIGTERM", () => controller.abort());
+          // Closing the terminal window stops the bridge cleanly too.
+          process.once("SIGHUP", () => controller.abort());
+          return runBridge(stateDir, controller.signal);
+        },
+      });
+    } finally {
+      terminal.close();
+      for (const signal of signals) process.off(signal, cancelCommand);
+      await release();
+    }
+  } else if (positionals.join(" ") === "run") {
+    const release = await acquireStateLock(stateDir);
+    try {
+      const controller = new AbortController();
+      process.once("SIGINT", () => controller.abort());
+      process.once("SIGTERM", () => controller.abort());
+      process.once("SIGHUP", () => controller.abort());
+      await runBridge(stateDir, controller.signal);
+    } finally {
+      await release();
+    }
   } else throw new Error(help);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
