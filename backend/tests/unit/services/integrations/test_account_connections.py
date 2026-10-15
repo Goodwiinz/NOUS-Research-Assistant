@@ -1077,6 +1077,24 @@ async def test_list_devices_reports_no_account_wide_once_the_account_is_not_live
     ] is False
 
 
+async def test_list_devices_reports_no_account_wide_with_two_account_approvals(
+    db: AsyncSession,
+) -> None:
+    """Two runnable account approvals make every run on the device ambiguous
+    (the mint fails closed), so the composer must not offer the computer."""
+    run = ["harness:execute", "tools:read"]
+    await _consent_row(
+        db, device=DEVICE, binding={"binding_kind": "account"}, scopes=run
+    )
+    listed = {d.id: d for d in await service.list_devices(db, OWNER)}
+    assert listed[DEVICE].account_wide is True
+    await _consent_row(
+        db, device=DEVICE, binding={"binding_kind": "account"}, scopes=run
+    )
+    listed = {d.id: d for d in await service.list_devices(db, OWNER)}
+    assert listed[DEVICE].account_wide is False
+
+
 async def test_list_workspaces_keeps_account_folders_while_the_approval_lives(
     db: AsyncSession,
 ) -> None:

@@ -1288,15 +1288,14 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
         # approval still on file covers nothing (see _holds_account_run_consent).
         account_live = False
     run_chats: dict[UUID, list[UUID | None]] = {d.id: [] for d in devices}
-    account_wide: dict[UUID, bool] = {d.id: False for d in devices}
+    account_runs: dict[UUID, int] = {d.id: 0 for d in devices}
     project_ids: dict[UUID, set[UUID]] = {d.id: set() for d in devices}
     for consent in consents:
         if "harness:execute" not in (consent.scopes or []):
             continue
         run_chats[consent.device_id].append(consent.thread_id)
         if consent.binding_kind == "account":
-            if account_live:
-                account_wide[consent.device_id] = True
+            account_runs[consent.device_id] += 1
         elif consent.binding_kind == "project" and consent.project_id is not None:
             project_ids[consent.device_id].add(consent.project_id)
     return [
@@ -1311,7 +1310,9 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
                     key=str,
                 )
             ),
-            account_wide=account_wide[device.id],
+            # Exactly one, as live_account_run_consent: with two, every run
+            # on the device is refused, so the composer must not offer it.
+            account_wide=account_live and account_runs[device.id] == 1,
             project_ids=sorted(project_ids[device.id], key=str),
         )
         for device in devices
