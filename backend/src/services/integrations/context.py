@@ -638,6 +638,25 @@ def _new_grant(
     return grant, IssuedGrant(token=token, grant_id=grant.id)
 
 
+def _single_lineage(
+    matching: list[IntegrationGrantRequest],
+) -> IntegrationGrantRequest | None:
+    """The one consent a device's grant may be minted under, else None.
+
+    An account consent wins over project consents. ``nous --rc`` replaces a
+    project pairing with an account pairing and leaves the project consent
+    live until the user revokes it; the account lineage is the one the running
+    bridge holds and renews. Two account consents, or no account consent and
+    more than one project consent, are ambiguous: fail closed. Picking the
+    first row would be nondeterministic and could mint authority the paired
+    bridge cannot renew.
+    """
+    accounts = [consent for consent in matching if consent.binding_kind == "account"]
+    if accounts:
+        return accounts[0] if len(accounts) == 1 else None
+    return matching[0] if len(matching) == 1 else None
+
+
 async def mint_integration_grant(
     db: AsyncSession,
     *,
@@ -649,9 +668,24 @@ async def mint_integration_grant(
     thread_id: UUID | None = None,
     run_id: UUID | None = None,
     device_id: UUID | None = None,
+    consent_kind: BindingKind | None = None,
 ) -> IssuedGrant:
-    """Trusted internal API. External issuance must use the consent exchange."""
-    check_scopes(scopes, workspace_bound=workspace_id is not None)
+    """Trusted internal API. External issuance must use the consent exchange.
+
+    ``consent_kind`` (PR 2's run path always passes it) restricts the device's
+    consents to that kind. Among them exactly one must match. Without it, an
+    account consent wins over project consents (_single_lineage).
+
+    Mints a project or workspace grant, never an account grant: that exists
+    only as a device's pairing (exchange_request). With a device, the grant's
+    consent is the device's one live consent that admits the binding
+    (_consent_admits, _single_lineage). For a project that is a consent of the
+    project, or an account consent while the project is in the account.
+    """
+    kind = derive_binding_kind(project_id, workspace_id)
+    if kind is None:
+        raise IntegrationAccessDenied()
+    check_scopes(scopes, binding_kind=kind)
     await validate_binding(
         db,
         user_id=user_id,
@@ -661,6 +695,7 @@ async def mint_integration_grant(
         thread_id=thread_id,
         run_id=run_id,
         device_id=device_id,
+        binding_kind=kind,
     )
     request_id = None
     if device_id is not None:
@@ -670,31 +705,34 @@ async def mint_integration_grant(
                 .where(
                     IntegrationGrantRequest.user_id == user_id,
                     IntegrationGrantRequest.organization_id == organization_id,
-                    IntegrationGrantRequest.project_id == project_id,
-                    IntegrationGrantRequest.workspace_id == workspace_id,
+                    _consent_admits(
+                        kind, project_id, workspace_id, user_id, organization_id
+                    ),
                     IntegrationGrantRequest.device_id == device_id,
                     IntegrationGrantRequest.status == "consumed",
                     IntegrationGrantRequest.consent_revoked_at.is_(None),
                     IntegrationGrantRequest.is_deleted.is_(False),
+                    *(
+                        ()
+                        if consent_kind is None
+                        else (IntegrationGrantRequest.binding_kind == consent_kind,)
+                    ),
                 )
                 .execution_options(populate_existing=True)
             )
         ).all()
-        # A chat-bound consent authorizes only its chat; a project-wide
-        # consent (thread_id NULL) authorizes any chat in the project.
+        # A chat-bound consent authorizes only its chat; a project-wide or
+        # account consent (thread_id NULL) authorizes any chat it covers.
         matching_consents = [
             consent
             for consent in consents
             if scopes <= set(consent.scopes) and consent.thread_id in (None, thread_id)
         ]
-        # A device may have more than one consumed consent lineage. Selecting
-        # the first database row is nondeterministic and can mint run authority
-        # that the currently paired bridge credential cannot renew. Fail closed
-        # until the owner leaves one unambiguous active consent for this device.
-        if len(matching_consents) != 1:
+        chosen = _single_lineage(list(matching_consents))
+        if chosen is None:
             # Name the one cause the owner can fix from the chat: a consent
             # with enough scopes exists but is bound to another chat. No
-            # consent, too few scopes or two lineages stay opaque.
+            # consent, too few scopes or an ambiguous lineage stay opaque.
             if not matching_consents and any(
                 scopes <= set(consent.scopes)
                 and consent.thread_id not in (None, thread_id)
@@ -702,13 +740,11 @@ async def mint_integration_grant(
             ):
                 raise DeviceBoundToAnotherChat()
             raise IntegrationAccessDenied()
-        request_id = matching_consents[0].id
+        request_id = chosen.id
     grant, issued = _new_grant(
         user_id=user_id,
         organization_id=organization_id,
-        # validate_binding has refused the case with no kind (Task 9 replaces
-        # this call).
-        binding_kind=derive_binding_kind(project_id, workspace_id) or "project",
+        binding_kind=kind,
         project_id=project_id,
         workspace_id=workspace_id,
         scopes=scopes,

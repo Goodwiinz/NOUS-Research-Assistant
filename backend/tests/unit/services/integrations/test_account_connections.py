@@ -31,6 +31,7 @@ from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.integration_connections import ConnectionConsent
 from src.schemas.integration_context import (
+    BindingKind,
     GrantRequestCreate,
     IntegrationContext,
     IssuedGrant,
@@ -668,3 +669,125 @@ async def test_renewal_and_resume_keep_the_account_kind(db: AsyncSession) -> Non
         db, resumed.token, required_scope="tools:read"
     )
     assert (ctx.binding_kind, ctx.consent_id) == ("account", consent)
+
+
+# --- a run's project grant under an account approval (Task 9) ----------------------
+
+RUN = frozenset({"harness:execute"})
+
+
+async def _mint(db: AsyncSession, project: UUID) -> Any:
+    issued = await service.mint_integration_grant(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=project,
+        scopes=RUN,
+        device_id=DEVICE,
+    )
+    return await db.get(IntegrationGrant, issued.grant_id, populate_existing=True)
+
+
+async def test_a_run_grant_is_minted_under_the_account_consent(
+    db: AsyncSession,
+) -> None:
+    consent, _ = await _approve(db)
+    grant = await _mint(db, P_MEMBER)
+    assert (grant.binding_kind, grant.project_id, grant.request_id) == (
+        "project",
+        P_MEMBER,
+        consent,
+    )
+
+
+async def test_no_run_grant_outside_the_account(db: AsyncSession) -> None:
+    await _approve(db)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await _mint(db, P_FOREIGN)
+
+
+# SECURITY-CRITICAL: consent precedence (the PR 3 planner's question).
+async def test_the_account_consent_wins_over_a_live_project_consent(
+    db: AsyncSession,
+) -> None:
+    await _approve(
+        db, project_id=P_OWNED, scopes=frozenset({"harness:execute", "tools:read"})
+    )
+    account, _ = await _approve(db)
+    grant = await _mint(db, P_OWNED)
+    assert grant.request_id == account
+
+
+async def test_two_account_consents_are_ambiguous(db: AsyncSession) -> None:
+    await _approve(db)
+    await _approve(db)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await _mint(db, P_OWNED)
+
+
+async def test_project_consents_alone_keep_the_old_rule(db: AsyncSession) -> None:
+    scopes = frozenset({"harness:execute", "tools:read"})
+    first, _ = await _approve(db, project_id=P_OWNED, scopes=scopes)
+    assert (await _mint(db, P_OWNED)).request_id == first
+    await _approve(db, project_id=P_OWNED, scopes=scopes)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await _mint(db, P_OWNED)
+
+
+async def test_an_account_consent_without_the_run_scope_mints_nothing(
+    db: AsyncSession,
+) -> None:
+    await _approve(db, scopes=frozenset({"tools:read"}))
+    with pytest.raises(service.IntegrationAccessDenied):
+        await _mint(db, P_OWNED)
+
+
+@pytest.mark.parametrize(
+    ("consent_kind", "expected"), [("account", "account"), ("project", "project")]
+)
+async def test_consent_kind_picks_the_lineage_the_caller_names(
+    db: AsyncSession, consent_kind: BindingKind, expected: str
+) -> None:
+    # Two live consents on one device only arise through the API (a full
+    # bridge pairing registers a new device), so the API makes them here.
+    project, _ = await _approve(
+        db, project_id=P_OWNED, scopes=frozenset({"harness:execute", "tools:read"})
+    )
+    account, _ = await _approve(db)
+    issued = await service.mint_integration_grant(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=P_OWNED,
+        scopes=RUN,
+        device_id=DEVICE,
+        consent_kind=consent_kind,
+    )
+    grant = await db.get(IntegrationGrant, issued.grant_id, populate_existing=True)
+    assert grant is not None
+    assert grant.request_id == {"account": account, "project": project}[expected]
+
+
+async def test_consent_kind_account_still_fails_closed_on_two_account_consents(
+    db: AsyncSession,
+) -> None:
+    await _approve(db)
+    await _approve(db)  # a second account request on one device is allowed
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.mint_integration_grant(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=P_OWNED,
+            scopes=RUN,
+            device_id=DEVICE,
+            consent_kind="account",
+        )
+
+
+async def test_the_mint_never_issues_an_account_grant(db: AsyncSession) -> None:
+    await _approve(db)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.mint_integration_grant(
+            db, user_id=USER, organization_id=ORG, scopes=RUN, device_id=DEVICE
+        )
