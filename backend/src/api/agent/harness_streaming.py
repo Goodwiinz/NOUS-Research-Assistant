@@ -18,6 +18,8 @@ from src.services.agent.run_event_store import read_events
 from src.services.agent.run_event_types import TERMINAL_RUN_EVENTS, RunEventType
 from src.services.harness.account import live_account_consent, project_in_account
 from src.services.integrations.context import (
+    DeviceBoundToAnotherChat,
+    DeviceNotConnectedToProject,
     IntegrationAccessDenied,
     mint_integration_grant,
 )
@@ -98,6 +100,12 @@ async def create_chat_context(
 
     The returned token is intentionally discarded. It is never returned to the
     browser; only its database identity is attached to the accepted run.
+
+    Every refusal about this computer, its folder or the chat's project is
+    raised as DeviceNotConnectedToProject: one message for all of them, so the
+    chat can name it without revealing which check failed or whether a device
+    or folder id exists. A computer bound to another chat keeps its own
+    message; server-policy refusals stay ValueError and so the generic error.
     """
     from src.core.config import settings
 
@@ -107,6 +115,32 @@ async def create_chat_context(
         raise ValueError("Codex runs require a project-bound NOUS chat thread")
     if current_user.organization_id is None:
         raise ValueError("Codex runs require an organization-backed account")
+    try:
+        authorized: IntegrationContext = await _authorize_chat_run(
+            db,
+            current_user=current_user,
+            thread=thread,
+            device_id=device_id,
+            workspace_id=workspace_id,
+        )
+    except DeviceBoundToAnotherChat:
+        raise
+    except IntegrationAccessDenied as exc:
+        raise DeviceNotConnectedToProject() from exc
+    return authorized
+
+
+async def _authorize_chat_run(
+    db: Any,
+    *,
+    current_user: Any,
+    thread: Any,
+    device_id: UUID,
+    workspace_id: UUID,
+) -> IntegrationContext:
+    """Check the folder, decide the approval and mint the run's grant (the
+    policy guards have passed). Denials here are opaque; the caller names them
+    for the chat."""
     kind = await _run_consent_kind(
         db,
         current_user=current_user,

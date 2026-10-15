@@ -55,6 +55,7 @@ from src.services.harness.account import (
     run_project,
 )
 from src.services.integrations.context import (
+    DeviceNotConnectedToProject,
     IntegrationAccessDenied,
     create_request,
     decide_request,
@@ -739,6 +740,38 @@ async def test_an_unknown_or_deleted_folder_is_denied(
             device_id=ACCOUNT_DEVICE,
             workspace_id=FOLDER_A,
         )
+
+
+async def test_every_refusal_of_a_device_or_folder_is_one_named_message(
+    db: AsyncSession, context: IntegrationContext, account: IntegrationContext
+) -> None:
+    """The chat names the refusal, and it names the same thing whatever the
+    cause, so a guessed device or folder id learns nothing."""
+    await pair_project(db, PROJECT_B, DEVICE)
+    await leave_account(db)
+    thread = await db.get(Thread, THREAD)
+    thread_b = await db.get(Thread, THREAD_B)
+    cases = [
+        (thread, uuid4(), FOLDER_A),  # unknown device
+        (thread, ACCOUNT_DEVICE, uuid4()),  # unknown folder
+        (thread, ACCOUNT_DEVICE, LOCAL),  # a folder of another device
+        (thread_b, DEVICE, LOCAL),  # a project folder of another project
+        (thread_b, ACCOUNT_DEVICE, FOLDER_A),  # a project outside the account
+    ]
+    messages = set()
+    for chat, device_id, folder in cases:
+        with pytest.raises(DeviceNotConnectedToProject) as raised:
+            await create_chat_context(
+                db,
+                current_user=OWNER,
+                thread=chat,
+                device_id=device_id,
+                workspace_id=folder,
+            )
+        messages.add(
+            (type(raised.value), raised.value.client_message, str(raised.value))
+        )
+    assert len(messages) == 1
 
 
 async def _run_and_session(db: AsyncSession, run_id: str) -> tuple[Any, HarnessSession]:
