@@ -78,6 +78,12 @@ function isTerminal(type: string): boolean {
 export const BOUND_TO_ANOTHER_CHAT_MESSAGE =
   'This computer is bound to another chat — connect it to this chat or pick another computer.';
 
+/** Shown in the chat bubble for the server's `device_not_connected_to_project`
+ * error category: the computer holds neither an account approval nor an
+ * approval for this chat's project, or the folder cannot be used here. */
+export const NOT_CONNECTED_TO_PROJECT_MESSAGE =
+  "This computer isn't connected to this project.";
+
 /** Query key prefix of the paired-computer list; the user id follows. */
 const DEVICES_QUERY_KEY = ['harness', 'devices'] as const;
 
