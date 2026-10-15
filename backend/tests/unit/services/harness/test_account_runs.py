@@ -8,7 +8,7 @@ Mutation verification (2026-10-14, PR 2 Tasks 1-3): for each guard named in a
 backend, the named tests were observed FAIL, and the source was restored.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,7 +29,10 @@ from tests.unit.services.harness.test_runs import (  # noqa: F401
     db,
 )
 
-from src.api.agent.harness_streaming import create_chat_context
+from src.api.agent.harness_streaming import (
+    context_for_accepted_run,
+    create_chat_context,
+)
 from src.core.config import settings
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
@@ -886,3 +889,220 @@ async def test_a_project_pairing_still_cannot_lease_another_projects_run(
     assert str(command.runId) == run_b and command.projectId is None
     with pytest.raises(IntegrationAccessDenied):
         await ingest_bridge_event(db, context, event_for(command))
+
+
+def native_request_event(command: Any, seq: int) -> BridgeEvent:
+    return event_for(
+        command,
+        seq,
+        {
+            "kind": "request",
+            "sessionId": "native-session",
+            "turnId": "native-turn",
+            "itemId": "item-1",
+            "requestId": 7,
+            "approvalId": "approval-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "native-session",
+                "turnId": "native-turn",
+                "itemId": "item-1",
+                "approvalId": "approval-1",
+                "command": "pytest -q",
+                "cwd": "/workspace",
+            },
+        },
+    )
+
+
+def running_event(command: Any, seq: int = 1) -> BridgeEvent:
+    return event_for(
+        command,
+        seq,
+        {
+            "kind": "observation",
+            "state": "running",
+            "sessionId": "native-session",
+            "turnId": "native-turn",
+        },
+    )
+
+
+async def expire_run_grants(db: AsyncSession) -> None:
+    """Run grants are chat-bound and last 15 minutes; pairing grants are not."""
+    await db.execute(
+        update(IntegrationGrant)
+        .where(IntegrationGrant.thread_id.is_not(None))
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+    )
+    await db.commit()
+
+
+async def test_dispatch_after_the_bridge_polled_still_starts_the_run(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import dispatch_pending, lease_commands
+
+    run_id = await start(db, THREAD_B, FOLDER_A)
+    # The bridge polls between acceptance and dispatch: the swap comes first.
+    assert await lease_commands(db, account, ACCOUNT_DEVICE) == []
+    _, session = await _run_and_session(db, run_id)
+    assert session.grant_id == account.grant_id
+    assert await dispatch_pending(db) == 1
+    run, _ = await _run_and_session(db, run_id)
+    assert run.status == "queued"
+
+
+# Mutation MA5 (Task 7): delete `session.grant_id = grant.id` in
+# lease_commands; this test must fail.
+async def test_a_long_run_outlives_its_run_grant_and_resolves_an_approval_card(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.approvals import (
+        NativeDecision,
+        ingest_native_request,
+        native_request_context,
+        resolve_native_request,
+    )
+    from src.services.harness.delivery import (
+        dispatch_pending,
+        ingest_bridge_event,
+        lease_commands,
+    )
+    from src.services.integrations.context import renew_grant
+
+    await start(db, THREAD_B, FOLDER_A)
+    assert await dispatch_pending(db) == 1
+    (first,) = await lease_commands(db, account, ACCOUNT_DEVICE)
+    await expire_run_grants(db)
+    issued = await renew_grant(db, OWNER, account.grant_id)
+    renewed = await resolve_integration_context(
+        db, issued.token, required_scope="harness:execute"
+    )
+    # A never-acknowledged start is re-leased: its prompt is rebuilt and
+    # checked under the session's (pairing) grant, not the expired run grant.
+    await db.execute(update(HarnessCommand).values(lease_until=None))
+    await db.commit()
+    (again,) = await lease_commands(db, renewed, ACCOUNT_DEVICE)
+    assert again.commandId == first.commandId and again.projectId == PROJECT_B
+    await ingest_bridge_event(db, renewed, running_event(again, 1))
+    request_id, _ = await ingest_native_request(
+        db, renewed, native_request_event(again, 2)
+    )
+    decision_context = await native_request_context(db, request_id, USER)
+    assert decision_context.binding_kind == "account"
+    assert decision_context.grant_id == renewed.grant_id
+    await resolve_native_request(
+        db, decision_context, request_id, NativeDecision.allow()
+    )
+    responses = [
+        c
+        for c in await lease_commands(db, renewed, ACCOUNT_DEVICE)
+        if c.body.kind == "respond"
+    ]
+    assert len(responses) == 1 and responses[0].projectId is None
+
+
+# Mutations MA7 / MA8 (Task 7): delete `request.project_id != run.project_id`
+# in native_request_context (first assertion fails) or in
+# resolve_native_request (second assertion fails).
+async def test_a_native_request_recorded_for_another_project_is_refused(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.approvals import (
+        NativeDecision,
+        ingest_native_request,
+        native_request_context,
+        resolve_native_request,
+    )
+    from src.services.harness.delivery import (
+        dispatch_pending,
+        ingest_bridge_event,
+        lease_commands,
+    )
+
+    await start(db, THREAD_B, FOLDER_A)
+    assert await dispatch_pending(db) == 1
+    (command,) = await lease_commands(db, account, ACCOUNT_DEVICE)
+    await ingest_bridge_event(db, account, running_event(command, 1))
+    request_id, _ = await ingest_native_request(
+        db, account, native_request_event(command, 2)
+    )
+    decision_context = await native_request_context(db, request_id, USER)
+    await db.execute(
+        update(HarnessNativeRequest)
+        .where(HarnessNativeRequest.id == request_id)
+        .values(project_id=PROJECT)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await native_request_context(db, request_id, USER)
+    with pytest.raises(IntegrationAccessDenied):
+        await resolve_native_request(
+            db, decision_context, request_id, NativeDecision.allow()
+        )
+
+
+# Mutation MA6 (Task 7): delete `original.request_id != grant.request_id` from
+# _authorize's lineage check; this test must fail.
+async def test_a_second_account_approval_on_the_device_cannot_take_over_a_run(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import (
+        dispatch_pending,
+        ingest_bridge_event,
+        lease_commands,
+    )
+
+    await start(db, THREAD_B, FOLDER_A)
+    assert await dispatch_pending(db) == 1
+    (command,) = await lease_commands(db, account, ACCOUNT_DEVICE)
+    other = await pair_account(db)  # a second consent lineage on the same device
+    assert other.consent_id != account.consent_id
+    assert await lease_commands(db, other, ACCOUNT_DEVICE) == []
+    with pytest.raises(IntegrationAccessDenied):
+        await ingest_bridge_event(db, other, event_for(command))
+
+
+async def test_a_run_that_cannot_start_says_its_project_left_the_account(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.agent.run_event_store import read_events
+    from src.services.harness.account import PROJECT_UNREACHABLE
+    from src.services.harness.delivery import dispatch_pending
+
+    run_id = await start(db, THREAD_B, FOLDER_A)
+    await leave_account(db)
+    assert await dispatch_pending(db) == 0
+    run, session = await _run_and_session(db, run_id)
+    assert run.status == "failed" and not session.workspace_locked
+    events = await read_events(db, run_id, organization_id=ORG, user_id=USER)
+    assert events[-1].payload["message"] == PROJECT_UNREACHABLE
+
+
+async def test_stream_resume_after_the_swap_reads_as_the_owner(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import lease_commands
+
+    run_id = await start(db, THREAD_B, FOLDER_A)
+    await lease_commands(db, account, ACCOUNT_DEVICE)  # swap
+    stream = await context_for_accepted_run(db, run_id=UUID(run_id), current_user=OWNER)
+    assert (stream.user_id, stream.organization_id) == (USER, ORG)
+    assert stream.grant_id == account.grant_id
+
+
+async def test_the_prompt_is_built_under_the_swapped_pairing_grant_and_rechecked(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.services.harness.delivery import lease_commands
+    from src.services.harness.prompt_context import build_harness_prompt
+
+    run_id = await start(db, THREAD_B, FOLDER_A)
+    await lease_commands(db, account, ACCOUNT_DEVICE)  # swap
+    _, session = await _run_and_session(db, run_id)
+    assert session.grant_id == account.grant_id
+    assert (await build_harness_prompt(db, run_id=run_id)).input
+    await leave_account(db)
+    with pytest.raises(IntegrationAccessDenied):
+        await build_harness_prompt(db, run_id=run_id)
