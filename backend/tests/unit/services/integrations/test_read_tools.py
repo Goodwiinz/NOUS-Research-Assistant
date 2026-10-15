@@ -4118,6 +4118,20 @@ async def test_an_account_tool_without_a_selector_asks_for_one(
     adapters["_tool_list_project_documents"].assert_not_awaited()
 
 
+async def test_an_account_tool_is_denied_before_it_asks_for_a_selector(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    """Whether the account is still live is answered first, so a caller outside
+    it learns nothing from the missing-selector error."""
+    await db.execute(
+        update(Organization).where(Organization.id == ORG).values(is_active=False)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, _account_context(), _invocation("list_project_documents"))
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("selected", "expected"),
     [(PROJECT, DOC_IN_PROJECT), (FOREIGN_PROJECT, DOC_FOREIGN)],

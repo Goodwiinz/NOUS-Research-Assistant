@@ -1259,6 +1259,13 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
             )
         )
     ).all()
+    try:
+        await authorized_account(db, user.id, user.organization_id)
+        account_live = True
+    except IntegrationAccessDenied:
+        # The user is no longer active in a live organization: an account
+        # approval still on file covers nothing (see _holds_account_run_consent).
+        account_live = False
     run_chats: dict[UUID, list[UUID | None]] = {d.id: [] for d in devices}
     account_wide: dict[UUID, bool] = {d.id: False for d in devices}
     project_ids: dict[UUID, set[UUID]] = {d.id: set() for d in devices}
@@ -1267,7 +1274,8 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
             continue
         run_chats[consent.device_id].append(consent.thread_id)
         if consent.binding_kind == "account":
-            account_wide[consent.device_id] = True
+            if account_live:
+                account_wide[consent.device_id] = True
         elif consent.binding_kind == "project" and consent.project_id is not None:
             project_ids[consent.device_id].add(consent.project_id)
     return [
