@@ -305,6 +305,17 @@ def test_project_and_workspace_scope_rules_are_unchanged() -> None:
         service.check_scopes({"harness:execute"}, binding_kind="workspace")
 
 
+def test_check_scopes_refuses_both_spellings_of_the_kind() -> None:
+    kinds: tuple[BindingKind, ...] = ("workspace", "account")
+    for kind in kinds:
+        with pytest.raises(ValueError, match="not both"):
+            service.check_scopes(
+                {"tools:read"}, binding_kind=kind, workspace_bound=True
+            )
+    # The default kind with the old keyword is the old spelling alone.
+    service.check_scopes({"tools:read"}, workspace_bound=True)
+
+
 # --- validate_binding: the account branch --------------------------------------
 
 

@@ -126,6 +126,8 @@ def check_scopes(
     ``workspace_bound=True`` is the older spelling of
     ``binding_kind="workspace"`` and is kept for its callers.
     """
+    if workspace_bound and binding_kind != "project":
+        raise ValueError("pass binding_kind or workspace_bound, not both")
     kind: BindingKind = "workspace" if workspace_bound else binding_kind
     held = set(scopes)
     if not held or not held <= STANDARD_SCOPES:

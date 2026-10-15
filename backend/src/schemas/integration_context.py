@@ -67,9 +67,9 @@ class IntegrationContext(BaseModel):
     project_id: UUID | None = None
     workspace_id: UUID | None = None
     # Derived from project_id / workspace_id when not given; an account
-    # context must name it. The default is never used: _derive_kind (a
-    # before-validator) always fills the field for dict input, so no sentinel
-    # is needed.
+    # context must name it. The default is never used for validated dict input
+    # (_derive_kind, a before-validator, always fills the field); model_construct
+    # and model_copy skip the validator.
     binding_kind: BindingKind = "project"
     thread_id: UUID | None = None
     run_id: UUID | None = None
