@@ -111,17 +111,26 @@ const NO_CONNECTED_COMPUTER_MESSAGE =
 
 /**
  * Whether this computer may run Codex for the chat's project: it holds an
- * account approval, or a project approval for that project. A backend older
- * than account connections sends neither field; missing data never hides a
+ * account approval, a project approval for that project, or a project
+ * approval bound to this chat (the server names a chat-bound approval only in
+ * bound_thread_ids, not in project_ids). A backend older than account
+ * connections sends neither account field; missing data never hides a
  * computer, and the server still refuses one that cannot run here.
  */
-function servesProject(device: HarnessDevice, projectId: string): boolean {
+function servesProject(
+  device: HarnessDevice,
+  projectId: string,
+  threadId: string | null
+): boolean {
   const accountWide: unknown = device.account_wide;
   const projectIds: unknown = device.project_ids;
   if (typeof accountWide !== 'boolean' || !Array.isArray(projectIds)) {
     return true;
   }
-  return accountWide || projectIds.includes(projectId);
+  const bound: unknown = device.bound_thread_ids;
+  const boundHere =
+    threadId !== null && Array.isArray(bound) && bound.includes(threadId);
+  return accountWide || projectIds.includes(projectId) || boundHere;
 }
 
 /**
@@ -376,9 +385,9 @@ export function useHarnessConnection(
         : projectId === null
           ? []
           : (pairedDevices ?? []).filter((device) =>
-              servesProject(device, projectId)
+              servesProject(device, projectId, threadId)
             ),
-    [pairedDevices, projectId]
+    [pairedDevices, projectId, threadId]
   );
   const selectedDevice = devices.find(
     (device) => device.id === selection.deviceId

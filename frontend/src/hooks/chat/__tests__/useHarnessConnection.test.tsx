@@ -583,6 +583,30 @@ describe('useHarnessConnection', () => {
     ).toEqual(['Choose computer', 'Account laptop', 'Project desk']);
   });
 
+  it('lists a computer whose only approval is bound to this chat', async () => {
+    // A chat-bound project approval is named by bound_thread_ids alone; the
+    // server leaves it out of project_ids.
+    const chatDesk = {
+      id: 'device-chat',
+      label: 'Chat desk',
+      bound_thread_ids: ['thread-a'],
+      account_wide: false,
+      project_ids: [],
+    };
+    listDevices.mockResolvedValue([chatDesk, otherDesk]);
+    const here = renderConnectedHarness('thread-a', 'project-a');
+    act(() => here.result.current.selectProvider('codex'));
+    await waitFor(() =>
+      expect(here.result.current.devices.map((device) => device.id)).toEqual([
+        'device-chat',
+      ])
+    );
+    const elsewhere = renderConnectedHarness('thread-b', 'project-a');
+    act(() => elsewhere.result.current.selectProvider('codex'));
+    await waitFor(() => expect(listDevices).toHaveBeenCalled());
+    await waitFor(() => expect(elsewhere.result.current.devices).toEqual([]));
+  });
+
   it('never hides a computer from a backend without account fields', async () => {
     listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
     const view = renderConnectedHarness('thread-a', 'project-a');
