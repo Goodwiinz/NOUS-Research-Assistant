@@ -1,6 +1,12 @@
 import { ToolRequestRejected, type ToolDescriptor, type ToolInvocation, type ToolResult } from "./client.ts";
 import type { ToolCatalog } from "./server.ts";
 
+// Pinning keeps a Local Codex run's NOUS tools on its chat's project. It is a
+// guard on the model, not a security boundary: the server still checks every
+// call against the account. Two calls are not pinned: `get_action_status`
+// (needs an invocation id the run was given) and `save_papers_to_folder`'s
+// `document_ids`, which the server checks against the account, not the pin.
+
 /** Fields that name a NOUS project in a tool or action call. */
 export const PROJECT_FIELDS = ["project_id", "from_project_id", "to_project_id"] as const;
 /** Read tools that reach beyond one project. */
