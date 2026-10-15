@@ -15,12 +15,14 @@ that workspace is never in the account.
 from __future__ import annotations
 
 import os
+import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete, insert, select, text, update
+from sqlalchemy.exc import SAWarning
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from src.models.base import Base
@@ -59,6 +61,11 @@ WORKSPACES: dict[str, tuple[UUID, UUID | None, bool, bool, bool, str | None]] = 
     "legacy-other-org-member": (OUTSIDER, None, False, False, False, "live"),
     "archived": (USER, ORG, True, False, False, None),
     "deleted": (USER, ORG, False, True, False, None),
+    # The owner does not bypass the organization check.
+    "owned-in-other-org": (USER, OTHER_ORG, False, False, False, None),
+    # A live membership never revives an archived or deleted workspace.
+    "archived-member": (COLLEAGUE, ORG, True, False, False, "live"),
+    "deleted-member": (COLLEAGUE, ORG, False, True, False, "live"),
 }
 WORKSPACE = {name: uuid4() for name in WORKSPACES}
 PROJECT = {name: uuid4() for name in WORKSPACES}
@@ -72,7 +79,7 @@ async def _seed(db: AsyncSession) -> None:
         await db.execute(
             insert(Organization).values(id=org, name=str(org), storage_limit_bytes=1)
         )
-    for user, org in ((USER, ORG), (COLLEAGUE, ORG), (OUTSIDER, OTHER_ORG)):
+    for user, user_org in ((USER, ORG), (COLLEAGUE, ORG), (OUTSIDER, OTHER_ORG)):
         await db.execute(
             text(
                 "INSERT INTO users (id, organization_id, email, password_hash, "
@@ -83,19 +90,26 @@ async def _seed(db: AsyncSession) -> None:
             ),
             {
                 "id": str(user),
-                "org": str(org),
+                "org": str(user_org),
                 "email": f"{user}@example.test",
                 "active": True,
                 "deleted": False,
             },
         )
-    for name, (owner, org, archived, deleted, public, membership) in WORKSPACES.items():
+    for name, (
+        owner,
+        ws_org,
+        archived,
+        deleted,
+        public,
+        membership,
+    ) in WORKSPACES.items():
         await db.execute(
             insert(Workspace).values(
                 id=WORKSPACE[name],
                 name=name,
                 owner_id=owner,
-                organization_id=org,
+                organization_id=ws_org,
                 is_archived=archived,
                 is_deleted=deleted,
                 is_public=public,
@@ -116,6 +130,18 @@ async def _seed(db: AsyncSession) -> None:
                     is_deleted=membership == "lapsed",
                 )
             )
+    # Other people's memberships: a membership row must count only for the
+    # user it names (membership.user_id == user_id).
+    for name in ("not-member", "public-not-member"):
+        await db.execute(
+            insert(WorkspaceMember).values(
+                id=uuid4(),
+                workspace_id=WORKSPACE[name],
+                user_id=COLLEAGUE,
+                role=WorkspaceRole.EDITOR,
+                is_deleted=False,
+            )
+        )
     await db.execute(
         insert(Collection).values(
             [
@@ -231,7 +257,10 @@ async def test_the_account_agrees_with_the_projects_rule(db: AsyncSession) -> No
             await db.scalars(accessible_research_workspace_ids_query(USER))
         ).all()
     }
-    assert await _account_workspaces(db) == research - {WORKSPACE["archived"]}
+    assert await _account_workspaces(db) == research - {
+        WORKSPACE["archived"],
+        WORKSPACE["archived-member"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -313,3 +342,49 @@ async def test_account_summary_counts_what_the_rule_covers_today(
     await db.commit()
     summary = await account_summary(db, USER, ORG)
     assert (summary.workspace_count, summary.project_count) == (5, 5)
+
+
+async def test_the_condition_adds_no_cartesian_product_to_a_read_shaped_statement(
+    db: AsyncSession,
+) -> None:
+    # The condition names the unaliased Collection, so the caller's FROM must
+    # contain it. A read tool selects Collection joined to Workspace: that must
+    # compile and run with SQLAlchemy's cartesian-product lint as an error.
+    statement = (
+        select(Collection.id, Collection.name, Workspace.name)
+        .join(Workspace, Collection.workspace_id == Workspace.id)
+        .where(account_scope_condition(USER, ORG))
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SAWarning)
+        rows = (await db.execute(statement)).all()
+    assert {UUID(str(row[0])) for row in rows} == await _account_projects(db)
+
+
+async def test_a_statement_without_collection_in_its_from_is_a_cartesian_product(
+    db: AsyncSession,
+) -> None:
+    # The trap, pinned: with no Collection in the caller's FROM the condition
+    # pulls an unjoined ``collections`` into the statement and is true for
+    # every row. SQLAlchemy's linter reports it, so a misuse fails loudly here.
+    with pytest.warns(SAWarning, match="cartesian product"):
+        await db.execute(select(Workspace.id).where(account_scope_condition(USER, ORG)))
+
+
+async def test_the_workspace_subquery_never_correlates_onto_a_joined_workspace(
+    db: AsyncSession,
+) -> None:
+    # Joined to a workspace that is NOT in the account, on a condition that
+    # ignores the Collection: the subquery must still answer "which workspaces
+    # are in the account", so the result is the account set, not the joined
+    # row's own verdict (which would be empty). The workspace subquery has a
+    # single FROM, so SQLAlchemy's auto-correlation already leaves it alone and
+    # .correlate(None) is not observable today (deleting it keeps this test
+    # green); this pins the behaviour for any refactor that adds a FROM.
+    statement = (
+        select(Collection.id)
+        .join(Workspace, Workspace.id == WORKSPACE["not-member"])
+        .where(account_scope_condition(USER, ORG))
+    )
+    rows = await db.scalars(statement)
+    assert {UUID(str(value)) for value in rows.all()} == await _account_projects(db)
