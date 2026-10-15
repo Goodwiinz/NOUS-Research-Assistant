@@ -27,6 +27,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from src.core.config import settings
+from src.models.collection import Collection
 from src.models.document_embedding import DOCUMENT_EMBEDDING_DIMENSIONS
 from src.models.vector import EmbeddingResponse
 from src.services.embedding.document_embedding_service import DocumentEmbeddingService
@@ -138,6 +139,30 @@ def test_project_scope_is_an_exists_over_live_links_collections_and_workspaces()
 
 def test_no_project_scope_means_no_collection_join() -> None:
     assert "collection_documents" not in _compile(project_ids=None)
+
+
+def test_a_collection_scope_is_one_condition_not_an_id_list() -> None:
+    """A workspace scope binds its one workspace id, however many Collections
+    the workspace holds (asyncpg refuses more than 32,767 parameters)."""
+    workspace = uuid.uuid4()
+    statement = build_semantic_search_statement(
+        query_vector=[0.1] * DIM,
+        organization_id=ORG,
+        project_ids=None,
+        published_after=None,
+        published_before=None,
+        limit=20,
+        collection_scope=Collection.workspace_id == workspace,
+    )
+    compiled = statement.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+
+    exists = sql[sql.index("EXISTS") : sql.index("ORDER BY")]
+    assert "collections.workspace_id = " in exists
+    assert "collection_documents.collection_id IN" not in exists
+    assert "collections.is_deleted IS false" in exists
+    assert "workspaces.is_deleted IS false" in exists
+    assert list(compiled.params.values()).count(workspace) == 1
 
 
 def test_ordering_is_the_cosine_operator_so_the_hnsw_index_can_serve_it() -> None:
@@ -382,6 +407,21 @@ async def test_an_invalid_organization_fails_closed(
         await semantic_search(
             FakeSession(), query="graphs", organization_id=organization  # type: ignore[arg-type]
         )
+
+
+async def test_project_ids_and_a_collection_scope_are_exclusive(
+    channel_on: FakeEmbedder,
+) -> None:
+    session = FakeSession()
+    with pytest.raises(ValueError, match="collection_scope"):
+        await semantic_search(
+            session,  # type: ignore[arg-type]
+            query="graphs",
+            organization_id=ORG,
+            project_ids=[PROJECT],
+            collection_scope=Collection.id == PROJECT,
+        )
+    assert session.statements == [] and channel_on.queries == []
 
 
 async def test_an_invalid_project_id_raises(channel_on: FakeEmbedder) -> None:

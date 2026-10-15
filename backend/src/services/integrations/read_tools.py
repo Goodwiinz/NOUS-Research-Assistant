@@ -23,7 +23,7 @@ from typing import Any, Iterable, Sequence, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, desc, func, select
+from sqlalchemy import ColumnElement, desc, false, func, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -1436,22 +1436,26 @@ async def _discover_papers(
 ) -> ToolResult:
     """One discovery round over the grant's whole scope (library) and arXiv.
 
-    The library scope is ``authorized_scope`` of this call: re-checked access,
-    live Collections only, a project grant's one project or a workspace grant's
-    projects. The searches themselves run in their own sessions (see
-    ``discover_papers``); nothing outside ``project_ids`` can be read.
+    The library scope is ``authorized_scope_filter`` of this call: re-checked
+    access, then a condition on ``Collection`` (a project grant's one project or
+    a workspace grant's projects) that each library statement applies together
+    with the live-ancestor checks. It is never expanded into an id list, which a
+    large workspace would push past the bind-parameter limit. The searches run
+    in their own sessions (see ``discover_papers``); nothing outside the scope
+    can be read.
     """
     try:
         request = discover_papers.parse_arguments(arguments)
     except discover_papers.DiscoverArgumentError as error:
         raise ToolArgumentError(str(error)) from error
-    project_ids: list[UUID] = []
+    # An arXiv-only round runs no library call; ``false()`` matches nothing.
+    library_scope: ColumnElement[bool] = false()
     if "library" in request.sources:
-        project_ids = sorted(await authorized_scope(db, context))
+        library_scope = await authorized_scope_filter(db, context)
     payload = await discover_papers.discover(
         request,
         organization_id=context.organization_id,
-        project_ids=project_ids,
+        library_scope=library_scope,
         # The public search_arxiv tool returns at most 5 papers; a discovery
         # round reads arXiv to its difficulty depth through this internal cap.
         arxiv_search=partial(

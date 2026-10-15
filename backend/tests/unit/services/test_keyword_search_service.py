@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from src.models.collection import Collection
 from src.services.search.keyword_search_service import (
     MAX_LIMIT,
     build_keyword_search_statement,
@@ -100,6 +101,43 @@ def test_project_scope_is_an_exists_over_live_links_collections_and_workspaces()
 
 def test_no_project_scope_means_no_collection_join() -> None:
     assert "collection_documents" not in _compile(project_ids=None)
+
+
+def test_a_collection_scope_is_one_condition_not_an_id_list() -> None:
+    """A workspace scope binds its one workspace id, however many Collections
+    the workspace holds (asyncpg refuses more than 32,767 parameters)."""
+    workspace = uuid.uuid4()
+    statement = build_keyword_search_statement(
+        terms="grpo",
+        organization_id=ORG,
+        project_ids=None,
+        published_after=None,
+        published_before=None,
+        limit=20,
+        collection_scope=Collection.workspace_id == workspace,
+    )
+    compiled = statement.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+
+    exists = sql[sql.index("EXISTS") : sql.index("ORDER BY")]
+    assert "collections.workspace_id = " in exists
+    assert "collection_documents.collection_id IN" not in exists
+    assert "collections.is_deleted IS false" in exists
+    assert "workspaces.is_deleted IS false" in exists
+    assert list(compiled.params.values()).count(workspace) == 1
+
+
+async def test_project_ids_and_a_collection_scope_are_exclusive() -> None:
+    session = AsyncMock()
+    with pytest.raises(ValueError, match="collection_scope"):
+        await keyword_search(
+            session,
+            query="grpo",
+            organization_id=ORG,
+            project_ids=[PROJECT],
+            collection_scope=Collection.id == PROJECT,
+        )
+    session.execute.assert_not_awaited()
 
 
 def test_the_window_is_in_the_where_before_order_and_limit() -> None:

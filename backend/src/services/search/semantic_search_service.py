@@ -14,8 +14,10 @@ Tenancy and scoping are all in the one SQL statement:
   ``fulltext_search_service``);
 - ``project_ids`` limits results to documents linked to those Collections
   through ``collection_documents``; ``None`` means the whole organization and
-  an empty list means nothing. The link, its Collection and the Collection's
-  Workspace must all be live;
+  an empty list means nothing. ``collection_scope`` does the same with a
+  condition on ``Collection`` instead of an id list (``authorized_scope_filter``),
+  so a workspace-wide scope binds one value however many Collections it holds.
+  The link, its Collection and the Collection's Workspace must all be live;
 - soft-deleted documents and documents that have not finished processing never
   match.
 
@@ -55,7 +57,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Literal, Sequence
 
-from sqlalchemy import Select, case, exists, func, select, text
+from sqlalchemy import ColumnElement, Select, case, exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
@@ -135,17 +137,25 @@ def publication_text_expressions() -> tuple[Any, Any]:
     return effective, source
 
 
-def project_scope_condition(project_ids: set[uuid.UUID]) -> Any:
-    """``Document`` is linked to one of ``project_ids``, every ancestor live.
+def project_scope_condition(scope: set[uuid.UUID] | ColumnElement[bool]) -> Any:
+    """``Document`` is linked to a Collection in ``scope``, every ancestor live.
 
-    The link, its Collection and the Collection's Workspace must all be live,
-    so a soft-deleted parent revokes its documents even though no cascade
-    touched them. Shared by the semantic and the keyword search, which must
-    scope a document identically.
+    ``scope`` is a set of Collection ids, or a condition on ``Collection`` (such
+    as ``authorized_scope_filter``'s) that selects them inside this statement,
+    which a workspace needs: it can hold more Collections than one statement
+    may bind. The link, its Collection and the Collection's Workspace must all
+    be live, so a soft-deleted parent revokes its documents even though no
+    cascade touched them. Shared by the semantic and the keyword search, which
+    must scope a document identically.
     """
+    in_scope = (
+        CollectionDocument.collection_id.in_(scope)
+        if isinstance(scope, (set, frozenset))
+        else scope
+    )
     return exists().where(
         CollectionDocument.document_id == Document.id,
-        CollectionDocument.collection_id.in_(project_ids),
+        in_scope,
         CollectionDocument.is_deleted.is_(False),
         Collection.id == CollectionDocument.collection_id,
         Collection.is_deleted.is_(False),
@@ -163,6 +173,7 @@ def build_semantic_search_statement(
     published_before: date | None,
     limit: int,
     exact: bool = False,
+    collection_scope: ColumnElement[bool] | None = None,
 ) -> Select[Any]:
     """The single statement ``semantic_search`` runs (exposed for tests).
 
@@ -194,6 +205,8 @@ def build_semantic_search_statement(
     )
     if project_ids is not None:
         statement = statement.where(project_scope_condition(project_ids))
+    if collection_scope is not None:
+        statement = statement.where(project_scope_condition(collection_scope))
     if published_after is not None:
         statement = statement.where(published_on >= published_after.isoformat())
     if published_before is not None:
@@ -292,10 +305,12 @@ async def semantic_search_strict(
     published_after: date | None = None,
     published_before: date | None = None,
     limit: int = DEFAULT_LIMIT,
+    collection_scope: ColumnElement[bool] | None = None,
 ) -> list[SemanticSearchHit]:
     """``semantic_search``, but a channel that cannot answer raises.
 
-    Same arguments, scoping and window as ``semantic_search``. The difference is
+    Same arguments, scoping and window as ``semantic_search``; pass the scope as
+    ``project_ids`` or as ``collection_scope``, not both. The difference is
     only the failure contract: a disabled flag or a query that could not be
     embedded raises ``SemanticSearchUnavailable`` instead of returning ``[]``, so
     a caller that reports per-channel status (``discover_papers``) can tell "the
@@ -303,6 +318,8 @@ async def semantic_search_strict(
     """
     if not settings.SEMANTIC_SEARCH_ENABLED:
         raise SemanticSearchUnavailable("disabled")
+    if project_ids is not None and collection_scope is not None:
+        raise ValueError("Semantic search takes project_ids or collection_scope")
     org = _org_scope(organization_id)
     projects = None if project_ids is None else _project_scope(project_ids)
     if projects is not None and not projects:
@@ -335,6 +352,7 @@ async def semantic_search_strict(
             published_before=before,
             limit=page,
             exact=not index_allowed,
+            collection_scope=collection_scope,
         )
     )
     return [_to_hit(row) for row in result]
@@ -349,6 +367,7 @@ async def semantic_search(
     published_after: date | None = None,
     published_before: date | None = None,
     limit: int = DEFAULT_LIMIT,
+    collection_scope: ColumnElement[bool] | None = None,
 ) -> list[SemanticSearchHit]:
     """Documents nearest to ``query``, best first; ``[]`` when the channel is off.
 
@@ -368,6 +387,7 @@ async def semantic_search(
             published_after=published_after,
             published_before=published_before,
             limit=limit,
+            collection_scope=collection_scope,
         )
     except SemanticSearchUnavailable:
         return []

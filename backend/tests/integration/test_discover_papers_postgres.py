@@ -439,7 +439,7 @@ async def test_discover_papers_end_to_end(
     payload = await dp.discover(
         _request(published_after="2020-01-01", published_before="2020-12-31"),
         organization_id=seeded["org-a"],
-        project_ids=[seeded["alpha"]],
+        library_scope=Collection.id == seeded["alpha"],
         arxiv_search=_arxiv,
         today=date(2026, 10, 13),
     )
@@ -485,7 +485,7 @@ async def test_a_document_outside_the_grant_never_appears(
             published_after="2020-01-01",
         ),
         organization_id=seeded["org-a"],
-        project_ids=[seeded["alpha"]],
+        library_scope=Collection.id == seeded["alpha"],
         arxiv_search=_arxiv,
         today=date(2026, 10, 13),
     )
@@ -498,7 +498,7 @@ async def test_a_document_outside_the_grant_never_appears(
         both = await dp.discover(
             _request(keywords=words, sources=["library"]),
             organization_id=seeded["org-a"],
-            project_ids=[seeded["alpha"], seeded["beta"]],
+            library_scope=Collection.workspace_id == sid("disc-ws-a"),
             arxiv_search=_arxiv,
             today=date(2026, 10, 13),
         )
@@ -511,7 +511,7 @@ async def test_discover_papers_without_a_window_is_capped_and_scoped(
     payload = await dp.discover(
         _request(difficulty=10),
         organization_id=seeded["org-a"],
-        project_ids=[seeded["alpha"]],
+        library_scope=Collection.id == seeded["alpha"],
         arxiv_search=_arxiv,
         today=date(2026, 10, 13),
     )
@@ -530,7 +530,7 @@ async def test_a_workspace_wide_scope_adds_every_project_of_the_workspace(
     payload = await dp.discover(
         _request(sources=["library"], difficulty=10, keywords=["note"]),
         organization_id=seeded["org-a"],
-        project_ids=[seeded["alpha"], seeded["beta"]],
+        library_scope=Collection.workspace_id == sid("disc-ws-a"),
         arxiv_search=_arxiv,
         today=date(2026, 10, 13),
     )
@@ -564,7 +564,7 @@ async def test_a_missing_embeddings_table_leaves_the_session_usable(
             kwargs: dict[str, Any] = {
                 "query": "retrieval augmented generation",
                 "organization_id": seeded["org-a"],
-                "project_ids": [seeded["alpha"]],
+                "library_scope": Collection.id == seeded["alpha"],
                 "after": None,
                 "before": None,
                 "limit": 10,
@@ -618,7 +618,7 @@ async def test_a_failing_embedding_provider_is_unavailable_not_empty(
     payload = await dp.discover(
         _request(),
         organization_id=seeded["org-a"],
-        project_ids=[seeded["alpha"]],
+        library_scope=Collection.id == seeded["alpha"],
         arxiv_search=_arxiv,
         today=date(2026, 10, 13),
     )
@@ -643,7 +643,7 @@ async def test_the_flag_off_is_unavailable_without_touching_the_database(
     payload = await dp.discover(
         _request(),
         organization_id=seeded["org-a"],
-        project_ids=[seeded["alpha"]],
+        library_scope=Collection.id == seeded["alpha"],
         arxiv_search=_arxiv,
         today=date(2026, 10, 13),
     )

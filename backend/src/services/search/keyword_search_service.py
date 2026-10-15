@@ -6,8 +6,8 @@
 words and one-letter words are ignored), but written for the discovery tool
 rather than for the ``/documents/search`` page:
 
-- it takes the same ``organization_id`` / ``project_ids`` scope as
-  ``semantic_search`` and applies it in the one SQL statement (the
+- it takes the same ``organization_id`` / ``project_ids`` (or
+  ``collection_scope``) scope as ``semantic_search`` and applies it in the one SQL statement (the
   organization filter, plus the live link / Collection / Workspace chain from
   ``project_scope_condition``). ``fulltext_search_service`` can only be scoped
   by an id list, which is unbounded for a workspace-wide grant;
@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Sequence
 
-from sqlalchemy import Select, desc, func, literal_column, select
+from sqlalchemy import ColumnElement, Select, desc, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.document import Document, ProcessingStatus
@@ -110,6 +110,7 @@ def build_keyword_search_statement(
     published_after: date | None,
     published_before: date | None,
     limit: int,
+    collection_scope: ColumnElement[bool] | None = None,
 ) -> Select[Any]:
     """The single statement ``keyword_search`` runs (exposed for tests)."""
     published_on, published_source = publication_text_expressions()
@@ -133,6 +134,8 @@ def build_keyword_search_statement(
     )
     if project_ids is not None:
         statement = statement.where(project_scope_condition(project_ids))
+    if collection_scope is not None:
+        statement = statement.where(project_scope_condition(collection_scope))
     if published_after is not None:
         statement = statement.where(published_on >= published_after.isoformat())
     if published_before is not None:
@@ -149,15 +152,21 @@ async def keyword_search(
     published_after: date | None = None,
     published_before: date | None = None,
     limit: int = DEFAULT_LIMIT,
+    collection_scope: ColumnElement[bool] | None = None,
 ) -> list[KeywordSearchHit]:
     """Documents containing every word of ``query``, best first.
 
     ``project_ids`` limits the search to documents linked to those Collections
     (``None`` is the whole organization, an empty list is nothing).
+    ``collection_scope`` is the same limit as a condition on ``Collection``
+    (``authorized_scope_filter``), for a scope too large to bind as ids; pass
+    one or the other, not both.
     ``published_after`` / ``published_before`` are inclusive day bounds on the
     publication day described in the module docstring. ``limit`` is clamped to
     ``MAX_LIMIT``. Database errors propagate. Never commits.
     """
+    if project_ids is not None and collection_scope is not None:
+        raise ValueError("Keyword search takes project_ids or collection_scope")
     org = _org_scope(organization_id)
     projects = None if project_ids is None else _project_scope(project_ids)
     if projects is not None and not projects:
@@ -178,6 +187,7 @@ async def keyword_search(
             published_after=after,
             published_before=before,
             limit=page,
+            collection_scope=collection_scope,
         )
     )
     return [

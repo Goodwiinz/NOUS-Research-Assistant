@@ -89,7 +89,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -254,12 +254,11 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> Fakes:
 async def run(
     fakes: Fakes,
     req: dp.DiscoverRequest | None = None,
-    project_ids: list[UUID] | None = None,
 ) -> dict[str, Any]:
     return await discover(
         req or request(),
         organization_id=ORG,
-        project_ids=[PROJECT] if project_ids is None else project_ids,
+        library_scope=Collection.id == PROJECT,
         arxiv_search=fakes.arxiv_search,
         today=TODAY,
     )
@@ -1488,7 +1487,7 @@ def _semantic_kwargs() -> dict[str, Any]:
     return {
         "query": "question",
         "organization_id": ORG,
-        "project_ids": [PROJECT],
+        "library_scope": Collection.id == PROJECT,
         "after": None,
         "before": None,
         "limit": 10,
@@ -1809,6 +1808,14 @@ def _invocation(**arguments: Any) -> ToolInvocation:
     )
 
 
+async def _live_projects(db: AsyncSession, scope: Any) -> list[UUID]:
+    """The live Collections ``scope`` selects, as the library statements see them."""
+    rows = await db.execute(
+        select(Collection.id).where(scope, Collection.is_deleted.is_(False))
+    )
+    return sorted(UUID(str(value)) for value in rows.scalars())
+
+
 @pytest.fixture
 def gateway(monkeypatch: pytest.MonkeyPatch, fakes: Fakes) -> Fakes:
     monkeypatch.setattr(read_tools, "_tool_search_arxiv", fakes.arxiv_search)
@@ -1824,7 +1831,7 @@ async def test_a_project_grant_searches_only_its_project(
     for arguments in gateway.named("library_keyword") + gateway.named(
         "library_semantic"
     ):
-        assert arguments["project_ids"] == [PROJECT]
+        assert await _live_projects(db, arguments["library_scope"]) == [PROJECT]
         assert arguments["organization_id"] == ORG
 
 
@@ -1833,11 +1840,27 @@ async def test_a_workspace_grant_searches_its_live_projects_and_no_other(
 ) -> None:
     await invoke_read(db, _context(project=False), _invocation())
 
-    scope = gateway.named("library_semantic")[0]["project_ids"]
+    scope = await _live_projects(
+        db, gateway.named("library_semantic")[0]["library_scope"]
+    )
     # Both live projects of the grant's workspace; not the user's other
     # workspace, not the soft-deleted project.
     assert scope == sorted([PROJECT, OTHER_PROJECT])
     assert FOREIGN_PROJECT not in scope and DELETED_PROJECT not in scope
+
+
+async def test_a_workspace_grant_scope_is_one_condition_not_an_id_list(
+    db: AsyncSession, gateway: Fakes
+) -> None:
+    """Codex P2 on #1984: a workspace can hold more Collections than one
+    statement may bind (asyncpg's 32,767 parameters), so the scope must reach
+    the searches as a condition on the workspace, never as expanded ids."""
+    await invoke_read(db, _context(project=False), _invocation())
+
+    for name in ("library_keyword", "library_semantic"):
+        compiled = gateway.named(name)[0]["library_scope"].compile()
+        assert "collections.workspace_id = " in str(compiled)
+        assert list(compiled.params.values()) == [WORKSPACE]
 
 
 async def test_an_arxiv_only_round_reads_no_library_scope(
@@ -1924,7 +1947,7 @@ async def test_the_identity_query_drops_documents_outside_the_scope(
         )
     ]
     found = await dp._library_candidates(
-        db, hits, organization_id=ORG, project_ids=[PROJECT]
+        db, hits, organization_id=ORG, library_scope=Collection.id == PROJECT
     )
 
     assert [candidate.id for candidate in found] == [str(DOC_IN)]
@@ -1934,12 +1957,22 @@ async def test_the_identity_query_drops_documents_outside_the_scope(
     assert candidate.doi == "10.1000/abc"
     assert candidate.authors == ("P. Lewis", "E. Perez")
     assert candidate.citations == 123
+    # A workspace scope: its live projects only, not the soft-deleted one.
     both = await dp._library_candidates(
-        db, hits, organization_id=ORG, project_ids=[PROJECT, OTHER_PROJECT]
+        db,
+        hits,
+        organization_id=ORG,
+        library_scope=Collection.workspace_id == WORKSPACE,
     )
     assert {c.id for c in both} == {str(DOC_IN), str(DOC_SIBLING)}
+    # A scope that selects no Collection (an unknown workspace) reads nothing.
     assert (
-        await dp._library_candidates(db, hits, organization_id=ORG, project_ids=[])
+        await dp._library_candidates(
+            db,
+            hits,
+            organization_id=ORG,
+            library_scope=Collection.workspace_id == uuid4(),
+        )
         == []
     )
 
@@ -1955,7 +1988,7 @@ async def test_library_text_is_redacted_like_the_other_library_tools(
         snippet="Write to author@example.org " + "x" * 400,
     )
     (candidate,) = await dp._library_candidates(
-        db, [hit], organization_id=ORG, project_ids=[PROJECT]
+        db, [hit], organization_id=ORG, library_scope=Collection.id == PROJECT
     )
 
     assert "example.com" not in candidate.title

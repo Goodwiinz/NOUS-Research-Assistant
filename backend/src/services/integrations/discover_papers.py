@@ -71,7 +71,7 @@ from datetime import date, datetime, timezone
 from functools import partial
 from typing import Any, Awaitable, Callable, Literal, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -439,12 +439,13 @@ async def _library_candidates(
     hits: Sequence[Any],
     *,
     organization_id: uuid.UUID,
-    project_ids: Sequence[uuid.UUID],
+    library_scope: ColumnElement[bool],
 ) -> list[Candidate]:
     """Library hits as candidates, with the identity fields search does not return.
 
     One extra query by id adds authors, arXiv id, DOI and citation count. It
-    repeats the organization and scope predicates, so a hit that left the scope
+    repeats the organization and scope predicates (``library_scope`` is a
+    condition on ``Collection``, never an id list), so a hit that left the scope
     (or was deleted) since the search ran is dropped rather than shown.
     """
     if not hits:
@@ -463,7 +464,7 @@ async def _library_candidates(
             Document.id.in_(ids),
             Document.organization_id == organization_id,
             Document.is_deleted.is_(False),
-            project_scope_condition(set(project_ids)),
+            project_scope_condition(library_scope),
         )
     )
     identity = {str(row[0]): row for row in rows.all()}
@@ -493,7 +494,7 @@ async def _library_keyword(
     *,
     query: str,
     organization_id: uuid.UUID,
-    project_ids: Sequence[uuid.UUID],
+    library_scope: ColumnElement[bool],
     after: date | None,
     before: date | None,
     limit: int,
@@ -503,13 +504,13 @@ async def _library_keyword(
             session,
             query=query,
             organization_id=organization_id,
-            project_ids=project_ids,
+            collection_scope=library_scope,
             published_after=after,
             published_before=before,
             limit=limit,
         )
         return await _library_candidates(
-            session, hits, organization_id=organization_id, project_ids=project_ids
+            session, hits, organization_id=organization_id, library_scope=library_scope
         )
 
 
@@ -517,7 +518,7 @@ async def _library_semantic(
     *,
     query: str,
     organization_id: uuid.UUID,
-    project_ids: Sequence[uuid.UUID],
+    library_scope: ColumnElement[bool],
     after: date | None,
     before: date | None,
     limit: int,
@@ -534,7 +535,7 @@ async def _library_semantic(
                     session,
                     query=query,
                     organization_id=organization_id,
-                    project_ids=project_ids,
+                    collection_scope=library_scope,
                     published_after=after,
                     published_before=before,
                     limit=limit,
@@ -557,7 +558,7 @@ async def _library_semantic(
                 )
             raise ChannelUnavailable("not_provisioned") from error
         return await _library_candidates(
-            session, hits, organization_id=organization_id, project_ids=project_ids
+            session, hits, organization_id=organization_id, library_scope=library_scope
         )
 
 
@@ -675,7 +676,7 @@ def _plan(
     request: DiscoverRequest,
     *,
     organization_id: uuid.UUID,
-    project_ids: Sequence[uuid.UUID],
+    library_scope: ColumnElement[bool],
     arxiv_search: ArxivSearch,
 ) -> list[_CallSpec]:
     """The calls of one round, in the order their results are fused."""
@@ -686,7 +687,7 @@ def _plan(
     }
     library: dict[str, Any] = {
         "organization_id": organization_id,
-        "project_ids": project_ids,
+        "library_scope": library_scope,
         **window,
     }
     arxiv: dict[str, Any] = {"arxiv_search": arxiv_search, **window}
@@ -927,19 +928,22 @@ async def discover(
     request: DiscoverRequest,
     *,
     organization_id: uuid.UUID,
-    project_ids: Sequence[uuid.UUID],
+    library_scope: ColumnElement[bool],
     arxiv_search: ArxivSearch,
     today: date | None = None,
 ) -> dict[str, Any]:
     """Run one round and return the tool payload (an ``error`` payload if every call failed).
 
-    ``project_ids`` is the grant's scope, already resolved (and re-checked) by
-    the caller; the library calls search nothing outside it.
+    ``library_scope`` is the grant's scope as a condition on ``Collection``
+    (``authorized_scope_filter``, already re-checked by the caller), applied
+    inside each library statement; the library calls search nothing outside it.
+    It is a condition rather than an id list because a workspace can hold more
+    Collections than one statement may bind.
     """
     specs = _plan(
         request,
         organization_id=organization_id,
-        project_ids=project_ids,
+        library_scope=library_scope,
         arxiv_search=arxiv_search,
     )
     records = list(await asyncio.gather(*(_run_call(spec) for spec in specs)))
