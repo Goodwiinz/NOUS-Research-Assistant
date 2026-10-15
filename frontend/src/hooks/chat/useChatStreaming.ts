@@ -618,7 +618,15 @@ export function useChatStreaming(
   const storeIsRetrievingRag = useChatStore((state) => state.isRetrievingRag);
   const streamingThreadId = useChatStore((state) => state.streamingThreadId);
   const activeThreadId = useChatStore((state) => state.currentThreadId);
-  const harnessConnection = useHarnessConnection(activeThreadId);
+  // The Codex picker offers only computers and folders that can run this
+  // chat's project. null: a loaded chat with no project (a stale ?projectId=
+  // is ignored); undefined: not known yet, which filters nothing.
+  const harnessProjectId =
+    boundProjectId ?? (threadProjectId === null ? null : undefined);
+  const harnessConnection = useHarnessConnection(
+    activeThreadId,
+    harnessProjectId
+  );
   // The cold-load probe outlives the render that started it; it must act on
   // the current (post-auth) connection, not the one captured at probe start.
   const harnessConnectionRef = useRef(harnessConnection);

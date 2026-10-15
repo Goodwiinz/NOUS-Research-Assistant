@@ -61,6 +61,19 @@ class DeviceBoundToAnotherChat(IntegrationAccessDenied):
     )
 
 
+class DeviceNotConnectedToProject(IntegrationAccessDenied):
+    """This computer cannot run Codex for the chat's project: it holds neither
+    an account approval covering the project nor an approval for the project,
+    or the chosen folder is not usable from this project.
+
+    One message for every such cause, including a device or folder id that is
+    not the caller's, so the text reveals nothing a guess could not. Still an
+    IntegrationAccessDenied, so every caller that maps denials keeps doing so.
+    """
+
+    client_message: ClassVar[str] = "This computer isn't connected to this project."
+
+
 class IntegrationConflict(Exception):
     """A request was already decided, consumed or expired."""
 
@@ -1296,7 +1309,15 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
         run_chats[consent.device_id].append(consent.thread_id)
         if consent.binding_kind == "account":
             account_runs[consent.device_id] += 1
-        elif consent.binding_kind == "project" and consent.project_id is not None:
+        elif (
+            consent.binding_kind == "project"
+            and consent.project_id is not None
+            and consent.thread_id is None
+        ):
+            # Only a chat-unbound approval serves every chat of its project.
+            # One bound to a chat serves that chat alone (mint_integration_grant
+            # skips it for any other), so it is named by bound_thread_ids, not
+            # offered here for the project's other chats.
             project_ids[consent.device_id].add(consent.project_id)
     return [
         DeviceListItemDTO(

@@ -1,12 +1,19 @@
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
 from src.api.agent import harness_streaming
+from src.core.config import settings
 from src.schemas.integration_context import IntegrationContext
 from src.services.agent.run_event_types import RunEventType
+from src.services.integrations.context import (
+    DeviceBoundToAnotherChat,
+    DeviceNotConnectedToProject,
+    IntegrationAccessDenied,
+)
 
 
 def test_external_resume_cursor_resets_stale_run_identity() -> None:
@@ -129,3 +136,93 @@ async def test_external_stream_disconnect_only_ends_observation(
 
 async def _never() -> None:
     return None
+
+
+_OWNER = SimpleNamespace(id=uuid4(), organization_id=uuid4())
+_CHAT = SimpleNamespace(id=uuid4(), source_project_id=uuid4())
+
+
+async def _start_codex(db: Any = None, *, thread: Any = _CHAT) -> Any:
+    return await harness_streaming.create_chat_context(
+        db if db is not None else SimpleNamespace(),
+        current_user=_OWNER,
+        thread=thread,
+        device_id=uuid4(),
+        workspace_id=uuid4(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_computer_without_access_to_the_project_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(
+        harness_streaming,
+        "_authorize_chat_run",
+        AsyncMock(side_effect=IntegrationAccessDenied()),
+    )
+    with pytest.raises(DeviceNotConnectedToProject):
+        await _start_codex()
+
+
+@pytest.mark.asyncio
+async def test_a_chat_bound_computer_keeps_its_own_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(
+        harness_streaming,
+        "_authorize_chat_run",
+        AsyncMock(side_effect=DeviceBoundToAnotherChat()),
+    )
+    with pytest.raises(DeviceBoundToAnotherChat) as raised:
+        await _start_codex()
+    assert type(raised.value) is DeviceBoundToAnotherChat
+
+
+@pytest.mark.asyncio
+async def test_server_policy_refusals_stay_generic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authorize = AsyncMock()
+    monkeypatch.setattr(harness_streaming, "_authorize_chat_run", authorize)
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", False)
+    with pytest.raises(ValueError, match="disabled by server policy"):
+        await _start_codex()
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
+    with pytest.raises(ValueError, match="project-bound"):
+        await _start_codex(thread=SimpleNamespace(id=uuid4(), source_project_id=None))
+    authorize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_binding_is_not_a_denial_the_user_can_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A plain PermissionError is a server fault, not an IntegrationAccessDenied:
+    # it keeps the generic treatment instead of blaming the user's computer.
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
+    monkeypatch.setattr(
+        harness_streaming,
+        "_authorize_chat_run",
+        AsyncMock(side_effect=PermissionError("could not bind")),
+    )
+    with pytest.raises(PermissionError) as raised:
+        await _start_codex()
+    assert not isinstance(raised.value, IntegrationAccessDenied)
+
+
+@pytest.mark.asyncio
+async def test_a_folder_this_chat_cannot_use_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No folder row matches this device and folder: the real folder check runs
+    # and nothing is minted.
+    monkeypatch.setattr(settings, "HARNESS_BRIDGE_ENABLED", True)
+    mint = AsyncMock()
+    monkeypatch.setattr(harness_streaming, "mint_integration_grant", mint)
+    db = SimpleNamespace(scalar=AsyncMock(return_value=None))
+    with pytest.raises(DeviceNotConnectedToProject):
+        await _start_codex(db)
+    mint.assert_not_awaited()

@@ -191,7 +191,8 @@ class DeviceListItemDTO(DeviceDTO):
     bound_thread_ids: list[UUID]
     # It holds a live account run consent: any project in the account.
     account_wide: bool
-    # Projects of its live project run consents, chat-bound ones included.
+    # Projects of its live project run consents that are not bound to a chat.
+    # A chat-bound one serves its chat alone and is named by bound_thread_ids.
     project_ids: list[UUID]
 
 
