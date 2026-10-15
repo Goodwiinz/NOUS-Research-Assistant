@@ -103,5 +103,6 @@ def run_project(context: IntegrationContext, run: Any) -> UUID | None:
         project: UUID | None = run.project_id
         return project
     if context.binding_kind == "project":
-        return context.project_id
+        named: UUID | None = context.project_id
+        return named
     raise IntegrationAccessDenied()

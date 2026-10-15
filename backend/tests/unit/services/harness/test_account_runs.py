@@ -326,9 +326,10 @@ async def test_a_project_is_in_the_account_only_while_the_account_covers_it(
     db: AsyncSession, account: IntegrationContext
 ) -> None:
     async def inside(project_id: UUID | None) -> bool:
-        return await project_in_account(
+        found: bool = await project_in_account(
             db, user_id=USER, organization_id=ORG, project_id=project_id
         )
+        return found
 
     assert await inside(PROJECT) and await inside(PROJECT_B)
     assert not await inside(None) and not await inside(uuid4())
@@ -474,13 +475,14 @@ async def test_the_run_consent_kind_is_decided_before_any_grant_is_minted(
     from src.api.agent.harness_streaming import _run_consent_kind
 
     async def kind(thread_id: UUID, device: UUID, folder: UUID) -> str:
-        return await _run_consent_kind(
+        decided: str = await _run_consent_kind(
             db,
             current_user=OWNER,
             thread=await db.get(Thread, thread_id),
             device_id=device,
             workspace_id=folder,
         )
+        return decided
 
     assert await kind(THREAD, DEVICE, LOCAL) == "project"
     assert await kind(THREAD, ACCOUNT_DEVICE, FOLDER_A) == "account"
