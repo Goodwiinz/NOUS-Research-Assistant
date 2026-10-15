@@ -412,6 +412,32 @@ describe('ConnectedDevices', () => {
     expect(harnessService.listWorkspaces).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      'without harness:execute',
+      [{ ...accountConsent, scopes: ['library:read', 'tools:read'] }],
+    ],
+    ['that has not been used yet', [{ ...accountConsent, status: 'approved' }]],
+    [
+      'twice over (every run on the device is refused)',
+      [accountConsent, { ...accountConsent, request_id: 'r5' }],
+    ],
+  ])(
+    'offers no account folders for an account approval %s',
+    async (_name, consents) => {
+      vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+        { ...laptop, consents },
+      ]);
+      render(<ConnectedDevices />);
+      expect(await screen.findAllByText('Whole account')).not.toHaveLength(0);
+      expect(screen.queryByText('Account folders')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('No account folders on this computer yet.')
+      ).not.toBeInTheDocument();
+      expect(harnessService.listWorkspaces).not.toHaveBeenCalled();
+    }
+  );
+
   it('says when a computer has no account folders yet', async () => {
     vi.mocked(integrationConnectionsService.list).mockResolvedValue([
       accountLaptop,

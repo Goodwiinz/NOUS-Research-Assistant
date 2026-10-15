@@ -38,6 +38,20 @@ const consentName = (consent: ApiConnectionConsent): string => {
 };
 
 /**
+ * Whether the computer can run Codex under the account: exactly one live
+ * account approval that holds harness:execute (consumed, as the server counts
+ * them for `account_wide` on the composer's computer list). With none, or with
+ * two, the server refuses every account run and lists no account folders.
+ */
+const runsUnderAccount = (consents: ApiConnectionConsent[]): boolean =>
+  consents.filter(
+    (consent) =>
+      consent.kind === 'account' &&
+      consent.status === 'consumed' &&
+      consent.scopes.includes('harness:execute')
+  ).length === 1;
+
+/**
  * Folders on this computer that belong to no project (account folders): any
  * chat in the account can run Codex in them. Read through the same query key
  * as the chat composer's folder list, so the folder list has one cache.
@@ -257,7 +271,7 @@ export function ConnectedDevices(): ReactElement {
                 ))}
               </ul>
             )}
-            {device.consents.some((consent) => consent.kind === 'account') && (
+            {runsUnderAccount(device.consents) && (
               <AccountFolders
                 deviceId={device.device_id}
                 deviceLabel={device.device_label}
