@@ -109,8 +109,15 @@ export function ConnectedDevices(): ReactElement {
     retry: false,
     staleTime: 0,
   });
-  const refresh = (): Promise<void> =>
-    queryClient.invalidateQueries({ queryKey });
+  // The chat composer offers the computers and folders read from the same
+  // access, under ['harness', ...] with a 30 s staleTime: refresh them with
+  // the list so a revoked computer is not offered for the rest of that time.
+  const refresh = async (): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey }),
+      queryClient.invalidateQueries({ queryKey: ['harness'] }),
+    ]);
+  };
   const revokeConsent = useMutation({
     mutationFn: (requestId: string) =>
       integrationConnectionsService.revokeConsent(requestId),

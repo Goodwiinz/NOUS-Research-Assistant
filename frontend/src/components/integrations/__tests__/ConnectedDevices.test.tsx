@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/integrationConnectionsService', () => ({
@@ -434,5 +436,67 @@ describe('ConnectedDevices', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Account folders could not be loaded.'
     );
+  });
+
+  describe('what the chat composer keeps after access is removed', () => {
+    // The composer reads the same harness caches (computers and folders); a
+    // revoked computer must not stay on offer for the rest of their 30 s.
+    const seeded = (): {
+      client: QueryClient;
+      wrapper: ({ children }: { children: ReactNode }) => ReactNode;
+    } => {
+      const client = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      client.setQueryData(['harness', 'devices', 'u1'], []);
+      client.setQueryData(['harness', 'workspaces', 'u1', 'd1'], []);
+      const wrapper = ({ children }: { children: ReactNode }): ReactNode => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      );
+      return { client, wrapper };
+    };
+    const invalidated = (
+      client: QueryClient,
+      key: string[]
+    ): boolean | undefined => client.getQueryState(key)?.isInvalidated;
+
+    it('invalidates the composer caches when a consent is revoked', async () => {
+      vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
+      vi.mocked(
+        integrationConnectionsService.revokeConsent
+      ).mockResolvedValue();
+      const { client, wrapper } = seeded();
+      const { user } = render(<ConnectedDevices />, { wrapper });
+      await user.click(
+        await screen.findByRole('button', {
+          name: 'Revoke Laptop (d1) access to Thesis',
+        })
+      );
+      await waitFor(() =>
+        expect(invalidated(client, ['harness', 'devices', 'u1'])).toBe(true)
+      );
+      expect(invalidated(client, ['harness', 'workspaces', 'u1', 'd1'])).toBe(
+        true
+      );
+    });
+
+    it('invalidates the composer caches when a device is disconnected', async () => {
+      vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
+      vi.mocked(integrationConnectionsService.disconnect).mockResolvedValue();
+      const { client, wrapper } = seeded();
+      const { user } = render(<ConnectedDevices />, { wrapper });
+      await user.click(
+        await screen.findByRole('button', { name: 'Disconnect Laptop (d1)' })
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'Disconnect and end CLI sign-ins' })
+      );
+      await waitFor(() =>
+        expect(invalidated(client, ['harness', 'devices', 'u1'])).toBe(true)
+      );
+    });
   });
 });
