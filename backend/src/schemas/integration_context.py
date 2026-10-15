@@ -67,7 +67,9 @@ class IntegrationContext(BaseModel):
     project_id: UUID | None = None
     workspace_id: UUID | None = None
     # Derived from project_id / workspace_id when not given; an account
-    # context must name it.
+    # context must name it. The default is never used: _derive_kind (a
+    # before-validator) always fills the field for dict input, so no sentinel
+    # is needed.
     binding_kind: BindingKind = "project"
     thread_id: UUID | None = None
     run_id: UUID | None = None
@@ -148,6 +150,7 @@ class GrantRequestDTO(BaseModel):
     status: GrantRequestStatus
     expires_at: datetime
     approval_url: str
+    binding_kind: BindingKind
     project_id: UUID | None
     workspace_id: UUID | None = None
     device_id: UUID
@@ -157,6 +160,8 @@ class GrantRequestDTO(BaseModel):
     device_label: str
     thread_id: UUID | None = None
     thread_label: str | None = None
+    # Account requests only, computed each time the request is read.
+    account_summary: AccountSummaryDTO | None = None
 
 
 class GrantDecision(BaseModel):

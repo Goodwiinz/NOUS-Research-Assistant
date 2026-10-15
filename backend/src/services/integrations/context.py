@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from src.core.cli_token_revocation import revoke_user_cli_tokens
+from src.core.config import settings
 from src.models.agent_run import AgentRun
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.collection import Collection
@@ -62,6 +63,10 @@ class DeviceBoundToAnotherChat(IntegrationAccessDenied):
 
 class IntegrationConflict(Exception):
     """A request was already decided, consumed or expired."""
+
+
+class AccountConnectionsDisabled(Exception):
+    """ACCOUNT_CONNECTIONS_ENABLED is off: no new account approval request."""
 
 
 def now() -> datetime:
@@ -248,7 +253,12 @@ def _account_identity_live(user_id: UUID, organization_id: UUID) -> ColumnElemen
 def account_workspace_condition(
     user_id: UUID, organization_id: UUID
 ) -> ColumnElement[bool]:
-    """``Workspace`` is in the account of ``user_id`` in ``organization_id``."""
+    """``Workspace`` is in the account of ``user_id`` in ``organization_id``.
+
+    Names the unaliased ``Workspace``: the caller's FROM must contain it
+    (``select(Workspace...)``, or a join to it). Otherwise SQLAlchemy adds an
+    unjoined ``workspaces`` to the statement, a cross product the condition is
+    true for on every row."""
     membership = aliased(WorkspaceMember)
     return and_(
         Workspace.is_deleted.is_(False),
@@ -270,7 +280,12 @@ def account_scope_condition(
     user_id: UUID, organization_id: UUID
 ) -> ColumnElement[bool]:
     """``Collection`` is in the account: live, not archived, in an account
-    workspace. The workspace subquery never correlates (``correlate(None)``),
+    workspace.
+
+    Names the unaliased ``Collection``: the caller's FROM must contain it
+    (``select(Collection...)``, or a join to it). Otherwise SQLAlchemy adds an
+    unjoined ``collections`` to the statement, a cross product the condition
+    is true for on every row. The workspace subquery never correlates (``correlate(None)``),
     so a statement that also joins ``Workspace`` (``_library_folders``) cannot
     turn it into a test of its own row."""
     workspaces = (
@@ -555,6 +570,7 @@ def _new_grant(
     *,
     user_id: UUID,
     organization_id: UUID,
+    binding_kind: BindingKind,
     project_id: UUID | None = None,
     workspace_id: UUID | None = None,
     scopes: Iterable[str],
@@ -568,6 +584,7 @@ def _new_grant(
         id=uuid4(),
         user_id=user_id,
         organization_id=organization_id,
+        binding_kind=binding_kind,
         project_id=project_id,
         workspace_id=workspace_id,
         scopes=sorted(scopes),
@@ -650,6 +667,9 @@ async def mint_integration_grant(
     grant, issued = _new_grant(
         user_id=user_id,
         organization_id=organization_id,
+        # validate_binding has refused the case with no kind (Task 9 replaces
+        # this call).
+        binding_kind=derive_binding_kind(project_id, workspace_id) or "project",
         project_id=project_id,
         workspace_id=workspace_id,
         scopes=scopes,
@@ -775,7 +795,10 @@ async def revoke_integration_grant(
 async def create_request(
     db: AsyncSession, user: Any, data: GrantRequestCreate
 ) -> GrantRequestDTO:
-    check_scopes(data.scopes, workspace_bound=data.workspace_id is not None)
+    kind = data.binding_kind
+    if kind == "account" and not settings.ACCOUNT_CONNECTIONS_ENABLED:
+        raise AccountConnectionsDisabled()
+    check_scopes(data.scopes, binding_kind=kind)
     await validate_binding(
         db,
         user_id=user.id,
@@ -784,11 +807,13 @@ async def create_request(
         workspace_id=data.workspace_id,
         device_id=data.device_id,
         thread_id=data.thread_id,
+        binding_kind=kind,
     )
     request = IntegrationGrantRequest(
         id=uuid4(),
         user_id=user.id,
         organization_id=user.organization_id,
+        binding_kind=kind,
         project_id=data.project_id,
         workspace_id=data.workspace_id,
         device_id=data.device_id,
@@ -825,6 +850,7 @@ async def owned_request(
         workspace_id=request.workspace_id,
         device_id=request.device_id,
         thread_id=request.thread_id,
+        binding_kind=cast(BindingKind, request.binding_kind),
     )
     return cast(IntegrationGrantRequest, request)
 
@@ -832,7 +858,10 @@ async def owned_request(
 async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantRequestDTO:
     request = await owned_request(db, user, request_id)
     project_label = workspace_label = None
-    if request.project_id is not None:
+    summary: AccountSummaryDTO | None = None
+    if request.binding_kind == "account":
+        summary = await account_summary(db, user.id, user.organization_id)
+    elif request.project_id is not None:
         project = await authorized_project(
             db, user.id, user.organization_id, request.project_id
         )
@@ -859,6 +888,7 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         status=cast(GrantRequestStatus, status),
         expires_at=request.expires_at,
         approval_url=f"/integrations/approve?request_id={request.id}",
+        binding_kind=cast(BindingKind, request.binding_kind),
         project_id=request.project_id,
         workspace_id=request.workspace_id,
         device_id=request.device_id,
@@ -868,6 +898,7 @@ async def request_dto(db: AsyncSession, user: Any, request_id: UUID) -> GrantReq
         device_label=device.label,
         thread_id=request.thread_id,
         thread_label=thread_label,
+        account_summary=summary,
     )
 
 
@@ -917,6 +948,7 @@ async def exchange_request(
     grant, issued = _new_grant(
         user_id=user.id,
         organization_id=user.organization_id,
+        binding_kind=cast(BindingKind, request.binding_kind),
         project_id=request.project_id,
         workspace_id=request.workspace_id,
         device_id=request.device_id,
@@ -1048,6 +1080,7 @@ async def _replace_grant(
     replacement, issued = _new_grant(
         user_id=grant.user_id,
         organization_id=grant.organization_id,
+        binding_kind=cast(BindingKind, grant.binding_kind),
         project_id=grant.project_id,
         workspace_id=grant.workspace_id,
         device_id=grant.device_id,

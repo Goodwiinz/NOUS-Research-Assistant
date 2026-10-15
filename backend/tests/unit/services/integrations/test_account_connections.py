@@ -15,9 +15,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import insert, text, update
+from sqlalchemy import insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.core.config import settings
 from src.models.base import Base
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.collection import Collection
@@ -26,7 +27,11 @@ from src.models.organization import Organization
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.integration_connections import ConnectionConsent
-from src.schemas.integration_context import GrantRequestCreate, IntegrationContext
+from src.schemas.integration_context import (
+    GrantRequestCreate,
+    IntegrationContext,
+    IssuedGrant,
+)
 from src.schemas.tool_actions import ActionActor
 from src.services.integrations import context as service
 
@@ -371,3 +376,107 @@ async def test_an_account_scope_is_rechecked_on_every_call(db: AsyncSession) -> 
     await db.commit()
     with pytest.raises(service.IntegrationAccessDenied):
         await service.authorized_scope_filter(db, _account_ctx())
+
+
+# --- the flag, account requests, the approval DTO and the exchange -------------
+
+
+@pytest.fixture(autouse=True)
+def account_connections_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "ACCOUNT_CONNECTIONS_ENABLED", True)
+
+
+async def _approve(
+    db: AsyncSession,
+    *,
+    device: UUID = DEVICE,
+    scopes: frozenset[str] = ACCOUNT_RUN,
+    **binding: Any,
+) -> tuple[UUID, IssuedGrant]:
+    """Request, approve and exchange one consent; account unless a project or
+    workspace is given."""
+    data = GrantRequestCreate(
+        device_id=device,
+        scopes=set(scopes),
+        **(binding or {"account": True}),
+    )
+    request = await service.create_request(db, OWNER, data)
+    await service.decide_request(db, OWNER, request.id, True)
+    return request.id, await service.exchange_request(db, OWNER, request.id)
+
+
+async def test_an_account_request_shows_what_it_covers(db: AsyncSession) -> None:
+    dto = await service.create_request(
+        db,
+        OWNER,
+        GrantRequestCreate(account=True, device_id=DEVICE, scopes=set(ACCOUNT_RUN)),
+    )
+    assert dto.binding_kind == "account"
+    assert (dto.project_id, dto.workspace_id, dto.thread_id) == (None, None, None)
+    assert (dto.project_label, dto.workspace_label) == (None, None)
+    assert dto.device_label == "Laptop"
+    assert dto.account_summary is not None
+    # OWNED and MEMBER_WS; FOREIGN_WS is another organization's.
+    assert (dto.account_summary.workspace_count, dto.account_summary.project_count) == (
+        2,
+        3,
+    )
+
+
+async def test_a_project_request_is_unchanged_and_has_no_summary(
+    db: AsyncSession,
+) -> None:
+    dto = await service.create_request(
+        db,
+        OWNER,
+        GrantRequestCreate(project_id=P_OWNED, device_id=DEVICE, scopes={"tools:read"}),
+    )
+    assert (dto.binding_kind, dto.project_label, dto.account_summary) == (
+        "project",
+        "Thesis",
+        None,
+    )
+
+
+async def test_account_requests_are_refused_while_the_flag_is_off(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "ACCOUNT_CONNECTIONS_ENABLED", False)
+    with pytest.raises(service.AccountConnectionsDisabled):
+        await service.create_request(
+            db,
+            OWNER,
+            GrantRequestCreate(account=True, device_id=DEVICE, scopes={"tools:read"}),
+        )
+    assert await db.scalar(select(IntegrationGrantRequest.id)) is None
+    # Project pairings do not depend on the flag.
+    await service.create_request(
+        db,
+        OWNER,
+        GrantRequestCreate(project_id=P_OWNED, device_id=DEVICE, scopes={"tools:read"}),
+    )
+
+
+async def test_an_account_request_refuses_project_only_scopes(db: AsyncSession) -> None:
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.create_request(
+            db,
+            OWNER,
+            GrantRequestCreate(
+                account=True,
+                device_id=DEVICE,
+                scopes={"tools:read", "artifacts:publish"},
+            ),
+        )
+
+
+async def test_exchange_issues_an_account_kind_pairing_grant(db: AsyncSession) -> None:
+    consent, issued = await _approve(db)
+    grant = await db.get(IntegrationGrant, issued.grant_id)
+    assert grant is not None
+    assert (grant.binding_kind, grant.project_id, grant.workspace_id) == (
+        "account",
+        None,
+        None,
+    )
+    assert (grant.request_id, grant.device_id) == (consent, DEVICE)

@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     HARNESS_BRIDGE_ENABLED: bool = False
     # Kill switch for the scoped integration read gateway (/integrations/tools).
     NOUS_MCP_ENABLED: bool = False
+    # Rollout gate for account-wide harness connections: new account approval
+    # requests answer 503 while false. Existing account approvals keep
+    # working; revoke them under Connected devices.
+    ACCOUNT_CONNECTIONS_ENABLED: bool = False
     # Artifact workspace rollout flags; reads stay available when writes are off.
     ARTIFACTS_ENABLED: bool = False
     ARTIFACT_EDITING_ENABLED: bool = False
