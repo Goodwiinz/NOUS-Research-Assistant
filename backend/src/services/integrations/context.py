@@ -569,7 +569,7 @@ async def validate_binding(
 
 
 def _consent_admits(
-    kind: str,
+    kind: BindingKind,
     project_id: UUID | None,
     workspace_id: UUID | None,
     user_id: UUID,
@@ -645,13 +645,16 @@ def _single_lineage(
 ) -> IntegrationGrantRequest | None:
     """The one consent a device's grant may be minted under, else None.
 
-    An account consent wins over project consents. ``nous --rc`` replaces a
-    project pairing with an account pairing and leaves the project consent
-    live until the user revokes it; the account lineage is the one the running
-    bridge holds and renews. Two account consents, or no account consent and
-    more than one project consent, are ambiguous: fail closed. Picking the
-    first row would be nondeterministic and could mint authority the paired
-    bridge cannot renew.
+    ``matching`` holds only the consents that admit the binding and hold the
+    requested scopes, so precedence counts only those: an account consent
+    without ``harness:execute`` does not win a run grant over a project
+    consent that has it. Among them an account consent wins over project
+    consents. ``nous --rc`` replaces a project pairing with an account pairing
+    and leaves the project consent live until the user revokes it; the account
+    lineage is the one the running bridge holds and renews. Two account
+    consents holding the scopes, or no account consent and more than one
+    project consent, are ambiguous: fail closed. Picking the first row would be
+    nondeterministic and could mint authority the paired bridge cannot renew.
     """
     accounts = [consent for consent in matching if consent.binding_kind == "account"]
     if accounts:
@@ -674,7 +677,7 @@ async def mint_integration_grant(
 ) -> IssuedGrant:
     """Trusted internal API. External issuance must use the consent exchange.
 
-    ``consent_kind`` (PR 2's run path always passes it) restricts the device's
+    ``consent_kind`` (PR 2's run path is intended to pass it) restricts the device's
     consents to that kind. Among them exactly one must match. Without it, an
     account consent wins over project consents (_single_lineage).
 
@@ -730,7 +733,7 @@ async def mint_integration_grant(
             for consent in consents
             if scopes <= set(consent.scopes) and consent.thread_id in (None, thread_id)
         ]
-        chosen = _single_lineage(list(matching_consents))
+        chosen = _single_lineage(matching_consents)
         if chosen is None:
             # Name the one cause the owner can fix from the chat: a consent
             # with enough scopes exists but is bound to another chat. No

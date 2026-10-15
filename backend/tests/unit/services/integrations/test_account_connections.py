@@ -683,6 +683,101 @@ async def test_renewal_and_resume_keep_the_account_kind(db: AsyncSession) -> Non
     assert (ctx.binding_kind, ctx.consent_id) == ("account", consent)
 
 
+# SECURITY-CRITICAL: an account consent never covers more than account scopes.
+async def test_a_project_grant_never_outgrows_the_account_consent_it_stands_on(
+    db: AsyncSession,
+) -> None:
+    consent, _ = await _approve(db)
+    within = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="project",
+        project_id=P_MEMBER,
+        scopes=frozenset({"harness:execute"}),
+    )
+    await service.resolve_integration_context(
+        db, within, required_scope="harness:execute"
+    )
+    # artifacts:publish is a project scope the account consent does not hold.
+    wider = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="project",
+        project_id=P_MEMBER,
+        scopes=frozenset({"harness:execute", "artifacts:publish"}),
+    )
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resolve_integration_context(
+            db, wider, required_scope="harness:execute"
+        )
+
+
+async def _expire_grant(db: AsyncSession, token: str) -> UUID:
+    """Lapse the stored grant behind ``token`` (inside the resume window)."""
+    grant_id = await db.scalar(
+        select(IntegrationGrant.id).where(
+            IntegrationGrant.token_hash == sha256(token.encode()).hexdigest()
+        )
+    )
+    assert grant_id is not None
+    await db.execute(
+        update(IntegrationGrant)
+        .where(IntegrationGrant.id == grant_id)
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
+    )
+    await db.commit()
+    return grant_id
+
+
+# SECURITY-CRITICAL: resume re-checks that the consent admits the binding.
+@pytest.mark.parametrize("leaves", ["archived-workspace", "archived-project"])
+async def test_resume_of_a_project_grant_under_an_account_consent_ends_with_its_project(
+    db: AsyncSession, leaves: str
+) -> None:
+    consent, _ = await _approve(db)
+    token = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="project",
+        project_id=P_MEMBER,
+        scopes=frozenset({"harness:execute"}),
+    )
+    grant_id = await _expire_grant(db, token)
+    # Control: while the project is in the account, the lapsed grant resumes.
+    resumed = await service.resume_grant(db, OWNER, grant_id, token)
+    grant_id = await _expire_grant(db, resumed.token)
+    change = {
+        "archived-workspace": update(Workspace)
+        .where(Workspace.id == MEMBER_WS)
+        .values(is_archived=True),
+        "archived-project": update(Collection)
+        .where(Collection.id == P_MEMBER)
+        .values(research_status="archived"),
+    }[leaves]
+    await db.execute(change)
+    await db.commit()
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resume_grant(db, OWNER, grant_id, resumed.token)
+
+
+# SECURITY-CRITICAL: an account grant resumes only from an account consent.
+async def test_resume_of_an_account_grant_refuses_a_project_consent(
+    db: AsyncSession,
+) -> None:
+    consent, _ = await _approve(
+        db, project_id=P_OWNED, scopes=frozenset({"harness:execute", "tools:read"})
+    )
+    token = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="account",
+        scopes=frozenset({"tools:read"}),
+    )
+    grant_id = await _expire_grant(db, token)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resume_grant(db, OWNER, grant_id, token)
+
+
 # --- a run's project grant under an account approval (Task 9) ----------------------
 
 RUN = frozenset({"harness:execute"})
