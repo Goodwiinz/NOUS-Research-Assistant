@@ -29,7 +29,9 @@ async def list_tools(
 ) -> list[ToolDescriptorDTO]:
     _require_enabled()
     return list_read_tools(
-        context.scopes, workspace_bound=context.workspace_id is not None
+        context.scopes,
+        workspace_bound=context.binding_kind == "workspace",
+        account_bound=context.binding_kind == "account",
     )
 
 
