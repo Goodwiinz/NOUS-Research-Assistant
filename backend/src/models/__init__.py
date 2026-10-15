@@ -38,6 +38,7 @@ from .citation_relationship import CitationRelationship
 from .collection import Collection, CollectionDocument
 from .conversation import Conversation
 from .document import Document, DocumentType, ProcessingStatus
+from .document_embedding import DocumentEmbedding
 
 # Enhanced document processing models
 from .document_processing import (
@@ -320,6 +321,7 @@ __all__ = [
     "ProcessingHistory",
     "ProcessingStage",
     "DocumentVersion",
+    "DocumentEmbedding",
     "MultimodalContent",
     "ContentType",
     "DocumentQualityMetrics",

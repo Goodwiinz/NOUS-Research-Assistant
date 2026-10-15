@@ -2504,15 +2504,27 @@ def _arxiv_cache_key(
     categories: Optional[List[str]],
     recency_days: int,
     chronological: bool = False,
+    window: Optional[tuple[Optional[str], Optional[str]]] = None,
+    or_terms: Optional[str] = None,
 ) -> tuple:
     cats = tuple(sorted(categories)) if categories else ()
-    return (
+    key = (
         query.strip(),
         int(max_results),
         cats,
         int(recency_days),
         bool(chronological),
     )
+    # An absolute window is part of the identity: with recency_days=0 it is the
+    # only thing that tells a 2020 search from an unbounded one. Left off the
+    # key when absent, so every windowless key keeps its old shape.
+    if window:
+        key += (window,)
+    # The OR part changes the query arXiv answers, so a search with it must not
+    # be served from (or serve) the one without. Same rule: absent, no change.
+    if or_terms:
+        key += (("or", or_terms.strip()),)
+    return key
 
 
 def _arxiv_cache_get(key: tuple) -> Optional[Dict[str, Any]]:
@@ -2686,19 +2698,24 @@ def _arxiv_redis_key(
     categories: Optional[List[str]],
     recency_days: int,
     chronological: bool,
+    window: Optional[tuple[Optional[str], Optional[str]]] = None,
+    or_terms: Optional[str] = None,
 ) -> str:
     import hashlib
 
     cats = ",".join(sorted(categories)) if categories else ""
-    raw = "|".join(
-        [
-            _normalize_cache_query(query),
-            str(int(max_results)),
-            cats,
-            str(int(recency_days)),
-            str(int(bool(chronological))),
-        ]
-    )
+    parts = [
+        _normalize_cache_query(query),
+        str(int(max_results)),
+        cats,
+        str(int(recency_days)),
+        str(int(bool(chronological))),
+    ]
+    if window:  # see _arxiv_cache_key: absent windows keep their old digest
+        parts.append(f"{window[0] or ''}..{window[1] or ''}")
+    if or_terms:  # likewise: no OR part, no change to the digest
+        parts.append(f"or:{_normalize_cache_query(or_terms)}")
+    raw = "|".join(parts)
     # usedforsecurity=False: this is a cache-key digest, not a security hash
     # (Bandit B324). Collision resistance is irrelevant for a cache bucket.
     digest = hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
@@ -2751,11 +2768,111 @@ async def _arxiv_redis_set(redis_key: str, payload: Dict[str, Any]) -> None:
         logger.debug("Failed to write arXiv cache entry to Redis", exc_info=True)
 
 
-async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Search arXiv for papers."""
+# arXiv's earliest submissions are from 1991; an open lower bound for a
+# window that only has an upper one.
+_ARXIV_WINDOW_FLOOR = "199001010000"
+_ARXIV_WINDOW_CEILING = "999912312359"
+
+
+def _arxiv_window(
+    args: Dict[str, Any],
+) -> tuple[Optional[str], Optional[str]]:
+    """``(published_after, published_before)`` as ISO days, or ``None`` each.
+
+    A bound that is not a ``YYYY-MM-DD`` date is ignored (the tool contract is
+    advisory for the agent; the integration gateway validates its own
+    arguments before they get here).
+    """
+    from datetime import date
+
+    bounds: list[Optional[str]] = []
+    for key in ("published_after", "published_before"):
+        raw = args.get(key)
+        day: Optional[str] = None
+        if isinstance(raw, str) and len(raw) == 10:
+            try:
+                day = date.fromisoformat(raw).isoformat()
+            except ValueError:
+                day = None
+        bounds.append(day)
+    return bounds[0], bounds[1]
+
+
+# The agent-facing tools return at most this many arXiv papers per search.
+_ARXIV_TOOL_MAX_RESULTS = 5
+
+
+async def _arxiv_stale_payload(
+    cache_key: tuple, redis_key: str
+) -> Optional[Dict[str, Any]]:
+    """The last known result for a search, of any age: L1 first, then L2."""
+    stale = _ARXIV_SEARCH_CACHE.get(cache_key)
+    if stale is not None:
+        return stale[1]
+    return await _arxiv_redis_get(redis_key, allow_stale=True)
+
+
+def _has_search_terms(query: str) -> bool:
+    """True when at least one token is not filler (a stopword)."""
+    return any(
+        re.sub(r"[^a-z]", "", t.lower()) not in _ARXIV_STOPWORDS for t in query.split()
+    )
+
+
+def _scope_arxiv_keywords(raw: str) -> str:
+    """Strip filler from a keyword query and field-scope it for arXiv.
+
+    Strip filler/recency words (e.g. "recent papers on") before the query
+    reaches arXiv's all-field index — they dilute relevance scores without
+    adding signal. Then field-scope plain keywords (all:tok AND all:tok) —
+    unfielded terms are OR'd by arXiv and drown chronological sort in off-topic
+    papers. Skip that when the sanitizer fell back to a pure-filler query (every
+    token a stopword): ANDing all: over stopwords ('all:recent AND all:the')
+    would rewrite a query we deliberately chose to preserve verbatim into an
+    over-restrictive one (codex audit on #1406, finding 3).
+    """
+    query = _sanitize_arxiv_query(raw)
+    if _has_search_terms(query):
+        query = _field_arxiv_query(query)
+    return query
+
+
+async def _tool_search_arxiv(
+    args: Dict[str, Any],
+    *,
+    max_results_cap: int = _ARXIV_TOOL_MAX_RESULTS,
+    or_terms: Optional[str] = None,
+    max_gate_wait_s: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Search arXiv for papers.
+
+    The keyword arguments are Python arguments, not tool arguments, so a model
+    cannot set them. Every agent and read-tool caller leaves them at their
+    defaults; ``discover_papers`` uses all three.
+
+    ``max_results_cap`` is the most papers one call may return (default
+    ``_ARXIV_TOOL_MAX_RESULTS``); ``discover_papers`` passes a larger one to read
+    arXiv to its difficulty depth.
+
+    ``or_terms`` are plain keywords searched in the SAME request:
+    ``(<query terms ANDed>) OR (<or_terms ANDed>)``, then the date window
+    around the whole expression. One request instead of two, so one slot of the
+    3 s arXiv rate gate. arXiv ranks a paper that matches both parts above one
+    that matches the second only. Terms that already use arXiv syntax are
+    ignored (they could close the window).
+
+    ``max_gate_wait_s`` bounds the wait for the arXiv rate gate. A fresh cached
+    result is served before the gate is asked. When the wait would exceed the
+    budget nothing is sent: the last known result is returned (``stale``), or
+    an ``error_type="rate_gated"`` payload when there is none.
+    """
     from datetime import datetime, timedelta, timezone
 
-    from src.services.arxiv.arxiv_service import ArXivIngestionService
+    from src.services.arxiv.arxiv_service import (
+        _ARXIV_QUERY_SYNTAX,
+        ArXivIngestionService,
+        ArxivRateGated,
+    )
 
     query = args.get("query", "")
     # Preserve the user's raw query for the cache key — the recency filter
@@ -2763,24 +2880,21 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     # otherwise make two identical searches a minute apart miss the bounded
     # cache and defeat its 429-avoidance purpose (audit #14).
     original_query = query
-    # Strip filler/recency words (e.g. "recent papers on") before the query
-    # reaches arXiv's all-field index — they dilute relevance scores without
-    # adding signal. The raw ``original_query`` is still used as the cache key.
-    query = _sanitize_arxiv_query(query)
-    # Field-scope plain keywords (all:tok AND all:tok) — unfielded terms are
-    # OR'd by arXiv and drown chronological sort in off-topic papers. Skip
-    # when the sanitizer fell back to a pure-filler query (every token a
-    # stopword): ANDing all: over stopwords ('all:recent AND all:the') would
-    # rewrite a query we deliberately chose to preserve verbatim into an
-    # over-restrictive one (codex audit on #1406, finding 3).
-    if any(
-        re.sub(r"[^a-z]", "", t.lower()) not in _ARXIV_STOPWORDS for t in query.split()
-    ):
-        query = _field_arxiv_query(query)
+    query = _scope_arxiv_keywords(query)
+    # The OR part, built with the same helpers as the main query. Dropped when
+    # it has no search term (empty, or only filler), is written in arXiv syntax
+    # (it could close the window), or is the main query again.
+    or_key: Optional[str] = None
+    extra = " ".join((or_terms or "").split())
+    if extra and _has_search_terms(extra) and not _ARXIV_QUERY_SYNTAX.search(extra):
+        alternative = _scope_arxiv_keywords(extra)
+        if alternative != query:
+            query = f"({query}) OR ({alternative})" if query else alternative
+            or_key = extra
     # Hard cap at 5 papers + 250-char abstracts. Trace showed 10×500-char
     # results = 8087 chars feeding into the synthesis LLM call and triggering
     # 1536 reasoning tokens (~46s). Smaller payload = faster synthesis.
-    max_results = max(1, min(args.get("max_results", 5), 5))
+    max_results = max(1, min(args.get("max_results", 5), max_results_cap))
     categories = args.get("categories")
 
     # Recency window: default to last 12 months so "find recent X" actually
@@ -2800,7 +2914,20 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     # than in the tool wrapper so every caller is covered — the research
     # subgraph's direct-search fast path builds this args dict itself.
     recency_days = max(0, min(recency_days, _MAX_ARXIV_RECENCY_DAYS))
-    if recency_days > 0:
+    # An absolute window (``published_after`` / ``published_before``, ISO
+    # days, inclusive) replaces the relative lookback: it is the same arXiv
+    # ``submittedDate`` filter, with the caller's bounds instead of "now minus
+    # N days". It is applied in the arXiv query, never to the returned page.
+    after, before = _arxiv_window(args)
+    window = (after, before) if (after or before) else None
+    if window:
+        recency_days = 0
+        date_filter = "submittedDate:[{} TO {}]".format(
+            f"{after.replace('-', '')}0000" if after else _ARXIV_WINDOW_FLOOR,
+            f"{before.replace('-', '')}2359" if before else _ARXIV_WINDOW_CEILING,
+        )
+        query = f"({query}) AND {date_filter}" if query else date_filter
+    elif recency_days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=recency_days)
         cutoff_str = cutoff.strftime("%Y%m%d%H%M")
         # arxiv API supports the `submittedDate:[FROM TO]` filter inside
@@ -2820,10 +2947,22 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     # the window), NOT the date-filtered query whose minute-precision cutoff
     # changes every minute. (audit #14)
     cache_key = _arxiv_cache_key(
-        original_query, max_results, categories, recency_days, chronological
+        original_query,
+        max_results,
+        categories,
+        recency_days,
+        chronological,
+        window,
+        or_key,
     )
     redis_key = _arxiv_redis_key(
-        original_query, max_results, categories, recency_days, chronological
+        original_query,
+        max_results,
+        categories,
+        recency_days,
+        chronological,
+        window,
+        or_key,
     )
     # Fresh lookup: L1 (per-process) then L2 (shared Redis). An L2 hit warms L1.
     cached = _arxiv_cache_get(cache_key)
@@ -2834,6 +2973,11 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
     if cached is not None:
         return {**cached, "cached": True}
 
+    # Only a budgeted call passes the budget on, so a service that predates it
+    # (or a test double) is called exactly as before.
+    gate: Dict[str, Any] = (
+        {} if max_gate_wait_s is None else {"max_gate_wait_s": max_gate_wait_s}
+    )
     try:
         async with ArXivIngestionService() as service:
             papers = await service.search_papers(
@@ -2842,6 +2986,7 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
                 categories=categories,
                 sort_by=sort_by,
                 sort_order="descending",
+                **gate,
             )
             results = []
             for p in papers[:max_results]:
@@ -2872,17 +3017,32 @@ async def _tool_search_arxiv(args: Dict[str, Any]) -> Dict[str, Any]:
             _arxiv_cache_set(cache_key, payload)
             await _arxiv_redis_set(redis_key, payload)
             return payload
+    except ArxivRateGated:
+        # Not a failure: the shared rate gate is busier than the caller's
+        # budget, and nothing was sent. The last known result is still better
+        # than none; otherwise say so, with a type the caller can act on.
+        logger.info(
+            "ArXiv search skipped: rate gate wait over the %ss budget", max_gate_wait_s
+        )
+        stale_payload = await _arxiv_stale_payload(cache_key, redis_key)
+        if stale_payload is not None:
+            return {
+                **stale_payload,
+                "cached": True,
+                "stale": True,
+                "warning": "ArXiv is busy; returned cached results.",
+            }
+        return {
+            "error": "arXiv is busy; its rate gate would delay this search.",
+            "error_type": "rate_gated",
+            "query": query,
+        }
     except Exception as e:
         logger.error("ArXiv search tool failed", exc_info=e)
         # On 429 or other failure, serve the last known result so the LLM can
         # proceed instead of looping: L1 any-age (bypasses the fresh check),
         # then L2 stale (entries live STALE_TTL past the fresh window).
-        stale = _ARXIV_SEARCH_CACHE.get(cache_key)
-        stale_payload = (
-            stale[1]
-            if stale is not None
-            else await _arxiv_redis_get(redis_key, allow_stale=True)
-        )
+        stale_payload = await _arxiv_stale_payload(cache_key, redis_key)
         if stale_payload is not None:
             return {
                 **stale_payload,

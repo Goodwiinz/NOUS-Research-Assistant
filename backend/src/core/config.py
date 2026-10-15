@@ -893,6 +893,20 @@ class Settings(BaseSettings):
     COHERE_EMBED_DIMENSIONS: int = 1024
     COHERE_EMBED_BATCH_SIZE: int = 96
 
+    # GOO-435 (Plan 07 slice 5): pgvector semantic channel. Both default OFF.
+    # DOCUMENT_EMBEDDINGS_ENABLED gates embed-on-ingest and the backfill task;
+    # SEMANTIC_SEARCH_ENABLED gates the query side. The document_embeddings
+    # column is vector(1024) (= COHERE_EMBED_DIMENSIONS), so any provider that
+    # answers with another length is skipped, never stored.
+    DOCUMENT_EMBEDDINGS_ENABLED: bool = False
+    SEMANTIC_SEARCH_ENABLED: bool = False
+    # discover_papers: the longest its one arXiv call waits for the shared arXiv
+    # rate gate (requests are spaced 3 s apart across all pods). A longer wait
+    # skips the call (status "unavailable", reason "rate_gated") instead of
+    # holding the whole round; cached arXiv results are served before the gate
+    # is asked. The gate's own queue cap (30 s) bounds any larger value.
+    DISCOVER_ARXIV_MAX_GATE_WAIT_SECONDS: float = 1.0
+
     # Processing Configuration
     MAX_CONCURRENT_JOBS: int = 5
     JOB_RETRY_MAX: int = 3

@@ -799,3 +799,43 @@ async def test_reused_kb_handle_without_completed_status_is_reconciled() -> None
     assert result.kb_sync_failed is False
     assert existing.do_kb_sync_status == "completed"
     sync.assert_awaited_once_with(kb_db, [existing])
+
+
+async def test_embeddings_are_queued_for_the_persisted_documents_when_enabled() -> None:
+    """GOO-435: after the batch commits, reused and new rows are queued."""
+    existing = _existing_document()
+    db = MockAsyncSession().set_scalars_result([existing])
+
+    with (
+        patch("src.core.database.AsyncSessionLocal", return_value=db),
+        patch.object(settings, "DO_KB_ENABLED", False),
+        patch.object(settings, "DOCUMENT_EMBEDDINGS_ENABLED", True),
+        patch(
+            "src.tasks.document_embedding_tasks.enqueue_document_embeddings"
+        ) as enqueue,
+    ):
+        result = await persist_arxiv_documents(
+            [_source()], user_id=uuid4(), organization_id=existing.organization_id
+        )
+
+    assert result.document_ids == [str(existing.id)]
+    enqueue.assert_called_once_with(existing.organization_id, [str(existing.id)])
+
+
+async def test_nothing_is_queued_while_embeddings_are_disabled() -> None:
+    existing = _existing_document()
+    db = MockAsyncSession().set_scalars_result([existing])
+
+    with (
+        patch("src.core.database.AsyncSessionLocal", return_value=db),
+        patch.object(settings, "DO_KB_ENABLED", False),
+        patch.object(settings, "DOCUMENT_EMBEDDINGS_ENABLED", False),
+        patch(
+            "src.tasks.document_embedding_tasks.enqueue_document_embeddings"
+        ) as enqueue,
+    ):
+        await persist_arxiv_documents(
+            [_source()], user_id=uuid4(), organization_id=existing.organization_id
+        )
+
+    enqueue.assert_not_called()
