@@ -25,8 +25,10 @@ from src.api.arxiv import (
     arxiv_llm_bulk_router,
     arxiv_local,
     arxiv_local_router,
+    arxiv_papers_router,
     arxiv_router,
 )
+from src.api.arxiv import papers as arxiv_papers
 from src.core.dependencies import get_current_user
 from src.models.user import User
 from src.services import expensive_work_admission
@@ -38,8 +40,13 @@ USER_ROUTERS = [
     arxiv_change_router,
     arxiv_extraction_router,
     arxiv_local_router,
+    arxiv_papers_router,
 ]
 EXPENSIVE = {
+    "/api/v1/arxiv/papers/metadata",  # lazy admission on upstream miss
+    "/api/v1/arxiv/papers/pdf",  # lazy admission on upstream miss
+    "/api/v1/arxiv/papers/sync",
+    "/api/v1/arxiv/papers/recent",
     "/api/v1/arxiv/ingest",  # in-handler admission (#1661)
     "/api/v1/arxiv/create-dataset",  # in-handler admission (#1661)
     "/api/v1/arxiv/download/{paper_id}",  # external PDF download (<=50 MiB)
@@ -63,7 +70,8 @@ CHEAP = {
     "/local-papers",
     "/local-stats",
 }
-IN_HANDLER = {"/api/v1/arxiv/ingest", "/api/v1/arxiv/create-dataset"}
+LAZY_ADMISSION = {"/api/v1/arxiv/papers/metadata", "/api/v1/arxiv/papers/pdf"}
+IN_HANDLER = {"/api/v1/arxiv/ingest", "/api/v1/arxiv/create-dataset"} | LAZY_ADMISSION
 
 
 def _routes(router: Any) -> list[APIRoute]:
@@ -89,6 +97,15 @@ def test_expensive_arxiv_route_requires_shared_admission(path: str) -> None:
         r for router in USER_ROUTERS for r in _routes(router) if r.path == path
     )
     assert getattr(route.endpoint, "expensive_work_admission", False)
+
+
+@pytest.mark.parametrize("path", sorted(LAZY_ADMISSION))
+def test_cached_paper_routes_install_lazy_admission(path: str) -> None:
+    route = next(r for r in _routes(arxiv_papers_router) if r.path == path)
+    assert any(
+        dependency.call is arxiv_papers.paper_admission
+        for dependency in route.dependant.dependencies
+    )
 
 
 def _client() -> TestClient:

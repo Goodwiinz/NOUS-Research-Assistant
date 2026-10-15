@@ -63,3 +63,11 @@ reuse, overly narrow categories, cache-hit admission charges and sync metadata
 being erased by recent imports. Regression tests cover each correction. Smaller
 corrections normalize identifier casing/empty dates/PDF links, use a disposable
 PDF download cache, and retain unknown status for ambiguous withdrawal wording.
+
+Fable's follow-up confirmed those nine findings resolved. Its additional
+admission-inventory coverage finding led to enrolling the new router, classifying
+all four paths, checking the lazy admission dependencies, and exercising denied
+cache misses through both actual route/service paths. The final focused
+admission/router suite passed 34 tests; runtime source is unchanged from the
+1,834-test matrix. A live abstract-page check also read `1706.03762v7`, its title,
+eight authors and non-withdrawn status successfully.

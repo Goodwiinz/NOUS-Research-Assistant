@@ -2,7 +2,7 @@
 
 from collections.abc import Iterator
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -124,22 +124,24 @@ def test_authentication_required() -> None:
         ).status_code in (401, 403)
 
 
+@pytest.mark.parametrize("path", ["metadata", "pdf"])
 def test_cache_miss_admission_failure_stays_429(
-    client: tuple[TestClient, User, object], monkeypatch: pytest.MonkeyPatch
+    client: tuple[TestClient, User, object], monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
-    from fastapi import HTTPException
-
+    from src.services import expensive_work_admission
     from src.services.arxiv import papers
 
-    monkeypatch.setattr(
-        papers,
-        "resolve_metadata",
-        AsyncMock(side_effect=HTTPException(429, "Quota exhausted")),
-    )
+    admit = AsyncMock(return_value=False)
+    monkeypatch.setattr(expensive_work_admission, "admit_expensive_work", admit)
+    monkeypatch.setattr(papers, "_cached", AsyncMock(return_value=None))
+    upstream = MagicMock()
+    monkeypatch.setattr(papers, "ArXivIngestionService", upstream)
     assert (
-        client[0].get("/api/v1/arxiv/papers/metadata?paper_id=2401.00001").status_code
+        client[0].get(f"/api/v1/arxiv/papers/{path}?paper_id=2401.00001").status_code
         == 429
     )
+    admit.assert_awaited_once()
+    upstream.assert_not_called()
 
 
 def test_recent_accepts_physics_categories(
