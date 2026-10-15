@@ -1,7 +1,7 @@
 """Create document_embeddings for the pgvector semantic channel (GOO-435).
 
 Revision ID: jd01_document_embeddings
-Revises: ic02_selected_skill_snapshot
+Revises: aw03_artifact_completion
 Create Date: 2026-10-13
 
 Plan 07 slice 5a. One table, one row per document, kept apart from
@@ -41,7 +41,7 @@ Downgrade drops the table and its indexes and leaves the extension installed
 from alembic import op  # type: ignore[attr-defined]
 
 revision = "jd01_document_embeddings"
-down_revision = "ic02_selected_skill_snapshot"
+down_revision = "aw03_artifact_completion"
 branch_labels = None
 depends_on = None
 

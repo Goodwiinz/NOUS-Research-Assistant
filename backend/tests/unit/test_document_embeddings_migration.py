@@ -23,7 +23,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-PARENT = "ic02_selected_skill_snapshot"
+PARENT = "aw03_artifact_completion"
 REVISION = "jd01_document_embeddings"
 
 
