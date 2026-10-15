@@ -945,9 +945,11 @@ _BINDING_ROWS: dict[str, dict[str, Any]] = {
 
 
 # Each shape: (columns, is the row accepted?) per table. Without binding_kind
-# the model derives project or workspace from the one column set, never
-# account: a row naming neither is refused (NOT NULL), and one naming both is
-# refused by the kind CHECK. An action's project_id is its target and its
+# a grant request or grant derives project or workspace from the one column
+# set, never account: a row naming neither is refused (NOT NULL), and one
+# naming both is refused by the kind CHECK. An action has no default: its
+# writer states the kind (_ACTION_KIND gives the one a shape without a stated
+# kind is written with). An action's project_id is its target and its
 # workspace_id the grant's binding, so a workspace action may name both.
 _BINDINGS: dict[str, dict[str, Any]] = {
     "project": {"project_id": PROJECT},
@@ -983,6 +985,7 @@ _ACCEPTED: dict[str, set[str]] = {
         "account-action-with-target-workspace",
     },
 }
+_ACTION_KIND = {"project": "project", "workspace": "workspace", "both": "workspace"}
 _ACTION_ONLY = {
     "account-action-with-target-workspace",
     "account-action-with-project-and-target",
@@ -999,14 +1002,38 @@ async def test_database_enforces_the_binding_rule(
 
     if binding in _ACTION_ONLY and table_name != "integration_tool_actions":
         pytest.skip("target_workspace_id is an action column")
+    stated = (
+        {"binding_kind": _ACTION_KIND[binding]}
+        if table_name == "integration_tool_actions" and binding in _ACTION_KIND
+        else {}
+    )
     row = insert(Base.metadata.tables[table_name]).values(
-        **_BINDING_ROWS[table_name], **_BINDINGS[binding]
+        **_BINDING_ROWS[table_name], **_BINDINGS[binding], **stated
     )
     if binding in _ACCEPTED[table_name]:
         await db.execute(row)
         await db.commit()
         return
     # NOT NULL (no kind derivable) or the kind CHECK: both name binding_kind.
+    with pytest.raises(IntegrityError, match="binding_kind"):
+        await db.execute(row)
+
+
+@pytest.mark.parametrize(
+    "binding",
+    ["project", "workspace", "account", "account-action-with-target-workspace"],
+)
+async def test_an_action_that_omits_its_kind_is_refused_not_defaulted(
+    db: AsyncSession, binding: str
+) -> None:
+    """The writer states an action's kind: no shape, an account one included,
+    falls back to a derived "project" or "workspace"."""
+    from src.models.base import Base
+
+    shape = {k: v for k, v in _BINDINGS[binding].items() if k != "binding_kind"}
+    row = insert(Base.metadata.tables["integration_tool_actions"]).values(
+        **_BINDING_ROWS["integration_tool_actions"], **shape
+    )
     with pytest.raises(IntegrityError, match="binding_kind"):
         await db.execute(row)
 

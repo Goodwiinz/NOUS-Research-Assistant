@@ -1301,6 +1301,11 @@ async def _workspace_row(db: AsyncSession, **overrides: Any) -> IntegrationToolA
         "state": "awaiting_approval",
     }
     values.update(overrides)
+    # The writer states the kind: a row naming a workspace is a workspace
+    # grant's, any other a project grant's (an account row passes its own).
+    values.setdefault(
+        "binding_kind", "workspace" if values["workspace_id"] is not None else "project"
+    )
     row = IntegrationToolAction(**values)
     db.add(row)
     await db.commit()
@@ -1691,6 +1696,7 @@ def test_a_workspace_grants_action_replays_for_its_workspace_actor() -> None:
         user_id=USER,
         project_id=PROJECT,
         workspace_id=WORKSPACE,
+        binding_kind="workspace",
         invocation_id=uuid4(),
         tool_name="create_project_note",
         arguments=NOTE_ARGS,
@@ -1715,6 +1721,7 @@ def test_a_workspace_grants_action_replays_for_its_workspace_actor() -> None:
         user_id=USER,
         project_id=PROJECT,
         workspace_id=None,
+        binding_kind="project",
         invocation_id=uuid4(),
         tool_name="create_project_note",
         arguments=NOTE_ARGS,
@@ -3451,3 +3458,514 @@ async def test_collection_membership_writes_use_actor_organization(
     assert await _linked(db, collection.id, PAPER2) is (identity == "active")
     for blocked in (foreign, retired):
         assert not await _linked(db, collection.id, blocked)
+
+
+# --- account grants: library actions across the account ---------------------
+
+OUTSIDE_WORKSPACE, OUTSIDE = uuid4(), uuid4()
+
+
+async def _account_actor(
+    db: AsyncSession,
+    scopes: frozenset[str] = LIBRARY,
+    *,
+    consent_scopes: frozenset[str] | None = None,
+) -> ActionActor:
+    """The actor of a live account grant and its account consent on DEVICE."""
+    grant_id, consent_id = uuid4(), uuid4()
+    await db.execute(
+        insert(IntegrationGrantRequest).values(
+            id=consent_id,
+            user_id=USER,
+            organization_id=ORG,
+            binding_kind="account",
+            project_id=None,
+            workspace_id=None,
+            device_id=DEVICE,
+            scopes=sorted(scopes if consent_scopes is None else consent_scopes),
+            status="consumed",
+            expires_at=SOON,
+            approved_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.execute(
+        insert(IntegrationGrant).values(
+            **_grant_values(
+                grant_id,
+                project_id=None,
+                binding_kind="account",
+                request_id=consent_id,
+                scopes=sorted(scopes),
+            )
+        )
+    )
+    await db.commit()
+    return ActionActor(
+        user_id=USER,
+        organization_id=ORG,
+        project_id=None,
+        workspace_id=None,
+        binding_kind="account",
+        grant_id=grant_id,
+        consent_id=consent_id,
+        scopes=scopes,
+    )
+
+
+async def _outside_the_account(db: AsyncSession) -> None:
+    """A Collection USER may change as an editor of another organization's
+    workspace: never part of USER's account."""
+    await db.execute(
+        insert(Workspace).values(
+            id=OUTSIDE_WORKSPACE,
+            name="Outside",
+            owner_id=OTHER_USER,
+            organization_id=ORG2,
+        )
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            id=uuid4(),
+            workspace_id=OUTSIDE_WORKSPACE,
+            user_id=USER,
+            role=WorkspaceRole.EDITOR,
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            id=OUTSIDE, name="Outside", workspace_id=OUTSIDE_WORKSPACE
+        )
+    )
+    await db.commit()
+
+
+async def test_an_account_grant_moves_papers_between_workspaces_without_asking(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _account_actor(db)
+    status = await request_action(
+        db,
+        actor,
+        _call(
+            "move_papers_between_folders",
+            document_ids=[str(PAPER)],
+            from_project_id=P,
+            to_project_id=str(ELSEWHERE),
+        ),
+    )
+    assert status.state == "succeeded"
+    row = await _row(db, status.invocation_id)
+    assert (row.binding_kind, row.project_id, row.workspace_id) == (
+        "account",
+        PROJECT,
+        None,
+    )
+    assert row.target_workspace_id is None
+    assert await _linked(db, ELSEWHERE, PAPER) and not await _linked(db, PROJECT, PAPER)
+
+
+OUTSIDE_THE_ACCOUNT: dict[str, tuple[str, dict[str, Any]]] = {
+    "rename-outside": ("rename_folder", {"project_id": str(OUTSIDE), "name": "X"}),
+    "save-outside": (
+        "save_papers_to_folder",
+        {"document_ids": [str(PAPER2)], "project_id": str(OUTSIDE)},
+    ),
+    "move-out": (
+        "move_papers_between_folders",
+        {
+            "document_ids": [str(PAPER)],
+            "from_project_id": P,
+            "to_project_id": str(OUTSIDE),
+        },
+    ),
+    "rename-deleted": ("rename_folder", {"project_id": str(RETIRED), "name": "X"}),
+    "note-outside": ("create_project_note", {**NOTE_ARGS, "project_id": str(OUTSIDE)}),
+    "folder-outside": (
+        "create_folder",
+        {"name": "Reading", "workspace_id": str(OUTSIDE_WORKSPACE)},
+    ),
+    "folder-unknown-workspace": (
+        "create_folder",
+        {"name": "Reading", "workspace_id": str(uuid4())},
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"), OUTSIDE_THE_ACCOUNT.values(), ids=list(OUTSIDE_THE_ACCOUNT)
+)
+async def test_an_account_grant_cannot_reach_outside_the_account(
+    db: AsyncSession, library: None, name: str, arguments: dict[str, Any]
+) -> None:
+    await _outside_the_account(db)
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(db, await _account_actor(db), _call(name, **arguments))
+    assert await _row_count(db) == 0
+    assert (await _collection(db, OUTSIDE)).name == "Outside"
+
+
+async def test_an_account_folder_names_its_workspace(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _account_actor(db)
+    with pytest.raises(ToolActionArgumentError, match="workspace_id is required"):
+        await request_action(db, actor, _call("create_folder", name="Reading"))
+    status = await request_action(
+        db,
+        actor,
+        _call("create_folder", name="Reading", workspace_id=str(OTHER_WORKSPACE)),
+    )
+    assert status.state == "succeeded"
+    row = await _row(db, status.invocation_id)
+    assert (row.project_id, row.workspace_id, row.target_workspace_id) == (
+        None,
+        None,
+        OTHER_WORKSPACE,
+    )
+    created = await db.scalar(select(Collection).where(Collection.name == "Reading"))
+    assert created is not None and created.workspace_id == OTHER_WORKSPACE
+    assert _receipt(status) == {
+        "ok": True,
+        "tool_name": "create_folder",
+        "project_id": str(created.id),
+        "workspace_id": str(OTHER_WORKSPACE),
+        "name": "Reading",
+    }
+
+
+async def test_project_and_workspace_grants_still_refuse_a_workspace_argument(
+    db: AsyncSession, library: None
+) -> None:
+    for actor in (await _library_actor(db), _actor(scopes=LIBRARY)):
+        with pytest.raises(
+            ToolActionArgumentError, match="identity arguments are not accepted"
+        ):
+            await request_action(
+                db,
+                actor,
+                _call("create_folder", name="Reading", workspace_id=str(WORKSPACE)),
+            )
+    assert await _row_count(db) == 0
+
+
+async def test_an_account_note_names_its_project_and_waits_for_a_decision(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _account_actor(db)
+    with pytest.raises(ToolActionArgumentError, match="project_id is required"):
+        await request_action(db, actor, _call("create_project_note", **NOTE_ARGS))
+    status = await request_action(
+        db, actor, _call("create_project_note", **NOTE_ARGS, project_id=P)
+    )
+    assert status.state == "awaiting_approval"
+    await _approve(db, status.invocation_id)
+    done = await execute_action(db, status.invocation_id)
+    assert done is not None and done.state == "succeeded"
+    note = await db.scalar(select(ProjectNote))
+    assert note is not None and note.project_id == PROJECT
+
+
+async def test_auto_run_under_an_account_follows_library_write(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _account_actor(db)
+    renamed = await request_action(
+        db, actor, _call("rename_folder", project_id=str(SECOND), name="Renamed")
+    )
+    assert renamed.state == "succeeded"
+    for invocation in (
+        _call("delete_folder", project_id=str(SECOND)),
+        _call("ingest_arxiv_papers", paper_ids=["2401.00001"], project_id=P),
+    ):
+        assert (
+            await request_action(db, actor, invocation)
+        ).state == "awaiting_approval"
+    with pytest.raises(ToolActionArgumentError, match="project_id is required"):
+        await request_action(
+            db, actor, _call("ingest_arxiv_papers", paper_ids=["2401.00002"])
+        )
+
+
+async def test_an_account_action_replays_and_another_binding_conflicts(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _account_actor(db, WRITE)
+    invocation = _call("rename_folder", project_id=str(SECOND), name="Renamed")
+    first = await request_action(db, actor, invocation)
+    assert (
+        await request_action(db, actor, invocation)
+    ).invocation_id == first.invocation_id
+    # Under the same consent (so the row is found) a project or workspace
+    # actor is not the account's: the replay conflicts instead of answering.
+    same_consent = {"grant_id": actor.grant_id, "consent_id": actor.consent_id}
+    for stranger in (
+        _actor(scopes=WRITE, **same_consent),
+        _workspace_actor(project_id=None, **same_consent),
+    ):
+        with pytest.raises(ActionConflict):
+            await request_action(db, stranger, invocation)
+    # Another consent never finds the row at all, and its own target check
+    # refuses a folder outside its project.
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(db, _actor(scopes=WRITE), invocation)
+    assert await _row_count(db) == 1
+
+
+# SECURITY-CRITICAL: the account is re-checked before the effect.
+@pytest.mark.parametrize("action", ["rename", "create-folder", "move"])
+async def test_an_account_action_rechecks_the_account_when_it_runs(
+    db: AsyncSession, library: None, action: str
+) -> None:
+    actor = await _account_actor(db, WRITE)  # tools:write: every action waits
+    invocation = {
+        "rename": _call("rename_folder", project_id=str(ELSEWHERE), name="Renamed"),
+        "create-folder": _call(
+            "create_folder", name="Reading", workspace_id=str(OTHER_WORKSPACE)
+        ),
+        # The destination is the one that leaves the account.
+        "move": _call(
+            "move_papers_between_folders",
+            document_ids=[str(PAPER)],
+            from_project_id=P,
+            to_project_id=str(ELSEWHERE),
+        ),
+    }[action]
+    status = await request_action(db, actor, invocation)
+    assert status.state == "awaiting_approval"
+    await _approve(db, status.invocation_id)
+    await db.execute(
+        update(Workspace)
+        .where(Workspace.id == OTHER_WORKSPACE)
+        .values(is_archived=True)
+    )
+    await db.commit()
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (
+        await _last_error(db, status.invocation_id)
+        == "grant no longer authorizes this action"
+    )
+    assert (await _collection(db, ELSEWHERE)).name == "Elsewhere"
+    assert (
+        await db.scalar(select(Collection).where(Collection.name == "Reading")) is None
+    )
+    assert await _linked(db, PROJECT, PAPER) and not await _linked(db, ELSEWHERE, PAPER)
+
+
+# SECURITY-CRITICAL: approval and grant kinds must match at execution.
+@pytest.mark.parametrize("other", ["project", "workspace"])
+async def test_an_account_action_needs_an_account_grant(
+    db: AsyncSession, library: None, other: str
+) -> None:
+    actor = await _account_actor(db, WRITE)
+    status = await request_action(
+        db, actor, _call("rename_folder", project_id=P, name="Renamed")
+    )
+    # A project (or workspace) grant and consent try to authorise the account row.
+    if other == "project":
+        grant_id, consent_id = GRANT, CONSENT
+    else:
+        borrowed = await _library_actor(db, WRITE)
+        grant_id, consent_id = borrowed.grant_id, borrowed.consent_id
+    await db.execute(
+        update(IntegrationToolAction)
+        .where(IntegrationToolAction.invocation_id == status.invocation_id)
+        .values(grant_id=grant_id, consent_id=consent_id)
+    )
+    await db.commit()
+    await _approve(db, status.invocation_id)
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (
+        await _last_error(db, status.invocation_id)
+        == "grant no longer authorizes this action"
+    )
+    assert await _project_name(db) == "Project"
+
+
+# SECURITY-CRITICAL: an account grant never authorises a project or workspace row.
+@pytest.mark.parametrize("row_kind", ["project", "workspace"])
+async def test_a_project_or_workspace_action_is_not_authorised_by_an_account_grant(
+    db: AsyncSession, library: None, row_kind: str
+) -> None:
+    if row_kind == "project":
+        status = await request_action(db, _actor(), _rename_project())
+    else:
+        status = await request_action(
+            db, await _library_actor(db, WRITE), _rename_project()
+        )
+    account = await _account_actor(db, WRITE)
+    await db.execute(
+        update(IntegrationToolAction)
+        .where(IntegrationToolAction.invocation_id == status.invocation_id)
+        .values(grant_id=account.grant_id, consent_id=account.consent_id)
+    )
+    await db.commit()
+    await _approve(db, status.invocation_id)
+    failed = await execute_action(db, status.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert (
+        await _last_error(db, status.invocation_id)
+        == "grant no longer authorizes this action"
+    )
+    assert await _project_name(db) == "Project"
+
+
+# SECURITY-CRITICAL: a project grant under an account consent.
+async def test_a_project_grant_under_an_account_consent_acts_while_its_project_is_in_the_account(
+    db: AsyncSession, library: None
+) -> None:
+    account = await _account_actor(db, WRITE)
+    run_grant = uuid4()
+    await db.execute(
+        insert(IntegrationGrant).values(
+            **_grant_values(
+                run_grant,
+                project_id=PROJECT,
+                request_id=account.consent_id,
+                scopes=sorted(WRITE),
+            )
+        )
+    )
+    await db.commit()
+    actor = _actor(grant_id=run_grant, consent_id=account.consent_id)
+    status = await request_action(db, actor, _rename_project())
+    await _approve(db, status.invocation_id)
+    done = await execute_action(db, status.invocation_id)
+    assert done is not None and done.state == "succeeded"
+    # Archived: authorized_project still admits PROJECT, the account does not.
+    await db.execute(
+        update(Workspace).where(Workspace.id == WORKSPACE).values(is_archived=True)
+    )
+    await db.commit()
+    later = await request_action(db, actor, _rename_project())
+    await _approve(db, later.invocation_id)
+    failed = await execute_action(db, later.invocation_id)
+    assert failed is not None and failed.state == "failed"
+    assert await _last_error(db, later.invocation_id) == "consent revoked"
+
+
+async def test_the_review_of_an_account_folder_names_its_workspace(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _account_actor(db, WRITE)
+    status = await request_action(
+        db,
+        actor,
+        _call("create_folder", name="Reading", workspace_id=str(OTHER_WORKSPACE)),
+    )
+    review = await get_action_for_review(db, await _user(db), status.invocation_id)
+    assert (review.workspace_id, review.workspace_label) == (OTHER_WORKSPACE, "Other")
+    assert review.summary == "Create folder “Reading” in workspace “Other”"
+    assert review.project_available is True
+
+
+async def test_the_review_of_an_account_move_names_both_folders(
+    db: AsyncSession, library: None
+) -> None:
+    actor = await _account_actor(db, WRITE)
+    status = await request_action(
+        db,
+        actor,
+        _call(
+            "move_papers_between_folders",
+            document_ids=[str(PAPER)],
+            from_project_id=P,
+            to_project_id=str(ELSEWHERE),
+        ),
+    )
+    review = await get_action_for_review(db, await _user(db), status.invocation_id)
+    # A project action names its workspace through the project, not here.
+    assert (review.workspace_id, review.workspace_label) == (None, None)
+    assert review.summary.startswith(
+        "Move 1 paper from folder “Project” to folder “Elsewhere”"
+    )
+
+
+async def test_an_account_review_names_only_folders_the_account_covers(
+    db: AsyncSession, library: None
+) -> None:
+    await _outside_the_account(db)
+    row = await _workspace_row(
+        db,
+        binding_kind="account",
+        workspace_id=None,
+        project_id=PROJECT,
+        tool_name="move_papers_between_folders",
+        arguments={
+            "document_ids": [str(PAPER)],
+            "from_project_id": P,
+            "to_project_id": str(OUTSIDE),
+        },
+    )
+    review = await get_action_for_review(db, await _user(db), row.invocation_id)
+    assert "Outside" not in review.summary and str(OUTSIDE) in review.summary
+
+
+async def test_an_account_grant_edits_a_papers_metadata_in_any_workspace_folder(
+    db: AsyncSession, library: None
+) -> None:
+    await _outside_the_account(db)
+    outsider = _paper(uuid4())
+    db.add(outsider)
+    await db.flush()
+    db.add(CollectionDocument(collection_id=OUTSIDE, document_id=outsider.id))
+    db.add(CollectionDocument(collection_id=ELSEWHERE, document_id=PAPER2))
+    await db.commit()
+    actor = await _account_actor(db)
+    status = await request_action(
+        db,
+        actor,
+        _call("update_document_metadata", document_id=str(PAPER2), title="New"),
+    )
+    assert status.state == "succeeded"
+    assert (await _row(db, status.invocation_id)).project_id == ELSEWHERE
+    with pytest.raises(IntegrationAccessDenied):
+        await request_action(
+            db,
+            actor,
+            _call("update_document_metadata", document_id=str(outsider.id), title="X"),
+        )
+
+
+# The kind is stated by the writer: a row that omits it must not become a
+# project row by default (an account action would then lose its binding).
+async def test_an_action_row_must_state_its_binding_kind(
+    db: AsyncSession, library: None
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    omitted = IntegrationToolAction(
+        organization_id=ORG,
+        user_id=USER,
+        project_id=PROJECT,
+        invocation_id=uuid4(),
+        tool_name="rename_folder",
+        arguments={"project_id": P, "name": "X"},
+        argument_hash="0" * 64,
+        state="awaiting_approval",
+    )
+    db.add(omitted)
+    with pytest.raises(IntegrityError, match="binding_kind"):
+        await db.commit()
+    await db.rollback()
+
+
+async def test_the_stored_kind_of_each_action_is_the_actors(
+    db: AsyncSession, library: None
+) -> None:
+    kinds: dict[str, str] = {}
+    for kind, actor in (
+        ("project", _actor(scopes=LIBRARY)),
+        ("workspace", await _library_actor(db)),
+        ("account", await _account_actor(db)),
+    ):
+        status = await request_action(
+            db, actor, _call("rename_folder", project_id=P, name=f"As {kind}")
+        )
+        kinds[kind] = (await _row(db, status.invocation_id)).binding_kind
+    assert kinds == {
+        "project": "project",
+        "workspace": "workspace",
+        "account": "account",
+    }

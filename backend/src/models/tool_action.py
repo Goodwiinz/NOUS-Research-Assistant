@@ -21,7 +21,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import GUID, BaseModel
-from src.models.integration_grant import derived_binding_kind
 
 # awaiting_approval -> approved -> executing -> succeeded | outcome_unknown
 #                   \-> failed (denied, revoked, or a rolled-back effect)
@@ -76,9 +75,9 @@ class IntegrationToolAction(BaseModel):
     workspace_id: Mapped[UUID | None] = mapped_column(
         GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
     )
-    binding_kind: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=derived_binding_kind
-    )
+    # No default: the writer states the kind (request_action), so an omitted
+    # one fails NOT NULL instead of storing "project" for an account action.
+    binding_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     # Where an account grant's create_folder creates the folder.
     target_workspace_id: Mapped[UUID | None] = mapped_column(
         GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
