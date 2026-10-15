@@ -57,10 +57,10 @@ from src.services.harness.account import (
 from src.services.integrations.context import (
     DeviceNotConnectedToProject,
     IntegrationAccessDenied,
-    list_devices,
     create_request,
     decide_request,
     exchange_request,
+    list_devices,
     mint_integration_grant,
     resolve_integration_context,
 )
