@@ -76,6 +76,28 @@ describe('account wording', () => {
     );
     expect(label).not.toMatch(/this workspace/);
   });
+  it('names every action library:write runs without asking in the account', () => {
+    // AUTO_RUN_ACTIONS (backend/src/services/agent/tool_actions.py): the
+    // account create_folder takes a workspace_id and rename_folder a
+    // project_id, so both reach beyond the project a chat is in.
+    const label = scopeLabel('library:write', 'account');
+    expect(label).toMatch(/Add, remove and move papers/);
+    expect(label).toMatch(/create folders in any workspace/);
+    expect(label).toMatch(/rename any project/);
+    expect(label).toMatch(/change the title and tags of a paper/);
+    expect(scopeSummary('library:write', 'account')).toBe(
+      'add, move and remove papers, create folders, rename projects and edit paper details anywhere in your account without asking each time'
+    );
+  });
+  it('words the short tools:write summary as changes, not notes', () => {
+    // tools:write also requests folder deletions and arXiv ingests.
+    expect(scopeSummary('tools:write')).toBe(
+      'request changes (you approve each one)'
+    );
+    expect(scopeSummary('tools:write', 'account')).toBe(
+      'request changes in any project (you approve each one)'
+    );
+  });
   it('lists the workspaces and projects of the account for library:read', () => {
     expect(scopeLabel('library:read', 'account')).toBe(
       'List the workspaces and projects in your account'

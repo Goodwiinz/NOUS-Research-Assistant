@@ -111,7 +111,7 @@ describe('ConnectedDevices', () => {
     expect(await screen.findByText('Whole account')).toBeInTheDocument();
     expect(
       screen.getByText(
-        'run Local Codex from any chat, list your workspaces and projects, change folders and paper details in any project without asking each time, read documents in every project, request notes in any project (you approve each one)'
+        'run Local Codex from any chat, list your workspaces and projects, add, move and remove papers, create folders, rename projects and edit paper details anywhere in your account without asking each time, read documents in every project, request changes in any project (you approve each one)'
       )
     ).toBeInTheDocument();
     await user.click(
@@ -243,7 +243,7 @@ describe('ConnectedDevices', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'list the folders in the workspace, change folders and paper details without asking each time, read project documents, request notes (you approve each one)'
+        'list the folders in the workspace, change folders and paper details without asking each time, read project documents, request changes (you approve each one)'
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();

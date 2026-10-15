@@ -37,13 +37,13 @@ const ACCOUNT_LABELS: Record<string, string> = {
     'Request changes in any project in your account that you approve one by one',
   'library:read': 'List the workspaces and projects in your account',
   'library:write':
-    'Add, remove, move and rename items in any project in your account, and change the title and tags of a paper (including removing every tag), without asking each time. An edited paper changes everywhere it appears. Deleting folders and ingesting papers still require your approval.',
+    'Add, remove and move papers in any project in your account, create folders in any workspace, rename any project, and change the title and tags of a paper (including removing every tag), without asking each time. An edited paper changes everywhere it appears. Deleting folders and ingesting papers still require your approval.',
 };
 
 const SUMMARIES: Record<string, string> = {
   'harness:execute': 'run coding sessions',
   'tools:read': 'read project documents',
-  'tools:write': 'request notes (you approve each one)',
+  'tools:write': 'request changes (you approve each one)',
   'context:read': 'read memories you chose to share',
   'artifacts:publish': 'publish files to chats',
   'handoff:read': "read this chat's handoff",
@@ -55,10 +55,10 @@ const SUMMARIES: Record<string, string> = {
 const ACCOUNT_SUMMARIES: Record<string, string> = {
   'harness:execute': 'run Local Codex from any chat',
   'tools:read': 'read documents in every project',
-  'tools:write': 'request notes in any project (you approve each one)',
+  'tools:write': 'request changes in any project (you approve each one)',
   'library:read': 'list your workspaces and projects',
   'library:write':
-    'change folders and paper details in any project without asking each time',
+    'add, move and remove papers, create folders, rename projects and edit paper details anywhere in your account without asking each time',
 };
 
 // Own keys only: a scope named like an Object.prototype member ("constructor")

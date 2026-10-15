@@ -195,11 +195,12 @@ function ApprovalContent(): React.JSX.Element {
                     </p>
                     <p>
                       It can make reversible changes in every project in your
-                      account without asking you first: adding, removing, moving
-                      and renaming items, and changing a paper&apos;s title and
-                      tags. Deleting folders and ingesting papers still ask you
-                      first. You can revoke this access at any time from Manage
-                      connected devices.
+                      account without asking you first: adding, removing and
+                      moving papers, renaming any project, changing a
+                      paper&apos;s title and tags, and creating folders in any
+                      workspace. Deleting folders and ingesting papers still ask
+                      you first. You can revoke this access at any time from
+                      Manage connected devices.
                     </p>
                   </AlertDescription>
                 </Alert>

@@ -58,6 +58,14 @@ const accountRequest = {
 };
 
 describe('IntegrationApprovalPage', () => {
+  it('asks the user to check a project, workspace or whole account', async () => {
+    mockGet.mockResolvedValue(request);
+    render(<IntegrationApprovalPage />);
+    expect(
+      await screen.findByText(/project, workspace or whole account/)
+    ).toBeInTheDocument();
+  });
+
   it('shows the chat a request is bound to', async () => {
     mockGet.mockResolvedValue({
       ...request,
@@ -194,6 +202,12 @@ describe('IntegrationApprovalPage', () => {
     expect(warning).toHaveTextContent(
       /every project in your account without asking you first/
     );
+    // Every auto-running action, including the two that reach beyond the
+    // chat's own project.
+    expect(warning).toHaveTextContent(/adding, removing and moving papers/);
+    expect(warning).toHaveTextContent(/creating folders in any workspace/);
+    expect(warning).toHaveTextContent(/renaming any project/);
+    expect(warning).toHaveTextContent(/changing a paper's title and tags/);
     expect(warning).toHaveTextContent(
       /Deleting folders and ingesting papers still ask you first/
     );
