@@ -16,6 +16,10 @@ export type BridgeIdentity = {
 };
 export type BridgeCommand = BridgeIdentity & {
   expiresAt: string;
+  // The run's NOUS project, on a start command leased under an account
+  // pairing (backend schemas/harness.py BridgeCommand.projectId): the bridge
+  // pins the run's NOUS tools to it. Never copied onto an event.
+  projectId?: string;
   body:
     | { kind: "start"; input: string; sessionId?: string }
     | { kind: "interrupt"; sessionId: string; turnId: string }
@@ -119,11 +123,14 @@ export function parseCommand(value: unknown): BridgeCommand {
       "workspaceId",
       "generation",
       "expiresAt",
+      "projectId",
       "body",
     ]) ||
     ![value.deviceId, value.runId, value.commandId, value.workspaceId].every(
       (x) => typeof x === "string" && uuid.test(x),
     ) ||
+    (value.projectId !== undefined &&
+      !(typeof value.projectId === "string" && uuid.test(value.projectId))) ||
     !Number.isSafeInteger(value.generation) ||
     value.generation < 1 ||
     typeof value.expiresAt !== "string" ||
@@ -174,6 +181,8 @@ export function parseCommand(value: unknown): BridgeCommand {
         throw new Error("invalid answers");
     } else throw new Error("invalid response kind");
   } else throw new Error("invalid command kind");
+  if (value.projectId !== undefined && b.kind !== "start")
+    throw new Error("invalid bridge command");
   return structuredClone(value) as BridgeCommand;
 }
 
