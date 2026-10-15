@@ -1,7 +1,7 @@
-"""Shared, project- or workspace-scoped integration identity and pairing contracts."""
+"""Shared project-, workspace- or account-scoped integration identity and pairing contracts."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -28,14 +28,47 @@ STANDARD_SCOPES = frozenset(
 )
 
 
+# project: one Collection. workspace: every live Collection of one workspace.
+# account: every live, unarchived Collection of the user's organization
+# workspaces that they own or belong to, evaluated per statement
+# (services/integrations/context.account_scope_condition).
+BindingKind = Literal["project", "workspace", "account"]
+
+
+def derive_binding_kind(
+    project_id: object, workspace_id: object
+) -> Literal["project", "workspace"] | None:
+    """The kind a binding without a stated kind has. Never "account": both
+    NULL without the kind means "bound to nothing" and is denied."""
+    if project_id is not None and workspace_id is None:
+        return "project"
+    if workspace_id is not None and project_id is None:
+        return "workspace"
+    return None
+
+
+def binding_matches_kind(kind: str, project_id: object, workspace_id: object) -> bool:
+    """Whether the two binding columns have the shape ``kind`` requires."""
+    if kind == "project":
+        return project_id is not None and workspace_id is None
+    if kind == "workspace":
+        return workspace_id is not None and project_id is None
+    if kind == "account":
+        return project_id is None and workspace_id is None
+    return False
+
+
 class IntegrationContext(BaseModel):
     model_config = ConfigDict(frozen=True)
     user_id: UUID
     organization_id: UUID
-    # Exactly one binding. project_id: one Collection (today's model).
-    # workspace_id: every live Collection the user can see in that workspace.
+    # project_id: one Collection. workspace_id: every live Collection the user
+    # can see in that workspace. Neither: an account context (binding_kind).
     project_id: UUID | None = None
     workspace_id: UUID | None = None
+    # Derived from project_id / workspace_id when not given; an account
+    # context must name it.
+    binding_kind: BindingKind = "project"
     thread_id: UUID | None = None
     run_id: UUID | None = None
     grant_id: UUID
@@ -47,10 +80,22 @@ class IntegrationContext(BaseModel):
     # resolving a grant, which therefore passes no scope check.
     scopes: frozenset[str] = frozenset()
 
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_kind(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("binding_kind") is None:
+            kind = derive_binding_kind(data.get("project_id"), data.get("workspace_id"))
+            if kind is None:
+                raise ValueError("exactly one of project_id or workspace_id")
+            data = {**data, "binding_kind": kind}
+        return data
+
     @model_validator(mode="after")
     def _one_binding(self) -> "IntegrationContext":
-        if (self.project_id is None) == (self.workspace_id is None):
-            raise ValueError("exactly one of project_id or workspace_id")
+        if not binding_matches_kind(
+            self.binding_kind, self.project_id, self.workspace_id
+        ):
+            raise ValueError("binding does not match binding_kind")
         return self
 
 
@@ -63,18 +108,39 @@ class GrantRequestCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     project_id: UUID | None = None
     workspace_id: UUID | None = None
+    # The whole account (ACCOUNT_CONNECTIONS_ENABLED): no project, workspace
+    # or chat.
+    account: bool = False
     device_id: UUID
     scopes: set[str]
     thread_id: UUID | None = None
 
     @model_validator(mode="after")
     def _one_binding(self) -> "GrantRequestCreate":
-        if (self.project_id is None) == (self.workspace_id is None):
+        if self.account:
+            if self.project_id is not None or self.workspace_id is not None:
+                raise ValueError("account excludes project_id and workspace_id")
+            if self.thread_id is not None:
+                raise ValueError("an account connection cannot be bound to a chat")
+        elif (self.project_id is None) == (self.workspace_id is None):
             raise ValueError("exactly one of project_id or workspace_id")
         return self
 
+    @property
+    def binding_kind(self) -> BindingKind:
+        if self.account:
+            return "account"
+        return "project" if self.project_id is not None else "workspace"
+
 
 GrantRequestStatus = Literal["pending", "approved", "denied", "expired", "consumed"]
+
+
+class AccountSummaryDTO(BaseModel):
+    """What an account approval covers at the moment it is shown."""
+
+    workspace_count: int
+    project_count: int
 
 
 class GrantRequestDTO(BaseModel):
