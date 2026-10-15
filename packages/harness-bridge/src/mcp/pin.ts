@@ -9,8 +9,8 @@ import type { ToolCatalog } from "./server.ts";
 
 /** Fields that name a NOUS project in a tool or action call. */
 export const PROJECT_FIELDS = ["project_id", "from_project_id", "to_project_id"] as const;
-/** Read tools that reach beyond one project. */
-const ACCOUNT_WIDE_TOOLS = new Set(["list_library"]);
+/** Read tools that reach beyond one project: list_library lists the account, and discover_papers searches its whole library. */
+const ACCOUNT_WIDE_TOOLS = new Set(["list_library", "discover_papers"]);
 
 export const pinnedMessage = (project: string): string =>
   `this Local Codex run can use NOUS project ${project} only (its chat's project)`;

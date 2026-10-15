@@ -42,6 +42,11 @@ function accountCatalog(seen: ToolInvocation[]): ToolCatalog {
     },
     { name: "list_library", description: "List", inputSchema: { type: "object", properties: {} } },
     {
+      name: "discover_papers",
+      description: "Discover",
+      inputSchema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
+    },
+    {
       name: "search_arxiv",
       description: "arXiv",
       inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
@@ -94,6 +99,11 @@ test("a pinned catalog hides list_library and offers project_id only as the run'
   const refused = await mcp.callTool({ name: "list_library", arguments: {} });
   assert.equal(refused.isError, true);
   assert.match(text(refused), /list_library reaches the whole account/);
+  // discover_papers searches the grant's whole library (the account), so a
+  // pinned run cannot use it either.
+  const discovered = await mcp.callTool({ name: "discover_papers", arguments: { question: "q" } });
+  assert.equal(discovered.isError, true);
+  assert.match(text(discovered), /discover_papers reaches the whole account/);
   assert.equal(seen.length, 0);
 });
 
