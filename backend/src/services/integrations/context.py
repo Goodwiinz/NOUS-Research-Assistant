@@ -566,6 +566,45 @@ async def validate_binding(
             raise IntegrationAccessDenied()
 
 
+def _consent_admits(
+    kind: str,
+    project_id: UUID | None,
+    workspace_id: UUID | None,
+    user_id: UUID,
+    organization_id: UUID,
+) -> ColumnElement[bool]:
+    """The consent requests that may stand behind a grant with this binding.
+
+    account: an account consent. workspace: a consent of that workspace.
+    project: a consent of that project, or an account consent while the
+    project is in the account. That is evaluated in the same statement, so a
+    project that leaves the account ends every grant under the account consent
+    at its next use.
+    """
+    if kind == "account":
+        return IntegrationGrantRequest.binding_kind == "account"
+    if kind == "workspace" and workspace_id is not None:
+        return and_(
+            IntegrationGrantRequest.binding_kind == "workspace",
+            IntegrationGrantRequest.workspace_id == workspace_id,
+        )
+    if kind == "project" and project_id is not None:
+        return or_(
+            and_(
+                IntegrationGrantRequest.binding_kind == "project",
+                IntegrationGrantRequest.project_id == project_id,
+            ),
+            and_(
+                IntegrationGrantRequest.binding_kind == "account",
+                exists().where(
+                    Collection.id == project_id,
+                    account_scope_condition(user_id, organization_id),
+                ),
+            ),
+        )
+    return false()
+
+
 def _new_grant(
     *,
     user_id: UUID,
@@ -693,7 +732,11 @@ async def _validate_grant(
         or not live(grant.expires_at)
     ):
         raise IntegrationAccessDenied()
-    check_scopes(grant.scopes, workspace_bound=grant.workspace_id is not None)
+    kind = cast(BindingKind, grant.binding_kind)
+    check_scopes(grant.scopes, binding_kind=kind)
+    # An account grant exists only as one device's pairing, from its consent.
+    if kind == "account" and grant.request_id is None:
+        raise IntegrationAccessDenied()
     await validate_binding(
         db,
         user_id=grant.user_id,
@@ -703,6 +746,7 @@ async def _validate_grant(
         thread_id=grant.thread_id,
         run_id=grant.run_id,
         device_id=grant.device_id,
+        binding_kind=kind,
     )
     if grant.device_id is not None:
         consent = await db.scalar(
@@ -712,8 +756,13 @@ async def _validate_grant(
                 IntegrationGrantRequest.status == "consumed",
                 IntegrationGrantRequest.user_id == grant.user_id,
                 IntegrationGrantRequest.organization_id == grant.organization_id,
-                IntegrationGrantRequest.project_id == grant.project_id,
-                IntegrationGrantRequest.workspace_id == grant.workspace_id,
+                _consent_admits(
+                    kind,
+                    grant.project_id,
+                    grant.workspace_id,
+                    grant.user_id,
+                    grant.organization_id,
+                ),
                 IntegrationGrantRequest.device_id == grant.device_id,
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
                 IntegrationGrantRequest.is_deleted.is_(False),
@@ -757,6 +806,7 @@ async def resolve_integration_context(
         grant_id=grant.id,
         consent_id=grant.request_id,
         scopes=frozenset(grant.scopes),
+        binding_kind=cast(BindingKind, grant.binding_kind),
     )
 
 
@@ -1014,7 +1064,8 @@ async def resume_grant(
         or grant.expires_at.replace(tzinfo=timezone.utc) <= now() - RESUME_WINDOW
     ):
         raise IntegrationAccessDenied()
-    check_scopes(grant.scopes, workspace_bound=grant.workspace_id is not None)
+    kind = cast(BindingKind, grant.binding_kind)
+    check_scopes(grant.scopes, binding_kind=kind)
     await validate_binding(
         db,
         user_id=grant.user_id,
@@ -1023,6 +1074,7 @@ async def resume_grant(
         workspace_id=grant.workspace_id,
         thread_id=grant.thread_id,
         device_id=grant.device_id,
+        binding_kind=kind,
     )
     consent = await db.scalar(
         select(IntegrationGrantRequest)
@@ -1031,8 +1083,13 @@ async def resume_grant(
             IntegrationGrantRequest.status == "consumed",
             IntegrationGrantRequest.user_id == grant.user_id,
             IntegrationGrantRequest.organization_id == grant.organization_id,
-            IntegrationGrantRequest.project_id == grant.project_id,
-            IntegrationGrantRequest.workspace_id == grant.workspace_id,
+            _consent_admits(
+                kind,
+                grant.project_id,
+                grant.workspace_id,
+                grant.user_id,
+                grant.organization_id,
+            ),
             IntegrationGrantRequest.device_id == grant.device_id,
             # The pairing's own chat binding: exchange and renewal copy it.
             IntegrationGrantRequest.thread_id == grant.thread_id,

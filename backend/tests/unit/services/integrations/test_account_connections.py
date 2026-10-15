@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from secrets import token_urlsafe
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -480,3 +483,188 @@ async def test_exchange_issues_an_account_kind_pairing_grant(db: AsyncSession) -
         None,
     )
     assert (grant.request_id, grant.device_id) == (consent, DEVICE)
+
+
+# --- grant validation across kinds (Task 8) ---------------------------------------
+
+SOON = datetime.now(timezone.utc) + timedelta(hours=1)
+
+
+async def _store_grant(
+    db: AsyncSession,
+    *,
+    request_id: UUID,
+    binding_kind: str,
+    project_id: UUID | None = None,
+    device: UUID = DEVICE,
+    scopes: frozenset[str] = ACCOUNT_RUN,
+) -> str:
+    """A live grant row with a known token, as a mint or exchange stores it."""
+    token = "nous_ig_" + token_urlsafe(32)
+    db.add(
+        IntegrationGrant(
+            id=uuid4(),
+            user_id=USER,
+            organization_id=ORG,
+            binding_kind=binding_kind,
+            project_id=project_id,
+            device_id=device,
+            request_id=request_id,
+            scopes=sorted(scopes),
+            token_hash=sha256(token.encode()).hexdigest(),
+            expires_at=SOON,
+            consented_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+    return token
+
+
+async def _revoke(db: AsyncSession, consent: UUID) -> None:
+    await db.execute(
+        update(IntegrationGrantRequest)
+        .where(IntegrationGrantRequest.id == consent)
+        .values(consent_revoked_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+
+
+async def test_an_account_grant_resolves_to_an_account_context(
+    db: AsyncSession,
+) -> None:
+    consent, issued = await _approve(db)
+    ctx = await service.resolve_integration_context(
+        db, issued.token, required_scope="tools:read"
+    )
+    assert (ctx.binding_kind, ctx.project_id, ctx.workspace_id) == (
+        "account",
+        None,
+        None,
+    )
+    assert ctx.consent_id == consent and ctx.scopes == ACCOUNT_RUN
+    await _revoke(db, consent)
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resolve_integration_context(
+            db, issued.token, required_scope="tools:read"
+        )
+
+
+# SECURITY-CRITICAL: approval/grant kind matching.
+@pytest.mark.parametrize("case", ["project-consent", "other-device-account-consent"])
+async def test_an_account_grant_needs_an_account_consent_of_its_device(
+    db: AsyncSession, case: str
+) -> None:
+    if case == "project-consent":
+        consent, _ = await _approve(
+            db, project_id=P_OWNED, scopes=frozenset({"harness:execute", "tools:read"})
+        )
+    else:
+        consent, _ = await _approve(db, device=OTHER_DEVICE)
+    # tools:read alone, so only the consent's kind (or device) can refuse it.
+    token = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="account",
+        scopes=frozenset({"tools:read"}),
+    )
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resolve_integration_context(
+            db, token, required_scope="tools:read"
+        )
+
+
+# SECURITY-CRITICAL: a project grant under an account consent.
+@pytest.mark.parametrize(
+    "leaves", ["archived-workspace", "archived-project", "membership-ended"]
+)
+async def test_a_project_grant_under_an_account_consent_ends_when_its_project_leaves(
+    db: AsyncSession, leaves: str
+) -> None:
+    consent, _ = await _approve(db)
+    token = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="project",
+        project_id=P_MEMBER,
+        scopes=frozenset({"harness:execute"}),
+    )
+    ctx = await service.resolve_integration_context(
+        db, token, required_scope="harness:execute"
+    )
+    assert (ctx.binding_kind, ctx.project_id, ctx.consent_id) == (
+        "project",
+        P_MEMBER,
+        consent,
+    )
+    change = {
+        "archived-workspace": update(Workspace)
+        .where(Workspace.id == MEMBER_WS)
+        .values(is_archived=True),
+        "archived-project": update(Collection)
+        .where(Collection.id == P_MEMBER)
+        .values(research_status="archived"),
+        "membership-ended": update(WorkspaceMember)
+        .where(WorkspaceMember.workspace_id == MEMBER_WS)
+        .values(is_deleted=True),
+    }[leaves]
+    await db.execute(change)
+    await db.commit()
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resolve_integration_context(
+            db, token, required_scope="harness:execute"
+        )
+
+
+async def test_an_account_consent_never_covers_another_organizations_project(
+    db: AsyncSession,
+) -> None:
+    consent, _ = await _approve(db)
+    await service.authorized_project(db, USER, ORG, P_FOREIGN)  # a pairing could
+    token = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="project",
+        project_id=P_FOREIGN,
+        scopes=frozenset({"harness:execute"}),
+    )
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resolve_integration_context(
+            db, token, required_scope="harness:execute"
+        )
+
+
+async def test_a_project_grant_still_needs_its_own_project_consent(
+    db: AsyncSession,
+) -> None:
+    consent, _ = await _approve(
+        db, project_id=P_OWNED, scopes=frozenset({"harness:execute", "tools:read"})
+    )
+    token = await _store_grant(
+        db,
+        request_id=consent,
+        binding_kind="project",
+        project_id=P_OWNED_2,
+        scopes=frozenset({"tools:read"}),
+    )
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.resolve_integration_context(
+            db, token, required_scope="tools:read"
+        )
+
+
+async def test_renewal_and_resume_keep_the_account_kind(db: AsyncSession) -> None:
+    consent, issued = await _approve(db)
+    renewed = await service.renew_grant(db, OWNER, issued.grant_id)
+    stored = await db.get(IntegrationGrant, renewed.grant_id, populate_existing=True)
+    assert stored is not None and stored.binding_kind == "account"
+    await db.execute(
+        update(IntegrationGrant)
+        .where(IntegrationGrant.id == renewed.grant_id)
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
+    )
+    await db.commit()
+    resumed = await service.resume_grant(db, OWNER, renewed.grant_id, renewed.token)
+    ctx = await service.resolve_integration_context(
+        db, resumed.token, required_scope="tools:read"
+    )
+    assert (ctx.binding_kind, ctx.consent_id) == ("account", consent)
