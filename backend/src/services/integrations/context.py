@@ -677,9 +677,10 @@ async def mint_integration_grant(
 ) -> IssuedGrant:
     """Trusted internal API. External issuance must use the consent exchange.
 
-    ``consent_kind`` (PR 2's run path is intended to pass it) restricts the device's
-    consents to that kind. Among them exactly one must match. Without it, an
-    account consent wins over project consents (_single_lineage).
+    ``consent_kind`` (the Local Codex run path always passes it) restricts the
+    device's consents to that kind, and needs a device. Among them exactly one
+    must match. Without it, an account consent wins over project consents
+    (_single_lineage).
 
     Mints a project or workspace grant, never an account grant: that exists
     only as a device's pairing (exchange_request). With a device, the grant's
@@ -688,7 +689,9 @@ async def mint_integration_grant(
     project, or an account consent while the project is in the account.
     """
     kind = derive_binding_kind(project_id, workspace_id)
-    if kind is None:
+    # A stated consent kind names an approval, and only a device holds one:
+    # without a device it would silently mint with no approval behind it.
+    if kind is None or (consent_kind is not None and device_id is None):
         raise IntegrationAccessDenied()
     check_scopes(scopes, binding_kind=kind)
     await validate_binding(
