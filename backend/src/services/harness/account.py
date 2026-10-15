@@ -19,6 +19,7 @@ from src.schemas.integration_context import IntegrationContext
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     account_scope_condition,
+    live_account_run_consent,
 )
 
 PROJECT_UNREACHABLE = "This project is no longer reachable from this computer."
@@ -53,31 +54,13 @@ async def project_in_account(
 async def live_account_consent(
     db: AsyncSession, *, user_id: UUID, organization_id: UUID, device_id: UUID
 ) -> IntegrationGrantRequest | None:
-    """The device's one exchanged, unrevoked account approval that can run
-    Codex (``harness:execute``, not bound to a chat), else None.
-
-    Two would be ambiguous; ``mint_integration_grant`` fails closed on them too
-    (it counts the same consents), so this never admits a folder the mint
-    would then refuse for lack of a lineage.
-    """
-    rows = (
-        await db.scalars(
-            select(IntegrationGrantRequest)
-            .where(
-                IntegrationGrantRequest.user_id == user_id,
-                IntegrationGrantRequest.organization_id == organization_id,
-                IntegrationGrantRequest.device_id == device_id,
-                IntegrationGrantRequest.binding_kind == "account",
-                IntegrationGrantRequest.status == "consumed",
-                IntegrationGrantRequest.consent_revoked_at.is_(None),
-                IntegrationGrantRequest.is_deleted.is_(False),
-                IntegrationGrantRequest.thread_id.is_(None),
-            )
-            .execution_options(populate_existing=True)
-        )
-    ).all()
-    runnable = [row for row in rows if "harness:execute" in (row.scopes or [])]
-    return runnable[0] if len(runnable) == 1 else None
+    """The device's one runnable account approval (see
+    ``live_account_run_consent``, shared with account-folder registration and
+    listing), else None."""
+    consent: IntegrationGrantRequest | None = await live_account_run_consent(
+        db, user_id, organization_id, device_id
+    )
+    return consent
 
 
 async def consent_kind(db: AsyncSession, request_id: UUID | None) -> str | None:

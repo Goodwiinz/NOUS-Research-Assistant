@@ -1220,3 +1220,34 @@ async def test_the_prompt_is_built_under_the_swapped_pairing_grant_and_rechecked
     await leave_account(db)
     with pytest.raises(IntegrationAccessDenied):
         await build_harness_prompt(db, run_id=run_id)
+
+
+# Mutation MA9: make `_holds_account_run_consent` accept any runnable account
+# approval again (`consent is not None` -> `True` over the unfiltered rows);
+# this test must fail.
+async def test_account_folders_need_the_one_approval_every_run_would_use(
+    db: AsyncSession, account: IntegrationContext
+) -> None:
+    from src.schemas.integration_context import WorkspaceBindingCreate
+    from src.services.integrations.context import bind_workspace, list_workspaces
+
+    async def listed() -> set[UUID]:
+        return {
+            b.workspace_id for b in await list_workspaces(db, OWNER, ACCOUNT_DEVICE)
+        }
+
+    registered = uuid4()
+    data = WorkspaceBindingCreate(workspace_id=registered, label="c")
+    assert (await bind_workspace(db, OWNER, ACCOUNT_DEVICE, data)).project_id is None
+    assert await listed() == {FOLDER_A, FOLDER_B, registered}
+    # A second runnable approval makes the lineage ambiguous: every run on this
+    # device is refused, so no account folder may be registered or listed.
+    await pair_account(db)
+    assert await listed() == set()
+    with pytest.raises(IntegrationAccessDenied):
+        await bind_workspace(
+            db,
+            OWNER,
+            ACCOUNT_DEVICE,
+            WorkspaceBindingCreate(workspace_id=uuid4(), label="d"),
+        )

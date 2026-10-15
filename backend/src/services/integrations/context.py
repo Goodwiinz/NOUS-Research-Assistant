@@ -1209,19 +1209,21 @@ async def register_device(
     return device
 
 
-async def _holds_account_run_consent(
+async def live_account_run_consent(
     db: AsyncSession, user_id: UUID, organization_id: UUID, device_id: UUID
-) -> bool:
-    """The device holds a live account approval that can run Codex: consumed,
-    not revoked, with harness:execute, while the user is active in the live
-    organization."""
-    try:
-        await authorized_account(db, user_id, organization_id)
-    except IntegrationAccessDenied:
-        return False
-    held = (
+) -> IntegrationGrantRequest | None:
+    """The device's one exchanged, unrevoked account approval that can run
+    Codex (``harness:execute``, not bound to a chat), else None.
+
+    Two would be ambiguous: ``mint_integration_grant`` fails closed on them
+    (``_single_lineage``), so every run on the device would be refused. Account
+    folders are registered and listed under this same predicate, never under a
+    looser one that admits folders no run could use.
+    """
+    rows = (
         await db.scalars(
-            select(IntegrationGrantRequest.scopes).where(
+            select(IntegrationGrantRequest)
+            .where(
                 IntegrationGrantRequest.user_id == user_id,
                 IntegrationGrantRequest.organization_id == organization_id,
                 IntegrationGrantRequest.device_id == device_id,
@@ -1229,10 +1231,26 @@ async def _holds_account_run_consent(
                 IntegrationGrantRequest.status == "consumed",
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
                 IntegrationGrantRequest.is_deleted.is_(False),
+                IntegrationGrantRequest.thread_id.is_(None),
             )
+            .execution_options(populate_existing=True)
         )
     ).all()
-    return any("harness:execute" in (scopes or []) for scopes in held)
+    runnable = [row for row in rows if "harness:execute" in (row.scopes or [])]
+    return runnable[0] if len(runnable) == 1 else None
+
+
+async def _holds_account_run_consent(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, device_id: UUID
+) -> bool:
+    """The device holds its one live account approval that can run Codex, while
+    the user is active in the live organization."""
+    try:
+        await authorized_account(db, user_id, organization_id)
+    except IntegrationAccessDenied:
+        return False
+    consent = await live_account_run_consent(db, user_id, organization_id, device_id)
+    return consent is not None
 
 
 async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
