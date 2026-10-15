@@ -7,14 +7,28 @@ ORCHESTRATION_TEST_DATABASE_URL is set (docs/testing/harness-live-proof.md Gate
 
 from __future__ import annotations
 
-from uuid import uuid4
+import os
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
+from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import insert, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.models.base import Base
+from src.models.bridge_device import BridgeDevice, WorkspaceBinding
+from src.models.collection import Collection
+from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
+from src.models.organization import Organization
+from src.models.user import User
+from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.integration_connections import ConnectionConsent
 from src.schemas.integration_context import GrantRequestCreate, IntegrationContext
 from src.schemas.tool_actions import ActionActor
+from src.services.integrations import context as service
 
 pytestmark = pytest.mark.unit
 SCHEMA_IDS = {
@@ -22,7 +36,7 @@ SCHEMA_IDS = {
 }
 
 
-def _ctx(**values: object) -> IntegrationContext:
+def _ctx(**values: Any) -> IntegrationContext:
     return IntegrationContext(
         user_id=SCHEMA_IDS["user"],
         organization_id=SCHEMA_IDS["org"],
@@ -114,3 +128,246 @@ def test_action_actor_may_name_its_kind() -> None:
         project_id=uuid4(),
     )
     assert legacy.binding_kind is None  # derived where it is used (tool_actions)
+
+
+# --- database: one account, a device, and what lies outside the account -----
+
+ORG, OTHER_ORG = uuid4(), uuid4()
+USER, COLLEAGUE, OUTSIDER = uuid4(), uuid4(), uuid4()
+OWNED, MEMBER_WS, FOREIGN_WS = uuid4(), uuid4(), uuid4()
+# P_FOREIGN: USER is a live member of another organization's workspace.
+# authorized_project admits it; the account does not.
+P_OWNED, P_OWNED_2, P_MEMBER, P_FOREIGN = (uuid4() for _ in range(4))
+DEVICE, OTHER_DEVICE = uuid4(), uuid4()
+OWNER = SimpleNamespace(id=USER, organization_id=ORG)
+ACCOUNT_RUN = frozenset(
+    {"harness:execute", "tools:read", "tools:write", "library:read", "library:write"}
+)
+_TABLES: list[Any] = [
+    Organization,
+    User,
+    Workspace,
+    WorkspaceMember,
+    Collection,
+    BridgeDevice,
+    WorkspaceBinding,
+    IntegrationGrantRequest,
+    IntegrationGrant,
+]
+
+
+async def _seed_account(db: AsyncSession) -> None:
+    for org in (ORG, OTHER_ORG):
+        await db.execute(
+            insert(Organization).values(id=org, name=str(org), storage_limit_bytes=1)
+        )
+    for user, org in ((USER, ORG), (COLLEAGUE, ORG), (OUTSIDER, OTHER_ORG)):
+        await db.execute(
+            text(
+                "INSERT INTO users (id, organization_id, email, password_hash, "
+                "first_name, last_name, role, is_active, login_count, created_at, "
+                "updated_at, is_deleted) VALUES (:id, :org, :email, 'unused', 'T', "
+                "'U', 'USER', :active, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, "
+                ":deleted)"
+            ),
+            {
+                "id": str(user),
+                "org": str(org),
+                "email": f"{user}@example.test",
+                "active": True,
+                "deleted": False,
+            },
+        )
+    for workspace, owner, org, name in (
+        (OWNED, USER, ORG, "Owned"),
+        (MEMBER_WS, COLLEAGUE, ORG, "Shared"),
+        (FOREIGN_WS, OUTSIDER, OTHER_ORG, "Foreign"),
+    ):
+        await db.execute(
+            insert(Workspace).values(
+                id=workspace, name=name, owner_id=owner, organization_id=org
+            )
+        )
+    for workspace in (MEMBER_WS, FOREIGN_WS):
+        await db.execute(
+            insert(WorkspaceMember).values(
+                id=uuid4(),
+                workspace_id=workspace,
+                user_id=USER,
+                role=WorkspaceRole.EDITOR,
+            )
+        )
+    for project, workspace, name in (
+        (P_OWNED, OWNED, "Thesis"),
+        (P_OWNED_2, OWNED, "Grant"),
+        (P_MEMBER, MEMBER_WS, "Shared notes"),
+        (P_FOREIGN, FOREIGN_WS, "Foreign"),
+    ):
+        await db.execute(
+            insert(Collection).values(id=project, name=name, workspace_id=workspace)
+        )
+    for device, label in ((DEVICE, "Laptop"), (OTHER_DEVICE, "Desktop")):
+        await db.execute(
+            insert(BridgeDevice).values(
+                id=device, user_id=USER, organization_id=ORG, label=label
+            )
+        )
+    await db.commit()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+async def db(request: pytest.FixtureRequest) -> AsyncIterator[AsyncSession]:
+    if request.param == "sqlite":
+        dsn, schema = "sqlite+aiosqlite:///:memory:", None
+    else:
+        raw = os.getenv("ORCHESTRATION_TEST_DATABASE_URL") or ""
+        if not raw:
+            pytest.skip("ORCHESTRATION_TEST_DATABASE_URL is not configured (NOT RUN)")
+        dsn = raw.replace("postgresql://", "postgresql+asyncpg://", 1)
+        schema = "account_connections_" + uuid4().hex
+    admin = create_async_engine(dsn) if schema else None
+    if admin is not None:
+        async with admin.begin() as conn:
+            await conn.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+    engine = (
+        create_async_engine(
+            dsn, connect_args={"server_settings": {"search_path": schema}}
+        )
+        if schema
+        else create_async_engine(dsn)
+    )
+    try:
+        async with engine.begin() as conn:
+            # Nullable chat and run associations keep their real FK targets.
+            await conn.exec_driver_sql("CREATE TABLE threads (id uuid PRIMARY KEY)")
+            await conn.exec_driver_sql(
+                "CREATE TABLE agent_runs (job_id varchar(36) PRIMARY KEY)"
+            )
+            await conn.run_sync(
+                Base.metadata.create_all, tables=[m.__table__ for m in _TABLES]
+            )
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            await _seed_account(session)
+            yield session
+    finally:
+        await engine.dispose()
+        if admin is not None:
+            async with admin.begin() as conn:
+                await conn.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
+            await admin.dispose()
+
+
+def _account_ctx(**values: Any) -> IntegrationContext:
+    return IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        binding_kind="account",
+        grant_id=uuid4(),
+        **values,
+    )
+
+
+# --- scopes by kind ------------------------------------------------------------
+
+
+def test_an_account_may_hold_only_the_account_scopes() -> None:
+    service.check_scopes(ACCOUNT_RUN, binding_kind="account")
+    service.check_scopes({"tools:read", "harness:execute"}, binding_kind="account")
+    for project_only in (
+        "artifacts:publish",
+        "context:read",
+        "handoff:read",
+        "handoff:write",
+    ):
+        with pytest.raises(service.IntegrationAccessDenied):
+            service.check_scopes({"tools:read", project_only}, binding_kind="account")
+    # The scope implications still hold for an account.
+    with pytest.raises(service.IntegrationAccessDenied):
+        service.check_scopes({"tools:read", "library:write"}, binding_kind="account")
+
+
+def test_project_and_workspace_scope_rules_are_unchanged() -> None:
+    # Regression for the signature change: the old keyword still works.
+    service.check_scopes({"tools:read", "artifacts:publish", "context:read"})
+    service.check_scopes({"tools:read", "library:read"}, workspace_bound=True)
+    with pytest.raises(service.IntegrationAccessDenied):
+        service.check_scopes({"tools:read", "context:read"}, workspace_bound=True)
+    with pytest.raises(service.IntegrationAccessDenied):
+        service.check_scopes({"harness:execute"}, binding_kind="workspace")
+
+
+# --- validate_binding: the account branch --------------------------------------
+
+
+async def test_an_account_binding_needs_a_device_and_no_chat_or_run(
+    db: AsyncSession,
+) -> None:
+    await service.validate_binding(
+        db,
+        user_id=USER,
+        organization_id=ORG,
+        project_id=None,
+        device_id=DEVICE,
+        binding_kind="account",
+    )
+    extras: tuple[dict[str, Any], ...] = (
+        {"device_id": None},
+        {"device_id": DEVICE, "thread_id": uuid4()},
+        {"device_id": DEVICE, "run_id": uuid4()},
+        {"device_id": DEVICE, "project_id": P_OWNED},
+        {"device_id": DEVICE, "workspace_id": OWNED},
+        {"device_id": uuid4()},  # not the user's device
+    )
+    for extra in extras:
+        values: dict[str, Any] = {"project_id": None, **extra}
+        with pytest.raises(service.IntegrationAccessDenied):
+            await service.validate_binding(
+                db, user_id=USER, organization_id=ORG, binding_kind="account", **values
+            )
+
+
+async def test_both_null_without_the_kind_is_still_bound_to_nothing(
+    db: AsyncSession,
+) -> None:
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.validate_binding(
+            db, user_id=USER, organization_id=ORG, project_id=None, device_id=DEVICE
+        )
+
+
+async def test_an_account_binding_ends_with_its_user(db: AsyncSession) -> None:
+    await db.execute(update(User).where(User.id == USER).values(is_active=False))
+    await db.commit()
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.validate_binding(
+            db,
+            user_id=USER,
+            organization_id=ORG,
+            project_id=None,
+            device_id=DEVICE,
+            binding_kind="account",
+        )
+
+
+# --- authorized_scope / authorized_scope_filter ----------------------------------
+
+
+async def test_an_account_scope_is_the_account_rule_not_authorized_project(
+    db: AsyncSession,
+) -> None:
+    assert await service.authorized_scope(db, _account_ctx()) == {
+        P_OWNED,
+        P_OWNED_2,
+        P_MEMBER,
+    }
+    # P_FOREIGN stays reachable by a project pairing, never by the account.
+    await service.authorized_project(db, USER, ORG, P_FOREIGN)
+
+
+async def test_an_account_scope_is_rechecked_on_every_call(db: AsyncSession) -> None:
+    await db.execute(
+        update(Organization).where(Organization.id == ORG).values(is_active=False)
+    )
+    await db.commit()
+    with pytest.raises(service.IntegrationAccessDenied):
+        await service.authorized_scope_filter(db, _account_ctx())

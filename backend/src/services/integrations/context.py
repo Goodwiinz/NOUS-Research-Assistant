@@ -35,6 +35,7 @@ from src.schemas.integration_context import (
     IntegrationContext,
     IssuedGrant,
     WorkspaceBindingCreate,
+    derive_binding_kind,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,26 @@ _PROJECT_ONLY_SCOPES = frozenset(
 )
 
 
-def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> None:
+# An account approval spans many projects. Everything bound to one project or
+# one chat (artifact publication, selected memories, chat handoffs) stays with
+# project pairings; Local Codex runs get a project grant per run (PR 2).
+ACCOUNT_SCOPES = frozenset(
+    {"harness:execute", "tools:read", "tools:write", "library:read", "library:write"}
+)
+
+
+def check_scopes(
+    scopes: Iterable[str],
+    *,
+    binding_kind: BindingKind = "project",
+    workspace_bound: bool = False,
+) -> None:
+    """Refuse a scope set no grant of ``binding_kind`` may hold.
+
+    ``workspace_bound=True`` is the older spelling of
+    ``binding_kind="workspace"`` and is kept for its callers.
+    """
+    kind: BindingKind = "workspace" if workspace_bound else binding_kind
     held = set(scopes)
     if not held or not held <= STANDARD_SCOPES:
         raise IntegrationAccessDenied()
@@ -109,7 +129,9 @@ def check_scopes(scopes: Iterable[str], *, workspace_bound: bool = False) -> Non
         not needed <= held for scope, needed in _SCOPE_REQUIRES.items() if scope in held
     ):
         raise IntegrationAccessDenied()
-    if workspace_bound and held & _PROJECT_ONLY_SCOPES:
+    if kind == "workspace" and held & _PROJECT_ONLY_SCOPES:
+        raise IntegrationAccessDenied()
+    if kind == "account" and not held <= ACCOUNT_SCOPES:
         raise IntegrationAccessDenied()
 
 
@@ -404,8 +426,12 @@ async def authorized_scope_filter(
     statement may bind (asyncpg refuses more than 32,767 parameters, and the
     collection routes put no cap on a workspace), so an ``IN`` list of its ids
     is an outage waiting for that many folders. The condition does not exclude
-    soft-deleted Collections or Workspaces: the caller's statement must.
+    soft-deleted Collections or Workspaces: the caller's statement must. An
+    account condition excludes deleted and archived rows itself.
     """
+    if context.binding_kind == "account":
+        await authorized_account(db, context.user_id, context.organization_id)
+        return account_scope_condition(context.user_id, context.organization_id)
     if context.project_id is not None:
         await authorized_project(
             db, context.user_id, context.organization_id, context.project_id
@@ -457,13 +483,27 @@ async def validate_binding(
     thread_id: UUID | None = None,
     run_id: UUID | str | None = None,
     device_id: UUID | None = None,
+    binding_kind: BindingKind | None = None,
 ) -> None:
-    if project_id is not None and workspace_id is None:
+    # Without a stated kind the columns decide, and both NULL is no binding:
+    # only binding_kind="account" makes it the account.
+    kind = (
+        binding_kind
+        if binding_kind is not None
+        else derive_binding_kind(project_id, workspace_id)
+    )
+    if kind == "project" and project_id is not None and workspace_id is None:
         await authorized_project(db, user_id, organization_id, project_id)
-    elif workspace_id is not None and project_id is None:
+    elif kind == "workspace" and workspace_id is not None and project_id is None:
         await authorized_workspace(db, user_id, organization_id, workspace_id)
         # A workspace has no single project for a chat or a run to belong to.
         if thread_id is not None or run_id is not None:
+            raise IntegrationAccessDenied()
+    elif kind == "account" and project_id is None and workspace_id is None:
+        await authorized_account(db, user_id, organization_id)
+        # An account approval belongs to one device and to no chat or run;
+        # each run gets a project grant of its own (PR 2).
+        if device_id is None or thread_id is not None or run_id is not None:
             raise IntegrationAccessDenied()
     else:
         raise IntegrationAccessDenied()
