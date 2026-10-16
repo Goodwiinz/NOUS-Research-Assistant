@@ -358,7 +358,7 @@ async def test_corrected_source_preserves_parent_and_successor_release_bytes(
     entered, release = asyncio.Event(), asyncio.Event()
     original_append = reviews._append
 
-    async def held_append(db: AsyncSession, *args: Any, **kwargs: Any) -> None:
+    async def held_append(db: AsyncSession, *args: Any, **kwargs: Any) -> UUID:
         if (
             kwargs.get("event_type") == "review_update.release_linked"
             and kwargs.get("version_id") == successor.id
@@ -366,7 +366,7 @@ async def test_corrected_source_preserves_parent_and_successor_release_bytes(
         ):
             entered.set()
             await release.wait()
-        await original_append(db, *args, **kwargs)
+        return await original_append(db, *args, **kwargs)
 
     monkeypatch.setattr(reviews, "_append", held_append)
     first = asyncio.create_task(
@@ -451,3 +451,63 @@ async def test_corrected_source_preserves_parent_and_successor_release_bytes(
                 assert package == original_bytes
                 assert exported["body_sha256"] == original_root_export["body_sha256"]
     assert hashes[root.id] != hashes[successor.id]
+
+    # A later unavailable notice check cannot undo a known invalidation.
+    world.crossref.notice_fail = True
+    async with factory() as db:
+        later_executions = await updates.claim_due(
+            db, search_rules.to_utc(local, zone) + timedelta(days=8)
+        )
+    assert len(later_executions) == 1
+    async with factory() as db:
+        outcome = await updates.run_execution(
+            db,
+            later_executions[0],
+            lambda _org: world.connectors,
+            worker="notice-outage-release-proof",
+        )
+    assert outcome == "succeeded"
+    later_delta = await review_proof._delta(world, later_executions[0])
+    later_classes = {item.report_id: item.delta_class for item in later_delta.items}
+    assert later_classes[str(reports["r5"])] == "unknown"
+    await review_proof._successor(
+        world, "notice-outage-review", successor.id, later_delta
+    )
+    later_listing = await manuscript_proof._listing(world)
+    assert later_listing[parent_release.id].status == "stale"
+    assert later_listing[unrelated_release.id].status == "verified"
+    assert later_listing[successor_release.id].status == "verified"
+    _, replayed = await review_proof._successor(
+        world, "successor-release-review", root.id, delta
+    )
+    assert replayed
+    assert (
+        await review_proof._scalar(
+            factory,
+            "SELECT count(*) FROM research_decision_events stale "
+            "JOIN research_decision_events accepted "
+            "ON accepted.id::text = (stale.payload->'cause'->>'event_id') "
+            "WHERE stale.event_type = 'release.staled' "
+            "AND stale.payload->'release_ids' @> CAST(:ids AS jsonb) "
+            "AND accepted.event_type = 'review_update.versioned' "
+            "AND accepted.subject_id = :version",
+            ids=json.dumps([str(parent_release.draft_release_id)]),
+            version=successor.id,
+        )
+        == 1
+    )
+    package, digest = await review_proof._as(
+        world,
+        "O",
+        ResearchAction.VIEW,
+        lambda db, ctx: manuscripts.package_bytes(db, ctx, parent_release.id),
+    )
+    assert package == original_bytes and digest == original_sha
+    assert (
+        await review_proof._scalar(
+            factory,
+            "SELECT row_to_json(m)::text FROM manuscript_releases m WHERE id = :id",
+            id=parent_release.id,
+        )
+        == parent_row
+    )

@@ -72,10 +72,11 @@ ignored it and fell back to optional testcontainers: a CI-shaped baseline
 with testcontainers disabled exited successfully but skipped all three new
 cases. The fallback correction ran eleven native scenarios with zero skips,
 including the original screening suite, with only the CI database variable
-configured and testcontainers disabled. The two new files are assigned to
+configured and testcontainers disabled. At head
+`aaed1d70773d32e9099d7199e91a205dcaeefed7`, the two new files were assigned to
 integration shards 1 (release chain) and 3 (citation chase), respectively.
 Hosted execution is verified separately against the published head's producer
-and JUnit records; local admission evidence is not a hosted pass.
+logs; local admission evidence is not a hosted pass.
 
 CI does install testcontainers, so that conditional baseline does not establish
 that previous hosted runs skipped these cases. The correction reuses the
@@ -100,7 +101,7 @@ scratch database does not have the vector extension installed; these fixtures
 do not exercise embeddings. This is local source evidence, not a deployed acceptance
 result or methods-expert review.
 
-The final owning PostgreSQL matrix passed seven scenarios with zero skips,
+The original owning PostgreSQL matrix passed seven scenarios with zero skips,
 including both statement variants and the required chase. The architecture,
 API and owning-service unit matrix passed 1,651 tests. Pinned local blocking
 checks that ran passed; unchanged-contract and unchanged-migration conditional
@@ -124,3 +125,34 @@ Raw local logs and JUnit outputs are retained outside tracked source under
 `required-chase-native-v1.log` and `required-chase-mutation.json`. The
 sanitized source/result manifest beside this document binds the final proof
 files; hosted CI is reported separately for the exact published head.
+
+## Retraction persistence follow-up
+
+The original results and source hashes in `proof.json` are retained. The
+separate [persistence proof](persistence-proof.json) binds this follow-up.
+
+Fable's methods-evidence review raised a possible status reversal. A native
+probe confirmed it at `aaed1d70773d32e9099d7199e91a205dcaeefed7`: accepting a
+later weekly delta whose publication check is unknown changed P from stale
+back to verified, despite the retained earlier retraction. P's bytes were
+unchanged. The permanent regression failed at that exact status assertion.
+
+Accepting a successor now invokes the existing draft-release invalidator in
+the same transaction as the review version and event. The strict ledger
+recognizes `research_review_update` as a cause, linked to the exact review
+event. Existing dependent draft releases stay invalidated when a later check
+is unknown; unrelated releases remain verified. Manuscript rows and stored
+package bytes remain immutable.
+
+Both native statement variants pass after two accepted deltas. They verify
+one durable invalidation after acceptance replay and join its cause to the
+correct review event. The existing review-version proof also passes. There
+are three distinct native cases; the restored plain case overlaps the first
+matrix. The unit/API/architecture and ledger matrix passes 1,765 cases with
+zero skips. Omitting only the durable invalidation call reproduces the status
+failure; exact restoration passes again. Applicable local CI gates pass.
+
+The stamp applies when accepting a successor. Historical accepted updates and
+any already-revived statuses require separate assessment before rollout.
+Protocol approval, conformant-run status and providers remain fixtures; this
+does not establish deployed acceptance or human methods-expert approval.
