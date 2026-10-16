@@ -65207,7 +65207,7 @@
     },
     "/api/v2/threads/{thread_id}/handoff": {
       "get": {
-        "description": "Latest harness handoff left in this chat (standalone route).",
+        "description": "Latest handoff, or null for an authorized chat without one.",
         "operationId": "get_thread_handoff_api_v2_threads__thread_id__handoff_get",
         "parameters": [
           {
@@ -65226,7 +65226,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HandoffDTO"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandoffDTO"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Thread Handoff Api V2 Threads  Thread Id  Handoff Get"
                 }
               }
             },

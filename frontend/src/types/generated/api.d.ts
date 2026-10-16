@@ -10534,7 +10534,7 @@ export interface paths {
         };
         /**
          * Get Thread Handoff
-         * @description Latest harness handoff left in this chat (standalone route).
+         * @description Latest handoff, or null for an authorized chat without one.
          */
         get: operations["get_thread_handoff_api_v2_threads__thread_id__handoff_get"];
         put?: never;
@@ -43985,7 +43985,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HandoffDTO"];
+                    "application/json": components["schemas"]["HandoffDTO"] | null;
                 };
             };
             /** @description Validation Error */

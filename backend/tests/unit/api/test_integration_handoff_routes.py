@@ -134,6 +134,7 @@ def app(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]) -> FastAPI:
     monkeypatch.setattr(handoffs, "save", save)
     monkeypatch.setattr(handoffs, "read_latest_for_thread", read_for_thread)
     monkeypatch.setattr(thread_routes.workspace_access, "get_thread", get_thread)
+    monkeypatch.setattr(thread_routes.workspace_access, "get_thread_lean", get_thread)
 
     async def fake_db() -> AsyncIterator[Any]:
         yield None
@@ -272,7 +273,7 @@ def test_browser_route_reads_latest(app: FastAPI) -> None:
     assert response.json()["version"] == 3
 
 
-def test_browser_route_404_for_outsider_and_empty(
+def test_browser_route_404_for_outsider_and_null_for_empty(
     client: TestClient, state: dict[str, Any]
 ) -> None:
     state["thread"] = None
@@ -282,8 +283,8 @@ def test_browser_route_404_for_outsider_and_empty(
     state["thread"] = _thread(ORG)
     state["latest"] = None
     response = client.get(f"/api/v2/threads/{THREAD}/handoff")
-    assert response.status_code == 404
-    assert response.json() == {"detail": "No handoff for this chat"}
+    assert response.status_code == 200
+    assert response.json() is None
 
 
 def test_browser_route_scopes_by_the_chats_workspace_org(
@@ -319,7 +320,7 @@ class _OwnerOrgSession:
 
 @pytest.mark.parametrize(
     ("owner_org", "status", "read_orgs"),
-    [(OWNER_ORG, 200, [OWNER_ORG]), (None, 404, [])],
+    [(OWNER_ORG, 200, [OWNER_ORG]), (None, 200, [])],
     ids=["owner-has-org", "owner-has-none"],
 )
 def test_browser_route_reads_a_legacy_workspace_under_its_owners_org(
@@ -344,6 +345,6 @@ def test_browser_route_reads_a_legacy_workspace_under_its_owners_org(
     with TestClient(app) as client:
         response = client.get(f"/api/v2/threads/{THREAD}/handoff")
     assert response.status_code == status
-    if status == 404:
-        assert response.json() == {"detail": "No handoff for this chat"}
+    if owner_org is None:
+        assert response.json() is None
     assert state["read_orgs"] == read_orgs

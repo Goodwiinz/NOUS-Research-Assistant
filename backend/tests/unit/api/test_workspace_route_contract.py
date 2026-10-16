@@ -194,7 +194,7 @@ STANDALONE_ROUTES = [
     ("GET", "/threads/{thread_id}", ThreadDetailResponse, 200, False),
     ("PATCH", "/threads/{thread_id}", ThreadResponse, 200, False),
     ("DELETE", "/threads/{thread_id}", None, 204, False),
-    ("GET", "/threads/{thread_id}/handoff", HandoffDTO, 200, False),
+    ("GET", "/threads/{thread_id}/handoff", HandoffDTO | None, 200, False),
     ("GET", "/threads/{thread_id}/messages", ChatMessageListResponse, 200, False),
     (
         "POST",

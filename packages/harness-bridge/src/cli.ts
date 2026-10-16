@@ -1620,6 +1620,7 @@ export function recoverInterrupt(
 }
 const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | rc --api URL --root PATH [--label NAME] | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or unlinked from --project, reconnect. Reconnect without --chat to unbind.
+  New browser-started runs need a device bound to the chat's current project. Other live linked-project bindings retain MCP and handoff access.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions. It always requests library:read, so list_library can name the projects its tools need.
   connect --library (needs --tools and --write) also requests library:read and library:write.
