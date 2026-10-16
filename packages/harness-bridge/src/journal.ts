@@ -250,6 +250,29 @@ export class Journal {
       .get(command.workspaceId) as { command: string } | undefined;
     return lock ? this.row(lock.command) : undefined;
   }
+  /** The run a Stop or approval is for: its workspace's lock holder, or, once
+   * reject() released a refused run's lock after its terminal observation
+   * (D-2'), that run's 'denied' start. NOUS never stored the terminal, so it
+   * keeps the run open and redelivers its commands on every poll; without the
+   * fallback they found no owner, or the folder's next run, and the throw
+   * closed the socket on every reconnect (GOO-433). */
+  private target(command: BridgeCommand): Row | undefined {
+    const owner = this.owner(command);
+    if (
+      owner &&
+      (JSON.parse(owner.command) as BridgeCommand).runId === command.runId
+    )
+      return owner;
+    const released = (
+      this.db
+        .prepare("SELECT * FROM commands WHERE state='denied'")
+        .all() as Row[]
+    ).find(
+      (row) =>
+        (JSON.parse(row.command) as BridgeCommand).runId === command.runId,
+    );
+    return released ?? owner;
+  }
   renewLease(
     deviceId: string,
     expiresAt: string,
@@ -316,8 +339,7 @@ export class Journal {
     // lease is left to lapse. An interrupt of it only stops work, and an
     // approval for it is dropped below, so neither needs a live lease.
     const refused =
-      command.body.kind !== "start" &&
-      this.owner(command)?.state === "denied";
+      command.body.kind !== "start" && this.target(command)?.state === "denied";
     if (
       !refused &&
       (Date.parse(expiresAt) <= Date.now() ||
@@ -327,7 +349,8 @@ export class Journal {
     const b = command.body;
     const interruptOwner = randomUUID();
     const claimed = this.tx(() => {
-      const owner = this.owner(command);
+      const owner =
+        b.kind === "start" ? this.owner(command) : this.target(command);
       if (b.kind === "start") {
         if (owner) throw new Error("workspace quarantined");
       } else {
@@ -346,6 +369,13 @@ export class Journal {
           throw new Error("interrupt target mismatch");
         // A refused run is final: its approvals are dropped, not forwarded.
         if (b.kind === "respond" && owner.state === "denied") return false;
+        // Its lock released (D-2'): the run finished here, nothing to stop.
+        if (
+          b.kind === "interrupt" &&
+          owner.state === "denied" &&
+          !this.holdsLock(owner.id)
+        )
+          return false;
         if (b.kind === "respond" && owner.state !== "running")
           throw new Error("approval blocked during recovery");
       }
