@@ -305,3 +305,30 @@ threshold. No secret values were recorded. Production-environment definition,
 owner decisions and live/methods acceptance also remain open. No deployment,
 live flags, backfill, grant or workflow creation, merge, self-approval, manual
 Linear status change or external message was performed.
+## CI registry availability follow-up
+
+After refreshing onto develop, pipeline38958382094 at
+`8c868403eee98ed79d4b7c0ddb1684412c83951a` twice failed its shard-1 service pull
+before checkout: producers117172667579 and117180791954 returned ECR
+`Data limit exceeded`. The missing pytest command and Codecov action were
+downstream of the skipped checkout/setup, not application-test failures.
+
+The CI-only follow-up uses the same official Docker Hub PostgreSQL15,
+PostgreSQL15-alpine and Redis7 digests proven by successful hosted #2022
+producers at `bce9bf7d4d896f401171953caffb52e029cd0ca8`. All four service-image
+values and one existing migration expected-image literal change. Parsed
+health checks, credentials, ports, triggers, permissions and test commands
+remain identical. The retained worker crash experiment stays bound to its
+original frozen source and does not become a new experiment result.
+
+[CI proof](ci-registry-proof.json) records image identity and 492 passing CI
+contract cases with no failures or skips. Pinned actionlint1.7.7 passes the
+whole tree with the exact `SHELLCHECK_OPTS` in workflow-lint.yml; changed-file
+Ruff/Black/isort also pass. Current-head hosted checks remain required.
+
+Pins require manual refresh: inspect `docker.io/library/postgres:15`,
+`docker.io/library/postgres:15-alpine` and `docker.io/library/redis:7` with
+`docker buildx imagetools inspect`, record each matching index digest and
+linux/amd64 variant, replace the digest while retaining the tag hint, update
+the contract literal and rerun local/hosted checks. Do not refresh a digest
+without recording the variant identity and successful required CI.
