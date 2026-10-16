@@ -142,8 +142,9 @@ def test_queue_processing_job_sends_and_commits() -> None:
 
     celery_mod.celery_app.send_task.side_effect = send
     with patch.dict(sys.modules, {"src.tasks.celery_app": celery_mod}):
-        asyncio.run(pipeline.queue_processing_job("job-1"))
+        dispatched = asyncio.run(pipeline.queue_processing_job("job-1"))
 
+    assert dispatched is True
     assert events == ["commit", "send"]
     assert uuid.UUID(job.celery_task_id)
     assert job.status == JobStatus.QUEUED
@@ -155,6 +156,126 @@ def test_queue_processing_job_sends_and_commits() -> None:
         task_id=job.celery_task_id,
     )
     db.commit.assert_awaited_once()
+
+
+# --- routing: KG jobs must reach the task their origin site dispatched -----
+#
+# knowledge_graph.py creates MERGE jobs as BATCH_PROCESSING with
+# parameters.operation == "entity_merge" and dispatches kg_merge_entities_job on
+# graph_processing; KG extraction jobs (knowledge_graph.py, research/projects.py)
+# are ENTITY_EXTRACTION with operation == "document_entity_extraction" and
+# ``document_ids``, dispatched to kg_extract_entities_job on entity_processing.
+# The generic ``extract_entities`` task reads parameters["document_id"] and
+# KeyErrors on a KG job. A retry must re-dispatch what the origin site did.
+
+
+def _retrying_job(**kwargs: object) -> ProcessingJob:
+    values = {"status": JobStatus.RETRYING, "retry_count": 1}
+    values.update(kwargs)
+    job = _pending_job(**values)
+    job.celery_task_id = "previous-attempt"
+    return job
+
+
+def _dispatch(job: ProcessingJob) -> tuple[MagicMock, MagicMock, bool]:
+    db = _async_db()
+    db.execute.return_value = _result(scalar=job)
+    celery_mod = MagicMock()
+    with patch.dict(sys.modules, {"src.tasks.celery_app": celery_mod}):
+        dispatched = asyncio.run(_pipeline(db).queue_processing_job(str(job.id)))
+    return db, celery_mod, dispatched
+
+
+def test_queue_processing_job_routes_kg_merge_retry_to_merge_task() -> None:
+    job = _retrying_job(
+        job_type=JobType.BATCH_PROCESSING,
+        parameters={"operation": "entity_merge", "groups": [{"entities": ["a"]}]},
+        queue_name="graph_processing",
+    )
+
+    db, celery_mod, dispatched = _dispatch(job)
+
+    assert dispatched is True
+    assert job.status == JobStatus.QUEUED
+    assert job.queue_name == "graph_processing"
+    celery_mod.celery_app.send_task.assert_called_once_with(
+        "kg_merge_entities_job",
+        args=[str(job.id)],
+        queue="graph_processing",
+        task_id=job.celery_task_id,
+    )
+    db.commit.assert_awaited_once()
+
+
+def test_queue_processing_job_routes_kg_extraction_to_kg_task() -> None:
+    job = _retrying_job(
+        job_type=JobType.ENTITY_EXTRACTION,
+        parameters={
+            "operation": "document_entity_extraction",
+            "document_ids": [str(uuid.uuid4())],
+        },
+        queue_name="entity_processing",
+    )
+
+    db, celery_mod, dispatched = _dispatch(job)
+
+    assert dispatched is True
+    assert job.status == JobStatus.QUEUED
+    celery_mod.celery_app.send_task.assert_called_once_with(
+        "kg_extract_entities_job",
+        args=[str(job.id)],
+        queue="entity_processing",
+        task_id=job.celery_task_id,
+    )
+
+
+def test_queue_processing_job_keeps_generic_entity_extraction_route() -> None:
+    job = _retrying_job(
+        job_type=JobType.ENTITY_EXTRACTION,
+        parameters={"document_id": str(uuid.uuid4())},
+    )
+
+    _, celery_mod, dispatched = _dispatch(job)
+
+    assert dispatched is True
+    celery_mod.celery_app.send_task.assert_called_once_with(
+        "extract_entities",
+        args=[str(job.id)],
+        queue="entity_processing",
+        task_id=job.celery_task_id,
+    )
+
+
+def test_queue_processing_job_unroutable_job_fails_loudly() -> None:
+    # analytics_processor.create_job also writes BATCH_PROCESSING rows, with
+    # arbitrary parameters and no "operation": nothing consumes those via this
+    # path, so the honest outcome is FAILED with a reason, not silent RETRYING.
+    job = _retrying_job(job_type=JobType.BATCH_PROCESSING, parameters={})
+
+    db, celery_mod, dispatched = _dispatch(job)
+
+    assert dispatched is False
+    celery_mod.celery_app.send_task.assert_not_called()
+    assert job.status == JobStatus.FAILED
+    assert job.celery_task_id == "previous-attempt"
+    assert "batch_processing" in (job.error_message or "")
+    assert job.error_type == "UnroutableJob"
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+def test_queue_processing_job_publish_failure_reports_not_dispatched() -> None:
+    job = _pending_job()
+    db = _async_db()
+    # First execute: reservation; second: post-failure reload of the same row.
+    db.execute.side_effect = [_result(scalar=job), _result(scalar=job)]
+    celery_mod = MagicMock()
+    celery_mod.celery_app.send_task.side_effect = RuntimeError("broker down")
+    with patch.dict(sys.modules, {"src.tasks.celery_app": celery_mod}):
+        dispatched = asyncio.run(_pipeline(db).queue_processing_job(str(job.id)))
+
+    assert dispatched is False
+    assert job.status == JobStatus.FAILED
 
 
 def _pending_job(**kwargs: object) -> ProcessingJob:
@@ -265,7 +386,7 @@ def test_retry_failed_jobs_retries_eligible() -> None:
     db = _async_db()
     db.execute.return_value = _result(scalars=[retryable, stuck])
     pipeline = _pipeline(db)
-    pipeline.queue_processing_job = AsyncMock()  # type: ignore[method-assign]
+    pipeline.queue_processing_job = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
     count = asyncio.run(pipeline.retry_failed_jobs(organization_id="org-1"))
 
@@ -274,3 +395,23 @@ def test_retry_failed_jobs_retries_eligible() -> None:
     stuck.retry_job.assert_not_called()
     pipeline.queue_processing_job.assert_awaited_once_with(retryable.id)
     db.commit.assert_awaited_once()
+
+
+def test_retry_failed_jobs_counts_only_dispatched_jobs() -> None:
+    # "Retried N jobs" must mean N jobs were handed to a worker. A job that
+    # could not be routed or published is not a retry, whatever retry_job did.
+    dispatched = MagicMock(can_retry=True)
+    undispatched = MagicMock(can_retry=True)
+    db = _async_db()
+    db.execute.return_value = _result(scalars=[dispatched, undispatched])
+    pipeline = _pipeline(db)
+    pipeline.queue_processing_job = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[True, False]
+    )
+
+    count = asyncio.run(pipeline.retry_failed_jobs(organization_id="org-1"))
+
+    assert count == 1
+    dispatched.retry_job.assert_called_once()
+    undispatched.retry_job.assert_called_once()
+    assert pipeline.queue_processing_job.await_count == 2

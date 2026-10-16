@@ -19,6 +19,7 @@ from src.core.dependencies import get_current_user, require_admin
 # Must match conftest's mock_admin_user.organization_id — the endpoints
 # now scope traces to the caller's tenant.
 _FIXTURE_ORG_ID = "test-org-id"
+from src.services.diagnostics.diagnostics_store import DiagnosticsStore
 from src.services.diagnostics.retrieval_diagnostics import (
     ContextDiagnostics,
     FusionDiagnostics,
@@ -27,9 +28,43 @@ from src.services.diagnostics.retrieval_diagnostics import (
     SourceDiagnostics,
 )
 
+# What a real redis-py connection failure looks like: host, port and errno are
+# internal topology and must never reach the response body.
+_LEAKY_REDIS_ERROR = (
+    "Error 111 connecting to redis-master.nous.svc:6379. Connection refused."
+)
+
+# The public 503 detail is a contract the dashboard's operators read; pin the
+# literal here rather than importing it so a drift is a visible test change.
+_UNAVAILABLE_DETAIL = "Diagnostics storage is temporarily unavailable"
+
 # ============================================================================
 # Factories
 # ============================================================================
+
+
+def _make_sync_redis() -> MagicMock:
+    """A sync Redis stand-in that is reachable and holds no traces."""
+    client = MagicMock()
+    client.get = MagicMock(return_value=None)
+    client.zrevrange = MagicMock(return_value=[])
+    client.zrangebyscore = MagicMock(return_value=[])
+    return client
+
+
+def _assert_unavailable(response) -> None:
+    """503 with the stable public detail and none of the Redis error text."""
+    assert response.status_code == 503, response.text
+    body = response.json()
+    # The app wraps HTTP errors in {"error": {"message": ...}} format
+    error_msg = body.get("error", {}).get("message", "") or body.get("detail", "")
+    assert error_msg == _UNAVAILABLE_DETAIL
+    # Fake-success shapes must be gone entirely.
+    assert "traces" not in body
+    assert "total_traces" not in body
+    # backend/AGENTS.md: public HTTP errors use stable safe messages.
+    for leaked in ("6379", "redis-master", "Error 111", "Connection refused"):
+        assert leaked not in response.text
 
 
 def _make_trace(**overrides) -> RetrievalTrace:
@@ -243,6 +278,67 @@ class TestGetRecentTracesEndpoint:
         assert body["traces"] == []
         assert body["count"] == 0
 
+    def test_genuinely_empty_store_returns_200(self, test_client) -> None:
+        """A reachable Redis with no traces is 'no traffic', not an outage."""
+        store = DiagnosticsStore(redis_client=_make_sync_redis())
+        with patch(
+            "src.api.diagnostics.retrieval_diagnostics.diagnostics_store", store
+        ):
+            response = test_client.get("/api/v1/diagnostics/traces")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "traces": [],
+            "count": 0,
+            "limit": 50,
+            "offset": 0,
+        }
+
+    def test_redis_error_returns_503_not_empty_list(self, test_client) -> None:
+        """A Redis failure must not be reported as 'no traces captured yet'.
+
+        Live path: router -> real DiagnosticsStore -> failing Redis client.
+        """
+        redis = _make_sync_redis()
+        redis.zrevrange.side_effect = ConnectionError(_LEAKY_REDIS_ERROR)
+        store = DiagnosticsStore(redis_client=redis)
+        with patch(
+            "src.api.diagnostics.retrieval_diagnostics.diagnostics_store", store
+        ):
+            response = test_client.get("/api/v1/diagnostics/traces")
+
+        _assert_unavailable(response)
+
+    def test_no_redis_client_returns_503_not_empty_list(self, test_client) -> None:
+        """No Redis client configured is an outage, not an empty dashboard."""
+        store = DiagnosticsStore(redis_client=None)
+        with (
+            patch.object(
+                DiagnosticsStore,
+                "redis",
+                new_callable=lambda: property(lambda self: None),
+            ),
+            patch("src.api.diagnostics.retrieval_diagnostics.diagnostics_store", store),
+        ):
+            response = test_client.get("/api/v1/diagnostics/traces")
+
+        _assert_unavailable(response)
+
+    @patch("src.api.diagnostics.retrieval_diagnostics.diagnostics_store")
+    def test_store_unavailable_signal_maps_to_503(
+        self, mock_store, test_client
+    ) -> None:
+        """The store's unavailability signal is the router's 503 contract."""
+        from src.services.diagnostics.diagnostics_store import DiagnosticsUnavailable
+
+        mock_store.get_recent_traces = AsyncMock(
+            side_effect=DiagnosticsUnavailable(_LEAKY_REDIS_ERROR)
+        )
+
+        response = test_client.get("/api/v1/diagnostics/traces")
+
+        _assert_unavailable(response)
+
 
 # ============================================================================
 # GET /api/v1/diagnostics/aggregate
@@ -297,6 +393,65 @@ class TestGetAggregateStatsEndpoint:
         mock_store.get_aggregate_stats.assert_called_once_with(
             hours=48, organization_id=_FIXTURE_ORG_ID
         )
+
+    def test_genuinely_empty_store_returns_zero_stats(self, test_client) -> None:
+        """A reachable Redis with no traces is 'Total queries 0', legitimately."""
+        store = DiagnosticsStore(redis_client=_make_sync_redis())
+        with patch(
+            "src.api.diagnostics.retrieval_diagnostics.diagnostics_store", store
+        ):
+            response = test_client.get("/api/v1/diagnostics/aggregate")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total_traces"] == 0
+        assert body["avg_time_ms"] == 0
+        assert "error" not in body
+
+    def test_redis_error_returns_503_not_error_dict(self, test_client) -> None:
+        """A Redis failure must be a 503, not a 200 carrying the exception text.
+
+        Live path: router -> real DiagnosticsStore -> failing Redis client.
+        """
+        redis = _make_sync_redis()
+        redis.zrangebyscore.side_effect = ConnectionError(_LEAKY_REDIS_ERROR)
+        store = DiagnosticsStore(redis_client=redis)
+        with patch(
+            "src.api.diagnostics.retrieval_diagnostics.diagnostics_store", store
+        ):
+            response = test_client.get("/api/v1/diagnostics/aggregate")
+
+        _assert_unavailable(response)
+
+    def test_no_redis_client_returns_503_not_error_dict(self, test_client) -> None:
+        """No Redis client configured is an outage, not a 200 {"error": ...}."""
+        store = DiagnosticsStore(redis_client=None)
+        with (
+            patch.object(
+                DiagnosticsStore,
+                "redis",
+                new_callable=lambda: property(lambda self: None),
+            ),
+            patch("src.api.diagnostics.retrieval_diagnostics.diagnostics_store", store),
+        ):
+            response = test_client.get("/api/v1/diagnostics/aggregate")
+
+        _assert_unavailable(response)
+
+    @patch("src.api.diagnostics.retrieval_diagnostics.diagnostics_store")
+    def test_store_unavailable_signal_maps_to_503(
+        self, mock_store, test_client
+    ) -> None:
+        """The store's unavailability signal is the router's 503 contract."""
+        from src.services.diagnostics.diagnostics_store import DiagnosticsUnavailable
+
+        mock_store.get_aggregate_stats = AsyncMock(
+            side_effect=DiagnosticsUnavailable(_LEAKY_REDIS_ERROR)
+        )
+
+        response = test_client.get("/api/v1/diagnostics/aggregate")
+
+        _assert_unavailable(response)
 
 
 # ============================================================================
