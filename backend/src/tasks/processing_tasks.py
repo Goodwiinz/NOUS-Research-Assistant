@@ -1278,12 +1278,17 @@ def kg_merge_entities_job(self, job_id: str):
         # the broker ack redelivers the message. Re-running would regress the
         # job COMPLETED -> RUNNING and re-process every group — re-deleting
         # already-merged duplicate nodes and duplicating re-pointed edges.
-        if job.status == JobStatus.COMPLETED:
+        # FAILED/CANCELLED are terminal too: an all-groups-failed job commits
+        # FAILED below, and a redelivery after that commit would start_job() it
+        # back to RUNNING and repeat every Neo4j delete/re-point. RETRYING is
+        # non-terminal and still runs.
+        if job.status in _TERMINAL_PROCESSING_STATUSES:
             logger.info(
-                f"Job {job_id} already completed; skipping redelivered entity merge"
+                f"Job {job_id} already {job.status.value}; "
+                "skipping redelivered entity merge"
             )
             return {
-                "status": "completed",
+                "status": job.status.value,
                 "job_id": job_id,
                 "skipped": "duplicate_delivery",
             }
@@ -1311,11 +1316,17 @@ def kg_merge_entities_job(self, job_id: str):
                 failure_count += 1
                 continue
 
-            duplicate_ids = [
-                e.get("id")
-                for e in group_entities
-                if e.get("id") and e.get("id") != primary_id
-            ]
+            # Dedupe (order-preserving) and drop the primary: a request listing
+            # the same duplicate twice would otherwise process it twice, and the
+            # second delete_entity returns False (node already gone), marking a
+            # successful merge as a failed group.
+            duplicate_ids = list(
+                dict.fromkeys(
+                    e.get("id")
+                    for e in group_entities
+                    if e.get("id") and e.get("id") != primary_id
+                )
+            )
             step_message = f"Merging group {index + 1}/{total_groups}"
             job.update_progress(
                 step_message, min(90.0, ((index + 1) / max(total_groups, 1)) * 85.0)

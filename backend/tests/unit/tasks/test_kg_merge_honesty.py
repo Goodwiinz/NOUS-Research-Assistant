@@ -315,3 +315,92 @@ def test_partial_success_still_completes_with_counts(
     job.fail_job.assert_not_called()
     assert result == {"status": "completed", "job_id": "job-partial"}
     assert captured == {"total_groups": 2, "merged_groups": 1, "failed_groups": 1}
+
+
+@pytest.mark.parametrize("terminal", [JobStatus.FAILED, JobStatus.CANCELLED])
+def test_merge_short_circuits_terminal_failed_job(
+    monkeypatch: pytest.MonkeyPatch, terminal: JobStatus
+) -> None:
+    """Guard 5: now that an all-groups-failed merge commits FAILED, a worker
+    killed between that commit and the late ack redelivers the message. The
+    redelivery must not start_job() a terminal job (FAILED -> RUNNING) and
+    repeat every Neo4j delete/re-point."""
+    job = _job_with_groups(_two_groups())
+    job.status = terminal
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [job]
+    monkeypatch.setattr(pt, "SessionLocal", lambda: db)
+    kg = MagicMock()
+    monkeypatch.setattr(pt, "knowledge_graph_service", kg)
+
+    result = pt.kg_merge_entities_job.apply(args=("job-term",)).result
+
+    assert result == {
+        "status": terminal.value,
+        "job_id": "job-term",
+        "skipped": "duplicate_delivery",
+    }
+    job.start_job.assert_not_called()
+    job.complete_job.assert_not_called()
+    job.fail_job.assert_not_called()
+    assert kg.method_calls == []
+
+
+def test_merge_runs_retrying_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RETRYING is non-terminal: an explicitly re-queued job must still run."""
+    job = _job_with_groups(_two_groups())
+    job.status = JobStatus.RETRYING
+    captured: dict = {}
+    job.complete_job.side_effect = lambda result: captured.update(result)
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [job]
+    monkeypatch.setattr(pt, "SessionLocal", lambda: db)
+    kg = MagicMock()
+    kg.get_relationships.return_value = []
+    kg.delete_entity.return_value = True
+    monkeypatch.setattr(pt, "knowledge_graph_service", kg)
+
+    result = pt.kg_merge_entities_job.apply(args=("job-retry",)).result
+
+    job.start_job.assert_called_once()
+    assert result == {"status": "completed", "job_id": "job-retry"}
+    assert captured == {"total_groups": 2, "merged_groups": 2, "failed_groups": 0}
+
+
+def test_repeated_duplicate_id_in_group_merges_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard 6: a group listing the same duplicate twice ([primary, dup, dup])
+    must delete dup once. Processing it twice makes the second delete_entity
+    return False (node already gone), marking a successful merge as failed —
+    and with guard 4 a single such group fails the whole job."""
+    job = _job_with_groups(
+        [
+            {
+                "suggested_primary": "primary-1",
+                "entities": [
+                    {"id": "primary-1"},
+                    {"id": "dup-1"},
+                    {"id": "dup-1"},
+                    {"id": "primary-1"},
+                ],
+            }
+        ]
+    )
+    captured: dict = {}
+    job.complete_job.side_effect = lambda result: captured.update(result)
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [job]
+    monkeypatch.setattr(pt, "SessionLocal", lambda: db)
+    kg = MagicMock()
+    kg.get_relationships.return_value = []
+    # Real delete_entity: True on the first delete, False once the node is gone.
+    kg.delete_entity.side_effect = [True, False, False]
+    monkeypatch.setattr(pt, "knowledge_graph_service", kg)
+
+    result = pt.kg_merge_entities_job.apply(args=("job-dupdup",)).result
+
+    kg.delete_entity.assert_called_once_with("dup-1", organization_id="org-1")
+    job.fail_job.assert_not_called()
+    assert result == {"status": "completed", "job_id": "job-dupdup"}
+    assert captured == {"total_groups": 1, "merged_groups": 1, "failed_groups": 0}
