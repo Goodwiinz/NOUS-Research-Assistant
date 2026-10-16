@@ -211,8 +211,12 @@ class ExtractionMatrixService:
         try:
             client, model = self._get_openai_client()
         except RuntimeError as e:
-            await self.set_extraction_status(task_id, {"status": "failed"})
-            await self.set_extraction_status(task_id, {"error": str(e)})
+            # One write: a poll landing between two writes settled on
+            # "failed" with no message. The message is the fixed string
+            # raised by _get_openai_client, never key material.
+            await self.set_extraction_status(
+                task_id, {"status": "failed", "error": str(e)}
+            )
             return
 
         async with AsyncSessionLocal() as db:

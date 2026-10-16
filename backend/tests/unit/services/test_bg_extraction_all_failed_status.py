@@ -179,3 +179,41 @@ async def test_partial_success_stays_completed(
     assert appended == [docs[1]] and session.commits == 1
     assert status["status"] == "completed"
     assert status["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_missing_api_key_fails_in_a_single_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status "failed" and its error must land in ONE write: a poll between
+    two writes settled on failed with no message. Mutation: split the write
+    back into {"status": "failed"} then {"error": ...} and this fails on
+    len(writes) == 2 (three writes) / the failed write lacking "error"."""
+    writes: list[dict[str, Any]] = []
+    original = ems.ExtractionMatrixService.set_extraction_status
+
+    async def record(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        writes.append(dict(payload))
+        return await original(task_id, payload)
+
+    async def no_redis() -> None:
+        return None
+
+    def no_key() -> tuple:
+        raise RuntimeError("No OpenAI or Azure OpenAI API key configured.")
+
+    monkeypatch.setattr("src.services.agent.job_store.get_redis", no_redis)
+    monkeypatch.setattr(
+        ems.ExtractionMatrixService, "set_extraction_status", staticmethod(record)
+    )
+    monkeypatch.setattr(
+        ems.ExtractionMatrixService, "_get_openai_client", staticmethod(no_key)
+    )
+
+    status = await _run([], {}, "task-no-key")
+
+    assert [w.get("status") for w in writes] == ["running", "failed"]
+    assert len(writes) == 2
+    failed = writes[1]
+    assert failed["error"] == "No OpenAI or Azure OpenAI API key configured."
+    assert (status["status"], status["error"]) == ("failed", failed["error"])

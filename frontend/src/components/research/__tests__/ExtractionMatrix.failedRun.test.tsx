@@ -244,12 +244,25 @@ describe('ExtractionMatrix polled task outcome', () => {
       vi.mocked(getExtractionTaskStatus).mockResolvedValue(
         taskStatus({ status: 'running', completed: 1 })
       );
+      // The first status is the route's seed, written before the worker's
+      // first update; older seeds carry no `completed`. It must render as
+      // 0/2, never "/2". Mutation: drop `?? 0` from the banner and the 0/2
+      // assertion fails.
       await act(async () => {
-        resolveStatus(taskStatus({ status: 'running', completed: 1 }));
+        resolveStatus({
+          status: 'running',
+          matrix_id: 'm-1',
+          total: 2,
+          failed: 0,
+          skipped: 0,
+        } as ExtractionTaskStatus);
         await vi.advanceTimersByTimeAsync(10);
       });
-      expect(await screen.findByText(/Extracting 1\/2/)).toBeInTheDocument();
+      expect(await screen.findByText(/Extracting 0\/2/)).toBeInTheDocument();
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await screen.findByText(/Extracting 1\/2/)).toBeInTheDocument();
 
       vi.mocked(getExtractionTaskStatus).mockResolvedValue(
         taskStatus({ status: 'completed', completed: 2 })
