@@ -7,7 +7,7 @@ bottleneck analysis.
 """
 
 from .bottleneck_analyzer import BottleneckAnalyzer, BottleneckReport, Finding
-from .diagnostics_store import DiagnosticsStore
+from .diagnostics_store import DiagnosticsStore, DiagnosticsUnavailable
 from .retrieval_diagnostics import (
     ContextDiagnostics,
     FusionDiagnostics,
@@ -23,6 +23,7 @@ __all__ = [
     "ContextDiagnostics",
     "RetrievalTrace",
     "DiagnosticsStore",
+    "DiagnosticsUnavailable",
     "BottleneckAnalyzer",
     "BottleneckReport",
     "Finding",
