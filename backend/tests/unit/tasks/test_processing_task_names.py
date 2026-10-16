@@ -17,13 +17,16 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-# The exact strings queue_processing_job passes to send_task, by job type.
+# The exact strings queue_processing_job passes to send_task, by job type
+# (and, for KG jobs, by parameters["operation"]).
 _SEND_TASK_NAMES = {
     "process_document_ingestion",
     "extract_text_content",
     "generate_embeddings",
     "extract_entities",
     "index_in_graph",
+    "kg_extract_entities_job",
+    "kg_merge_entities_job",
 }
 
 
