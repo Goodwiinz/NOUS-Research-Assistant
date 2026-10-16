@@ -305,11 +305,30 @@ class ExtractionMatrixService:
                     )
                     await bump("failed")
 
-        await self.set_extraction_status(task_id, {"status": "completed"})
+        # Honest outcome (same rule as kg_extract_entities_job): a run that
+        # recorded nothing because every document failed (revoked key, quota,
+        # a failing append) is a failed run, not a completed one with zero
+        # rows. A partial run stays "completed" with its counters.
+        counts = _extraction_status[task_id]
+        completed, failed = counts.get("completed", 0), counts.get("failed", 0)
+        if completed == 0 and failed > 0:
+            await self.set_extraction_status(
+                task_id,
+                {
+                    "status": "failed",
+                    "error": (
+                        f"{failed} of {counts.get('total', failed)} documents "
+                        "failed; nothing was recorded"
+                    ),
+                },
+            )
+        else:
+            await self.set_extraction_status(task_id, {"status": "completed"})
         logger.info(
             "bg_extraction_complete",
             task_id=task_id,
             matrix_id=str(matrix_id),
+            status=_extraction_status[task_id]["status"],
             total=_extraction_status[task_id]["total"],
             completed=_extraction_status[task_id]["completed"],
             failed=_extraction_status[task_id]["failed"],

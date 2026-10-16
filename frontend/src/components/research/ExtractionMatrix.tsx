@@ -122,6 +122,8 @@ export function ExtractionMatrix({
             clearInterval(pollRef.current);
             pollRef.current = null;
           }
+          // A 'failed' status stays in autoExtractionStatus so the banner
+          // below can show its error instead of silently clearing.
           setAutoExtractionTaskId(null);
 
           if (status.status === 'completed' && matrix) {
@@ -363,18 +365,35 @@ export function ExtractionMatrix({
 
   return (
     <div className="space-y-4">
-      {autoExtractionTaskId && autoExtractionStatus && (
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2">
-          <span className="text-xs text-muted-foreground">
-            Extracting {autoExtractionStatus.completed}/
-            {autoExtractionStatus.total}…
-          </span>
-          {autoExtractionStatus.failed > 0 && (
-            <span className="text-xs text-destructive">
-              ({autoExtractionStatus.failed} failed)
-            </span>
-          )}
+      {autoExtractionStatus?.status === 'failed' ? (
+        <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2">
+          <p role="alert" className="flex-1 text-xs text-destructive">
+            {autoExtractionStatus.error ?? 'Extraction failed'}
+          </p>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Dismiss extraction error"
+            onClick={() => setAutoExtractionStatus(null)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
         </div>
+      ) : (
+        autoExtractionTaskId &&
+        autoExtractionStatus && (
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2">
+            <span className="text-xs text-muted-foreground">
+              Extracting {autoExtractionStatus.completed}/
+              {autoExtractionStatus.total}…
+            </span>
+            {autoExtractionStatus.failed > 0 && (
+              <span className="text-xs text-destructive">
+                ({autoExtractionStatus.failed} failed)
+              </span>
+            )}
+          </div>
+        )
       )}
 
       <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">
