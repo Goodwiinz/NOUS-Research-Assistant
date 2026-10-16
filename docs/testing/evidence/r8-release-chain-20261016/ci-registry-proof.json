@@ -1,0 +1,62 @@
+{
+  "schema": "nous.ci-postgres-registry-proof.v1",
+  "recorded_at": "2026-10-16T19:23:51.960019+00:00",
+  "source_base": "fd81c64eeac30fdb827e588f266813e845a7494e",
+  "workflow": "jobs.integration-tests.services.postgres.image",
+  "before": "public.ecr.aws/docker/library/postgres:15",
+  "after": "docker.io/library/postgres@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c",
+  "only_parsed_yaml_value_changed": true,
+  "workflow_before_sha256": "85d13a171acba40f5128febb79757a2b542a414488fba7670d6a6c5d083d9e36",
+  "workflow_after_sha256": "0aca480c52b858e4dd82108eb2cb790007b0e0f436d2f1c3af697c97345c93b5",
+  "observed_successful_image": {
+    "run": 38932566042,
+    "head": "fd81c64eeac30fdb827e588f266813e845a7494e",
+    "attempt": 2,
+    "producer_job": 117090755060,
+    "url": "https://github.com/Goodwiinz/NOUS-Research-Assistant/actions/runs/38932566042/job/117090755060",
+    "digest": "sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c",
+    "producer_log_sha256": "55d9b6f853c006d04f4b3f4e09153b625296ab97396a4d7fc8db844890ee5007"
+  },
+  "registry_identity_check": {
+    "command": "docker manifest inspect docker.io/library/postgres@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c",
+    "exit_code": 0,
+    "media_type": "application/vnd.oci.image.index.v1+json",
+    "platform_manifest_count": 16,
+    "linux_amd64_digest": "sha256:a5f9ead8ed7cb25abc36bea51fb9bb2be8d5579ed4ef3d28876027e438391ff0",
+    "inspection_output_sha256": "6ed5e593f1ba025475f9cc2986f6d09dcd871c3a312f58e4576b274461071991"
+  },
+  "blocked_producers": [
+    {
+      "attempt": 1,
+      "shard3_job": 117086851124
+    },
+    {
+      "attempt": 2,
+      "shard3_job": 117090755066
+    },
+    {
+      "attempt": 3,
+      "shard3_job": 117100509451
+    }
+  ],
+  "failure": "public ECR returned toomanyrequests: Data limit exceeded before checkout and integration tests",
+  "validation": {
+    "ci_contract_cases": 492,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "junit_sha256": "273287c2728b2bfe196fdd4ec850376bad3c37ec1cd17b67806dbac64ca3f4ec",
+    "actionlint": "1.7.7 (matching hosted gate), whole tree PASS; official release archive checksum verified",
+    "actionlint_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "scope": [
+    "Integration service image download source changes; exact previously passing OCI digest is pinned.",
+    "Parsed test commands, gates, triggers, permissions, credentials, ports, health checks and other jobs are identical.",
+    "Application and test source hashes remain the same as the separate persistence proof.",
+    "Local manifest availability is not proof of GitHub runner download availability; hosted CI must validate the published head."
+  ],
+  "references": [
+    "https://hub.docker.com/_/postgres",
+    "https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers"
+  ]
+}

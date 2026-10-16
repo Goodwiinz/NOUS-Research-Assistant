@@ -156,3 +156,19 @@ The stamp applies when accepting a successor. Historical accepted updates and
 any already-revived statuses require separate assessment before rollout.
 Protocol approval, conformant-run status and providers remain fixtures; this
 does not establish deployed acceptance or human methods-expert approval.
+
+## CI image delivery follow-up
+
+At `fd81c64`, integration shards 1 and 2 passed, but shard 3 failed three
+times before checkout: the public ECR mirror returned `Data limit exceeded`
+while pulling PostgreSQL. Test and Codecov failures after missing checkout
+are downstream; the extended package cases were not executed in that shard.
+
+The integration service now pulls the [official PostgreSQL image](https://hub.docker.com/_/postgres)
+from Docker Hub, pinned to the exact OCI digest observed in the passing
+shards. A successful manifest inspection verified that Docker Hub serves
+that digest. The [registry proof](ci-registry-proof.json) records the producer,
+digest and checks. Only the parsed integration image value changes; database
+setup, test commands and required gates remain identical. The CI contract
+suite passes 492 cases, and pinned actionlint 1.7.7 passes for the whole tree.
+Actual download and test execution still require the new published-head CI.

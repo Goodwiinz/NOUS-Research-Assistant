@@ -845,7 +845,8 @@ jobs:
         shard: [1, 2, 3]
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:15
+        # Same PostgreSQL 15 digest verified in the passing shards; avoid ECR's data quota.
+        image: docker.io/library/postgres@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
