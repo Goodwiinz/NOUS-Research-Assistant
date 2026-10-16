@@ -92,3 +92,11 @@ zero infrastructure exclusions**, classified Codex-only primitives
 insufficient and **NOT GATED**. A successful synthetic provider diagnostic
 does not replace that agent result. Deployed MCP/grant execution, broader
 labelled retrieval evaluation, owner acceptance and live rollout remain open.
+## Forward source guard
+
+The historical V3 declaration covered fifteen explicit files. A later isolated
+Git reproduction showed that modifying an unlisted imported model left that
+identity unchanged. The forward runner now requires a complete clean checkout
+and verifies its HEAD/tree again after cleanup. The new V4 record is NOT RUN;
+the V3 measurements are preserved without being reused for the changed guard.
+See [verifier/source-integrity evidence](../discovery-verifier-20261016/README.md).

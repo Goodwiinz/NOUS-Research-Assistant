@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -118,9 +120,9 @@ def test_clean_but_different_commit_refuses_execution_before_database_access(
     assert called == []
 
 
-@pytest.mark.parametrize("commit_change", [False, True], ids=["dirty", "new-head"])
+@pytest.mark.parametrize("change", ["dirty", "new-head", "git-unavailable"])
 def test_mid_run_source_change_invalidates_measurement_after_cleanup(
-    probe: ModuleType, monkeypatch: pytest.MonkeyPatch, commit_change: bool
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     import sqlalchemy
 
@@ -155,8 +157,15 @@ def test_mid_run_source_change_invalidates_measurement_after_cleanup(
     async def exercise(
         _fixture: dict[str, Any], _progress: dict[str, Any]
     ) -> dict[str, Any]:
-        (probe.ROOT / UNLISTED).write_text("CHANGED_DURING_RUN = 3\n")
-        if commit_change:
+        if change == "git-unavailable":
+
+            def unavailable() -> dict[str, Any]:
+                raise subprocess.CalledProcessError(128, ["git", "status"])
+
+            monkeypatch.setattr(probe, "identity", unavailable)
+        else:
+            (probe.ROOT / UNLISTED).write_text("CHANGED_DURING_RUN = 3\n")
+        if change == "new-head":
             git(probe.ROOT, "add", "--", UNLISTED)
             commit(probe.ROOT)
         return {"status": "completed"}
@@ -170,6 +179,7 @@ def test_mid_run_source_change_invalidates_measurement_after_cleanup(
         "TRANSFORMERS_OFFLINE",
     ):
         monkeypatch.setenv(key, os.environ.get(key, ""))
+    monkeypatch.syspath_prepend(str(probe.ROOT / "backend"))
     monkeypatch.setenv(
         "NOUS_PROVIDER_PROOF_DATABASE_URL", "postgresql://postgres@127.0.0.1/proof"
     )
@@ -180,7 +190,39 @@ def test_mid_run_source_change_invalidates_measurement_after_cleanup(
     artifacts.mkdir(parents=True)
     result = probe.run(declaration, artifacts)
     assert result["status"] == "infrastructure"
-    assert result["error_type"] == "SourceIdentityError"
-    assert result["source_integrity"] == "failed"
+    assert result["error_type"] == (
+        "CalledProcessError" if change == "git-unavailable" else "SourceIdentityError"
+    )
+    assert result["source_integrity"] == (
+        "unavailable" if change == "git-unavailable" else "failed"
+    )
     assert result["scratch_database_removed"] is True
     assert any(sql.startswith("DROP DATABASE") for sql in statements)
+
+
+@pytest.mark.parametrize("action", ["declare", "run"])
+def test_cli_source_errors_exit_as_infrastructure(
+    probe: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    action: str,
+) -> None:
+    artifacts = probe.ROOT / "evals/jobs/cli"
+    artifacts.mkdir(parents=True)
+    declaration = artifacts / "declaration.json"
+    declaration.write_text(json.dumps({"identity": probe.identity()}))
+    output = artifacts / "result.json"
+    (probe.ROOT / UNLISTED).write_text("UNDECLARED_INPUT = 4\n")
+    args = (
+        ["probe", "--declare", str(output)]
+        if action == "declare"
+        else ["probe", "--run", str(declaration), "--output", str(output)]
+    )
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(SystemExit) as raised:
+        probe.main()
+    assert raised.value.code == 2
+    error = json.loads(capsys.readouterr().err)
+    assert error["status"] == "infrastructure"
+    assert error["error_type"] == "SourceIdentityError"
+    assert not output.exists()

@@ -607,17 +607,19 @@ def run(declaration: dict[str, Any], artifacts: Path) -> dict[str, Any]:
         result["source_after"] = identity()
         if result["source_after"] != declaration["identity"]:
             raise SourceIdentityError("Inputs changed during provider execution")
-    except SourceIdentityError:
+    except Exception as failure:
         result.update(
             status="infrastructure",
-            error_type="SourceIdentityError",
-            source_integrity="failed",
+            error_type=type(failure).__name__,
+            source_integrity=(
+                "failed" if isinstance(failure, SourceIdentityError) else "unavailable"
+            ),
         )
     result["recorded_at"] = datetime.now(timezone.utc).isoformat()
     return result
 
 
-def main() -> None:
+def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--declare", type=Path)
@@ -641,6 +643,23 @@ def main() -> None:
     print(json.dumps({"status": result["status"], "output": str(args.output)}))
     if result["status"] != "completed":
         raise SystemExit(1 if result["status"] == "objective_failure" else 2)
+
+
+def main() -> None:
+    try:
+        _main()
+    except SourceIdentityError as failure:
+        print(
+            json.dumps(
+                {
+                    "status": "infrastructure",
+                    "error_type": type(failure).__name__,
+                    "diagnostic": str(failure),
+                }
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":

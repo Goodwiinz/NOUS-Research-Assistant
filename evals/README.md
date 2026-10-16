@@ -184,3 +184,10 @@ The [corrected-task record](baselines/agent-flow-2026-10-16-harness-mcp-discover
 contains a fresh 0/5 series after mandatory typing fixes changed the digest.
 The earlier 1/5 series is preserved as historical evidence; neither record is
 GATED, and neither establishes current composite or deployed quality.
+The [verified-results revision](baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-results.json)
+corrects successful-tool-result, per-trial citation, unsupported-list and answer
+truncation guards. It is NOT RUN as a new scored benchmark. Earlier discovery
+scores remain archival after the task-defect invalidation rule; 36 host
+calibration/source-integrity cases do not substitute for new agent trials.
+The [provider V4 record](baselines/discovery-provider-2026-10-16-v4.json) likewise
+records no new provider measurement after the complete-checkout guard changed.

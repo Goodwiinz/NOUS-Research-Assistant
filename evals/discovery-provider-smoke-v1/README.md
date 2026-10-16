@@ -57,3 +57,18 @@ JSON row containers. Its exact inputs and positive result remain historical.
 Explicit row annotations and independently retained page outcomes require a
 third declaration before execution. All versions remain counted separately;
 no labels, corpus, provider models or release thresholds are changed.
+## Source-integrity revision
+
+The forward runner requires a complete clean Git-visible checkout before
+declaration/execution, records its HEAD and tree, and rechecks identity after
+scratch cleanup. Store declarations, logs and results outside the checkout or
+under ignored `evals/jobs/`. A source change makes the measurement infrastructure
+invalid; it is not an objective reward zero. Ignored artifacts are outside this
+source guard, which is a before/after integrity check rather than OS isolation.
+
+The V3 provider measurements retain their original fifteen-input declaration.
+They do not establish this new guard. The dated V4 manifest/baseline records
+NOT RUN with no new provider/PostgreSQL measurement; fresh source, runtime,
+provider and environment identities are required before another execution.
+See `docs/testing/evidence/discovery-verifier-20261016/README.md` for the 36-case
+host calibration and preserved historical record hashes.

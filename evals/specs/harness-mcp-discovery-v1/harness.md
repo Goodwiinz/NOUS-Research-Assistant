@@ -1,4 +1,6 @@
-Status: draft (pre-registered 2026-10-07; no trial run yet). Results stay local and exploratory-tier until recorded under the `AGENT_FLOW_BASELINE.md` procedure (dated source manifest with `recorded_at`, baseline JSON, artifacts under `evals/jobs/`).
+Status: historical protocol with dated amendments below. Earlier trials retain
+their exact recorded revisions. The corrected verified-results revision is
+NOT RUN; host calibration does not establish a current capability decision.
 
 Agent under test: an external harness, not NOUS code. Harbor 0.6.6's built-in `claude-code` and `codex` agents (`harbor/agents/installed/claude_code.py`, `codex.py`); `NousProductionAgent` is not involved. Each agent writes the task's `[[environment.mcp_servers]]` entry into its CLI's native config, and the CLI spawns `/opt/nous-eval/start-mcp.sh` inside `main`:
 
@@ -161,3 +163,23 @@ The ten-attempt cap applies separately to each registered task/dataset/provider
 baseline. Mandatory task corrections require a new declaration before trial 1;
 earlier attempts remain in the campaign total and cannot contribute scores to
 the new baseline. This clarifies the reset used for the typing correction.
+
+## Amendment 2026-10-16: successful results and trial-bound citations
+
+The forward verifier now requires `is_error: false` for a successful HTTP 200
+read, binds paper identifiers/titles/DOI aliases to successful per-trial
+`returned_ids`, inspects every detected top-level list/table row, and rejects
+truncated answer captures. Put non-paper method notes in prose. Required
+search application errors and bridge HTTP server failures are infrastructure,
+including recovered failures; they cannot contribute a positive or zero agent
+reward. A rejected invalid query followed by a successful valid call remains
+scoreable. The required primitives, planted papers and 4/5 decision threshold
+are unchanged.
+
+All eight original calibration files retain their expected exits. Five new
+fixtures and source-integrity tests bring the focused host matrix to 36 cases.
+The registered whole-run invalidation rule applies to the discovered verifier
+defects: old scores are archival, not current acceptance. The new
+`agent-flow-2026-10-16-harness-mcp-discovery-verified-results` manifest/baseline
+records NOT RUN with no scored trials or decision. Freeze fresh execution
+identities and collect new trials before applying the decision rule.

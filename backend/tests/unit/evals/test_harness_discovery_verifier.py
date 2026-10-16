@@ -72,6 +72,15 @@ def test_aliases_of_actual_subset_results_are_accepted(tmp_path: Path) -> None:
     assert code == 0, report
 
 
+def test_method_notes_in_prose_preserve_a_valid_answer(tmp_path: Path) -> None:
+    trial = subset_trial()
+    trial["evidence"][
+        "answer"
+    ] += "\nMethods: Searched the three NOUS sources for clinical question answering.\n"
+    code, report = verify_trial(trial, tmp_path)
+    assert code == 0, report
+
+
 @pytest.mark.parametrize(
     "unreturned",
     [
