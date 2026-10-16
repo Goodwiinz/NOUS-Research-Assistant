@@ -80,6 +80,8 @@ export interface CreateMatrixResponse {
 }
 
 export interface TriggerExtractionResponse {
+  /** Celery task id; poll it via getExtractionTaskStatus. */
+  task_id: string;
   matrix_id: string;
   document_ids: string[];
   status: string;
