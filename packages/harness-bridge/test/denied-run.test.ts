@@ -568,6 +568,156 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
   }
 });
 
+// GOO-433: D-2' released the folder of a run refused after its terminal
+// observation was journaled, but that lock was also the only mapping that
+// routed the run's later commands (owner() looks the workspace's lock up).
+// NOUS never stored the terminal, so it keeps the run open and redelivers the
+// user's Stop and any approval on every poll; executeCommand() then found no
+// owner ("no active target"), or the next run's owner once the folder was
+// reused ("generation or run mismatch"), and the throw closed the socket on
+// every reconnect: the same device-wide stall BR-1 fixed. Codex has stopped,
+// so both commands are consumed without a native call, as the approval of a
+// refused run already is, and the socket stays open.
+// Mutations, each with the focused command
+// pnpm --filter @nous/harness-bridge test test/denied-run.test.ts --test-name-pattern="folder was released":
+// - src/journal.ts target() (line 268-273): return `owner` instead of the
+//   released 'denied' start and connectBridge rejects with "no active target"
+//   (folder free) or "generation or run mismatch" (folder reused);
+// - src/journal.ts executeCommand() (line 374-380): neutralize the
+//   denied-interrupt consume guard (`!this.holdsLock(owner.id)` -> false) and
+//   the Stop of the finished turn is forwarded to Codex: its state is
+//   'delivered' !== 'missing', and a1.interrupts is 1.
+// The wrong-workspace guard (line 363) has its own test below.
+for (const reused of [false, true])
+  test(`NOUS still leasing a run refused after its folder was released${reused ? " and reused" : ""}: its Stop and approval are consumed and the socket stays open`, async (t) => {
+    const { connectBridge } = await import("../src/connection.ts");
+    const f = fixture();
+    const r1 = start(randomUUID());
+    const a1 = codex("r1");
+    let responded = 0;
+    a1.respondToRequest = async () => {
+      responded += 1;
+    };
+    const stop: BridgeCommand = {
+      ...r1,
+      commandId: randomUUID(),
+      expiresAt: later(),
+      body: { kind: "interrupt", sessionId: "s-r1", turnId: "t-r1" },
+    };
+    const approve: BridgeCommand = {
+      ...r1,
+      commandId: randomUUID(),
+      expiresAt: later(),
+      body: { kind: "respond", requestId: 7, approvalRecordId: randomUUID(), response: { kind: "decision", allow: true } },
+    };
+    const next = { ...start(r1.deviceId), workspaceId: r1.workspaceId };
+    const j = new Journal(f.path, () => options);
+    const done = new AbortController();
+    let polls = 0;
+    class Socket extends EventTarget {
+      static OPEN = 1;
+      readyState = 1;
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+      send(raw: string) {
+        if (!JSON.parse(raw).poll) return;
+        if ((polls += 1) === 6) return done.abort(); // five redeliveries
+        const lease = { deviceId: r1.deviceId, expiresAt: later(), runs: { [r1.runId]: r1.generation, [next.runId]: next.generation } };
+        setImmediate(() =>
+          this.dispatchEvent(
+            new MessageEvent("message", { data: JSON.stringify({ commands: [stop, approve], lease }) }),
+          ),
+        );
+      }
+      close() {
+        if (this.readyState !== 3) {
+          this.readyState = 3;
+          // Asynchronous, as a real WebSocket: the bridge's own error surfaces.
+          queueMicrotask(() => this.dispatchEvent(new Event("close")));
+        }
+      }
+    }
+    withSocket(t, Socket);
+    try {
+      await j.execute(r1, a1); // r1#1 observation:running
+      j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" }); // r1#2
+      // NOUS refuses r1#1, the replay of an observation it had stored; r1#2 was
+      // never stored, so NOUS keeps the run open.
+      assert.equal(j.reject(refusal(r1)), true);
+      assert.equal(j.workspaceLocked(r1.workspaceId), false);
+      if (reused) await j.execute(next, codex("next"));
+      await connectBridge({
+        url: "wss://example.test/api/v1/harness/connect",
+        deviceId: r1.deviceId,
+        credentials: { accessToken: "jwt", grantToken: "grant" },
+        journal: j,
+        adapterFor: (_workspaceId, runId) => (runId === r1.runId ? a1 : codex("next")),
+        signal: until(done),
+        timing: { pollMs: 10, livenessMs: 1000 },
+      });
+      assert.ok(polls > 2);
+      // The finished turn is not interrupted (its watchdog does not either).
+      assert.equal(j.state(stop.commandId), "missing");
+      assert.equal(a1.interrupts, 0);
+      assert.equal(j.state(approve.commandId), "missing");
+      assert.equal(responded, 0);
+      assert.equal(j.state(r1.commandId), "denied");
+      assert.equal(j.workspaceLocked(r1.workspaceId), reused);
+      if (reused) assert.equal(j.state(next.commandId), "running");
+    } finally {
+      j.close();
+      f.cleanup();
+    }
+  });
+
+// target() routes a released refused run by run id, where owner() routed by
+// the command's workspace. The identity check therefore compares the
+// workspace too: a Stop or approval that names the run under another folder is
+// refused as before, and nothing reaches Codex. The mid-run case (lock held)
+// keeps routing through the lock: "NOUS still leasing a refused run" above.
+// Mutation: drop `start.workspaceId !== command.workspaceId` from the
+// mismatch check in src/journal.ts executeCommand() (line 363) and the
+// commands are consumed instead (Missing expected rejection).
+test("a Stop or approval for a released refused run under another folder is still refused", async () => {
+  const f = fixture();
+  const r1 = start(randomUUID());
+  const a1 = codex("r1");
+  let responded = 0;
+  a1.respondToRequest = async () => {
+    responded += 1;
+  };
+  const j = new Journal(f.path, () => options);
+  try {
+    await j.execute(r1, a1); // r1#1 observation:running
+    j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" }); // r1#2
+    assert.equal(j.reject(refusal(r1)), true);
+    assert.equal(j.workspaceLocked(r1.workspaceId), false);
+    const elsewhere = { ...r1, workspaceId: randomUUID() };
+    const stop: BridgeCommand = {
+      ...elsewhere,
+      commandId: randomUUID(),
+      body: { kind: "interrupt", sessionId: "s-r1", turnId: "t-r1" },
+    };
+    const approve: BridgeCommand = {
+      ...elsewhere,
+      commandId: randomUUID(),
+      body: { kind: "respond", requestId: 7, approvalRecordId: randomUUID(), response: { kind: "decision", allow: true } },
+    };
+    await assert.rejects(j.execute(stop, a1), /generation or run mismatch/);
+    await assert.rejects(j.execute(approve, a1), /generation or run mismatch/);
+    assert.equal(a1.interrupts, 0);
+    assert.equal(responded, 0);
+    assert.equal(j.state(stop.commandId), "missing");
+    assert.equal(j.state(approve.commandId), "missing");
+    assert.equal(j.state(r1.commandId), "denied");
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});
+
 // The reject frame itself (backend/src/api/harness.py sends it per refused
 // event, in place of the ack). Before it, connection.ts read it as an invalid
 // lease frame, closed the socket and reconnected into the same refused run.
