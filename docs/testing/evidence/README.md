@@ -8,6 +8,7 @@ Feature- and run-specific evidence bundles. Keep each bundle’s source identity
 
 | Directory | Contents |
 | --- | --- |
+| [linear-release-20261016/](linear-release-20261016/README.md) | GOO-337/319/320 current source and read-only dev release evidence, exact image/CI/runtime boundaries, authenticated list/detail checks and remaining overnight commitments |
 | [verify-chat-send-stream-reload-20261009-r2/](verify-chat-send-stream-reload-20261009-r2/README.md) | nous-verify deployed-lane run (backend `a0d4c6b`): HITL approve and deny and project creation via chat PASS; chat send/stream/reload PASS except the terminal-state criterion (run still in flight at the streamed checkpoint); screenshots reviewed |
 | [verify-chat-send-stream-reload-20261009/](verify-chat-send-stream-reload-20261009/README.md) | nous-verify deployed-lane run: document upload PASS; chat journeys failed on a test selector defect (superseded by -r2) |
 | [verify-login-20261009/](verify-login-20261009/README.md) | nous-verify deployed-lane run: login PASS; chat timed out at the 30 s default (superseded) |

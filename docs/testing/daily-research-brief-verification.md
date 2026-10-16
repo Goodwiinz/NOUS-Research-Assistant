@@ -535,3 +535,15 @@ records. They are not the sole basis of any final-source claim.
 
 The ship gate remains closed until every FAILED, BLOCKED, and release-critical
 NOT RUN item is cleared on one exact release candidate.
+
+## 2026-10-16 read-only release-evidence amendment
+
+The [dated release refresh](evidence/linear-release-20261016/README.md) verifies
+the current source default is false, PR #1955's lifecycle fix is merged, and
+the dev backend/worker/beat run the digest mapped to `7fbd027ce`. It records
+exact producer jobs, Argo/database state, eight current PostgreSQL passes and
+authenticated Daily Brief list/detail reads. The older record above is
+preserved. Production scope, second-account owner-only checks, Safety,
+configured-model evaluation, controlled live create/start/export, live rollback
+and the remaining R8 methods/journey gates remain open. No live configuration,
+deployment or feature flag was changed by the refresh.

@@ -1,0 +1,111 @@
+{
+  "observed_at": "2026-10-16T10:30:18.468379+00:00",
+  "target": "https://dev-api.goodwiinz.tech",
+  "mode": "read-only API acceptance; one normal authentication request",
+  "requests": [
+    {
+      "path_template": "/openapi.json",
+      "http_status": 200,
+      "bytes": 931416,
+      "sha256": "21f7af164ba62986543b5c6d361771d5bec243bf5d1ac3efda035df3a035591c"
+    },
+    {
+      "path_template": "/api/v1/research-engine/blueprints/templates",
+      "http_status": 200,
+      "bytes": 1073,
+      "sha256": "01ea59da15f87e6ddb70110390d599b5da9db52e2e6c92f83d69d137adccf6c7"
+    },
+    {
+      "path_template": "/api/v1/research-engine/blueprints/templates/{slug}",
+      "http_status": 200,
+      "bytes": 3403,
+      "sha256": "a599cc36a033d07e9422518362953d0573eb9a3e7382c69e1205d194b744ce39"
+    },
+    {
+      "path_template": "/api/v1/research-engine/projects",
+      "http_status": 200,
+      "bytes": 1331,
+      "sha256": "03280a95f5c3cb4dc55ed2fc85f38e5fca60985c2bb042ba4172c1bc239720ef"
+    },
+    {
+      "path_template": "/api/v1/research-engine/projects/{project_id}/search-schedules",
+      "http_status": 200,
+      "bytes": 32,
+      "sha256": "2fae9db119c00c9fd30a89568193a08ce5e6ee307b7ab99dff4f7768ea029e4a"
+    },
+    {
+      "path_template": "/api/v1/research-engine/projects/{project_id}/review-versions",
+      "http_status": 200,
+      "bytes": 27,
+      "sha256": "3b81f183632f2f28b10853ff3b48376cc7e8b49efd24280038acf04ca9c20b0f"
+    },
+    {
+      "path_template": "/api/v1/research-engine/projects/{project_id}/search-schedules",
+      "http_status": 200,
+      "bytes": 32,
+      "sha256": "2fae9db119c00c9fd30a89568193a08ce5e6ee307b7ab99dff4f7768ea029e4a"
+    },
+    {
+      "path_template": "/api/v1/research-engine/projects/{project_id}/review-versions",
+      "http_status": 200,
+      "bytes": 27,
+      "sha256": "3b81f183632f2f28b10853ff3b48376cc7e8b49efd24280038acf04ca9c20b0f"
+    },
+    {
+      "path_template": "/api/v1/research-engine/projects/{project_id}/search-schedules",
+      "http_status": 200,
+      "bytes": 32,
+      "sha256": "2fae9db119c00c9fd30a89568193a08ce5e6ee307b7ab99dff4f7768ea029e4a"
+    },
+    {
+      "path_template": "/api/v1/research-engine/projects/{project_id}/review-versions",
+      "http_status": 200,
+      "bytes": 27,
+      "sha256": "3b81f183632f2f28b10853ff3b48376cc7e8b49efd24280038acf04ca9c20b0f"
+    }
+  ],
+  "writes": "no create/start/schedule/review/flag/deploy request",
+  "authentication_http_status": 200,
+  "schema_matches_image_source": true,
+  "template_count": 4,
+  "daily_template_visible": true,
+  "daily_detail_loaded": true,
+  "accessible_project_count": 3,
+  "inspected_projects": [
+    {
+      "project_id_sha256": "6bbde95f3d14718c20ea6f994fb0d574f74f5c01dba689231526370b73ca36bf",
+      "schedule_count": 0,
+      "strategy_count": 0,
+      "review_version_count": 0,
+      "delta_option_count": 0
+    },
+    {
+      "project_id_sha256": "196247a28ef26b0b2a9da30934b98bbcb1e437173abd1ea9101678b868bae2fb",
+      "schedule_count": 0,
+      "strategy_count": 0,
+      "review_version_count": 0,
+      "delta_option_count": 0
+    },
+    {
+      "project_id_sha256": "5e66bdc539bd5362c4b271d879e6bb7254362c0ec536ee2520e48a122dbb8ddb",
+      "schedule_count": 0,
+      "strategy_count": 0,
+      "review_version_count": 0,
+      "delta_option_count": 0
+    }
+  ],
+  "status": "completed_read_probes",
+  "unverified": [
+    "create/start execution",
+    "read/export of retained controlled Daily Brief run",
+    "second-account owner-only negative control",
+    "scheduler restart/ticks and delta export",
+    "review parent/successor export and independent methods review",
+    "live rollback"
+  ],
+  "schema_comparison": {
+    "image_source_canonical_sha256": "3ea1b695f00a4bf0c9f077cef15c5799457ca48f7743b00c4d3d355e71338635",
+    "live_canonical_sha256": "3ea1b695f00a4bf0c9f077cef15c5799457ca48f7743b00c4d3d355e71338635",
+    "canonicalization": "JSON parse; json.dumps(sort_keys=True,separators=(comma,colon)), UTF-8; SHA-256. Raw response hash is recorded separately."
+  }
+}
