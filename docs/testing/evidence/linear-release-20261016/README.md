@@ -207,3 +207,101 @@ PR #2017 now repairs the same-origin Azure rerank path that caused the earlier
 top three; long-page selection included both labelled relevant pages and the
 short document skipped reranking. The historical agent result remains 0/5 and
 NOT GATED. These local results leave live flags and broader acceptance open.
+
+## Full local R8 crash-recovery proof, 13:01 UTC
+
+A separate predeclared run at clean source
+`556e0bed6783454c6fec0c662152aa11dfedeb24` completed **34 checks passed, zero
+failed, zero NOT RUN**. [Sanitized recovery evidence](r8-crash.json) binds
+the adapter, eight source files and raw artifacts by hash. Those source hashes,
+HEAD and the clean working tree were checked again after execution. The
+earlier warm-run record retains its own crash NOT RUN result.
+
+The unchanged harness used real Crossref, PubMed and OpenAlex requests, two
+beat processes, private Redis and an owned PostgreSQL database. The database
+URL used the synchronous driver expected by Alembic and worker health checks.
+The app derives its asyncpg URL normally; the harness mirrored that derivation
+for its own async engine. The pre-run declaration's driver wording describes
+the harness adaptation rather than every derivation inside the app.
+No production service clock, stale constant or signal-ownership guard changed.
+
+- At `12:30:37 UTC`, the harness hard-killed its own active worker process
+  group after the first attempt was persisted. An intermediate sample found
+  no second attempt; the final three-attempt history shows the retry began
+  only after the stale threshold.
+- The replacement started the retry at `13:00:57.731996 UTC`,
+  **1,820.301978 seconds** after the first attempt, above the unchanged
+  **1,800-second** stale timeout. It succeeded at `13:01:01.000077 UTC`.
+  The retained attempt sequence is `started, started, succeeded`, from two
+  worker identities, for one execution and one import receipt.
+- Clock samples before and after the run remained within the predeclared
+  three-second database/host skew bound. Actual samples and monotonic duration
+  are retained in the sanitized record; the minimum retry assertion was not
+  relaxed to that tolerance.
+- The main update retained all five delta classes and a real retraction
+  notice. The intentional provider outage produced unknown results without
+  fabricated retractions. An archived project failed with `project_archived`
+  and no import receipt.
+- All owned child processes stopped by `13:01:08 UTC`; the scratch database
+  was removed. A subsequent read found zero owned proof databases and zero
+  native-test schemas; the private Redis port was closed.
+
+Those subsequent read observations are recorded in the orchestrator's tool
+outputs. The retained run bundle itself records database removal and child
+shutdown. Worker/beat logs use Eastern local time (UTC-4), while this summary
+and attempt timestamps use UTC; the schedule also retains its own local-zone
+value.
+
+The two beat ticks were serialized by one worker. This does not establish
+concurrent `SKIP LOCKED` contention. Review-export repetition in this run is
+the harness's same-session check. The separately retained fresh-session
+warm-run check and the new native manuscript-package proof have their own
+source identities. Worker logs contain no `MissingGreenlet` or `unhealthy`
+markers in this run; this observation is not general worker-health acceptance.
+Two worker logs recorded a Crossref HTTP 429; the persisted executions
+subsequently succeeded. Raw logs, adapter and evidence remain owner-only under
+ignored `evals/jobs/r8-crash-local-20261016-v1/`.
+
+This is local process/provider evidence. Deployed HTTP/MCP journeys and
+methods-expert acceptance remain open.
+
+## Integrated package proof and CI checkpoint, 13:02 UTC
+
+[PR #2022](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/2022), head
+`ca0c0cd642a926b18a18f5b74df8b2fb9a7277d4`, connects actual GOO-315 packages
+to GOO-319/320 updates. Its native test found that a candidate's own manuscript
+journal advanced its frozen PRISMA hash and immediately made promotion stale.
+Independent Fable correctness and security reviews found the automatic
+statement-bound venue journal did the same. Both reproduced paths are fixed
+by excluding exactly those two bookkeeping streams; statement identity,
+approvals and venue validation keep their existing content/freshness gates.
+
+The full chain runs with and without statements: a retraction stales the
+affected release while an unrelated release stays verified, concurrent linking
+retains one link and event, and fresh read-only sessions verify both real ZIP
+packages and canonical review exports with the original parent bytes intact.
+A separate scheduled update records required backward/forward citation-chase
+receipts and reuses them on retry. Seven native scenarios, 1,651 unit/API
+tests and four causal guard mutations passed. Both final Fable delta reviews
+completed without blockers and with `readOnlyViolation=false`. Hosted Test
+Pipeline **38904505690** was still running at this checkpoint.
+
+The following latest-source pipelines completed after the earlier checkpoint:
+
+| PR / head | Successful Test Pipeline | E2E producer | Release Gate producer |
+| --- | --- | --- | --- |
+| #2014 / `ee23b5d78032e990bccd267d445928b8f9f308e3` | 38892413820 attempt 2 | 116962426110 | 116965574358 |
+| #2017 / `e9d2e4126a97a0a51ae6cea40ffabc0723b74e34` | 38892808799 attempt 3 | 116964892664 | 116968246386 |
+| #2021 previous documentation head / `556e0bed6783454c6fec0c662152aa11dfedeb24` | 38895622806 | 116968972068 | 116972956581 |
+
+The last row verifies the previous documentation head. This addendum requires
+its own hosted checks. #2009 and #2016 retain their exact-head successes above.
+
+Authenticated Safety and the configured Daily Brief model evaluation remain
+unavailable: pinned Safety 3.8.1 reports no authenticated session, and normal
+checks of the configured Infisical root/app paths and running backend find a
+placeholder Anthropic credential, no Safety key and no frozen citation
+threshold. No secret values were recorded. Production-environment definition,
+owner decisions and live/methods acceptance also remain open. No deployment,
+live flags, backfill, grant or workflow creation, merge, self-approval, manual
+Linear status change or external message was performed.

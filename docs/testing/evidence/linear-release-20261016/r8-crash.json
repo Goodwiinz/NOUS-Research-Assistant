@@ -1,0 +1,366 @@
+{
+  "schema": "nous.testing.r8-real-crash-evidence.v1",
+  "classification": "Local real-provider/process crash diagnostic; not deployed HTTP/MCP or methods acceptance",
+  "recorded_at": "2026-10-16T13:01:09.316701+00:00",
+  "status": "completed",
+  "declaration": {
+    "declared_at": "2026-10-16T12:19:20.171867+00:00",
+    "source_revision": "556e0bed6783454c6fec0c662152aa11dfedeb24",
+    "source_dirty": false,
+    "files": {
+      "backend/scripts/validation/r8_live_proof.py": "0f22342cdbb3ec20ac253082d885708dc0992c5b958f291e0995b5e487a914fb",
+      "backend/src/services/research_engine/search_update_service.py": "c1cb3b07a03092e46dfa96995d46e6a5b6774c62c08cd79668737fc4b69e2e7b",
+      "backend/src/services/research_engine/search_update_rules.py": "0ad3cd3ba625205fffbfa434cb2c3e66bbae5f05f26bd1bd63dfcf33e8b41b42",
+      "backend/src/services/research_engine/review_update_service.py": "d5e5719556deb497ae51abe067d672657876c0f284278ba1a9a48aa5b0d10eeb",
+      "backend/src/tasks/search_update_tasks.py": "0162eaae8b6449e9c73a4fd6ee1425bb73f5f8434119c04390d38cbfed24298b",
+      "backend/src/tasks/celery_app.py": "2a96896558248a16b779a63bc446a0d180904e64b1b2104d6d30b420b787c5cb",
+      "backend/tests/integration/research_engine_postgres_support.py": "3395e7c431e5ce1fae3d234ca84b1d35c39fa7a362efa48fdab4ec9df463fe8d",
+      "backend/tests/integration/test_report_identity_postgres.py": "fd984884c66b418e4c44fe28d1be8ea75708041da38d53023b698a519c26e79c"
+    },
+    "adapter_sha256": "99e5c3917a43eabf35b36f06f823567b38c8a7e68dabd04b44d472652ec01a2a",
+    "database_driver": "Synchronous postgres URL in environment; only harness create_async_engine adapts to asyncpg",
+    "crash": "--allow-hard-kill true; only spawned process group; real 30 minute stale timeout; no clock or service override",
+    "scenarios": [
+      "outage",
+      "main",
+      "two beat serialized duplicate ticks",
+      "worker SIGKILL and persisted stale-attempt recovery",
+      "review chain and exports",
+      "revoke"
+    ],
+    "timing_requirements": {
+      "minimum_retry_after_first_attempt_seconds": 1800,
+      "maximum_observed_database_host_skew_seconds": 3,
+      "retry_must_follow_observed_hard_kill": true
+    }
+  },
+  "source_unchanged_after_run": true,
+  "post_run_source_revision": "556e0bed6783454c6fec0c662152aa11dfedeb24",
+  "scratch_database_removed": true,
+  "elapsed_monotonic_seconds": 2509.071519332996,
+  "timing": {
+    "retry_after_first_attempt_seconds": 1820.301978,
+    "retry_after_hard_kill_seconds": 1820.731996,
+    "timeout_constant_seconds": 1800.0
+  },
+  "clock": {
+    "clock_before": {
+      "estimated_skew_seconds": -0.001191,
+      "round_trip_seconds": 0.001769
+    },
+    "clock_after": {
+      "estimated_skew_seconds": -0.000485,
+      "round_trip_seconds": 0.002002
+    }
+  },
+  "checks": {
+    "passed": 34,
+    "failed": 0,
+    "not_run": 0,
+    "outcomes": [
+      {
+        "name": "chain.root_carries_four_decisions",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.one_execution",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.succeeded",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.crossref_not_ok",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.no_fabricated_retraction",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.retracted_doi_unknown_provider_failed",
+        "status": "PASS"
+      },
+      {
+        "name": "outage.finished_before_main_fire",
+        "status": "PASS"
+      },
+      {
+        "name": "main.one_execution",
+        "status": "PASS"
+      },
+      {
+        "name": "main.two_beats_ticking",
+        "status": "PASS"
+      },
+      {
+        "name": "main.attempts",
+        "status": "PASS"
+      },
+      {
+        "name": "main.all_five_classes",
+        "status": "PASS"
+      },
+      {
+        "name": "main.retraction_notice_real",
+        "status": "PASS"
+      },
+      {
+        "name": "main.single_import_receipt",
+        "status": "PASS"
+      },
+      {
+        "name": "main.export_hash_stable",
+        "status": "PASS"
+      },
+      {
+        "name": "main.two_distinct_corpus_snapshots",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.successor_idempotent",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.unchanged_decision_carried_by_reference",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.uncertain_unknown_carried_with_flag",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.required_work_matches_delta_classes",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.targeted_queue_assigned_to_reviewer",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.accounting_unresolved_while_work_open",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.accounting_reconciles_after_review",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.exports_reload_identically",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.reviewer_cannot_create_version",
+        "status": "PASS"
+      },
+      {
+        "name": "chain.foreign_cannot_create_version",
+        "status": "PASS"
+      },
+      {
+        "name": "crash.no_second_run_while_attempt_is_live",
+        "status": "PASS"
+      },
+      {
+        "name": "crash.one_execution",
+        "status": "PASS"
+      },
+      {
+        "name": "crash.attempts_started_started_succeeded",
+        "status": "PASS"
+      },
+      {
+        "name": "crash.retry_of_first_attempt",
+        "status": "PASS"
+      },
+      {
+        "name": "crash.attempts_from_two_workers",
+        "status": "PASS"
+      },
+      {
+        "name": "crash.single_import_receipt",
+        "status": "PASS"
+      },
+      {
+        "name": "revoke.one_execution",
+        "status": "PASS"
+      },
+      {
+        "name": "revoke.failed_project_archived",
+        "status": "PASS"
+      },
+      {
+        "name": "revoke.no_import_receipt",
+        "status": "PASS"
+      }
+    ]
+  },
+  "errors": [],
+  "scenarios": {
+    "outage": {
+      "counts": {
+        "changed": 0,
+        "corrected_retracted": 0,
+        "new": 20,
+        "unchanged": 0,
+        "unknown": 4
+      },
+      "coverage_providers": {
+        "crossref": {
+          "completion": "failed",
+          "error_type": "ConnectError",
+          "limit": 10,
+          "returned": 0,
+          "status": "failed"
+        },
+        "openalex": {
+          "completion": "cap_reached",
+          "error_type": null,
+          "limit": 10,
+          "returned": 10,
+          "status": "ok"
+        },
+        "pubmed": {
+          "completion": "cap_reached",
+          "error_type": null,
+          "limit": 10,
+          "returned": 10,
+          "status": "ok"
+        }
+      },
+      "attempts": [
+        {
+          "at": "2026-10-16T12:22:37.434791+00:00",
+          "outcome": "started"
+        },
+        {
+          "at": "2026-10-16T12:22:48.692513+00:00",
+          "outcome": "succeeded"
+        }
+      ]
+    },
+    "main": {
+      "counts": {
+        "changed": 1,
+        "corrected_retracted": 1,
+        "new": 28,
+        "unchanged": 1,
+        "unknown": 1
+      },
+      "coverage_providers": {
+        "crossref": {
+          "completion": "cap_reached",
+          "error_type": null,
+          "limit": 10,
+          "returned": 10,
+          "status": "ok"
+        },
+        "openalex": {
+          "completion": "cap_reached",
+          "error_type": null,
+          "limit": 10,
+          "returned": 10,
+          "status": "ok"
+        },
+        "pubmed": {
+          "completion": "cap_reached",
+          "error_type": null,
+          "limit": 10,
+          "returned": 10,
+          "status": "ok"
+        }
+      },
+      "citation_chasing": {
+        "required": false,
+        "status": "not_required"
+      },
+      "attempts": [
+        {
+          "at": "2026-10-16T12:26:37.431613+00:00",
+          "outcome": "started"
+        },
+        {
+          "at": "2026-10-16T12:26:40.69859+00:00",
+          "outcome": "succeeded"
+        }
+      ]
+    },
+    "crash": {
+      "attempts": [
+        {
+          "at": "2026-10-16T12:30:37.430018+00:00",
+          "outcome": "started"
+        },
+        {
+          "at": "2026-10-16T13:00:57.731996+00:00",
+          "outcome": "started"
+        },
+        {
+          "at": "2026-10-16T13:01:01.000077+00:00",
+          "outcome": "succeeded"
+        }
+      ]
+    },
+    "revoke": {
+      "attempts": [
+        {
+          "at": "2026-10-16T12:32:37.441181+00:00",
+          "outcome": "started"
+        },
+        {
+          "at": "2026-10-16T12:32:37.507842+00:00",
+          "outcome": "failed"
+        }
+      ]
+    }
+  },
+  "limitations": [
+    "Local owned-process/provider diagnostic, not deployed HTTP/MCP acceptance.",
+    "Two beat ticks were serialized by one worker; not concurrent SKIP LOCKED contention.",
+    "Review export repetition is the harness same-session check, not fresh-session evidence in this run.",
+    "No scientific screening or methods-expert acceptance is implied."
+  ],
+  "hard_kill_events": [
+    {
+      "at": "2026-10-16T12:30:37+00:00",
+      "event": "worker_hard_killed",
+      "scenario": "crash"
+    }
+  ],
+  "raw_artifact_sha256": {
+    "declaration.json": "2c8607e2f675210834cf5912b60ee1e82900aae1045f67a4b1d705b37bb0b676",
+    "evidence/checks.json": "bf5896885818e75faad2e960f9f338fa1c2454f79610b60eb7c165b8b716b8ee",
+    "evidence/delta-main.json": "364e574c9265ef9e2c8d65cfbd860d7dddddb97a5dfabac46fbe0270a21841c9",
+    "evidence/log-excerpts.txt": "a1c8b13e3f54095f5fde957c21322b1ba2975d8f71a2aba0d148aac521b74bc4",
+    "evidence/log-summary.json": "fd0cd721f9b78a702fe9b6d58efcea7f7def8c4e1bce4cb7a2e10ee726ebcd7f",
+    "evidence/review-chain.json": "b9aad6494e0aa1b7748aaf0c3060f2a5c7c92e3caad3d090cd2eb82e5c165eec",
+    "evidence/review-version-root-export.json": "05e245b1966efe72d221b48da251d80a8da46c3344d645f544ad95fda0036eca",
+    "evidence/review-version-successor-export.json": "c9b4c7032659ef1aafcab6fde9b602078341cfbea03cc876a1a4b993cc1c5561",
+    "evidence/scenario-crash.json": "8a506e6fc47fc6d7d953b9d2b73a7ab29b67be761104f04a0ee4351d05a01db0",
+    "evidence/scenario-main.json": "3f06235080c3c6a1f0287115f53f8bdd9176a2fc904fb4f494c18440f93ecd36",
+    "evidence/scenario-outage.json": "286e3da2bf8d8dfb174b8b5484c5cd25de492c4901aa48c43aabd3993dd838d8",
+    "evidence/scenario-revoke.json": "1212664af7e36a572701978d5310b9fa191d799476ee26080e95a058799f5243",
+    "evidence/snapshots-main.json": "6030d9edfb36d39c04fbcbe1b688f37964f05361753856bb71d84f8c865ef580",
+    "evidence/state.json": "9d8eee6c72ce6d978db6b4cf2698328049d0fc56d00a42594d0776e6df25574a",
+    "evidence/timeline.json": "e69013ac1eda27fa231a74fe5815961c6ea0a0084c6b6206adb5d681b87e87ee",
+    "migration.log": "05f3e8f3cd205bafd1444fc982fc4ec97d503f3a9c5b82dc01d7f5d8dbb938a1",
+    "process.json": "e5251b8c017f2dc41e004780517f844c8a4b453770c9d60d4bfb0477c35bb826",
+    "result.json": "cfc533c980d6124181377eba0fee5b5fbb02a27d6ea23fa1471dfa785788a0e1",
+    "scratch/beat-1-schedule.db": "6bc1f523c8c64ff45a73acace753297e0db660eabdc1f3c7508de0b01f1369ec",
+    "scratch/beat-2-schedule.db": "20ca9715748cbde0598ff37452f29b833b377ab8a8630bc1ea7c561266124c30",
+    "scratch/logs/beat-1.log": "d4a1230d5f6bbb1838f6c9302565733097f28ad27a45a4d7c953d3c392e153e0",
+    "scratch/logs/beat-2.log": "99f156885124920b4e151134c499d9420c790068be27c5146ce31f8e3699ce50",
+    "scratch/logs/redis.log": "9d3018a28c751cf668a4f7c271b6da7c3ffa6edee6905210771656199df03c4b",
+    "scratch/logs/worker-1-outage.log": "360f1ec1c886b612cd075780b13e17daf462555242055048646c5be1683abf50",
+    "scratch/logs/worker-2-normal.log": "3ce6f3ca8d16228d3651f2707fb5921eeaa78e1846f3a3ae797b73b48b4facd0",
+    "scratch/logs/worker-3-after-crash.log": "3a54f065d8476be89931244af29dd47751700744b4ab68c237184fba7e5983f0"
+  },
+  "driver_clarification": "The pre-run declaration describes the harness adaptation. The app also derives an asyncpg URL from the synchronous environment URL; the harness mirrored that derivation for its own async engine.",
+  "time_and_observation_notes": [
+    "Worker/beat logs use Eastern local time UTC-4; this public summary uses UTC. The schedule retains its own local-zone value.",
+    "Hard-kill timestamp is whole-second; the strict 1800-second assertion uses sub-second database attempt timestamps.",
+    "The early no-duplicate check is a sample; the retained final attempt history establishes the full timing window.",
+    "Subsequent zero-database, zero-native-schema and closed-Redis observations are in orchestrator tool outputs; the original bundle records database removal and child shutdown."
+  ]
+}
