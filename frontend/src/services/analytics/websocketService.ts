@@ -4,7 +4,7 @@ import { AnalyticsMetric, TimeSeriesData } from '@/stores/analytics';
 import { getPublicWebSocketOrigin } from '@/utils/publicEndpoints';
 
 // WebSocket Configuration
-interface WebSocketConfig {
+export interface WebSocketConfig {
   url: string;
   protocols?: string[];
   reconnectInterval?: number;
@@ -23,7 +23,7 @@ type WebSocketMessageType =
   | 'heartbeat'
   | 'error';
 
-interface WebSocketMessage {
+export interface WebSocketMessage {
   type: WebSocketMessageType;
   payload: WebSocketMessagePayload;
   timestamp: string;
@@ -96,12 +96,12 @@ interface SubscriptionPayload {
   metrics: string[];
 }
 
-interface MetricUpdateMessage extends WebSocketMessage {
+export interface MetricUpdateMessage extends WebSocketMessage {
   type: 'metric_update';
   payload: AnalyticsMetric;
 }
 
-interface TimeSeriesUpdateMessage extends WebSocketMessage {
+export interface TimeSeriesUpdateMessage extends WebSocketMessage {
   type: 'time_series_update';
   payload: {
     metricId: string;
@@ -109,12 +109,12 @@ interface TimeSeriesUpdateMessage extends WebSocketMessage {
   };
 }
 
-interface GraphUpdateMessage extends WebSocketMessage {
+export interface GraphUpdateMessage extends WebSocketMessage {
   type: 'graph_update';
   payload: GraphUpdatePayload;
 }
 
-interface AlertTriggeredMessage extends WebSocketMessage {
+export interface AlertTriggeredMessage extends WebSocketMessage {
   type: 'alert_triggered';
   payload: {
     alertId: string;
@@ -127,7 +127,7 @@ interface AlertTriggeredMessage extends WebSocketMessage {
   };
 }
 
-interface ConnectionStatusMessage extends WebSocketMessage {
+export interface ConnectionStatusMessage extends WebSocketMessage {
   type: 'connection_status';
   payload: {
     status: 'connected' | 'disconnected' | 'error';
@@ -135,7 +135,7 @@ interface ConnectionStatusMessage extends WebSocketMessage {
   };
 }
 
-interface HeartbeatMessage extends WebSocketMessage {
+export interface HeartbeatMessage extends WebSocketMessage {
   type: 'heartbeat';
   payload: {
     timestamp: string;
@@ -143,7 +143,7 @@ interface HeartbeatMessage extends WebSocketMessage {
   };
 }
 
-interface ErrorMessage extends WebSocketMessage {
+export interface ErrorMessage extends WebSocketMessage {
   type: 'error';
   payload: ErrorPayload;
 }
@@ -151,7 +151,7 @@ interface ErrorMessage extends WebSocketMessage {
 // Event Handlers
 type WebSocketEventHandler<T = any> = (data: T) => void;
 
-interface WebSocketEventHandlers {
+export interface WebSocketEventHandlers {
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (error: Error) => void;
@@ -172,7 +172,8 @@ export class WebSocketService {
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private connectionTimer: NodeJS.Timeout | null = null;
   private messageQueue: WebSocketMessage[] = [];
-  private isConnecting = false;
+  private connecting = false;
+  private reconnectAttempts = 0;
   private isManualClose = false;
   private lastHeartbeat = 0;
   private pendingSubscriptions: Set<string> = new Set();
@@ -195,12 +196,12 @@ export class WebSocketService {
         return;
       }
 
-      if (this.isConnecting) {
+      if (this.connecting) {
         reject(new Error('Connection already in progress'));
         return;
       }
 
-      this.isConnecting = true;
+      this.connecting = true;
       this.isManualClose = false;
 
       try {
@@ -215,7 +216,8 @@ export class WebSocketService {
         }, this.config.connectionTimeout);
 
         this.ws.onopen = () => {
-          this.isConnecting = false;
+          this.connecting = false;
+          this.reconnectAttempts = 0;
           this.clearConnectionTimer();
           this.startHeartbeat();
           this.processPendingSubscriptions();
@@ -226,7 +228,7 @@ export class WebSocketService {
         };
 
         this.ws.onclose = (event) => {
-          this.isConnecting = false;
+          this.connecting = false;
           this.clearConnectionTimer();
           this.stopHeartbeat();
           this.updateStoreConnection('disconnected');
@@ -239,7 +241,7 @@ export class WebSocketService {
         };
 
         this.ws.onerror = (error) => {
-          this.isConnecting = false;
+          this.connecting = false;
           this.clearConnectionTimer();
           this.updateStoreConnection('error');
           const errorObj = new Error('WebSocket connection error');
@@ -252,7 +254,7 @@ export class WebSocketService {
         };
 
       } catch (error) {
-        this.isConnecting = false;
+        this.connecting = false;
         this.clearConnectionTimer();
         reject(error);
       }
@@ -272,17 +274,19 @@ export class WebSocketService {
 
     this.messageQueue = [];
     this.pendingSubscriptions.clear();
+    this.connecting = false;
+    this.reconnectAttempts = 0;
     this.updateStoreConnection('disconnected');
   }
 
   private scheduleReconnect(): void {
-    const store = useRealtimeStore.getState();
-
-    if (store.reconnectAttempts >= this.config.maxReconnectAttempts!) {
+    if (this.reconnectAttempts >= this.config.maxReconnectAttempts!) {
       this.updateStoreConnection('error');
       return;
     }
 
+    this.reconnectAttempts += 1;
+    useRealtimeStore.setState({ reconnectAttempts: this.reconnectAttempts });
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
       if (!this.isManualClose) {
@@ -471,9 +475,11 @@ export class WebSocketService {
   }
 
   private updateStoreConnection(status: 'connecting' | 'connected' | 'disconnected' | 'error'): void {
-    const store = useRealtimeStore.getState();
-    store.setConnectionStatus(status);
-    store.setConnected(status === 'connected');
+    useRealtimeStore.setState({
+      connectionStatus: status,
+      isConnected: status === 'connected',
+      reconnectAttempts: this.reconnectAttempts,
+    });
   }
 
   // Event Handler Registration
@@ -523,7 +529,7 @@ export class WebSocketService {
   }
 
   isConnecting(): boolean {
-    return this.isConnecting || this.ws?.readyState === WebSocket.CONNECTING;
+    return this.connecting || this.ws?.readyState === WebSocket.CONNECTING;
   }
 
   getConnectionStats(): {
@@ -555,12 +561,15 @@ export const analyticsWebSocket = createWebSocketService({
 
 // React Hook for WebSocket
 export const useWebSocket = (config?: WebSocketConfig) => {
-  const [ws, setWs] = useState<WebSocketService | null>(null);
+  // Configuration selects the initial service; renders retain that service.
+  const [ws] = useState(
+    () => config ? createWebSocketService(config) : analyticsWebSocket
+  );
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const service = config ? createWebSocketService(config) : analyticsWebSocket;
+    const service = ws;
 
     service.onConnect(() => {
       setIsConnected(true);
@@ -579,12 +588,10 @@ export const useWebSocket = (config?: WebSocketConfig) => {
       setError(err.message);
     });
 
-    setWs(service);
-
     return () => {
       service.disconnect();
     };
-  }, []);
+  }, [ws]);
 
   return {
     ws,

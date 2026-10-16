@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { authCookieOptions } from './cookieOptions';
+import { getSupabaseServerConfig } from './serverConfig';
 
 export async function createClient(): Promise<SupabaseClient> {
   const cookieStore = await cookies();
@@ -12,16 +13,7 @@ export async function createClient(): Promise<SupabaseClient> {
   // SUPABASE_SERVER_URL is an optional server-only runtime override pointing at
   // the in-network address (docker DNS). Unset in production, where the public
   // URL is reachable from the server too — so behavior is unchanged.
-  const supabaseUrl =
-    process.env.SUPABASE_SERVER_URL ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    'http://localhost:54321';
-  // Fail fast instead of an empty key that 401s every request and masquerades
-  // as a working auth guard (mirrors the throw in client.ts).
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseAnonKey) {
-    throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY is not configured.');
-  }
+  const { supabaseUrl, supabaseAnonKey } = getSupabaseServerConfig();
 
   return createServerClient(supabaseUrl, supabaseAnonKey, {
     cookieOptions: authCookieOptions(),
