@@ -73,11 +73,6 @@ BRIDGE_USER_AGENT = TRUTH["bridge_user_agent"]
 INTEGRATION_PREFIX = "/api/v1/integrations/"
 REQUIRED_TOOLS = tuple(TRUTH["required_search_tools"])
 CORPUS_IDS = {value.lower() for value in TRUTH["corpus"]["document_ids"]}
-CORPUS_TITLES = list(TRUTH["corpus"]["titles"])
-SERVED_TITLES = list(TRUTH["served_titles"])
-ARXIV_IDS = set(TRUTH["arxiv"]["ids"])
-PMIDS = set(TRUTH["pubmed"]["pmids"])
-DOIS = {value.lower() for value in TRUTH["pubmed"]["dois"]}
 SERVED_UUIDS = {value.lower() for value in TRUTH["served_uuids"]}
 ARXIV_DOI_PREFIX = "10.48550/arxiv."
 MAX_ANSWER_BYTES = 1_000_000
@@ -202,7 +197,7 @@ def split_by_client(
 
 
 def accepted_reads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """tools/read calls the gateway accepted (HTTP 200), in log order."""
+    """Successful tools/read results, in log order, excluding error envelopes."""
     return sorted(
         (
             event
@@ -210,6 +205,7 @@ def accepted_reads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if event.get("method") == "POST"
             and event.get("path") == READ_PATH
             and event.get("status") == 200
+            and event.get("is_error") is False
             and isinstance(event.get("tool_name"), str)
         ),
         key=lambda event: event.get("seq") or 0,
@@ -267,10 +263,10 @@ def answer_dois(answer: str) -> set[str]:
     }
 
 
-def doi_served(doi: str) -> bool:
+def doi_served(doi: str, sources: dict[str, set[str]]) -> bool:
     if doi.startswith(ARXIV_DOI_PREFIX):
-        return re.sub(r"v\d+$", "", doi[len(ARXIV_DOI_PREFIX) :]) in ARXIV_IDS
-    return doi in DOIS
+        return re.sub(r"v\d+$", "", doi[len(ARXIV_DOI_PREFIX) :]) in sources["arxiv"]
+    return doi in sources["dois"]
 
 
 def answer_ids(answer: str) -> dict[str, set[str]]:
@@ -283,17 +279,62 @@ def answer_ids(answer: str) -> dict[str, set[str]]:
     }
 
 
-def cites_served(text: str) -> bool:
+def returned_sources(reads: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Bind fixture aliases to papers returned by successful calls in this trial."""
+    returned: set[str] = set()
+    for event in reads:
+        ids = event.get("returned_ids")
+        if not isinstance(ids, list) or not all(
+            isinstance(value, str) for value in ids
+        ):
+            raise InfrastructureFailure("successful read has malformed returned_ids")
+        for value in ids:
+            lowered = value.lower()
+            match = ARXIV_RE.fullmatch(lowered)
+            returned.add(match.group(1) if match else lowered)
+    sources: dict[str, set[str]] = {
+        key: set()
+        for key in (
+            "corpus",
+            "corpus_titles",
+            "arxiv",
+            "pmids",
+            "dois",
+            "titles",
+            "uuids",
+        )
+    }
+    # The catalog serves project metadata; it is not a paper citation.
+    sources["uuids"].update(SERVED_UUIDS - CORPUS_IDS)
+    for paper in TRUTH["papers"]:
+        if paper["returned_id"].lower() not in returned:
+            continue
+        sources["titles"].add(paper["title"])
+        for field, kind in (
+            ("document_id", "corpus"),
+            ("arxiv_id", "arxiv"),
+            ("pmid", "pmids"),
+            ("doi", "dois"),
+        ):
+            if field in paper:
+                sources[kind].add(paper[field].lower())
+        if "document_id" in paper:
+            sources["uuids"].add(paper["document_id"].lower())
+            sources["corpus_titles"].add(paper["title"])
+    return sources
+
+
+def cites_served(text: str, sources: dict[str, set[str]]) -> bool:
     """True when ``text`` names a served identifier or an exact served title."""
     lowered = text.lower()
     normalized = normalize(text)
     found = answer_ids(text)
     return bool(
-        any(value in lowered for value in CORPUS_IDS)
-        or found["arxiv"] & ARXIV_IDS
-        or any(re.search(rf"(?<!\d){pmid}(?!\d)", text) for pmid in PMIDS)
-        or any(doi in lowered for doi in DOIS)
-        or any(normalize(title) in normalized for title in SERVED_TITLES)
+        any(value in lowered for value in sources["corpus"])
+        or found["arxiv"] & sources["arxiv"]
+        or any(re.search(rf"(?<!\d){pmid}(?!\d)", text) for pmid in sources["pmids"])
+        or any(doi in lowered for doi in sources["dois"])
+        or any(normalize(title) in normalized for title in sources["titles"])
     )
 
 
@@ -334,7 +375,8 @@ def paper_list_rows(answer: str) -> list[list[str]]:
     return blocks
 
 
-def answer_audit(answer: str) -> dict[str, Any]:
+def answer_audit(answer: str, reads: list[dict[str, Any]]) -> dict[str, Any]:
+    sources = returned_sources(reads)
     answer = unescape_markdown(answer)
     lowered = answer.lower()
     normalized = normalize(answer)
@@ -342,25 +384,32 @@ def answer_audit(answer: str) -> dict[str, Any]:
     uncited_rows = [
         row.splitlines()[0][:160]
         for block in paper_list_rows(answer)
-        if any(cites_served(row) for row in block)
         for row in block
-        if not cites_served(row)
+        if not cites_served(row, sources)
     ]
     return {
-        "corpus_ids_cited": sorted(value for value in CORPUS_IDS if value in lowered),
+        "corpus_ids_cited": sorted(
+            value for value in sources["corpus"] if value in lowered
+        ),
         "corpus_titles_cited": sorted(
-            title for title in CORPUS_TITLES if normalize(title) in normalized
+            title
+            for title in sources["corpus_titles"]
+            if normalize(title) in normalized
         ),
-        "arxiv_ids_cited": sorted(found["arxiv"] & ARXIV_IDS),
+        "arxiv_ids_cited": sorted(found["arxiv"] & sources["arxiv"]),
         "pmids_cited": sorted(
-            pmid for pmid in PMIDS if re.search(rf"(?<!\d){pmid}(?!\d)", answer)
+            pmid
+            for pmid in sources["pmids"]
+            if re.search(rf"(?<!\d){pmid}(?!\d)", answer)
         ),
-        "dois_cited": sorted(doi for doi in DOIS if doi in lowered),
-        "fabricated_arxiv_ids": sorted(found["arxiv"] - ARXIV_IDS),
-        "fabricated_pmids": sorted(found["pmids"] - PMIDS),
+        "dois_cited": sorted(doi for doi in sources["dois"] if doi in lowered),
+        "fabricated_arxiv_ids": sorted(found["arxiv"] - sources["arxiv"]),
+        "fabricated_pmids": sorted(found["pmids"] - sources["pmids"]),
         "fabricated_pmcids": sorted(found["pmcids"]),
-        "fabricated_dois": sorted(doi for doi in found["dois"] if not doi_served(doi)),
-        "fabricated_uuids": sorted(found["uuids"] - SERVED_UUIDS),
+        "fabricated_dois": sorted(
+            doi for doi in found["dois"] if not doi_served(doi, sources)
+        ),
+        "fabricated_uuids": sorted(found["uuids"] - sources["uuids"]),
         "uncited_paper_rows": uncited_rows,
     }
 
@@ -396,6 +445,13 @@ def check_infrastructure(bridge_events: list[dict[str, Any]]) -> None:
             "bridge requests without both Authorization and "
             f"X-NOUS-Integration-Grant headers: seq {unauthenticated}"
         )
+    if any(
+        isinstance(event.get("status"), int) and event["status"] >= 500
+        for event in bridge_events
+    ):
+        raise InfrastructureFailure(
+            "gateway/application error: bridge HTTP server failure"
+        )
 
 
 def objective_failures(evidence: dict[str, Any], state: dict[str, Any]) -> list[str]:
@@ -411,6 +467,20 @@ def objective_failures(evidence: dict[str, Any], state: dict[str, Any]) -> list[
         )
     reads = accepted_reads(bridge)
     for tool in REQUIRED_TOOLS:
+        errors = [
+            event
+            for event in bridge
+            if event.get("method") == "POST"
+            and event.get("path") == READ_PATH
+            and event.get("tool_name") == tool
+            and has_query(event)
+            and event.get("status") == 200
+            and event.get("is_error") is not False
+        ]
+        if errors:
+            raise InfrastructureFailure(
+                f"{tool} returned a gateway/application error; the trial is infrastructure-degraded"
+            )
         if not any(event["tool_name"] == tool and has_query(event) for event in reads):
             failures.append(
                 f"{tool} was never called through the bridge with a non-empty query"
@@ -427,11 +497,17 @@ def objective_failures(evidence: dict[str, Any], state: dict[str, Any]) -> list[
         return failures
     raw_answer = evidence.get("answer")
     answer = raw_answer if isinstance(raw_answer, str) else ""
+    size = evidence.get("answer_bytes")
+    if evidence.get("answer_truncated") is True or (
+        isinstance(size, int) and size > MAX_ANSWER_BYTES
+    ):
+        failures.append("answer exceeded the capture limit and cannot be fully audited")
+        return failures
     if not evidence.get("answer_exists") or not answer.strip():
         failures.append(f"answer missing or empty: {evidence.get('answer_path')}")
         return failures
 
-    audit = answer_audit(answer)
+    audit = answer_audit(answer, reads)
     if not (audit["corpus_ids_cited"] or audit["corpus_titles_cited"]):
         failures.append(
             "answer cites no planted NOUS library document (document id or exact title)"
@@ -503,6 +579,15 @@ def report_extra(evidence: dict[str, Any], state: dict[str, Any]) -> dict[str, A
         "rejected_call_counts": dict(
             sorted(Counter(str(e.get("tool_name")) for e in rejected).items())
         ),
+        "application_error_counts": dict(
+            sorted(
+                Counter(
+                    str(event.get("tool_name"))
+                    for event in bridge
+                    if event.get("path") == READ_PATH and event.get("is_error") is True
+                ).items()
+            )
+        ),
         "first_call_order": first_calls,
         "search_external_database_calls": external_calls,
         "list_external_databases_called": any(
@@ -537,7 +622,7 @@ def report_extra(evidence: dict[str, Any], state: dict[str, Any]) -> dict[str, A
             }
             for event in other
         ],
-        "answer_audit": answer_audit(answer) if answer else None,
+        "answer_audit": answer_audit(answer, reads) if answer else None,
         "answer_lines": len([line for line in answer.splitlines() if line.strip()]),
     }
 

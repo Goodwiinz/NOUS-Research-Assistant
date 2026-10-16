@@ -44,11 +44,22 @@ class ProofViolation(Exception):
     """A reachable contract/isolation failure, distinct from infrastructure."""
 
 
+class SourceIdentityError(RuntimeError):
+    """Undeclared source inputs prevent a reproducible provider measurement."""
+
+
 def sid(value: str) -> uuid.UUID:
     return uuid.uuid5(NS, value)
 
 
 def identity() -> dict[str, Any]:
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=ROOT, text=True
+    ).strip()
+    if dirty:
+        raise SourceIdentityError(
+            "Provider proof requires a clean Git-visible checkout"
+        )
     endpoint = os.environ.get(
         "COHERE_EMBED_ENDPOINT", "https://api.cohere.com/v2/embed"
     )
@@ -56,13 +67,11 @@ def identity() -> dict[str, Any]:
         "source_revision": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
-        "source_dirty": bool(
-            subprocess.check_output(
-                ["git", "status", "--porcelain", "--", *SOURCE_FILES],
-                cwd=ROOT,
-                text=True,
-            ).strip()
-        ),
+        "source_dirty": False,
+        "source_tree": subprocess.check_output(
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, text=True
+        ).strip(),
+        "source_scope": "complete clean Git-visible checkout at source_revision",
         "files": {
             name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
             for name in SOURCE_FILES
@@ -523,7 +532,8 @@ def run(declaration: dict[str, Any], artifacts: Path) -> dict[str, Any]:
     from sqlalchemy.engine import make_url
     from sqlalchemy.pool import NullPool
 
-    assert declaration["identity"] == identity(), "Inputs changed after declaration"
+    if declaration["identity"] != identity():
+        raise SourceIdentityError("Inputs changed after declaration")
     try:
         url = make_url(os.environ["NOUS_PROVIDER_PROOF_DATABASE_URL"])
     except Exception:
@@ -593,6 +603,16 @@ def run(declaration: dict[str, Any], artifacts: Path) -> dict[str, Any]:
                 retained_scratch_database=name,
             )
         admin.dispose()
+    try:
+        result["source_after"] = identity()
+        if result["source_after"] != declaration["identity"]:
+            raise SourceIdentityError("Inputs changed during provider execution")
+    except SourceIdentityError:
+        result.update(
+            status="infrastructure",
+            error_type="SourceIdentityError",
+            source_integrity="failed",
+        )
     result["recorded_at"] = datetime.now(timezone.utc).isoformat()
     return result
 
