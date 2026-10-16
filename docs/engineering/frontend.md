@@ -154,6 +154,42 @@ necessary, extend the contract here first.
   advisory until their debt reaches zero — see [testing.md](testing.md) for
   how to move a floor.
 
+## Endpoint configuration
+
+Browser services consume `getPublicApiOrigin()`, `getPublicApiBaseUrl()` and
+`getPublicWebSocketOrigin()` from `frontend/src/utils/publicEndpoints.ts`.
+`API_CONFIG.BASE_URL` delegates to that same resolver with `preferLocalProxy`
+enabled, retaining same-origin Next.js routing when a local UI is configured
+with a remote backend. Direct streaming callers keep the default local-origin
+policy. `NEXT_PUBLIC_API_BASE_URL`
+takes precedence for versioned API calls; `NEXT_PUBLIC_API_URL` supplies the
+origin when no explicit base is set. WebSocket configuration accepts
+`NEXT_PUBLIC_WS_URL` and its legacy `NEXT_PUBLIC_WEBSOCKET_URL` alias, otherwise
+deriving the protocol and origin from the API. Versioned URLs retain their
+version once, and relative API bases stay relative.
+
+Local pages ignore baked remote origins and remote pages ignore loopback
+origins. Only the resolver supplies local development defaults. Without a
+browser or configured origin, HTTP calls retain `/api/v1` and the WebSocket
+origin stays unset. The unreferenced legacy `graphService.ts` and
+`graphAnalyticsService.ts` clients for standalone ports 8003/8009/8010 have
+been removed after checking repository callers. Historical migration documents
+retain their earlier design; they do not establish deployed endpoints.
+
+Both Next.js configurations use `frontend/config/resolveBackendUrl.js` for
+server rewrites. Production builds require an explicit `BACKEND_URL`,
+`NEXT_PUBLIC_API_URL`, or absolute `NEXT_PUBLIC_API_BASE_URL`; a local
+production build may set an intentional local backend. Missing public
+variables remain unset instead of becoming localhost strings in the bundle.
+SSR/proxy authentication requires a configured Supabase URL and anon key;
+`SUPABASE_SERVER_URL` remains the server-only override for container networks.
+
+The `nous/no-loopback-runtime-urls` ESLint rule rejects loopback HTTP/WebSocket
+URL literals and template text in runtime `frontend/src` files. Colocated
+tests, `src/test`, comments, and the shared resolver's intentional development
+defaults are exempt. Endpoint and caller regression tests live in
+`src/utils/__tests__` and `src/services/__tests__/publicEndpoints.integration.test.ts`.
+
 ## Toolchain
 
 - Node 24, `pnpm@10.18.2` (root `packageManager` + `.nvmrc`); root

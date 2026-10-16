@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "es5",
-    "lib": ["dom", "dom.iterable", "es6"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es6"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -21,17 +25,40 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@/nous": ["./app/components/nous/index.ts"],
-      "@/nous/*": ["./app/components/nous/*"],
-      "@/*": ["./src/*", "./app/*"],
-      "@/components/*": ["./src/components/*"],
-      "@/lib/*": ["./src/lib/*"],
-      "@/hooks/*": ["./src/hooks/*"],
-      "@/types/*": ["./src/types/*"],
-      "@/utils/*": ["./src/utils/*"],
-      "@/stores/*": ["./src/stores/*"],
-      "@/styles/*": ["./src/styles/*"],
-      "@test/*": ["./src/test/*"]
+      "@/nous": [
+        "./app/components/nous/index.ts"
+      ],
+      "@/nous/*": [
+        "./app/components/nous/*"
+      ],
+      "@/*": [
+        "./src/*",
+        "./app/*"
+      ],
+      "@/components/*": [
+        "./src/components/*"
+      ],
+      "@/lib/*": [
+        "./src/lib/*"
+      ],
+      "@/hooks/*": [
+        "./src/hooks/*"
+      ],
+      "@/types/*": [
+        "./src/types/*"
+      ],
+      "@/utils/*": [
+        "./src/utils/*"
+      ],
+      "@/stores/*": [
+        "./src/stores/*"
+      ],
+      "@/styles/*": [
+        "./src/styles/*"
+      ],
+      "@test/*": [
+        "./src/test/*"
+      ]
     }
   },
   "include": [
@@ -61,9 +88,6 @@
     "src/components/monitoring/SystemOverviewDashboard.tsx",
     "src/components/ui/enhanced-new-chat-dialog.tsx",
     "src/components/ui/shadcn-io/**/*",
-    "src/services/analytics/**/*",
-    "src/services/graphAnalyticsService.ts",
-    "src/services/graphService.ts",
     "src/services/monitoringWebsocketService.ts",
     "src/services/searchService.ts",
     "src/hooks/useAnalyticsTracking.ts",

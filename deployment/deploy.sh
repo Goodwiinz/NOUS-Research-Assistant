@@ -133,7 +133,11 @@ build_and_push_images() {
 
     # Build frontend image
     log_info "Building frontend image..."
-    docker build -f frontend/Dockerfile.prod -t multimodal-rag/frontend:latest .
+    docker build \
+        --build-arg BACKEND_URL="${BACKEND_URL:-http://backend:8000}" \
+        --build-arg NEXT_PUBLIC_SUPABASE_URL="${NEXT_PUBLIC_SUPABASE_URL:?Set NEXT_PUBLIC_SUPABASE_URL before building}" \
+        --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${NEXT_PUBLIC_SUPABASE_ANON_KEY:?Set NEXT_PUBLIC_SUPABASE_ANON_KEY before building}" \
+        -f frontend/Dockerfile.prod -t multimodal-rag/frontend:latest .
     docker push multimodal-rag/frontend:latest
 
     log_success "Docker images built and pushed successfully."
