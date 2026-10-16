@@ -565,10 +565,7 @@ export default function ProjectDetailPage() {
   const handleUploadComplete = useCallback(
     async (documentIds: string[]) => {
       setShowUploadWizard(false);
-      // The wizard has already told the user every file uploaded; linking to
-      // this project is a separate step that can fail per document (role,
-      // archived project, duplicate, server error). Report what did not link
-      // instead of letting the library-only upload pass as a project upload.
+      // The wizard already reported success; linking can still fail per document.
       const results = await Promise.allSettled(
         documentIds.map((docId) =>
           projectService.addDocumentToProject(projectId, docId)

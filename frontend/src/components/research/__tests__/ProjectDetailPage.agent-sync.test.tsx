@@ -39,7 +39,6 @@ vi.mock('@/services/projectService', () => ({
   },
 }));
 vi.mock('react-hot-toast', () => ({
-  __esModule: true,
   default: {
     success: vi.fn(),
     error: vi.fn(),
@@ -117,8 +116,7 @@ vi.mock('@/components/research-engine/ProjectWorkflow', () => ({
   ),
 }));
 vi.mock('@/components/upload', () => ({
-  // Stand-in for the wizard's "Done" step: the real wizard has already told
-  // the user every file was uploaded and processed before calling onComplete.
+  // Simulates the wizard's "Done" step.
   DocumentUploadWizard: ({
     isOpen,
     onComplete,
@@ -440,14 +438,10 @@ describe('ProjectDetailPage agent sync', () => {
           '1 of 2 documents could not be added to this project'
         );
       });
-      expect(mockProjectService.addDocumentToProject).toHaveBeenCalledWith(
-        'proj-1',
-        'd1'
-      );
-      expect(mockProjectService.addDocumentToProject).toHaveBeenCalledWith(
-        'proj-1',
-        'd2'
-      );
+      expect(mockProjectService.addDocumentToProject.mock.calls).toEqual([
+        ['proj-1', 'd1'],
+        ['proj-1', 'd2'],
+      ]);
       // Still refresh so the documents that did link are shown.
       expect(mockFetchProjectDocuments).toHaveBeenCalledWith('proj-1');
     });
