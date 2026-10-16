@@ -88,7 +88,9 @@ class _LLM:
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-def _wire(monkeypatch: pytest.MonkeyPatch, texts: list[str], llm: _LLM):
+def _wire(
+    monkeypatch: pytest.MonkeyPatch, texts: list[str], llm: _LLM
+) -> tuple[list[Any], dict[str, str], "_Session", list[Any]]:
     matrix = SimpleNamespace(project_id=uuid4())
     version = SimpleNamespace(fields=[{"name": "Sample size", "type": "text"}])
     docs = [
@@ -104,7 +106,9 @@ def _wire(monkeypatch: pytest.MonkeyPatch, texts: list[str], llm: _LLM):
     async def no_redis() -> None:
         return None
 
-    async def fake_read_whole_text(text: str, fields: Any, read: Any):
+    async def fake_read_whole_text(
+        text: str, fields: Any, read: Any
+    ) -> tuple[dict[str, Any], list[Any], bool]:
         await read(text)  # one LLM call per document
         return {}, [], False
 
