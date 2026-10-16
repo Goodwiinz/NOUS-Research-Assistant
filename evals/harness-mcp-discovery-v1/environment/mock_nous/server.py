@@ -180,11 +180,15 @@ def _bounds_ok(spec: dict[str, Any], value: Any) -> bool:
     if "enum" in spec and value not in spec["enum"]:
         return False
     if isinstance(value, int) and not isinstance(value, bool):
-        return spec.get("minimum", value) <= value <= spec.get("maximum", value)
+        return bool(spec.get("minimum", value) <= value <= spec.get("maximum", value))
     if isinstance(value, str):
-        return spec.get("minLength", 0) <= len(value) <= spec.get("maxLength", 2**31)
+        return bool(
+            spec.get("minLength", 0) <= len(value) <= spec.get("maxLength", 2**31)
+        )
     if isinstance(value, list):
-        return spec.get("minItems", 0) <= len(value) <= spec.get("maxItems", 2**31)
+        return bool(
+            spec.get("minItems", 0) <= len(value) <= spec.get("maxItems", 2**31)
+        )
     return True
 
 
@@ -743,6 +747,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         event = self.base_event("GET", path)
         _present, valid = self.auth_state()
+        payload: dict[str, str] | list[dict[str, Any]]
         if path != CATALOG_PATH:
             status, payload = HTTPStatus.NOT_FOUND, {"detail": "Not Found"}
         elif not valid:

@@ -1141,3 +1141,25 @@ For any future revision:
 5. Evidence in `evals/jobs/`; machine-readable summary in
    `evals/baselines/agent-flow-<date>.json`; source manifest in
    `evals/source-manifests/agent-flow-<date>.json`.
+
+## Recorded amendment: capability 18, 2026-10-16
+
+The first accepted series is recorded in
+`baselines/agent-flow-2026-10-16-harness-mcp-discovery-http.json` and its dated
+source manifest. Codex 0.161.0 / Azure `gpt-5.6-terra`: objective **1/5**,
+semantic **N/A**, accepted-series infrastructure failures **0**; five earlier
+transport-degraded attempts were excluded under the registered rule. The
+Codex-only product decision is **PRIMITIVES INSUFFICIENT**. This is historical
+primitive composition at bridge revision `57fc21bc7`, not current composite
+quality or deployment acceptance. Status remains **NOT GATED**. The earlier
+"awaits first recorded run" statements are historical pre-registration state.
+No prior baseline has been replaced or scored across a digest boundary.
+
+### Capability 18: corrected-task record
+
+Mandatory typing corrections produced a new task/verifier digest. The fresh
+record `baselines/agent-flow-2026-10-16-harness-mcp-discovery-typed-http.json`
+contains 0/5 objective passes, semantic N/A, zero infrastructure failures,
+and the Codex-only PRIMITIVES INSUFFICIENT decision. It supersedes no prior
+record and reuses no score. Five attempts were used at this digest; total
+across task versions is fifteen. Status: NOT GATED.

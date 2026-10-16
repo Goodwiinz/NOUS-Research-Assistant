@@ -64,7 +64,17 @@ RUN chmod 0555 /opt/nous-eval/start-mcp.sh /opt/nous-eval/launch.py /opt/nous-ev
 # WebSearch/WebFetch are removed by the pre-registered
 # `--ak disallowed_tools=WebSearch,WebFetch` (specs/.../harness.md).
 RUN install -d -m 0777 /tmp/codex-home \
-    && printf 'web_search = "disabled"\n' > /tmp/codex-home/config.toml \
+    && printf '%s\n' \
+        'web_search = "disabled"' \
+        'model_provider = "azure_http"' \
+        '[model_providers.azure_http]' \
+        'name = "Azure OpenAI HTTP"' \
+        'base_url = "https://goodwiinzapix.cognitiveservices.azure.com/openai/v1"' \
+        'env_key = "OPENAI_API_KEY"' \
+        'wire_api = "responses"' \
+        'requires_openai_auth = false' \
+        'supports_websockets = false' \
+        > /tmp/codex-home/config.toml \
     && chmod 0666 /tmp/codex-home/config.toml
 
 RUN mkdir -p /app

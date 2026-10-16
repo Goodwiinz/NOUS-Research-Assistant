@@ -167,3 +167,20 @@ agent-eval run --task evals/tasks/regression/ --agent claude-code --runs 3
 # Generate report
 agent-eval report --format table
 ```
+
+### External harness discovery decision
+
+[`harness-mcp-discovery-v1`](harness-mcp-discovery-v1/task.toml) measures an
+external harness combining the primitive MCP searches through the pinned real
+bridge and a deterministic gateway double. The
+[specification](specs/harness-mcp-discovery-v1/harness.md) fixes its scoring and
+infrastructure exclusions. Use `prepare_harness_discovery.py --output <new-dir>`
+to prepare its declared source before running Harbor. The
+[2026-10-16 record](baselines/agent-flow-2026-10-16-harness-mcp-discovery-http.json)
+is Codex-only, objective 1/5, **NOT GATED**. It does not validate the current
+composite tool or deployed search quality. Trial traces remain ignored locally.
+
+The [corrected-task record](baselines/agent-flow-2026-10-16-harness-mcp-discovery-typed-http.json)
+contains a fresh 0/5 series after mandatory typing fixes changed the digest.
+The earlier 1/5 series is preserved as historical evidence; neither record is
+GATED, and neither establishes current composite or deployed quality.

@@ -47,7 +47,7 @@ import unicodedata
 import urllib.request
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, "/opt/nous-eval/lib")
 try:
@@ -561,7 +561,7 @@ def main() -> int:
             )
             return 2
         os.environ["EVIDENCE_PATH"] = str(evidence_path)
-    return run_verifier_main(BENCHMARK_ID, objective_failures, report_extra)
+    return cast(int, run_verifier_main(BENCHMARK_ID, objective_failures, report_extra))
 
 
 if __name__ == "__main__":

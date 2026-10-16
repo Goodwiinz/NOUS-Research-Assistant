@@ -102,3 +102,62 @@ Slice 5 decision rule (pre-registered; applies to the two harness/model pairs ab
 The rule is exhaustive. The audit diagnostics (missing source, `list_project_documents` used instead of `search_documents`, fabricated identifiers, connector choice) are recorded with the outcome to inform the Slice 5 design; they do not change the outcome. Record the outcome as a dated amendment to `docs/plans/2026-10-05-nous-mcp-alphaxiv-parity.md`, as Plan 07 requires.
 
 Fidelity limits (details in `environment.md`): the NOUS backend is a deterministic double, while the bridge and the catalog text and schemas the harness reads are real. Search relevance is a keyword match that is more lenient than production; the arXiv recency window is not applied; `do_kb_retrieve` acts as if a knowledge base were provisioned; tokens are fake. A pass shows the harness can combine the primitives against the real MCP surface. It does not show the live gateway on `rag-dev` behaves the same (`NOUS_MCP_ENABLED` is off there), nor that results generalize to other topics, models or harness versions.
+
+## Amendment 2026-10-16: pinned source and HTTP trials
+
+The first five Codex attempts completed after each encountered an Azure
+WebSocket HTTP 302 and recovered over HTTPS. Their raw rewards were four
+failures and one pass. Under the registered provider-error exclusion they
+are infrastructure-degraded and excluded; they establish no product decision.
+
+Before the replacement trials, the task image selects a custom Azure Responses
+provider with `supports_websockets=false`. The deployment remains
+`gpt-5.6-terra`, Codex remains 0.161.0 and Harbor remains 0.6.6. The verifier,
+fixtures and decision threshold are unchanged. This is a new task digest and
+baseline. Five replacement attempts remain within the ten-attempt cap.
+
+For this custom-provider image, do not export or forward `OPENAI_BASE_URL`.
+The image supplies the provider URL; Harbor 0.6.6 would append the legacy
+override inside the provider table. Forward only `OPENAI_API_KEY`.
+
+The user requested Claude Fable. Both Bedrock Fable 5 and Fable 5.1 invocation
+probes returned AccessDeniedException despite listed profiles. Claude benchmark
+trials remain NOT RUN. Authenticated local Fable code reviews are separate
+evidence and do not substitute for benchmark trials.
+
+Build the bridge revision declared by `task.toml`, using a new output directory:
+
+```sh
+python3 evals/prepare_harness_discovery.py --output /tmp/nous-discovery-http
+cd /tmp/nous-discovery-http
+# Run the Codex Harbor command above, with a new job name.
+```
+
+The preparation command archives the pinned bridge, workspace manifests,
+lockfile and shared verifier helpers, then copies the current task. It records
+SHA-256 inputs in `source-inputs.json`. It never overwrites an existing output
+directory. Forward only the needed provider credential to Harbor, and retain
+the trial artifacts locally. The result concerns historical primitive
+composition at `57fc21bc7`; it does not evaluate current composite discovery
+quality, live provider ranking or deployed behavior.
+
+## Amendment 2026-10-16: corrected typing, fresh baseline
+
+The inherited task failed the delivery mypy gate on three JSON-bound predicates,
+a response variable shared by dictionary/list branches, and the verifier's
+imported exit-code return. Corrections make those types explicit. All eight
+calibration fixtures retain their expected exits; truth fixtures, required
+tools, provider, CLI versions and decision threshold are unchanged.
+
+These source edits change task/dataset digests. The completed HTTP 1/5 record
+remains historical evidence for its exact snapshot and cannot score the current
+task. A fresh baseline is declared before its first trial and must collect
+five scoreable trials under the same exclusions and ten-attempt cap. All
+earlier attempts and results remain recorded. The first five attempts of this
+corrected baseline bring the total across task versions to fifteen; scores
+are never selected or combined across versions.
+
+The ten-attempt cap applies separately to each registered task/dataset/provider
+baseline. Mandatory task corrections require a new declaration before trial 1;
+earlier attempts remain in the campaign total and cannot contribute scores to
+the new baseline. This clarifies the reset used for the typing correction.
