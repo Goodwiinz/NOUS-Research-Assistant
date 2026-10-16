@@ -263,14 +263,13 @@ export class Journal {
       (JSON.parse(owner.command) as BridgeCommand).runId === command.runId
     )
       return owner;
-    const released = (
-      this.db
-        .prepare("SELECT * FROM commands WHERE state='denied'")
-        .all() as Row[]
-    ).find(
-      (row) =>
-        (JSON.parse(row.command) as BridgeCommand).runId === command.runId,
-    );
+    // Only a refused start that no longer holds its lock: a 'denied' lock
+    // holder is mid-run and still routes through its workspace's lock above.
+    const released = this.db
+      .prepare(
+        "SELECT * FROM commands WHERE state='denied' AND json_extract(command,'$.runId')=? AND id NOT IN (SELECT command FROM locks)",
+      )
+      .get(command.runId) as Row | undefined;
     return released ?? owner;
   }
   renewLease(
@@ -356,9 +355,12 @@ export class Journal {
       } else {
         if (!owner) throw new Error("no active target");
         const start: BridgeCommand = JSON.parse(owner.command);
+        // owner() keyed by workspace; target() may route by run, so the
+        // workspace is compared here too.
         if (
           start.runId !== command.runId ||
           start.deviceId !== command.deviceId ||
+          start.workspaceId !== command.workspaceId ||
           start.generation !== command.generation
         )
           throw new Error("generation or run mismatch");

@@ -578,9 +578,16 @@ test("NOUS still leasing a refused run: its Stop is delivered, its approval drop
 // every reconnect: the same device-wide stall BR-1 fixed. Codex has stopped,
 // so both commands are consumed without a native call, as the approval of a
 // refused run already is, and the socket stays open.
-// Mutation: drop the released-run fallback in src/journal.ts target() and
-// connectBridge rejects with "no active target" (folder free) or "generation
-// or run mismatch" (folder reused).
+// Mutations, each with the focused command
+// pnpm --filter @nous/harness-bridge test test/denied-run.test.ts --test-name-pattern="folder was released":
+// - src/journal.ts target() (line 268-273): return `owner` instead of the
+//   released 'denied' start and connectBridge rejects with "no active target"
+//   (folder free) or "generation or run mismatch" (folder reused);
+// - src/journal.ts executeCommand() (line 374-380): neutralize the
+//   denied-interrupt consume guard (`!this.holdsLock(owner.id)` -> false) and
+//   the Stop of the finished turn is forwarded to Codex: its state is
+//   'delivered' !== 'missing', and a1.interrupts is 1.
+// The wrong-workspace guard (line 363) has its own test below.
 for (const reused of [false, true])
   test(`NOUS still leasing a run refused after its folder was released${reused ? " and reused" : ""}: its Stop and approval are consumed and the socket stays open`, async (t) => {
     const { connectBridge } = await import("../src/connection.ts");
@@ -664,6 +671,52 @@ for (const reused of [false, true])
       f.cleanup();
     }
   });
+
+// target() routes a released refused run by run id, where owner() routed by
+// the command's workspace. The identity check therefore compares the
+// workspace too: a Stop or approval that names the run under another folder is
+// refused as before, and nothing reaches Codex. The mid-run case (lock held)
+// keeps routing through the lock: "NOUS still leasing a refused run" above.
+// Mutation: drop `start.workspaceId !== command.workspaceId` from the
+// mismatch check in src/journal.ts executeCommand() (line 363) and the
+// commands are consumed instead (Missing expected rejection).
+test("a Stop or approval for a released refused run under another folder is still refused", async () => {
+  const f = fixture();
+  const r1 = start(randomUUID());
+  const a1 = codex("r1");
+  let responded = 0;
+  a1.respondToRequest = async () => {
+    responded += 1;
+  };
+  const j = new Journal(f.path, () => options);
+  try {
+    await j.execute(r1, a1); // r1#1 observation:running
+    j.recordNative(r1.commandId, { kind: "terminal", status: "completed", sessionId: "s-r1", turnId: "t-r1" }); // r1#2
+    assert.equal(j.reject(refusal(r1)), true);
+    assert.equal(j.workspaceLocked(r1.workspaceId), false);
+    const elsewhere = { ...r1, workspaceId: randomUUID() };
+    const stop: BridgeCommand = {
+      ...elsewhere,
+      commandId: randomUUID(),
+      body: { kind: "interrupt", sessionId: "s-r1", turnId: "t-r1" },
+    };
+    const approve: BridgeCommand = {
+      ...elsewhere,
+      commandId: randomUUID(),
+      body: { kind: "respond", requestId: 7, approvalRecordId: randomUUID(), response: { kind: "decision", allow: true } },
+    };
+    await assert.rejects(j.execute(stop, a1), /generation or run mismatch/);
+    await assert.rejects(j.execute(approve, a1), /generation or run mismatch/);
+    assert.equal(a1.interrupts, 0);
+    assert.equal(responded, 0);
+    assert.equal(j.state(stop.commandId), "missing");
+    assert.equal(j.state(approve.commandId), "missing");
+    assert.equal(j.state(r1.commandId), "denied");
+  } finally {
+    j.close();
+    f.cleanup();
+  }
+});
 
 // The reject frame itself (backend/src/api/harness.py sends it per refused
 // event, in place of the ack). Before it, connection.ts read it as an invalid
