@@ -111,3 +111,21 @@ unchanged cancellation fixtures errored before their test bodies; they are
 not claimed as passing in the unprepared runs. No production encryption or
 cancellation code was changed. The restored route table retains exact ordered
 characterization and adds the new route rather than weakening the assertion.
+# Native continuation fixture follow-up, 2026-10-16 11:11 UTC
+
+At head `9ba9267f16af03448da9101c76c32bcc42580294`, Test Pipeline
+38886273682 integration shard 1 (producer 116930143965) failed both
+same-project continuation cases because its minimal schema omitted
+`project_threads`. PostgreSQL resolves the live-chain query's `EXISTS`
+relation even when the current-project branch matches. The fixture now
+creates the real `ProjectThread` table after its parents; no assertions or
+production behavior changed. Both native PostgreSQL 15.19 cases passed with
+zero skips using `ORCHESTRATION_TEST_DATABASE_URL=<owned local PostgreSQL URL>`
+and `PYTHONPATH=backend <prepared backend Python> -m pytest -q
+backend/tests/integration/test_same_project_continuation.py`. Pinned Ruff,
+Black and isort passed. A read-only Fable follow-up found no blocker, with
+`readOnlyViolation=false`.
+
+That run's integration shard 2 (producer 116930144067) stopped on the public
+ECR image-pull quota before tests. It is a separate infrastructure failure.
+Fresh hosted checks are required for the repaired fixture commit.
