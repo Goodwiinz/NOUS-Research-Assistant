@@ -6,7 +6,7 @@ Scope: GOO-219, GOO-237, GOO-238, GOO-239, GOO-240, GOO-241, GOO-435,
 GOO-436, GOO-419, GOO-337, GOO-319 and GOO-320. The user requested review,
 implementation, double-checking with Claude Fable, and overnight work.
 
-Worktree: `/Users/goodwiinz/.codex/worktrees/7b9e/RAG_system`.
+Worktree: dedicated Codex-managed `7b9e/RAG_system` checkout.
 Branch: `codex/goo-219-linear-open-issues`.
 Freshly fetched base: `6928d3d90a8d7f9e419015c1511eae213ec968ad`.
 The starting checkout was stale; the implementation branch starts at that
@@ -25,7 +25,7 @@ fetched base. No pre-existing source changes were overwritten.
 
 ## Execution and ownership
 
-- Same-host shared board: `/Users/goodwiinz/.loop-bridge`, verified writable;
+- Same-host shared board: `$LOOP_BRIDGE_DIR`, verified writable;
   its initial listing had no claims. The endpoint claim uses agent
   `codex-01a1435c`, area `frontend-endpoints-GOO-219-237-241`, and the branch
   above. Renew it before expiry; do not label it merged without a verified merge.
@@ -130,3 +130,34 @@ The tenant-scoped handoff uniqueness proposal has its own managed worktree,
 `linear-handoff-org/RAG_system`, branch `codex/goo-423-handoff-org-scope`.
 Implementation, migration execution, review and owner acceptance are pending.
 The full twelve-issue goal remains active.
+
+## 2026-10-16: hosted review follow-up
+
+At `b9c258a8f58f9688c8e6a9991ba71ec5309c236d`, Test Pipeline
+38873092695 passed, including frontend producer 116882740395 (3,056
+tests and unchanged coverage floors), E2E producer 116884436565 and Release
+Gate 116888153961. This is source/CI evidence, not production acceptance.
+
+Automated review identified build callers that supplied backend routing only
+at runtime. The local E2E builder now passes its backend container target;
+production and Azure Compose builds pass their backend service target; the
+direct deployment builder forwards the backend and required public auth
+configuration. No deployment command was executed. Local E2E shell syntax
+and stubbed E2E/deployment builder invocations verify argument forwarding
+without building or starting containers. The whole legacy deployment script
+already fails Bash parsing on its unquoted Kubernetes selector at both the
+previous and current heads; this unrelated legacy defect was not changed or
+counted as a passing check. These caller changes require a new hosted result
+for their head.
+
+Personal workstation paths in this progress record were replaced with neutral
+checkout and board descriptions. Historical test counts above remain tied to
+their recorded source revision.
+
+The retained production/security Compose variants and hardened frontend builder
+also forward the backend service target. The Bake frontend target now forwards
+explicit backend and public Supabase variables; blank defaults retain the
+Dockerfile's required-configuration refusal. Render validation is local only.
+These legacy/unresolved definitions do not establish a live environment or
+revive a deployment path. Development Compose renders and its focused config
+assertions passed; the script-contract suite passed 170 tests.
