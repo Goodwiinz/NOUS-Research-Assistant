@@ -154,6 +154,9 @@ describe('useThreadHandoff', () => {
     );
     const { result } = renderHook(() => useThreadHandoff(THREAD), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(get).toHaveBeenCalledWith(
+      `/api/v2/threads/${THREAD}/handoff/latest`
+    );
     expect(result.current.data).toBeNull();
     const query = client
       .getQueryCache()

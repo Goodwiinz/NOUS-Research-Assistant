@@ -229,9 +229,11 @@ streaming route continue accepting authorized Codex selections.
 
 ## Browser handoff visibility
 
-`GET /api/v2/threads/{thread_id}/handoff` first authorizes the chat with the
+`GET /api/v2/threads/{thread_id}/handoff/latest` first authorizes the chat with the
 single-query access check. It returns `200 null` when that readable chat has
-no handoff and 404 when the chat is inaccessible. The browser shows the newest
+no handoff and 404 when the chat is inaccessible. The original `/handoff` route
+retains its object-or-404 response for existing generated clients. The browser
+uses `/handoff/latest` and shows the newest
 save from the current project or any live linked project in the chat's own
 workspace. Deleted projects, deleted links, other workspaces and other
 organizations remain excluded. Ordering uses save time because version numbers

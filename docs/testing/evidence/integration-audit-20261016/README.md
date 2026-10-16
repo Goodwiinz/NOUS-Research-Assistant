@@ -17,10 +17,13 @@ CLI commands and current discovery timeout documentation.
   offsets from 0 through 25. Contracts were regenerated together.
 - A chat's live project links retain its device binding after an additive
   relink. Organization, workspace, membership and deletion predicates remain.
-- A readable chat without a handoff returns 200 null; an inaccessible chat
+- The additive `/api/v2/threads/{thread_id}/handoff/latest` route returns
+  200 null for a readable chat without a handoff; an inaccessible chat
   retains 404. The access check loads no members and uses one SELECT. Mounted
   views poll every five minutes while empty and every thirty seconds while
   active; background polling stays disabled.
+  The existing `/handoff` route preserves its object-or-404 contract for
+  generated clients. The chat UI uses the new nullable route.
 - The browser shows the newest accepted save from any live linked project in
   the chat workspace. Save time orders across project chains; harness reads,
   replay and optimistic concurrency retain separate project chains. Deleted
@@ -72,3 +75,39 @@ requirements. Static gates used CI's pinned linters independently. The tests
 exercise local fixtures and source; they do not establish authenticated
 deployed acceptance. No deployment, live flag change, merge or manual Linear
 status change was performed. Hosted CI must be checked on the published head.
+
+## Hosted verification and compatibility amendment, 2026-10-16
+
+At `863f6157e944e31a958dcd1b1950b74396898699`, Test Pipeline
+38879159892 failed. Alembic producer 116901715338 could not start its
+PostgreSQL service because public ECR returned `toomanyrequests: Data limit
+exceeded`; it executed no migration checks. Contract producer 116902326876
+found the existing 200-object response had become nullable. Unit producer
+116902327072 reported two failures: the grant-resume fixture lacked
+`project_threads`, and the transaction-ownership freeze lacked the new
+read-only access helpers. Its other 10,543 tests passed; downstream skipped
+jobs and the aggregate Release Gate do not represent additional defects.
+
+The nullable browser route is now additive at `/handoff/latest`; the existing
+route preserves its exact 200-object contract and empty 404. The frontend
+requests the new route. Both generated contract files were regenerated and
+staged together. Official oasdiff 1.23.0 (verified release checksum) reports
+no breaking changes against `origin/develop`. No breaking-change bypass label
+was added.
+
+The missing fixture table and read-only ownership entries were added. The
+focused route/grant-resume/transaction matrix passed **161 tests**, and the
+affected frontend views again passed **20 tests**. All blocking local gates
+passed after staging the generated contracts. Unchanged migration probes
+skipped and full-tree ESLint remains advisory. A new hosted result is still
+required for the follow-up head.
+
+Fable's follow-up found the characterization table still described the old
+route. Its three failures were reproduced, then the table was updated for
+21 standalone / 50 total routes and both response models. The complete API
+unit directory passed **1,489 tests** after explicitly initializing test-only
+field encryption with an ephemeral key. Without that preparation, four
+unchanged cancellation fixtures errored before their test bodies; they are
+not claimed as passing in the unprepared runs. No production encryption or
+cancellation code was changed. The restored route table retains exact ordered
+characterization and adds the new route rather than weakening the assertion.

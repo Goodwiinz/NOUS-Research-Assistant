@@ -263,12 +263,13 @@ def test_over_bound_payload_is_422(
     assert state["saved"] == []
 
 
-def test_browser_route_reads_latest(app: FastAPI) -> None:
+@pytest.mark.parametrize("suffix", ["", "/latest"])
+def test_browser_route_reads_latest(app: FastAPI, suffix: str) -> None:
     app.dependency_overrides[get_current_user_token] = lambda: TokenData(
         user_id=str(USER), organization_id=str(ORG), is_cli=False
     )
     with TestClient(app) as client:
-        response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+        response = client.get(f"/api/v2/threads/{THREAD}/handoff{suffix}")
     assert response.status_code == 200
     assert response.json()["version"] == 3
 
@@ -277,14 +278,17 @@ def test_browser_route_404_for_outsider_and_null_for_empty(
     client: TestClient, state: dict[str, Any]
 ) -> None:
     state["thread"] = None
-    response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+    response = client.get(f"/api/v2/threads/{THREAD}/handoff/latest")
     assert response.status_code == 404
     assert response.json() == {"detail": "Thread not found"}
     state["thread"] = _thread(ORG)
     state["latest"] = None
-    response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+    response = client.get(f"/api/v2/threads/{THREAD}/handoff/latest")
     assert response.status_code == 200
     assert response.json() is None
+    legacy = client.get(f"/api/v2/threads/{THREAD}/handoff")
+    assert legacy.status_code == 404
+    assert legacy.json() == {"detail": "No handoff for this chat"}
 
 
 def test_browser_route_scopes_by_the_chats_workspace_org(
@@ -297,7 +301,7 @@ def test_browser_route_scopes_by_the_chats_workspace_org(
         id=USER, organization_id=uuid4()
     )
     with TestClient(app) as client:
-        response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+        response = client.get(f"/api/v2/threads/{THREAD}/handoff/latest")
     assert response.status_code == 200
     assert state["read_orgs"] == [thread_org]
 
@@ -343,7 +347,7 @@ def test_browser_route_reads_a_legacy_workspace_under_its_owners_org(
 
     app.dependency_overrides[get_db] = owner_db
     with TestClient(app) as client:
-        response = client.get(f"/api/v2/threads/{THREAD}/handoff")
+        response = client.get(f"/api/v2/threads/{THREAD}/handoff/latest")
     assert response.status_code == status
     if owner_org is None:
         assert response.json() is None

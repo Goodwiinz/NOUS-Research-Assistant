@@ -65207,8 +65207,57 @@
     },
     "/api/v2/threads/{thread_id}/handoff": {
       "get": {
-        "description": "Latest handoff, or null for an authorized chat without one.",
+        "description": "Preserve the original object-or-404 contract for existing clients.",
         "operationId": "get_thread_handoff_api_v2_threads__thread_id__handoff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Thread Handoff",
+        "tags": [
+          "workspaces-flat"
+        ]
+      }
+    },
+    "/api/v2/threads/{thread_id}/handoff/latest": {
+      "get": {
+        "description": "Latest handoff, or null for an authorized chat without one.",
+        "operationId": "get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get",
         "parameters": [
           {
             "in": "path",
@@ -65234,7 +65283,7 @@
                       "type": "null"
                     }
                   ],
-                  "title": "Response Get Thread Handoff Api V2 Threads  Thread Id  Handoff Get"
+                  "title": "Response Get Latest Thread Handoff Api V2 Threads  Thread Id  Handoff Latest Get"
                 }
               }
             },
@@ -65256,7 +65305,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Thread Handoff",
+        "summary": "Get Latest Thread Handoff",
         "tags": [
           "workspaces-flat"
         ]

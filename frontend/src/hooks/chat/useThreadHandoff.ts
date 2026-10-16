@@ -25,7 +25,7 @@ export async function fetchThreadHandoff(
   try {
     // A readable chat with no handoff yet answers 200 with a null body.
     return await api.get<ApiHandoff | null>(
-      `/api/v2/threads/${encodeURIComponent(threadId)}/handoff`
+      `/api/v2/threads/${encodeURIComponent(threadId)}/handoff/latest`
     );
   } catch (error: unknown) {
     // 404: the chat is gone or not readable by this account (servers before
