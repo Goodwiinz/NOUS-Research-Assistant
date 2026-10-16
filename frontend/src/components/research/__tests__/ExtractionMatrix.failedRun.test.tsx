@@ -13,7 +13,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen, within } from '@/test/test-utils';
+import { act, render, screen, waitFor, within } from '@/test/test-utils';
 import { ExtractionMatrix } from '../ExtractionMatrix';
 import {
   createMatrix,
@@ -21,6 +21,7 @@ import {
   getExtractionTaskStatus,
   getMatrix,
   listMatrices,
+  triggerExtraction,
 } from '@/services/scispaceService';
 import type {
   ExtractionMatrix as ExtractionMatrixType,
@@ -65,7 +66,15 @@ const taskStatus = (
   ...overrides,
 });
 
-async function createAndPoll(status: ExtractionTaskStatus): Promise<void> {
+const FAILED = taskStatus({
+  status: 'failed',
+  failed: 2,
+  error: '2 of 2 documents failed; nothing was recorded',
+});
+
+async function createAndPoll(
+  status: ExtractionTaskStatus | (() => Promise<ExtractionTaskStatus>)
+): Promise<void> {
   vi.mocked(listMatrices).mockResolvedValue({ matrices: [] });
   vi.mocked(getMatrix).mockResolvedValue(matrix);
   vi.mocked(createMatrix).mockResolvedValue({
@@ -76,7 +85,11 @@ async function createAndPoll(status: ExtractionTaskStatus): Promise<void> {
     created_at: '2026-10-16T00:00:00Z',
     extraction_task_id: 'task-1',
   });
-  vi.mocked(getExtractionTaskStatus).mockResolvedValue(status);
+  if (typeof status === 'function') {
+    vi.mocked(getExtractionTaskStatus).mockImplementation(status);
+  } else {
+    vi.mocked(getExtractionTaskStatus).mockResolvedValue(status);
+  }
 
   const { user } = render(
     <ExtractionMatrix
@@ -157,6 +170,100 @@ describe('ExtractionMatrix polled task outcome', () => {
 
     expect(await screen.findByText('Second')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the failed alert when a stale in-flight poll resolves running', async () => {
+    // Out-of-order responses: poll 1 outlasts the 3s interval, poll 2 returns
+    // 'failed' (alert shown, task id cleared), then poll 1 finally resolves
+    // 'running'. That late response must be dropped, not written over the
+    // terminal status (which would hide both progress and alert).
+    // Mutation check: remove the `stale()` guard in the poll effect and this
+    // fails at the final getByRole('alert').
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let resolveFirst!: (status: ExtractionTaskStatus) => void;
+      const first = new Promise<ExtractionTaskStatus>((resolve) => {
+        resolveFirst = resolve;
+      });
+      let calls = 0;
+      await createAndPoll(() => {
+        calls += 1;
+        return calls === 1 ? first : Promise.resolve(FAILED);
+      });
+
+      await vi.advanceTimersByTimeAsync(3000); // poll 2 -> failed
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+      await act(async () => {
+        resolveFirst(taskStatus({ status: 'running', completed: 1 }));
+        await vi.advanceTimersByTimeAsync(10);
+      });
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        '2 of 2 documents failed; nothing was recorded'
+      );
+      expect(screen.queryByText(/Extracting 1\/2/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a retry clears the failed alert and polls the new task', async () => {
+    // Mutation check: in startExtraction, remove setAutoExtractionStatus(null)
+    // -> the alert assertion fails; remove setAutoExtractionTaskId(task_id)
+    // -> "Extracting 1/2" is never rendered.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await createAndPoll(FAILED);
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+      vi.mocked(triggerExtraction).mockResolvedValue({
+        task_id: 'task-2',
+        matrix_id: 'm-1',
+        document_ids: ['doc-1', 'doc-2'],
+        status: 'accepted',
+        message: 'Extraction started for 2 document(s)',
+      });
+      // The new task's first poll is held pending: the old alert must already
+      // be gone at retry start, not only once a fresh status lands.
+      let resolveStatus!: (status: ExtractionTaskStatus) => void;
+      vi.mocked(getExtractionTaskStatus).mockImplementationOnce(
+        () =>
+          new Promise<ExtractionTaskStatus>((resolve) => {
+            resolveStatus = resolve;
+          })
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'Extract' }));
+
+      await waitFor(() =>
+        expect(getExtractionTaskStatus).toHaveBeenLastCalledWith('task-2')
+      );
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      vi.mocked(getExtractionTaskStatus).mockResolvedValue(
+        taskStatus({ status: 'running', completed: 1 })
+      );
+      await act(async () => {
+        resolveStatus(taskStatus({ status: 'running', completed: 1 }));
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(await screen.findByText(/Extracting 1\/2/)).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      vi.mocked(getExtractionTaskStatus).mockResolvedValue(
+        taskStatus({ status: 'completed', completed: 2 })
+      );
+      await vi.advanceTimersByTimeAsync(3000);
+      await waitFor(() =>
+        expect(screen.queryByText(/Extracting 1\/2/)).not.toBeInTheDocument()
+      );
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      // create, after the trigger, after the completed poll
+      expect(getMatrix).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clears the banner after a completed run', async () => {
