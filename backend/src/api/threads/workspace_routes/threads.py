@@ -365,16 +365,16 @@ async def delete_thread_standalone(
     await db.commit()
 
 
-@standalone_router.get("/threads/{thread_id}/handoff", response_model=HandoffDTO)
-async def get_thread_handoff(
+@standalone_router.get(
+    "/threads/{thread_id}/handoff/latest", response_model=HandoffDTO | None
+)
+async def get_latest_thread_handoff(
     thread_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> HandoffDTO:
-    """Latest harness handoff left in this chat (standalone route)."""
-    thread = await workspace_access.get_thread(
-        db, thread_id, current_user.id, include_messages=False
-    )
+) -> HandoffDTO | None:
+    """Latest handoff, or null for an authorized chat without one."""
+    thread = await workspace_access.get_thread_lean(db, thread_id, current_user.id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
     # Scope by the chat's own workspace org: an authorized member or viewer
@@ -388,6 +388,17 @@ async def get_thread_handoff(
         if organization_id is not None
         else None
     )
+    return latest
+
+
+@standalone_router.get("/threads/{thread_id}/handoff", response_model=HandoffDTO)
+async def get_thread_handoff(
+    thread_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> HandoffDTO:
+    """Preserve the original object-or-404 contract for existing clients."""
+    latest = await get_latest_thread_handoff(thread_id, db, current_user)
     if latest is None:
         raise HTTPException(status_code=404, detail="No handoff for this chat")
     return latest
