@@ -164,11 +164,39 @@ times before checkout: the public ECR mirror returned `Data limit exceeded`
 while pulling PostgreSQL. Test and Codecov failures after missing checkout
 are downstream; the extended package cases were not executed in that shard.
 
-The integration service now pulls the [official PostgreSQL image](https://hub.docker.com/_/postgres)
-from Docker Hub, pinned to the exact OCI digest observed in the passing
-shards. A successful manifest inspection verified that Docker Hub serves
-that digest. The [registry proof](ci-registry-proof.json) records the producer,
-digest and checks. Only the parsed integration image value changes; database
-setup, test commands and required gates remain identical. The CI contract
-suite passes 492 cases, and pinned actionlint 1.7.7 passes for the whole tree.
-Actual download and test execution still require the new published-head CI.
+The initial change at `711feb3` moved the integration PostgreSQL image to
+Docker Hub; its [original registry record](ci-registry-proof.json) is retained.
+The next run exposed the same ECR quota on the migration PostgreSQL Alpine
+image. Fable also identified the remaining Redis pull as quota exposure.
+
+All four service-image references in this Test Pipeline now use the
+[official PostgreSQL](https://hub.docker.com/_/postgres) and
+[Redis](https://hub.docker.com/_/redis) images from Docker Hub, pinned to the
+exact three OCI digests observed in passing jobs. Major/variant tag hints
+remain visible. Separate manifest inspections verify each tag-plus-digest
+reference and retain argv, exit codes, timestamps and output hashes.
+
+The [complete registry proof](ci-registry-proof-v2.json) records the four
+changed YAML image values. Database setup, credentials, permissions, test
+commands and required gates remain identical. One existing migration CI
+contract assertion tracks the verified PostgreSQL Alpine image. The CI
+contract suite passes 492 cases, and pinned actionlint 1.7.7 passes for the
+whole tree. Explicit command results accompany silent logs; an empty log's
+hash alone is not pass evidence. Actual runner downloads and test execution
+still require the new published-head CI.
+
+### Refreshing the image pins
+
+These workflow-service digests require explicit refresh for image/security
+updates. Inspect the approved major/variant tags with Docker tooling:
+
+```sh
+docker buildx imagetools inspect docker.io/library/postgres:15
+docker buildx imagetools inspect docker.io/library/postgres:15-alpine
+docker buildx imagetools inspect docker.io/library/redis:7
+```
+
+Record the index digest and Linux/amd64 descriptor. Update the four service
+references and the existing migration contract assertion together, retaining
+the intended major versions and variants. Add a dated identity/check record,
+run pinned actionlint and the CI contract suite, and require full hosted CI.

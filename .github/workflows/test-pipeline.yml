@@ -305,11 +305,12 @@ jobs:
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
     # Throwaway CI-local Postgres for the advisory execution probes. Credentials
-    # are disposable (postgres/postgres) — no secrets, by design. Docker's
-    # official ECR Public images avoid Docker Hub's shared-runner pull quota.
+    # are disposable (postgres/postgres) — no secrets, by design. These official
+    # image digests match passing CI pulls; ECR exhausted its anonymous data quota.
+    # Refresh pins using docs/testing/evidence/r8-release-chain-20261016/README.md.
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:15-alpine
+        image: docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -846,7 +847,7 @@ jobs:
     services:
       postgres:
         # Same PostgreSQL 15 digest verified in the passing shards; avoid ECR's data quota.
-        image: docker.io/library/postgres@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
+        image: docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
@@ -856,7 +857,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
         ports:
           - 6379/tcp
         options: >-
@@ -1517,7 +1518,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:15
+        image: docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
