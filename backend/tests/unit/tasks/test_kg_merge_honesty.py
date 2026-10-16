@@ -16,6 +16,20 @@ Two guards from the Postgres<->Neo4j dual-write audit:
    If reading them fails (get_relationships swallows errors and returns []) or
    re-pointing one fails, the DETACH DELETE would destroy those edges for good
    while the group is counted merged — so the duplicate must be kept.
+
+4. Job-level honesty (mirrors kg_extract_entities_job): per-group failures
+   only bump ``failed_groups``, so a job in which EVERY group failed (Neo4j
+   down, every primary missing) used to COMPLETE with ``merged_groups=0`` —
+   and the EntityMergeTool frontend toasts "Merge job completed" on status
+   alone. Such a job must be FAILED (``error_type="merge_failed"``); a
+   partial success still completes with its counts.
+
+Mutation check for guard 4 (docs/engineering/testing.md): neutralize the
+``if success_count == 0 and failure_count > 0`` branch before
+``job.complete_job`` in ``kg_merge_entities_job``
+(backend/src/tasks/processing_tasks.py) and run
+``pytest -q tests/unit/tasks/test_kg_merge_honesty.py -k all_groups_fail``
+— it must fail on ``fail_job`` not being called.
 """
 
 from __future__ import annotations
@@ -64,9 +78,6 @@ def test_failed_delete_counts_group_as_failed(monkeypatch: pytest.MonkeyPatch) -
             }
         ]
     }
-    captured = {}
-    job.complete_job.side_effect = lambda result: captured.update(result)
-
     db = MagicMock()
     db.query.return_value.filter.return_value.first.side_effect = [job]
     monkeypatch.setattr(pt, "SessionLocal", lambda: db)
@@ -78,9 +89,12 @@ def test_failed_delete_counts_group_as_failed(monkeypatch: pytest.MonkeyPatch) -
 
     result = pt.kg_merge_entities_job.apply(args=("job-2",)).result
 
-    assert result["status"] == "completed"
-    assert captured["merged_groups"] == 0
-    assert captured["failed_groups"] == 1
+    # The only group failed, so the job itself is failed (guard 4), and the
+    # counts travel in the returned result instead of complete_job.
+    assert result["status"] == "failed"
+    assert result["result"]["merged_groups"] == 0
+    assert result["result"]["failed_groups"] == 1
+    job.complete_job.assert_not_called()
     kg.delete_entity.assert_called_once_with("dup-1", organization_id="org-1")
 
 
@@ -118,7 +132,8 @@ def test_successful_delete_counts_group_as_merged(
 
 def _run_merge_job(monkeypatch: pytest.MonkeyPatch, kg) -> dict:
     """Run kg_merge_entities_job for one {primary-1, dup-1} group against ``kg``
-    and return the result dict handed to ``complete_job``."""
+    and return the task's return dict. With a single group that fails, the job
+    is failed (guard 4) and the counts live under ``["result"]``."""
     job = MagicMock()
     job.status = JobStatus.PENDING
     job.organization_id = "org-1"
@@ -130,16 +145,13 @@ def _run_merge_job(monkeypatch: pytest.MonkeyPatch, kg) -> dict:
             }
         ]
     }
-    captured: dict = {}
-    job.complete_job.side_effect = lambda result: captured.update(result)
 
     db = MagicMock()
     db.query.return_value.filter.return_value.first.side_effect = [job]
     monkeypatch.setattr(pt, "SessionLocal", lambda: db)
     monkeypatch.setattr(pt, "knowledge_graph_service", kg)
 
-    pt.kg_merge_entities_job.apply(args=("job-x",))
-    return captured
+    return pt.kg_merge_entities_job.apply(args=("job-x",)).result
 
 
 def test_failed_edge_repoint_keeps_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,11 +174,12 @@ def test_failed_edge_repoint_keeps_duplicate(monkeypatch: pytest.MonkeyPatch) ->
     kg.create_relationship.side_effect = RuntimeError("Neo4j transient error")
     kg.delete_entity.return_value = True
 
-    captured = _run_merge_job(monkeypatch, kg)
+    result = _run_merge_job(monkeypatch, kg)
 
     kg.delete_entity.assert_not_called()
-    assert captured["merged_groups"] == 0
-    assert captured["failed_groups"] == 1
+    assert result["status"] == "failed"
+    assert result["result"]["merged_groups"] == 0
+    assert result["result"]["failed_groups"] == 1
 
 
 def test_unreadable_relationships_keep_duplicate(
@@ -185,11 +198,12 @@ def test_unreadable_relationships_keep_duplicate(
     monkeypatch.setattr(kg, "get_session", _down)
     kg.delete_entity = MagicMock(return_value=True)  # type: ignore[method-assign]
 
-    captured = _run_merge_job(monkeypatch, kg)
+    result = _run_merge_job(monkeypatch, kg)
 
     kg.delete_entity.assert_not_called()
-    assert captured["merged_groups"] == 0
-    assert captured["failed_groups"] == 1
+    assert result["status"] == "failed"
+    assert result["result"]["merged_groups"] == 0
+    assert result["result"]["failed_groups"] == 1
 
 
 def test_get_relationships_strict_raises_default_stays_lenient(
@@ -210,3 +224,94 @@ def test_get_relationships_strict_raises_default_stays_lenient(
     assert kg.get_relationships("dup-1", organization_id="org-1") == []
     with pytest.raises(RuntimeError, match="Neo4j unavailable"):
         kg.get_relationships("dup-1", organization_id="org-1", strict=True)
+
+
+def _job_with_groups(groups: list) -> MagicMock:
+    job = MagicMock()
+    job.status = JobStatus.PENDING
+    job.organization_id = "org-1"
+    job.parameters = {"groups": groups}
+    return job
+
+
+def _two_groups() -> list:
+    return [
+        {
+            "suggested_primary": f"primary-{n}",
+            "entities": [{"id": f"primary-{n}"}, {"id": f"dup-{n}"}],
+        }
+        for n in (1, 2)
+    ]
+
+
+def test_all_groups_fail_fails_the_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guard 4: Neo4j down for every group -> 0 merged / N failed. The job
+    must be FAILED (error_type="merge_failed"), not COMPLETED with
+    merged_groups=0 — the frontend toasts success on status alone."""
+    job = _job_with_groups(_two_groups())
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [job]
+    monkeypatch.setattr(pt, "SessionLocal", lambda: db)
+
+    kg = MagicMock()
+    kg.get_relationships.side_effect = RuntimeError("Neo4j unavailable")
+    monkeypatch.setattr(pt, "knowledge_graph_service", kg)
+
+    result = pt.kg_merge_entities_job.apply(args=("job-all-fail",)).result
+
+    job.complete_job.assert_not_called()
+    job.fail_job.assert_called_once()
+    message, kwargs = job.fail_job.call_args.args[0], job.fail_job.call_args.kwargs
+    assert kwargs == {"error_type": "merge_failed"}
+    assert "2/2" in message
+    assert result == {
+        "status": "failed",
+        "job_id": "job-all-fail",
+        "result": {"total_groups": 2, "merged_groups": 0, "failed_groups": 2},
+    }
+    kg.delete_entity.assert_not_called()
+
+
+def test_zero_groups_keeps_existing_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty group list is rejected before any merge runs (ValueError ->
+    generic fail path). Guard 4 must not re-label that as ``merge_failed`` —
+    the 0-merged/0-failed case never reaches the final block."""
+    job = _job_with_groups([])
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [job]
+    monkeypatch.setattr(pt, "SessionLocal", lambda: db)
+    kg = MagicMock()
+    monkeypatch.setattr(pt, "knowledge_graph_service", kg)
+
+    eager = pt.kg_merge_entities_job.apply(args=("job-empty",))
+
+    assert eager.state == "FAILURE"
+    assert isinstance(eager.result, ValueError)
+    job.complete_job.assert_not_called()
+    job.fail_job.assert_called_once()
+    assert job.fail_job.call_args.kwargs == {"error_type": "ValueError"}
+    job.start_job.assert_not_called()
+
+
+def test_partial_success_still_completes_with_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard 4 must not over-reach: one merged + one failed group is a
+    COMPLETED job carrying both counts, exactly as before."""
+    job = _job_with_groups(_two_groups())
+    captured: dict = {}
+    job.complete_job.side_effect = lambda result: captured.update(result)
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [job]
+    monkeypatch.setattr(pt, "SessionLocal", lambda: db)
+
+    kg = MagicMock()
+    kg.get_relationships.return_value = []
+    kg.delete_entity.side_effect = [True, False]  # group 1 merged, group 2 not
+    monkeypatch.setattr(pt, "knowledge_graph_service", kg)
+
+    result = pt.kg_merge_entities_job.apply(args=("job-partial",)).result
+
+    job.fail_job.assert_not_called()
+    assert result == {"status": "completed", "job_id": "job-partial"}
+    assert captured == {"total_groups": 2, "merged_groups": 1, "failed_groups": 1}

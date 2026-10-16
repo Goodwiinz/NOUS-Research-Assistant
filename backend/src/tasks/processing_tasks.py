@@ -1407,13 +1407,28 @@ def kg_merge_entities_job(self, job_id: str):
                 )
 
         job.update_progress("Finalizing merge job", 95)
-        job.complete_job(
-            result={
-                "total_groups": total_groups,
-                "merged_groups": success_count,
-                "failed_groups": failure_count,
-            }
-        )
+        result = {
+            "total_groups": total_groups,
+            "merged_groups": success_count,
+            "failed_groups": failure_count,
+        }
+
+        # Honest outcome (same guard as kg_extract_entities_job): every
+        # per-group failure above only bumps failure_count, so a job in which
+        # NOTHING merged (Neo4j down, every primary missing) would otherwise
+        # COMPLETE with merged_groups=0 — a false success to anything polling
+        # job status. Fail it so the total failure is visible; a partial merge
+        # still completes with its counts.
+        if success_count == 0 and failure_count > 0:
+            job.fail_job(
+                f"Entity merge merged no groups "
+                f"({failure_count}/{total_groups} failed)",
+                error_type="merge_failed",
+            )
+            db.commit()
+            return {"status": "failed", "job_id": job_id, "result": result}
+
+        job.complete_job(result=result)
         db.commit()
         return {"status": "completed", "job_id": job_id}
     except Exception as e:
