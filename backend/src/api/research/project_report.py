@@ -33,7 +33,14 @@ from sqlalchemy.orm import selectinload
 from src.core.config import get_settings
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.models import Collection, CollectionDocument, ProjectNote, User, Workspace
+from src.models import (
+    Collection,
+    CollectionDocument,
+    Document,
+    ProjectNote,
+    User,
+    Workspace,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/projects", tags=["project-report"])
@@ -128,9 +135,19 @@ async def render_project_report(
             detail="Project not found or access denied",
         )
 
+    # Mirrors list_project_documents in projects.py: deleting a document only
+    # stamps Document.is_deleted and removing it from a project only stamps
+    # CollectionDocument.is_deleted (no cascade either way), so both must be
+    # filtered here or the report lists and counts documents the user removed.
     docs_q = (
         select(CollectionDocument)
-        .where(CollectionDocument.collection_id == project_id)
+        .join(Document, CollectionDocument.document_id == Document.id)
+        .where(
+            CollectionDocument.collection_id == project_id,
+            CollectionDocument.is_deleted == False,
+            Document.organization_id == current_user.organization_id,
+            Document.is_deleted == False,
+        )
         .options(selectinload(CollectionDocument.document))
         .order_by(CollectionDocument.sort_order)
     )

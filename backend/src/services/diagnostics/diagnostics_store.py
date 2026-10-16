@@ -31,6 +31,21 @@ def _index_key(organization_id: Optional[str]) -> str:
 
 TRACE_TTL_SECONDS = 86400  # 24 hours
 
+# Stable public detail for an unreachable store. Never carries the Redis
+# error text: host, port and errno are internal topology (backend/AGENTS.md).
+DIAGNOSTICS_UNAVAILABLE_DETAIL = "Diagnostics storage is temporarily unavailable"
+
+
+class DiagnosticsUnavailable(RuntimeError):
+    """The diagnostics store cannot be reached (no client, or Redis failed).
+
+    Raised by the dashboard reads (``get_recent_traces``,
+    ``get_aggregate_stats``) instead of returning ``[]`` / ``{"error": ...}``:
+    an empty result there means "no traffic", and an outage must not look like
+    one. The router maps this to HTTP 503. The original Redis error stays on
+    ``__cause__`` for logs only.
+    """
+
 
 class DiagnosticsStore:
     """Stores and retrieves diagnostic traces in Redis."""
@@ -133,10 +148,14 @@ class DiagnosticsStore:
         limit: int = 50,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """Get recent trace summaries (trace_id, query, timestamp, total_time_ms)."""
+        """Get recent trace summaries (trace_id, query, timestamp, total_time_ms).
+
+        Raises ``DiagnosticsUnavailable`` when the store cannot be reached; an
+        empty list means Redis answered and holds no traces for this tenant.
+        """
         client = self.redis
         if client is None:
-            return []
+            raise DiagnosticsUnavailable("no Redis client configured")
 
         try:
             index_key = _index_key(organization_id)
@@ -171,15 +190,19 @@ class DiagnosticsStore:
             return summaries
         except Exception as e:
             logger.error(f"Failed to get recent traces: {e}")
-            return []
+            raise DiagnosticsUnavailable("recent traces read failed") from e
 
     async def get_aggregate_stats(
         self, *, organization_id: str, hours: int = 24
     ) -> Dict[str, Any]:
-        """Compute aggregate statistics over recent traces."""
+        """Compute aggregate statistics over recent traces.
+
+        Raises ``DiagnosticsUnavailable`` when the store cannot be reached;
+        zeroed stats mean Redis answered and holds no traces in the window.
+        """
         client = self.redis
         if client is None:
-            return {"error": "Redis unavailable"}
+            raise DiagnosticsUnavailable("no Redis client configured")
 
         try:
             index_key = _index_key(organization_id)
@@ -268,7 +291,7 @@ class DiagnosticsStore:
             }
         except Exception as e:
             logger.error(f"Failed to compute aggregate stats: {e}")
-            return {"error": str(e)}
+            raise DiagnosticsUnavailable("aggregate stats read failed") from e
 
     async def update_trace_evaluation(
         self,
