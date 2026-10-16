@@ -107,8 +107,10 @@ async function openSaveToNoteAndSubmit(title: string): Promise<void> {
   fireEvent.click(screen.getByRole('button', { name: /save to note/i }));
   const input = await screen.findByLabelText(/note title/i);
   fireEvent.change(input, { target: { value: title } });
-  // Plain click (no `act` wrapper) so the store's error write and the
-  // handler's follow-up are scheduled exactly as they are in production.
+  // Deliberately NOT wrapped in an async `act(...)`: fireEvent only wraps the
+  // synchronous click, so the store's error write and the handler's awaited
+  // follow-up are flushed as separate renders, exactly as in production.
+  // An async act would batch them and hide the transient error-screen render.
   fireEvent.click(screen.getByRole('button', { name: /save note/i }));
 }
 
@@ -181,6 +183,38 @@ describe('ProjectChatTab — unlink outcome', () => {
     expect(screen.getByText('Quarterly review discussion')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load threads')).toBeNull();
     expect(useProjectChatStore.getState().errors[PROJECT_ID]).toBeNull();
+  });
+
+  it('ignores Escape while the unlink is in flight and still shows a late failure', async () => {
+    let rejectUnlink: (reason: Error) => void = () => {};
+    service.unlinkThreadFromProject.mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectUnlink = reject;
+        })
+    );
+    await renderTabWithThread();
+
+    await confirmUnlinkTwice();
+    expect(
+      await screen.findByRole('button', { name: 'Unlinking…' })
+    ).toBeDisabled();
+
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
+    // Dismissal must be refused mid-request, or the eventual failure would
+    // land in a hidden dialog with nothing telling the user.
+    expect(screen.getByText('Unlink thread from project?')).toBeInTheDocument();
+
+    await act(async () => {
+      rejectUnlink(new Error('Backend timed out'));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Backend timed out'
+    );
+    expect(screen.getByText('Unlink thread from project?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unlink' })).toBeEnabled();
+    expect(screen.queryByText('Failed to load threads')).toBeNull();
   });
 
   it('closes the confirm dialog and removes the thread when the unlink succeeds', async () => {

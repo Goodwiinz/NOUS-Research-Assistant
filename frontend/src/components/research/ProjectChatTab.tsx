@@ -327,7 +327,16 @@ export const ProjectChatTab: React.FC<ProjectChatTabProps> = ({
         />
       )}
 
-      <AlertDialog open={unlinkDialogOpen} onOpenChange={setUnlinkDialogOpen}>
+      <AlertDialog
+        open={unlinkDialogOpen}
+        onOpenChange={(open) => {
+          // Escape / overlay must not dismiss a request that is still in
+          // flight: its failure would land in a hidden dialog with no
+          // feedback (same rule as SaveToNoteModal.handleOpenChange).
+          if (!open && isUnlinking) return;
+          setUnlinkDialogOpen(open);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Unlink thread from project?</AlertDialogTitle>
