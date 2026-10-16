@@ -191,3 +191,10 @@ scores remain archival after the task-defect invalidation rule; 36 host
 calibration/source-integrity cases do not substitute for new agent trials.
 The [provider V4 record](baselines/discovery-provider-2026-10-16-v4.json) likewise
 records no new provider measurement after the complete-checkout guard changed.
+
+The separate [provider V5 record](baselines/discovery-provider-2026-10-16-v5.json)
+records one newly declared real-provider/local-PostgreSQL diagnostic at clean
+source `6970a07177573576e2dd22882ed30c1d5d097bc6`, completed at 22:18:29 UTC.
+The full source identity matched after cleanup. V4 remains an unchanged NOT RUN
+preparation; V5 is NOT GATED and does not substitute for corrected Harbor trials
+or deployed acceptance.

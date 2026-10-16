@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "version": "provider-v5-20261016",
+  "recorded_at": "2026-10-16T22:18:29.181089+00:00",
+  "status": "completed",
+  "classification": "NOT GATED: synthetic local service/provider diagnostic",
+  "source_manifest": "evals/source-manifests/discovery-provider-2026-10-16-v5.json",
+  "source_manifest_sha256": "eae05a9a964c26ee86f0816e4a9b9cca6eee56a9511fad1fab0cbf92117377be",
+  "execution_repository_revision": "6970a07177573576e2dd22882ed30c1d5d097bc6",
+  "execution_source_tree": "21843ea00674916143bba9c05b8f2975a6003d3e",
+  "attempt_count": 1,
+  "canonical_query_count": 8,
+  "near_boundary_query_count": 1,
+  "canonical_aggregate": {
+    "semantic_recall_at_1": 0.9375,
+    "semantic_recall_at_3": 1.0,
+    "composite_recall_at_1": 0.9375,
+    "composite_recall_at_3": 1.0
+  },
+  "date_window": {
+    "semantic_recall_at_1": 1.0,
+    "semantic_recall_at_3": 1.0,
+    "composite_recall_at_1": 1.0,
+    "composite_recall_at_3": 1.0
+  },
+  "pages": {
+    "long": {
+      "total": 14,
+      "selected": 6,
+      "labelled_relevant": 2,
+      "labelled_relevant_retained": 2,
+      "gold_recall_at_6": 1.0,
+      "short_circuited": false
+    },
+    "short": {
+      "total": 3,
+      "selected": 3,
+      "short_circuited": true,
+      "reranker_invoked": false
+    }
+  },
+  "database": {
+    "server": "15.19 (Debian 15.19-1.pgdg12+2)",
+    "pgvector_extension": "0.8.7",
+    "revision": "jd01_document_embeddings",
+    "embedding_rows": 13,
+    "embedding_dimensions": 1024,
+    "embedding_provider_model": "cohere:embed-v-4-0"
+  },
+  "orgwide_semantic_duplicate_excluded": true,
+  "complete_source_identity_matches_after_cleanup": true,
+  "scratch_database_removed": true,
+  "post_run_scratch_database_count": 0,
+  "owned_container_stopped_and_removed": true,
+  "infrastructure_failure": null,
+  "objective_failure": null,
+  "release_threshold": null,
+  "semantic_gate": "N/A for this diagnostic; no agent answer or judge",
+  "limits": [
+    "synthetic fixture only",
+    "not a Harbor agent trial",
+    "deployed MCP and grant HTTP not run",
+    "no arXiv request",
+    "no deployment or corpus backfill",
+    "does not establish broader retrieval quality or release acceptance"
+  ],
+  "previous_record": "evals/baselines/discovery-provider-2026-10-16-v4.json",
+  "previous_score_reused": false,
+  "results_pooled": false
+}

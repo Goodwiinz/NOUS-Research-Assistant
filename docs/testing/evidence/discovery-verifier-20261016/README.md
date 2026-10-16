@@ -60,3 +60,11 @@ inputs; it does not establish the new complete-checkout source guard. New
 authorized, predeclared canonical and near-boundary trials are required before
 a current capability decision. Live composite/MCP quality remains a separate
 acceptance requirement.
+
+## 2026-10-16 22:18 UTC provider execution amendment
+
+The separate [V5 diagnostic](../discovery-provider-v5-20261016/README.md)
+completed one new provider/PostgreSQL attempt at clean source `6970a071`, with the
+complete source identity matching after cleanup. The V4 NOT RUN preparation
+and this earlier host-only proof retain their recorded scope. The corrected
+Harbor task remains NOT RUN; V5 does not supply an agent capability decision.

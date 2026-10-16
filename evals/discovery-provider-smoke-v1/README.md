@@ -72,3 +72,12 @@ NOT RUN with no new provider/PostgreSQL measurement; fresh source, runtime,
 provider and environment identities are required before another execution.
 See `docs/testing/evidence/discovery-verifier-20261016/README.md` for the 36-case
 host calibration and preserved historical record hashes.
+
+## 2026-10-16 complete-checkout execution amendment
+
+The separate V5 attempt completed at 22:18:29 UTC using clean source
+`6970a07177573576e2dd22882ed30c1d5d097bc6`. Its full identity matched after real
+provider/PostgreSQL execution and scratch cleanup. The V4 NOT RUN preparation
+remains unchanged. See the [V5 evidence](../../docs/testing/evidence/discovery-provider-v5-20261016/README.md)
+for the newly declared fixture measurements and limits. It remains NOT GATED;
+no Harbor or deployed MCP/grant trial is implied.

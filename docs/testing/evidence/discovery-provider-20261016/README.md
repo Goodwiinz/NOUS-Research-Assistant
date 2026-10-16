@@ -100,3 +100,10 @@ identity unchanged. The forward runner now requires a complete clean checkout
 and verifies its HEAD/tree again after cleanup. The new V4 record is NOT RUN;
 the V3 measurements are preserved without being reused for the changed guard.
 See [verifier/source-integrity evidence](../discovery-verifier-20261016/README.md).
+
+## 2026-10-16 22:18 UTC execution amendment
+
+A separate [V5 diagnostic](../discovery-provider-v5-20261016/README.md) now
+exercises the complete-checkout guard at clean source `6970a071`. Its full identity
+matched after real provider/PostgreSQL execution and cleanup. This V3 record
+and the V4 NOT RUN preparation are unchanged; no measurements are pooled.
