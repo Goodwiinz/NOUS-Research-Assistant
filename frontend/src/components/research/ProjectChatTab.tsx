@@ -102,10 +102,15 @@ export const ProjectChatTab: React.FC<ProjectChatTabProps> = ({
     initialMessage: string,
     threadTitle?: string
   ) => {
-    await startChat({
+    const result = await startChat({
       initial_message: initialMessage,
       thread_title: threadTitle,
     });
+    if (!result) {
+      // Throwing keeps StartChatModal open with the typed message and lets it
+      // render the failure inline.
+      throw new Error(takeActionError('Failed to start chat'));
+    }
     setIsStartChatModalOpen(false);
   };
 
@@ -179,8 +184,8 @@ export const ProjectChatTab: React.FC<ProjectChatTabProps> = ({
     refreshThreads();
   };
 
-  // The three content states below are rendered INSIDE a single tree with the
-  // dialogs, never as early returns. An action failure writes the store's
+  // The four content states below (loading / error / empty / list) are
+  // rendered INSIDE a single tree with the dialogs, never as early returns. An action failure writes the store's
   // error slot before the handler can consume it, which momentarily switches
   // the content to the error screen; if the dialogs lived inside that branch
   // they would unmount and lose the user's input and the error they were

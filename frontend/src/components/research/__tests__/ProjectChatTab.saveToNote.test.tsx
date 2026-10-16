@@ -162,6 +162,61 @@ describe('ProjectChatTab — save-to-note outcome', () => {
   });
 });
 
+async function openStartChatAndSubmit(message: string): Promise<void> {
+  fireEvent.click(screen.getByRole('button', { name: /start chat/i }));
+  const input = await screen.findByLabelText(/initial message/i);
+  fireEvent.change(input, { target: { value: message } });
+  // Same scheduling note as openSaveToNoteAndSubmit: no async act wrapper.
+  fireEvent.click(screen.getByRole('button', { name: 'Start chat' }));
+}
+
+describe('ProjectChatTab — start-chat outcome', () => {
+  beforeEach(resetStoreWithOneThread);
+
+  it('keeps the modal open, shows the error and preserves the message when starting fails', async () => {
+    service.startChatFromProject.mockRejectedValue(
+      new Error('Project has no indexed documents')
+    );
+    await renderTabWithThread();
+
+    await openStartChatAndSubmit('Summarise the key findings');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Project has no indexed documents'
+    );
+    expect(screen.getByText('Start new chat')).toBeInTheDocument();
+    expect(screen.getByLabelText(/initial message/i)).toHaveValue(
+      'Summarise the key findings'
+    );
+    expect(screen.queryByText('Failed to load threads')).toBeNull();
+    expect(useProjectChatStore.getState().errors[PROJECT_ID]).toBeNull();
+  });
+
+  it('closes the modal and refreshes the list when starting succeeds', async () => {
+    service.startChatFromProject.mockResolvedValue({
+      thread_id: 'thread-new',
+      conversation_id: 'conv-new',
+      project_thread_id: 'pt-new',
+      document_scope: [],
+    });
+    await renderTabWithThread();
+    expect(service.listProjectThreads).toHaveBeenCalledTimes(1);
+
+    await openStartChatAndSubmit('Summarise the key findings');
+
+    await waitFor(() =>
+      expect(screen.queryByText('Start new chat')).toBeNull()
+    );
+    expect(service.startChatFromProject).toHaveBeenCalledWith(PROJECT_ID, {
+      initial_message: 'Summarise the key findings',
+      thread_title: undefined,
+    });
+    // The store refreshes the thread list itself on success.
+    expect(service.listProjectThreads).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('ProjectChatTab — unlink outcome', () => {
   beforeEach(resetStoreWithOneThread);
 
