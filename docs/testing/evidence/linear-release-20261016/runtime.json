@@ -1,0 +1,36 @@
+{
+  "observation_window": "2026-10-16T10:17Z to 10:19Z",
+  "app": "nous-dev-aws",
+  "namespace": "multimodal-rag-system",
+  "gitops_revision": "4c4600392c0e4a3705f58b4abcdf6868c8e226bc",
+  "image_source": "7fbd027ce9f9b7a222c4038edf7ea321416a86dd",
+  "image_digest": "sha256:263a39bfbf68686e9f6a639fef8ccc9ec2d6da02c67cf9a92ffc77c4392a33b1",
+  "argo_sync": "Synced",
+  "argo_health": "Healthy",
+  "backend_worker_beat_ready": true,
+  "migration_job": {
+    "phase": "Succeeded",
+    "exit_code": 0,
+    "finished_at": "2026-10-16T07:23:47Z"
+  },
+  "runtime_read": {
+    "alembic_head": "jd01_document_embeddings",
+    "document_embeddings_table": true,
+    "flags": {
+      "AGENT_PAGE_FILTER": false,
+      "DAILY_RESEARCH_BRIEF_ENABLED": true,
+      "DOCUMENT_EMBEDDINGS_ENABLED": false,
+      "NOUS_MCP_ENABLED": true,
+      "SEARCH_UPDATES_ENABLED": true,
+      "SEMANTIC_SEARCH_ENABLED": false
+    },
+    "pgvector": "0.8.2",
+    "source_defaults_are_separate": true
+  },
+  "method": "read-only Kubernetes metadata, ECR image lookup and SELECT-only migration/extension inspection; no configuration or rollout mutation",
+  "consumer_restart_counts": {
+    "celery-beat": 0,
+    "celery-worker": 0,
+    "backend": 0
+  }
+}

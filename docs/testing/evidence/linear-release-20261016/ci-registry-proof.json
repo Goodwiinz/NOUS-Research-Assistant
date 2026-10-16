@@ -1,0 +1,115 @@
+{
+  "schema": "nous.ci-service-registry-proof.v1",
+  "recorded_at": "2026-10-16T21:58:46.540885+00:00",
+  "source_parent": "8c868403eee98ed79d4b7c0ddb1684412c83951a",
+  "source_state": "final uncommitted CI-only patch; published head is bound separately in PR metadata",
+  "image_changes": [
+    {
+      "job": "migration-check",
+      "service": "postgres",
+      "before": "public.ecr.aws/docker/library/postgres:15-alpine",
+      "after": "docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81"
+    },
+    {
+      "job": "integration-tests",
+      "service": "postgres",
+      "before": "public.ecr.aws/docker/library/postgres:15",
+      "after": "docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c"
+    },
+    {
+      "job": "integration-tests",
+      "service": "redis",
+      "before": "public.ecr.aws/docker/library/redis:7",
+      "after": "docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85"
+    },
+    {
+      "job": "performance-tests",
+      "service": "postgres",
+      "before": "public.ecr.aws/docker/library/postgres:15",
+      "after": "docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c"
+    }
+  ],
+  "other_parsed_yaml_fields_identical": true,
+  "source_files": {
+    ".github/workflows/test-pipeline.yml": "fdb8bab645d8d9f9d0f6a9ffea506e48ccae4f977f2d55e3abc1b0ae8dd22e6f",
+    "backend/tests/unit/ci/test_migration_check_workflow.py": "d79bece444e8cad37666d7f5c7768ecc2c4332f6cab3263d1c653d2ca69061bd"
+  },
+  "triggering_failures": [
+    {
+      "run": 38958382094,
+      "attempt": 1,
+      "head": "8c868403eee98ed79d4b7c0ddb1684412c83951a",
+      "producer": 117172667579
+    },
+    {
+      "run": 38958382094,
+      "attempt": 2,
+      "head": "8c868403eee98ed79d4b7c0ddb1684412c83951a",
+      "producer": 117180791954
+    }
+  ],
+  "failure_classification": "ECR Data limit exceeded before checkout; missing pytest and Codecov action are downstream. No application test failed in those producers.",
+  "verified_image_provenance": {
+    "head": "bce9bf7d4d896f401171953caffb52e029cd0ca8",
+    "run": 38958384694,
+    "migration": 117167690603,
+    "integration": 117174304835,
+    "release_gate": 117184945736,
+    "detail": "all three exact Docker Hub digests appear in successful hosted producer logs",
+    "manifest_record": "https://github.com/Goodwiinz/NOUS-Research-Assistant/blob/293339d4b9d5d36fb61e0e7b3d182e602ad7eeff/docs/testing/evidence/r8-release-chain-20261016/ci-registry-proof-v2.json"
+  },
+  "local_validation": {
+    "ci_contract_cases": 492,
+    "failures": 0,
+    "skipped": 0,
+    "junit_sha256": "34aa9558611bfdfef2babf0d4b435ff61fa15fcd58acae080f2063417371f0c3",
+    "gates": [
+      {
+        "name": "ruff",
+        "exit_code": 0,
+        "stdout_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "env_overrides": {}
+      },
+      {
+        "name": "black",
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "1a56c7cd8457fd05d978cfbd139d7bfd86e86acaa9b57668e718ef8bccc0cf48",
+        "env_overrides": {}
+      },
+      {
+        "name": "isort",
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "env_overrides": {}
+      },
+      {
+        "name": "actionlint",
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "env_overrides": {
+          "SHELLCHECK_OPTS": "-e SC2086 -e SC2129"
+        }
+      },
+      {
+        "name": "ci-unit",
+        "exit_code": 0,
+        "stdout_sha256": "cac8a892e18722b636c3088084569cdc2ec488a99ad333f9744e5b986648668d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "env_overrides": {}
+      }
+    ],
+    "actionlint": "pinned1.7.7 whole tree, SHELLCHECK_OPTS exactly matches workflow-lint.yml",
+    "raw_commands": "owner-only raw files retain exact argv, executable/output paths and timestamps; those host paths are omitted here"
+  },
+  "limits": [
+    "The crash experiment remains bound to frozen556e0bed; no experiment result is relabelled.",
+    "Runtime changes are limited to four service-image values and one existing expected-image literal; a provenance comment is corrected. All other parsed fields remain identical.",
+    "Tag hints are informational; immutable digests need manual maintenance.",
+    "Current published-head CI remains required after this patch."
+  ],
+  "prepared_first_at": "2026-10-16T21:40:28.515013+00:00"
+}
