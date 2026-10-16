@@ -146,3 +146,63 @@ def test_the_model_stays_off_base_metadata() -> None:
     assert "document_embeddings" not in Base.metadata.tables
     assert DocumentEmbedding.__table__.metadata is not Base.metadata
     assert "DocumentEmbedding" in src.models.__all__
+
+
+def _ddl_block(upgrade_sql: str) -> str:
+    """The nested block from ``CREATE EXTENSION`` to the end of its handler."""
+    start = upgrade_sql.index("CREATE EXTENSION")
+    return upgrade_sql[start : upgrade_sql.index("END; END $jd01$", start)]
+
+
+def test_refused_pgvector_ddl_warns_instead_of_failing_the_chain(
+    upgrade_sql: str,
+) -> None:
+    """A role without the right to create extensions, or a pgvector without
+    ``hnsw`` (< 0.5), must not fail the migration Job and block the rollout."""
+    block = _ddl_block(upgrade_sql)
+    handler = block[block.index("EXCEPTION") :]
+    for condition in (
+        "insufficient_privilege",
+        "feature_not_supported",
+        "undefined_object",
+        "undefined_file",
+    ):
+        assert condition in handler
+    assert "RAISE WARNING" in handler and "NOT created" in handler
+    assert "SQLSTATE" in handler and "SQLERRM" in handler
+    # Never re-raised: the handler only warns.
+    assert not re.search(r"\bRAISE( EXCEPTION)?;", handler)
+
+
+def test_every_pgvector_statement_runs_inside_the_guarded_block(
+    upgrade_sql: str,
+) -> None:
+    body = _ddl_block(upgrade_sql)
+    guarded = body[: body.index("EXCEPTION")]
+    outside = upgrade_sql.replace(body, "")
+    for statement in (
+        "CREATE EXTENSION IF NOT EXISTS vector",
+        "CREATE TABLE IF NOT EXISTS document_embeddings",
+        "USING hnsw (embedding vector_cosine_ops)",
+        "ENABLE ROW LEVEL SECURITY",
+        "REVOKE ALL ON TABLE document_embeddings FROM anon",
+    ):
+        assert statement in guarded
+        assert statement not in outside
+    # The nested block opens right before the extension, inside the DO body.
+    assert (
+        upgrade_sql[: upgrade_sql.index("CREATE EXTENSION")].rstrip().endswith("BEGIN")
+    )
+
+
+def test_recovery_names_the_parent_never_downgrade_minus_one(upgrade_sql: str) -> None:
+    """``alembic downgrade -1`` from a later head undoes the wrong revision."""
+    source = (BACKEND_ROOT / "alembic" / "versions" / f"{REVISION}.py").read_text()
+    gotchas = (BACKEND_ROOT.parent / "docs" / "engineering" / "gotchas.md").read_text()
+    for text in (source, gotchas):
+        assert "downgrade -1" not in text
+        assert f"alembic downgrade {PARENT} && alembic upgrade {REVISION}" in text
+        assert f"alembic upgrade {PARENT}:{REVISION} --sql" in text
+    # Both warnings carry the explicit recovery.
+    recovery = f"alembic downgrade {PARENT} && alembic upgrade {REVISION}"
+    assert upgrade_sql.count(recovery) == 2
