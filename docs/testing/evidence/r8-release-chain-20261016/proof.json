@@ -1,12 +1,13 @@
 {
   "schema": "nous.local-release-chain-proof/1",
-  "captured_at": "2026-10-16T12:56:51.844486+00:00",
+  "captured_at": "2026-10-16T13:23:57.438161+00:00",
   "source_base": "4c4600392c0e4a3705f58b4abcdf6868c8e226bc",
   "source_patch": "declared uncommitted final source; bind published commit separately",
   "source_files": {
     "backend/src/services/research/manuscript_release_service.py": "f10cd55dbedbabef1b44ec1cfbaeb701d08dc46fa47f1e49e834a9191c993c39",
     "backend/tests/integration/test_review_release_chain_postgres.py": "d69f1517a7a9e0bda81e0869ddc96ac9782aa0f9e7dd633389259ac5993c340c",
-    "backend/tests/integration/test_search_update_citation_chase_postgres.py": "eae5416f4a857372ba31641550c2fd5a3ac6fa460282aad9be66ceb12042233b"
+    "backend/tests/integration/test_search_update_citation_chase_postgres.py": "eae5416f4a857372ba31641550c2fd5a3ac6fa460282aad9be66ceb12042233b",
+    "backend/tests/integration/test_screening_queue_postgres.py": "6f9f7d660f798073cb2d45580db3da12bbfb570dcc04b362fd6f1b369e1781cd"
   },
   "runtime": {
     "postgresql": "15.19",
@@ -101,5 +102,47 @@
       "sha256": "0226cd6181baae75dd12c04988c399477db959ed3cd839be782a191e2ecdf801"
     }
   },
-  "statement_bound_path": "Complete release chain runs plain and with approved fixture statements and real venue checks"
+  "statement_bound_path": "Complete release chain runs plain and with approved fixture statements and real venue checks",
+  "ci_admission": {
+    "configuration": "Only ORCHESTRATION_TEST_DATABASE_URL; RESEARCH_DECISION_DATABASE_URL absent; testcontainers disabled in test process",
+    "before": {
+      "artifact": "release-chain-ci-admission-before.xml",
+      "sha256": "5d222637de05ff52c5063cbd790983eaba68764e6019c081844fc39b7d1e17e9",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "classification": "NOT RUN: all three new cases skipped, despite exit0"
+    },
+    "after": {
+      "artifact": "release-chain-ci-admission-after.xml",
+      "sha256": "68e63e1194025212736f1fff34274efb7e25a500b1619e01806f093e81d825ba",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "classification": "Local CI-shaped native admission PASS, not hosted CI"
+    },
+    "new_test_shards": {
+      "backend/tests/integration/test_review_release_chain_postgres.py": 1,
+      "backend/tests/integration/test_search_update_citation_chase_postgres.py": 3
+    },
+    "correction": "Shared screening factory uses explicit database first, then the existing CI database, then optional testcontainers. Unique schemas unchanged.",
+    "consumer_matrix": {
+      "artifact": "release-chain-ci-admission-consumers.xml",
+      "sha256": "4a14ed6726b9dee86b433273fe3870eb2797ad9466425820f06178e44bc8139c",
+      "consumer_files": 22,
+      "selected_functions": 34,
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "limitations": [
+      "CI installs testcontainers; the unavailable-testcontainers baseline does not establish previous hosted skips.",
+      "Three existing fresh-schema downgrade branches gated directly by RESEARCH_DECISION_DATABASE_URL are NOT RUN under orchestration-only admission: review versions, search updates, archive deposit.",
+      "Earlier explicit-variable native matrix exercised review/search downgrade paths; that evidence is separate.",
+      "Shard allocation is point-in-time for declared source files; hosted JUnit verification remains pending."
+    ]
+  }
 }

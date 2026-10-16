@@ -62,7 +62,31 @@ The separate real-worker R8 evidence covers worker execution and recovery.
 Use an isolated PostgreSQL database with the normal integration prerequisites.
 The fixture creates and drops a unique schema and rebuilds research tables
 through their actual migrations. It reads `RESEARCH_DECISION_DATABASE_URL`,
-otherwise using the repository's `postgres_container` fixture.
+then `ORCHESTRATION_TEST_DATABASE_URL`, then the optional `postgres_container`
+fixture when neither URL is configured.
+
+For hosted CI, `screening_factory` also accepts
+`ORCHESTRATION_TEST_DATABASE_URL` when its explicit database variable is absent.
+The integration workflow already supplies that URL. Previously the fixture
+ignored it and fell back to optional testcontainers: a CI-shaped baseline
+with testcontainers disabled exited successfully but skipped all three new
+cases. The fallback correction ran eleven native scenarios with zero skips,
+including the original screening suite, with only the CI database variable
+configured and testcontainers disabled. The two new files are assigned to
+integration shards 1 (release chain) and 3 (citation chase), respectively.
+Hosted execution is verified separately against the published head's producer
+and JUnit records; local admission evidence is not a hosted pass.
+
+CI does install testcontainers, so that conditional baseline does not establish
+that previous hosted runs skipped these cases. The correction reuses the
+already configured job database instead of starting an additional container.
+All 22 direct fixture-consumer files were then checked in the same local setup:
+39 collected cases passed with zero pytest skips. Three existing fresh-schema
+downgrade substeps, guarded directly by `RESEARCH_DECISION_DATABASE_URL`, are
+**NOT RUN** in the orchestration-only check (`test_review_versions_postgres`,
+`test_search_updates_postgres`, `test_archive_deposit_postgres`). The earlier
+explicit-variable native matrix exercised the review/search downgrade paths;
+the admission check does not replace that separate evidence.
 
 ```sh
 cd backend
