@@ -565,17 +565,23 @@ export default function ProjectDetailPage() {
   const handleUploadComplete = useCallback(
     async (documentIds: string[]) => {
       setShowUploadWizard(false);
-      try {
-        await Promise.all(
-          documentIds.map((docId) =>
-            projectService.addDocumentToProject(projectId, docId)
-          )
+      // The wizard has already told the user every file uploaded; linking to
+      // this project is a separate step that can fail per document (role,
+      // archived project, duplicate, server error). Report what did not link
+      // instead of letting the library-only upload pass as a project upload.
+      const results = await Promise.allSettled(
+        documentIds.map((docId) =>
+          projectService.addDocumentToProject(projectId, docId)
+        )
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) {
+        toast.error(
+          `${failed} of ${documentIds.length} documents could not be added to this project`
         );
-        await fetchProjectDocuments(projectId);
-      } catch {
-        // linking may partially fail, still refresh to show what succeeded
-        await fetchProjectDocuments(projectId);
       }
+      // Refresh regardless so the documents that did link are shown.
+      await fetchProjectDocuments(projectId);
     },
     [projectId, fetchProjectDocuments]
   );
