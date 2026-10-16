@@ -97,3 +97,36 @@ The full 12-issue goal remains active. Remaining work includes reviewed PR
 delivery/hosted checks, the discovery decision evaluation and labelled recall
 measurement, the existing PR I audit fixes and HO-4 proposal, and refreshed
 Daily Brief/living-review acceptance evidence and their owner-dependent gates.
+
+## Subsequent hosted and audit checks
+
+Endpoint PR [#2009](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/2009)
+is draft. Its first head passed all 3,039 hosted frontend tests but failed the
+64.75% function coverage floor at 64.26%; Release Gate was a downstream failure.
+Meaningful analytics caller tests now pass 3,056 cases with coverage and all
+coverage floors unchanged (functions 64.80%). Fable reviewed that test delta
+without findings or observed writes. The next head requires fresh hosted CI.
+
+The existing PR I commits were reused on `codex/goo-430-audit-fixes` in managed
+worktree `linear-audit-fixes/RAG_system`. Two cherry-pick conflicts retained
+current CLI commands and discovery timeout documentation. The remaining
+HO-3 route now uses the lean access check and returns 200 null for an authorized
+chat without a handoff, preserving 404 for an inaccessible chat. Contracts were
+regenerated together. Current checks: 209 backend tests, 20 affected frontend
+tests, 314 bridge tests, all blocking local gates; the first-save retry was
+mutation-verified with exact restoration. Separate Fable code/security reviews
+both found a relinked-project handoff visibility gap; that finding remains to
+be resolved and reviewed before delivery.
+
+Five initial Codex discovery attempts encountered Azure WebSocket HTTP 302
+errors and recovered over HTTPS. They are excluded under the registered
+provider-error rule, with no decision claimed. Five replacement attempts use
+an explicitly HTTP Azure provider and a new task digest. The preparation
+command materializes the declared historical bridge revision; all 92 source
+inputs were checked. Fable Bedrock invocation remains denied, so benchmark
+evidence can only be Codex-only. Local OAuth Fable code reviews are separate.
+
+The tenant-scoped handoff uniqueness proposal has its own managed worktree,
+`linear-handoff-org/RAG_system`, branch `codex/goo-423-handoff-org-scope`.
+Implementation, migration execution, review and owner acceptance are pending.
+The full twelve-issue goal remains active.

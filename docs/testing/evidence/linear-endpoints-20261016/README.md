@@ -70,3 +70,25 @@ does not establish a local-backend, analytics-stream, migration or deployed
 candidate acceptance result. Production build behavior is covered through the
 actual configuration modules; a complete optimized production build was not
 run. Hosted CI is a separate gate and must be bound to the published PR head.
+
+## Coverage amendment after first hosted run
+
+PR [#2009](https://github.com/Goodwiinz/NOUS-Research-Assistant/pull/2009),
+head `aa9d402a0d1c41c906007982f6d2ae28dfa306f2`, passed all 3,039 frontend
+tests in [producer job 116873435089](https://github.com/Goodwiinz/NOUS-Research-Assistant/actions/runs/38870271504/job/116873435089).
+That job failed its subsequent coverage ratchet: function coverage was 64.26%,
+below the existing 64.75% floor. Its Release Gate failure was downstream of
+that producer. This was not an infrastructure failure or a confirmed flake.
+
+Additional caller tests cover authenticated deployed-origin reads across the
+analytics service exports, encoded query arguments, factory initialization
+without token persistence, and API health success/failure. Production source
+and all coverage floors are unchanged. The exact local CI command
+`CI=true pnpm --dir frontend test:coverage` passed **389 files, 3,056 tests**.
+`node scripts/ci/check_frontend_coverage.mjs frontend/coverage/coverage-summary.json`
+passed: functions **64.80%**, lines/statements **53.50%**, branches **80.47%**.
+
+Fable resumed correctness session `d257f839-4148-4785-a7c1-9d7e820e245a`
+completed its independent test-delta review with no concrete defect and a
+false read-only tripwire. The earlier separate security review still applies
+to unchanged production source. A new hosted run must verify the next head.

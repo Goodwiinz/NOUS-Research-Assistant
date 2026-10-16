@@ -89,6 +89,181 @@ describe('default API callers use public endpoint policy', () => {
     expect(getServiceStatus().websocket.connecting).toBe(false);
   });
 
+  it('initializes every analytics service without persisting the supplied token', async () => {
+    const services = await import('../analytics');
+    localStorage.removeItem('authToken');
+    const initialized = services.initializeAnalyticsServices({
+      authToken: 'never-persist-this-token',
+    });
+    expect(initialized).toEqual({
+      metrics: services.metricsApi,
+      graph: services.graphApi,
+      dashboard: services.dashboardApi,
+      reports: services.reportApi,
+      alerts: services.alertApi,
+      export: services.exportApi,
+      websocket: services.analyticsWebSocket,
+    });
+    expect(services.initializeAnalyticsServices()).toEqual(initialized);
+    expect(localStorage.getItem('authToken')).toBeNull();
+    services.analyticsServiceFactory.reset();
+    expect(services.analyticsServiceFactory.getMetricsApi()).toBe(
+      services.metricsApi
+    );
+  });
+
+  const reads: Array<{
+    name: string;
+    path: string;
+    query?: Record<string, string>;
+    request: (services: typeof import('../analytics')) => Promise<unknown>;
+  }> = [
+    {
+      name: 'metric detail',
+      path: '/metrics/metric-1',
+      request: (s) => s.metricsApi.getMetric('metric-1'),
+    },
+    {
+      name: 'metric time series',
+      path: '/metrics/metric-1/timeseries',
+      query: {
+        granularity: 'hour',
+        timeRange: JSON.stringify({ start: '2026-10-01', end: '2026-10-16' }),
+      },
+      request: (s) =>
+        s.metricsApi.getTimeSeriesData(
+          'metric-1',
+          { start: '2026-10-01', end: '2026-10-16' },
+          'hour'
+        ),
+    },
+    {
+      name: 'metric aggregation',
+      path: '/metrics/aggregate',
+      query: {
+        metricIds: JSON.stringify(['one', 'two']),
+        aggregation: 'average',
+      },
+      request: (s) =>
+        s.metricsApi.getAggregatedMetrics(['one', 'two'], 'average'),
+    },
+    {
+      name: 'filtered graph',
+      path: '/graph',
+      query: {
+        nodeTypes: JSON.stringify(['paper']),
+        searchQuery: 'clinical RAG',
+      },
+      request: (s) =>
+        s.graphApi.getGraphData({
+          nodeTypes: ['paper'],
+          searchQuery: 'clinical RAG',
+        }),
+    },
+    {
+      name: 'graph node',
+      path: '/graph/nodes/node-1',
+      request: (s) => s.graphApi.getNode('node-1'),
+    },
+    {
+      name: 'graph neighbors',
+      path: '/graph/nodes/node-1/neighbors',
+      query: { depth: '2' },
+      request: (s) => s.graphApi.getNodeNeighbors('node-1', 2),
+    },
+    {
+      name: 'graph path',
+      path: '/graph/shortest-path',
+      query: { source: 'one', target: 'two' },
+      request: (s) => s.graphApi.findShortestPath('one', 'two'),
+    },
+    {
+      name: 'dashboards',
+      path: '/dashboards',
+      request: (s) => s.dashboardApi.getDashboards(),
+    },
+    {
+      name: 'dashboard detail',
+      path: '/dashboards/dashboard-1',
+      request: (s) => s.dashboardApi.getDashboard('dashboard-1'),
+    },
+    {
+      name: 'reports',
+      path: '/reports',
+      request: (s) => s.reportApi.getReports(),
+    },
+    {
+      name: 'report detail',
+      path: '/reports/report-1',
+      request: (s) => s.reportApi.getReport('report-1'),
+    },
+    {
+      name: 'alert rules',
+      path: '/alerts/rules',
+      request: (s) => s.alertApi.getAlertRules(),
+    },
+    {
+      name: 'bounded active alerts',
+      path: '/alerts',
+      query: { limit: '5' },
+      request: (s) => s.alertApi.getActiveAlerts(5),
+    },
+    {
+      name: 'export status',
+      path: '/export/export-1/status',
+      request: (s) => s.exportApi.getExportStatus('export-1'),
+    },
+  ];
+
+  it.each(reads)(
+    'routes authenticated $name reads through the shared API',
+    async ({ path, query, request }) => {
+      const data = { receipt: 'from-the-configured-api' };
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ success: true, data }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      expect(await request(await import('../analytics'))).toEqual(data);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [target, options] = fetchMock.mock.calls[0];
+      const url = new URL(target);
+      expect(url.origin).toBe('https://dev-api.example');
+      expect(url.pathname).toBe(`/api/v1/analytics${path}`);
+      expect(Object.fromEntries(url.searchParams)).toEqual(query ?? {});
+      expect(options.headers.Authorization).toBe('Bearer test-session');
+    }
+  );
+
+  it.each([true, false])(
+    'reports API health from the response success flag (%s)',
+    async (success) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            success,
+            data: [],
+            message: 'Analytics unavailable',
+          }),
+        })
+      );
+      const { performHealthCheck } = await import('../analytics');
+      const result = await performHealthCheck();
+      expect(result.healthy).toBe(success);
+      expect(result.services.api.status).toBe(
+        success ? 'healthy' : 'unhealthy'
+      );
+      if (!success)
+        expect(result.services.api).toMatchObject({
+          error: 'Analytics unavailable',
+        });
+    }
+  );
+
   it('keeps one WebSocket client per mount when configuration is passed inline', async () => {
     const urls: string[] = [];
     class Socket {
