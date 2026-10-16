@@ -272,6 +272,54 @@ describe('ProjectChatTab — unlink outcome', () => {
     expect(screen.queryByText('Failed to load threads')).toBeNull();
   });
 
+  it('does not mistake a concurrent thread-refresh failure for an unlink failure', async () => {
+    // Tab mounts with cached threads while its initial refresh is still in
+    // flight; the refresh then fails and, after that, the unlink succeeds.
+    let rejectRefresh: (reason: Error) => void = () => {};
+    service.listProjectThreads.mockImplementation(
+      () =>
+        new Promise<
+          Awaited<ReturnType<typeof projectChatService.listProjectThreads>>
+        >((_resolve, reject) => {
+          rejectRefresh = reject;
+        })
+    );
+    let resolveUnlink: () => void = () => {};
+    service.unlinkThreadFromProject.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUnlink = resolve;
+        })
+    );
+    act(() => {
+      useProjectChatStore.setState((state) => {
+        state.linkedThreads[PROJECT_ID] = [thread];
+      });
+    });
+    await renderTabWithThread();
+
+    await confirmUnlinkTwice();
+    await act(async () => {
+      rejectRefresh(new Error('Thread list unavailable'));
+    });
+    // The genuine load error is now showing behind the still-open dialog.
+    expect(screen.getByText('Failed to load threads')).toBeInTheDocument();
+    await act(async () => {
+      resolveUnlink();
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText('Unlink thread from project?')).toBeNull()
+    );
+    // The unlink succeeded: no unlink error, and the unrelated load error was
+    // neither shown as an unlink failure nor swallowed by the unlink path.
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(useProjectChatStore.getState().errors[PROJECT_ID]).toBe(
+      'Thread list unavailable'
+    );
+    expect(screen.getByText('Thread list unavailable')).toBeInTheDocument();
+  });
+
   it('closes the confirm dialog and removes the thread when the unlink succeeds', async () => {
     service.unlinkThreadFromProject.mockResolvedValue(undefined);
     await renderTabWithThread();

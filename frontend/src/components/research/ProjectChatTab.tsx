@@ -128,10 +128,11 @@ export const ProjectChatTab: React.FC<ProjectChatTabProps> = ({
     setUnlinkError(null);
     setIsUnlinking(true);
     try {
-      await unlinkThread(threadToUnlink);
-      // `unlinkThreadFromProject` resolves void either way; the store's error
-      // slot is the only success signal it exposes.
-      if (useProjectChatStore.getState().errors[projectId]) {
+      // Use the operation's own outcome, not `errors[projectId]`: that slot
+      // is shared with the thread refresh, so a concurrent load failure must
+      // neither read as an unlink failure nor be cleared by a successful one.
+      const unlinked = await unlinkThread(threadToUnlink);
+      if (!unlinked) {
         setUnlinkError(takeActionError('Failed to unlink thread'));
         return;
       }
