@@ -276,6 +276,16 @@ async def _ensure_workspace(db: Any, user: Any, org_id: Any) -> Any:
     between the two used to leave a permanently broken account (audit R5-L25).
     Running this on *every* path — found user included — makes that state heal
     on the next fire instead of persisting forever.
+
+    Ownership alone is not enough. R5-M28 re-pins the *user* to the synthetic
+    org, but a workspace created before that still carries the real org it was
+    born in, and every org-scoped access path
+    (``project_access.accessible_research_workspace_ids``, which compares
+    ``coalesce(workspace.organization_id, owner.organization_id)`` against the
+    actor's org) rejects it — so ``create_project`` failed on every synthetic
+    run with "No workspace found". Only a workspace whose effective org is the
+    synthetic org counts; a stale foreign-org one is reported, never touched
+    (it sits inside a real tenant — moving or deleting it is a human call).
     """
     from sqlalchemy import select
 
@@ -287,9 +297,24 @@ async def _ensure_workspace(db: Any, user: Any, org_id: Any) -> Any:
             Workspace.is_deleted == False,  # noqa: E712
         )
     )
-    workspace = result.scalars().first()
-    if workspace is not None:
-        return workspace
+    owned = list(result.scalars().all())
+    # NULL organization_id resolves to the owner's org, which is the synthetic
+    # org by the time we get here (the caller re-pins the user first).
+    usable = [
+        ws for ws in owned if ws.organization_id is None or ws.organization_id == org_id
+    ]
+    if usable:
+        return usable[0]
+    for stale in owned:
+        log.warning(
+            "synthetic_traffic.bootstrap",
+            action="stale_foreign_org_workspace",
+            warning="synthetic user owns a workspace in a non-synthetic org; "
+            "leaving it untouched and creating one in the synthetic org",
+            workspace_id=str(stale.id),
+            workspace_org_id=str(stale.organization_id),
+            org_id=str(org_id),
+        )
 
     workspace = Workspace(
         name=f"{SYNTH_PREFIX}workspace",
