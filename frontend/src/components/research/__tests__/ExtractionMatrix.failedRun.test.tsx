@@ -12,10 +12,12 @@
  * "Unable to find role=alert"; the second must keep passing either way.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@/test/test-utils';
+import userEvent from '@testing-library/user-event';
+import { render, screen, within } from '@/test/test-utils';
 import { ExtractionMatrix } from '../ExtractionMatrix';
 import {
   createMatrix,
+  deleteMatrix,
   getExtractionTaskStatus,
   getMatrix,
   listMatrices,
@@ -111,6 +113,50 @@ describe('ExtractionMatrix polled task outcome', () => {
     );
     expect(screen.queryByText(/^Extracting/)).not.toBeInTheDocument();
     expect(getExtractionTaskStatus).toHaveBeenCalledWith('task-1');
+  });
+
+  it('drops a stale failed alert when another matrix is created', async () => {
+    // Mutation check: remove the setAutoExtractionStatus(null) reset at the
+    // start of handleCreate and the final assertion fails because the first
+    // matrix's alert is still in the document under the second matrix.
+    await createAndPoll(
+      taskStatus({
+        status: 'failed',
+        failed: 2,
+        error: '2 of 2 documents failed; nothing was recorded',
+      })
+    );
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    // Delete the failed matrix; the create form comes back with its fields.
+    vi.mocked(deleteMatrix).mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    expect(
+      await screen.findByRole('button', { name: 'Create matrix' })
+    ).toBeInTheDocument();
+
+    // The second matrix enqueues no extraction, so nothing would ever poll
+    // and replace the stale status.
+    vi.mocked(createMatrix).mockResolvedValue({
+      id: 'm-2',
+      project_id: 'p-1',
+      name: 'Second',
+      columns: [{ name: 'Sample size' }],
+      created_at: '2026-10-16T00:00:00Z',
+      extraction_task_id: null,
+    });
+    vi.mocked(getMatrix).mockResolvedValue({
+      ...matrix,
+      id: 'm-2',
+      name: 'Second',
+    });
+    await user.click(screen.getByRole('button', { name: 'Create matrix' }));
+
+    expect(await screen.findByText('Second')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('clears the banner after a completed run', async () => {

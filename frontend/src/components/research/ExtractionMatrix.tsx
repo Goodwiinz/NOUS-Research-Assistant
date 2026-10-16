@@ -152,6 +152,9 @@ export function ExtractionMatrix({
 
     setCreating(true);
     setError(null);
+    // A previous matrix's terminal (failed) status must not outlive it: the
+    // new matrix may never poll (no extraction_task_id) to replace it.
+    setAutoExtractionStatus(null);
     try {
       const result = await createMatrix(projectId, {
         name: createName.trim(),
