@@ -283,7 +283,9 @@ async def test_duplicate_producers_publish_once_with_stale_identity_map(
                 ),
                 timeout=10,
             )
-        assert results == [None, None]
+        assert all(isinstance(r, bool) for r in results), results
+        # Exactly one producer reports it dispatched; the loser no-ops.
+        assert sorted(results) == [False, True]
         assert (
             broker.call_count == 1
         ), "Concurrent producers published the same attempt twice"

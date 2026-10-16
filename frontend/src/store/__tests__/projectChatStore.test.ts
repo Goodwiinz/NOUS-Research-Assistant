@@ -363,6 +363,40 @@ describe('useProjectChatStore', () => {
 
       expect(useProjectChatStore.getState().errors[projectId]).toBe('Not found');
     });
+
+    it('should resolve true on success so callers do not infer the outcome from the shared error slot', async () => {
+      act(() => {
+        useProjectChatStore.setState({
+          linkedThreads: {
+            [projectId]: [createMockProjectThread({ thread_id: threadId })],
+          },
+        });
+      });
+      mockService.unlinkThreadFromProject.mockResolvedValue();
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await useProjectChatStore
+          .getState()
+          .unlinkThreadFromProject(projectId, threadId);
+      });
+
+      expect(result).toBe(true);
+    });
+
+    it('should resolve false when the service rejects', async () => {
+      mockService.unlinkThreadFromProject.mockRejectedValue(new Error('Not found'));
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await useProjectChatStore
+          .getState()
+          .unlinkThreadFromProject(projectId, threadId);
+      });
+
+      expect(result).toBe(false);
+      expect(useProjectChatStore.getState().errors[projectId]).toBe('Not found');
+    });
   });
 
   // ==========================================================================
