@@ -74,9 +74,7 @@ async def test_report_renders_for_owner(
         _scalars_all([]),
     ]
 
-    with patch(
-        "src.api.research.project_report._scan_recent_threads", return_value=[]
-    ):
+    with patch("src.api.research.project_report._scan_recent_threads", return_value=[]):
         response = await render_project_report(
             mock_project.id, current_user=mock_user, db=mock_db
         )
@@ -99,11 +97,132 @@ async def test_report_404_when_not_owned_or_missing(
     mock_db.execute.side_effect = [_scalar_one_or_none(None)]
 
     with pytest.raises(HTTPException) as exc_info:
-        await render_project_report(
-            uuid4(), current_user=mock_user, db=mock_db
-        )
+        await render_project_report(uuid4(), current_user=mock_user, db=mock_db)
 
     assert exc_info.value.status_code == 404
     assert "not found or access denied" in exc_info.value.detail
     # Lookup must short-circuit: no docs/notes queries after a denied project.
     assert mock_db.execute.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Soft-deleted / unlinked documents must not appear in the report.
+#
+# Deleting a document only stamps ``Document.is_deleted``; removing it from a
+# project stamps ``CollectionDocument.is_deleted``. Neither cascades, so the
+# documents query has to filter both — exactly like ``list_project_documents``
+# in ``src/api/research/projects.py``. Real (throwaway) SQLite here, because the
+# predicate lives in SQL, not Python; a mocked ``db.execute`` cannot observe it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def sqlite_session_factory():
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from src.models import (
+        CollectionDocument,
+        Document,
+        Organization,
+        ProjectNote,
+        Workspace,
+    )
+    from src.models.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            lambda sync_conn: Base.metadata.create_all(
+                sync_conn,
+                tables=[
+                    Organization.__table__,
+                    Workspace.__table__,
+                    Collection.__table__,
+                    Document.__table__,
+                    CollectionDocument.__table__,
+                    ProjectNote.__table__,
+                ],
+            )
+        )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
+
+
+def _document(org_id: Any, title: str, *, deleted: bool = False) -> Any:
+    from src.models import Document, DocumentType
+
+    return Document(
+        id=uuid4(),
+        title=title,
+        filename=f"{title}.pdf",
+        file_path=f"/tmp/{title}.pdf",
+        file_size_bytes=1,
+        mime_type="application/pdf",
+        document_type=DocumentType.TEXT,
+        organization_id=org_id,
+        is_deleted=deleted,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_report_excludes_deleted_and_unlinked_documents(
+    mock_user: MagicMock, sqlite_session_factory: Any
+) -> None:
+    """A soft-deleted document, a document unlinked from the project, and a
+    foreign-organization document must neither be listed nor counted; the live
+    document still is.
+    """
+    from src.api.research.project_report import render_project_report
+    from src.models import CollectionDocument, Organization, Workspace
+
+    org_id = uuid4()
+    foreign_org_id = uuid4()
+    mock_user.organization_id = org_id
+
+    async with sqlite_session_factory() as db:
+        db.add_all(
+            [
+                Organization(id=org_id, name="Org", storage_limit_bytes=1),
+                Organization(id=foreign_org_id, name="Other", storage_limit_bytes=1),
+            ]
+        )
+        workspace = Workspace(id=uuid4(), name="WS", owner_id=mock_user.id)
+        project = Collection(
+            id=uuid4(), workspace_id=workspace.id, name="Test Research Project"
+        )
+        live = _document(org_id, "LIVE-DOC")
+        soft_deleted = _document(org_id, "SOFT-DELETED-DOC", deleted=True)
+        unlinked = _document(org_id, "UNLINKED-DOC")
+        foreign = _document(foreign_org_id, "FOREIGN-ORG-DOC")
+        db.add_all([workspace, project, live, soft_deleted, unlinked, foreign])
+        await db.flush()
+        db.add_all(
+            [
+                CollectionDocument(collection_id=project.id, document_id=live.id),
+                CollectionDocument(
+                    collection_id=project.id, document_id=soft_deleted.id
+                ),
+                CollectionDocument(
+                    collection_id=project.id, document_id=unlinked.id, is_deleted=True
+                ),
+                CollectionDocument(collection_id=project.id, document_id=foreign.id),
+            ]
+        )
+        await db.commit()
+
+        with patch(
+            "src.api.research.project_report._scan_recent_threads", return_value=[]
+        ):
+            response = await render_project_report(
+                project.id, current_user=mock_user, db=db
+            )
+
+    body = response.body.decode()
+    assert "LIVE-DOC" in body
+    assert "SOFT-DELETED-DOC" not in body
+    assert "UNLINKED-DOC" not in body
+    assert "FOREIGN-ORG-DOC" not in body
