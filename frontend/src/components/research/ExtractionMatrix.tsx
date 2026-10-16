@@ -112,16 +112,28 @@ export function ExtractionMatrix({
   useEffect(() => {
     if (!autoExtractionTaskId) return;
 
+    // A response is applied only while this effect instance is current and
+    // the task is still non-terminal. A poll that outlasts the interval must
+    // not write 'running' over the 'failed'/'completed' a later poll already
+    // recorded (that would hide both the progress banner and the alert).
+    let cancelled = false;
+    let settled = false;
+    const stale = (): boolean => cancelled || settled;
+
     const poll = async () => {
       try {
         const status = await getExtractionTaskStatus(autoExtractionTaskId);
+        if (stale()) return;
         setAutoExtractionStatus(status);
 
         if (status.status === 'completed' || status.status === 'failed') {
+          settled = true;
           if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
           }
+          // A 'failed' status stays in autoExtractionStatus so the banner
+          // below can show its error instead of silently clearing.
           setAutoExtractionTaskId(null);
 
           if (status.status === 'completed' && matrix) {
@@ -137,6 +149,7 @@ export function ExtractionMatrix({
     poll();
 
     return () => {
+      cancelled = true;
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
@@ -150,6 +163,9 @@ export function ExtractionMatrix({
 
     setCreating(true);
     setError(null);
+    // A previous matrix's terminal (failed) status must not outlive it: the
+    // new matrix may never poll (no extraction_task_id) to replace it.
+    setAutoExtractionStatus(null);
     try {
       const result = await createMatrix(projectId, {
         name: createName.trim(),
@@ -170,16 +186,26 @@ export function ExtractionMatrix({
     }
   };
 
+  const startExtraction = async (targetMatrixId: string): Promise<void> => {
+    // A new run replaces whatever the previous run ended with, and its task
+    // id becomes the polled task so this run's progress or failure is shown.
+    setAutoExtractionStatus(null);
+    const result = await triggerExtraction(targetMatrixId, {
+      document_ids: documents.map((d) => d.id),
+    });
+    await fetchMatrix(targetMatrixId);
+    if (result.task_id) {
+      setAutoExtractionTaskId(result.task_id);
+    }
+  };
+
   const handleExtract = async () => {
     if (!matrix || documents.length === 0) return;
 
     setExtracting(true);
     setError(null);
     try {
-      await triggerExtraction(matrix.id, {
-        document_ids: documents.map((d) => d.id),
-      });
-      await fetchMatrix(matrix.id);
+      await startExtraction(matrix.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Extraction failed');
     } finally {
@@ -239,10 +265,7 @@ export function ExtractionMatrix({
 
       if (result.columns_changed && documents.length > 0) {
         try {
-          await triggerExtraction(matrix.id, {
-            document_ids: documents.map((d) => d.id),
-          });
-          await fetchMatrix(matrix.id);
+          await startExtraction(matrix.id);
         } catch {
           // Non-critical
         }
@@ -363,18 +386,35 @@ export function ExtractionMatrix({
 
   return (
     <div className="space-y-4">
-      {autoExtractionTaskId && autoExtractionStatus && (
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2">
-          <span className="text-xs text-muted-foreground">
-            Extracting {autoExtractionStatus.completed}/
-            {autoExtractionStatus.total}…
-          </span>
-          {autoExtractionStatus.failed > 0 && (
-            <span className="text-xs text-destructive">
-              ({autoExtractionStatus.failed} failed)
-            </span>
-          )}
+      {autoExtractionStatus?.status === 'failed' ? (
+        <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2">
+          <p role="alert" className="flex-1 text-xs text-destructive">
+            {autoExtractionStatus.error ?? 'Extraction failed'}
+          </p>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Dismiss extraction error"
+            onClick={() => setAutoExtractionStatus(null)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
         </div>
+      ) : (
+        autoExtractionTaskId &&
+        autoExtractionStatus && (
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2">
+            <span className="text-xs text-muted-foreground">
+              Extracting {autoExtractionStatus.completed ?? 0}/
+              {autoExtractionStatus.total}…
+            </span>
+            {autoExtractionStatus.failed > 0 && (
+              <span className="text-xs text-destructive">
+                ({autoExtractionStatus.failed} failed)
+              </span>
+            )}
+          </div>
+        )
       )}
 
       <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">

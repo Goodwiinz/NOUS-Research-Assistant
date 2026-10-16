@@ -409,7 +409,13 @@ async def trigger_extraction(
         {
             "matrix_id": str(matrix_id),
             "status": "running",
+            # Counters the UI renders ("Extracting completed/total") so a
+            # poll before the worker's first write shows 0/N, not "/N".
+            # ``extracted`` is the pre-existing key, kept for compatibility.
             "extracted": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
             "total": len(request.document_ids),
         },
     )

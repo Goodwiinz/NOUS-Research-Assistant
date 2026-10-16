@@ -88,7 +88,7 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
     }
   };
 
-  const handleCopyMarkdown = () => {
+  const handleCopyMarkdown = async () => {
     if (!result) return;
     const md = result.sections
       .map(
@@ -96,8 +96,13 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
           `## ${s.title}\n\n${s.description}\n\n*Suggested: ~${s.suggested_word_count} words*`
       )
       .join('\n\n---\n\n');
-    navigator.clipboard.writeText(md);
-    toast.success('Outline copied as markdown');
+    try {
+      await navigator.clipboard.writeText(md);
+      toast.success('Outline copied as markdown');
+    } catch {
+      // Clipboard access denied, document unfocused, or insecure context.
+      toast.error('Could not copy the outline');
+    }
   };
 
   const handleOpenChange = (open: boolean) => {

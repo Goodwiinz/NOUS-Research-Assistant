@@ -14,7 +14,11 @@ from pydantic import BaseModel, Field
 from src.core.dependencies import get_current_user, require_admin
 from src.models.user import User
 from src.services.diagnostics.bottleneck_analyzer import BottleneckAnalyzer
-from src.services.diagnostics.diagnostics_store import diagnostics_store
+from src.services.diagnostics.diagnostics_store import (
+    DIAGNOSTICS_UNAVAILABLE_DETAIL,
+    DiagnosticsUnavailable,
+    diagnostics_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,20 @@ def _require_tenant(current_user: User) -> str:
     return str(organization_id)
 
 
+def _store_unavailable() -> HTTPException:
+    """503 with a stable detail; the Redis error itself stays in the store's log.
+
+    Without this the dashboard reads returned ``200 {"traces": []}`` /
+    ``200 {"error": "<exception text>"}`` during a Redis outage, so the
+    operator saw "No traces captured yet" and "Total queries 0" instead of an
+    outage.
+    """
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=DIAGNOSTICS_UNAVAILABLE_DETAIL,
+    )
+
+
 # --- Endpoints ---
 
 
@@ -105,11 +123,15 @@ async def get_recent_traces(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Get recent trace summaries."""
-    traces = await diagnostics_store.get_recent_traces(
-        limit=limit,
-        offset=offset,
-        organization_id=_require_tenant(current_user),
-    )
+    # An empty list is a real answer ("no traffic"); an unreachable store is 503.
+    try:
+        traces = await diagnostics_store.get_recent_traces(
+            limit=limit,
+            offset=offset,
+            organization_id=_require_tenant(current_user),
+        )
+    except DiagnosticsUnavailable as exc:
+        raise _store_unavailable() from exc
     return {"traces": traces, "count": len(traces), "limit": limit, "offset": offset}
 
 
@@ -119,9 +141,13 @@ async def get_aggregate_stats(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Get aggregate statistics over the specified time period."""
-    stats = await diagnostics_store.get_aggregate_stats(
-        hours=hours, organization_id=_require_tenant(current_user)
-    )
+    # Zeroed stats are a real answer ("no traffic"); an unreachable store is 503.
+    try:
+        stats = await diagnostics_store.get_aggregate_stats(
+            hours=hours, organization_id=_require_tenant(current_user)
+        )
+    except DiagnosticsUnavailable as exc:
+        raise _store_unavailable() from exc
     return stats
 
 
