@@ -89,3 +89,10 @@ These records do not establish deployed grants, broad retrieval quality,
 a Fable benchmark or independent human methods acceptance. Old `5f682a33`
 Harbor and V5 provider results remain dated observations at weaker sources;
 no historical score is reused for this changed task.
+
+
+## Completed measurement amendment
+
+Fresh [host-verified model and provider records](../discovery-current-20261017/README.md)
+now supersede the construction-time NOT RUN status at execution source `7d8e9ebb`.
+They retain the failed provider attempt and excluded model attempt separately.

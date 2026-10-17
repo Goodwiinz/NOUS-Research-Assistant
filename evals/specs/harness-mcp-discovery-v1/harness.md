@@ -249,3 +249,14 @@ trials. Fresh model contexts must exclude their solution folder. Current
 hardened model/provider measurements remain NOT RUN pending clean source and
 new declarations. Source, task/dataset/harness/controller/configuration hashes
 and all three runtime services must be bound before collecting model scores.
+
+
+### 2026-10-17 completed host-verified measurement amendment
+
+The [new dated evidence](../../../docs/testing/evidence/discovery-current-20261017/README.md) records 5/5 scoreable Codex passes
+across six attempts, one provider-error exclusion, and a separate fresh
+provider V7 completion after a retained V6 infrastructure timeout. Both
+executed at clean `7d8e9ebb`; later evidence commits do not change that identity.
+The fixed-task decision is PRIMITIVES SUFFICIENT for Codex only, NOT GATED.
+Old scores remain unpooled; Oracle controls are unscored. Deployed quality,
+agent variants, Fable benchmark and independent human acceptance remain open.
