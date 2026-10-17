@@ -27,11 +27,13 @@ is exported as the ``predecessor``.
 Derived on read: work status, accounting (each version's
 flow from ``prisma.derive_prisma_flow`` over retained rows restricted to the
 records and decisions it froze) and staleness (``graph_part`` adds
-``report -> document`` edges for the tip's changed or corrected reports;
+``report -> document`` edges for the tip's changed reports and every accepted
+correction or retraction;
 ``draft_release_service._graph`` bridges each document to its pinned source
 revisions, so GOO-307's walk stales only their dependents). Accepting a delta
 also uses GOO-307's durable invalidation for existing draft releases; a later
-unknown publication check cannot restore a previously invalidated release.
+unknown publication check cannot restore a previously invalidated release
+or permit a new release to depend on a known corrected or retracted report.
 
 # ponytail: out of scope, each at its seam: automatic delta acceptance;
 # carrying extraction or appraisal values (they re-stale and are re-accepted
@@ -723,25 +725,36 @@ async def graph_part(
 ) -> tuple[
     list[tuple[release_rules.Node, release_rules.Node]], set[release_rules.Node]
 ]:
-    """``report -> document`` for each document of a report the tip version's
-    delta classed ``changed`` or ``corrected_retracted``; those reports are
-    the changed nodes. Unrelated reports add nothing."""
-    tip = (
-        await db.execute(
-            select(V)
-            .where(V.collection_id == collection_id)
-            .order_by(V.version_number.desc())
-            .limit(1)
+    """Retain accepted publication notices across later unavailable checks.
+
+    Historical corrections/retractions stay changed inputs for future release
+    gates as well as existing releases. Ordinary ``changed`` inputs retain
+    their existing tip-only scope. Unaccepted deltas add nothing.
+    """
+    deltas = cast(
+        Sequence[dict[str, Any]],
+        (
+            await db.execute(
+                select(V.input_versions["accepted_delta"])
+                .where(
+                    V.collection_id == collection_id,
+                    V.accepted_execution_id.is_not(None),
+                )
+                .order_by(V.version_number.desc())
+            )
         )
-    ).scalar_one_or_none()
-    if tip is None or tip.accepted_execution_id is None:
+        .scalars()
+        .all(),
+    )
+    if not deltas:
         return [], set()
-    delta = cast(dict[str, Any], tip.input_versions["accepted_delta"])
     merged_into = await search_update_service._merged_into(db, collection_id)
     affected = {
         search_update_service._survivor(merged_into, str(item["report_id"]))
+        for index, delta in enumerate(deltas)
         for item in delta["items"]
-        if item["class"] in ("changed", "corrected_retracted")
+        if item["class"] == "corrected_retracted"
+        or (index == 0 and item["class"] == "changed")
     }
     if not affected:
         return [], set()

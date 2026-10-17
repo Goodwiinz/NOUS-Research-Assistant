@@ -200,3 +200,40 @@ Record the index digest and Linux/amd64 descriptor. Update the four service
 references and the existing migration contract assertion together, retaining
 the intended major versions and variants. Add a dated identity/check record,
 run pinned actionlint and the CI contract suite, and require full hosted CI.
+
+
+## Accepted publication history follow-up (2026-10-17)
+
+The earlier persistence fix protected draft releases already present when a
+review accepted a correction or retraction. A later unknown publication check
+still hid that notice from a new draft's promotion graph. The new native
+regression reproduced an unsafe promotion at `bce9bf7d`.
+
+`graph_part` now reads retained accepted deltas from the same project and
+keeps every accepted correction or retraction, alongside ordinary changes
+from the latest delta only. Merged reports resolve to their surviving identity.
+Unknown, omitted and later no-notice results cannot erase known publication
+evidence. Unaccepted executions add nothing. This also protects new draft
+promotions without a prior release row to invalidate.
+
+The separate [publication history proof](publication-history-proof.json) binds
+this source and its final tests. Restoring the old graph function makes the
+new promotion assertion fail; exact restoration passes both native statement
+variants and the existing review-version scenario (three cases, zero skips).
+Seven unit histories cover notice persistence, omissions, ordinary changes
+and merged identities. The broader initialized unit/API/architecture matrix
+passes 1,785 cases. The initial broad run lacked synthetic encryption setup;
+its four setup errors remain retained separately. Pinned local gates that ran
+pass; unchanged generated-type and migration checks remain skipped.
+
+Fable's independent read-only correctness/security review found no blocker.
+The primary matched all three source fingerprints afterward; the reviewer
+read source and proof records without running tests or recomputing hashes.
+The owned PostgreSQL container was removed after confirming zero test schemas.
+
+Retention is conservative: no correction-clearance or waiver policy is added.
+A later accepted event that first reaches a live release supplies that
+invalidation's cause; the historical notice remains in the review chain.
+The graph now reads all accepted delta payloads in its project. These local
+results do not establish current hosted CI, deployed acceptance or independent
+human methods approval. Earlier proof records remain unchanged.

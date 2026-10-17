@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.models.generated_draft import GeneratedDraft
 from src.schemas.research_engine import ReviewReleaseLinkCreate, SearchScheduleCreate
 from src.services.artifacts.storage import LocalArtifactStorage
+from src.services.research import draft_release_service as drafts
 from src.services.research import manuscript_release_service as manuscripts
 from src.services.research import statements_service as statements
 from src.services.research_engine import review_update_service as reviews
@@ -477,6 +478,53 @@ async def test_corrected_source_preserves_parent_and_successor_release_bytes(
     assert later_listing[parent_release.id].status == "stale"
     assert later_listing[unrelated_release.id].status == "verified"
     assert later_listing[successor_release.id].status == "verified"
+    other_project = await review_proof._seed(factory)
+    async with factory() as db:
+        assert await reviews.graph_part(db, other_project["collection"]) == (
+            [],
+            set(),
+        )
+
+    # A new draft has no earlier release row to invalidate. Its promotion
+    # must still see the accepted retraction through the later unknown tip.
+    unsafe_draft = await _new_draft(world, "New claim from r5.", 5)
+    await review_proof._claim_on(
+        world, unsafe_draft, "New claim from r5.", documents["r5"], bodies["r5"]
+    )
+    with pytest.raises(drafts.ReleaseBlocked) as refused:
+        await draft_proof._promote(
+            world,
+            "A",
+            unsafe_draft.id,
+            unsafe_draft.version,
+            "draft-after-unknown-retracted",
+            _sha(unsafe_draft.content),
+        )
+    assert {blocker.code for blocker in refused.value.blockers} == {"stale_evidence"}
+    assert (
+        await review_proof._scalar(
+            factory,
+            "SELECT count(*) FROM draft_releases WHERE draft_id = :id",
+            id=unsafe_draft.id,
+        )
+        == 0
+    )
+    safe_draft = await _new_draft(world, "New claim from r1.", 6)
+    await review_proof._claim_on(
+        world, safe_draft, "New claim from r1.", documents["r1"], bodies["r1"]
+    )
+    safe_release, _ = await draft_proof._promote(
+        world,
+        "A",
+        safe_draft.id,
+        safe_draft.version,
+        "draft-after-unknown-unrelated",
+        _sha(safe_draft.content),
+    )
+    assert safe_release.stale_at is None
+    assert (
+        await draft_proof._check(world, safe_draft.id, safe_draft.version)
+    ).release_status == "verified"
     _, replayed = await review_proof._successor(
         world, "successor-release-review", root.id, delta
     )
