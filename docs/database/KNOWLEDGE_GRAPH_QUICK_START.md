@@ -1,5 +1,7 @@
 # Knowledge Graph Quick Start Guide
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## TL;DR
 
 Your RAG system now automatically extracts entities from uploaded documents and stores them in Neo4j! 🎉

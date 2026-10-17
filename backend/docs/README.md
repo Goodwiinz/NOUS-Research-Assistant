@@ -1,5 +1,7 @@
 # RAG Analytics API Documentation
 
+> **Stale / historical (2026-10-17):** It covers only part of the API and its paths and schemas may have drifted. The source of truth is the generated `backend/openapi.json` (also served at `/docs` when `DEBUG` is on). Current contracts: [`docs/engineering/`](../../docs/engineering/README.md).
+
 This directory contains comprehensive documentation for the RAG Analytics API, including OpenAPI specifications, usage examples, and integration guides.
 
 ## 📚 Documentation Files
@@ -8,7 +10,7 @@ This directory contains comprehensive documentation for the RAG Analytics API, i
 - **File**: `analytics_api.yaml`
 - **Description**: Complete OpenAPI 3.0.2 specification for all analytics endpoints
 - **Features**:
-  - 43 analytics API endpoints
+  - an analytics endpoint set that predates the current API (`backend/openapi.json` lists 46 `/api/v1/analytics` paths today; this YAML does not track it)
   - Comprehensive schema definitions
   - Request/response examples
   - Authentication and security definitions
@@ -25,20 +27,14 @@ This directory contains comprehensive documentation for the RAG Analytics API, i
   - Best practices
 
 ### 3. API Test Suite
-- **File**: `../src/tests/test_api_documentation.py`
-- **Description**: Comprehensive tests validating API documentation
-- **Coverage**:
-  - OpenAPI schema validation
-  - Endpoint compliance testing
-  - Response format validation
-  - Error handling verification
+- **File**: none. `backend/src/tests/test_api_documentation.py` no longer exists. The enforced contract check is `python scripts/ci/generate_openapi.py --check` against `backend/openapi.json`, plus the suites under `backend/tests/unit/api`.
 
 ## 🚀 Quick Start
 
 ### 1. Access Interactive Documentation
 ```bash
-# Start the RAG system
-docker-compose up
+# Start the backend (local dev does not use Docker; see docs/engineering/README.md)
+# then browse to the docs, which are served only when DEBUG is true
 
 # Access Swagger UI
 open http://localhost:8000/docs

@@ -1,5 +1,7 @@
 # Complete Knowledge Graph Backend Service Architecture
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## 3. Graph Visualization API Service (Port 8010) - FRONTEND DATA PREPARATION
 
 ### Service Responsibilities
