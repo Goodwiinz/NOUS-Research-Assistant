@@ -1,76 +1,46 @@
 # Self-Hosted GitHub Actions Runner
 
-A persistent GitHub Actions runner on a DigitalOcean droplet for CI/CD jobs
-that need Docker or heavy compute (image builds, test suites).
+> **Status: unverified, likely retired.** This page records a persistent runner
+> that was provisioned on a DigitalOcean droplet. DigitalOcean resources are
+> being decommissioned (see
+> [../../docs/runbooks/aws-decommission.md](../../docs/runbooks/aws-decommission.md)),
+> and whether this runner still exists or is online is **not verified**. The
+> droplet address was removed from this page; look it up in the DigitalOcean
+> console if you need it.
 
-## Host
+## Workflows using a self-hosted runner
 
-| Property | Value                             |
-| -------- | --------------------------------- |
-| Droplet  | `moltbot1241onubuntu` (DO, NYC3)  |
-| IP       | `138.197.36.44`                   |
-| Specs    | 8 vCPU / 16 GB RAM / 320 GB disk  |
-| OS       | Ubuntu 24.04 LTS                  |
-| Docker   | 28.2                              |
-| Runner   | GitHub Actions Runner 2.333.1     |
-| Labels   | `self-hosted`, `linux`, `x64`     |
-| User     | `runner` (non-root, docker group) |
+Checked 2026-10-17: the only workflow with a self-hosted label is
+`.github/workflows/agent-eval.yml` (`runs-on: [self-hosted, linux]`). The older
+claims that `docker-build.yml` and `test-runner.yml` used this runner are stale:
+`test-runner.yml` no longer exists, and `docker-build.yml` is not self-hosted.
+If the runner is gone, `agent-eval.yml` jobs wait for a runner that never
+arrives, so confirm runner status in **Settings -> Actions -> Runners** before
+relying on that workflow.
 
-## Workflows Using This Runner
+## Original host profile (historical)
 
-- `.github/workflows/docker-build.yml` - backend + frontend image builds
-- `.github/workflows/test-runner.yml` - test execution
+| Property | Value |
+| -------- | ----- |
+| Provider | DigitalOcean droplet, NYC3 |
+| Specs | 8 vCPU / 16 GB RAM / 320 GB disk |
+| OS | Ubuntu 24.04 LTS |
+| Labels | `self-hosted`, `linux`, `x64` |
+| User | `runner` (non-root, docker group) |
+| Service name | `actions.runner.Goodwiinz-rag.do-droplet-runner` |
 
-Both use `runs-on: [self-hosted, linux]`.
-
-## Service Management
+## Operating notes (apply only if the host still exists)
 
 ```bash
-ssh root@138.197.36.44
-
-# Status / stop / start
+# On the runner host
 systemctl status actions.runner.Goodwiinz-rag.do-droplet-runner
-systemctl stop   actions.runner.Goodwiinz-rag.do-droplet-runner
-systemctl start  actions.runner.Goodwiinz-rag.do-droplet-runner
-
-# Logs
 journalctl -u actions.runner.Goodwiinz-rag.do-droplet-runner -f
 ```
 
-## Re-registering the Runner
+Re-registering a runner needs a fresh registration token created from the
+repository settings or the GitHub API with an appropriately scoped token; never
+paste a token into a shell history or a document. The runner is not ephemeral,
+so periodic Docker cleanup is needed on the host.
 
-If the runner loses its registration (token expired, repo transfer, etc.):
-
-```bash
-# 1. Generate a new registration token (requires classic PAT with repo scope)
-read -s "GH_PAT?Classic PAT: " && export GH_PAT
-REG_TOKEN=$(curl -sL -X POST \
-  -H "Authorization: token $GH_PAT" \
-  -H "Accept: application/vnd.github+json" \
-  https://api.github.com/repositories/1073120335/actions/runners/registration-token \
-  | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['token'])")
-
-# 2. SSH in and reconfigure
-ssh root@138.197.36.44
-systemctl stop actions.runner.Goodwiinz-rag.do-droplet-runner
-su - runner -c 'cd ~/actions-runner && ./config.sh remove --token <OLD_TOKEN>'
-su - runner -c 'cd ~/actions-runner && ./config.sh \
-  --url https://github.com/Goodwiinz/rag \
-  --token <REG_TOKEN> \
-  --name do-droplet-runner \
-  --labels self-hosted,linux,x64 \
-  --work _work \
-  --replace \
-  --unattended'
-systemctl start actions.runner.Goodwiinz-rag.do-droplet-runner
-```
-
-## Notes
-
-- The runner is **not ephemeral** (unlike the previous ARC/K8s setup) - it persists
-  across jobs. Periodic Docker cleanup is recommended:
-  `ssh root@138.197.36.44 "docker system prune -af --volumes"`
-- ARC on DOKS was decommissioned in favor of this setup (see `infrastructure/arc/`
-  for historical reference).
-- The repo owner is `Goodwiinz` (capital G) - using `goodwiins` causes 404s due to
-  GitHub's redirect behavior with the runner binary.
+The repository owner login is `Goodwiinz` (capital G). The earlier ARC/Kubernetes
+runner setup is kept only as history in [../arc/](../arc/runner-deployment.yaml).

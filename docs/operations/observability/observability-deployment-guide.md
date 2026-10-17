@@ -1,5 +1,7 @@
 # Observability Stack Deployment Guide
 
+> **Status: design record (reconciled 2026-10-17).** This document describes an observability design or setup; whether it is deployed on the AWS cluster is not verified. Alerting that Terraform defines for AWS resources is in [infrastructure/terraform/monitoring.tf](../../../infrastructure/terraform/monitoring.tf). Current deployment: AWS EKS `nous-dev-cluster` (`us-east-1`), namespace `multimodal-rag-system`, Argo CD application `nous-dev-aws`. Qdrant is removed; live retrieval is PostgreSQL full-text. Start with the [AWS deployment overview](../../deployment/aws-overview.md) and [AWS on-call commands](../aws-on-call.md). The text below is kept unedited as a record; do not run its commands without checking them against the current repo.
+
 ## Overview
 
 This guide provides step-by-step instructions for deploying the complete observability stack for the Multimodal Enterprise RAG System. The stack includes distributed tracing, metrics collection, log aggregation, visualization, and alerting.

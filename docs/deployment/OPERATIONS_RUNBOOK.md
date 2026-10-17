@@ -1,5 +1,7 @@
 # Operations Runbook - Multimodal Enterprise RAG System
 
+> **Status: superseded (reconciled 2026-10-17).** This is a near-duplicate of [../operations/OPERATIONS_RUNBOOK.md](../operations/OPERATIONS_RUNBOOK.md) and targets an earlier deployment generation (namespace `rag-system`, Qdrant). Current deployment: AWS EKS `nous-dev-cluster` (`us-east-1`), namespace `multimodal-rag-system`, Argo CD application `nous-dev-aws`. Qdrant is removed; live retrieval is PostgreSQL full-text. Start with the [AWS deployment overview](aws-overview.md) and [AWS on-call commands](../operations/aws-on-call.md). The text below is kept unedited as a record; do not run its commands without checking them against the current repo.
+
 ## 📋 Table of Contents
 
 1. [System Overview](#system-overview)

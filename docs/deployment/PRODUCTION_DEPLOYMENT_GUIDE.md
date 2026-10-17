@@ -1,5 +1,7 @@
 # Production Deployment Guide
 
+> **Status: historical (reconciled 2026-10-17).** This guide was written for earlier deployment generations (Docker Compose, single-host or DigitalOcean/DOKS setups). Current deployment: AWS EKS `nous-dev-cluster` (`us-east-1`), namespace `multimodal-rag-system`, Argo CD application `nous-dev-aws`. Qdrant is removed; live retrieval is PostgreSQL full-text. Start with the [AWS deployment overview](aws-overview.md) and [AWS on-call commands](../operations/aws-on-call.md). The text below is kept unedited as a record; do not run its commands without checking them against the current repo.
+
 > **Legacy guide (2026-09-29):** The DigitalOcean staging/production deployment
 > workflows described here have been retired. For the current AWS dev release
 > path, use [CI and release workflows](../../.github/workflows/README.md).
@@ -684,9 +686,9 @@ kubectl rollout restart deployment/knowledge-graph-analytics-backend -n knowledg
 
 ### Documentation
 
-- **Architecture Guide**: [docs/architecture/ARCHITECTURE.md](../architecture/ARCHITECTURE.md)
+- **Architecture Guide**: [docs/architecture/ARCHITECTURE.md](../architecture/README.md)
 - **API Documentation**: [docs/api/README.md](../api/README.md)
-- **Security Guide**: [docs/security/SECURITY_GUIDE.md](../security/SECURITY_GUIDE.md)
+- **Security Guide**: [docs/security/SECURITY_GUIDE.md](../security/README.md)
 
 ### Monitoring Links
 
