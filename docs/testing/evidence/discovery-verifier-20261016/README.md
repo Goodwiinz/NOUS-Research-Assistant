@@ -68,3 +68,12 @@ completed one new provider/PostgreSQL attempt at clean source `6970a071`, with t
 complete source identity matching after cleanup. The V4 NOT RUN preparation
 and this earlier host-only proof retain their recorded scope. The corrected
 Harbor task remains NOT RUN; V5 does not supply an agent capability decision.
+
+## 2026-10-17 UTC corrected agent-evaluation amendment
+
+The separate [fresh Harbor series](../discovery-harness-verified-20261016/README.md)
+has now completed at source `5f682a33`, with five scoreable Codex trials and
+0/5 objective passes. Two infrastructure attempts were excluded and retained.
+The historical NOT RUN preparations remain unchanged. This new decision is
+Codex-only and NOT GATED; it does not establish current composite or deployed
+quality.

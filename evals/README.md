@@ -198,3 +198,12 @@ source `6970a07177573576e2dd22882ed30c1d5d097bc6`, completed at 22:18:29 UTC.
 The full source identity matched after cleanup. V4 remains an unchanged NOT RUN
 preparation; V5 is NOT GATED and does not substitute for corrected Harbor trials
 or deployed acceptance.
+
+The later [fresh verified HTTP decision](baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
+records seven attempts and five scoreable Codex trials at clean source
+`5f682a33`: 0/5 objective passes, with two infrastructure attempts excluded
+and retained. The registered Codex-only decision is PRIMITIVES INSUFFICIENT;
+status remains NOT GATED. Earlier NOT RUN preparations and defective-verifier
+results remain unchanged, and scores are not pooled. The
+[evidence](../docs/testing/evidence/discovery-harness-verified-20261016/README.md)
+distinguishes build receipts, direct runtime snapshots and suite-gate limits.

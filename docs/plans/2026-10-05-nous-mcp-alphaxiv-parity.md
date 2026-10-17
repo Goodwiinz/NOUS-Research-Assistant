@@ -1213,3 +1213,27 @@ attempts across task versions: 15; this baseline used 5/10. See
 [corrected record](../../evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-typed-http.json).
 Current composite quality, labelled recall and deployed acceptance remain
 separate requirements.
+
+### 2026-10-17 UTC: verifier correction and new Slice 5 decision
+
+The later successful-result, returned-identifier, unsupported-list and
+truncation defects invalidate using the earlier historical rewards for
+current acceptance. The old records above remain unchanged. A new declaration
+at clean source `5f682a33` froze the corrected task, real bridge `57fc21bc7`,
+Harbor 0.6.6 and Codex 0.161.0 / Azure gpt-5.6-terra before fresh trials.
+The pinned catalog check and all 13 in-image calibrations passed.
+
+Seven attempts yielded five scoreable trials with **0/5 objective passes**
+and **two infrastructure exclusions**. The raw pass following a recovered
+provider-stream failure was excluded; the other exclusion failed agent
+installation before execution. Two unchanged replacements completed the
+series. All five scoreable failures omitted the required `search_documents`
+primitive. The unchanged decision rule yields **PRIMITIVES INSUFFICIENT for
+Codex only**, supporting retention of Slice 5 for that pair.
+
+This is a new recorded decision, with no old reward reused. Status remains
+**NOT GATED**; current composite/deployed quality, Fable benchmark trials and
+broader acceptance remain separate. The real-provider V5 diagnostic measures
+its own synthetic fixture. See [fresh evidence](../testing/evidence/discovery-harness-verified-20261016/README.md),
+[source manifest](../../evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
+and [baseline](../../evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json).

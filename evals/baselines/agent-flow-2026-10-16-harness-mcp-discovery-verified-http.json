@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-17T02:37:11.216294+00:00",
+  "suite": "nous-harness-mcp-v1",
+  "status": "NOT GATED",
+  "source_manifest": "evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json",
+  "source_manifest_sha256": "f7c1e6737dd47b119529b073a8205a5a813d0d6cd1df6afee671085978c0be53",
+  "execution_repository_revision": "5f682a33412ed9eaaf816b9c42ea90784d62b89b",
+  "bridge_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "task_digests": {
+    "harness-mcp-discovery-v1": "sha256:272a78795d8ad3cdbeef5bc5c4107590fe2e7cf2254b4df7a99a29bebb74be75"
+  },
+  "dataset_digests": {
+    "harness-mcp-discovery-v1": "sha256:dda540bfdc383c117e1a296596e28c24910559a965167969589c08d3e1866549"
+  },
+  "harness_digest": "sha256:2d74e74ede5d41cad2ae9add9c75d0bfe77d9312645f2723fedb2002757210cd",
+  "attempts": 7,
+  "attempt_cap": 10,
+  "scoreable_trials": 5,
+  "objective_passes": 0,
+  "semantic": "N/A; deterministic task, no judge",
+  "infrastructure_exclusions": 2,
+  "decision": "PRIMITIVES INSUFFICIENT for Codex only",
+  "decision_pass_threshold": 4,
+  "raw_passing_reward_excluded": true,
+  "trials": [
+    {
+      "attempt": 1,
+      "classification": "scoreable",
+      "raw_reward": 0.0,
+      "accepted_reward": 0.0,
+      "failure_summary": "required search_documents primitive was not invoked",
+      "agent_cli": "0.161.0",
+      "model": "gpt-5.6-terra",
+      "agent_execution_seconds": 321.843416,
+      "artifact_hashes": {
+        "result.json": "854ba9c75a810ee3683e2cf7fd7d4ef258b6637c2ee62109b7ddd46539c38ba8",
+        "verifier/audit.json": "4b8283d9a81c64f8fc712f534b9239a72055a26a1fe645db7bddd8c383b24e24",
+        "agent/codex.txt": "0fcb239632c4a427a7df2e4ee174e70ad1c9c2f1cef68ab117db501d051e684b",
+        "verifier/reward.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      }
+    },
+    {
+      "attempt": 2,
+      "classification": "infrastructure",
+      "raw_reward": 1.0,
+      "accepted_reward": null,
+      "failure_summary": "recovered model-provider stream failure; excluded by registered rule",
+      "agent_cli": "0.161.0",
+      "model": "gpt-5.6-terra",
+      "agent_execution_seconds": 41.546455,
+      "artifact_hashes": {
+        "result.json": "d8c7cc244f9e3c77a218d8d4486b211b71e2fb986651eb75081607a86b2ffc77",
+        "verifier/audit.json": "d38b9459857a69d31f041b2b26cfcae4723318dfcdf2ada0a2fe668c0a66a37c",
+        "agent/codex.txt": "be7b9b8f1971bcd1156b54692c30f24fcf7c153f18d16a9e91fcefa5cee6f94c",
+        "verifier/reward.txt": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+      }
+    },
+    {
+      "attempt": 3,
+      "classification": "scoreable",
+      "raw_reward": 0.0,
+      "accepted_reward": 0.0,
+      "failure_summary": "required search_documents primitive was not invoked",
+      "agent_cli": "0.161.0",
+      "model": "gpt-5.6-terra",
+      "agent_execution_seconds": 21.877421,
+      "artifact_hashes": {
+        "result.json": "b69790d37e74757f44d22bb367198e4de95021c4e5d58e4f8743fbf7acf785d4",
+        "verifier/audit.json": "7de49871983b84ace5be3650bd2155f28f482ae6036ee6cde8f5b6059ee1533b",
+        "agent/codex.txt": "3cae67d8b207aa3afe6b5282b8bff954acdf0c8e4bd67b74d35332630087ff7c",
+        "verifier/reward.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      }
+    },
+    {
+      "attempt": 4,
+      "classification": "scoreable",
+      "raw_reward": 0.0,
+      "accepted_reward": 0.0,
+      "failure_summary": "required search_documents primitive was not invoked",
+      "agent_cli": "0.161.0",
+      "model": "gpt-5.6-terra",
+      "agent_execution_seconds": 21.117222,
+      "artifact_hashes": {
+        "result.json": "d04e4c3eb871a66a1d797f0b94e512447f92ed4f69d720f4423814331a7dc3e4",
+        "verifier/audit.json": "126f99d5e514ac0289c7815b32dae43b3750204508b10d90a79c7025f20c102e",
+        "agent/codex.txt": "e3a4d95629ad4b8ed2863fa4cbae9b5c6801aaccf8db617dcb3f5ee2aa05623b",
+        "verifier/reward.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      }
+    },
+    {
+      "attempt": 5,
+      "classification": "infrastructure",
+      "raw_reward": null,
+      "accepted_reward": null,
+      "failure_summary": "agent installation failed before execution/reward",
+      "agent_cli": null,
+      "model": null,
+      "agent_execution_seconds": null,
+      "artifact_hashes": {
+        "result.json": "cf94d6db5f1f3d7a848e31abfd5c6ba89738a64bf39deacf178b3125c166f4c9"
+      }
+    },
+    {
+      "attempt": 6,
+      "classification": "scoreable",
+      "raw_reward": 0.0,
+      "accepted_reward": 0.0,
+      "failure_summary": "required search_documents primitive was not invoked",
+      "agent_cli": "0.161.0",
+      "model": "gpt-5.6-terra",
+      "agent_execution_seconds": 18.074827,
+      "artifact_hashes": {
+        "result.json": "ba2d145cabde73936f94208af57125eabb1ac1a6be238696c1a5aa72c2cfc904",
+        "verifier/audit.json": "9a3b18390739e1b2a5012ea176032e948e80abdc3d7bb7555eee9996640b9479",
+        "agent/codex.txt": "98f2070866b61b7a1e59c9656909314b7c35153fd7033cef020732b48475a961",
+        "verifier/reward.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      }
+    },
+    {
+      "attempt": 7,
+      "classification": "scoreable",
+      "raw_reward": 0.0,
+      "accepted_reward": 0.0,
+      "failure_summary": "required search_documents primitive was not invoked",
+      "agent_cli": "0.161.0",
+      "model": "gpt-5.6-terra",
+      "agent_execution_seconds": 33.46131,
+      "artifact_hashes": {
+        "result.json": "50e7bb2eaa7553006a969280ee6cc703e619f769a143e36779185d01d386a759",
+        "verifier/audit.json": "1c88c59415bf4b63f8c5f67b4df8a4608494c699e3c4ad49fa859710842e2cb5",
+        "agent/codex.txt": "c45f1b4602d687b2faa9f1020bade028af27e2ce7230c83f94ac42fac5da4cb8",
+        "verifier/reward.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      }
+    }
+  ],
+  "prior_campaign_attempts": 15,
+  "campaign_attempts_all_versions": 22,
+  "scores_pooled": false,
+  "prior_scores_reused": false,
+  "agent_elapsed": {
+    "n": 5,
+    "p50_seconds": 21.877421,
+    "p95_seconds": 264.1669948,
+    "method": "scoreable agent-execution start to finish; p95 linear interpolation",
+    "first_token_latency": null,
+    "first_token_reason": "not collected"
+  },
+  "near_boundary_agent_variants": "NOT RUN; five fixed-task decision trials plus separately recorded verifier calibration; no suite GATED promotion",
+  "fable_benchmark": "NOT RUN; requested Fable Bedrock access previously denied; AWS sign-in refresh remains pending",
+  "limits": [
+    "real bridge57fc with deterministic gateway double",
+    "not current composite discovery or real-provider ranking evaluation",
+    "not deployed MCP/grant acceptance",
+    "no direct container image snapshots for first five attempts; recovered build export receipts are separate evidence",
+    "no objective 5of5 suite gate; two infrastructure attempts excluded and retained"
+  ],
+  "previous_record": "evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-results.json"
+}

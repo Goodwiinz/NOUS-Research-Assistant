@@ -183,3 +183,22 @@ defects: old scores are archival, not current acceptance. The new
 `agent-flow-2026-10-16-harness-mcp-discovery-verified-results` manifest/baseline
 records NOT RUN with no scored trials or decision. Freeze fresh execution
 identities and collect new trials before applying the decision rule.
+
+## Amendment 2026-10-17 UTC: fresh corrected decision series
+
+A new declaration at clean source `5f682a33` froze the current corrected task,
+bridge `57fc21bc7`, Harbor 0.6.6 and Codex 0.161.0 / Azure gpt-5.6-terra before execution.
+Both images built, the pinned catalog check passed, and all 13 calibration
+fixtures matched inside the main image. Five initial attempts included one
+recovered provider-stream failure with raw reward 1 and one agent-install
+failure without reward. Both are infrastructure under the unchanged rules.
+Two unchanged replacement attempts produced five scoreable trials in seven
+attempts, within the cap of ten. Their objective result is 0/5; the registered
+decision is PRIMITIVES INSUFFICIENT for Codex only. No old score was reused.
+
+This new [baseline](../../baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
+and [source manifest](../../source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
+leave the earlier NOT RUN preparation unchanged. Status remains NOT GATED;
+agent phrasing/order variants and Fable benchmark trials were not run. Direct
+runtime snapshots exist only for replacements; build-export receipts for all
+attempts are retained separately. See [evidence and limits](../../../docs/testing/evidence/discovery-harness-verified-20261016/README.md).

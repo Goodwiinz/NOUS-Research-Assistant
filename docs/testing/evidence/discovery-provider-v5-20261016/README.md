@@ -60,3 +60,10 @@ pooled. V5 establishes the complete-checkout guard only at its declared source
 and runtime. The corrected Harbor task remains NOT RUN. Its historical 0/5
 result remains archival under the verifier-defect invalidation rule. Deployed
 MCP/grant journeys, broader labelled evaluation and owner acceptance remain open.
+
+## 2026-10-17 UTC agent-evaluation amendment
+
+A later [corrected Harbor series](../discovery-harness-verified-20261016/README.md)
+completed separately at source `5f682a33`: five scoreable Codex trials, 0/5
+objective passes, and two infrastructure exclusions retained. The current
+V5 provider result is unchanged and is not pooled with those agent rewards.

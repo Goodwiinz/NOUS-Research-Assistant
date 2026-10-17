@@ -1163,3 +1163,28 @@ contains 0/5 objective passes, semantic N/A, zero infrastructure failures,
 and the Codex-only PRIMITIVES INSUFFICIENT decision. It supersedes no prior
 record and reuses no score. Five attempts were used at this digest; total
 across task versions is fifteen. Status: NOT GATED.
+
+### Capability 18: verifier correction and fresh decision, 2026-10-17 UTC
+
+Later verifier defects invalidate using the earlier rewards for current
+acceptance. Those historical records remain unchanged. Successful results,
+per-trial returned identifiers, every paper-list block and answer truncation
+are now checked by the corrected verifier. All 13 in-image calibration cases
+matched before the new series.
+
+The separate [verified HTTP record](baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
+ran at clean source `5f682a33`, with the real bridge at `57fc21bc7`, Harbor
+0.6.6 and Codex 0.161.0 / Azure gpt-5.6-terra. Seven attempts produced five
+scoreable trials with **0/5 objective passes**, **N/A semantic**, and **two
+infrastructure exclusions**. A recovered provider-stream failure invalidated
+one raw passing reward; an agent-install failure emitted no reward. Two
+unchanged replacements completed the series. The fresh registered decision
+is **PRIMITIVES INSUFFICIENT for Codex only**. No old score is reused or pooled;
+the campaign now retains 22 attempts across versions.
+
+Status remains **NOT GATED**. Build-export digests were recovered for all
+attempts, while direct container snapshots exist only for the replacements.
+Agent phrasing/order variants and Fable benchmark trials were not run.
+Current composite quality, real-provider ranking and deployed acceptance are
+separate from this historical primitive-surface decision. See the
+[evidence and limits](../docs/testing/evidence/discovery-harness-verified-20261016/README.md).
