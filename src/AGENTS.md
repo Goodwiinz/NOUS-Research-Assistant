@@ -10,11 +10,17 @@ helpers. Consult the [invalid-pattern audit](../docs/audits/2026-09-14-invalid-p
 the root and frontend manifests, and the task files under `src/trigger/`
 before treating a job as live.
 
-There is an evidence-backed loader ambiguity: `frontend/trigger.config.ts`
-resolves `./src/trigger` relative to `frontend`, while this tree contains
-`src/trigger/`. Before editing, registering, or deploying a job, prove the
-actual loader and deployment path from its consumer. Do not assume the root
-`src/trigger/` tree is live merely because it exists.
+Loader and deploy path (checked 2026-10-17): the root `trigger.config.ts` and
+`frontend/trigger.config.ts` are byte-identical and both set
+`dirs: ["./src/trigger"]`, relative to the directory the Trigger CLI runs from.
+Run from the repo root, that is this tree (14 `.ts` files including `_lib/`).
+Run from `frontend/`, it is `frontend/src/trigger/`, which holds only
+`example.ts`. The deploy workflow `.github/workflows/trigger-deploy.yml` runs
+`pnpm dlx trigger.dev@4.4.6 deploy` from the repo root with no
+`working-directory`, so the root `src/trigger/` tree is what gets deployed. It
+triggers on pushes to `main` only (paths `src/trigger/**`, `trigger.config.ts`,
+`package.json`) and uses Node 20. Jobs are therefore deployed from `main`, not
+from `develop`; do not treat `frontend/src/trigger/` as a job location.
 
 ## Invalid patterns
 
@@ -33,10 +39,10 @@ actual loader and deployment path from its consumer. Do not assume the root
 
 ## Required workflow
 
-- Trace a job from its loader/config consumer through the backend endpoint and
-  persistence operation before changing it. Resolve the Trigger configuration
-  ambiguity with repository evidence and record any still-unproven reachability
-  rather than calling it deployed.
+- Trace a job from the root loader/config through the backend endpoint and
+  persistence operation before changing it. The loader is settled (see above);
+  still record any unproven reachability of the backend endpoint rather than
+  calling a job working.
 - Keep backend-client calls schema-validated, authorization backend-owned,
   retries bounded, logs secret-safe, and writes idempotent/HITL-safe. Changes
   that alter wire shapes must follow the backend OpenAPI/generated-type

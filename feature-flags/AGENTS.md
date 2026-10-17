@@ -9,8 +9,14 @@ examples. Compare it with the backend flag service at
 `backend/src/services/infrastructure/feature_flags.py`, the frontend enum and
 defaults in `frontend/src/services/featureFlags.tsx`, and the concrete runtime
 registration or test that consumes them. The [invalid-pattern audit](../docs/audits/2026-09-14-invalid-patterns-audit.md)
-classifies the root-config relationship as review risk `RR-002`, not as a
-confirmed live or dead path.
+classified the root-config relationship as review risk `RR-002`. Resolved
+2026-10-17: `_load_mock_flags` in the backend flag service builds its path as
+`os.path.dirname(__file__) + "../../feature-flags/launchdarkly-config.json"`.
+From `backend/src/services/infrastructure/` that is
+`backend/src/feature-flags/launchdarkly-config.json`, which does not exist, so
+the root `feature-flags/launchdarkly-config.json` is never loaded by that code.
+The loader skips the missing file and falls back to its hard-coded default flag
+values. Treat the root file as reference/example data until a consumer is added.
 
 The tracked root config has no proven production reachability by itself.
 Examples are illustrative, provider-managed flags are external state, and
@@ -38,11 +44,11 @@ their loader is traced. Preserve that distinction when reviewing a change.
   environment, and fallback path. Reconcile flag keys, enum members, allowed
   values, defaults, and rollout targeting across the backend, frontend, and
   any deployment configuration.
-- Resolve and test the relative loader in
-  `backend/src/services/infrastructure/feature_flags.py` (currently the
-  `../../feature-flags/launchdarkly-config.json` path). Editors must establish
-  where that path resolves from the actual module and consumer; do not assume
-  it reaches this tracked root.
+- The relative loader in
+  `backend/src/services/infrastructure/feature_flags.py` (the
+  `../../feature-flags/launchdarkly-config.json` path) resolves to
+  `backend/src/feature-flags/`, not this root. Do not "fix" it by editing this
+  JSON; fixing the path is a code change with its own test.
 - Keep mock/development behavior distinct from provider-backed evaluation.
   Add or update focused consumer tests for the real layout before declaring
   the root config live, dead, or safe to replace.
