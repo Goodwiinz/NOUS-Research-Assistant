@@ -67,7 +67,7 @@ src/
 ## Database migrations
 
 `backend/alembic/` is the single canonical migration system.  
-Run: `cd backend && alembic upgrade head`; CI enforces a single head and revision ids of at most 32 characters (`python ../scripts/ci/check_alembic.py`; see `backend/alembic/README.md`).  
+Run: `cd backend && alembic upgrade head`; CI enforces a single head and revision ids of at most 32 characters (`python ../scripts/ci/check_alembic.py`; see `backend/alembic/README.md`).
 Config: `backend/alembic.ini`, env: `backend/alembic/env.py`
 
 ## Adding a new domain

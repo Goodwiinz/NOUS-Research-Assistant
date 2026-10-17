@@ -5,22 +5,22 @@
 
 ## Environments
 
-Only `dev` is live. `values-staging.yaml` and `values-production.yaml` exist under `infrastructure/helm/knowledge-graph-analytics/` but are dead; do not deploy from them.
+Only `dev` is live, on AWS EKS (`nous-dev-cluster`, `us-east-1`). `values-staging.yaml` and `values-production.yaml` exist under `infrastructure/helm/knowledge-graph-analytics/` but are render fixtures only; do not deploy from them.
 
 `infrastructure/argocd/applications/` holds two dev application definitions, both tracking `develop` and the chart `infrastructure/helm/knowledge-graph-analytics`:
 
-| File | Values files | Destination namespace | Notes |
+| File | Values files | Destination namespace | Status |
 |---|---|---|---|
-| `dev.yaml` (`nous-dev`) | `values.yaml`, `values-dev.yaml` | `rag-dev` | The original DigitalOcean-era app; `CLAUDE.md` names `rag-dev` as the live namespace |
-| `aws-dev.yaml` (`nous-dev-aws`) | `values.yaml`, `values-aws.yaml` | `multimodal-rag-system` | AWS EKS variant: ECR images, RDS and ElastiCache, ALB ingress |
+| `aws-dev.yaml` (`nous-dev-aws`) | `values.yaml`, `values-aws.yaml` | `multimodal-rag-system` | **Live.** ECR images, RDS and ElastiCache, ALB ingress |
+| `dev.yaml` (`nous-dev`) | `values.yaml`, `values-dev.yaml` | `rag-dev` | Retired DigitalOcean (DOKS) app; `values-dev.yaml` is frozen rollback material |
 
-Which of the two is currently synced in the cluster cannot be derived from the repo; confirm in ArgoCD before assuming. Other applications there: `root.yaml`, `aws-dev-root.yaml`, `infisical-operator.yaml`, `nous-dev-aws-ingress.yaml`. Project definition: `infrastructure/argocd/project.yaml`.
+Source of truth: `docs/engineering/gotchas.md` and `.github/workflows/README.md`. Other applications there: `root.yaml`, `aws-dev-root.yaml`, `infisical-operator.yaml`, `nous-dev-aws-ingress.yaml`. Project definition: `infrastructure/argocd/project.yaml`.
 
 **Rule:** never `kubectl patch` ArgoCD-managed resources directly; selfHeal reverts it. Commit the change instead.
 
 ## Release flow
 
-After a green Test Pipeline on `develop`, `.github/workflows/release-dev.yml` builds the SHA and opens a digest-pinned GitOps PR to the dev values file; merging it deploys. `docker-build.yml` pushes images to Amazon ECR (`REGISTRY` in that workflow). The frontend deploys separately via Vercel.
+After a green Test Pipeline on `develop`, `.github/workflows/release-dev.yml` builds the SHA and opens a digest-pinned GitOps PR to `values-aws.yaml`; merging it deploys. `docker-build.yml` pushes images to Amazon ECR (`REGISTRY` in that workflow). The frontend deploys separately via Vercel.
 
 ## Workflows (`.github/workflows/`, 11 files)
 
