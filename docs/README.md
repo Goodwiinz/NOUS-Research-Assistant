@@ -14,6 +14,7 @@ evidence; those records have different authority and freshness.
 | Understand local Codex, MCP and publication | [Harness bridge contract](engineering/harness-bridge.md) |
 | Run tests or interpret verification | [Testing contract](engineering/testing.md), [verification records](testing/README.md) and [evaluation evidence](../evals/README.md) |
 | Operate or deploy the application | [Operational notes](engineering/gotchas.md), [operations](operations/README.md) and [infrastructure runbooks](runbooks/README.md) |
+| Check the frontend design system and product register | [DESIGN.md](../DESIGN.md) (tokens and components) and [PRODUCT.md](../PRODUCT.md) (product register and principles) |
 | Find audit findings and their evidence | [Audit index](audits/README.md) |
 | Find a design, decision or implementation plan | [Decisions](decisions/README.md), [specifications](specs/README.md), [plans](plans/README.md) and [Superpowers records](superpowers/README.md) |
 | Follow project knowledge and delivery in Linear | [NOUS codebase knowledge base](https://linear.app/goodwiinz/document/nous-codebase-knowledge-base-c4cf26347ad2) |
@@ -28,8 +29,11 @@ evidence; those records have different authority and freshness.
 * **Dated results:** audits, reports, fix records and evaluation bundles retain
   their original revision, environment and results. A Done ticket, checked plan
   or recorded pass is not a new CI or production acceptance result.
-* **Archived records:** `archive/` preserves retired planning material. It is
-  useful history, rather than current setup or execution guidance.
+* **Archived records:** `archive/` preserves retired planning material, retired
+  guides ([archived guides](archive/guides/README.md)), the old root daily logs
+  ([daily logs](archive/daily-logs/README.md)) and project status
+  ([project status](archive/projects/nous-status.md)). It is useful history,
+  rather than current setup or execution guidance.
 
 Repository engineering contracts remain canonical. Linear is a linked project
 knowledge and delivery view; it does not replace the code or its checks.

@@ -1,5 +1,7 @@
 # shadcn/ui MCP Server Integration
 
+> **Dated 2026-10-17: IDE and MCP setup steps depend on third-party tools and on a local configuration that this repository does not commit. Treat it as a setup note, not a verified procedure. The Claude Code and Cursor variants ([CLAUDE_CODE_SHADCN_SETUP.md](CLAUDE_CODE_SHADCN_SETUP.md), [CURSOR_SHADCN_SETUP.md](CURSOR_SHADCN_SETUP.md)) are superseded by this guide.**
+
 This project is configured with shadcn/ui MCP Server integration for seamless component access. You have **both** Claude Code MCP integration and VS Code extension options available!
 
 ## ✅ ALREADY CONFIGURED: Claude Code MCP Integration
@@ -194,4 +196,4 @@ Your project already has these shadcn/ui components:
 - [Continue Extension Documentation](https://docs.continue.dev/)
 - [shadcn/ui Documentation](https://ui.shadcn.com/)
 - [MCP Server Documentation](https://github.com/jpisnice/shadcn-ui-mcp-server)
-- [Project-specific Components](./src/components/ui/)
+- [Project-specific Components](../../frontend/src/components/ui/)

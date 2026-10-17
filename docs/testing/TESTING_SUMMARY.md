@@ -1,5 +1,7 @@
 # 🎯 RAG Platform Testing Summary
 
+> **Stale (2026-10-17): an earlier testing summary. Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. Its counts and results describe the run when it was written, not current status. See the [testing contract](../engineering/testing.md).**
+
 ## 📊 Current Implementation Status
 
 ### ✅ **FULLY IMPLEMENTED FEATURES (100%)**

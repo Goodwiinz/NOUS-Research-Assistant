@@ -286,3 +286,7 @@ rollout step 7. A local test cannot prove Vercel's webhook ordering.
 - Require both clients updated before the remote schema-2 migration.
 - Treat any real Vercel deployment after migration as a failed design and move
   to the dedicated-repository fallback rather than weakening identity checks.
+
+## Status update 2026-10-17
+
+The original status ("proposed; awaiting owner review before implementation planning") is kept as written. Checked on 2026-10-17: the implementation shipped as #1581 (`fix(nous): exclude coordination commits from Vercel deployments`), following the cross-machine claims in #1580. This note does not verify the live Vercel project behavior.

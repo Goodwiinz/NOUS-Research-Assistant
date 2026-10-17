@@ -1,5 +1,7 @@
 # NOUS Project Status
 
+> **Archived 2026-10-17: historical project status snapshot from 2026-03-23. It is not current status and no script or workflow reads it.**
+
 _Last updated: 2026-03-23_
 
 ---

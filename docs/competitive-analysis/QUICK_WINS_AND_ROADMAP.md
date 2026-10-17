@@ -1,5 +1,7 @@
 # Quick Wins & Roadmap Summary
 
+> **Not a live roadmap (2026-10-17): this is a dated competitive snapshot. Its priorities, effort estimates and status markers were not maintained. Current work is tracked in Linear and in [plans](../plans/README.md); verify any item against the code before treating it as open or done.**
+
 ## 🚀 Immediate Quick Wins (This Sprint)
 
 ### 1. **Inline Citation Links** — 2-3 days

@@ -280,8 +280,8 @@ test('shows document progress', () => {
 
 ## Additional Resources
 
-- [Complete Real-time Processing Guide](../REALTIME_PROCESSING_GUIDE.md)
-- [WebSocket API Documentation](../websocket_services.md)
+- [Complete Real-time Processing Guide](REALTIME_PROCESSING_GUIDE.md)
+- [WebSocket API Documentation](../../guides/websocket_services.md)
 - [React Component Documentation](../frontend/react-components.md)
 - [Backend API Reference](../api/realtime-api.md)
 

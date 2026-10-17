@@ -8,14 +8,14 @@ Dated source reviews, findings, reproduction probes and saved execution evidence
 
 | Directory | Contents |
 | --- | --- |
-| [2026-09-29-live-evidence/](2026-09-29-live-evidence/) | Retained records and supporting files |
-| [2026-09-30-live-evidence/](2026-09-30-live-evidence/) | Retained records and supporting files |
-| [2026-09-30b-live-evidence/](2026-09-30b-live-evidence/) | Retained records and supporting files |
+| [2026-09-29-live-evidence/](2026-09-29-live-evidence/) | Raw JSON API responses (about 67 files) captured on dev during the 2026-09-29 GOO-294 role and backfill live pass |
+| [2026-09-30-live-evidence/](2026-09-30-live-evidence/) | Raw JSON API responses (about 24 files; draft, blueprint and protocol probes) behind the 2026-09-30 GOO-290/291/292 evidence notes |
+| [2026-09-30b-live-evidence/](2026-09-30b-live-evidence/) | Raw JSON API responses (about 205 files, grouped by probe id A1 to E4) behind the 2026-09-30b GOO-290 to GOO-303 evidence notes |
 | [2026-10-04-live-evidence-r8/](2026-10-04-live-evidence-r8/README.md) | R8 live evidence: real worker, beat and live providers for GOO-319 and GOO-320 |
 | [agent/](agent/README.md) | Agent audit rounds |
-| [agent-orchestration-2026-09-25/](agent-orchestration-2026-09-25/) | Retained records and supporting files |
+| [agent-orchestration-2026-09-25/](agent-orchestration-2026-09-25/) | Offline diagnostic probe scripts and a vitest config used by the [agent orchestration audit](agent-orchestration-2026-09-25.md) |
 | [chat/](chat/README.md) | Chat and streaming audits |
-| [examples/](examples/) | Retained records and supporting files |
+| [examples/](examples/) | Example audit scope-partition input (`streaming-partition.json`) illustrating [scope partitioning](SCOPE_PARTITIONING.md) |
 | [retrieval/](retrieval/README.md) | Retrieval and graph audits |
 | [system/](system/README.md) | System design audits |
 
@@ -23,6 +23,7 @@ Dated source reviews, findings, reproduction probes and saved execution evidence
 
 | File | Subject |
 | --- | --- |
+| [AUDIT_REPORT.md](AUDIT_REPORT.md) | Historical root audit report (moved from the repository root) |
 | [2026-09-14-invalid-patterns-audit.md](2026-09-14-invalid-patterns-audit.md) | Invalid-pattern audit — 2026-09-14 |
 | [2026-09-16-chat-preservation.md](2026-09-16-chat-preservation.md) | Chat preservation: implementation and provisional pre-flight |
 | [2026-09-17-chat-qa.md](2026-09-17-chat-qa.md) | Chat QA — 2026-09-17 |
@@ -50,3 +51,7 @@ Dated source reviews, findings, reproduction probes and saved execution evidence
 | [agent-orchestration-2026-09-25.md](agent-orchestration-2026-09-25.md) | Agent orchestration and release readiness audit |
 | [chat-adversarial-2026-09-16.md](chat-adversarial-2026-09-16.md) | Chat adversarial browser audit — 2026-09-16 |
 | [desktop-research-workflow-fixes-2026-09-14.md](desktop-research-workflow-fixes-2026-09-14.md) | Desktop research workflow repairs — 2026-09-14 |
+
+## Related records outside this directory
+
+* [Agent subsystem bug and performance audit, 2026-06-04](../reports/agent-subsystem-bug-perf-audit-2026-06-04.md) is a dated source audit kept with the reports rather than in this directory.

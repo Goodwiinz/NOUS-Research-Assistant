@@ -1,5 +1,7 @@
 # A/B Testing System for Multimodal Enterprise RAG
 
+> **Design document, unverified as of 2026-10-17: this describes an intended A/B testing architecture. Partial code exists (`backend/src/schemas/ab_testing.py`, `backend/src/auth/ab_testing_auth.py`), but the document was not checked against it, and it does not show that any experiment runs in a deployment.**
+
 ## Overview
 
 This comprehensive A/B testing system is designed specifically for optimizing query improvements in a Multimodal Enterprise RAG system. It supports high-volume scenarios (thousands of queries per hour) with real-time metrics collection, statistical analysis, and intelligent query routing.

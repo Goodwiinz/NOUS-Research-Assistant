@@ -1,5 +1,7 @@
 # WebSocket Services Documentation
 
+> **Path check 2026-10-17: component file locations below were updated to the current tree, but the feature descriptions (Redis clustering, circuit breakers, batching) were not re-verified against the code. See `backend/src/websocket/websocket_api.py` and the services named below for the real behavior.**
+
 ## Overview
 
 The Multimodal Enterprise RAG System includes a comprehensive WebSocket infrastructure that provides real-time updates for document processing, job status, system notifications, and more. This documentation covers the architecture, usage, and configuration of the WebSocket services.
@@ -8,7 +10,7 @@ The Multimodal Enterprise RAG System includes a comprehensive WebSocket infrastr
 
 ### Core Components
 
-#### 1. Enhanced Connection Manager (`websocket_manager.py`)
+#### 1. Enhanced Connection Manager (`backend/src/services/websocket/websocket_manager.py`)
 - **Purpose**: Manages WebSocket connections with enterprise-grade features
 - **Features**:
   - JWT authentication
@@ -19,7 +21,7 @@ The Multimodal Enterprise RAG System includes a comprehensive WebSocket infrastr
   - Connection metrics and monitoring
   - Circuit breaker patterns for fault tolerance
 
-#### 2. Status Update Service (`status_update_service.py`)
+#### 2. Status Update Service (`backend/src/services/infrastructure/status_update_service.py`)
 - **Purpose**: Provides real-time status updates with intelligent throttling
 - **Features**:
   - Document processing progress tracking
@@ -29,7 +31,7 @@ The Multimodal Enterprise RAG System includes a comprehensive WebSocket infrastr
   - Priority-based message delivery
   - Subscription management
 
-#### 3. Processing Integration (`processing_integration.py`)
+#### 3. Processing Integration (`backend/src/services/processing/processing_integration.py`)
 - **Purpose**: Integrates WebSocket updates with document processing pipeline
 - **Features**:
   - Real-time processing progress updates
@@ -38,7 +40,7 @@ The Multimodal Enterprise RAG System includes a comprehensive WebSocket infrastr
   - Processing context management
   - Automatic status synchronization
 
-#### 4. Error Handler (`websocket_error_handler.py`)
+#### 4. Error Handler (`backend/src/services/websocket/websocket_error_handler.py`)
 - **Purpose**: Comprehensive error handling and recovery
 - **Features**:
   - Automatic error classification and severity assessment
@@ -47,7 +49,7 @@ The Multimodal Enterprise RAG System includes a comprehensive WebSocket infrastr
   - Exponential backoff for reconnections
   - Error analytics and reporting
 
-#### 5. Service Initializer (`websocket_service_initializer.py`)
+#### 5. Service Initializer (`backend/src/services/websocket/websocket_service_initializer.py`)
 - **Purpose**: Orchestrates initialization and lifecycle of all WebSocket services
 - **Features**:
   - Coordinated service startup/shutdown

@@ -150,19 +150,19 @@ The system maintains these quality thresholds:
 
 ### Core Documentation
 
-- **[Architecture](../architecture/)** - System design and component architecture
-- **[API Documentation](../api/)** - REST API contracts and endpoints
-- **[Deployment Guides](../deployment/)** - Production deployment procedures
-- **[Database Setup](../database/)** - Database configuration and schemas
-- **[Security](../security/)** - Security audit and authentication
-- **[Testing](../testing/)** - Test suites and quality assurance
+- **[Architecture](../../architecture/)** - System design and component architecture
+- **[API Documentation](../../api/)** - REST API contracts and endpoints
+- **[Deployment Guides](../../deployment/)** - Production deployment procedures
+- **[Database Setup](../../database/)** - Database configuration and schemas
+- **[Security](../../security/)** - Security audit and authentication
+- **[Testing](../../testing/)** - Test suites and quality assurance
 
 ### Quick Links
 
 - **[Implementation Guide](IMPLEMENTATION_GUIDE.md)** - Current implementation details
 - **[Production Deployment](../deployment/PRODUCTION_DEPLOYMENT_GUIDE.md)** - Production deployment
 - **[Operations Runbook](../deployment/RUNBOOKS.md)** - Operational procedures
-- **[Troubleshooting](../fixes/)** - Common issues and solutions
+- **[Troubleshooting](../../fixes/)** - Common issues and solutions
 
 ## 🚨 Troubleshooting
 
