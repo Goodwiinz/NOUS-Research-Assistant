@@ -81,3 +81,23 @@ provider/PostgreSQL execution and scratch cleanup. The V4 NOT RUN preparation
 remains unchanged. See the [V5 evidence](../../docs/testing/evidence/discovery-provider-v5-20261016/README.md)
 for the newly declared fixture measurements and limits. It remains NOT GATED;
 no Harbor or deployed MCP/grant trial is implied.
+
+
+## 2026-10-17 attempt and runtime hardening
+
+New declarations include an attempt ID. Before any database/provider execution,
+`run` atomically creates an owner-only claim under ignored
+`evals/jobs/provider-attempt-claims/`. Copies of the same declaration keep that
+ID and cannot execute again in the same checkout, even after an infrastructure
+result. The append-only claim journal retains the initial declaration digest
+and terminal result or exception type. A process killed before completion
+leaves a consumed, incomplete claim; it does not authorize a retry. Create a
+new declaration and retain the earlier attempt. This is a local orchestration
+guard, not protection against an owner deliberately deleting its records.
+
+All thirteen proof prerequisites use explicit exceptions, including under
+optimized Python. Identity now records optimization/interpreter details and
+the complete installed distribution/version inventory, including Alembic and
+the synchronous PostgreSQL driver. Historical V5 results retain their actual
+source and four-package identity; they do not establish this stronger runner.
+A fresh clean source and declaration are required for new measurements.

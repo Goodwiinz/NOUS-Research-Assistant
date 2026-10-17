@@ -26,7 +26,8 @@
           "grant": true
         },
         "user_agent": "node",
-        "status": 200
+        "status": 200,
+        "bridge_authenticated": true
       },
       {
         "seq": 3,
@@ -48,7 +49,8 @@
         "returned_ids": [
           "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73",
           "4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19"
-        ]
+        ],
+        "bridge_authenticated": true
       },
       {
         "seq": 4,
@@ -71,7 +73,8 @@
         "returned_ids": [
           "2509.17001v1",
           "2509.17002v1"
-        ]
+        ],
+        "bridge_authenticated": true
       }
     ]
   }

@@ -27,7 +27,8 @@
         },
         "user_agent": "node",
         "status": 200,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       },
       {
         "seq": 2,
@@ -44,7 +45,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": false,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       },
       {
         "seq": 3,
@@ -63,7 +65,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": false,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       },
       {
         "seq": 4,
@@ -83,7 +86,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": false,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       },
       {
         "seq": 5,
@@ -104,7 +108,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": false,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       }
     ]
   }

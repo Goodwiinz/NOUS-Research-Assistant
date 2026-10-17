@@ -1,4 +1,4 @@
-"""Prepare and exec the real NOUS harness bridge as a stdio MCP server.
+"""Prepare the real stdio MCP bridge inside its isolated bridge service.
 
 Steps, each safe to repeat because the agent CLI may spawn the server more
 than once (and concurrently):
@@ -13,7 +13,8 @@ than once (and concurrently):
 3. Write the owner-only credential store the bridge reads
    (``CredentialStore``: directory 0700 and file 0600, owned by this uid,
    ``<store>/<uuid-v4 handle>.json`` holding ``{accessToken, grantToken}``).
-   The tokens are fake and opaque; ``grantId``/``renewedAt`` are omitted, so
+   The access token comes from the private bridge/mock volume. The fixture
+   grant is opaque; ``grantId``/``renewedAt`` are omitted, so
    ``GrantKeeper`` never calls the renewal endpoint.
 4. ``execve`` the bridge: ``node --import <tsx loader> src/cli.ts mcp --api
    http://127.0.0.1:<port>/api/v1 --store <dir> --session <handle>``, the
@@ -44,11 +45,13 @@ LISTEN_PORT = int(os.environ.get("NOUS_EVAL_LISTEN_PORT", "18080"))
 RUN_DIR = Path(os.environ.get("NOUS_EVAL_RUN_DIR", f"/tmp/nous-eval-{os.getuid()}"))
 READY_TIMEOUT_S = float(os.environ.get("NOUS_EVAL_READY_TIMEOUT_S", "20"))
 
-# Fixed fake credentials. The handle must be a UUID v4 (credentials.ts
+# Fixed fixture handle/grant. The handle must be a UUID v4 (credentials.ts
 # validHandle); the grant token mirrors the backend format check
 # (``nous_ig_`` + 43 url-safe characters = 51) so the mock can apply it.
 CREDENTIAL_HANDLE = "7d1e4c2a-5b8f-4e3d-9a6c-0f2b4d8e6a15"
-ACCESS_TOKEN = "harbor-eval-opaque-cli-access-token"
+ACCESS_TOKEN_FILE = Path(
+    os.environ.get("NOUS_EVAL_ACCESS_TOKEN_FILE", "/run/nous-bridge/access-token")
+)
 GRANT_TOKEN = "nous_ig_" + "harbor-eval-opaque-tools-read-grant-0000000"
 assert len(GRANT_TOKEN) == 51
 
@@ -157,7 +160,10 @@ def write_credentials(store: Path) -> None:
     owner_only_dir(store)
     destination = store / f"{CREDENTIAL_HANDLE}.json"
     temporary = store / f".{CREDENTIAL_HANDLE}.{os.getpid()}.tmp"
-    payload = json.dumps({"accessToken": ACCESS_TOKEN, "grantToken": GRANT_TOKEN})
+    access_token = ACCESS_TOKEN_FILE.read_text().strip()
+    if len(access_token) < 40:
+        raise RuntimeError("Private bridge credential unavailable")
+    payload = json.dumps({"accessToken": access_token, "grantToken": GRANT_TOKEN})
     fd = os.open(
         temporary,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),

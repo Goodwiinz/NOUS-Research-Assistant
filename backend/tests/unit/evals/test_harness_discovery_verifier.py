@@ -60,9 +60,13 @@ def subset_trial() -> dict[str, Any]:
         if event.get("returned_ids"):
             event["returned_ids"] = event["returned_ids"][:1]
     trial["evidence"]["answer"] = (
-        "- Hallucination Audit of a Hospital Formulary RAG Assistant | NOUS library\n"
-        "- arXiv:2509.17001v1 | arXiv\n"
-        "- DOI 10.5555/nouseval.2025.40517001 | PubMed\n"
+        "- Hallucination Audit of a Hospital Formulary RAG Assistant | "
+        "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73 | NOUS library\n"
+        "- Chart-Aware Retrieval-Augmented Generation for Clinical Question "
+        "Answering over Electronic Health Records | arXiv:2509.17001v1 | arXiv\n"
+        "- Retrieval-augmented large language models for answering clinicians' "
+        "drug-dosing questions: a prospective evaluation | "
+        "DOI 10.5555/nouseval.2025.40517001 | PubMed\n"
     )
     return trial
 
@@ -168,3 +172,95 @@ def test_real_oversized_answer_capture_is_rejected(
     assert "capture limit" in " ".join(
         module.objective_failures(evidence, trial["state"])
     )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "Ward-Round Notes on Citation-Grounded RAG for Clinical Question Answering",
+            "Hallucination Audit of a Hospital Formulary RAG Assistant",
+        ),
+        ("arXiv:2509.17001v1 | arXiv", "arXiv:2509.17002v1 | arXiv"),
+        ("arXiv:2509.17001v1 | arXiv", "arXiv:2509.17001v1 | NOUS library"),
+        (
+            "arXiv:2509.17001v1 | arXiv",
+            "https://arxiv.org/abs/2509.17001v1 | NOUS library",
+        ),
+        ("40517001 | PubMed", "40517001 | arXiv"),
+    ],
+    ids=[
+        "wrong-title",
+        "wrong-returned-id",
+        "wrong-source",
+        "url-is-not-source",
+        "wrong-pubmed-source",
+    ],
+)
+def test_returned_tokens_do_not_validate_mismatched_paper_fields(
+    old: str, new: str, tmp_path: Path
+) -> None:
+    trial = json.loads((TASK / "calibration/pass.json").read_text())
+    assert old in trial["evidence"]["answer"]
+    trial["evidence"]["answer"] = trial["evidence"]["answer"].replace(old, new, 1)
+    code, report = verify_trial(trial, tmp_path)
+    assert code == 10, report
+    assert report["answer_audit"]["uncited_paper_rows"], report
+
+
+def test_identifiers_in_prose_do_not_replace_required_paper_rows(
+    tmp_path: Path,
+) -> None:
+    trial = subset_trial()
+    trial["evidence"]["answer"] = trial["evidence"]["answer"].replace("- ", "")
+    code, report = verify_trial(trial, tmp_path)
+    assert code == 10, report
+    assert report["answer_audit"]["matched_search_tools"] == [], report
+
+
+def test_multiple_identifiers_must_belong_to_the_same_paper(tmp_path: Path) -> None:
+    trial = json.loads((TASK / "calibration/pass.json").read_text())
+    trial["evidence"]["answer"] = trial["evidence"]["answer"].replace(
+        "PMID 40517001, DOI 10.5555/nouseval.2025.40517001",
+        "PMID 40517001, DOI 10.5555/nouseval.2025.40517002",
+        1,
+    )
+    code, report = verify_trial(trial, tmp_path)
+    assert code == 10, report
+    assert report["answer_audit"]["uncited_paper_rows"], report
+
+
+def test_same_paper_arxiv_doi_and_version_aliases_remain_valid(tmp_path: Path) -> None:
+    trial = subset_trial()
+    trial["evidence"]["answer"] = trial["evidence"]["answer"].replace(
+        "arXiv:2509.17001v1", "DOI 10.48550/arXiv.2509.17001v1"
+    )
+    code, report = verify_trial(trial, tmp_path)
+    assert code == 0, report
+
+
+def test_title_field_must_equal_one_returned_title(tmp_path: Path) -> None:
+    trial = subset_trial()
+    trial["evidence"]["answer"] = trial["evidence"]["answer"].replace(
+        "Hallucination Audit", "Invented paper borrowing Hallucination Audit", 1
+    )
+    code, report = verify_trial(trial, tmp_path)
+    assert code == 10, report
+    assert report["answer_audit"]["uncited_paper_rows"], report
+
+
+def test_displayed_markdown_title_and_source_fields_remain_valid(
+    tmp_path: Path,
+) -> None:
+    trial = subset_trial()
+    trial["evidence"]["answer"] = (
+        trial["evidence"]["answer"]
+        .replace(
+            "Hallucination Audit of a Hospital Formulary RAG Assistant",
+            "**Hallucination Audit of a Hospital Formulary RAG Assistant**",
+            1,
+        )
+        .replace("| NOUS library", "| **NOUS library**", 1)
+    )
+    code, report = verify_trial(trial, tmp_path)
+    assert code == 0, report

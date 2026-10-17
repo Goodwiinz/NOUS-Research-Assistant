@@ -12,11 +12,13 @@ calls (``packages/harness-bridge/src/mcp/client.ts``):
   (``invoke_read``/``_finish``/``_source_refs`` and the ``tools_impl``
   payloads), answered from ``fixtures.json``.
 
-Both routes demand ``Authorization: Bearer <token>`` and
+Both routes demand the exact private bridge ``Authorization: Bearer <token>`` and
 ``X-NOUS-Integration-Grant: nous_ig_<43 chars>`` (401 otherwise), never
 redirect, and answer well inside the bridge's 30 s timeout. Every request to
 ``/api/v1/integrations/*`` is appended to an in-memory log served read-only at
-``GET /events``; nothing else can write it. ``GET /healthz`` is readiness.
+``GET /events``; nothing else can write it. Authentication verdicts are derived
+by this server, never accepted from caller-supplied fields. ``GET /healthz``
+waits for the private credential volume to be provisioned by the bridge host.
 
 Fidelity limits (documented in the task spec): search relevance is a keyword
 match on the lowercased query, not arXiv/PubMed ranking or the real ILIKE
@@ -32,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -43,6 +46,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
+TOKEN_FILE = Path("/run/nous-bridge/access-token")
 CATALOG: list[dict[str, Any]] = json.loads((HERE / "catalog.json").read_text())
 CONNECTORS: dict[str, Any] = json.loads((HERE / "connectors.json").read_text())
 FIXTURES: dict[str, Any] = json.loads((HERE / "fixtures.json").read_text())
@@ -717,11 +721,19 @@ class Handler(BaseHTTPRequestHandler):
         grant = self.headers.get("X-NOUS-Integration-Grant") or ""
         present = {"authorization": bool(authorization), "grant": bool(grant)}
         bearer = authorization[7:] if authorization.startswith("Bearer ") else ""
-        valid = bool(bearer.strip()) and bool(GRANT_RE.match(grant))
+        try:
+            expected = TOKEN_FILE.read_text().strip()
+        except OSError:
+            expected = ""
+        valid = (
+            len(expected) >= 40
+            and secrets.compare_digest(bearer, expected)
+            and bool(GRANT_RE.match(grant))
+        )
         return present, valid
 
     def base_event(self, method: str, path: str) -> dict[str, Any]:
-        present, _valid = self.auth_state()
+        present, valid = self.auth_state()
         return {
             "method": method,
             "path": path,
@@ -729,12 +741,20 @@ class Handler(BaseHTTPRequestHandler):
             "arguments": None,
             "invocation_id": None,
             "headers_present": present,
+            "bridge_authenticated": valid,
             "user_agent": self.headers.get("User-Agent"),
         }
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
         path = urlparse(self.path).path
         if path == "/healthz":
+            try:
+                ready = len(TOKEN_FILE.read_text().strip()) >= 40
+            except OSError:
+                ready = False
+            if not ready:
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "starting"})
+                return
             self.send_json(HTTPStatus.OK, {"status": "ok", "service": "mock-nous"})
             return
         if path == "/events":

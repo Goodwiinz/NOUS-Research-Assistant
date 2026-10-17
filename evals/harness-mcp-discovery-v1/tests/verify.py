@@ -17,11 +17,11 @@ Inputs:
 - state: ``GET http://mock-nous:8080/events``, the mock gateway's read-only log
   of every ``/api/v1/integrations/*`` request any client in ``main`` made.
 
-Bridge traffic: the real bridge calls the gateway with Node's built-in
-``fetch``, whose User-Agent is ``node`` (``truth.json`` ``bridge_user_agent``,
-seen on every bridge request in the local smoke run). Only those requests are
-MCP tool use. A request from any other client (curl, python, ...) bypassed the
-primitives under test.
+Bridge traffic: the real bridge runs in a separate service whose private
+bearer is mounted only there and in the mock gateway. The gateway derives
+``bridge_authenticated`` from exact credential validation. The agent's stdio
+relay carries MCP bytes to the real bridge; choosing Node's User-Agent cannot
+authenticate a direct gateway request. User-Agent is diagnostic only.
 
 Infrastructure (exit 2, never reward 0): the mock is unreachable; no
 successful bridge ``GET /api/v1/integrations/tools`` was recorded (the MCP
@@ -32,8 +32,8 @@ bridge; a required search tool was never accepted, through the bridge, with a
 non-empty ``query``; the answer is missing, empty or not a regular file; the
 answer cites no planted library document (id or exact title), no planted arXiv
 id, or no planted PMID/DOI; the answer contains an arXiv-style id, PMID, PMCID,
-DOI or UUID that the mock never served (fabrication); a row of the paper list
-cites no paper the tools returned.
+DOI or UUID that its required search never served (fabrication); a paper-list
+row does not bind one returned paper's title, identifier and explicit source.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - local calibration path
     from evals.harbor_common.envelope import InfrastructureFailure, run_verifier_main
 
 BENCHMARK_ID = "harness-mcp-discovery-v1"
-TRUTH_PATH = Path("/tests/truth.json")
+TRUTH_PATH = Path(__file__).with_name("truth.json")
 try:
     TRUTH = json.loads(TRUTH_PATH.read_text(encoding="utf-8"))
 except FileNotFoundError:  # pragma: no cover - local calibration without /tests
@@ -69,7 +69,6 @@ ANSWER_PATH = Path(os.environ.get("ANSWER_PATH", TRUTH["answer_path"]))
 EVENTS_URL = os.environ.get("MOCK_EVENTS_URL", TRUTH["mock_events_url"])
 CATALOG_PATH = TRUTH["catalog_path"]
 READ_PATH = TRUTH["read_path"]
-BRIDGE_USER_AGENT = TRUTH["bridge_user_agent"]
 INTEGRATION_PREFIX = "/api/v1/integrations/"
 REQUIRED_TOOLS = tuple(TRUTH["required_search_tools"])
 CORPUS_IDS = {value.lower() for value in TRUTH["corpus"]["document_ids"]}
@@ -191,8 +190,8 @@ def split_by_client(
     events: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(bridge requests, requests from any other client)."""
-    bridge = [e for e in events if e.get("user_agent") == BRIDGE_USER_AGENT]
-    other = [e for e in events if e.get("user_agent") != BRIDGE_USER_AGENT]
+    bridge = [e for e in events if e.get("bridge_authenticated") is True]
+    other = [e for e in events if e.get("bridge_authenticated") is not True]
     return bridge, other
 
 
@@ -281,8 +280,11 @@ def answer_ids(answer: str) -> dict[str, set[str]]:
 
 def returned_sources(reads: list[dict[str, Any]]) -> dict[str, set[str]]:
     """Bind fixture aliases to papers returned by successful calls in this trial."""
-    returned: set[str] = set()
+    returned: dict[str, set[str]] = {tool: set() for tool in REQUIRED_TOOLS}
     for event in reads:
+        tool = event.get("tool_name")
+        if tool not in returned or not has_query(event):
+            continue
         ids = event.get("returned_ids")
         if not isinstance(ids, list) or not all(
             isinstance(value, str) for value in ids
@@ -291,7 +293,7 @@ def returned_sources(reads: list[dict[str, Any]]) -> dict[str, set[str]]:
         for value in ids:
             lowered = value.lower()
             match = ARXIV_RE.fullmatch(lowered)
-            returned.add(match.group(1) if match else lowered)
+            returned[tool].add(match.group(1) if match else lowered)
     sources: dict[str, set[str]] = {
         key: set()
         for key in (
@@ -307,7 +309,7 @@ def returned_sources(reads: list[dict[str, Any]]) -> dict[str, set[str]]:
     # The catalog serves project metadata; it is not a paper citation.
     sources["uuids"].update(SERVED_UUIDS - CORPUS_IDS)
     for paper in TRUTH["papers"]:
-        if paper["returned_id"].lower() not in returned:
+        if paper["returned_id"].lower() not in returned[paper["tool_name"]]:
             continue
         sources["titles"].add(paper["title"])
         for field, kind in (
@@ -324,25 +326,74 @@ def returned_sources(reads: list[dict[str, Any]]) -> dict[str, set[str]]:
     return sources
 
 
-def cites_served(text: str, sources: dict[str, set[str]]) -> bool:
-    """True when ``text`` names a served identifier or an exact served title."""
-    lowered = text.lower()
-    normalized = normalize(text)
+def field_text(value: str) -> str:
+    """Compare displayed Markdown fields, preserving the paper's words."""
+    value = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", value)
+    value = value.replace("**", "").replace("__", "").replace("`", "")
+    return normalize(value).strip(" *_\"'")
+
+
+def paper_identifiers(text: str) -> set[str]:
     found = answer_ids(text)
-    return bool(
-        any(value in lowered for value in sources["corpus"])
-        or found["arxiv"] & sources["arxiv"]
-        or any(re.search(rf"(?<!\d){pmid}(?!\d)", text) for pmid in sources["pmids"])
-        or any(doi in lowered for doi in sources["dois"])
-        or any(normalize(title) in normalized for title in sources["titles"])
-    )
+    cited = set().union(*(found[k] for k in ("uuids", "arxiv", "pmids", "dois")))
+    for identifier in tuple(cited):
+        if identifier.startswith(ARXIV_DOI_PREFIX):
+            match = ARXIV_RE.fullmatch(identifier[len(ARXIV_DOI_PREFIX) :])
+            if match:
+                cited.remove(identifier)
+                cited.add(ARXIV_DOI_PREFIX + match.group(1))
+    return cited
+
+
+def matching_paper(text: str, sources: dict[str, set[str]]) -> dict[str, Any] | None:
+    """Bind three explicit fields to one actually returned search record."""
+    row = re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", text.strip())
+    cells = [cell.strip() for cell in row.strip("|").split("|")]
+    if len(cells) != 3:
+        return None
+    title, identifier_field, source = cells
+    title, source = field_text(title), field_text(source)
+    source_labels = {
+        "search_documents": {"nous library", "library", "nous"},
+        "search_arxiv": {"arxiv"},
+        "search_external_database": {
+            "pubmed",
+            "medline",
+            "pubmed/medline",
+            "pubmed / medline",
+        },
+    }
+    # A bare PMID is interpreted in its explicit PubMed source field.
+    identifier_ids = paper_identifiers(identifier_field + " " + source)
+    all_ids = paper_identifiers(text)
+    for paper in TRUTH["papers"]:
+        if (
+            paper["title"] not in sources["titles"]
+            or title != normalize(paper["title"])
+            or source not in source_labels[paper["tool_name"]]
+        ):
+            continue
+        identifiers = {
+            paper[field].lower()
+            for field in ("document_id", "arxiv_id", "pmid", "doi")
+            if field in paper
+        }
+        if "arxiv_id" in paper:
+            identifiers.add(ARXIV_DOI_PREFIX + paper["arxiv_id"].lower())
+        if identifier_ids and identifier_ids <= identifiers and all_ids <= identifiers:
+            return cast(dict[str, Any], paper)
+    return None
+
+
+def cites_served(text: str, sources: dict[str, set[str]]) -> bool:
+    return matching_paper(text, sources) is not None
 
 
 def paper_list_rows(answer: str) -> list[list[str]]:
-    """Top-level list and table rows grouped into blocks.
+    """List items, including nested items, and table rows grouped into blocks.
 
-    A row starts at an unindented ``-``/``*``/``+``/``1.`` item or ``|`` table
-    row and absorbs the indented lines below it (sub-bullets, wrapped text).
+    A row starts at a ``-``/``*``/``+``/``1.`` item or ``|`` table
+    row and absorbs wrapped prose lines below it. Nested items are new rows.
     A heading, horizontal rule or unindented paragraph line ends a block.
     Table header and separator rows are not rows.
     """
@@ -353,7 +404,11 @@ def paper_list_rows(answer: str) -> list[list[str]]:
         stripped = line.strip()
         if not stripped:
             continue
-        if line[0] in " \t":
+        if (
+            line[0] in " \t"
+            and not LIST_ROW_RE.match(stripped)
+            and not stripped.startswith("|")
+        ):
             if block:
                 block[-1] += "\n" + stripped
             continue
@@ -381,6 +436,12 @@ def answer_audit(answer: str, reads: list[dict[str, Any]]) -> dict[str, Any]:
     lowered = answer.lower()
     normalized = normalize(answer)
     found = answer_ids(answer)
+    matched = [
+        paper
+        for block in paper_list_rows(answer)
+        for row in block
+        if (paper := matching_paper(row, sources)) is not None
+    ]
     uncited_rows = [
         row.splitlines()[0][:160]
         for block in paper_list_rows(answer)
@@ -411,6 +472,7 @@ def answer_audit(answer: str, reads: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "fabricated_uuids": sorted(found["uuids"] - sources["uuids"]),
         "uncited_paper_rows": uncited_rows,
+        "matched_search_tools": sorted({paper["tool_name"] for paper in matched}),
     }
 
 
@@ -428,7 +490,7 @@ def check_infrastructure(bridge_events: list[dict[str, Any]]) -> None:
     if not catalog:
         raise InfrastructureFailure(
             "no successful bridge GET /api/v1/integrations/tools recorded "
-            f"(User-Agent {BRIDGE_USER_AGENT!r}): the NOUS MCP server never listed "
+            "(private bridge authentication): the NOUS MCP server never listed "
             "its tools, so the harness never connected"
         )
     unauthenticated = [
@@ -508,6 +570,9 @@ def objective_failures(evidence: dict[str, Any], state: dict[str, Any]) -> list[
         return failures
 
     audit = answer_audit(answer, reads)
+    for tool in REQUIRED_TOOLS:
+        if tool not in audit["matched_search_tools"]:
+            failures.append(f"no complete paper row matches a result from {tool}")
     if not (audit["corpus_ids_cited"] or audit["corpus_titles_cited"]):
         failures.append(
             "answer cites no planted NOUS library document (document id or exact title)"
@@ -525,12 +590,12 @@ def objective_failures(evidence: dict[str, Any], state: dict[str, Any]) -> list[
     ):
         if audit[kind]:
             failures.append(
-                f"answer cites identifiers no tool returned ({kind}): {audit[kind]}"
+                f"answer cites identifiers not returned by their required searches ({kind}): {audit[kind]}"
             )
     if audit["uncited_paper_rows"]:
         failures.append(
-            "paper-list rows cite no paper the tools returned (no served id or "
-            f"exact served title): {audit['uncited_paper_rows']}"
+            "paper-list rows do not bind title, identifier and source to one "
+            f"required-search result: {audit['uncited_paper_rows']}"
         )
     return failures
 

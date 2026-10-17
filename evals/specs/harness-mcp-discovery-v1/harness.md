@@ -202,3 +202,50 @@ leave the earlier NOT RUN preparation unchanged. Status remains NOT GATED;
 agent phrasing/order variants and Fable benchmark trials were not run. Direct
 runtime snapshots exist only for replacements; build-export receipts for all
 attempts are retained separately. See [evidence and limits](../../../docs/testing/evidence/discovery-harness-verified-20261016/README.md).
+
+
+## 2026-10-17 provenance and record-binding amendment
+
+A fresh review reproduced raw HTTP authenticated with an agent-chosen token
+and User-Agent `node`, invented titles attached to served IDs, and an empty
+required library search credited through project listing. The gateway now
+accepts only a private bearer mounted in separate bridge/mock services. Main
+has a stdio TCP relay to the real bridge and no credential mount. The gateway
+records its own authentication verdict; User-Agent is diagnostic.
+
+Every paper row must bind an exact returned title, identifier and explicit
+source label to one paper returned by that source's required search. Listing
+and passage retrieval cannot provide another search's citations. The current
+calibration set has nineteen cases, including independent false-provenance,
+mismatched-record and empty-search/listing fixtures.
+
+The earlier source `5f682a33` seven-attempt series, 0/5 scoreable result and
+its two exclusions remain historical and unpooled. They are not acceptance
+of this changed task, verifier or environment. New digests, images, runtime
+identities and a declaration are required before collecting a fresh series.
+The four-of-five threshold, infrastructure exclusions and ten-attempt cap stay
+unchanged. A manual real-MCP isolation preflight is separate from model trials.
+
+
+### 2026-10-17 final host-verification protocol
+
+The current task requires three pipe-separated paper fields (title,
+identifier(s), source), one record per row, including nested list items.
+Source labels cannot be borrowed from identifier prefixes. All IDs in a row
+must belong to that record and come from its required search. The current
+construction matrix is 65 host cases with 19 in-image calibrations. Earlier
+construction phases and historical model scores are separate and unpooled.
+
+A registered host controller must invoke `evals/verify_discovery_trial.py`
+from Harbor 0.6.6's `VERIFICATION_START` hook, with an answer snapshot outside
+agent mounts and the actual mock's full Docker identity/project. Native
+rewards alone do not gate this task. Require host/native agreement and the
+existing provider/infrastructure exclusions; missing host evidence or a
+mismatch is infrastructure. Capture before verifier upload and cleanup:
+`--no-delete` still removes running containers through Compose down.
+
+The two Oracle lifecycle controls are unscored authoring checks, not model
+trials. Fresh model contexts must exclude their solution folder. Current
+hardened model/provider measurements remain NOT RUN pending clean source and
+new declarations. Source, task/dataset/harness/controller/configuration hashes
+and all three runtime services must be bound before collecting model scores.

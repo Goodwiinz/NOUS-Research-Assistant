@@ -48,6 +48,15 @@ class SourceIdentityError(RuntimeError):
     """Undeclared source inputs prevent a reproducible provider measurement."""
 
 
+class ProofPrerequisiteError(RuntimeError):
+    """A configured runtime prerequisite failed before a valid measurement."""
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ProofPrerequisiteError(message)
+
+
 def sid(value: str) -> uuid.UUID:
     return uuid.uuid5(NS, value)
 
@@ -80,6 +89,19 @@ def identity() -> dict[str, Any]:
         "packages": {
             name: importlib.metadata.version(name)
             for name in ["SQLAlchemy", "asyncpg", "pgvector", "httpx"]
+        },
+        "installed_distributions": sorted(
+            (
+                {"name": distribution.metadata["Name"], "version": distribution.version}
+                for distribution in importlib.metadata.distributions()
+            ),
+            key=lambda item: (item["name"].casefold(), item["version"]),
+        ),
+        "interpreter": {
+            "implementation": platform.python_implementation(),
+            "version": sys.version,
+            "optimization": sys.flags.optimize,
+            "cache_tag": sys.implementation.cache_tag,
         },
         "flags": {
             "DOCUMENT_EMBEDDINGS_ENABLED": True,
@@ -147,25 +169,36 @@ async def exercise(fixture: dict[str, Any], progress: dict[str, Any]) -> dict[st
         or async_engine.url.database != engine.url.database
     ):
         raise ValueError("Resolved application engines must use the owned scratch DB")
-    assert settings.COHERE_EMBED_MODEL == fixture["model"]
+    require(
+        settings.COHERE_EMBED_MODEL == fixture["model"],
+        "Embedding model differs from the frozen fixture",
+    )
     declared = identity()
-    assert (
-        cohere_embed_service.is_enabled and cohere_rerank_service.is_enabled
-    ), "Both Cohere providers must be configured before the first call"
-    assert (
+    require(
+        cohere_embed_service.is_enabled and cohere_rerank_service.is_enabled,
+        "Both Cohere providers must be configured before the first call",
+    )
+    require(
         hashlib.sha256(cohere_embed_service.endpoint.encode()).hexdigest()
-        == declared["provider_endpoint_sha256"]
-    ), "Embedding endpoint differs from declaration"
-    assert cohere_rerank_service.endpoint == _normalize_rerank_endpoint(
-        os.environ.get("COHERE_RERANK_ENDPOINT", "")
-    ), "Rerank endpoint differs from declared configuration/adapter"
+        == declared["provider_endpoint_sha256"],
+        "Embedding endpoint differs from declaration",
+    )
+    require(
+        cohere_rerank_service.endpoint
+        == _normalize_rerank_endpoint(os.environ.get("COHERE_RERANK_ENDPOINT", "")),
+        "Rerank endpoint differs from declared configuration/adapter",
+    )
     progress["served_rerank_endpoint_sha256"] = hashlib.sha256(
         str(cohere_rerank_service.endpoint).encode()
     ).hexdigest()
-    assert (
-        cohere_rerank_service.model == declared["rerank_model"]
-    ), "Rerank model differs from declaration"
-    assert document_embedding_service._active_provider() == fixture["provider"]
+    require(
+        cohere_rerank_service.model == declared["rerank_model"],
+        "Rerank model differs from declaration",
+    )
+    require(
+        document_embedding_service._active_provider() == fixture["provider"],
+        "Embedding provider differs from the frozen fixture",
+    )
     os.environ["ENCRYPTION_MASTER_KEY"] = base64.b64encode(os.urandom(32)).decode()
     initialize_encryption()
 
@@ -236,20 +269,25 @@ async def exercise(fixture: dict[str, Any], progress: dict[str, Any]) -> dict[st
                 [doc.id for doc in [*docs, other]], db
             )
             await db.commit()
-            assert (
+            require(
                 await db.scalar(
                     text("SELECT count(*) FROM documents WHERE search_vector IS NULL")
                 )
-                == 0
-            ), "Fixture keyword vectors were not populated"
-            assert await db.scalar(
-                text("SELECT to_regclass('document_embeddings') IS NOT NULL")
-            ), "pgvector migration did not create document_embeddings"
+                == 0,
+                "Fixture keyword vectors were not populated",
+            )
+            require(
+                await db.scalar(
+                    text("SELECT to_regclass('document_embeddings') IS NOT NULL")
+                ),
+                "pgvector migration did not create document_embeddings",
+            )
             for doc in [*docs, other]:
                 outcome = await document_embedding_service.embed_document(db, doc)
-                assert (
-                    outcome == EmbedOutcome.EMBEDDED
-                ), f"Document embedding outcome: {outcome.value}"
+                require(
+                    outcome == EmbedOutcome.EMBEDDED,
+                    f"Document embedding outcome: {outcome.value}",
+                )
 
         by_id = {
             str(doc.id): fixture["corpus"][index]["key"]
@@ -306,10 +344,14 @@ async def exercise(fixture: dict[str, Any], progress: dict[str, Any]) -> dict[st
                 library_scope=Collection.id == sid("project"),
                 arxiv_search=forbidden_arxiv,
             )
-            assert "error" not in payload
-            assert all(
-                call["status"] in ["ok", "empty"] for call in payload["calls"]
-            ), payload["calls"]
+            require(
+                "error" not in payload,
+                "Composite discovery returned an error envelope",
+            )
+            require(
+                all(call["status"] in ["ok", "empty"] for call in payload["calls"]),
+                "One or more composite provider calls failed",
+            )
             served_ids.update(paper["id"] for paper in payload["papers"])
             if any(paper["id"] not in by_id for paper in payload["papers"]):
                 raise ProofViolation("Composite result outside the authorized corpus")
@@ -470,11 +512,17 @@ async def exercise(fixture: dict[str, Any], progress: dict[str, Any]) -> dict[st
                     )
                 )
             ).all()
-            assert sum(row[2] for row in stored) == len(docs) + 1
-            assert all(
-                row[0] == f"cohere:{fixture['model']}"
-                and row[1] == fixture["dimensions"]
-                for row in stored
+            require(
+                sum(row[2] for row in stored) == len(docs) + 1,
+                "Stored embedding count differs from the declared corpus",
+            )
+            require(
+                all(
+                    row[0] == f"cohere:{fixture['model']}"
+                    and row[1] == fixture["dimensions"]
+                    for row in stored
+                ),
+                "Stored embedding model or dimensions differ from the frozen fixture",
             )
             database = {
                 "server": await db.scalar(text("SHOW server_version")),
@@ -528,6 +576,58 @@ async def exercise(fixture: dict[str, Any], progress: dict[str, Any]) -> dict[st
 
 
 def run(declaration: dict[str, Any], artifacts: Path) -> dict[str, Any]:
+    """Consume one declaration atomically and retain its attempt lifecycle."""
+    identifier = declaration.get("declaration_id")
+    if not isinstance(identifier, str) or len(identifier) != 32:
+        raise SourceIdentityError(
+            "A new --declare record with an attempt ID is required"
+        )
+    try:
+        parsed = uuid.UUID(hex=identifier)
+    except ValueError:
+        raise SourceIdentityError("Invalid declaration attempt ID") from None
+    if parsed.hex != identifier:
+        raise SourceIdentityError("Invalid declaration attempt ID")
+    registry = ROOT / "evals/jobs/provider-attempt-claims"
+    registry.mkdir(mode=0o700, parents=True, exist_ok=True)
+    claim = registry / f"{identifier}.jsonl"
+    try:
+        fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise SourceIdentityError(
+            "Declaration already consumed; declare a new attempt"
+        ) from None
+    with os.fdopen(fd, "w") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "status": "claimed",
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    "declaration_sha256": hashlib.sha256(
+                        json.dumps(declaration, sort_keys=True).encode()
+                    ).hexdigest(),
+                }
+            )
+            + "\n"
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        result = _run_once(declaration, artifacts)
+    except BaseException as failure:
+        terminal = {"status": "infrastructure", "error_type": type(failure).__name__}
+        raise
+    else:
+        terminal = result
+        return result
+    finally:
+        with claim.open("a") as handle:
+            handle.write(json.dumps({"terminal": terminal}) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
+def _run_once(declaration: dict[str, Any], artifacts: Path) -> dict[str, Any]:
     from sqlalchemy import create_engine
     from sqlalchemy.engine import make_url
     from sqlalchemy.pool import NullPool
@@ -585,7 +685,7 @@ def run(declaration: dict[str, Any], artifacts: Path) -> dict[str, Any]:
         # Retain diagnostics only locally; never include provider keys or DB URLs.
         result["diagnostic"] = (
             str(failure)
-            if isinstance(failure, AssertionError)
+            if isinstance(failure, (AssertionError, ProofPrerequisiteError))
             else "Execution unavailable"
         )
     finally:
@@ -631,6 +731,7 @@ def _main() -> None:
             args.declare,
             {
                 "declared_at": datetime.now(timezone.utc).isoformat(),
+                "declaration_id": uuid.uuid4().hex,
                 "identity": identity(),
                 "fixture": str(FIXTURE.relative_to(ROOT)),
             },

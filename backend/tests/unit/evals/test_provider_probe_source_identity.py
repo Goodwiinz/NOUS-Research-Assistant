@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from types import ModuleType
+from threading import Event
+from types import ModuleType, SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -105,7 +109,7 @@ def test_clean_but_different_commit_refuses_execution_before_database_access(
 ) -> None:
     import sqlalchemy
 
-    declaration = {"identity": probe.identity()}
+    declaration = {"declaration_id": uuid4().hex, "identity": probe.identity()}
     (probe.ROOT / UNLISTED).write_text("NEW_COMMITTED_INPUT = 2\n")
     git(probe.ROOT, "add", "--", UNLISTED)
     commit(probe.ROOT)
@@ -170,7 +174,7 @@ def test_mid_run_source_change_invalidates_measurement_after_cleanup(
             commit(probe.ROOT)
         return {"status": "completed"}
 
-    declaration = {"identity": probe.identity()}
+    declaration = {"declaration_id": uuid4().hex, "identity": probe.identity()}
     for key in (
         "DATABASE_URL",
         "SUPABASE_DB_URL",
@@ -210,7 +214,9 @@ def test_cli_source_errors_exit_as_infrastructure(
     artifacts = probe.ROOT / "evals/jobs/cli"
     artifacts.mkdir(parents=True)
     declaration = artifacts / "declaration.json"
-    declaration.write_text(json.dumps({"identity": probe.identity()}))
+    declaration.write_text(
+        json.dumps({"declaration_id": uuid4().hex, "identity": probe.identity()})
+    )
     output = artifacts / "result.json"
     (probe.ROOT / UNLISTED).write_text("UNDECLARED_INPUT = 4\n")
     args = (
@@ -226,3 +232,110 @@ def test_cli_source_errors_exit_as_infrastructure(
     assert error["status"] == "infrastructure"
     assert error["error_type"] == "SourceIdentityError"
     assert not output.exists()
+
+
+@pytest.mark.parametrize("outcome", ["completed", "infrastructure"])
+def test_declaration_is_consumed_even_after_execution_failure(
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    declaration = {"declaration_id": uuid4().hex, "identity": probe.identity()}
+    calls: list[bool] = []
+
+    def execute(_declaration: dict[str, Any], _artifacts: Path) -> dict[str, Any]:
+        calls.append(True)
+        return {"status": outcome}
+
+    monkeypatch.setattr(probe, "_run_once", execute)
+    assert probe.run(declaration, probe.ROOT)["status"] == outcome
+    with pytest.raises(probe.SourceIdentityError, match="already consumed"):
+        probe.run(declaration, probe.ROOT / "another-output")
+    assert calls == [True]
+    claim = (
+        probe.ROOT
+        / "evals/jobs/provider-attempt-claims"
+        / (declaration["declaration_id"] + ".jsonl")
+    )
+    lifecycle = [json.loads(line) for line in claim.read_text().splitlines()]
+    assert lifecycle[0]["status"] == "claimed"
+    assert lifecycle[1]["terminal"]["status"] == outcome
+
+
+def test_concurrent_declaration_claim_allows_one_execution(
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    declaration = {"declaration_id": uuid4().hex, "identity": probe.identity()}
+    entered, release = Event(), Event()
+    calls: list[bool] = []
+
+    def execute(_declaration: dict[str, Any], _artifacts: Path) -> dict[str, Any]:
+        calls.append(True)
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(timeout=10)
+        return {"status": "completed"}
+
+    monkeypatch.setattr(probe, "_run_once", execute)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(probe.run, declaration, probe.ROOT)
+        try:
+            assert entered.wait(timeout=10)
+            second = pool.submit(probe.run, declaration, probe.ROOT)
+            with pytest.raises(probe.SourceIdentityError, match="already consumed"):
+                second.result(timeout=5)
+        finally:
+            release.set()
+        assert first.result(timeout=5)["status"] == "completed"
+    assert calls == [True]
+
+
+def test_claim_retains_an_exception_and_cannot_be_retried(
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    declaration = {"declaration_id": uuid4().hex, "identity": probe.identity()}
+
+    def failed(_declaration: dict[str, Any], _artifacts: Path) -> dict[str, Any]:
+        raise RuntimeError("Synthetic interrupted provider attempt")
+
+    monkeypatch.setattr(probe, "_run_once", failed)
+    with pytest.raises(RuntimeError, match="Synthetic interrupted"):
+        probe.run(declaration, probe.ROOT)
+    with pytest.raises(probe.SourceIdentityError, match="already consumed"):
+        probe.run(declaration, probe.ROOT)
+    claim = (
+        probe.ROOT
+        / "evals/jobs/provider-attempt-claims"
+        / (declaration["declaration_id"] + ".jsonl")
+    )
+    terminal = json.loads(claim.read_text().splitlines()[-1])["terminal"]
+    assert terminal == {"status": "infrastructure", "error_type": "RuntimeError"}
+
+
+def test_unlisted_installed_distribution_changes_identity(
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = probe.identity()
+    distributions = list(probe.importlib.metadata.distributions())
+    distributions.append(
+        SimpleNamespace(metadata={"Name": "synthetic-runtime-driver"}, version="2")
+    )
+    monkeypatch.setattr(
+        probe.importlib.metadata, "distributions", lambda: distributions
+    )
+    assert probe.identity() != before
+
+
+def test_prerequisites_survive_optimized_python() -> None:
+    assert not any(
+        isinstance(node, ast.Assert) for node in ast.walk(ast.parse(PROBE.read_text()))
+    )
+    script = (
+        "import importlib.util; "
+        f"s=importlib.util.spec_from_file_location('optimized_probe',{str(PROBE)!r}); "
+        "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+        "m.require(False, 'Disabled provider must refuse')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", script], capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert "ProofPrerequisiteError: Disabled provider must refuse" in result.stderr

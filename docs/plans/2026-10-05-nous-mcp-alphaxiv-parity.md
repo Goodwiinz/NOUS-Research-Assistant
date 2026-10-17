@@ -1237,3 +1237,16 @@ broader acceptance remain separate. The real-provider V5 diagnostic measures
 its own synthetic fixture. See [fresh evidence](../testing/evidence/discovery-harness-verified-20261016/README.md),
 [source manifest](../../evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
 and [baseline](../../evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json).
+
+
+### Discovery evidence correction (2026-10-17)
+
+Fresh review reproduced additional provenance/record-binding false passes and
+provider declaration/runtime-integrity gaps. The new task isolates the real
+bridge credential, partitions citation evidence by required search, and checks
+title/identifier/source together. Provider attempts are atomically consumed;
+optimized Python cannot remove prerequisites and runtime identity includes all
+installed distribution versions. Earlier Harbor and V5 records remain dated
+observations at their declared sources. They do not gate the changed runner.
+The [hardening evidence](../testing/evidence/discovery-hardening-20261017/README.md)
+separates construction checks from any subsequently declared experiment.

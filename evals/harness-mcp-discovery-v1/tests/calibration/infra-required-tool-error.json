@@ -26,7 +26,8 @@
           "grant": true
         },
         "user_agent": "node",
-        "status": 200
+        "status": 200,
+        "bridge_authenticated": true
       },
       {
         "seq": 2,
@@ -43,7 +44,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": false,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       },
       {
         "seq": 3,
@@ -62,7 +64,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": true,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       },
       {
         "seq": 4,
@@ -82,7 +85,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": true,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       },
       {
         "seq": 5,
@@ -103,7 +107,8 @@
         "user_agent": "node",
         "status": 200,
         "is_error": true,
-        "returned_ids": []
+        "returned_ids": [],
+        "bridge_authenticated": true
       }
     ]
   }

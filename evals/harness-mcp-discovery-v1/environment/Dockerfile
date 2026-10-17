@@ -50,8 +50,10 @@ RUN printf '' > /opt/nous-eval/lib/evals/__init__.py
 COPY evals/harness-mcp-discovery-v1/environment/launcher/start-mcp.sh \
      evals/harness-mcp-discovery-v1/environment/launcher/launch.py \
      evals/harness-mcp-discovery-v1/environment/launcher/forwarder.py \
+     evals/harness-mcp-discovery-v1/environment/launcher/bridge_host.py \
+     evals/harness-mcp-discovery-v1/environment/launcher/stdio_relay.py \
      /opt/nous-eval/
-RUN chmod 0555 /opt/nous-eval/start-mcp.sh /opt/nous-eval/launch.py /opt/nous-eval/forwarder.py \
+RUN chmod 0555 /opt/nous-eval/*.py /opt/nous-eval/start-mcp.sh \
     && chmod -R a+rX /opt/nous-eval /opt/nous-bridge \
     && /opt/nous-eval/bin/node \
         --import /opt/nous-bridge/packages/harness-bridge/node_modules/tsx/dist/loader.mjs \

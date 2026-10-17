@@ -1188,3 +1188,37 @@ Agent phrasing/order variants and Fable benchmark trials were not run.
 Current composite quality, real-provider ranking and deployed acceptance are
 separate from this historical primitive-surface decision. See the
 [evidence and limits](../docs/testing/evidence/discovery-harness-verified-20261016/README.md).
+
+
+### 2026-10-17 discovery provenance hardening
+
+The discovery task now isolates the real bridge and its private gateway bearer
+from the agent container, binds paper fields to one required-search record,
+and partitions citations by required search. The old `5f682a33` series remains
+a dated 0/5 observation and does not gate this new digest. Nineteen current
+calibration fixtures and host adversarial tests are construction evidence;
+a new declared Harbor series is required for current agent acceptance.
+
+
+### 2026-10-17 final host-verification protocol
+
+The current task requires three pipe-separated paper fields (title,
+identifier(s), source), one record per row, including nested list items.
+Source labels cannot be borrowed from identifier prefixes. All IDs in a row
+must belong to that record and come from its required search. The current
+construction matrix is 65 host cases with 19 in-image calibrations. Earlier
+construction phases and historical model scores are separate and unpooled.
+
+A registered host controller must invoke `evals/verify_discovery_trial.py`
+from Harbor 0.6.6's `VERIFICATION_START` hook, with an answer snapshot outside
+agent mounts and the actual mock's full Docker identity/project. Native
+rewards alone do not gate this task. Require host/native agreement and the
+existing provider/infrastructure exclusions; missing host evidence or a
+mismatch is infrastructure. Capture before verifier upload and cleanup:
+`--no-delete` still removes running containers through Compose down.
+
+The two Oracle lifecycle controls are unscored authoring checks, not model
+trials. Fresh model contexts must exclude their solution folder. Current
+hardened model/provider measurements remain NOT RUN pending clean source and
+new declarations. Source, task/dataset/harness/controller/configuration hashes
+and all three runtime services must be bound before collecting model scores.
