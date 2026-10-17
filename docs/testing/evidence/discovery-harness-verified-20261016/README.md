@@ -54,7 +54,8 @@ The registered provider-error rule excludes it despite that raw reward. A
 different attempt failed during agent installation before execution or reward.
 Two unchanged replacement attempts completed the five scoreable trials.
 All five failed solely because `search_documents` was not invoked through
-the bridge with a non-empty query; the harness used project listing instead.
+the bridge with a non-empty query. They used other library tools, including
+project listing and passage retrieval.
 No other objective failure was reported. This is a tool-composition result,
 not a semantic judgment that the literature answers were wrong.
 
