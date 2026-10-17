@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.0",
+  "version": "provider-v7-20261017",
+  "recorded_at": "2026-10-17T15:35:26.664913+00:00",
+  "status": "completed",
+  "classification": "NOT GATED: synthetic local service/provider diagnostic",
+  "source_manifest": "evals/source-manifests/discovery-provider-2026-10-17-v7.json",
+  "source_manifest_sha256": "b05b9ec8e7433d12ae61d4fe024a4689a372908c03916a5ef7a55dc2e858e391",
+  "execution_repository_revision": "7d8e9ebb382ee700135b60b9bcbb2ff596a92d4c",
+  "execution_source_tree": "da15428ccc58d367aab62c772fc211c7b47b6111",
+  "attempt_count": 1,
+  "current_source_attempt": 2,
+  "current_source_attempt_cap": 2,
+  "source_identity_matches_after_cleanup": true,
+  "scratch_database_removed": true,
+  "post_run_scratch_count": 0,
+  "owned_container_removed": true,
+  "previous_score_reused": false,
+  "results_pooled": false,
+  "release_threshold": null,
+  "semantic_gate": "N/A; no agent answer or judge",
+  "limits": [
+    "synthetic fixture only",
+    "not a Harbor model trial",
+    "deployed MCP/grant not run",
+    "no arXiv request, deployment or corpus backfill",
+    "no broad retrieval-quality or release-acceptance claim",
+    "owner tampering with local claims and same-version package-byte changes outside attestation"
+  ],
+  "canonical_query_count": 8,
+  "near_boundary_query_count": 1,
+  "canonical_aggregate": {
+    "semantic_recall_at_1": 0.9375,
+    "semantic_recall_at_3": 1.0,
+    "composite_recall_at_1": 0.9375,
+    "composite_recall_at_3": 1.0
+  },
+  "date_window": {
+    "semantic_recall_at_1": 1.0,
+    "semantic_recall_at_3": 1.0,
+    "composite_recall_at_1": 1.0,
+    "composite_recall_at_3": 1.0
+  },
+  "pages": [
+    {
+      "document": "long",
+      "status": "completed",
+      "metadata": {
+        "accepted_pages": [
+          1,
+          3,
+          9,
+          11,
+          12,
+          14
+        ],
+        "total_pages": 14,
+        "short_circuited": false,
+        "model": "Cohere-rerank-v4.0-pro"
+      },
+      "returned_page_numbers": [
+        1,
+        3,
+        9,
+        11,
+        12,
+        14
+      ]
+    },
+    {
+      "document": "short",
+      "status": "completed",
+      "metadata": {
+        "accepted_pages": [
+          1,
+          2,
+          3
+        ],
+        "total_pages": 3,
+        "short_circuited": true,
+        "model": null
+      },
+      "returned_page_numbers": [
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "page_gold_recall_at_6": 1.0,
+  "database": {
+    "server": "15.19 (Debian 15.19-1.pgdg12+2)",
+    "pgvector": "0.8.7",
+    "revision": "jd01_document_embeddings",
+    "embedding_rows": [
+      [
+        "cohere:embed-v-4-0",
+        1024,
+        13
+      ]
+    ]
+  },
+  "other_organization_duplicate_excluded": true,
+  "infrastructure_failure": null,
+  "objective_failure": null,
+  "unchanged_infrastructure_retry": true,
+  "previous_record": "evals/baselines/discovery-provider-2026-10-17-v6.json"
+}

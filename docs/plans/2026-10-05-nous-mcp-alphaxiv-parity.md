@@ -1174,3 +1174,79 @@ Task sketch: `LOCAL_TOOLS["discover_papers"] {query, sources?: ["corpus","arxiv"
 ## Plan index amendment
 
 When S1 opens, add a dated row to `docs/plans/2026-10-04-harness-plan-amendment.md` (or its successor) pointing at this plan and the design doc. Do not edit older plan files.
+
+## 2026-10-16: registered historical discovery decision
+
+The replacement HTTP series of `harness-mcp-discovery-v1` recorded **1/5
+objective passes**, semantic N/A, and zero provider/infrastructure failures.
+The preceding five attempts are excluded for Azure WebSocket HTTP302 errors
+under the registered provider-error rule. Ten attempts were used in total.
+For the pinned Codex 0.161.0 / Azure `gpt-5.6-terra` pair, the declared threshold
+therefore yields **PRIMITIVES INSUFFICIENT**. Three failed trials used
+`list_project_documents` and one used only `retrieve_passages` instead of the
+required `search_documents`. All five
+answers passed the identifier/fabrication audit; this is a tool-composition
+objective failure, not a claim that those answers were semantically wrong.
+
+This Codex-only result supports retaining Slice 5. It does not evaluate the
+current `discover_papers` implementation, live provider ranking, deployed
+behavior or labelled recall. The real bridge/lockfile/catalog surface is pinned
+to `57fc21bc740e086c9e5880b1e1f26634c6a0f1c5`; the gateway is a deterministic
+double. Fable benchmark trials remain NOT RUN because Bedrock invocation was
+denied. Authenticated local Fable code reviews are separate evidence. The
+record remains **NOT GATED**: objective 1/5 does not meet this suite's 5/5
+requirement, and final per-trial image digests were not retained after cleanup.
+
+See [run evidence](../testing/evidence/discovery-harness-20261016/README.md),
+[source manifest](../../evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-http.json)
+and [baseline](../../evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-http.json).
+
+### Corrected task: fresh decision record
+
+Required typing corrections changed task/verifier digests. Five fresh trials
+at the corrected HTTP task completed **0/5 objective**, **N/A semantic**,
+**0 infrastructure**. All used the MCP project listing instead of required
+library search, with native MCP calls observed and no fabricated identifiers.
+The registered Codex-only decision is **PRIMITIVES INSUFFICIENT**; status
+**NOT GATED**. Earlier scores remain separate historical records. Total
+attempts across task versions: 15; this baseline used 5/10. See
+[corrected record](../../evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-typed-http.json).
+Current composite quality, labelled recall and deployed acceptance remain
+separate requirements.
+
+### 2026-10-17 UTC: verifier correction and new Slice 5 decision
+
+The later successful-result, returned-identifier, unsupported-list and
+truncation defects invalidate using the earlier historical rewards for
+current acceptance. The old records above remain unchanged. A new declaration
+at clean source `5f682a33` froze the corrected task, real bridge `57fc21bc7`,
+Harbor 0.6.6 and Codex 0.161.0 / Azure gpt-5.6-terra before fresh trials.
+The pinned catalog check and all 13 in-image calibrations passed.
+
+Seven attempts yielded five scoreable trials with **0/5 objective passes**
+and **two infrastructure exclusions**. The raw pass following a recovered
+provider-stream failure was excluded; the other exclusion failed agent
+installation before execution. Two unchanged replacements completed the
+series. All five scoreable failures omitted the required `search_documents`
+primitive. The unchanged decision rule yields **PRIMITIVES INSUFFICIENT for
+Codex only**, supporting retention of Slice 5 for that pair.
+
+This is a new recorded decision, with no old reward reused. Status remains
+**NOT GATED**; current composite/deployed quality, Fable benchmark trials and
+broader acceptance remain separate. The real-provider V5 diagnostic measures
+its own synthetic fixture. See [fresh evidence](../testing/evidence/discovery-harness-verified-20261016/README.md),
+[source manifest](../../evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
+and [baseline](../../evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json).
+
+
+### Discovery evidence correction (2026-10-17)
+
+Fresh review reproduced additional provenance/record-binding false passes and
+provider declaration/runtime-integrity gaps. The new task isolates the real
+bridge credential, partitions citation evidence by required search, and checks
+title/identifier/source together. Provider attempts are atomically consumed;
+optimized Python cannot remove prerequisites and runtime identity includes all
+installed distribution versions. Earlier Harbor and V5 records remain dated
+observations at their declared sources. They do not gate the changed runner.
+The [hardening evidence](../testing/evidence/discovery-hardening-20261017/README.md)
+separates construction checks from any subsequently declared experiment.
