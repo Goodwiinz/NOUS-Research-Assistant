@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: one-off Vite-to-Next.js migration note; the migration is long finished and the content (including Next.js 15 references and old paths) is outdated.**
+> Historical record, not a live contract. Originally at `frontend/OPTION2_COMPLETE.md`; relative links and paths below were not updated.
+
 # Next.js Full Structure Migration (Option 2) - COMPLETE ✅
 
 ## New Structure Overview

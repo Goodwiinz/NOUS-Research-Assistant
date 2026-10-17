@@ -1,6 +1,6 @@
 # NOUS terminal
 
-Use Node 24 and pnpm 10.18.2. From this worktree:
+Use Node 24 and pnpm 10.18.2. From the repository root:
 
 ```sh
 pnpm install --frozen-lockfile

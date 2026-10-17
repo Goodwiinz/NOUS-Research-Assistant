@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: one-off Vite-to-Next.js migration note; the migration is long finished and the content (including Next.js 15 references and old paths) is outdated.**
+> Historical record, not a live contract. Originally at `frontend/FINAL_SUMMARY.md`; relative links and paths below were not updated.
+
 # ✅ Vite to Next.js Migration Complete - Final Summary
 
 ## What Was Done

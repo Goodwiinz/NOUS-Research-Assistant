@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: one-off completion report for the early E2E framework; commands and layout are outdated. The live E2E suite is tests/e2e.**
+> Historical record, not a live contract. Originally at `frontend/E2E_TESTING_COMPLETION_SUMMARY.md`; relative links and paths below were not updated.
+
 # Comprehensive E2E Testing Implementation Summary
 
 This document provides a complete overview of the comprehensive End-to-End (E2E) testing framework implemented for real-time document processing status updates in the Multimodal Enterprise RAG System.

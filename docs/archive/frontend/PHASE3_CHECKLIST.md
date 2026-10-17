@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: completed phase checklist for an early frontend service and store layer.**
+> Historical record, not a live contract. Originally at `frontend/PHASE3_CHECKLIST.md`; relative links and paths below were not updated.
+
 # Phase 3: Frontend Service & Store - Implementation Checklist
 
 ## Overview

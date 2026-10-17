@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: one-off troubleshooting note for an old API error; paths and ports are outdated.**
+> Historical record, not a live contract. Originally at `frontend/FIX_API_ERROR.md`; relative links and paths below were not updated.
+
 # Fixing API Error in Frontend
 
 ## Problem Identified

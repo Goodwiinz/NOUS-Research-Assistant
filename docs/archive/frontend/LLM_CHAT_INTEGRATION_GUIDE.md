@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: integration guide for early chat UI components; chat now lives in frontend/src/store/chat-store and packages/chat-runtime.**
+> Historical record, not a live contract. Originally at `frontend/LLM_CHAT_INTEGRATION_GUIDE.md`; relative links and paths below were not updated.
+
 # LLM Chat UI Enhancements - Integration Guide
 
 ## ✅ Successfully Created Components

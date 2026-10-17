@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: one-off report of past TypeScript fixes; current rules are in docs/engineering/frontend.md.**
+> Historical record, not a live contract. Originally at `frontend/TYPESCRIPT_FIXES_SUMMARY.md`; relative links and paths below were not updated.
+
 # TypeScript Fixes Summary
 
 ## Overview

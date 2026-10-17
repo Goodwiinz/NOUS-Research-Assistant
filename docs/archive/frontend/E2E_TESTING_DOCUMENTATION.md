@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: early E2E framework write-up; commands and layout are outdated. The live E2E suite is tests/e2e.**
+> Historical record, not a live contract. Originally at `frontend/E2E_TESTING_DOCUMENTATION.md`; relative links and paths below were not updated.
+
 # E2E Testing Documentation
 
 ## Overview

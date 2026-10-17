@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: quick reference for a past type-safety effort; generated API types and adapters are described in docs/engineering/api-contracts.md.**
+> Historical record, not a live contract. Originally at `frontend/docs/TYPE_SAFETY_QUICK_REFERENCE.md`; relative links and paths below were not updated.
+
 # Type Safety Quick Reference
 
 ## Quick Start
