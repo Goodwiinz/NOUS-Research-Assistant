@@ -101,6 +101,22 @@ features:
       - "frontend/src/hooks/chat/useArtifactSharing.ts"
       - "frontend/src/services/artifactService.ts"
       - "backend/src/services/artifacts/**"
+  - id: arxiv-paper-lifecycle
+    status: planned
+    surfaces:
+      web: []
+      api: ["GET /api/v1/arxiv/papers/metadata", "POST /api/v1/arxiv/papers/sync", "GET /api/v1/arxiv/papers/pdf", "POST /api/v1/arxiv/papers/recent"]
+      cli: []
+    states: [missing, cached, synced, queued, stored, error]
+    pass_criteria:
+      - "Metadata is fetched on cache miss and isolated by organization."
+      - "Explicit sync reports latest revision and withdrawal without rewriting a pin."
+      - "Administrators can queue bounded recent imports; PDFs use authenticated same-origin delivery."
+    scenarios: []
+    owns:
+      - "backend/src/api/arxiv/papers.py"
+      - "backend/src/services/arxiv/papers.py"
+      - "backend/src/services/arxiv/recent.py"
 ignore:
   # Shrink-only. Remove a path when a feature claims it; the checker fails on
   # entries that no longer exist, that a feature also claims, or (with --base)

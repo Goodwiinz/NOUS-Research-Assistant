@@ -2084,6 +2084,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/arxiv/papers/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metadata */
+        get: operations["metadata_api_v1_arxiv_papers_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/arxiv/papers/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pdf */
+        get: operations["pdf_api_v1_arxiv_papers_pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/arxiv/papers/recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recent */
+        post: operations["recent_api_v1_arxiv_papers_recent_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/arxiv/papers/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync */
+        post: operations["sync_api_v1_arxiv_papers_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/arxiv/search": {
         parameters: {
             query?: never;
@@ -18588,6 +18656,53 @@ export interface components {
             /** Total Pages */
             total_pages: number;
         };
+        /** PaperMetadata */
+        PaperMetadata: {
+            /** Abstract */
+            abstract: string;
+            /** Authors */
+            authors: string[];
+            /** Categories */
+            categories?: string[];
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Comment */
+            comment?: string | null;
+            /** Doi */
+            doi?: string | null;
+            /** Id */
+            id: string;
+            /** Latest Id */
+            latest_id?: string | null;
+            /** Latest Withdrawn */
+            latest_withdrawn?: boolean | null;
+            /** Pdf Url */
+            pdf_url?: string | null;
+            /** Published */
+            published?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "arxiv_atom" | "arxiv_abstract_page" | "arxiv_atom+abstract_page";
+            /** Title */
+            title: string;
+            /** Updated */
+            updated?: string | null;
+            /**
+             * Withdrawn
+             * @description Null until this revision's withdrawal status is checked
+             */
+            withdrawn?: boolean | null;
+        };
+        /** PaperRequest */
+        PaperRequest: {
+            /** Paper Id */
+            paper_id: string;
+        };
         /**
          * PendingReviewResponse
          * @description Pending review state for a run the caller can view, with bounded stage output.
@@ -19675,6 +19790,32 @@ export interface components {
             } | null;
             /** @default normal */
             frequency: components["schemas"]["UpdateFrequency"];
+        };
+        /** RecentImportRequest */
+        RecentImportRequest: {
+            /** Categories */
+            categories: string[];
+            /**
+             * Days
+             * @default 1
+             */
+            days: number;
+            /**
+             * Max Results
+             * @default 20
+             */
+            max_results: number;
+        };
+        /** RecentImportResponse */
+        RecentImportResponse: {
+            /**
+             * Status
+             * @default queued
+             * @constant
+             */
+            status: "queued";
+            /** Task Id */
+            task_id: string;
         };
         /** ReferenceMapping */
         ReferenceMapping: {
@@ -28447,6 +28588,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    metadata_api_v1_arxiv_papers_metadata_get: {
+        parameters: {
+            query: {
+                paper_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperMetadata"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pdf_api_v1_arxiv_papers_pdf_get: {
+        parameters: {
+            query: {
+                paper_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recent_api_v1_arxiv_papers_recent_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecentImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentImportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_api_v1_arxiv_papers_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaperRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperMetadata"];
                 };
             };
             /** @description Validation Error */
