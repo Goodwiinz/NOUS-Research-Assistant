@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement, ReactNode } from 'react';
 
 const listDevices = vi.fn();
-const listWorkspaces = vi.fn();
+const listFolders = vi.fn();
 const readRequest = vi.fn();
 const decideRequest = vi.fn();
 const stopRun = vi.fn();
@@ -21,7 +21,7 @@ const stopRun = vi.fn();
 vi.mock('@/services/harnessService', () => ({
   harnessService: {
     listDevices: (...args: unknown[]) => listDevices(...args),
-    listWorkspaces: (...args: unknown[]) => listWorkspaces(...args),
+    listFolders: (...args: unknown[]) => listFolders(...args),
     readRequest: (...args: unknown[]) => readRequest(...args),
     decideRequest: (...args: unknown[]) => decideRequest(...args),
   },
@@ -82,12 +82,12 @@ describe('useHarnessConnection', () => {
     vi.clearAllMocks();
     window.localStorage.clear();
     listDevices.mockResolvedValue([]);
-    listWorkspaces.mockResolvedValue([]);
+    listFolders.mockResolvedValue([]);
   });
 
   it('keeps stopping after interruption receipt until terminal evidence', async () => {
     listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
-    listWorkspaces.mockResolvedValue([
+    listFolders.mockResolvedValue([
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     stopRun.mockResolvedValue(undefined);
@@ -111,7 +111,7 @@ describe('useHarnessConnection', () => {
 
   it('isolates selections between threads and restores a thread selection', async () => {
     listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
-    listWorkspaces.mockResolvedValue([
+    listFolders.mockResolvedValue([
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     const first = renderConnectedHarness('thread-a');
@@ -135,7 +135,7 @@ describe('useHarnessConnection', () => {
 
   it('adopts a draft selection and routes late callbacks to the created thread', async () => {
     listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
-    listWorkspaces.mockResolvedValue([
+    listFolders.mockResolvedValue([
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     readRequest.mockResolvedValue({
@@ -389,7 +389,7 @@ describe('useHarnessConnection', () => {
 
   it('keeps provider, computer, and workspace controls keyboard reachable', async () => {
     listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
-    listWorkspaces.mockResolvedValue([
+    listFolders.mockResolvedValue([
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     const view = renderConnectedHarness();
@@ -427,7 +427,7 @@ describe('useHarnessConnection', () => {
 
   it('locks provider and target selection while a run owns the thread', () => {
     listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
-    listWorkspaces.mockResolvedValue([
+    listFolders.mockResolvedValue([
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     const view = renderConnectedHarness();
@@ -466,7 +466,7 @@ describe('useHarnessConnection', () => {
       { id: 'device-b', label: 'Desk', bound_thread_ids: [] },
       { id: 'device-c', label: 'Chat laptop', bound_thread_ids: ['thread-a'] },
     ]);
-    listWorkspaces.mockResolvedValue([
+    listFolders.mockResolvedValue([
       { workspace_id: 'workspace-a', project_id: 'project-a', label: 'Repo' },
     ]);
     const view = renderConnectedHarness('thread-a');
@@ -616,7 +616,7 @@ describe('useHarnessConnection', () => {
 
   it("offers account folders and this project's folders on an account computer", async () => {
     listDevices.mockResolvedValue([accountLaptop]);
-    listWorkspaces.mockResolvedValue(folders);
+    listFolders.mockResolvedValue(folders);
     const view = renderConnectedHarness('thread-a', 'project-a');
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
@@ -633,7 +633,7 @@ describe('useHarnessConnection', () => {
 
   it('hides account folders on a computer without an account approval', async () => {
     listDevices.mockResolvedValue([projectDesk]);
-    listWorkspaces.mockResolvedValue(folders);
+    listFolders.mockResolvedValue(folders);
     const view = renderConnectedHarness('thread-a', 'project-a');
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
@@ -647,7 +647,7 @@ describe('useHarnessConnection', () => {
 
   it('does not accept a remembered folder of another project on an account computer', async () => {
     listDevices.mockResolvedValue([accountLaptop]);
-    listWorkspaces.mockResolvedValue(folders);
+    listFolders.mockResolvedValue(folders);
     const view = renderConnectedHarness('thread-a', 'project-a');
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
@@ -689,7 +689,7 @@ describe('useHarnessConnection', () => {
 
   it('treats a remembered computer that cannot run this project as unchosen', async () => {
     listDevices.mockResolvedValue([accountLaptop, otherDesk]);
-    listWorkspaces.mockResolvedValue(folders);
+    listFolders.mockResolvedValue(folders);
     const view = renderConnectedHarness('thread-a', 'project-a');
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
@@ -707,7 +707,7 @@ describe('useHarnessConnection', () => {
 
   it('disables the folder picker for a remembered computer that was filtered out', async () => {
     listDevices.mockResolvedValue([accountLaptop, otherDesk]);
-    listWorkspaces.mockResolvedValue(folders);
+    listFolders.mockResolvedValue(folders);
     const view = renderConnectedHarness('thread-a', 'project-a');
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
@@ -724,7 +724,7 @@ describe('useHarnessConnection', () => {
 
   it('keeps the folder picker open for a computer the chat can use', async () => {
     listDevices.mockResolvedValue([accountLaptop, otherDesk]);
-    listWorkspaces.mockResolvedValue(folders);
+    listFolders.mockResolvedValue(folders);
     const view = renderConnectedHarness('thread-a', 'project-a');
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
@@ -755,7 +755,7 @@ describe('useHarnessConnection', () => {
 
   it("filters nothing while the chat's project is not known yet", async () => {
     listDevices.mockResolvedValue([accountLaptop, otherDesk]);
-    listWorkspaces.mockResolvedValue(folders);
+    listFolders.mockResolvedValue(folders);
     const view = renderConnectedHarness('thread-a');
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(2));

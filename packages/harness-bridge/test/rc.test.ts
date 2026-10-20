@@ -48,7 +48,7 @@ function override(inner: typeof fetch, match: (url: string, init: any) => boolea
   return (async (input: any, init: any = {}) => (match(String(input), init) ? reply() : inner(input, init))) as typeof fetch;
 }
 const jsonResponse = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
-const folderCall = (c: Call) => /\/integrations\/devices\/[^/]+\/workspaces$/.test(c.url);
+const folderCall = (c: Call) => /\/integrations\/devices\/[^/]+\/account-workspaces$/.test(c.url);
 
 function setup(fake?: typeof fetch) {
   const dir = mkdtempSync(join(tmpdir(), "nous-rc-"));
@@ -149,7 +149,7 @@ test("a stored token NOUS rejects triggers exactly one new login, and the reused
         return jsonResponse({ status: "approved", token: "cli-secret-2" });
       }
       // Grant renewal and folder registration sign with the stored CLI token.
-      const signed = url.endsWith("/renew") || /\/integrations\/devices\/[^/]+\/workspaces$/.test(url);
+      const signed = url.endsWith("/renew") || /\/integrations\/devices\/[^/]+\/account-workspaces$/.test(url);
       if (signed && init.headers?.Authorization !== "Bearer cli-secret-2") return jsonResponse({ detail: "expired" }, 401);
       return inner(input, init);
     }) as typeof fetch);

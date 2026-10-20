@@ -69,7 +69,7 @@ function AccountFolders({
   const folders = useQuery({
     queryKey: ['harness', 'workspaces', userId, deviceId],
     enabled: Boolean(userId),
-    queryFn: () => harnessService.listWorkspaces(deviceId),
+    queryFn: () => harnessService.listFolders(deviceId),
     retry: false,
     staleTime: 0,
   });

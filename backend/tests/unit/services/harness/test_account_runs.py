@@ -25,6 +25,18 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from tests.unit.services.harness.test_runs import (  # noqa: F401
+    CONVERSATION,
+    DEVICE,
+    LOCAL,
+    ORG,
+    PROJECT,
+    THREAD,
+    USER,
+    WORKSPACE,
+    context,
+    db,
+)
 
 from src.api.agent.harness_streaming import (
     context_for_accepted_run,
@@ -63,18 +75,6 @@ from src.services.integrations.context import (
     list_devices,
     mint_integration_grant,
     resolve_integration_context,
-)
-from tests.unit.services.harness.test_runs import (  # noqa: F401
-    CONVERSATION,
-    DEVICE,
-    LOCAL,
-    ORG,
-    PROJECT,
-    THREAD,
-    USER,
-    WORKSPACE,
-    context,
-    db,
 )
 
 pytestmark = pytest.mark.unit
@@ -1110,8 +1110,9 @@ async def test_one_account_bridge_leases_runs_in_two_projects(
 async def test_a_start_command_names_its_project_only_under_an_account_pairing(
     db: AsyncSession, context: IntegrationContext, account: IntegrationContext
 ) -> None:
-    from src.services.harness.delivery import dispatch_pending, lease_commands
     from tests.unit.services.harness.test_runs import accept
+
+    from src.services.harness.delivery import dispatch_pending, lease_commands
 
     await accept(db, context)  # a project pairing's run on DEVICE / LOCAL
     await start(db, THREAD_B, FOLDER_A)
@@ -1409,28 +1410,33 @@ async def test_the_prompt_is_built_under_the_swapped_pairing_grant_and_rechecked
 async def test_account_folders_need_the_one_approval_every_run_would_use(
     db: AsyncSession, account: IntegrationContext
 ) -> None:
-    from src.schemas.integration_context import WorkspaceBindingCreate
-    from src.services.integrations.context import bind_workspace, list_workspaces
+    from src.schemas.integration_context import AccountWorkspaceBindingCreate
+    from src.services.integrations.context import (
+        bind_account_workspace,
+        list_account_workspaces,
+    )
 
     async def listed() -> set[UUID]:
         return {
-            b.workspace_id for b in await list_workspaces(db, OWNER, ACCOUNT_DEVICE)
+            b.workspace_id
+            for b in await list_account_workspaces(db, OWNER, ACCOUNT_DEVICE)
         }
 
     registered = uuid4()
-    data = WorkspaceBindingCreate(workspace_id=registered, label="c")
-    assert (await bind_workspace(db, OWNER, ACCOUNT_DEVICE, data)).project_id is None
+    data = AccountWorkspaceBindingCreate(workspace_id=registered, label="c")
+    bound = await bind_account_workspace(db, OWNER, ACCOUNT_DEVICE, data)
+    assert bound.project_id is None
     assert await listed() == {FOLDER_A, FOLDER_B, registered}
     # A second runnable approval makes the lineage ambiguous: every run on this
     # device is refused, so no account folder may be registered or listed.
     await pair_account(db)
     assert await listed() == set()
     with pytest.raises(IntegrationAccessDenied):
-        await bind_workspace(
+        await bind_account_workspace(
             db,
             OWNER,
             ACCOUNT_DEVICE,
-            WorkspaceBindingCreate(workspace_id=uuid4(), label="d"),
+            AccountWorkspaceBindingCreate(workspace_id=uuid4(), label="d"),
         )
 
 

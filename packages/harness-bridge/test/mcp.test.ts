@@ -1069,12 +1069,12 @@ test("an account connection registers folders without a project, and carries a p
       workspaces: [{ id: "66666666-6666-4666-8666-666666666666", root: keep, label: "Kept", projectId: PROJECT }],
     } satisfies LocalState);
     await connect({ stateDir: dir, fetchFn: consentFetch(calls), announce: () => {}, apiUrl: "https://nous.test/api/v1", label: "dev", account: true });
-    const carried = calls.filter((c) => /\/devices\/[^/]+\/workspaces$/.test(c.url));
+    const carried = calls.filter((c) => /\/devices\/[^/]+\/account-workspaces$/.test(c.url));
     assert.equal(carried.length, 1);
     assert.equal(carried[0]!.body.label, "Kept");
     assert.equal("project_id" in carried[0]!.body, false);
     await addWorkspace({ stateDir: dir, fetchFn: consentFetch(calls), announce: () => {}, root: added });
-    const registered = calls.filter((c) => /\/devices\/[^/]+\/workspaces$/.test(c.url)).at(-1)!;
+    const registered = calls.filter((c) => /\/devices\/[^/]+\/account-workspaces$/.test(c.url)).at(-1)!;
     assert.equal("project_id" in registered.body, false);
     const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
     assert.deepEqual(state.workspaces.map((w: any) => [w.root, "projectId" in w]), [[keep, false], [added, false]]);

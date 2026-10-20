@@ -254,7 +254,7 @@ export function useHarnessConnection(
   });
   const workspacesQuery = useQuery({
     queryKey: ['harness', 'workspaces', userId, selection.deviceId],
-    queryFn: () => harnessService.listWorkspaces(selection.deviceId!),
+    queryFn: () => harnessService.listFolders(selection.deviceId!),
     enabled: Boolean(
       userId && selection.executionProvider === 'codex' && selection.deviceId
     ),

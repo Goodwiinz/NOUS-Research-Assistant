@@ -11,7 +11,7 @@ vi.mock('@/services/integrationConnectionsService', () => ({
   },
 }));
 vi.mock('@/services/harnessService', () => ({
-  harnessService: { listWorkspaces: vi.fn() },
+  harnessService: { listFolders: vi.fn() },
 }));
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: (): { user: { id: string } } => ({ user: { id: 'u1' } }),
@@ -90,7 +90,7 @@ const accountLaptop: ApiConnectedDevice = {
 
 describe('ConnectedDevices', () => {
   beforeEach(() => {
-    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([]);
+    vi.mocked(harnessService.listFolders).mockResolvedValue([]);
   });
 
   it('lists devices with plain-language access', async () => {
@@ -387,7 +387,7 @@ describe('ConnectedDevices', () => {
     vi.mocked(integrationConnectionsService.list).mockResolvedValue([
       accountLaptop,
     ]);
-    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([
+    vi.mocked(harnessService.listFolders).mockResolvedValue([
       { workspace_id: 'f1', project_id: null, label: 'thesis-code' },
       { workspace_id: 'f2', project_id: 'p1', label: 'project-only' },
     ]);
@@ -401,7 +401,7 @@ describe('ConnectedDevices', () => {
         .map((item) => item.textContent)
     ).toEqual(['thesis-code']);
     expect(screen.queryByText('project-only')).not.toBeInTheDocument();
-    expect(harnessService.listWorkspaces).toHaveBeenCalledWith('d1');
+    expect(harnessService.listFolders).toHaveBeenCalledWith('d1');
   });
 
   it('does not look up folders for a computer without account access', async () => {
@@ -409,7 +409,7 @@ describe('ConnectedDevices', () => {
     render(<ConnectedDevices />);
     expect(await screen.findByText('Thesis (p1)')).toBeInTheDocument();
     expect(screen.queryByText('Account folders')).not.toBeInTheDocument();
-    expect(harnessService.listWorkspaces).not.toHaveBeenCalled();
+    expect(harnessService.listFolders).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -434,7 +434,7 @@ describe('ConnectedDevices', () => {
       expect(
         screen.queryByText('No account folders on this computer yet.')
       ).not.toBeInTheDocument();
-      expect(harnessService.listWorkspaces).not.toHaveBeenCalled();
+      expect(harnessService.listFolders).not.toHaveBeenCalled();
     }
   );
 
@@ -442,7 +442,7 @@ describe('ConnectedDevices', () => {
     vi.mocked(integrationConnectionsService.list).mockResolvedValue([
       accountLaptop,
     ]);
-    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([
+    vi.mocked(harnessService.listFolders).mockResolvedValue([
       { workspace_id: 'f2', project_id: 'p1', label: 'project-only' },
     ]);
     render(<ConnectedDevices />);
@@ -455,7 +455,7 @@ describe('ConnectedDevices', () => {
     vi.mocked(integrationConnectionsService.list).mockResolvedValue([
       accountLaptop,
     ]);
-    vi.mocked(harnessService.listWorkspaces).mockRejectedValue(
+    vi.mocked(harnessService.listFolders).mockRejectedValue(
       new Error('500')
     );
     render(<ConnectedDevices />);

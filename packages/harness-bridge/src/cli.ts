@@ -539,7 +539,7 @@ export async function connect(
       await request(
         fetchFn,
         base,
-        `/integrations/devices/${device.id}/workspaces`,
+        folderRoute(device.id, projectId),
         token,
         {
           workspace_id: workspaceId,
@@ -672,6 +672,17 @@ export async function disconnect(
   }
   throw new Error(`NOUS could not revoke this device (${response.status}); nothing was removed, try again`);
 }
+/**
+ * Where a folder is registered. A project folder goes to the device's
+ * `/workspaces` (project_id required on the wire); an account folder, which
+ * belongs to no project, to `/account-workspaces`. NOUS keeps the two apart so
+ * the project route's contract never changes.
+ */
+export function folderRoute(deviceId: string, projectId: string | undefined): string {
+  return projectId !== undefined
+    ? `/integrations/devices/${deviceId}/workspaces`
+    : `/integrations/devices/${deviceId}/account-workspaces`;
+}
 export async function addWorkspace(
   options: ClientOptions & { root: string; label?: string },
 ): Promise<{ workspaceId: string; root: string }> {
@@ -706,7 +717,7 @@ export async function addWorkspace(
   await request(
     options.fetchFn ?? fetch,
     apiBase(state.apiUrl),
-    `/integrations/devices/${state.deviceId}/workspaces`,
+    folderRoute(state.deviceId, projectId),
     credentials.accessToken,
     { workspace_id: workspaceId, label, ...(projectId !== undefined ? { project_id: projectId } : {}) },
   );
