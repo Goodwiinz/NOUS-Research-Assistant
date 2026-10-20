@@ -872,3 +872,28 @@ async def test_live_start_rejects_file_missing_from_canonical_accepted_message(
             actor_id=ACTOR, chat_id=CHAT, run_id=harness.run_id, body=body
         )
     assert await harness.rows() == []
+
+
+async def test_update_without_any_run_is_a_no_op_until_one_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chat with no presentation run (new, or last used natively) must not
+    re-send an empty replacement on every poll."""
+    snapshot = AsyncMock(return_value=None)
+    monkeypatch.setattr(replay, "read_live_snapshot", snapshot)
+
+    assert await replay.read_live_update(
+        actor_id=ACTOR, chat_id=CHAT, known_run_id=None, after_seq=0
+    ) == {"type": "delta", "payloads": []}
+
+    # A run the client knew about that disappears is replaced exactly once;
+    # the follower's cursor then becomes (None, 0) and polls stay silent.
+    assert await replay.read_live_update(
+        actor_id=ACTOR, chat_id=CHAT, known_run_id=uuid4(), after_seq=2
+    ) == {"type": "replace", "payload": None}
+
+    started = {"runId": str(uuid4()), "events": [{"type": "run_start"}]}
+    snapshot.return_value = started
+    assert await replay.read_live_update(
+        actor_id=ACTOR, chat_id=CHAT, known_run_id=None, after_seq=0
+    ) == {"type": "replace", "payload": started}

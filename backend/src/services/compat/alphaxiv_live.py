@@ -402,6 +402,10 @@ async def read_live_update(
     if after_seq < 0:
         raise CompatibilityError(422, "Invalid live cursor")
     snapshot = await read_live_snapshot(actor_id=actor_id, chat_id=chat_id)
+    if snapshot is None and known_run_id is None:
+        # Still no presentation run (a new chat, or one last answered
+        # natively): the client already holds this empty view.
+        return {"type": "delta", "payloads": []}
     if (
         snapshot is None
         or snapshot["runId"] != str(known_run_id)
