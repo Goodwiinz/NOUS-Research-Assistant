@@ -196,13 +196,13 @@ class DeviceListItemDTO(DeviceDTO):
 
 
 class WorkspaceBindingCreate(DeviceCreate):
-    """A project folder: a local write root tied to one project.
+    """A project folder: a local write root tied to one project. Account
+    folders are registered at /devices/{device_id}/account-workspaces."""
 
-    `project_id` stays a required string on the wire: the bridge and the chat
-    composer read these routes through the generated types, and a nullable
-    `project_id` is an ERR-level `oasdiff` break (pinned by
-    tests/unit/api/test_integration_device_folders_contract.py). Account
-    folders have their own models and routes below."""
+    # `project_id` stays a required string on the wire: the bridge and the chat
+    # composer read these routes through the generated types, and a nullable
+    # `project_id` is an ERR-level `oasdiff` break (pinned by
+    # tests/unit/api/test_integration_device_folders_contract.py).
 
     workspace_id: UUID
     project_id: UUID

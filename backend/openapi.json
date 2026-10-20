@@ -31066,7 +31066,7 @@
       },
       "WorkspaceBindingCreate": {
         "additionalProperties": false,
-        "description": "A project folder: a local write root tied to one project.\n\n`project_id` stays a required string on the wire: the bridge and the chat\ncomposer read these routes through the generated types, and a nullable\n`project_id` is an ERR-level `oasdiff` break (pinned by\ntests/unit/api/test_integration_device_folders_contract.py). Account\nfolders have their own models and routes below.",
+        "description": "A project folder: a local write root tied to one project. Account\nfolders are registered at /devices/{device_id}/account-workspaces.",
         "properties": {
           "label": {
             "maxLength": 120,
