@@ -1,3 +1,5 @@
+> **Dated record (2026-10-17 review): written for the `feature/project-chat-integration` branch (Phase 3). It is not a live contract; check `frontend/src/store/` and `frontend/src/services/` for the current implementation.**
+
 # Project-Chat Integration - Phase 3 Complete
 
 ## Overview

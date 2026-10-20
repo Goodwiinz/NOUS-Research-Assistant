@@ -1,5 +1,7 @@
 # Inter-Service Communication and Resilience Strategies
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document defines the comprehensive inter-service communication patterns and resilience strategies for the Multimodal Enterprise RAG System microservices architecture. The design ensures reliable, performant, and fault-tolerant communication between services while supporting various interaction patterns.

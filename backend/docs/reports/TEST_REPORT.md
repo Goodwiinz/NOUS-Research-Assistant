@@ -1,5 +1,7 @@
 # Comprehensive Testing Report for Multimodal Enterprise RAG FastAPI Backend
 
+> **Stale / historical (2026-10-17):** It is a dated status or implementation report, kept as a record. File paths, test counts and completion claims reflect the state when it was written, not the current tree. Current contracts: [`docs/engineering/`](../../../docs/engineering/README.md).
+
 ## Executive Summary
 
 I have implemented a comprehensive testing suite for the Multimodal Enterprise RAG FastAPI backend, covering all critical aspects of enterprise-grade application testing. The test suite includes unit tests, integration tests, performance tests, and load testing scenarios.

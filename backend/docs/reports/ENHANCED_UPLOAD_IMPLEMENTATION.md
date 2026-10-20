@@ -1,5 +1,7 @@
 # Enhanced Document Upload and Processing Implementation
 
+> **Stale / historical (2026-10-17):** It is a dated status or implementation report, kept as a record. File paths, test counts and completion claims reflect the state when it was written, not the current tree. Current contracts: [`docs/engineering/`](../../../docs/engineering/README.md).
+
 This document describes the comprehensive implementation of the enhanced document upload and processing system for the Multimodal Enterprise RAG System.
 
 ## Overview

@@ -194,6 +194,7 @@ STANDALONE_ROUTES = [
     ("GET", "/threads/{thread_id}", ThreadDetailResponse, 200, False),
     ("PATCH", "/threads/{thread_id}", ThreadResponse, 200, False),
     ("DELETE", "/threads/{thread_id}", None, 204, False),
+    ("GET", "/threads/{thread_id}/handoff/latest", HandoffDTO | None, 200, False),
     ("GET", "/threads/{thread_id}/handoff", HandoffDTO, 200, False),
     ("GET", "/threads/{thread_id}/messages", ChatMessageListResponse, 200, False),
     (
@@ -281,7 +282,7 @@ def test_nested_router_prefix_and_tags_unchanged() -> None:
 
 
 def test_standalone_router_route_count_unchanged() -> None:
-    assert len(workspaces_standalone_router.routes) == len(STANDALONE_ROUTES) == 20
+    assert len(workspaces_standalone_router.routes) == len(STANDALONE_ROUTES) == 21
 
 
 def test_standalone_router_contract_unchanged() -> None:
@@ -294,9 +295,9 @@ def test_standalone_router_prefix_and_tags_unchanged() -> None:
     assert workspaces_standalone_router.tags == ["workspaces-flat"]
 
 
-def test_total_endpoint_count_is_49() -> None:
+def test_total_endpoint_count_is_50() -> None:
     total = len(workspaces_router.routes) + len(workspaces_standalone_router.routes)
-    assert total == 49
+    assert total == 50
 
 
 def test_module_level_constant_unchanged() -> None:

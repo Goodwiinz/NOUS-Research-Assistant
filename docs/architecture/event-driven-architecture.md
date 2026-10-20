@@ -1,5 +1,7 @@
 # Event-Driven Architecture for Async Processing
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document defines the comprehensive event-driven architecture for the Multimodal Enterprise RAG System. The design implements an asynchronous, event-based communication pattern that enables scalable, resilient, and loosely coupled service interactions.

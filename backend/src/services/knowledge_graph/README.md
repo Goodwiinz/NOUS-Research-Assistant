@@ -4,8 +4,8 @@ Neo4j-backed service responsible for storing, querying, and visualizing the enti
 
 ## Where it sits
 
-- **Agent data subgraph** — the LangGraph `data` route calls KG query tools in `backend/src/api/agent/execute.py` to answer entity/relationship questions.
-- **KG REST API** — `backend/src/api/knowledge_graph/` routes delegate CRUD and search to `KnowledgeGraphService`.
+- **Agent data subgraph** — the LangGraph `data` route calls the KG tools (`_tool_search_knowledge_graph`, `_tool_explore_entity_neighborhood`, `_tool_find_entity_paths`, `_tool_get_graph_stats`) in `backend/src/services/agent/tools_impl.py` to answer entity/relationship questions.
+- **KG REST API** — `backend/src/api/search/knowledge_graph.py` routes delegate CRUD and search to `KnowledgeGraphService`.
 - **Graph visualization panel** — the frontend graph explorer hits the visualization endpoints, which call `get_neighborhood`, `find_paths`.
 
 ## Key files
@@ -13,6 +13,7 @@ Neo4j-backed service responsible for storing, querying, and visualizing the enti
 | File                                  | Purpose                                                                                                                                                                                                                                       |
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `knowledge_graph_service.py`          | Core synchronous service — entity/relationship CRUD, full-text search, path traversal, neighborhood queries. The canonical implementation used by the main backend.                                                                           |
+| `repair.py`                           | Idempotent per-document Neo4j re-index core (audit D1 / P2.3), used when a document's graph data must be rebuilt.                                                                                                                          |
 | `layout_algorithms.py`                | Pure-Python layout algorithms (force-directed Fruchterman-Reingold, others) — iterations are bounded by graph size to avoid blocking the event loop on large graphs.                                                                          |
 
 ## Neo4j connection

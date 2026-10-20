@@ -44,6 +44,7 @@ REQUIRED_IDENTITY_ARGS: dict[str, tuple[str, ...]] = {
     "get_workspace": ("user_id",),
     "get_conversation": ("user_id",),
     "get_thread": ("user_id",),
+    "get_thread_lean": ("user_id",),
     "get_message": ("user_id",),
     "get_collection": ("user_id",),
     "get_accessible_document_or_none": ("user_id", "organization_id"),

@@ -1,15 +1,14 @@
 # NOUS — Data CODEMAP
 
-> Database schemas (PostgreSQL, Neo4j, Qdrant, Redis), migration ordering, seeders.
-> Last generated: 2026-04-26
+> Database schemas (PostgreSQL, Neo4j, Redis), migrations, seeders.
+> Partly refreshed 2026-10-17: Qdrant sections and nonexistent files were corrected. The migration table below is a 2026-04-26 snapshot of selected revisions and is not exhaustive; run `ls backend/alembic/versions` for the real chain.
 
 ## Data stores
 
 | Store | Port | Purpose |
 |---|---|---|
-| PostgreSQL (Supabase) | 5432 | Primary relational store — users, documents, threads, projects, analytics |
+| PostgreSQL | 5432 | Primary relational store (RDS PostgreSQL on AWS; local container `rag-postgres-1`) — users, documents, threads, projects, analytics, full-text search (`documents.search_vector`); optional pgvector `document_embeddings` behind flags |
 | Neo4j | 7687 | Knowledge graph — entities, relationships, citations |
-| Qdrant | 6333 | Vector store — document embeddings, semantic search |
 | Redis / Valkey | 6379 | Cache, Celery broker, WebSocket pub/sub, rate limiting |
 
 ## PostgreSQL schema
@@ -86,17 +85,11 @@ Graph database for the knowledge graph. No migration tool — schema is enforced
 
 `MENTIONS`, `RELATES_TO`, `CITES`, `PART_OF`, `AUTHORED_BY`
 
-Qdrant collection config: `database/qdrant_knowledge_graph_collections.json`  
 Redis KG cache config: `database/redis_knowledge_graph_config.lua`
 
-## Qdrant collections
+## Vector storage
 
-| Collection | Dimensions | Distance | Content |
-|---|---|---|---|
-| `documents` | 1536 (OpenAI) | Cosine | Document chunk embeddings |
-| `entities` | 1536 | Cosine | Entity embeddings for semantic KG search |
-
-Optimization config: `database/qdrant_optimization.py`
+Qdrant is fully removed (the leftover `database/qdrant_knowledge_graph_collections.json` is not used). Live retrieval is PostgreSQL full-text search. `DO_KB_ENABLED` defaults to `False`, and pgvector semantic search (`document_embeddings`, created only by migration `jd01_document_embeddings` when the `vector` extension is available) is gated by `SEMANTIC_SEARCH_ENABLED` / `DOCUMENT_EMBEDDINGS_ENABLED`, both default off. See `backend/src/services/search/README.md`.
 
 ## Redis / Valkey usage
 
@@ -108,16 +101,17 @@ Optimization config: `database/qdrant_optimization.py`
 | `celery:*` | — | Celery task queue / results |
 | `kg:cache:<query_hash>` | 5m | KG query result cache |
 
-## Supabase specifics
+## Supabase and hosting specifics
 
-- Session pooler mode: `pool_size = max_clients`. Default 15 saturates on Nano — bumped to 25.
-- Connection string: use `postgresql://` (not `postgresql+asyncpg://`) for Alembic + psycopg v3.
-- Storage bucket: documents are stored in Supabase Storage; file paths in `document.storage_path`.
+- AWS application SQL uses RDS PostgreSQL via `DATABASE_URL`; `SUPABASE_DB_URL` is deliberately blank in the AWS overlay. Supabase remains an auth/auxiliary service with its own migrations in `supabase/migrations/`.
+- Connection string for the agent checkpointer must be `postgresql://` (psycopg v3), not `postgresql+asyncpg://`.
+- Document bytes live in S3-compatible object storage; `Document.storage_path` is the bare object key and `file_path` is `s3://bucket/key`.
+- Alembic rules: exactly one head and revision ids of at most 32 characters, enforced by `scripts/ci/check_alembic.py` (see `backend/alembic/README.md`).
 
 ## Seeding / fixtures
 
 Test fixtures: `data/datasets/` — 4 fixture files used in integration tests.  
-Dev seed: `backend/scripts/seed_dev_data.py` (if present).
+There is no `backend/scripts/seed_dev_data.py`; `backend/src/core/init_db.py` provides the local bootstrap (`create_all`, default org/user).
 
 ## Adding a new table
 

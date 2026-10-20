@@ -13,17 +13,20 @@ class IntegrationHandoff(BaseModel):
     __tablename__ = "integration_handoffs"
     __table_args__ = (
         UniqueConstraint(
+            "organization_id",
             "thread_id",
             "project_id",
             "version",
-            name="uq_integration_handoffs_thread_project_version",
+            name="uq_integration_handoffs_org_thread_project_version",
         ),
-        # Per thread, never global: a global key would let tenants probe ids.
+        # Match the read namespace so an old organization cannot reserve a
+        # moved chat's version or retry-id slots in its new organization.
         UniqueConstraint(
+            "organization_id",
             "thread_id",
             "project_id",
             "handoff_id",
-            name="uq_integration_handoffs_thread_project_handoff",
+            name="uq_integration_handoffs_org_thread_project_handoff",
         ),
     )
     organization_id: Mapped[UUID] = mapped_column(

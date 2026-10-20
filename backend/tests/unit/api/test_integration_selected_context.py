@@ -21,6 +21,7 @@ from src.services.integrations.context import IntegrationAccessDenied
 from src.services.integrations.selected_context import (
     ContextNotFound,
     ContextSelectionInvalid,
+    ContextSelectionTooLarge,
 )
 
 pytestmark = pytest.mark.unit
@@ -57,7 +58,7 @@ async def _completed(value: Any) -> Any:
 
 @pytest.fixture
 def calls() -> dict[str, list[Any]]:
-    return {"options": [], "save": [], "read": []}
+    return {"options": [], "save": [], "read": [], "offsets": []}
 
 
 @pytest.fixture
@@ -87,8 +88,9 @@ def app(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list[Any]]) -> FastAPI
         calls["save"].append((user, request_id, memory_ids))
         return _completed(_options())
 
-    def read_selected_context(_db: Any, context: Any) -> Any:
+    def read_selected_context(_db: Any, context: Any, offset: int = 0) -> Any:
         calls["read"].append(context)
+        calls["offsets"].append(offset)
         return _completed(
             ToolResult(content=[{"memories": []}], is_error=False, source_refs=[])
         )
@@ -235,6 +237,38 @@ def test_service_errors_map_to_stable_statuses(
     )
     assert invalid.status_code == 422
     assert invalid.json()["detail"] == "Selected memories must belong to this project"
+    monkeypatch.setattr(
+        selected_context,
+        "save_selection",
+        lambda *_a, **_k: _completed(ContextSelectionTooLarge()),
+    )
+    too_large = client.put(
+        "/api/v1/integrations/context/selection",
+        json={"request_id": str(REQUEST), "memory_ids": [str(MEMORY)]},
+        headers=BROWSER,
+    )
+    assert too_large.status_code == 422
+    assert (
+        too_large.json()["detail"]
+        == "A selected memory is too large to share (64 KiB limit per read)"
+    )
+
+
+def test_harness_read_passes_a_bounded_offset(
+    client: TestClient, calls: dict[str, list[Any]]
+) -> None:
+    for query in ("", "?offset=0", "?offset=3", "?offset=25"):
+        response = client.get(
+            f"/api/v1/integrations/context{query}", headers=CLI_HEADERS
+        )
+        assert response.status_code == 200
+    assert calls["offsets"] == [0, 0, 3, 25]
+    for bad in ("-1", "26", "next"):
+        response = client.get(
+            f"/api/v1/integrations/context?offset={bad}", headers=CLI_HEADERS
+        )
+        assert response.status_code == 422
+    assert calls["offsets"] == [0, 0, 3, 25]
 
 
 def test_disabled_flag_blocks_the_harness_read(

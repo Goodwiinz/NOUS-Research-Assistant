@@ -1,5 +1,7 @@
 # Monitoring Integration Patterns with Existing Services
 
+> **Stale / historical (2026-10-17):** It is a design document for a subsystem; the described service layout may not match the current code. Verify against `backend/src/` and `backend/openapi.json` before relying on it. Current contracts: [`docs/engineering/`](../../docs/engineering/README.md).
+
 ## Overview
 
 This document outlines comprehensive integration patterns for incorporating the monitoring and observability system into the existing Multimodal RAG System services. The design ensures seamless integration with minimal disruption to current functionality while providing comprehensive monitoring capabilities.
