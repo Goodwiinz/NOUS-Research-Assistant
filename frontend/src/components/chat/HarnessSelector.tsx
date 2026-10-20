@@ -256,7 +256,10 @@ export function HarnessSelector({
             aria-label="Project workspace"
             value={controller.workspaceId ?? ''}
             onChange={(event) => selectWorkspace(event.target.value || null)}
-            disabled={disabled || !controller.deviceId}
+            disabled={
+              disabled ||
+              !devices.some((device) => device.id === controller.deviceId)
+            }
             className="h-8 max-w-40 rounded-md border border-(--nous-border-1) bg-(--nous-bg-1) px-2 text-xs text-(--nous-fg-1) focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
           >
             <option value="">Choose workspace</option>

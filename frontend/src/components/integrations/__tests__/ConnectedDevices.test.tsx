@@ -1,5 +1,7 @@
-import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/integrationConnectionsService', () => ({
   integrationConnectionsService: {
@@ -8,10 +10,14 @@ vi.mock('@/services/integrationConnectionsService', () => ({
     disconnect: vi.fn(),
   },
 }));
+vi.mock('@/services/harnessService', () => ({
+  harnessService: { listWorkspaces: vi.fn() },
+}));
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: (): { user: { id: string } } => ({ user: { id: 'u1' } }),
 }));
 
+import { harnessService } from '@/services/harnessService';
 import { integrationConnectionsService } from '@/services/integrationConnectionsService';
 import { render } from '@/test/test-utils';
 import type {
@@ -56,7 +62,37 @@ const workspaceConsent: ApiConnectionConsent = {
   approved_at: null,
 };
 
+// An account consent binds neither a project nor a workspace (PR 1).
+const accountConsent: ApiConnectionConsent = {
+  request_id: 'r4',
+  kind: 'account',
+  project_id: null,
+  project_label: null,
+  workspace_id: null,
+  workspace_label: null,
+  thread_id: null,
+  thread_label: null,
+  scopes: [
+    'harness:execute',
+    'library:read',
+    'library:write',
+    'tools:read',
+    'tools:write',
+  ],
+  status: 'consumed',
+  approved_at: null,
+};
+
+const accountLaptop: ApiConnectedDevice = {
+  ...laptop,
+  consents: [accountConsent],
+};
+
 describe('ConnectedDevices', () => {
+  beforeEach(() => {
+    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([]);
+  });
+
   it('lists devices with plain-language access', async () => {
     vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
     render(<ConnectedDevices />);
@@ -64,6 +100,37 @@ describe('ConnectedDevices', () => {
     expect(
       screen.getByText('run coding sessions, read project documents')
     ).toBeInTheDocument();
+  });
+
+  it('lists an account consent as the whole account and revokes it on its own', async () => {
+    vi.mocked(integrationConnectionsService.list)
+      .mockResolvedValueOnce([
+        { ...laptop, consents: [...laptop.consents, accountConsent] },
+      ])
+      .mockResolvedValue([laptop]);
+    vi.mocked(integrationConnectionsService.revokeConsent).mockResolvedValue();
+    const { user } = render(<ConnectedDevices />);
+    expect(await screen.findByText('Whole account')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'run Local Codex from any chat, list your workspaces and projects, add, move and remove papers, create folders, rename projects and edit paper details anywhere in your account without asking each time, read documents in every project, request changes in any project (you approve each one)'
+      )
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Revoke Laptop (d1) access to your whole account',
+      })
+    );
+    expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledTimes(
+      1
+    );
+    expect(integrationConnectionsService.revokeConsent).toHaveBeenCalledWith(
+      'r4'
+    );
+    await waitFor(() =>
+      expect(screen.queryByText('Whole account')).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();
   });
 
   it('revokes one project and refreshes the list', async () => {
@@ -178,7 +245,7 @@ describe('ConnectedDevices', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'list the folders in the workspace, change folders and paper details without asking each time, read project documents, request notes (you approve each one)'
+        'list the folders in the workspace, change folders and paper details without asking each time, read project documents, request changes (you approve each one)'
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Thesis (p1)')).toBeInTheDocument();
@@ -314,5 +381,148 @@ describe('ConnectedDevices', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/Only from chat/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Workspace/)).not.toBeInTheDocument();
+  });
+
+  it('lists the account folders of a computer with account access', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      accountLaptop,
+    ]);
+    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([
+      { workspace_id: 'f1', project_id: null, label: 'thesis-code' },
+      { workspace_id: 'f2', project_id: 'p1', label: 'project-only' },
+    ]);
+    render(<ConnectedDevices />);
+    const folders = await screen.findByRole('list', {
+      name: 'Account folders on Laptop (d1)',
+    });
+    expect(
+      within(folders)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual(['thesis-code']);
+    expect(screen.queryByText('project-only')).not.toBeInTheDocument();
+    expect(harnessService.listWorkspaces).toHaveBeenCalledWith('d1');
+  });
+
+  it('does not look up folders for a computer without account access', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
+    render(<ConnectedDevices />);
+    expect(await screen.findByText('Thesis (p1)')).toBeInTheDocument();
+    expect(screen.queryByText('Account folders')).not.toBeInTheDocument();
+    expect(harnessService.listWorkspaces).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'without harness:execute',
+      [{ ...accountConsent, scopes: ['library:read', 'tools:read'] }],
+    ],
+    ['that has not been used yet', [{ ...accountConsent, status: 'approved' }]],
+    [
+      'twice over (every run on the device is refused)',
+      [accountConsent, { ...accountConsent, request_id: 'r5' }],
+    ],
+  ])(
+    'offers no account folders for an account approval %s',
+    async (_name, consents) => {
+      vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+        { ...laptop, consents },
+      ]);
+      render(<ConnectedDevices />);
+      expect(await screen.findAllByText('Whole account')).not.toHaveLength(0);
+      expect(screen.queryByText('Account folders')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('No account folders on this computer yet.')
+      ).not.toBeInTheDocument();
+      expect(harnessService.listWorkspaces).not.toHaveBeenCalled();
+    }
+  );
+
+  it('says when a computer has no account folders yet', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      accountLaptop,
+    ]);
+    vi.mocked(harnessService.listWorkspaces).mockResolvedValue([
+      { workspace_id: 'f2', project_id: 'p1', label: 'project-only' },
+    ]);
+    render(<ConnectedDevices />);
+    expect(
+      await screen.findByText('No account folders on this computer yet.')
+    ).toBeInTheDocument();
+  });
+
+  it('reports account folders that could not be loaded', async () => {
+    vi.mocked(integrationConnectionsService.list).mockResolvedValue([
+      accountLaptop,
+    ]);
+    vi.mocked(harnessService.listWorkspaces).mockRejectedValue(
+      new Error('500')
+    );
+    render(<ConnectedDevices />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Account folders could not be loaded.'
+    );
+  });
+
+  describe('what the chat composer keeps after access is removed', () => {
+    // The composer reads the same harness caches (computers and folders); a
+    // revoked computer must not stay on offer for the rest of their 30 s.
+    const seeded = (): {
+      client: QueryClient;
+      wrapper: ({ children }: { children: ReactNode }) => ReactNode;
+    } => {
+      const client = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      client.setQueryData(['harness', 'devices', 'u1'], []);
+      client.setQueryData(['harness', 'workspaces', 'u1', 'd1'], []);
+      const wrapper = ({ children }: { children: ReactNode }): ReactNode => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      );
+      return { client, wrapper };
+    };
+    const invalidated = (
+      client: QueryClient,
+      key: string[]
+    ): boolean | undefined => client.getQueryState(key)?.isInvalidated;
+
+    it('invalidates the composer caches when a consent is revoked', async () => {
+      vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
+      vi.mocked(
+        integrationConnectionsService.revokeConsent
+      ).mockResolvedValue();
+      const { client, wrapper } = seeded();
+      const { user } = render(<ConnectedDevices />, { wrapper });
+      await user.click(
+        await screen.findByRole('button', {
+          name: 'Revoke Laptop (d1) access to Thesis',
+        })
+      );
+      await waitFor(() =>
+        expect(invalidated(client, ['harness', 'devices', 'u1'])).toBe(true)
+      );
+      expect(invalidated(client, ['harness', 'workspaces', 'u1', 'd1'])).toBe(
+        true
+      );
+    });
+
+    it('invalidates the composer caches when a device is disconnected', async () => {
+      vi.mocked(integrationConnectionsService.list).mockResolvedValue([laptop]);
+      vi.mocked(integrationConnectionsService.disconnect).mockResolvedValue();
+      const { client, wrapper } = seeded();
+      const { user } = render(<ConnectedDevices />, { wrapper });
+      await user.click(
+        await screen.findByRole('button', { name: 'Disconnect Laptop (d1)' })
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'Disconnect and end CLI sign-ins' })
+      );
+      await waitFor(() =>
+        expect(invalidated(client, ['harness', 'devices', 'u1'])).toBe(true)
+      );
+    });
   });
 });

@@ -5,6 +5,7 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import type { RenderHookResult } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -53,7 +54,8 @@ type ConnectedHarness = RenderHookResult<
 };
 
 function renderConnectedHarness(
-  threadId: string | null = 'thread-a'
+  threadId: string | null = 'thread-a',
+  projectId?: string | null
 ): ConnectedHarness {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -61,7 +63,9 @@ function renderConnectedHarness(
   const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  const hook = renderHook(() => useHarnessConnection(threadId), { wrapper });
+  const hook = renderHook(() => useHarnessConnection(threadId, projectId), {
+    wrapper,
+  });
   return {
     ...hook,
     client,
@@ -525,5 +529,237 @@ describe('useHarnessConnection', () => {
     act(() => view.result.current.selectProvider('codex'));
     await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
     expect(view.result.current.isBoundToAnotherChat('device-c')).toBe(true);
+  });
+
+  // PR 1's device fields: account_wide (a live account approval) and
+  // project_ids (live project approvals that can run Codex).
+  const accountLaptop = {
+    id: 'device-account',
+    label: 'Account laptop',
+    bound_thread_ids: [],
+    account_wide: true,
+    project_ids: [],
+  };
+  const projectDesk = {
+    id: 'device-project',
+    label: 'Project desk',
+    bound_thread_ids: [],
+    account_wide: false,
+    project_ids: ['project-a'],
+  };
+  const otherDesk = {
+    id: 'device-other',
+    label: 'Other desk',
+    bound_thread_ids: [],
+    account_wide: false,
+    project_ids: ['project-b'],
+  };
+  const folders = [
+    { workspace_id: 'folder-account', project_id: null, label: 'Any project' },
+    { workspace_id: 'folder-here', project_id: 'project-a', label: 'This one' },
+    { workspace_id: 'folder-there', project_id: 'project-b', label: 'Other' },
+  ];
+
+  it("lists only computers that can run Codex for the chat's project", async () => {
+    listDevices.mockResolvedValue([accountLaptop, projectDesk, otherDesk]);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() =>
+      expect(view.result.current.devices.map((device) => device.id)).toEqual([
+        'device-account',
+        'device-project',
+      ])
+    );
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+    const picker = screen.getByRole('combobox', { name: 'Paired computer' });
+    expect(
+      within(picker)
+        .getAllByRole('option')
+        .map((option) => option.textContent)
+    ).toEqual(['Choose computer', 'Account laptop', 'Project desk']);
+  });
+
+  it('lists a computer whose only approval is bound to this chat', async () => {
+    // A chat-bound project approval is named by bound_thread_ids alone; the
+    // server leaves it out of project_ids.
+    const chatDesk = {
+      id: 'device-chat',
+      label: 'Chat desk',
+      bound_thread_ids: ['thread-a'],
+      account_wide: false,
+      project_ids: [],
+    };
+    listDevices.mockResolvedValue([chatDesk, otherDesk]);
+    const here = renderConnectedHarness('thread-a', 'project-a');
+    act(() => here.result.current.selectProvider('codex'));
+    await waitFor(() =>
+      expect(here.result.current.devices.map((device) => device.id)).toEqual([
+        'device-chat',
+      ])
+    );
+    const elsewhere = renderConnectedHarness('thread-b', 'project-a');
+    act(() => elsewhere.result.current.selectProvider('codex'));
+    await waitFor(() => expect(listDevices).toHaveBeenCalled());
+    await waitFor(() => expect(elsewhere.result.current.devices).toEqual([]));
+  });
+
+  it('never hides a computer from a backend without account fields', async () => {
+    listDevices.mockResolvedValue([{ id: 'device-a', label: 'My laptop' }]);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+  });
+
+  it("offers account folders and this project's folders on an account computer", async () => {
+    listDevices.mockResolvedValue([accountLaptop]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => view.result.current.selectDevice('device-account'));
+    await waitFor(() =>
+      expect(
+        view.result.current.workspaces.map((folder) => folder.workspace_id)
+      ).toEqual(['folder-account', 'folder-here'])
+    );
+    act(() => view.result.current.selectWorkspace('folder-account'));
+    expect(view.result.current.disabledReason).toBeNull();
+    expect(view.canSend()).toBe(true);
+  });
+
+  it('hides account folders on a computer without an account approval', async () => {
+    listDevices.mockResolvedValue([projectDesk]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => view.result.current.selectDevice('device-project'));
+    await waitFor(() =>
+      expect(
+        view.result.current.workspaces.map((folder) => folder.workspace_id)
+      ).toEqual(['folder-here'])
+    );
+  });
+
+  it('does not accept a remembered folder of another project on an account computer', async () => {
+    listDevices.mockResolvedValue([accountLaptop]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => view.result.current.selectDevice('device-account'));
+    await waitFor(() => expect(view.result.current.workspaces).toHaveLength(2));
+    // The server still lists project-b's folder; the chat must not use it.
+    act(() => view.result.current.selectWorkspace('folder-there'));
+    expect(view.result.current.disabledReason).toBe(
+      'Choose a bound project workspace.'
+    );
+    expect(view.canSend()).toBe(false);
+  });
+
+  it.each([
+    ['project_ids', { id: 'device-old', label: 'Old', account_wide: false }],
+    ['account_wide', { id: 'device-old', label: 'Old', project_ids: [] }],
+  ])(
+    'never hides a computer when only %s is missing',
+    async (_missing, device) => {
+      listDevices.mockResolvedValue([device]);
+      const view = renderConnectedHarness('thread-a', 'project-a');
+      act(() => view.result.current.selectProvider('codex'));
+      await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    }
+  );
+
+  it('says when no paired computer can run this project', async () => {
+    listDevices.mockResolvedValue([otherDesk]);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() =>
+      expect(view.result.current.disabledReason).toBe(
+        'None of your paired computers is connected to this project.'
+      )
+    );
+    expect(view.result.current.devices).toEqual([]);
+    expect(view.canSend()).toBe(false);
+  });
+
+  it('treats a remembered computer that cannot run this project as unchosen', async () => {
+    listDevices.mockResolvedValue([accountLaptop, otherDesk]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => {
+      view.result.current.selectDevice('device-other');
+      view.result.current.selectWorkspace('folder-there');
+    });
+    await waitFor(() =>
+      expect(view.result.current.disabledReason).toBe(
+        'Choose a paired computer.'
+      )
+    );
+    expect(view.canSend()).toBe(false);
+  });
+
+  it('disables the folder picker for a remembered computer that was filtered out', async () => {
+    listDevices.mockResolvedValue([accountLaptop, otherDesk]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => view.result.current.selectDevice('device-other'));
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+    expect(
+      screen.getByRole('combobox', { name: 'Project workspace' })
+    ).toBeDisabled();
+  });
+
+  it('keeps the folder picker open for a computer the chat can use', async () => {
+    listDevices.mockResolvedValue([accountLaptop, otherDesk]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a', 'project-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(1));
+    act(() => view.result.current.selectDevice('device-account'));
+    await waitFor(() => expect(view.result.current.workspaces).toHaveLength(2));
+    render(
+      <QueryClientProvider client={view.client}>
+        <HarnessSelector controller={view.result.current} />
+      </QueryClientProvider>
+    );
+    expect(
+      screen.getByRole('combobox', { name: 'Project workspace' })
+    ).toBeEnabled();
+  });
+
+  it('needs a chat in a project before Codex can run', async () => {
+    listDevices.mockResolvedValue([accountLaptop]);
+    const view = renderConnectedHarness('thread-a', null);
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() =>
+      expect(view.result.current.disabledReason).toBe(
+        'Codex runs only in chats that belong to a project.'
+      )
+    );
+    expect(view.result.current.devices).toEqual([]);
+    expect(view.canSend()).toBe(false);
+  });
+
+  it("filters nothing while the chat's project is not known yet", async () => {
+    listDevices.mockResolvedValue([accountLaptop, otherDesk]);
+    listWorkspaces.mockResolvedValue(folders);
+    const view = renderConnectedHarness('thread-a');
+    act(() => view.result.current.selectProvider('codex'));
+    await waitFor(() => expect(view.result.current.devices).toHaveLength(2));
+    act(() => view.result.current.selectDevice('device-other'));
+    await waitFor(() => expect(view.result.current.workspaces).toHaveLength(3));
   });
 });

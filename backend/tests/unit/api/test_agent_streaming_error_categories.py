@@ -24,6 +24,7 @@ from src.api.agent.streaming import _stream_failure_category, _stream_failure_me
 from src.services.agent.agent_run_service import ActiveRunConflict
 from src.services.integrations.context import (
     DeviceBoundToAnotherChat,
+    DeviceNotConnectedToProject,
     IntegrationAccessDenied,
 )
 from src.shared.enums import AgentErrorCategory
@@ -346,6 +347,54 @@ async def test_a_device_bound_to_another_chat_is_named_on_the_wire() -> None:
     payload = _error_payload(frames)
     assert payload["category"] == "device_bound_to_another_chat"
     assert payload["error"] == BOUND_MESSAGE
+
+
+NOT_CONNECTED_MESSAGE = "This computer isn't connected to this project."
+
+
+@pytest.mark.asyncio
+async def test_a_device_not_connected_to_the_project_is_named_on_the_wire() -> None:
+    """Account connections: a computer with no approval covering the chat's
+    project (or a folder the chat cannot use) is named, not a generic error."""
+    thread = SimpleNamespace(id="11111111-1111-1111-1111-111111111302")
+    with (
+        patch(
+            "src.api.agent.streaming._resolve_thread",
+            new=AsyncMock(return_value=(thread, None)),
+        ),
+        patch(
+            "src.api.agent.harness_streaming.create_chat_context",
+            new=AsyncMock(side_effect=DeviceNotConnectedToProject()),
+        ) as mint,
+    ):
+        frames = await _run_stream(
+            _RaisingGraph(AssertionError("the graph must not run")),
+            execution_provider="codex",
+            device_id=uuid4(),
+            workspace_id=uuid4(),
+        )
+    mint.assert_awaited_once()
+    payload = _error_payload(frames)
+    assert payload["category"] == "device_not_connected_to_project"
+    assert payload["error"] == NOT_CONNECTED_MESSAGE
+
+
+def test_the_two_device_refusals_keep_their_own_categories() -> None:
+    assert (
+        _stream_failure_category(DeviceNotConnectedToProject())
+        is AgentErrorCategory.DEVICE_NOT_CONNECTED_TO_PROJECT
+    )
+    assert _stream_failure_message(DeviceNotConnectedToProject()) == (
+        NOT_CONNECTED_MESSAGE
+    )
+    assert (
+        _stream_failure_category(DeviceBoundToAnotherChat())
+        is AgentErrorCategory.DEVICE_BOUND_TO_ANOTHER_CHAT
+    )
+    # A bare denial stays generic: only the named subclass is surfaced.
+    assert _stream_failure_category(IntegrationAccessDenied()) is (
+        AgentErrorCategory.INTERNAL
+    )
 
 
 def test_other_preflight_failures_keep_the_generic_treatment() -> None:
