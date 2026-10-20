@@ -1,5 +1,7 @@
 # Knowledge Graph Storage Guide
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 This guide explains how to store and query knowledge graph data in your RAG system using Neo4j.
 
 ## Table of Contents

@@ -1,5 +1,7 @@
 # Knowledge Graph Architecture Implementation Summary
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Project Overview
 
 This document summarizes the complete implementation of the corrected Knowledge Graph Architecture for the Multimodal Enterprise RAG System. The implementation resolves the critical architectural violation where graph algorithms were incorrectly placed in the frontend, moving all graph processing to the backend where it belongs.

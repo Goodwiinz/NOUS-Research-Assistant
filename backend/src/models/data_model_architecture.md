@@ -166,8 +166,10 @@ CREATE TABLE entity_relationships (
 - **Entities**: Knowledge graph entities and relationships
 - **Metrics**: Performance and quality metrics
 
-### Vector Store: Qdrant
-**Purpose**: Semantic similarity search
+### Vector Store: historical (Qdrant removed)
+> Amendment 2026-10-17: Qdrant has been removed. Live retrieval is PostgreSQL full-text search; an optional pgvector `document_embeddings` table is gated by `SEMANTIC_SEARCH_ENABLED` / `DOCUMENT_EMBEDDINGS_ENABLED` (default off). The list below is the original design intent, not the running system.
+
+**Purpose (original)**: Semantic similarity search
 - **Document embeddings**: Multimodal content vectors
 - **Query embeddings**: Natural language query vectors
 - **Entity embeddings**: Entity semantic representations

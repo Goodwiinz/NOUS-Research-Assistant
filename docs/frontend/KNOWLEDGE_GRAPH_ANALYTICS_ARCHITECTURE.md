@@ -1,3 +1,5 @@
+> **Dated design (2026-10-17 review): an upfront architecture proposal that assumed Next.js 15 and other libraries. Current stack is Next.js 16, React 18 and Zustand 5 (see `frontend/package.json`). Check the code before relying on this.**
+
 # Knowledge Graph Analytics Dashboard - Frontend Architecture Design
 
 ## Overview

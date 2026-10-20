@@ -1,5 +1,7 @@
 # RAG System - Project Structure
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 **Multimodal Enterprise RAG System** - A comprehensive Retrieval-Augmented Generation platform for processing text, images, audio, and video with knowledge graph integration.
 
 ## Root Directory
@@ -300,7 +302,7 @@ docker-compose -f docker-compose.development.yml up -d
 docker-compose -f docker-compose.development.yml up backend
 
 # Start frontend (local development)
-cd frontend && npm run dev
+pnpm --dir frontend dev:offline
 
 # Run tests
 pytest tests/ --cov=src

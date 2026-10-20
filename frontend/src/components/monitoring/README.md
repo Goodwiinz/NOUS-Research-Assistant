@@ -1,3 +1,5 @@
+> **Stale (2026-10-17 review): this README was written for an earlier component set and its feature list is aspirational. The directory currently holds only `AlertList`, `MetricCard`, `PerformanceMetricsDashboard`, `StatusGrid` and `SystemOverviewDashboard`; check those files for real behavior.**
+
 # Monitoring Dashboard Components
 
 This directory contains a comprehensive set of React components for building enterprise-grade monitoring dashboards for the Multimodal RAG System.

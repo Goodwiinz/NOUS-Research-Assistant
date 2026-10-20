@@ -34,13 +34,13 @@ This comprehensive E2E testing framework validates complete user workflows acros
 ```bash
 # Install dependencies
 cd tests/e2e
-npm install
+pnpm install --frozen-lockfile
 
 # Install Playwright browsers
-npx playwright install
+pnpm exec playwright install
 
 # Install additional browsers (if needed)
-npx playwright install firefox webkit
+pnpm exec playwright install firefox webkit
 ```
 
 ### Environment Setup
@@ -57,19 +57,19 @@ nano .env.test
 
 ```bash
 # Run all tests
-npm run test:e2e
+pnpm run test:e2e
 
 # Run tests with UI
-npm run test:e2e:ui
+pnpm run test:e2e:ui
 
 # Run tests with debugging
-npm run test:e2e:debug
+pnpm run test:e2e:debug
 
 # Run specific test suites
-npm run test:e2e:visual
-npm run test:e2e:accessibility
-npm run test:e2e:mobile
-npm run test:e2e:performance
+pnpm run test:e2e:visual
+pnpm run test:e2e:accessibility
+pnpm run test:e2e:mobile
+pnpm run test:e2e:performance
 ```
 
 ## 📊 Test Reports
@@ -82,7 +82,7 @@ After running tests, reports are generated in `test-results/`:
 
 View reports:
 ```bash
-npm run test:e2e:report
+pnpm run test:e2e:report
 ```
 
 ## 🧪 Test Configuration
@@ -134,10 +134,10 @@ await page.screenshot({ path: 'test-results/screenshots/test.png', fullPage: tru
 ### Visual Regression
 ```bash
 # Run visual tests
-npm run test:e2e:visual
+pnpm run test:e2e:visual
 
 # Update visual snapshots
-UPDATE_SNAPSHOTS=true npm run test:e2e:visual
+UPDATE_SNAPSHOTS=true pnpm run test:e2e:visual
 ```
 
 ### Cross-browser Visual Testing
@@ -163,7 +163,7 @@ await checkA11y(page, null, {
 
 ### Running Accessibility Tests
 ```bash
-npm run test:e2e:accessibility
+pnpm run test:e2e:accessibility
 ```
 
 ### Accessibility Report Features
@@ -187,7 +187,7 @@ npm run test:e2e:accessibility
 
 ### Running Mobile Tests
 ```bash
-npm run test:e2e:mobile
+pnpm run test:e2e:mobile
 ```
 
 ## ⚡ Performance Testing
@@ -214,7 +214,7 @@ const metrics = await page.evaluate(() => {
 
 ### Running Performance Tests
 ```bash
-npm run test:e2e:performance
+pnpm run test:e2e:performance
 ```
 
 ## 🔧 Test Utilities
@@ -249,10 +249,10 @@ await helpers.uploadFile('[data-testid="file-input"]', './test-file.pdf');
 ### Debug Mode
 ```bash
 # Run tests with debugging
-npm run test:e2e:debug
+pnpm run test:e2e:debug
 
 # Generate code for test recording
-npm run test:e2e:codegen
+pnpm run test:e2e:codegen
 ```
 
 ### Debug Features
@@ -295,13 +295,13 @@ The E2E tests are integrated with GitHub Actions and run on:
 ### Running Tests Locally for CI
 ```bash
 # Install dependencies
-npm ci
+pnpm install --frozen-lockfile
 
 # Start services
 docker-compose -f docker-compose.test.yml up -d
 
 # Run tests
-npm run test:e2e:ci
+pnpm run test:e2e:ci
 
 # Cleanup
 docker-compose -f docker-compose.test.yml down
@@ -347,10 +347,10 @@ await page.waitForLoadState('networkidle');
 #### Browser Installation Issues
 ```bash
 # Reinstall browsers
-npx playwright install --force
+pnpm exec playwright install --force
 
 # Clear browser cache
-npx playwright install-deps
+pnpm exec playwright install-deps
 ```
 
 #### Docker Service Issues

@@ -1,6 +1,36 @@
 # store
 
-Client state management for NOUS, using [Zustand](https://github.com/pmndrs/zustand). All stores are plain `create()` calls; heavier stores layer on the `immer` middleware for ergonomic nested mutations, `persist` for localStorage hydration, and `devtools` / `subscribeWithSelector` where debugging or fine-grained subscriptions are needed. There is no Redux, no Context API, and no global store barrel — each store is imported directly by the components that need it.
+Client state management for NOUS, using [Zustand](https://github.com/pmndrs/zustand). All stores are plain `create()` calls; heavier stores layer on the `immer` middleware for ergonomic nested mutations, `persist` for localStorage hydration, and `devtools` / `subscribeWithSelector` where debugging or fine-grained subscriptions are needed. There is no Redux and no global store barrel — each store is imported directly by the components that need it. React context is used sparingly (for example `src/contexts/sidebar-context.tsx`, `hooks/useAuth.tsx` and `components/chat/ChatRagContext.tsx`), not for shared server data.
+
+## Ownership rules
+
+- TanStack Query owns request-backed server data. The chat Zustand store (`chat-store.ts`) is the single sanctioned exception, for the chat transcript. Several stores below (`projectStore`, `pipelineStore`, `research-engine-store`) still fetch from services and keep the results in Zustand; `projectStore` explicitly invalidates the matching Query caches after mutations. Do not add a second cache for an entity that already has an owner.
+- Import chat state only from `@/store/chat-store`. Never import from `store/chat/*`; those are internal slices.
+- The backend is the sole persisted-chat writer, so hooks must not add a second create-message call. Terminal reconciliation belongs to `chat-store`'s `refreshMessages`.
+- See [`frontend/AGENTS.md`](../../AGENTS.md) and [`docs/engineering/frontend.md`](../../../docs/engineering/frontend.md) for the full contract.
+
+## two store directories
+
+State lives in two sibling directories, which is easy to mix up:
+
+- `src/store/` (this directory, singular) holds the chat, project, pipeline, research-engine, notification, citation and sidebar stores listed below, plus `artifactPanelStore.ts`.
+- `src/stores/` (plural) holds `authStore.ts`, `agentActivityStore.ts`, `analyticsStore.ts` (and a `analyticsStore.new.ts` rewrite), `enhancedGraphStore.ts`, `graphStore.ts`, `monitoringStore.ts`, and an `analytics/` subfolder (`analyticsStore`, `graphStore`, `realtimeStore` behind an `index.ts`). Its tests are in `src/stores/__tests__/` (only `agentActivityStore.test.ts`); the auth-store tests are in `src/store/__tests__/`.
+
+## chat store layout
+
+`chat-store.ts` is the stable public entry point. It creates the persisted store and combines the internal modules in `chat/`:
+
+| path                          | role                                                                  |
+| ----------------------------- | --------------------------------------------------------------------- |
+| `chat/slices/`                | per-domain slices: workspace, conversation, thread, message, selection, streaming |
+| `chat/requestCoordinator.ts`  | per-thread newest-page request coordination and the (deprecated) active stream AbortController |
+| `chat/selectors.ts`           | selectors re-exported by `chat-store.ts`                               |
+| `chat/recordIndex.ts`         | reverse indexes for parent lookups                                     |
+| `chat/persistedSelection.ts`  | the persisted workspace / conversation / thread selection              |
+| `chat/initialState.ts`        | initial state shape                                                    |
+| `chat/types.ts`               | `ChatStore` and related types                                          |
+
+`artifactPanelStore.ts` is a small separate store for what the chat artifact panel is showing (document, note, draft, generated artifact, citations, handoff).
 
 ## stores
 
