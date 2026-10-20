@@ -38,6 +38,9 @@ runs:
         role-to-assume: arn:aws:iam::267685730035:role/nous-github-ci-ecr-public-pull
         # ECR Public issues auth tokens only in us-east-1.
         aws-region: us-east-1
+        # The default 12 attempts spend ~2 minutes before the anonymous
+        # fallback when the role is unavailable (e.g. fork PRs).
+        retry-max-attempts: 2
 
     - name: Log in to Amazon ECR Public
       id: ecr

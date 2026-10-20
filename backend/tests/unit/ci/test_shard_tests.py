@@ -110,6 +110,23 @@ def _integration_job() -> dict:
     return cast(dict, workflow["jobs"]["integration-tests"])
 
 
+def test_integration_job_starts_services_after_disk_prune() -> None:
+    """Job-level services pull anonymously before steps run, so Postgres and
+    Redis start from a step that logs in to ECR Public first. That step must
+    follow the disk-space prune, which would otherwise remove the containers."""
+    job = _integration_job()
+    assert "services" not in job
+    assert job["permissions"]["id-token"] == "write"
+    names = [step.get("name") for step in job["steps"]]
+    start = names.index("Start Postgres and Redis")
+    assert start > names.index("Free runner disk space")
+    assert start < names.index("Run integration tests")
+    step = job["steps"][start]
+    assert step["uses"] == "./.github/actions/start-ci-services"
+    assert step["with"]["postgres-image"].startswith("public.ecr.aws/")
+    assert step["with"]["redis-image"].startswith("public.ecr.aws/")
+
+
 def test_integration_job_enables_real_redis_cli_revocation_regression() -> None:
     job = _integration_job()
     step = next(
@@ -117,7 +134,7 @@ def test_integration_job_enables_real_redis_cli_revocation_regression() -> None:
     )
     env = step["env"]
     assert env.get("CLI_REVOCATION_TEST_REDIS_URL") == env["REDIS_URL"]
-    assert "job.services.redis.ports['6379']" in env["REDIS_URL"]
+    assert "redis://localhost:6379/" in env["REDIS_URL"]
 
 
 def test_integration_job_enrolls_orchestration_postgres_suites() -> None:
@@ -132,10 +149,8 @@ def test_integration_job_enrolls_orchestration_postgres_suites() -> None:
     )
     env = step["env"]
     assert env.get("ORCHESTRATION_TEST_DATABASE_URL") == env["DATABASE_URL"]
-    assert "job.services.postgres.ports['5432']" in env["DATABASE_URL"]
-    assert "job.services.redis.ports['6379']" in env.get(
-        "ORCHESTRATION_TEST_REDIS_URL", ""
-    )
+    assert "@localhost:5432/" in env["DATABASE_URL"]
+    assert "redis://localhost:6379/" in env.get("ORCHESTRATION_TEST_REDIS_URL", "")
 
 
 def test_integration_job_enrolls_retention_purge_regression() -> None:
@@ -175,10 +190,7 @@ def test_recovery_postgres_step_requires_executed_tests(
         if step.get("name") == "Run ingestion recovery PostgreSQL tests"
     )
     assert step["if"] == "matrix.shard == 1"
-    assert (
-        "job.services.postgres.ports['5432']"
-        in step["env"]["ORCHESTRATION_TEST_DATABASE_URL"]
-    )
+    assert "@localhost:5432/" in step["env"]["ORCHESTRATION_TEST_DATABASE_URL"]
     for module in (
         "test_stuck_processing_recovery.py",
         "test_stuck_recovery_terminal_retry.py",
@@ -239,10 +251,7 @@ def test_two_account_postgres_search_step_requires_executed_tests(
         if step.get("name") == "Run two-account PostgreSQL search isolation tests"
     )
     assert "matrix.shard == 1" in step["if"]
-    assert (
-        "job.services.postgres.ports['5432']"
-        in step["env"]["TWO_ACCOUNT_PG_TEST_DATABASE_URL"]
-    )
+    assert "@localhost:5432/" in step["env"]["TWO_ACCOUNT_PG_TEST_DATABASE_URL"]
     assert (
         "backend/tests/integration/two_account/test_search_isolation_postgres.py"
         in step["run"]
