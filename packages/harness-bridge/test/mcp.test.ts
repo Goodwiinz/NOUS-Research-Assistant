@@ -395,7 +395,7 @@ test("connect --workspace --library requests a workspace binding and the library
       scopes: ["tools:read", "tools:write", "library:read", "library:write"],
     });
     // There is no project to register local folders against.
-    assert.equal(calls.some((c) => c.url.endsWith("/workspaces")), false);
+    assert.equal(calls.some((c) => /\/(account-)?workspaces$/.test(c.url)), false);
     const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
     assert.equal(state.workspaceId, WORKSPACE);
     assert.equal("projectId" in state, false);
@@ -766,7 +766,7 @@ test("reconnecting to a workspace does not re-register folders against a missing
       label: "dev",
       tools: true,
     });
-    assert.equal(calls.some((c) => c.url.endsWith("/workspaces")), false);
+    assert.equal(calls.some((c) => /\/(account-)?workspaces$/.test(c.url)), false);
     const state = JSON.parse(readFileSync(join(dir, "connection.json"), "utf8"));
     assert.deepEqual(state.workspaces, []);
     assert.equal(state.workspaceId, WORKSPACE);

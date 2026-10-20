@@ -40,17 +40,25 @@ export const harnessService = {
       `/integrations/devices/${encodeURIComponent(deviceId)}/account-workspaces`
     );
   },
-  /** Every folder of the device: project folders, then account folders. */
+  /**
+   * Every folder of the device: project folders, then account folders. The
+   * frontend can deploy before a backend that has `/account-workspaces`, so
+   * a failed account request lists no account folders instead of hiding the
+   * project folders; a failed project request still rejects.
+   */
   async listFolders(deviceId: string): Promise<HarnessWorkspace[]> {
     const [project, account] = await Promise.all([
       this.listWorkspaces(deviceId),
-      this.listAccountWorkspaces(deviceId),
+      this.listAccountWorkspaces(deviceId).catch(
+        (): ApiAccountWorkspaceBinding[] => []
+      ),
     ]);
     return [
       ...project,
-      ...account.map(
-        (folder): HarnessAccountFolder => ({ ...folder, project_id: null })
-      ),
+      ...account.map((folder): HarnessAccountFolder => ({
+        ...folder,
+        project_id: null,
+      })),
     ];
   },
   readRequest(requestId: string): Promise<NativeRequestView> {
