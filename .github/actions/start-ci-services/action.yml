@@ -1,0 +1,103 @@
+name: Start CI Services
+description: >-
+  Start throwaway Postgres (and optionally Redis) containers for a CI job,
+  pulled from ECR Public with an authenticated token. Job-level `services:`
+  pull anonymously before any step can log in, and the anonymous ECR Public
+  data quota is shared across GitHub-hosted runners ("toomanyrequests: Data
+  limit exceeded"). Authentication uses GitHub OIDC (no static keys); the
+  calling job needs `permissions: id-token: write`. Without OIDC (fork PRs)
+  the login is skipped with a warning and the pull falls back to anonymous.
+  Containers publish fixed host ports: each job runs on its own VM.
+
+inputs:
+  postgres-image:
+    description: Postgres image reference
+    required: true
+  postgres-user:
+    description: POSTGRES_USER for the throwaway database
+    required: true
+  postgres-password:
+    description: POSTGRES_PASSWORD for the throwaway database (disposable, not a secret)
+    required: true
+  postgres-db:
+    description: POSTGRES_DB for the throwaway database
+    required: true
+  redis-image:
+    description: Redis image reference. Empty skips Redis.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Configure AWS credentials via GitHub OIDC
+      id: aws
+      continue-on-error: true
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+      with:
+        role-to-assume: arn:aws:iam::267685730035:role/nous-github-ci-ecr-public-pull
+        # ECR Public issues auth tokens only in us-east-1.
+        aws-region: us-east-1
+        # The default 12 attempts spend ~2 minutes before the anonymous
+        # fallback when the role is unavailable (e.g. fork PRs).
+        retry-max-attempts: 2
+
+    - name: Log in to Amazon ECR Public
+      id: ecr
+      if: steps.aws.outcome == 'success'
+      continue-on-error: true
+      uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      with:
+        registry-type: public
+        mask-password: true
+
+    - name: Start containers
+      shell: bash
+      env:
+        # Pass everything through env — never interpolate inputs into the
+        # script body (avoids expression-injection footguns flagged by
+        # actionlint).
+        ECR_LOGIN: ${{ steps.ecr.outcome }}
+        PG_IMAGE: ${{ inputs.postgres-image }}
+        PG_USER: ${{ inputs.postgres-user }}
+        PG_PASSWORD: ${{ inputs.postgres-password }}
+        PG_DB: ${{ inputs.postgres-db }}
+        REDIS_IMAGE: ${{ inputs.redis-image }}
+      run: |
+        set -euo pipefail
+        if [ "$ECR_LOGIN" != "success" ]; then
+          echo "::warning::ECR Public login unavailable; pulling anonymously (shared quota may be exhausted)"
+        fi
+        pull() {
+          for attempt in 1 2 3; do
+            docker pull --quiet "$1" && return 0
+            sleep $((attempt * 5))
+          done
+          return 1
+        }
+        pull "$PG_IMAGE"
+        docker run -d --name ci-postgres -p 5432:5432 \
+          -e POSTGRES_USER="$PG_USER" -e POSTGRES_PASSWORD="$PG_PASSWORD" -e POSTGRES_DB="$PG_DB" \
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30 \
+          "$PG_IMAGE"
+        containers=(ci-postgres)
+        if [ -n "$REDIS_IMAGE" ]; then
+          pull "$REDIS_IMAGE"
+          docker run -d --name ci-redis -p 6379:6379 \
+            --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 30 \
+            "$REDIS_IMAGE"
+          containers+=(ci-redis)
+        fi
+        for c in "${containers[@]}"; do
+          for _ in $(seq 1 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' "$c")
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          if [ "$status" != "healthy" ]; then
+            echo "::error::$c did not become healthy (status=$status)"
+            docker logs "$c" || true
+            exit 1
+          fi
+          echo "$c healthy"
+        done

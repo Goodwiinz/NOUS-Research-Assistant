@@ -304,22 +304,22 @@ jobs:
     runs-on: ubuntu-latest
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
-    # Throwaway CI-local Postgres for the advisory execution probes. Credentials
-    # are disposable (postgres/postgres) — no secrets, by design. Docker's
-    # official ECR Public images avoid Docker Hub's shared-runner pull quota.
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    # id-token: OIDC -> AWS for an authenticated ECR Public pull (see
+    # .github/actions/start-ci-services).
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # Throwaway CI-local Postgres for the advisory execution probes.
+      # Credentials are disposable (postgres/postgres) — no secrets, by design.
+      - name: Start Postgres
+        uses: ./.github/actions/start-ci-services
+        with:
+          postgres-image: public.ecr.aws/docker/library/postgres:15-alpine
+          postgres-user: postgres
+          postgres-password: postgres
+          postgres-db: postgres
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
@@ -843,23 +843,11 @@ jobs:
         # File-level split by size (scripts/ci/shard_tests.py). Add a shard
         # when a leg approaches the 30 minute cap.
         shard: [1, 2, 3]
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:15
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: test_db
-        ports:
-          - 5432/tcp
-        options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-      redis:
-        image: public.ecr.aws/docker/library/redis:7
-        ports:
-          - 6379/tcp
-        options: >-
-          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    # id-token: OIDC -> AWS for an authenticated ECR Public pull (see
+    # .github/actions/start-ci-services).
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
@@ -875,6 +863,15 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
           df -h
+      # After the prune above, which would remove the containers.
+      - name: Start Postgres and Redis
+        uses: ./.github/actions/start-ci-services
+        with:
+          postgres-image: public.ecr.aws/docker/library/postgres:15
+          postgres-user: test
+          postgres-password: test
+          postgres-db: test_db
+          redis-image: public.ecr.aws/docker/library/redis:7
       - name: Cache pip dependencies
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
@@ -936,23 +933,23 @@ jobs:
           ENVIRONMENT: testing
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ strategy.job-total }}
-          DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
           # These suites also fall back to ORCHESTRATION_TEST_DATABASE_URL;
           # their own variables keep them enrolled on their own. The third is
           # the retention-purge FK regression (HO-2).
-          AGENT_TOOL_OPERATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
-          ARTIFACT_PUBLISH_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
-          RETENTION_PURGE_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          AGENT_TOOL_OPERATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
+          ARTIFACT_PUBLISH_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
+          RETENTION_PURGE_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
           # The Daily Research Brief lifecycle and the other orchestration
           # suites skip without these. Each fixture creates and drops its own
           # schema, and the Redis suites delete only the keys they write.
-          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
-          ORCHESTRATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/15"
-          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
+          ORCHESTRATION_TEST_REDIS_URL: "redis://localhost:6379/15"
+          REDIS_URL: "redis://localhost:6379/0"
           # Lifecycle fixtures own a schema and queue in these throwaway services.
-          INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
-          INGESTION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
-          CLI_REVOCATION_TEST_REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          INGESTION_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
+          INGESTION_TEST_REDIS_URL: "redis://localhost:6379/0"
+          CLI_REVOCATION_TEST_REDIS_URL: "redis://localhost:6379/0"
           # X4 PDF-export tests fail instead of skipping without the renderer.
           PDF_EXPORT_TEST_REQUIRE_RENDERER: "1"
       - name: Run ingestion recovery PostgreSQL tests
@@ -980,10 +977,10 @@ jobs:
           PY
         env:
           ENVIRONMENT: testing
-          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
+          ORCHESTRATION_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
           DATABASE_URL: "sqlite:///:memory:"
           ASYNC_DATABASE_URL: "sqlite+aiosqlite:///:memory:"
-          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          REDIS_URL: "redis://localhost:6379/0"
           AZURE_OPENAI_CHAT_ENDPOINT: "https://example.invalid"
           AZURE_OPENAI_CHAT_API_KEY: "test-key-not-real"
       - name: Save ingestion recovery test results
@@ -1029,8 +1026,8 @@ jobs:
           PY
         env:
           ENVIRONMENT: testing
-          TWO_ACCOUNT_PG_TEST_DATABASE_URL: "postgresql://test:test@localhost:${{ job.services.postgres.ports['5432'] }}/test_db"
-          REDIS_URL: "redis://localhost:${{ job.services.redis.ports['6379'] }}/0"
+          TWO_ACCOUNT_PG_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/test_db"
+          REDIS_URL: "redis://localhost:6379/0"
       - name: Save two-account PostgreSQL search results
         if: ${{ !cancelled() && matrix.shard == 1 }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

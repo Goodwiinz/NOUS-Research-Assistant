@@ -45,18 +45,33 @@ def _step_named(name: str) -> dict:
     return matches[0]
 
 
-def test_job_has_postgres_15_service_with_healthcheck() -> None:
-    """The advisory execution checks need a real Postgres to upgrade against."""
+def test_job_starts_postgres_15_with_healthcheck() -> None:
+    """The advisory execution checks need a real Postgres to upgrade against.
+
+    It starts from a step (not job-level ``services:``) so the image pull can
+    authenticate to ECR Public first; anonymous pulls hit a shared quota.
+    """
     job = _load_job()
-    services = job.get("services") or {}
-    assert "postgres" in services, "migration-check must define a postgres service"
-    postgres = services["postgres"]
+    assert "services" not in job
+    assert job["permissions"]["id-token"] == "write"
+    step = _step_named("Start Postgres")
+    assert step["uses"] == "./.github/actions/start-ci-services"
+    image = step["with"]["postgres-image"]
     assert (
-        postgres.get("image") == "public.ecr.aws/docker/library/postgres:15-alpine"
-    ), f"expected official PostgreSQL 15 Alpine image, got {postgres.get('image')!r}"
-    options = postgres.get("options") or ""
-    assert "pg_isready" in options and "--health" in options, (
-        "postgres service must declare a pg_isready health check so the upgrade "
+        image == "public.ecr.aws/docker/library/postgres:15-alpine"
+    ), f"expected official PostgreSQL 15 Alpine image, got {image!r}"
+    steps = _steps()
+    assert steps.index(step) < steps.index(
+        _step_named("Advisory — upgrade head from empty DB")
+    )
+    action = yaml.safe_load(
+        (
+            REPO_ROOT / ".github" / "actions" / "start-ci-services" / "action.yml"
+        ).read_text(encoding="utf-8")
+    )
+    script = action["runs"]["steps"][-1]["run"]
+    assert "--health-cmd pg_isready" in script and "healthy" in script, (
+        "the action must wait for a pg_isready health check so the upgrade "
         "steps run against a ready DB"
     )
 
