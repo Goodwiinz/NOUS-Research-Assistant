@@ -22,7 +22,7 @@ const projectFolder = {
 };
 const accountFolder = { label: 'scratch', workspace_id: 'folder-2' };
 
-function routeGet(responses: Record<string, unknown>) {
+function routeGet(responses: Record<string, unknown>): void {
   vi.mocked(api.get).mockImplementation((url: string) => {
     const suffix = Object.keys(responses).find((key) => url.endsWith(key));
     if (!suffix) return Promise.reject(new Error(`unexpected GET ${url}`));

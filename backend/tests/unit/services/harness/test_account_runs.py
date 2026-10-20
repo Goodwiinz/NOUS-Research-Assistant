@@ -25,18 +25,6 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from tests.unit.services.harness.test_runs import (  # noqa: F401
-    CONVERSATION,
-    DEVICE,
-    LOCAL,
-    ORG,
-    PROJECT,
-    THREAD,
-    USER,
-    WORKSPACE,
-    context,
-    db,
-)
 
 from src.api.agent.harness_streaming import (
     context_for_accepted_run,
@@ -75,6 +63,18 @@ from src.services.integrations.context import (
     list_devices,
     mint_integration_grant,
     resolve_integration_context,
+)
+from tests.unit.services.harness.test_runs import (  # noqa: F401
+    CONVERSATION,
+    DEVICE,
+    LOCAL,
+    ORG,
+    PROJECT,
+    THREAD,
+    USER,
+    WORKSPACE,
+    context,
+    db,
 )
 
 pytestmark = pytest.mark.unit
@@ -1110,9 +1110,8 @@ async def test_one_account_bridge_leases_runs_in_two_projects(
 async def test_a_start_command_names_its_project_only_under_an_account_pairing(
     db: AsyncSession, context: IntegrationContext, account: IntegrationContext
 ) -> None:
-    from tests.unit.services.harness.test_runs import accept
-
     from src.services.harness.delivery import dispatch_pending, lease_commands
+    from tests.unit.services.harness.test_runs import accept
 
     await accept(db, context)  # a project pairing's run on DEVICE / LOCAL
     await start(db, THREAD_B, FOLDER_A)
