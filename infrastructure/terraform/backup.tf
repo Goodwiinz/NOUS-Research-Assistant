@@ -335,10 +335,14 @@ resource "aws_kms_alias" "backup" {
 resource "aws_backup_plan" "rds_backup" {
   name = "${var.project_name}-rds-backup-plan"
 
+  # RDS maintenance: Monday 03:00-04:00 UTC; automated backups: 04:00-06:00.
+  # AWS Backup cannot start in the hour before maintenance. Keep a buffer.
   rule {
     rule_name         = "daily_backups"
     target_vault_name = aws_backup_vault.main.name
-    schedule          = "cron(0 2 ? * *)"
+    schedule          = "cron(0 8 ? * *)"
+    start_window      = 60
+    completion_window = 180
 
     lifecycle {
       delete_after = 30
@@ -354,7 +358,9 @@ resource "aws_backup_plan" "rds_backup" {
   rule {
     rule_name         = "weekly_backups"
     target_vault_name = aws_backup_vault.main.name
-    schedule          = "cron(0 2 ? * 1)"
+    schedule          = "cron(0 8 ? * 1)"
+    start_window      = 60
+    completion_window = 180
 
     lifecycle {
       delete_after = 90
