@@ -1,5 +1,7 @@
 # ✅ Complete Knowledge Graph Setup - Ready to Use!
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Success! Your Knowledge Graph is Live
 
 Your RAG system now has **automatic entity extraction** working for both new and existing documents!

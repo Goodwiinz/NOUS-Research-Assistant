@@ -1,5 +1,7 @@
 # Corrected Knowledge Graph Database Architecture
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Executive Summary
 
 This document describes the corrected database architecture for the Knowledge Graph functionality that resolves the critical architectural violation where graph algorithms were incorrectly placed in frontend tasks. The new design implements proper backend-first processing with clear separation of concerns.

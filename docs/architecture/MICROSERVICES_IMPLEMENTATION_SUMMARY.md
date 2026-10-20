@@ -1,5 +1,7 @@
 # Multimodal Enterprise RAG System - Microservices Implementation Summary
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document summarizes the complete implementation of production-ready microservices for the Multimodal Enterprise RAG System. The implementation follows a clean architecture pattern with API-first design, comprehensive error handling, and full observability.

@@ -1,5 +1,7 @@
 # Comprehensive API Contracts - Multimodal Enterprise RAG System
 
+> **Stale / historical (2026-10-17):** It covers only part of the API and its paths and schemas may have drifted. The source of truth is the generated `backend/openapi.json` (also served at `/docs` when `DEBUG` is on). Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document provides complete API contracts for the Multimodal Enterprise RAG System UI, including REST endpoints, WebSocket specifications, authentication patterns, and comprehensive error handling. The API supports multi-tenant architecture with organization-based isolation, real-time updates, and comprehensive evaluation metrics.

@@ -1,5 +1,7 @@
 # Analytics Dashboard Migration Strategy
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document outlines the comprehensive migration strategy for implementing the Knowledge Graph Analytics Dashboard schema in the existing Multimodal Enterprise RAG System. The migration is designed to be non-disruptive, backwards-compatible, and supports gradual rollout.
