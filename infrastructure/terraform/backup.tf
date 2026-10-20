@@ -423,6 +423,13 @@ resource "aws_backup_selection" "rds" {
   ]
 }
 
+# EKS module v19 does not expose access_config. Enable API_AND_CONFIG_MAP
+# during cluster bootstrap (see docs/runbooks/eks-backup-recovery.md), then
+# fail closed here if a rebuilt cluster still uses CONFIG_MAP alone.
+data "aws_eks_cluster" "backup_target" {
+  name = module.eks.cluster_name
+}
+
 resource "aws_backup_selection" "eks" {
   name         = "${var.project_name}-eks-selection"
   iam_role_arn = aws_iam_role.backup_role.arn
@@ -431,6 +438,16 @@ resource "aws_backup_selection" "eks" {
   resources = [
     "arn:aws:eks:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/${module.eks.cluster_name}"
   ]
+
+  lifecycle {
+    precondition {
+      condition = contains(
+        ["API", "API_AND_CONFIG_MAP"],
+        data.aws_eks_cluster.backup_target.access_config[0].authentication_mode
+      )
+      error_message = "AWS Backup requires EKS API access entries. Enable API_AND_CONFIG_MAP without removing aws-auth mappings; see docs/runbooks/eks-backup-recovery.md."
+    }
+  }
 }
 
 # =============================================================================
@@ -536,16 +553,44 @@ resource "aws_cloudwatch_metric_alarm" "backup_failure" {
   alarm_name          = "${var.project_name}-backup-failure"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "1"
-  metric_name         = "BackupJobFailures"
+  metric_name         = "NumberOfBackupJobsFailed"
   namespace           = "AWS/Backup"
-  period              = "86400"
+  period              = "300"
   statistic           = "Sum"
   threshold           = "0"
-  alarm_description   = "This metric monitors backup failures"
+  alarm_description   = "AWS Backup jobs in ${aws_backup_vault.main.name}: NumberOfBackupJobsFailed"
   alarm_actions       = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    BackupVaultName = aws_backup_vault.main.name
+  }
 
   tags = {
     Name = "${var.project_name}-backup-failure"
+  }
+}
+
+# Jobs that never start expire rather than fail. Monitor both terminal states.
+resource "aws_cloudwatch_metric_alarm" "backup_expired" {
+  alarm_name          = "${var.project_name}-backup-expired"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "NumberOfBackupJobsExpired"
+  namespace           = "AWS/Backup"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "AWS Backup jobs in ${aws_backup_vault.main.name}: NumberOfBackupJobsExpired"
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    BackupVaultName = aws_backup_vault.main.name
+  }
+
+  tags = {
+    Name = "${var.project_name}-backup-expired"
   }
 }
 
