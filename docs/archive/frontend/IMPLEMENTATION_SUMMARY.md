@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: summary of the early frontend architecture proposal; see frontend/README.md and docs/engineering/frontend.md.**
+> Historical record, not a live contract. Originally at `frontend/docs/IMPLEMENTATION_SUMMARY.md`; relative links and paths below were not updated.
+
 # Frontend Architecture Implementation Summary
 
 ## Overview

@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: early frontend architecture proposal that does not match the current app; see frontend/README.md and docs/engineering/frontend.md.**
+> Historical record, not a live contract. Originally at `frontend/docs/FRONTEND_ARCHITECTURE.md`; relative links and paths below were not updated.
+
 # Frontend Architecture - Multimodal Enterprise RAG System
 
 ## Overview

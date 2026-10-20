@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: one-off migration note about moving graph algorithms out of the frontend; kept as a decision record.**
+> Historical record, not a live contract. Originally at `frontend/MIGRATION_GUIDE_GRAPH_ARCHITECTURE.md`; relative links and paths below were not updated.
+
 # Migration Guide: Knowledge Graph Frontend Architecture Correction
 
 ## Overview

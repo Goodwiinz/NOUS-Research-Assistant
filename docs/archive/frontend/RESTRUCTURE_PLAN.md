@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: completed restructuring plan from the Next.js migration.**
+> Historical record, not a live contract. Originally at `frontend/RESTRUCTURE_PLAN.md`; relative links and paths below were not updated.
+
 # Next.js Full Structure Reorganization Plan
 
 ## New Structure (Option 2)

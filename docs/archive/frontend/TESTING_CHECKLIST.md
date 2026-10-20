@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: one-off post-migration smoke checklist; superseded by the Vitest and Playwright suites.**
+> Historical record, not a live contract. Originally at `frontend/TESTING_CHECKLIST.md`; relative links and paths below were not updated.
+
 # Testing Checklist - Next.js Migration
 
 Use this checklist to verify your Next.js migration is working correctly.

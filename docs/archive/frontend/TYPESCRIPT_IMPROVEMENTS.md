@@ -1,3 +1,6 @@
+> **Archived 2026-10-17: past TypeScript type-safety proposal; current rules are in docs/engineering/frontend.md and docs/engineering/api-contracts.md.**
+> Historical record, not a live contract. Originally at `frontend/docs/TYPESCRIPT_IMPROVEMENTS.md`; relative links and paths below were not updated.
+
 # TypeScript Type Safety Improvements
 
 ## Overview

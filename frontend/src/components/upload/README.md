@@ -226,15 +226,12 @@ interface UploadWebSocketMessage {
 
 ## Testing
 
-The components include comprehensive Storybook stories for testing:
+Storybook is not installed in this repo (there is no `storybook` script), so
+`DocumentUploadWizard.stories.tsx` is not runnable as-is. The upload service is
+covered by Vitest:
 
 ```bash
-# Run Storybook
-npm run storybook
-
-# Navigate to:
-# Components/Upload/DocumentUploadWizard
-# Hooks/useDocumentUpload
+pnpm --dir frontend exec vitest run src/services/__tests__/uploadService.test.ts
 ```
 
 ## Performance Considerations
