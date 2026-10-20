@@ -50,8 +50,12 @@ applying this change alongside PR #2036's alert reconciliation.
   and reference filenames absent from the running backend filesystem. The
   local download path checks the stored file path directly. This establishes
   unresolved local-file references, not when or why the files disappeared.
-  Preserve rows and investigate recoverable originals and content checksums;
-  do not fabricate S3 mappings or mark these records repaired.
+  S3 key matching found artifacts for all 101 document UUIDs: 42 have exactly
+  one PDF candidate under bedrock; the other 59 have text/metadata artifacts
+  only. Across the matches: 101 documents TXT, 101 bedrock JSON, 59 bedrock
+  TXT and 42 bedrock PDF objects. These are recovery candidates, not verified
+  original-file parity. Preserve rows; validate ownership, original checksums
+  and candidate readability before changing references. No mappings were changed.
 - No `.cutover` directory was found in registered worktrees; the named source
   dumps/count files were not found in the checked primary checkout. Current
   storage inventory had no dump/manifest/cutover archive candidates. This
