@@ -50,6 +50,8 @@ The pieces already exist: the bridge does the browser login, the consent, the fo
 - The lock refusal ends `(if no such process is running, delete <dir>/bridge.lock)`, and a lock taken before the last reboot is replaced even if its pid is alive again.
 - While the bridge runs, SIGHUP (closing the terminal window) stops it cleanly like Ctrl-C and SIGTERM, in `nous --rc` and in `nous-harness run`.
 
+**Amendment 2026-10-15** (account connections, [design](2026-10-14-account-connection-design.md), PR 2): `nous --rc` is account-only. It no longer lists, picks or creates projects; it pairs the whole NOUS account (`harness:execute`, `tools:read`, `tools:write`, `library:read`, `library:write`), registers the current folder as an account folder, and prints `Connected: your NOUS account ↔ <folder>  (Codex <v>)` and `In any chat on NOUS, choose Local Codex → <device> → <folder>.` Why: a pairing bound to one project meant several pairings to use Codex across an account of many workspaces and projects (the owner: "I wanted to connect to the whole account"); the account approval is checked against the account on every call, so new projects are included and removed ones drop out, and each run is still held to its chat's project. The stored sign-in is checked with `GET /auth/me`. Replacing a stored project or workspace pairing prints the revoke hint and carries its folders over as account folders. A server without account connections prints `this NOUS server doesn't support account connections yet`. The "Pairings per computer" and "replaced project's consent" decisions still hold, applied to the account pairing; the "approve once per project" wording above now reads "once per account".
+
 ## What the user sees
 
 ```

@@ -26,11 +26,11 @@ const OTHER_PROJECT = "77777777-7777-4777-8777-777777777777";
 // Valid arguments for every action NOUS accepts (ALLOWED_ACTIONS in
 // backend/src/services/agent/tool_actions.py), each with all of its fields.
 const ACTIONS: Record<string, Record<string, unknown>> = {
-  create_project_note: { title: "Findings", content: "# Findings", tags: ["a"] },
+  create_project_note: { title: "Findings", content: "# Findings", tags: ["a"], project_id: PROJECT },
   save_papers_to_folder: { document_ids: [DOC], project_id: PROJECT },
   remove_papers_from_folder: { document_ids: [DOC], project_id: PROJECT },
   move_papers_between_folders: { document_ids: [DOC], from_project_id: PROJECT, to_project_id: OTHER_PROJECT },
-  create_folder: { name: "Reading", description: "Papers to read" },
+  create_folder: { name: "Reading", description: "Papers to read", workspace_id: "88888888-8888-4888-8888-888888888888" },
   rename_folder: { project_id: PROJECT, name: "Read" },
   delete_folder: { project_id: PROJECT },
   update_document_metadata: { document_id: DOC, title: "New title", tags: [] },
@@ -152,7 +152,7 @@ test("request_action sends only the note fields with the grant headers and never
       title: "Findings",
       content: "# Findings",
       tags: ["a"],
-      project_id: randomUUID(),
+      project_id: PROJECT,
       user_id: randomUUID(),
     });
     assert.equal(outcome.isError, undefined);
@@ -165,7 +165,8 @@ test("request_action sends only the note fields with the grant headers and never
     assert.deepEqual(JSON.parse(sent?.body ?? "{}"), {
       tool_name: "create_project_note",
       invocation_id: INVOCATION,
-      arguments: { title: "Findings", content: "# Findings", tags: ["a"] },
+      // project_id is a selector (an account connection's note names its project); user_id is identity.
+      arguments: { title: "Findings", content: "# Findings", tags: ["a"], project_id: PROJECT },
     });
   } finally {
     await server.close();
@@ -224,7 +225,7 @@ test("request_action offers every NOUS action and sends each with only its own f
     // Every other action's fields, and identity, ride along and must be dropped.
     const everyField: Record<string, unknown> = Object.assign({}, ...Object.values(ACTIONS));
     const identity = Object.fromEntries(
-      ["user_id", "organization_id", "workspace_id", "thread_id", "run_id", "grant_id", "consent_id"].map((key) => [key, randomUUID()]),
+      ["user_id", "organization_id", "thread_id", "run_id", "grant_id", "consent_id"].map((key) => [key, randomUUID()]),
     );
     for (const [action, fields] of Object.entries(ACTIONS)) {
       for (const field of Object.keys(fields)) assert.ok(schema.properties[field], `${action}: ${field} is advertised`);
@@ -461,6 +462,59 @@ test("a library:write connection is offered the action tools without --actions",
       invocation_id: INVOCATION,
       arguments: { document_ids: [DOC], project_id: PROJECT },
     });
+  } finally {
+    await server.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("the real MCP child started with --project pins its catalog and its actions to that project", async () => {
+  const receipt = { ok: true, tool_name: "save_papers_to_folder", project_id: PROJECT, document_ids: [DOC] };
+  const catalog = [
+    { name: "list_library", description: "List", input_schema: { type: "object", properties: {} } },
+    {
+      name: "search_documents",
+      description: "Search",
+      input_schema: {
+        type: "object",
+        properties: { query: { type: "string" }, project_id: { type: "string", format: "uuid" } },
+        required: ["query", "project_id"],
+      },
+    },
+  ];
+  const server = await backend(({ path }) =>
+    path.endsWith("/integrations/tools")
+      ? { code: 200, body: catalog }
+      : {
+          code: 200,
+          body: status("succeeded", {
+            tool_name: "save_papers_to_folder",
+            result: { content: [receipt], is_error: false, source_refs: [{ document_id: DOC }] },
+          }),
+        },
+  );
+  const stateDir = mkdtempSync(join(tmpdir(), "nous-actions-pinned-"));
+  try {
+    const credentialHandle = await new CredentialStore(stateDir).save(credentials);
+    const { command, args } = buildManagedMcpConfig({
+      apiOrigin: server.origin,
+      credentialHandle,
+      stateDir,
+      library: true,
+      project: PROJECT,
+    }).nous!;
+    const run = await driveMcpChild(command, args, stateDir, {
+      name: "request_action",
+      arguments: { action: "save_papers_to_folder", invocation_id: INVOCATION, document_ids: [DOC] },
+    });
+    assert.equal(run.code, 0, run.stderr);
+    const tools = run.tools as { name: string; inputSchema: { properties: Record<string, { enum?: string[] }> } }[];
+    assert.deepEqual(tools.map((t) => t.name).sort(), ["get_action_status", "request_action", "search_documents"]);
+    const search = tools.find((t) => t.name === "search_documents")!;
+    assert.deepEqual(search.inputSchema.properties.project_id?.enum, [PROJECT]);
+    assert.equal(run.result.isError, undefined, JSON.stringify(run.result));
+    const sent = server.requests.find((r) => r.method === "POST");
+    assert.deepEqual(JSON.parse(sent?.body ?? "{}").arguments, { document_ids: [DOC], project_id: PROJECT });
   } finally {
     await server.close();
     rmSync(stateDir, { recursive: true, force: true });

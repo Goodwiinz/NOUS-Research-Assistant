@@ -73,6 +73,19 @@ class DeviceBoundToAnotherChat(IntegrationAccessDenied):
     )
 
 
+class DeviceNotConnectedToProject(IntegrationAccessDenied):
+    """This computer cannot run Codex for the chat's project: it holds neither
+    an account approval covering the project nor an approval for the project,
+    or the chosen folder is not usable from this project.
+
+    One message for every such cause, including a device or folder id that is
+    not the caller's, so the text reveals nothing a guess could not. Still an
+    IntegrationAccessDenied, so every caller that maps denials keeps doing so.
+    """
+
+    client_message: ClassVar[str] = "This computer isn't connected to this project."
+
+
 class IntegrationConflict(Exception):
     """A request was already decided, consumed or expired."""
 
@@ -719,9 +732,10 @@ async def mint_integration_grant(
 ) -> IssuedGrant:
     """Trusted internal API. External issuance must use the consent exchange.
 
-    ``consent_kind`` (PR 2's run path is intended to pass it) restricts the device's
-    consents to that kind. Among them exactly one must match. Without it, an
-    account consent wins over project consents (_single_lineage).
+    ``consent_kind`` (the Local Codex run path always passes it) restricts the
+    device's consents to that kind, and needs a device. Among them exactly one
+    must match. Without it, an account consent wins over project consents
+    (_single_lineage).
 
     Mints a project or workspace grant, never an account grant: that exists
     only as a device's pairing (exchange_request). With a device, the grant's
@@ -730,7 +744,9 @@ async def mint_integration_grant(
     project, or an account consent while the project is in the account.
     """
     kind = derive_binding_kind(project_id, workspace_id)
-    if kind is None:
+    # A stated consent kind names an approval, and only a device holds one:
+    # without a device it would silently mint with no approval behind it.
+    if kind is None or (consent_kind is not None and device_id is None):
         raise IntegrationAccessDenied()
     check_scopes(scopes, binding_kind=kind)
     await validate_binding(
@@ -1248,19 +1264,21 @@ async def register_device(
     return device
 
 
-async def _holds_account_run_consent(
+async def live_account_run_consent(
     db: AsyncSession, user_id: UUID, organization_id: UUID, device_id: UUID
-) -> bool:
-    """The device holds a live account approval that can run Codex: consumed,
-    not revoked, with harness:execute, while the user is active in the live
-    organization."""
-    try:
-        await authorized_account(db, user_id, organization_id)
-    except IntegrationAccessDenied:
-        return False
-    held = (
+) -> IntegrationGrantRequest | None:
+    """The device's one exchanged, unrevoked account approval that can run
+    Codex (``harness:execute``, not bound to a chat), else None.
+
+    Two would be ambiguous: ``mint_integration_grant`` fails closed on them
+    (``_single_lineage``), so every run on the device would be refused. Account
+    folders are registered and listed under this same predicate, never under a
+    looser one that admits folders no run could use.
+    """
+    rows = (
         await db.scalars(
-            select(IntegrationGrantRequest.scopes).where(
+            select(IntegrationGrantRequest)
+            .where(
                 IntegrationGrantRequest.user_id == user_id,
                 IntegrationGrantRequest.organization_id == organization_id,
                 IntegrationGrantRequest.device_id == device_id,
@@ -1268,10 +1286,26 @@ async def _holds_account_run_consent(
                 IntegrationGrantRequest.status == "consumed",
                 IntegrationGrantRequest.consent_revoked_at.is_(None),
                 IntegrationGrantRequest.is_deleted.is_(False),
+                IntegrationGrantRequest.thread_id.is_(None),
             )
+            .execution_options(populate_existing=True)
         )
     ).all()
-    return any("harness:execute" in (scopes or []) for scopes in held)
+    runnable = [row for row in rows if "harness:execute" in (row.scopes or [])]
+    return runnable[0] if len(runnable) == 1 else None
+
+
+async def _holds_account_run_consent(
+    db: AsyncSession, user_id: UUID, organization_id: UUID, device_id: UUID
+) -> bool:
+    """The device holds its one live account approval that can run Codex, while
+    the user is active in the live organization."""
+    try:
+        await authorized_account(db, user_id, organization_id)
+    except IntegrationAccessDenied:
+        return False
+    consent = await live_account_run_consent(db, user_id, organization_id, device_id)
+    return consent is not None
 
 
 async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
@@ -1309,16 +1343,23 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
         # approval still on file covers nothing (see _holds_account_run_consent).
         account_live = False
     run_chats: dict[UUID, list[UUID | None]] = {d.id: [] for d in devices}
-    account_wide: dict[UUID, bool] = {d.id: False for d in devices}
+    account_runs: dict[UUID, int] = {d.id: 0 for d in devices}
     project_ids: dict[UUID, set[UUID]] = {d.id: set() for d in devices}
     for consent in consents:
         if "harness:execute" not in (consent.scopes or []):
             continue
         run_chats[consent.device_id].append(consent.thread_id)
         if consent.binding_kind == "account":
-            if account_live:
-                account_wide[consent.device_id] = True
-        elif consent.binding_kind == "project" and consent.project_id is not None:
+            account_runs[consent.device_id] += 1
+        elif (
+            consent.binding_kind == "project"
+            and consent.project_id is not None
+            and consent.thread_id is None
+        ):
+            # Only a chat-unbound approval serves every chat of its project.
+            # One bound to a chat serves that chat alone (mint_integration_grant
+            # skips it for any other), so it is named by bound_thread_ids, not
+            # offered here for the project's other chats.
             project_ids[consent.device_id].add(consent.project_id)
     return [
         DeviceListItemDTO(
@@ -1332,7 +1373,9 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
                     key=str,
                 )
             ),
-            account_wide=account_wide[device.id],
+            # Exactly one, as live_account_run_consent: with two, every run
+            # on the device is refused, so the composer must not offer it.
+            account_wide=account_live and account_runs[device.id] == 1,
             project_ids=sorted(project_ids[device.id], key=str),
         )
         for device in devices
