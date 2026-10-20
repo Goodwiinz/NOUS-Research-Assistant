@@ -49,8 +49,9 @@ for the response. That's a read, not a transaction boundary.
   creation, not an access filter — a public workspace is visible cross-org
   by design.
 - Every `workspace_access.get_*` getter (`get_workspace`, `get_conversation`,
-  `get_thread`, `get_message`, `get_collection`) requires `user_id` with no
-  default and fails closed (returns `None`); router callers turn that into
+  `get_thread`, `get_thread_lean`, `get_message`, `get_collection`) requires
+  `user_id` with no default and fails closed (returns `None`); router callers
+  turn that into
   404 via `workspace_routes/dependencies.py`, `ChatService` uses the
   `Optional[...]` directly. Enforced by
   `backend/tests/unit/architecture/test_maintenance_contracts.py`.

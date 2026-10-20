@@ -1,7 +1,4 @@
-import {
-  getPublicApiBaseUrl,
-  shouldUseLocalProxyForConfiguredOrigin,
-} from '@/utils/publicEndpoints';
+import { getPublicApiBaseUrl } from '@/utils/publicEndpoints';
 
 // API Response Types
 export interface APIResponse<T> {
@@ -50,28 +47,8 @@ export class APIErrorClass extends Error {
 }
 
 // Base Configuration
-const normalizeApiBaseUrl = (rawBaseUrl?: string): string => {
-  const trimmed = (rawBaseUrl || '').trim();
-
-  // Default to Next.js rewrite path to avoid CORS/mixed-content issues.
-  if (!trimmed) return getPublicApiBaseUrl('/api/v1');
-
-  if (shouldUseLocalProxyForConfiguredOrigin(trimmed)) {
-    return '/api/v1';
-  }
-
-  // If already versioned, keep as-is.
-  if (/\/api\/v[0-9]+\/?$/.test(trimmed)) {
-    return trimmed.replace(/\/$/, '');
-  }
-
-  return `${trimmed.replace(/\/$/, '')}/api/v1`;
-};
-
 export const API_CONFIG = {
-  BASE_URL: normalizeApiBaseUrl(
-    process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL
-  ),
+  BASE_URL: getPublicApiBaseUrl('/api/v1', { preferLocalProxy: true }),
   API_VERSION: 'v1',
   TIMEOUT_MS: 30000,
   RETRY_ATTEMPTS: 3,

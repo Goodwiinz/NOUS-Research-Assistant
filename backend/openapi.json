@@ -44615,6 +44615,20 @@
     "/api/v1/integrations/context": {
       "get": {
         "operationId": "get_selected_context_api_v1_integrations_context_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 25,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -44625,6 +44639,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -65399,7 +65423,7 @@
     },
     "/api/v2/threads/{thread_id}/handoff": {
       "get": {
-        "description": "Latest harness handoff left in this chat (standalone route).",
+        "description": "Preserve the original object-or-404 contract for existing clients.",
         "operationId": "get_thread_handoff_api_v2_threads__thread_id__handoff_get",
         "parameters": [
           {
@@ -65441,6 +65465,63 @@
           }
         ],
         "summary": "Get Thread Handoff",
+        "tags": [
+          "workspaces-flat"
+        ]
+      }
+    },
+    "/api/v2/threads/{thread_id}/handoff/latest": {
+      "get": {
+        "description": "Latest handoff, or null for an authorized chat without one.",
+        "operationId": "get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandoffDTO"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Latest Thread Handoff Api V2 Threads  Thread Id  Handoff Latest Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Latest Thread Handoff",
         "tags": [
           "workspaces-flat"
         ]

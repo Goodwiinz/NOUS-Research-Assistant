@@ -2,6 +2,14 @@ import { integrationHeaders, type IntegrationCredentials } from "../credentials.
 import { apiBase, throwForStatus, type ToolResult, ToolRequestRejected } from "../mcp/client.ts";
 import type { LocalTool } from "../mcp/server.ts";
 
+/** A selection holds at most 25 memories (the server's MAX_SELECTED_MEMORIES), so no offset past 25 is a page. */
+const MAX_CONTEXT_OFFSET = 25;
+const OFFSET_REJECTED = `read_selected_context takes only an optional offset, an integer from 0 to ${MAX_CONTEXT_OFFSET}`;
+
+function isContextOffset(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_CONTEXT_OFFSET;
+}
+
 const MESSAGES = {
   forbidden:
     "NOUS denied context access: the grant may lack context:read (reconnect with nous-harness connect --tools --context) or the project is outside the grant",
@@ -17,8 +25,11 @@ export class ContextHttpClient {
     this.headers = integrationHeaders(credentials);
     this.fetchFn = fetchFn;
   }
-  async read(): Promise<ToolResult> {
-    return this.request("");
+  /** One page of the selection; without an offset the server reads page 0. */
+  async read(offset?: number): Promise<ToolResult> {
+    if (offset === undefined) return this.request("");
+    if (!isContextOffset(offset)) throw new ToolRequestRejected(OFFSET_REJECTED);
+    return this.request(`?${new URLSearchParams({ offset: String(offset) })}`);
   }
   async load(skillName: string): Promise<ToolResult> {
     return this.request("/skills/load", { skill_name: skillName });
@@ -64,17 +75,28 @@ export class ContextHttpClient {
   }
 }
 
+function contextOffset(args: Record<string, unknown>): number | undefined {
+  const { offset } = args;
+  if (Object.keys(args).every((key) => key === "offset") && (offset === undefined || isContextOffset(offset)))
+    return offset;
+  throw new ToolRequestRejected(OFFSET_REJECTED);
+}
+
 /** `read_selected_context`: the project memories the user chose to share with this device. */
 export function readSelectedContextTool(client: ContextHttpClient): LocalTool {
   return {
     descriptor: {
       name: "read_selected_context",
       description:
-        "Read the project memories and frozen skill catalog the user chose to share with this device. Load a listed skill with load_selected_skill. Returns nothing until the user selects context in NOUS.",
-      inputSchema: { type: "object", additionalProperties: false, properties: {} },
+        "Read the project memories and frozen skill catalog the user chose to share with this device. Load a listed skill with load_selected_skill. Returns nothing until the user selects context in NOUS. Results are paged: when next_offset is not null, call again with offset set to next_offset until it is null.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { offset: { type: "integer", minimum: 0, maximum: MAX_CONTEXT_OFFSET } },
+      },
     },
-    async call() {
-      const result = await client.read();
+    async call(args) {
+      const result = await client.read(contextOffset(args));
       const structured = { content: result.content, source_refs: result.source_refs };
       return {
         text: JSON.stringify(structured),

@@ -1,13 +1,20 @@
-const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0']);
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
+const API_VERSION_PATH_RE = /\/api\/v[0-9]+\/?$/;
 
 type GlobalWithTestOrigin = typeof globalThis & {
   __TEST_BROWSER_ORIGIN__?: string;
 };
 
-const trimTrailingSlash = (value: string): string => value.replace(/\/$/, '');
+const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 
-const isLocalHostname = (hostname: string): boolean =>
-  LOCAL_HOSTNAMES.has(hostname);
+const isLocalHostname = (hostname: string): boolean => {
+  const normalized = hostname.toLowerCase().replace(/\.$/, '');
+  return (
+    LOCAL_HOSTNAMES.has(normalized) ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized) ||
+    normalized.endsWith('.localhost')
+  );
+};
 
 const parseUrl = (value: string): URL | null => {
   try {
@@ -18,7 +25,8 @@ const parseUrl = (value: string): URL | null => {
 };
 
 const getBrowserLocation = (): URL | null => {
-  const testOrigin = (globalThis as GlobalWithTestOrigin).__TEST_BROWSER_ORIGIN__;
+  const testOrigin = (globalThis as GlobalWithTestOrigin)
+    .__TEST_BROWSER_ORIGIN__;
   if (testOrigin) {
     return parseUrl(testOrigin);
   }
@@ -79,10 +87,21 @@ const mapFrontendHostToApiHost = (hostname: string): string => {
   return hostname;
 };
 
-const getConfiguredOrigin = (...values: Array<string | undefined>): string => {
+const getConfiguredOrigin = (
+  values: Array<string | undefined>,
+  protocols: readonly string[] = ['http:', 'https:']
+): string => {
   for (const value of values) {
     const trimmed = value?.trim();
     if (!trimmed || shouldIgnoreConfiguredOrigin(trimmed)) {
+      continue;
+    }
+
+    if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+      return trimTrailingSlash(trimmed);
+    }
+    const parsed = parseUrl(trimmed);
+    if (!parsed || !protocols.includes(parsed.protocol)) {
       continue;
     }
 
@@ -93,9 +112,12 @@ const getConfiguredOrigin = (...values: Array<string | undefined>): string => {
 };
 
 export const getPublicApiOrigin = (): string => {
-  const configured = getConfiguredOrigin(process.env.NEXT_PUBLIC_API_URL);
-  if (configured) {
-    return configured;
+  const configured = getConfiguredOrigin([
+    process.env.NEXT_PUBLIC_API_URL,
+    process.env.NEXT_PUBLIC_API_BASE_URL,
+  ]);
+  if (configured && !configured.startsWith('/')) {
+    return configured.replace(API_VERSION_PATH_RE, '');
   }
 
   const browserLocation = getBrowserLocation();
@@ -115,21 +137,34 @@ export const getPublicApiOrigin = (): string => {
   return browserLocation.origin;
 };
 
-export const getPublicApiBaseUrl = (defaultPath: string = '/api/v1'): string => {
-  const configuredBaseUrl = getConfiguredOrigin(
-    process.env.NEXT_PUBLIC_API_BASE_URL
-  );
-  if (configuredBaseUrl) {
-    if (shouldUseLocalProxyForConfiguredOrigin(configuredBaseUrl)) {
+export const getPublicApiBaseUrl = (
+  defaultPath: string = '/api/v1',
+  options: { preferLocalProxy?: boolean } = {}
+): string => {
+  // The main API client uses Next's proxy when a local UI is configured
+  // with a remote backend. Direct streaming callers keep their local default.
+  if (options.preferLocalProxy) {
+    const rawConfigured = [
+      process.env.NEXT_PUBLIC_API_BASE_URL,
+      process.env.NEXT_PUBLIC_API_URL,
+    ].find((value) => value?.trim());
+    if (
+      rawConfigured &&
+      shouldUseLocalProxyForConfiguredOrigin(rawConfigured.trim())
+    ) {
       return trimTrailingSlash(defaultPath);
     }
-
-    if (configuredBaseUrl.startsWith('/')) {
-      return trimTrailingSlash(configuredBaseUrl);
-    }
-
-    if (/\/api\/v[0-9]+\/?$/.test(configuredBaseUrl)) {
-      return trimTrailingSlash(configuredBaseUrl);
+  }
+  const configuredBaseUrl = getConfiguredOrigin([
+    process.env.NEXT_PUBLIC_API_BASE_URL,
+    process.env.NEXT_PUBLIC_API_URL,
+  ]);
+  if (configuredBaseUrl) {
+    if (
+      configuredBaseUrl.startsWith('/') ||
+      API_VERSION_PATH_RE.test(configuredBaseUrl)
+    ) {
+      return configuredBaseUrl;
     }
 
     return `${configuredBaseUrl}${defaultPath}`;
@@ -141,11 +176,11 @@ export const getPublicApiBaseUrl = (defaultPath: string = '/api/v1'): string => 
 
 export const getPublicWebSocketOrigin = (): string => {
   const configured = getConfiguredOrigin(
-    process.env.NEXT_PUBLIC_WS_URL,
-    process.env.NEXT_PUBLIC_WEBSOCKET_URL
+    [process.env.NEXT_PUBLIC_WS_URL, process.env.NEXT_PUBLIC_WEBSOCKET_URL],
+    ['ws:', 'wss:', 'http:', 'https:']
   );
   if (configured) {
-    return configured;
+    return configured.replace(/^http/, 'ws');
   }
 
   const apiOrigin = getPublicApiOrigin();
@@ -153,5 +188,5 @@ export const getPublicWebSocketOrigin = (): string => {
     return apiOrigin.replace(/^http/, 'ws');
   }
 
-  return 'ws://localhost:8000';
+  return '';
 };

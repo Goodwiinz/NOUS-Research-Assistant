@@ -1006,10 +1006,13 @@ jobs:
         # scratch databases with the real alembic chain (CREATE DATABASE needs
         # the service's superuser) and guards the thread/message full-text
         # objects and /api/v2/search/health on a migration-built schema.
+        # GOO-423 also replays handoff-key migration/rollback on a disposable
+        # database; it needs PostgreSQL but deliberately does not need pgvector.
         run: |
           mkdir -p test-results
           pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
             backend/tests/integration/test_search_vector_repair_postgres.py \
+            backend/tests/integration/test_handoff_org_slots_postgres.py \
             -c backend/pytest.ini -m integration \
             --junitxml=test-results/two-account-pg-search.xml -q -ra
           python - <<'PY'

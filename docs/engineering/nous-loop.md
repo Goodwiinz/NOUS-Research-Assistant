@@ -274,6 +274,56 @@ finding against the code, address real issues, and rerun affected tests. Review
 is evidence, not ceremony; an unavailable mandatory review ends as
 `ready-for-human`.
 
+Each review writes one verdict file, named after its lens (`code.md`,
+`security.md`), in the tick's review directory:
+`$LOOP_BRIDGE_DIR/reviews/<branch>/round-<N>/` with each `/` in the branch
+name replaced by `__`, or `$NOUS_RECEIPT_DIR/<run-id>/review/round-<N>/` in
+`remote-required` mode. The first line is exactly `VERDICT: PASS` or
+`VERDICT: CHANGES`, followed by the reviewed head and base SHAs and the
+findings with `path:line` references. `CHANGES` is reserved for a blocking
+finding in this diff; pre-existing issues the diff did not worsen are notes
+under a `PASS`. The primary agent reads verdicts from these files, never from
+memory of a review conversation. A tick that reconciles the same branch reads
+the same directory as its review history. A new tick needs a review directory
+that does not exist yet; if it exists, pick another branch name. Quote the final round's verdicts in
+the PR description, or in the tick report when no PR exists.
+
+A review round is one set of required reviews of one diff. Every round counts,
+including rounds repeated in step 8 for review comments, hosted failures, or
+base updates that change the PR's own diff. A base update that leaves that
+diff unchanged is not a new round: keep the verdict files in the same
+`round-<N>` directory and add the new head and base SHAs to each. When round 3 ends with any `VERDICT: CHANGES`,
+stop fixing: end the tick as `ready-for-human`, list each outstanding finding
+with its verdict file, and leave the branch and any PR for a human. If a fourth
+round would be needed for any reason, including a diff change after a round-3
+`PASS`, end the same way. Never resolve a disagreement by dropping a reviewer.
+
+### 6b. Check for human-gated changes
+
+Some changes need a person's approval even when every gate is green. If the
+final diff does any of the following, the tick still runs steps 7 and 7b and
+may publish the PR, but it ends as `ready-for-human` instead of merging. Name
+each matching item and its files in the report and the PR description:
+
+- adds or edits a database migration (`backend/alembic/versions/`,
+  `supabase/migrations/`);
+- adds, removes, or upgrades a dependency, or changes a manifest or lockfile
+  (`pyproject.toml`, any `requirements*.txt`, `package.json`,
+  `pnpm-lock.yaml`);
+- changes CI, deploy, or hosting configuration or the build scripts it runs
+  (`.github/workflows/`, `deployment/`, `infrastructure/`, Dockerfiles,
+  `docker-bake.hcl`, `vercel.json`, `scripts/ci/`);
+- breaks an API contract, i.e. it needs the `api-breaking-approved` label
+  described in [api-contracts.md](api-contracts.md);
+- writes production data, or sends email or other outbound messages;
+- rests on an assumption that is really a product decision, such as copy,
+  pricing, or what a user is allowed to see. Record that assumption in the PR
+  description.
+
+Authentication, authorization, and tenancy fixes are not on this list. They
+stay eligible for a merge under loop authority once the security review in
+step 6 passes.
+
 ### 7. Run local gates
 
 Run targeted tests plus every applicable repository gate. Use
@@ -328,7 +378,8 @@ address real issues.
 Whenever the published diff changes, return to the causal test proof and local
 gates, repeat independent review whenever the diff changes, and repeat security
 review when applicable. Re-publish the reviewed commit and re-check hosted
-evidence.
+evidence. Each repeat is a new review round under the step 6 cap, and the
+step 6b check runs again on the new diff.
 
 A merged change that touched a mapped feature stays merged-but-unverified
 until the dev lane runs it. The tick that merged it reruns the step 7b
@@ -391,9 +442,10 @@ Apply the following protocol to every PR, including reconciled work:
 5. **Guard the merge.** Immediately before merging, reread the live rules, PR
    head, base branch/SHA, open/draft state, reviews, and checks. Require the
    current task's merge authorization, destination `develop`, current base
-   incorporation, the final reviewed head, and every required gate. If relevant
-   state moved, invalidate readiness and repeat the affected preparation and
-   validation. Use an expected-head
+   incorporation, the final reviewed head, a `VERDICT: PASS` file for every
+   required review of that head, no step 6b match, and every required gate.
+   If relevant state moved, invalidate readiness and repeat the affected
+   preparation and validation. Use an expected-head
    merge guard, such as REST `sha` or `gh pr merge --match-head-commit`.
    These guards do not atomically lock the base. Omitting `--admin` does not
    prove protection applies to an exempt actor. To guarantee freshness at
