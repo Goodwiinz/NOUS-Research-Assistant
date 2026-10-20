@@ -6,7 +6,9 @@ Tests cover:
 - get_recent_traces() uses zrevrange and returns summaries
 - get_aggregate_stats() computes averages correctly
 - update_trace_evaluation() round-trips
-- Graceful handling when Redis is None
+- Graceful handling when Redis is None (writes/single reads degrade; the
+  dashboard reads raise DiagnosticsUnavailable so an outage is never
+  reported as "no traces")
 """
 
 import json
@@ -20,6 +22,7 @@ from src.services.diagnostics.diagnostics_store import (
     TRACE_KEY_PREFIX,
     TRACE_TTL_SECONDS,
     DiagnosticsStore,
+    DiagnosticsUnavailable,
     _index_key,
 )
 from src.services.diagnostics.retrieval_diagnostics import (
@@ -322,16 +325,42 @@ class TestGetRecentTraces:
         assert summaries[0]["trace_id"] == "bytes-id"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_redis_none(self) -> None:
-        """get_recent_traces() should return empty list when Redis is None."""
+    async def test_raises_unavailable_when_redis_none(self) -> None:
+        """get_recent_traces() must signal 'unavailable' when Redis is None.
+
+        Contract change: this used to assert ``== []``, which made an outage
+        indistinguishable from an empty index and put "No traces captured
+        yet" on the dashboard while Redis was down. The intent (no crash, no
+        garbage) is kept; the signal is now a typed exception the router maps
+        to 503.
+        """
         store = DiagnosticsStore(redis_client=None)
         with patch.object(
             type(store),
             "redis",
             new_callable=lambda: property(lambda self: None),
         ):
-            result = await store.get_recent_traces(organization_id="test-org")
-            assert result == []
+            with pytest.raises(DiagnosticsUnavailable):
+                await store.get_recent_traces(organization_id="test-org")
+
+    @pytest.mark.asyncio
+    async def test_raises_unavailable_on_redis_error(self) -> None:
+        """A Redis failure is 'unavailable', not an empty list."""
+        redis = _make_sync_redis()
+        redis.zrevrange.side_effect = ConnectionError("Redis unavailable")
+        store = DiagnosticsStore(redis_client=redis)
+
+        with pytest.raises(DiagnosticsUnavailable):
+            await store.get_recent_traces(organization_id="test-org")
+
+    @pytest.mark.asyncio
+    async def test_empty_index_still_returns_empty_list(self) -> None:
+        """A reachable Redis with no traces is genuinely empty, not unavailable."""
+        redis = _make_sync_redis()
+        redis.zrevrange.return_value = []
+        store = DiagnosticsStore(redis_client=redis)
+
+        assert await store.get_recent_traces(organization_id="test-org") == []
 
     @pytest.mark.asyncio
     async def test_skips_missing_traces(self) -> None:
@@ -476,16 +505,35 @@ class TestGetAggregateStats:
         assert stats["source_stats"] == {}
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_redis_none(self) -> None:
-        """get_aggregate_stats() should return error dict when Redis is None."""
+    async def test_raises_unavailable_when_redis_none(self) -> None:
+        """get_aggregate_stats() must signal 'unavailable' when Redis is None.
+
+        Contract change: this used to assert an ``{"error": ...}`` dict, which
+        the router passed through as HTTP 200 and the dashboard ignored
+        ("Total queries 0"). The signal is now a typed exception the router
+        maps to 503.
+        """
         store = DiagnosticsStore(redis_client=None)
         with patch.object(
             type(store),
             "redis",
             new_callable=lambda: property(lambda self: None),
         ):
-            result = await store.get_aggregate_stats(organization_id="test-org")
-            assert "error" in result
+            with pytest.raises(DiagnosticsUnavailable):
+                await store.get_aggregate_stats(organization_id="test-org")
+
+    @pytest.mark.asyncio
+    async def test_raises_unavailable_on_redis_error(self) -> None:
+        """A Redis failure is 'unavailable', not a 200-shaped {"error": str(e)}."""
+        redis = _make_sync_redis()
+        redis.zrangebyscore.side_effect = ConnectionError("Redis unavailable")
+        store = DiagnosticsStore(redis_client=redis)
+
+        with pytest.raises(DiagnosticsUnavailable) as excinfo:
+            await store.get_aggregate_stats(organization_id="test-org")
+
+        # The original cause stays attached for logs, never for the response.
+        assert isinstance(excinfo.value.__cause__, ConnectionError)
 
 
 # ============================================================================

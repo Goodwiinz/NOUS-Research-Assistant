@@ -1,5 +1,7 @@
 # Database Optimization Guide
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This guide covers the comprehensive database optimization framework implemented for the Multimodal Enterprise RAG System. The framework provides production-ready optimizations for PostgreSQL, Neo4j, Qdrant, and Redis databases.

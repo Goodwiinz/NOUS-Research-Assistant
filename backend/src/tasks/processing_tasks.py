@@ -34,6 +34,7 @@ from src.services.search.fulltext_search_service import fulltext_search_service
 from src.shared.enums import SatelliteSyncStatus
 from src.tasks._async_utils import run_async
 from src.tasks.celery_app import celery_app
+from src.tasks.document_embedding_tasks import enqueue_document_embeddings
 from src.tasks.processing_lifecycle import (
     ACTIVE_DOCUMENT_STATUSES,
     ProcessingStopped,
@@ -657,6 +658,11 @@ def process_document_ingestion(self, job_id: str):
 
         logger.info(f"Successfully processed document {document.id}")
 
+        # GOO-435: queue the pgvector embedding only now that the document is
+        # COMPLETED and committed. A no-op unless DOCUMENT_EMBEDDINGS_ENABLED,
+        # and a broker error is logged inside the helper, never raised here.
+        enqueue_document_embeddings(document_ids[1], [str(document_ids[0])])
+
         return {
             "status": "completed",
             "document_id": str(document.id),
@@ -1272,12 +1278,17 @@ def kg_merge_entities_job(self, job_id: str):
         # the broker ack redelivers the message. Re-running would regress the
         # job COMPLETED -> RUNNING and re-process every group — re-deleting
         # already-merged duplicate nodes and duplicating re-pointed edges.
-        if job.status == JobStatus.COMPLETED:
+        # FAILED/CANCELLED are terminal too: an all-groups-failed job commits
+        # FAILED below, and a redelivery after that commit would start_job() it
+        # back to RUNNING and repeat every Neo4j delete/re-point. RETRYING is
+        # non-terminal and still runs.
+        if job.status in _TERMINAL_PROCESSING_STATUSES:
             logger.info(
-                f"Job {job_id} already completed; skipping redelivered entity merge"
+                f"Job {job_id} already {job.status.value}; "
+                "skipping redelivered entity merge"
             )
             return {
-                "status": "completed",
+                "status": job.status.value,
                 "job_id": job_id,
                 "skipped": "duplicate_delivery",
             }
@@ -1305,11 +1316,17 @@ def kg_merge_entities_job(self, job_id: str):
                 failure_count += 1
                 continue
 
-            duplicate_ids = [
-                e.get("id")
-                for e in group_entities
-                if e.get("id") and e.get("id") != primary_id
-            ]
+            # Dedupe (order-preserving) and drop the primary: a request listing
+            # the same duplicate twice would otherwise process it twice, and the
+            # second delete_entity returns False (node already gone), marking a
+            # successful merge as a failed group.
+            duplicate_ids = list(
+                dict.fromkeys(
+                    e.get("id")
+                    for e in group_entities
+                    if e.get("id") and e.get("id") != primary_id
+                )
+            )
             step_message = f"Merging group {index + 1}/{total_groups}"
             job.update_progress(
                 step_message, min(90.0, ((index + 1) / max(total_groups, 1)) * 85.0)
@@ -1401,13 +1418,28 @@ def kg_merge_entities_job(self, job_id: str):
                 )
 
         job.update_progress("Finalizing merge job", 95)
-        job.complete_job(
-            result={
-                "total_groups": total_groups,
-                "merged_groups": success_count,
-                "failed_groups": failure_count,
-            }
-        )
+        result = {
+            "total_groups": total_groups,
+            "merged_groups": success_count,
+            "failed_groups": failure_count,
+        }
+
+        # Honest outcome (same guard as kg_extract_entities_job): every
+        # per-group failure above only bumps failure_count, so a job in which
+        # NOTHING merged (Neo4j down, every primary missing) would otherwise
+        # COMPLETE with merged_groups=0 — a false success to anything polling
+        # job status. Fail it so the total failure is visible; a partial merge
+        # still completes with its counts.
+        if success_count == 0 and failure_count > 0:
+            job.fail_job(
+                f"Entity merge merged no groups "
+                f"({failure_count}/{total_groups} failed)",
+                error_type="merge_failed",
+            )
+            db.commit()
+            return {"status": "failed", "job_id": job_id, "result": result}
+
+        job.complete_job(result=result)
         db.commit()
         return {"status": "completed", "job_id": job_id}
     except Exception as e:

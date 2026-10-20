@@ -1,4 +1,7 @@
 # Migration Strategy and Implementation Guide
+
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Multimodal Enterprise RAG System Analytics Platform
 
 This document provides a comprehensive migration strategy for extending the existing Neo4j/Qdrant-based RAG system with the new PostgreSQL analytics platform.

@@ -38,6 +38,7 @@ from .citation_relationship import CitationRelationship
 from .collection import Collection, CollectionDocument
 from .conversation import Conversation
 from .document import Document, DocumentType, ProcessingStatus
+from .document_embedding import DocumentEmbedding
 
 # Enhanced document processing models
 from .document_processing import (
@@ -320,6 +321,7 @@ __all__ = [
     "ProcessingHistory",
     "ProcessingStage",
     "DocumentVersion",
+    "DocumentEmbedding",
     "MultimodalContent",
     "ContentType",
     "DocumentQualityMetrics",
@@ -437,11 +439,13 @@ from .artifact import (
     ArtifactUpload,
     ArtifactVersion,
 )
+from .artifact_share import ArtifactShare, ArtifactShareAudience
 from .bridge_device import BridgeDevice, WorkspaceBinding
 from .harness_session import HarnessNativeRequest, HarnessSession
 from .integration_context_selection import IntegrationContextSelection
 from .integration_grant import IntegrationGrant, IntegrationGrantRequest
 from .integration_handoff import IntegrationHandoff
+from .native_artifact_intent import NativeArtifactIntent
 from .tool_action import IntegrationToolAction
 
 __all__ += [
@@ -458,4 +462,7 @@ __all__ += [
     "ArtifactUpload",
     "ArtifactReference",
     "ArtifactLifecycleOutbox",
+    "ArtifactShare",
+    "ArtifactShareAudience",
+    "NativeArtifactIntent",
 ]

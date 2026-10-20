@@ -115,7 +115,7 @@ Read-only cluster commands need `aws login` and the EKS kubeconfig.
    kubectl -n argocd get application nous-dev-aws -o jsonpath='{.status.sync.revision} {.status.sync.status} {.status.health.status}{"\n"}'
    ```
 
-5. **Local device.** Node 24, `pnpm install --frozen-lockfile`, a local checkout at or after the deployed SHA, and `codex --version` printing exactly `0.153.4`. Use a disposable fixture directory and a dedicated state directory, not your everyday one:
+5. **Local device.** Node 24, `pnpm install --frozen-lockfile`, a local checkout at or after the deployed SHA, and `codex --version` printing exactly `0.153.4` (amended 2026-10-12: or any version in `SUPPORTED_CODEX_VERSIONS`; `0.161.0` is listed but its live run is NOT RUN until an evidence bundle records it). Use a disposable fixture directory and a dedicated state directory, not your everyday one:
 
    ```sh
    export API=https://dev-api.goodwiinz.tech/api/v1

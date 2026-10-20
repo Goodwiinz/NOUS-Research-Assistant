@@ -1,5 +1,7 @@
 # Knowledge Graph Architecture - Corrected Implementation
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document describes the corrected Knowledge Graph architecture that resolves the critical architectural violation where graph algorithms were incorrectly placed in the frontend. The new architecture implements a clean separation of concerns with three specialized microservices, each handling specific aspects of knowledge graph functionality.

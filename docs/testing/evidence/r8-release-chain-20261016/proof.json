@@ -1,0 +1,148 @@
+{
+  "schema": "nous.local-release-chain-proof/1",
+  "captured_at": "2026-10-16T13:23:57.438161+00:00",
+  "source_base": "4c4600392c0e4a3705f58b4abcdf6868c8e226bc",
+  "source_patch": "declared uncommitted final source; bind published commit separately",
+  "source_files": {
+    "backend/src/services/research/manuscript_release_service.py": "f10cd55dbedbabef1b44ec1cfbaeb701d08dc46fa47f1e49e834a9191c993c39",
+    "backend/tests/integration/test_review_release_chain_postgres.py": "d69f1517a7a9e0bda81e0869ddc96ac9782aa0f9e7dd633389259ac5993c340c",
+    "backend/tests/integration/test_search_update_citation_chase_postgres.py": "eae5416f4a857372ba31641550c2fd5a3ac6fa460282aad9be66ceb12042233b",
+    "backend/tests/integration/test_screening_queue_postgres.py": "6f9f7d660f798073cb2d45580db3da12bbfb570dcc04b362fd6f1b369e1781cd"
+  },
+  "runtime": {
+    "postgresql": "15.19",
+    "python": "3.11.13",
+    "sqlalchemy": "2.0.51",
+    "vector_extension_installed": false
+  },
+  "test_reports": [
+    {
+      "label": "final native owning matrix including both parameterized release chains",
+      "artifact": "release-chain-native-matrix-v2.xml",
+      "sha256": "5e05d5fbf1c65c36cc8ea5735770b182918885fef7a747368bedd7224bc8aaa6",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "label": "final architecture API and owning unit matrix",
+      "artifact": "release-chain-unit-matrix-final.xml",
+      "sha256": "5659443a6ba23fcee304ef42b193b4ca6651a747b1708cd97cbe81cf2c3b3a63",
+      "tests": 1651,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "mutations": [
+    {
+      "guard": "self-invalidation",
+      "exit_code": 1,
+      "expected_failure": "prisma_body_sha256",
+      "causal_failure": true,
+      "test_sha256": "d69f1517a7a9e0bda81e0869ddc96ac9782aa0f9e7dd633389259ac5993c340c",
+      "source_file": "backend/src/services/research/manuscript_release_service.py",
+      "original_sha256": "f10cd55dbedbabef1b44ec1cfbaeb701d08dc46fa47f1e49e834a9191c993c39",
+      "restored_exit_code": 0,
+      "restored_pass": true
+    },
+    {
+      "guard": "release-link-replay",
+      "exit_code": 1,
+      "expected_failure": "Review version already has a release",
+      "causal_failure": true,
+      "test_sha256": "d69f1517a7a9e0bda81e0869ddc96ac9782aa0f9e7dd633389259ac5993c340c",
+      "source_file": "backend/src/services/research_engine/review_update_service.py",
+      "original_sha256": "d5e5719556deb497ae51abe067d672657876c0f284278ba1a9a48aa5b0d10eeb",
+      "restored_exit_code": 0,
+      "restored_pass": true
+    },
+    {
+      "guard": "targeted-invalidation",
+      "exit_code": 1,
+      "expected_failure": "assert 'verified' == 'stale'",
+      "causal_failure": true,
+      "test_sha256": "d69f1517a7a9e0bda81e0869ddc96ac9782aa0f9e7dd633389259ac5993c340c",
+      "source_file": "backend/src/services/research_engine/review_update_service.py",
+      "original_sha256": "d5e5719556deb497ae51abe067d672657876c0f284278ba1a9a48aa5b0d10eeb",
+      "restored_exit_code": 0,
+      "restored_pass": true
+    },
+    {
+      "guard": "pre-provider-citation-replay",
+      "exit_code": 1,
+      "causal_failure": true,
+      "restored_exit_code": 0,
+      "restored_pass": true,
+      "original_sha256": "c2700b3e530de2eac5ea093ef240c250c2e363ad8767323e43621c2b1b8434f1",
+      "source_file": "backend/src/services/research_engine/corpus_service.py"
+    }
+  ],
+  "local_quality": "all blocking checks that ran passed; strict mypy on both added files passed",
+  "conditional_checks_not_run": [
+    "generated TypeScript API types: no contract change",
+    "evidence migration delta and empty migration replay: no migration change"
+  ],
+  "scope": {
+    "approved_protocol": "fixture",
+    "completed_search_journal": "fixture",
+    "conformant_run": "fixture, not engine execution",
+    "providers": "controlled Crossref and OpenAlex replies",
+    "promotion_and_storage": "real service transactions and local ZIP bytes",
+    "live_provider_acceptance": false,
+    "deployed_acceptance": false,
+    "methods_expert_acceptance": false,
+    "real_worker_crash": "separate proof still running"
+  },
+  "additional_reproduction": {
+    "statement_bound_self_invalidation": {
+      "result": "FAIL before statement stream exclusion; snapshot differs only prisma_body_sha256",
+      "artifact": "release-chain-statement-repro.xml",
+      "sha256": "0226cd6181baae75dd12c04988c399477db959ed3cd839be782a191e2ecdf801"
+    }
+  },
+  "statement_bound_path": "Complete release chain runs plain and with approved fixture statements and real venue checks",
+  "ci_admission": {
+    "configuration": "Only ORCHESTRATION_TEST_DATABASE_URL; RESEARCH_DECISION_DATABASE_URL absent; testcontainers disabled in test process",
+    "before": {
+      "artifact": "release-chain-ci-admission-before.xml",
+      "sha256": "5d222637de05ff52c5063cbd790983eaba68764e6019c081844fc39b7d1e17e9",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "classification": "NOT RUN: all three new cases skipped, despite exit0"
+    },
+    "after": {
+      "artifact": "release-chain-ci-admission-after.xml",
+      "sha256": "68e63e1194025212736f1fff34274efb7e25a500b1619e01806f093e81d825ba",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "classification": "Local CI-shaped native admission PASS, not hosted CI"
+    },
+    "new_test_shards": {
+      "backend/tests/integration/test_review_release_chain_postgres.py": 1,
+      "backend/tests/integration/test_search_update_citation_chase_postgres.py": 3
+    },
+    "correction": "Shared screening factory uses explicit database first, then the existing CI database, then optional testcontainers. Unique schemas unchanged.",
+    "consumer_matrix": {
+      "artifact": "release-chain-ci-admission-consumers.xml",
+      "sha256": "4a14ed6726b9dee86b433273fe3870eb2797ad9466425820f06178e44bc8139c",
+      "consumer_files": 22,
+      "selected_functions": 34,
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "limitations": [
+      "CI installs testcontainers; the unavailable-testcontainers baseline does not establish previous hosted skips.",
+      "Three existing fresh-schema downgrade branches gated directly by RESEARCH_DECISION_DATABASE_URL are NOT RUN under orchestration-only admission: review versions, search updates, archive deposit.",
+      "Earlier explicit-variable native matrix exercised review/search downgrade paths; that evidence is separate.",
+      "Shard allocation is point-in-time for declared source files; hosted JUnit verification remains pending."
+    ]
+  }
+}

@@ -9,7 +9,6 @@ import {
   CustomTimeRange,
   AnalyticsFilters,
 } from '@/types';
-import { getPublicApiOrigin } from '@/utils/publicEndpoints';
 
 // Type guard for CustomTimeRange
 const isCustomTimeRange = (
@@ -19,8 +18,6 @@ const isCustomTimeRange = (
     typeof timeRange === 'object' && 'start' in timeRange && 'end' in timeRange
   );
 };
-
-const API_BASE_URL = getPublicApiOrigin() || 'http://localhost:8000';
 
 export interface QualityMetric {
   id: string;

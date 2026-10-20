@@ -43,11 +43,17 @@ export class ReauthenticationRequired extends Error {
 /** Stable tool-level errors (403/422/503); never retried. */
 export class ToolRequestRejected extends Error {}
 /** NOUS bounds search_arxiv at 120 s and get_arxiv_paper_content at 125 s (a
- * 120 s budget plus a 5 s outer guard; backend read_tools.py); every other read
- * keeps a short bound so a hung call does not block Codex for minutes. */
+ * 120 s budget plus a 5 s outer guard; backend read_tools.py), and one
+ * discover_papers round at about 45 s (its arXiv call waits on the shared rate
+ * gate; backend discover_papers.py). Every other read keeps a short bound so a
+ * hung call does not block Codex for minutes. */
 export const READ_TIMEOUT_MS = 30_000;
 export const SLOW_READ_TIMEOUT_MS = 135_000;
-const SLOW_READ_TOOLS = new Set(["search_arxiv", "get_arxiv_paper_content"]);
+const SLOW_READ_TOOLS = new Set([
+  "search_arxiv",
+  "get_arxiv_paper_content",
+  "discover_papers",
+]);
 /** Codex's own per-call MCP limit (60 s by default) must outlast the client. */
 export const MCP_TOOL_TIMEOUT_SEC = 150;
 /** The stable tool error NOUS itself returns when a tool's budget runs out. */

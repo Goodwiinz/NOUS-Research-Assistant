@@ -6,10 +6,12 @@ This document provides comprehensive documentation for the database architecture
 
 The system uses a polyglot persistence architecture with the following data stores:
 
-1. **PostgreSQL** - Primary relational database for structured data (prod: Supabase managed; dev: `rag-postgres-1` container, DB `multimodal_rag_dev`)
+1. **PostgreSQL** - Primary relational database for structured data (local: `rag-postgres-1` container, DB `multimodal_rag_dev`; AWS dev: RDS PostgreSQL; Supabase is auth/auxiliary, not the application SQL database)
 2. **Neo4j** - Knowledge graph for entities and relationships (self-hosted in-cluster, `bolt://neo4j.gen-text.app`)
-3. **DO Knowledge Base** - Vector/RAG retrieval via DigitalOcean GradientAI (`kbaas.do-ai.run`); manages its own embeddings. Implementation: `backend/src/services/do_kb/`. Controlled by `DO_KB_ENABLED` flag.
+3. **DO Knowledge Base** - Optional, flag-gated (`DO_KB_ENABLED`, default `False`) retrieval via DigitalOcean GradientAI (`kbaas.do-ai.run`); manages its own embeddings. Implementation: `backend/src/services/do_kb/`. Controlled by `DO_KB_ENABLED` flag.
 4. **Redis** - Cache and real-time data structures (prod: DO Managed Redis; dev: local container)
+
+> **Amendment 2026-10-17:** live retrieval is PostgreSQL full-text search (`fulltext_search_service`, `keyword_search_service`). DO KB is off unless `DO_KB_ENABLED` is set; statements below that call it "the RAG retrieval store" describe the flag-on configuration only.
 
 > **Qdrant removed**: Qdrant has been fully removed from the production stack (`config.py:173` deprecated, `values-production.yaml qdrant.enabled:false`, `QDRANT_URL` unset → `QdrantClient=None`). All Qdrant documentation below is superseded by DO Knowledge Base.
 

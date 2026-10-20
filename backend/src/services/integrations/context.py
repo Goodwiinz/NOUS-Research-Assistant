@@ -1,7 +1,9 @@
 """Restricted integration authority. Writes and transaction boundaries live here."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from hmac import compare_digest
 from secrets import token_urlsafe
 from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
@@ -18,6 +20,7 @@ from src.models.collection import Collection
 from src.models.conversation import Conversation
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
+from src.models.project_thread import ProjectThread
 from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
@@ -32,6 +35,8 @@ from src.schemas.integration_context import (
     IssuedGrant,
     WorkspaceBindingCreate,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IntegrationAccessDenied(PermissionError):
@@ -63,6 +68,15 @@ def now() -> datetime:
 
 def live(value: datetime) -> bool:
     return value.replace(tzinfo=timezone.utc) > now()
+
+
+# A lapsed pairing may be resumed from its consent until this long after its
+# last grant expired (owner decision 2026-10-13); after that, approve again.
+RESUME_WINDOW = timedelta(days=30)
+
+
+def _grant_token_shape(token: str) -> bool:
+    return token.startswith("nous_ig_") and len(token) == 51
 
 
 # A grant never carries a library scope without the gateway scope the
@@ -306,6 +320,24 @@ async def owned_device(
     return cast(BridgeDevice, device)
 
 
+async def _listed_under_project(
+    db: AsyncSession, project_id: UUID, thread_id: UUID
+) -> bool:
+    """A live project<->chat link: the row a project's Chat tab lists the chat
+    by (``project_chat.list_project_threads``). This checks only the link row;
+    parity with that listing holds together with validate_binding's chat
+    query, which already requires a live thread and conversation and the
+    same workspace as the project."""
+    link = await db.scalar(
+        select(ProjectThread.id).where(
+            ProjectThread.project_id == project_id,
+            ProjectThread.thread_id == thread_id,
+            ProjectThread.is_deleted.is_(False),
+        )
+    )
+    return link is not None
+
+
 async def validate_binding(
     db: AsyncSession,
     *,
@@ -317,8 +349,10 @@ async def validate_binding(
     run_id: UUID | str | None = None,
     device_id: UUID | None = None,
 ) -> None:
+    project_workspace_id: UUID | None = None
     if project_id is not None and workspace_id is None:
-        await authorized_project(db, user_id, organization_id, project_id)
+        project = await authorized_project(db, user_id, organization_id, project_id)
+        project_workspace_id = cast(UUID, project.workspace_id)
     elif workspace_id is not None and project_id is None:
         await authorized_workspace(db, user_id, organization_id, workspace_id)
         # A workspace has no single project for a chat or a run to belong to.
@@ -329,32 +363,42 @@ async def validate_binding(
     if device_id is not None:
         await owned_device(db, device_id, user_id, organization_id)
     if thread_id is not None:
-        thread = await db.scalar(
-            select(Thread.id)
-            .join(Conversation, Thread.conversation_id == Conversation.id)
-            .join(Workspace, Conversation.workspace_id == Workspace.id)
-            .where(
-                Thread.id == thread_id,
-                Thread.is_deleted.is_(False),
-                Conversation.is_deleted.is_(False),
-                Workspace.is_deleted.is_(False),
-                or_(
-                    Workspace.owner_id == user_id,
-                    exists().where(
-                        WorkspaceMember.workspace_id == Workspace.id,
-                        WorkspaceMember.user_id == user_id,
-                        WorkspaceMember.is_deleted.is_(False),
+        chat = (
+            await db.execute(
+                select(Thread.source_project_id, Conversation.workspace_id)
+                .join(Conversation, Thread.conversation_id == Conversation.id)
+                .join(Workspace, Conversation.workspace_id == Workspace.id)
+                .where(
+                    Thread.id == thread_id,
+                    Thread.is_deleted.is_(False),
+                    Conversation.is_deleted.is_(False),
+                    Workspace.is_deleted.is_(False),
+                    or_(
+                        Workspace.owner_id == user_id,
+                        exists().where(
+                            WorkspaceMember.workspace_id == Workspace.id,
+                            WorkspaceMember.user_id == user_id,
+                            WorkspaceMember.is_deleted.is_(False),
+                        ),
                     ),
-                ),
-                # The chat's workspace is in the grant's organization, by the
-                # same legacy rule as authorized_project: a legacy NULL-org
-                # workspace whose owner is in another organization is refused
-                # here, matching web access.
-                workspace_in_org(organization_id),
-                Thread.source_project_id == project_id,
+                    # The chat's workspace is in the grant's organization, by
+                    # the same legacy rule as authorized_project: a legacy
+                    # NULL-org workspace whose owner is in another organization
+                    # is refused here, matching web access.
+                    workspace_in_org(organization_id),
+                )
             )
-        )
-        if thread is None:
+        ).first()
+        if chat is None or project_id is None:
+            raise IntegrationAccessDenied()
+        # The chat's current project always counts. Linking a chat to another
+        # project is additive and only repoints the scalar, so a project that
+        # still lists the chat (a live link in the chat's own workspace) counts
+        # too; unlinking soft-deletes that row and ends the binding.
+        if chat.source_project_id != project_id and not (
+            chat.workspace_id == project_workspace_id
+            and await _listed_under_project(db, project_id, thread_id)
+        ):
             raise IntegrationAccessDenied()
     if run_id is not None:
         run = await db.scalar(
@@ -536,7 +580,7 @@ async def resolve_integration_context(
     nothing.
     """
     accepted = (required_scope,) if isinstance(required_scope, str) else required_scope
-    if not token.startswith("nous_ig_") or len(token) != 51:
+    if not _grant_token_shape(token):
         raise IntegrationAccessDenied()
     grant = await db.scalar(
         select(IntegrationGrant)
@@ -768,13 +812,96 @@ async def renew_grant(db: AsyncSession, user: Any, grant_id: UUID) -> IssuedGran
     grant = await _validate_grant(db, grant)
     if grant.device_id is None:
         raise IntegrationAccessDenied()
+    return await _replace_grant(db, grant, IntegrationGrant.expires_at > now())
+
+
+async def resume_grant(
+    db: AsyncSession, user: Any, grant_id: UUID, token: str
+) -> IssuedGrant:
+    """Re-issue a device's lapsed grant from the consent it was exchanged
+    from, without a new browser approval.
+
+    The caller must present the grant's own token, expired or not: a CLI
+    sign-in is not bound to a device, so the token (kept in the bridge's
+    owner-only credential file) is what proves this is the paired computer.
+    The grant is replaced like a renewal, so its token works once. Refused
+    once the grant was renewed or revoked (CLI disconnect, Revoke or device
+    disconnect under Connected devices), its consent or device revoked, its
+    project, workspace or chat out of reach, or ``RESUME_WINDOW`` after it
+    expired. Scopes come from the grant, never wider than its consent.
+    IntegrationConflict when the grant was replaced or revoked between the
+    checks and the swap.
+    """
+    grant = await owned_grant(db, user, grant_id)
+    if (
+        not _grant_token_shape(token)
+        or not compare_digest(grant.token_hash, sha256(token.encode()).hexdigest())
+        or grant.is_deleted
+        or grant.revoked_at is not None
+        # A pairing grant: bound to a device and its consent, never to a run.
+        or grant.device_id is None
+        or grant.request_id is None
+        or grant.run_id is not None
+        or grant.expires_at.replace(tzinfo=timezone.utc) <= now() - RESUME_WINDOW
+    ):
+        raise IntegrationAccessDenied()
+    check_scopes(grant.scopes, workspace_bound=grant.workspace_id is not None)
+    await validate_binding(
+        db,
+        user_id=grant.user_id,
+        organization_id=grant.organization_id,
+        project_id=grant.project_id,
+        workspace_id=grant.workspace_id,
+        thread_id=grant.thread_id,
+        device_id=grant.device_id,
+    )
+    consent = await db.scalar(
+        select(IntegrationGrantRequest)
+        .where(
+            IntegrationGrantRequest.id == grant.request_id,
+            IntegrationGrantRequest.status == "consumed",
+            IntegrationGrantRequest.user_id == grant.user_id,
+            IntegrationGrantRequest.organization_id == grant.organization_id,
+            IntegrationGrantRequest.project_id == grant.project_id,
+            IntegrationGrantRequest.workspace_id == grant.workspace_id,
+            IntegrationGrantRequest.device_id == grant.device_id,
+            # The pairing's own chat binding: exchange and renewal copy it.
+            IntegrationGrantRequest.thread_id == grant.thread_id,
+            IntegrationGrantRequest.consent_revoked_at.is_(None),
+            IntegrationGrantRequest.is_deleted.is_(False),
+        )
+        .execution_options(populate_existing=True)
+    )
+    if consent is None or not set(grant.scopes) <= set(consent.scopes):
+        raise IntegrationAccessDenied()
+    issued = await _replace_grant(db, grant)
+    # Authority re-issued without a browser step: the line to audit when a
+    # credential file may have been copied. Never log the token.
+    logger.info(
+        "integration grant resumed: grant=%s successor=%s device=%s consent=%s user=%s",
+        grant.id,
+        issued.grant_id,
+        grant.device_id,
+        grant.request_id,
+        grant.user_id,
+    )
+    return issued
+
+
+async def _replace_grant(
+    db: AsyncSession, grant: IntegrationGrant, *conditions: ColumnElement[bool]
+) -> IssuedGrant:
+    """Revoke ``grant`` while it is unrevoked (and ``conditions`` hold) and
+    issue its successor with the same binding, scopes, device, chat, run and
+    consent. Of two concurrent callers one wins; the other gets
+    IntegrationConflict."""
     result = await db.execute(
         update(IntegrationGrant)
         .execution_options(synchronize_session="fetch")
         .where(
-            IntegrationGrant.id == grant_id,
+            IntegrationGrant.id == grant.id,
             IntegrationGrant.revoked_at.is_(None),
-            IntegrationGrant.expires_at > now(),
+            *conditions,
         )
         .values(revoked_at=now())
     )

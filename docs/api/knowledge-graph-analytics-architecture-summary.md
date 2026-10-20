@@ -1,5 +1,7 @@
 # Knowledge Graph Analytics Dashboard - Complete Architecture Summary
 
+> **Stale / historical (2026-10-17):** It covers only part of the API and its paths and schemas may have drifted. The source of truth is the generated `backend/openapi.json` (also served at `/docs` when `DEBUG` is on). Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document provides a comprehensive summary of the backend service architecture for the Knowledge Graph Analytics Dashboard feature in the existing Multimodal Enterprise RAG System. The architecture supports real-time analytics computation, graph algorithms, time-series data aggregation, custom dashboard configuration, scheduled report generation, and multi-tenant access control.

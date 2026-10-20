@@ -3,12 +3,13 @@ import { mock, test } from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect, handoffFlush, handoffShow, status } from "../src/cli.ts";
+import { connect, handoffFlush, handoffShow, login, status } from "../src/cli.ts";
 import { CredentialStore } from "../src/credentials.ts";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const DEVICE = "22222222-2222-4222-8222-222222222222";
 const GRANT = "33333333-3333-4333-8333-333333333333";
+const RESUMED = "44444444-4444-4444-8444-444444444444";
 const WORKSPACE = "77777777-7777-4777-8777-777777777777";
 const OTHER_WORKSPACE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CHAT = "99999999-9999-4999-8999-999999999999";
@@ -17,22 +18,29 @@ const OTHER_CHAT = "88888888-8888-4888-8888-888888888888";
 type Reply = { code: number; body: object };
 
 /** Fake NOUS: full login + consent, and a renew endpoint whose answer each test picks. */
-function fakeNous(calls: string[], renew: () => Reply): typeof fetch {
+function fakeNous(calls: string[], renew: () => Reply, deviceAuth: (string | null)[] = []): typeof fetch {
   let issued = 0;
-  return (async (input: any) => {
+  return (async (input: any, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
     let data: object;
     if (url.endsWith("/cli-auth/start"))
       data = { session_id: "s", poll_token: "p", browser_url: "https://nous.test/l", verification_code: "ABCD-1234" };
     else if (url.includes("/cli-auth/status/")) data = { status: "approved", token: "cli-secret" };
-    else if (url.endsWith("/integrations/devices")) data = { id: DEVICE };
-    else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: "https://nous.test/a" };
+    else if (url.endsWith("/integrations/devices")) {
+      deviceAuth.push(new Headers(init?.headers).get("Authorization"));
+      data = { id: DEVICE };
+    }
+    // NOUS sends the approval page root-relative (integrations/context.py).
+    else if (url.endsWith("/grant-requests")) data = { id: GRANT, approval_url: `/integrations/approve?request_id=${GRANT}` };
     else if (url.endsWith("/exchange")) data = { token: `grant-secret-${(issued += 1)}`, grant_id: GRANT };
     else if (url.endsWith("/renew")) {
       const { code, body } = renew();
       return new Response(JSON.stringify(body), { status: code });
-    } else data = { status: "approved" };
+    } else if (url.endsWith("/resume"))
+      // A NOUS before grant resume shipped; `lapsing` answers it instead.
+      return new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 });
+    else data = { status: "approved" };
     return new Response(JSON.stringify(data), { status: 200 });
   }) as typeof fetch;
 }
@@ -44,9 +52,10 @@ function setup(renew: () => Reply = renewed) {
   const dir = mkdtempSync(join(tmpdir(), "nous-reuse-"));
   const calls: string[] = [];
   const messages: string[] = [];
+  const deviceAuth: (string | null)[] = [];
   const base = {
     stateDir: dir,
-    fetchFn: fakeNous(calls, renew),
+    fetchFn: fakeNous(calls, renew, deviceAuth),
     announce: (m: string) => messages.push(m),
     apiUrl: "https://nous.test/api/v1",
     projectId: PROJECT,
@@ -56,6 +65,7 @@ function setup(renew: () => Reply = renewed) {
     dir,
     calls,
     messages,
+    deviceAuth,
     base,
     state: () => JSON.parse(readFileSync(join(dir, "connection.json"), "utf8")),
     since: (mark: number) => calls.slice(mark),
@@ -97,7 +107,7 @@ test("a different chat runs the full flow and removes the superseded credential"
     const mark = t.calls.length;
     const second = await connect({ ...t.base, threadId: OTHER_CHAT });
     assert.ok(t.since(mark).some((u) => u.endsWith("/cli-auth/start")));
-    assert.equal(t.since(mark).some((u) => u.endsWith("/renew")), false);
+    assert.equal(t.since(mark).some((u) => u.endsWith("/renew") || u.endsWith("/resume")), false);
     assert.notEqual(second.credentialHandle, first.credentialHandle);
     assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false);
     assert.equal(existsSync(join(t.dir, `${second.credentialHandle}.json`)), true);
@@ -136,6 +146,108 @@ test("a failed liveness probe falls back to the full login and consent flow", as
   }
 });
 
+/** A pairing whose grant lapsed after `connect`: renewal refused, resume answered by `resume`. */
+function lapsing(resume: () => Reply) {
+  let lapsed = false;
+  const t = setup(() => (lapsed ? { code: 403, body: { detail: "expired" } } : renewed()));
+  const inner = t.base.fetchFn;
+  t.base.fetchFn = (async (input: any, init?: RequestInit) => {
+    const url = String(input);
+    if (!url.endsWith("/resume")) return inner(input, init);
+    t.calls.push(url);
+    const { code, body } = resume();
+    return new Response(JSON.stringify(body), { status: code });
+  }) as typeof fetch;
+  return { ...t, lapse: () => (lapsed = true) };
+}
+const resumedGrant = (): Reply => ({ code: 200, body: { token: "resumed-secret", grant_id: RESUMED } });
+
+test("a lapsed grant resumes from its consent with no login, consent or new device", async () => {
+  const t = lapsing(resumedGrant);
+  try {
+    const first = await connect({ ...t.base, tools: true });
+    const before = t.state();
+    t.lapse();
+    const mark = t.calls.length;
+    const again = await connect({ ...t.base, tools: true });
+    assert.deepEqual(again, first);
+    // One failed liveness probe, then one resume of the stored grant: no
+    // /cli-auth/start, no /integrations/grant-requests, no new device.
+    assert.deepEqual(t.since(mark), [
+      `https://nous.test/api/v1/integrations/grants/${GRANT}/renew`,
+      `https://nous.test/api/v1/integrations/grants/${GRANT}/resume`,
+    ]);
+    assert.deepEqual(t.state(), before, "same device, folders and credential handle");
+    const stored = await new CredentialStore(t.dir).load(first.credentialHandle);
+    assert.equal(stored.grantToken, "resumed-secret");
+    assert.equal(stored.grantId, RESUMED);
+    assert.equal(stored.accessToken, "cli-secret");
+    assert.match(
+      t.messages.at(-1)!,
+      new RegExp(`^Resumed binding: project ${PROJECT}; your earlier approval still holds, so no new login or consent was needed\\.$`),
+    );
+    assert.ok(!t.messages.join("\n").includes("secret"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a resumed binding names the scopes it keeps, like a reused one", async () => {
+  const t = lapsing(resumedGrant);
+  try {
+    await connect({ ...t.base, threadId: CHAT, tools: true, handoff: true });
+    t.lapse();
+    await connect({ ...t.base, threadId: CHAT, tools: true });
+    assert.match(t.messages.at(-1)!, new RegExp(`^Resumed binding: project ${PROJECT}, chat ${CHAT};`));
+    assert.match(t.messages.at(-1)!, /It keeps scopes this command did not request: handoff:read, handoff:write\./);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a workspace binding resumes like a project one", async () => {
+  const t = lapsing(resumedGrant);
+  try {
+    const workspace = { ...t.base, projectId: undefined, workspaceId: WORKSPACE, tools: true };
+    const first = await connect(workspace);
+    t.lapse();
+    const mark = t.calls.length;
+    assert.deepEqual(await connect(workspace), first);
+    assert.equal(t.since(mark).some((u) => u.endsWith("/cli-auth/start")), false);
+    assert.match(t.messages.at(-1)!, new RegExp(`^Resumed binding: workspace ${WORKSPACE};`));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a refused or unavailable resume runs the full login and consent flow", async () => {
+  for (const reply of [
+    // Revoked, disconnected, out of reach, or more than 30 days lapsed.
+    { code: 403, body: { detail: "Integration access denied" } },
+    // The stored CLI sign-in ended.
+    { code: 401, body: { detail: "expired" } },
+    // A NOUS without the resume route.
+    { code: 404, body: { detail: "Not Found" } },
+    { code: 503, body: { detail: "down" } },
+  ]) {
+    const t = lapsing(() => reply);
+    try {
+      const first = await connect({ ...t.base, tools: true });
+      t.lapse();
+      const mark = t.calls.length;
+      const second = await connect({ ...t.base, tools: true });
+      const later = t.since(mark);
+      assert.ok(later.some((u) => u.endsWith("/resume")), `resume tried before ${reply.code}`);
+      assert.ok(later.some((u) => u.endsWith("/cli-auth/start")), `full flow after ${reply.code}`);
+      assert.ok(later.some((u) => u.endsWith("/integrations/grant-requests")));
+      assert.notEqual(second.credentialHandle, first.credentialHandle);
+      assert.equal(t.messages.some((m) => /^(Reusing|Resumed) binding/.test(m)), false);
+    } finally {
+      t.cleanup();
+    }
+  }
+});
+
 test("a requested scope missing from the stored binding runs the full flow", async () => {
   const t = setup();
   try {
@@ -145,8 +257,8 @@ test("a requested scope missing from the stored binding runs the full flow", asy
     assert.equal(existsSync(join(t.dir, `${first.credentialHandle}.json`)), false);
     assert.equal(t.state().credentialHandle, second.credentialHandle);
     const later = t.since(mark);
-    // No probe is spent when the scopes already rule reuse out.
-    assert.equal(later.some((u) => u.endsWith("/renew")), false);
+    // No probe or resume is spent when the scopes already rule reuse out.
+    assert.equal(later.some((u) => u.endsWith("/renew") || u.endsWith("/resume")), false);
     assert.ok(later.some((u) => u.endsWith("/cli-auth/start")));
     assert.ok(t.state().scopes.includes("handoff:write"));
   } finally {
@@ -381,6 +493,99 @@ test("cleanup failure preserves the new binding and reports retryable local clea
     } finally {
       remove.mock.restore();
     }
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("connect with an access token skips the CLI login", async () => {
+  const t = setup();
+  try {
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.equal(
+      (await new CredentialStore(t.dir).load(t.state().credentialHandle)).accessToken,
+      "cli-from-rc",
+    );
+    assert.ok(!t.messages.join("\n").includes("cli-from-rc"));
+    assert.equal(t.calls.filter((u) => u.includes("/cli-auth/")).length, 0);
+    assert.equal(t.calls.filter((u) => u.endsWith("/integrations/devices")).length, 1);
+    // The device is registered with the given token, not a fresh login's.
+    assert.deepEqual(t.deviceAuth, ["Bearer cli-from-rc"]);
+    assert.equal(t.state().projectId, PROJECT);
+    assert.deepEqual(t.state().scopes, ["harness:execute", "tools:read"]);
+  } finally {
+    t.cleanup();
+  }
+});
+
+const APPROVE_PATH = `/integrations/approve?request_id=${GRANT}`;
+const approveLine = (link: string) => `Approve this device and project in your browser: ${link}`;
+
+test("the root-relative approval link prints in full on the website login() saw", async () => {
+  const t = setup();
+  try {
+    // The full flow signs in first; the fake's login page is https://nous.test/l.
+    await connect({ ...t.base, tools: true });
+    assert.ok(t.messages.includes(approveLine(`https://nous.test${APPROVE_PATH}`)), t.messages.join("\n"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("without a known website the approval link is the path, with a hint", async () => {
+  const t = setup();
+  try {
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.ok(
+      t.messages.includes(approveLine(`${APPROVE_PATH} (open this path on your NOUS website)`)),
+      t.messages.join("\n"),
+    );
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("without a known website, a path that normalises to //host is refused", async () => {
+  const t = setup();
+  try {
+    const fetchFn = (async (input: any, init?: RequestInit) =>
+      String(input).endsWith("/grant-requests")
+        ? new Response(JSON.stringify({ id: GRANT, approval_url: "/..//evil.example/x" }), { status: 200 })
+        : t.base.fetchFn(input, init)) as typeof fetch;
+    await assert.rejects(
+      connect({ ...t.base, fetchFn, tools: true, accessToken: "cli-from-rc" }),
+      { message: "invalid NOUS response" },
+    );
+    assert.ok(!t.messages.join("\n").includes("evil.example"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("a website recorded for another API is ignored; an explicit one is used", async () => {
+  const t = setup();
+  try {
+    await new CredentialStore(t.dir).writeLocal("website", {
+      apiUrl: "https://elsewhere.test/api/v1",
+      origin: "https://elsewhere.test",
+    });
+    await connect({ ...t.base, tools: true, accessToken: "cli-from-rc" });
+    assert.ok(t.messages.includes(approveLine(`${APPROVE_PATH} (open this path on your NOUS website)`)));
+    assert.ok(!t.messages.join("\n").includes("elsewhere"));
+    await connect({ ...t.base, tools: true, publish: true, accessToken: "cli-from-rc", websiteOrigin: "https://site.test" });
+    assert.ok(t.messages.includes(approveLine(`https://site.test${APPROVE_PATH}`)), t.messages.join("\n"));
+  } finally {
+    t.cleanup();
+  }
+});
+
+test("login() returns the CLI token after browser approval", async () => {
+  const t = setup();
+  try {
+    const token = await login("https://nous.test/api/v1", t.base);
+    assert.equal(token, "cli-secret");
+    assert.ok(t.calls.some((u) => u.endsWith("/cli-auth/start")));
+    assert.ok(t.messages.some((m) => m.includes("ABCD-1234")));
   } finally {
     t.cleanup();
   }

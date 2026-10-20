@@ -1,5 +1,7 @@
 # Phase 1 Implementation Completion Report
 
+> **Stale / historical (2026-10-17):** It is a dated status or implementation report, kept as a record. File paths, test counts and completion claims reflect the state when it was written, not the current tree. Current contracts: [`docs/engineering/`](../../../docs/engineering/README.md).
+
 ## Overview
 
 This report documents the successful completion of Phase 1 implementation for the Multimodal Enterprise RAG System. Phase 1 focused on establishing the core infrastructure and foundational functionality required for the system.

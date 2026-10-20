@@ -1,5 +1,7 @@
 # Comprehensive Knowledge Graph Backend Service Architecture
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 **Version**: 1.0.0
 **Date**: 2025-10-19
 **Author**: Claude Code Assistant

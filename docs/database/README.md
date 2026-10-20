@@ -1,6 +1,6 @@
 # Database and data-system references
 
-Schema designs, migration discussions, connection guides and knowledge-graph documentation. These records span multiple infrastructure generations. Check the current engineering operational notes before selecting a database, storage provider or deployment target.
+Schema designs, migration discussions, connection guides and knowledge-graph documentation. These records span multiple infrastructure generations. Check the current engineering operational notes before selecting a database, storage provider or deployment target. Current state (2026-10-17): PostgreSQL (RDS on AWS) is the application database, retrieval is PostgreSQL full-text search, DO KB is flag-off, Qdrant is removed. Files marked Stale or Historical below are kept as records; `ADR-qdrant-dense-leg.md` and `QDRANT_REMOVAL_STATUS.md` are dated decision/status records, not live design.
 
 [Documentation home](../README.md) · [Current engineering contracts](../engineering/README.md)
 

@@ -10,9 +10,6 @@
     "src/components/ui/enhanced-new-chat-dialog.tsx",
     "src/components/ui/shadcn-io/**/*",
     "src/hooks/useAnalyticsTracking.ts",
-    "src/services/analytics/**/*",
-    "src/services/graphAnalyticsService.ts",
-    "src/services/graphService.ts",
     "src/services/monitoringWebsocketService.ts",
     "src/services/searchService.ts",
     "src/stores/graphStore.ts",
@@ -1521,12 +1518,12 @@
         "warnings": 13
       },
       "src/services/analytics/websocketService.ts": {
-        "errors": 1,
-        "warnings": 5
+        "errors": 0,
+        "warnings": 4
       },
       "src/services/analyticsService.ts": {
         "errors": 0,
-        "warnings": 20
+        "warnings": 19
       },
       "src/services/citationService.ts": {
         "errors": 0,
@@ -1551,14 +1548,6 @@
       "src/services/featureFlags.tsx": {
         "errors": 0,
         "warnings": 21
-      },
-      "src/services/graphAnalyticsService.ts": {
-        "errors": 0,
-        "warnings": 2
-      },
-      "src/services/graphService.ts": {
-        "errors": 0,
-        "warnings": 7
       },
       "src/services/loggingService.ts": {
         "errors": 0,

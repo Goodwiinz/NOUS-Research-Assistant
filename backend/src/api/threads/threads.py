@@ -636,18 +636,26 @@ async def regenerate_thread_summary(
 
     try:
         summary = await asyncio.to_thread(_run_thread_summary_sync, thread_id)
-
-        if summary:
-            logger.info(f"Regenerated summary for thread {thread_id}")
-        else:
-            logger.warning(f"Failed to generate summary for thread {thread_id}")
-
     except Exception as e:
         logger.error(f"Summary regeneration failed for thread {thread_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Summary generation failed",
         )
+
+    # The service returns None when the LLM call failed *and* when the thread
+    # has no live messages (it doesn't distinguish the two). Either way nothing
+    # was regenerated, so a 200 carrying the previous summary (or null) would be
+    # a false success for API/CLI callers — fail the same way the except branch
+    # does instead of echoing stale state.
+    if not summary:
+        logger.warning(f"Failed to generate summary for thread {thread_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Summary generation failed",
+        )
+
+    logger.info(f"Regenerated summary for thread {thread_id}")
 
     # The sync service committed via its own session; refresh the async-session
     # copy so the response reflects the freshly written summary.

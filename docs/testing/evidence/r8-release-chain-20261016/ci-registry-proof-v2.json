@@ -1,0 +1,266 @@
+{
+  "schema": "nous.ci-service-registry-proof.v2",
+  "recorded_at": "2026-10-16T19:39:53.362973+00:00",
+  "source_base": "711feb35a31ff782f5e5a30a1a661568b5bde3d9",
+  "source_patch": "declared final workflow and CI-contract source, bind published commit separately",
+  "changed_yaml_values": [
+    {
+      "job": "migration-check",
+      "service": "postgres",
+      "before": "public.ecr.aws/docker/library/postgres:15-alpine",
+      "after": "docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81"
+    },
+    {
+      "job": "integration-tests",
+      "service": "postgres",
+      "before": "docker.io/library/postgres@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c",
+      "after": "docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c"
+    },
+    {
+      "job": "integration-tests",
+      "service": "redis",
+      "before": "public.ecr.aws/docker/library/redis:7",
+      "after": "docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85"
+    },
+    {
+      "job": "performance-tests",
+      "service": "postgres",
+      "before": "public.ecr.aws/docker/library/postgres:15",
+      "after": "docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c"
+    }
+  ],
+  "other_parsed_yaml_values_identical": true,
+  "source_declaration": {
+    "declared_at": "2026-10-16T19:36:24.998266+00:00",
+    "source_head_before_patch": "711feb35a31ff782f5e5a30a1a661568b5bde3d9",
+    "script_sha256": "fdfcd77bb656a3f39955ef8e14afddb2e1ec7881adb91524440b626c669d006b",
+    "files": {
+      ".github/workflows/test-pipeline.yml": "a60783af1e78f8685fa9a24c5fa7e97e2f0cf703820fbd084023c6648b7c0295",
+      "backend/tests/unit/ci/test_migration_check_workflow.py": "d79bece444e8cad37666d7f5c7768ecc2c4332f6cab3263d1c653d2ca69061bd"
+    }
+  },
+  "registry_checks": {
+    "declaration": {
+      "declared_at": "2026-10-16T19:34:15.898509+00:00",
+      "script_sha256": "46947548addeef75ba15293d075bcbd4448bf55be9dbdc6271870028bef158bb",
+      "scope": "read-only public registry metadata, no container or image publication",
+      "references": [
+        {
+          "variant": "postgres15",
+          "ref": "docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c",
+          "source_job": 117090755060,
+          "source_log_sha256": "55d9b6f853c006d04f4b3f4e09153b625296ab97396a4d7fc8db844890ee5007"
+        },
+        {
+          "variant": "postgres15-alpine",
+          "ref": "docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81",
+          "source_job": 117080183687,
+          "source_log_sha256": "07ada1bb12f9d3d95a4c76a36ec920a8108cede6596c66eebe49a12189e69082"
+        },
+        {
+          "variant": "redis7",
+          "ref": "docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85",
+          "source_job": 117090755060,
+          "source_log_sha256": "55d9b6f853c006d04f4b3f4e09153b625296ab97396a4d7fc8db844890ee5007"
+        }
+      ]
+    },
+    "records": [
+      {
+        "variant": "postgres15",
+        "reference": "docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c",
+        "source_job": 117090755060,
+        "argv": [
+          "docker",
+          "manifest",
+          "inspect",
+          "docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c"
+        ],
+        "started_at": "2026-10-16T19:34:15.901333+00:00",
+        "finished_at": "2026-10-16T19:34:21.241351+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "6ed5e593f1ba025475f9cc2986f6d09dcd871c3a312f58e4576b274461071991",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "media_type": "application/vnd.oci.image.index.v1+json",
+        "platform_count": 16,
+        "linux_amd64": [
+          "sha256:a5f9ead8ed7cb25abc36bea51fb9bb2be8d5579ed4ef3d28876027e438391ff0"
+        ]
+      },
+      {
+        "variant": "postgres15-alpine",
+        "reference": "docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81",
+        "source_job": 117080183687,
+        "argv": [
+          "docker",
+          "manifest",
+          "inspect",
+          "docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81"
+        ],
+        "started_at": "2026-10-16T19:34:21.241938+00:00",
+        "finished_at": "2026-10-16T19:34:26.454517+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c4a109ba4874e1fec59b349a314b15603fb9faaa2b7eacdf66ee83b43be23265",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "media_type": "application/vnd.oci.image.index.v1+json",
+        "platform_count": 16,
+        "linux_amd64": [
+          "sha256:25d430274d8a31184f9435cc5b2f56aff254952065bbbcac0c51acedb5a1d1e7"
+        ]
+      },
+      {
+        "variant": "redis7",
+        "reference": "docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85",
+        "source_job": 117090755060,
+        "argv": [
+          "docker",
+          "manifest",
+          "inspect",
+          "docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85"
+        ],
+        "started_at": "2026-10-16T19:34:26.458109+00:00",
+        "finished_at": "2026-10-16T19:34:29.988100+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "57e3cab5d70d6deae458f618d3a646695abd72d0020deef1f69d298a806b01f4",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "media_type": "application/vnd.oci.image.index.v1+json",
+        "platform_count": 10,
+        "linux_amd64": [
+          "sha256:cd745595f143052dd6a743bc5651d3ce4b03979fe5c99c7fcfab73461f6f217b"
+        ]
+      }
+    ]
+  },
+  "gate_checks": [
+    {
+      "label": "actionlint-version",
+      "argv": [
+        "/tmp/nous-linear-review/actionlint-1.7.7/actionlint",
+        "-version"
+      ],
+      "cwd": "/Users/goodwiinz/.codex/worktrees/linear-r8-release-chain/RAG_system",
+      "started_at": "2026-10-16T19:36:25.000441+00:00",
+      "finished_at": "2026-10-16T19:36:25.018996+00:00",
+      "exit_code": 0,
+      "stdout_sha256": "02062dd5cb479a3d9803ffebd4c2f50f7efc277e685e10225d80bfebd5393a6d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "actionlint",
+      "argv": [
+        "/tmp/nous-linear-review/actionlint-1.7.7/actionlint"
+      ],
+      "cwd": "/Users/goodwiinz/.codex/worktrees/linear-r8-release-chain/RAG_system",
+      "started_at": "2026-10-16T19:36:25.019374+00:00",
+      "finished_at": "2026-10-16T19:36:25.335497+00:00",
+      "exit_code": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "ci-unit",
+      "argv": [
+        "/Users/goodwiinz/development/RAG_system/backend/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/unit/ci",
+        "-q",
+        "-ra",
+        "--junitxml=/tmp/nous-linear-review/registry-v2-ci-unit.xml"
+      ],
+      "cwd": "/Users/goodwiinz/.codex/worktrees/linear-r8-release-chain/RAG_system/backend",
+      "started_at": "2026-10-16T19:36:25.335936+00:00",
+      "finished_at": "2026-10-16T19:37:06.090248+00:00",
+      "exit_code": 0,
+      "stdout_sha256": "347a253eaa269e553aada4d93a4ca439fe993ac6416fa04e3d886cf6013447b9",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "ruff",
+      "argv": [
+        "/tmp/nous-linear-review/lint-venv/bin/ruff",
+        "check",
+        "backend/tests/unit/ci/test_migration_check_workflow.py"
+      ],
+      "cwd": "/Users/goodwiinz/.codex/worktrees/linear-r8-release-chain/RAG_system",
+      "started_at": "2026-10-16T19:37:06.090879+00:00",
+      "finished_at": "2026-10-16T19:37:06.145875+00:00",
+      "exit_code": 0,
+      "stdout_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "black",
+      "argv": [
+        "/tmp/nous-linear-review/lint-venv/bin/black",
+        "--check",
+        "backend/tests/unit/ci/test_migration_check_workflow.py"
+      ],
+      "cwd": "/Users/goodwiinz/.codex/worktrees/linear-r8-release-chain/RAG_system",
+      "started_at": "2026-10-16T19:37:06.146203+00:00",
+      "finished_at": "2026-10-16T19:37:06.282448+00:00",
+      "exit_code": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "1a56c7cd8457fd05d978cfbd139d7bfd86e86acaa9b57668e718ef8bccc0cf48"
+    },
+    {
+      "label": "isort",
+      "argv": [
+        "/tmp/nous-linear-review/lint-venv/bin/isort",
+        "--check-only",
+        "backend/tests/unit/ci/test_migration_check_workflow.py"
+      ],
+      "cwd": "/Users/goodwiinz/.codex/worktrees/linear-r8-release-chain/RAG_system",
+      "started_at": "2026-10-16T19:37:06.282805+00:00",
+      "finished_at": "2026-10-16T19:37:06.347137+00:00",
+      "exit_code": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "ci_contract_tests": {
+    "cases": 492,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "junit_sha256": "23e4be3ef5f623c3b937be65fb9681ab08aece88fc8f31655b96d54a38d2346e"
+  },
+  "additional_trigger": {
+    "run": 38954974515,
+    "head": "711feb35a31ff782f5e5a30a1a661568b5bde3d9",
+    "producer_job": 117155662857,
+    "failure": "migration PostgreSQL15-alpine mirror also returned Data limit exceeded before checkout",
+    "producer_url": "https://github.com/Goodwiinz/NOUS-Research-Assistant/actions/runs/38954974515/job/117155662857",
+    "log_sha256": "22a04071fb37a28755078dcf54b6dc39157fbf92bbba160bdb84b228f1e83b33"
+  },
+  "identity_sources": [
+    {
+      "variant": "postgres15 and redis7",
+      "run": 38932566042,
+      "head": "fd81c64eeac30fdb827e588f266813e845a7494e",
+      "producer_job": 117090755060,
+      "url": "https://github.com/Goodwiinz/NOUS-Research-Assistant/actions/runs/38932566042/job/117090755060"
+    },
+    {
+      "variant": "postgres15-alpine",
+      "run": 38932566042,
+      "head": "fd81c64eeac30fdb827e588f266813e845a7494e",
+      "producer_job": 117080183687,
+      "url": "https://github.com/Goodwiinz/NOUS-Research-Assistant/actions/runs/38932566042/job/117080183687"
+    }
+  ],
+  "scope": [
+    "All service images in this Test Pipeline use the same verified official-image digests from Docker Hub with major/variant tag hints.",
+    "One existing CI contract expected-image literal is updated; all health, database, permission, trigger and test-gate YAML fields remain identical.",
+    "Application and native-test source hashes still match persistence-proof.json.",
+    "No new credentials or authentication behavior is introduced.",
+    "Explicit exit codes, argv, timestamps and input hashes are retained; empty output hashes alone are not used as pass evidence.",
+    "Digest pins require explicit refresh for image/security updates; README documents the maintenance procedure.",
+    "Local manifest reachability is not proof of hosted-runner availability. Exact published-head CI remains required."
+  ],
+  "references": [
+    "https://hub.docker.com/_/postgres",
+    "https://hub.docker.com/_/redis",
+    "https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers"
+  ]
+}

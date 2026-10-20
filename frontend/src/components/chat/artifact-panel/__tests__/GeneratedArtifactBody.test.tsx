@@ -8,6 +8,10 @@ vi.mock('@/services/artifactService', () => ({
     listVersions: vi.fn(),
     fetchVersionBlob: vi.fn(),
     downloadVersion: vi.fn(),
+    capabilities: vi.fn(),
+    listArtifactShares: vi.fn(),
+    createArtifactShare: vi.fn(),
+    revokeArtifactShare: vi.fn(),
   },
 }));
 
@@ -37,6 +41,70 @@ const v = (
 });
 
 describe('GeneratedArtifactBody', () => {
+  it('only shows sharing when the capability is explicitly enabled', async () => {
+    vi.mocked(artifactService.listVersions).mockResolvedValue([
+      v('v1', '2026-10-11T00:00:00Z'),
+    ]);
+    vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+      new Blob(['body'])
+    );
+    render(
+      <GeneratedArtifactBody
+        artifact={{
+          kind: 'generated',
+          artifactId: 'a1',
+          versionId: 'v1',
+          title: 'report.md',
+        }}
+      />
+    );
+    await screen.findByLabelText('Artifact version');
+    expect(screen.queryByRole('button', { name: 'Share version' })).toBeNull();
+  });
+
+  it('shares the selected older version and returns focus after closing', async () => {
+    vi.mocked(artifactService.capabilities).mockResolvedValue({
+      editingEnabled: false,
+      previewEnabled: false,
+      sharingEnabled: true,
+    });
+    vi.mocked(artifactService.listVersions).mockResolvedValue([
+      v('v1', '2026-10-11T00:00:00Z'),
+      v('v2', '2026-10-11T01:00:00Z'),
+    ]);
+    vi.mocked(artifactService.fetchVersionBlob).mockResolvedValue(
+      new Blob(['body'])
+    );
+    const { user } = render(
+      <GeneratedArtifactBody
+        artifact={{
+          kind: 'generated',
+          artifactId: 'a1',
+          versionId: 'v1',
+          title: 'report.md',
+        }}
+      />
+    );
+    const trigger = await screen.findByRole('button', {
+      name: 'Share version',
+    });
+    await user.click(trigger);
+    await user.type(
+      await screen.findByLabelText('Audience user IDs'),
+      '11111111-1111-4111-8111-111111111111'
+    );
+    await user.click(screen.getByRole('button', { name: 'Create share link' }));
+    await screen.findByRole('link', { name: 'Open shared version' });
+    expect(artifactService.createArtifactShare).toHaveBeenCalledWith(
+      'v1',
+      expect.any(Array),
+      expect.any(String),
+      expect.any(AbortSignal)
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
   it('lists versions newest first, shows provenance, and re-targets the panel on switch', async () => {
     act(() =>
       useArtifactPanelStore.setState({
@@ -163,5 +231,17 @@ beforeEach(() => {
   useAuthStore.setState({
     user: { id: 'actor', organization_id: 'org' } as User,
     isAuthenticated: true,
+  });
+  vi.mocked(artifactService.capabilities).mockResolvedValue({
+    editingEnabled: false,
+    previewEnabled: false,
+    sharingEnabled: false,
+  });
+  vi.mocked(artifactService.listArtifactShares).mockResolvedValue([]);
+  vi.mocked(artifactService.createArtifactShare).mockResolvedValue({
+    id: 's1',
+    versionId: 'v1',
+    expiresAt: '2099-10-12T12:00:00Z',
+    revokedAt: null,
   });
 });

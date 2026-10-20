@@ -27,9 +27,9 @@ const resolveBackendUrl = (env = process.env) => {
     return normalizeOriginCandidate(env.NEXT_PUBLIC_API_BASE_URL);
   }
 
-  if (env.VERCEL === '1') {
+  if (env.VERCEL === '1' || env.NODE_ENV === 'production') {
     throw new Error(
-      'BACKEND_URL or NEXT_PUBLIC_API_URL must be set for Vercel builds so API rewrites do not target localhost.'
+      'BACKEND_URL or NEXT_PUBLIC_API_URL must be set for production builds so API rewrites do not target localhost.'
     );
   }
 

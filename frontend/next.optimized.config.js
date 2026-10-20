@@ -9,6 +9,7 @@ const withBundleAnalyzer = require('@next/bundle-analyzer')({
 
 const webpack = require('webpack');
 const CompressionPlugin = require('compression-webpack-plugin');
+const { resolveBackendUrl } = require('./config/resolveBackendUrl');
 
 const performanceConfig = {
   // Enable React strict mode for development debugging
@@ -218,15 +219,16 @@ const performanceConfig = {
 
   // API rewrites with performance headers
   async rewrites() {
+    const backendUrl = resolveBackendUrl();
     return [
       // API routes with caching hints
       {
         source: '/api/v1/:path*',
-        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/:path*`,
+        destination: `${backendUrl}/api/v1/:path*`,
       },
       {
         source: '/api/v2/:path*',
-        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v2/:path*`,
+        destination: `${backendUrl}/api/v2/:path*`,
       },
     ];
   },
@@ -356,8 +358,12 @@ const performanceConfig = {
 
   // Environment variables (exposed to client)
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
-    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000',
+    ...(process.env.NEXT_PUBLIC_API_URL
+      ? { NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL }
+      : {}),
+    ...(process.env.NEXT_PUBLIC_WS_URL
+      ? { NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL }
+      : {}),
     NEXT_PUBLIC_PERFORMANCE_MODE: process.env.NODE_ENV === 'production' ? 'true' : 'false',
     NEXT_PUBLIC_ENABLE_BUNDLE_ANALYSIS: process.env.ANALYZE === 'true' ? 'true' : 'false',
   },

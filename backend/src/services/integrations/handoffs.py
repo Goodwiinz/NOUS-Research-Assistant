@@ -1,22 +1,25 @@
 """Versioned chat handoff record: harness-written structured data, never an
 LLM summary. Optimistic concurrency per thread; the service owns the commit.
 
-Every query is scoped by organization, thread and project: a chain belongs to
-one (thread, project) pair, so a chat re-attached to another project starts a
-fresh chain and never shows the previous project's handoffs. A conflict returns the latest version; the rejected
-content is never stored.
+Harness reads and writes are scoped by organization, thread and project.
+Each project has its own chain. The browser shows the newest save from the
+chat's current project or a still-linked project in the same workspace;
+unlinking a project hides its chain. A conflict returns that chain's latest
+version; rejected content is never stored.
 """
 
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.artifact import Artifact, ArtifactVersion
+from src.models.collection import Collection
 from src.models.conversation import Conversation
 from src.models.integration_handoff import IntegrationHandoff
+from src.models.project_thread import ProjectThread
 from src.models.thread import Thread
 from src.models.workspace import Workspace
 from src.schemas.integration_context import IntegrationContext
@@ -210,12 +213,29 @@ async def read_latest_for_thread(
     """Browser path; the caller has already authorized the thread, and
     ``organization_id`` is the org of the thread's workspace as
     ``workspace_organization_id`` gives it (a legacy workspace's is its
-    owner's), not the viewer's, who may be a member from another org. Only
-    the chain of the thread's current project is shown."""
+    owner's), not the viewer's, who may be a member from another org. Show the
+    newest save from a live project still linked to this chat. Version numbers
+    are local to a project chain and cannot order saves across projects."""
     row = await db.scalar(
         _live_chain(organization_id, thread_id)
-        .where(IntegrationHandoff.project_id == Thread.source_project_id)
-        .order_by(IntegrationHandoff.version.desc())
+        .join(Collection, Collection.id == IntegrationHandoff.project_id)
+        .where(
+            Collection.is_deleted.is_(False),
+            Collection.workspace_id == Workspace.id,
+            or_(
+                IntegrationHandoff.project_id == Thread.source_project_id,
+                exists().where(
+                    ProjectThread.project_id == IntegrationHandoff.project_id,
+                    ProjectThread.thread_id == Thread.id,
+                    ProjectThread.is_deleted.is_(False),
+                ),
+            ),
+        )
+        .order_by(
+            IntegrationHandoff.created_at.desc(),
+            IntegrationHandoff.version.desc(),
+            IntegrationHandoff.id.desc(),
+        )
         .limit(1)
     )
     return _dto(row) if row is not None else None

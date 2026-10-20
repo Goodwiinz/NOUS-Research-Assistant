@@ -16,13 +16,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Iterable, Sequence, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, desc, func, select
+from sqlalchemy import ColumnElement, desc, false, func, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -48,7 +50,7 @@ from src.services.artifacts.service import (
     count_project_artifacts,
     list_project_artifacts,
 )
-from src.services.integrations import arxiv_fulltext
+from src.services.integrations import arxiv_fulltext, discover_papers
 from src.services.integrations.arxiv_fulltext import MAX_PAGE_CHARS
 from src.services.integrations.context import (
     IntegrationAccessDenied,
@@ -85,8 +87,12 @@ _ARGS_ONLY_TOOLS = frozenset(
 )
 # Tools that act on no single project. A workspace grant gives them no project
 # selector: there is nothing for it to select. list_library lists the grant's
-# whole scope.
-_PROJECTLESS_TOOLS = _ARGS_ONLY_TOOLS | {"get_arxiv_paper_content", "list_library"}
+# whole scope, and so does the library half of discover_papers.
+_PROJECTLESS_TOOLS = _ARGS_ONLY_TOOLS | {
+    "get_arxiv_paper_content",
+    "list_library",
+    "discover_papers",
+}
 IDENTITY_ARGUMENTS = frozenset(
     {"project_id", "user_id", "organization_id", "thread_id", "run_id", "grant_id"}
 )
@@ -270,6 +276,98 @@ LOCAL_TOOLS: dict[str, tuple[str, dict[str, Any], str]] = {
         },
         "tools:read",
     ),
+    "discover_papers": (
+        "Find papers for a research question: one round of searches over this "
+        "connection's library (keyword and semantic) and arXiv (keyword), merged "
+        "into a ranked list of 1-15 papers, each with its date, authors, a "
+        "snippet and the searches that found it. You run the loop; this tool is "
+        "one round of it.\n"
+        "keywords: only the user's own terms, never synonyms or expansions (keep "
+        "GRPO as GRPO, do not spell it out); a keyword search matches only papers "
+        "that contain every keyword term. question: the user's question in one "
+        "sentence, for the semantic search. Choose published_after, "
+        "published_before and prioritize once and send the same values in every "
+        "call of the loop: the window is applied inside each search, not "
+        "afterwards. difficulty (1-10) sets how deep each search reads and how "
+        "many follow-up calls you may spend (followup_rounds_allowed in the "
+        "result: 0, 1 or 2).\n"
+        "After reading the results, if coverage is thin, make at most "
+        "followup_rounds_allowed more calls, each aimed at ONE concrete gap (a "
+        "missing method, benchmark, acronym or title phrase), never a rephrase of "
+        "an earlier call. Then answer with up to 15 paper ids that appeared in "
+        "the results (fewer when one paper clearly dominates), and never an id no "
+        "result returned. Run at most two such loops "
+        "per user turn. calls[] lists every search with its status: check it for "
+        "one that was unavailable or failed. arXiv is one call (keywords AND-ed, "
+        "plus the acronyms among them OR-ed in); when it is unavailable with "
+        "reason rate_gated, arXiv's shared rate limit was busy and the library "
+        "results are still valid: call again shortly for the arXiv half.",
+        {
+            "type": "object",
+            "properties": {
+                "keywords": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": discover_papers.MAX_KEYWORD_CHARS,
+                    },
+                    "minItems": 1,
+                    "maxItems": discover_papers.MAX_KEYWORDS,
+                    "description": "The user's own terms, one concept each.",
+                },
+                "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": discover_papers.MAX_QUESTION_CHARS,
+                    "description": "What the user wants to find, in one sentence.",
+                },
+                "difficulty": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": (
+                        "1-3: shallow, no follow-ups; 4-7: one follow-up call; "
+                        "8-10: deep, two follow-up calls."
+                    ),
+                },
+                "prioritize": {
+                    "type": "string",
+                    "enum": list(discover_papers.PRIORITIES),
+                    "default": "default",
+                    "description": (
+                        "recency favours newer papers, historical older and "
+                        "better-cited ones. It reorders; it never excludes."
+                    ),
+                },
+                "published_after": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 10,
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "description": "YYYY-MM-DD, inclusive.",
+                },
+                "published_before": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 10,
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "description": "YYYY-MM-DD, inclusive.",
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(discover_papers.SOURCES)},
+                    "minItems": 1,
+                    "maxItems": len(discover_papers.SOURCES),
+                    "uniqueItems": True,
+                    "default": list(discover_papers.SOURCES),
+                },
+            },
+            "required": ["keywords", "question", "difficulty"],
+            "additionalProperties": False,
+        },
+        "tools:read",
+    ),
     "list_library": (
         "List the folders (NOUS projects) this connection may use, with document "
         "counts. A page holds at most limit folders, fewer when their text is "
@@ -445,6 +543,13 @@ def _validate_arguments(
             raise ToolArgumentError("unknown arguments")
         if set(schema["required"]) - set(arguments):
             raise ToolArgumentError("missing required arguments")
+        if name == "discover_papers":
+            # Specific, safe reasons (a bad date, a reversed window, too many
+            # keywords) instead of the generic shape error below.
+            try:
+                discover_papers.parse_arguments(arguments)
+            except discover_papers.DiscoverArgumentError as error:
+                raise ToolArgumentError(str(error)) from error
         # The selector, when advertised, is a plain string here;
         # _target_project checks it is a UUID inside the grant's scope.
         _check_local_arguments(schema, arguments)
@@ -650,6 +755,231 @@ async def _document_content(
 
 
 _MARK_TAGS = ("<mark>", "</mark>")
+PAGE_RERANK_TIMEOUT_SECONDS = 10.0
+MAX_RERANK_PAGES = 100
+MAX_PAGE_FILTER_SOURCE_CHARS = 1024 * 1024
+
+
+def _split_pages(content_text: str) -> list[tuple[int, str]]:
+    """Preserve a leading preamble in the first marked page, never lose it."""
+    pages, _ = _scan_pages(content_text)
+    return [(number, text) for number, text, _ in pages]
+
+
+def _scan_pages(
+    source: str, *, max_pages: int | None = None, max_chars: int | None = None
+) -> tuple[list[tuple[int, str, int]], int]:
+    """Count all pages while copying only bounded candidates and text prefixes."""
+    pages: list[tuple[int, str, int]] = []
+    total = 0
+
+    def span_text(start: int, end: int) -> tuple[str, int]:
+        # Find stripped bounds without first allocating the entire page body.
+        while start < end and source[start].isspace():
+            start += 1
+        while end > start and source[end - 1].isspace():
+            end -= 1
+        stop = end if max_chars is None else min(end, start + max_chars)
+        return source[start:stop], end - start
+
+    def append_page(marker: re.Match[str], end: int) -> None:
+        nonlocal total
+        total += 1
+        if max_pages is not None and total > max_pages:
+            return
+        text, length = span_text(marker.end(), end)
+        if total == 1:
+            preamble, prefix_length = span_text(0, marker.start())
+            if prefix_length:
+                text = preamble + (f"\n{text}" if length else "")
+                length = prefix_length + (1 + length if length else 0)
+        pages.append((int(marker.group(1)), text[:max_chars], length))
+
+    previous = None
+    # Nine digits already allow implausibly large page counts. Longer markers
+    # remain text, avoiding both integer conversion failures and huge metadata.
+    for marker in re.finditer(r"(?m)^[ \t]*\[Page[ \t]+(\d{1,9})\][ \t]*\r?$", source):
+        if previous is not None:
+            append_page(previous, marker.start())
+        previous = marker
+    if previous is not None:
+        append_page(previous, len(source))
+    return pages, total
+
+
+def _json_text_prefix(text: str, budget: int) -> str:
+    """Longest prefix fitting an escaped UTF-8 JSON string's content budget."""
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        size = len(json.dumps(text[:mid], ensure_ascii=False).encode()) - 2
+        if size <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo]
+
+
+def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """Share the complete result's byte budget across pages; retain every row."""
+    chunks = payload["chunks"]
+    # Measure metadata with empty text, including every truncation indicator.
+    originals = [chunk["text"] for chunk in chunks]
+    for chunk in chunks:
+        chunk.setdefault("total_chars", len(chunk["text"]))
+        chunk["text"] = ""
+        chunk["truncated"] = True
+    payload["truncated"] = True
+    # Up to 100 repeated 500-character Unicode titles can exceed the cap
+    # before any page text is included. Bound titles only when necessary.
+    if _wire_size(payload) > MAX_RESULT_BYTES // 2:
+        for chunk in chunks:
+            if chunk["title"]:
+                title = chunk["title"]
+                chunk["title"] = _json_text_prefix(title, 256)
+                if chunk["title"] != title:
+                    chunk["title_truncated"] = True
+    metadata = ToolResult(
+        content=[payload], is_error=False, source_refs=_source_refs(payload)
+    )
+    # Include the envelope and references that _finish adds. Each truncation
+    # flag may grow by one byte when true becomes false after adding text.
+    remaining = max(
+        0, MAX_RESULT_BYTES - _wire_size(metadata.model_dump()) - len(chunks)
+    )
+    # Allocate short pages first so unused shares remain available to longer
+    # pages. Keep the rows in their original order and account for JSON escaping.
+    by_size = sorted(range(len(chunks)), key=lambda i: _wire_size(originals[i]))
+    for position, index in enumerate(by_size):
+        chunk = chunks[index]
+        budget = remaining // (len(chunks) - position)
+        chunk["text"] = _json_text_prefix(originals[index], budget)
+        remaining -= _wire_size(chunk["text"]) - 2
+        chunk["truncated"] = len(chunk["text"]) < chunk["total_chars"]
+    # Candidate limiting is independently reported even if all text fits.
+    if (
+        not any(c["truncated"] or c.get("title_truncated") for c in chunks)
+        and payload["page_filter"]["total_pages"] <= MAX_RERANK_PAGES
+    ):
+        payload.pop("truncated")
+    return payload
+
+
+async def _retrieve_document_pages(
+    db: AsyncSession,
+    context: IntegrationContext,
+    project_id: UUID,
+    document_id: str,
+    query: str,
+) -> dict[str, Any] | None:
+    """None means use FTS; unavailable means the document's access was revoked."""
+    from src.core.config import settings
+    from src.services.agent._pii_redact import redact_pii
+    from src.services.search.cohere_rerank_service import cohere_rerank_service
+
+    row = (
+        await db.execute(
+            _live_project_documents(project_id, context.organization_id)
+            .where(Document.id == UUID(document_id))
+            .with_only_columns(
+                Document.title,
+                func.substr(Document.content_text, 1, MAX_PAGE_FILTER_SOURCE_CHARS + 1),
+            )
+        )
+    ).first()
+    if row is None:
+        return _unavailable().content[0]
+    title, content_text = row
+    if len(content_text or "") > MAX_PAGE_FILTER_SOURCE_CHARS:
+        return None
+    pages, total_pages = await run_in_threadpool(
+        _scan_pages,
+        content_text or "",
+        max_pages=MAX_RERANK_PAGES,
+        max_chars=MAX_RESULT_BYTES,
+    )
+    short_circuited = any(page[1] for page in pages) and (
+        total_pages <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
+    )
+    model = None
+    rerank_succeeded = short_circuited
+    accepted = []
+    if short_circuited:
+        accepted = [(number, text, length, 1.0) for number, text, length in pages]
+    elif cohere_rerank_service.is_enabled and any(page[1] for page in pages):
+        # Blank extracted pages count toward pagination but Cohere rejects
+        # empty documents. Preserve the filtered list for response-index mapping.
+        candidates = [page for page in pages if page[1]]
+        # This endpoint owns a read-only request transaction. Copy scalar data
+        # above, then return its connection to the pool during the remote call.
+        # The post-provider authorization queries start a fresh transaction.
+        await db.rollback()
+        try:
+            outcome = await asyncio.wait_for(
+                cohere_rerank_service.rerank_with_outcome(
+                    query,
+                    documents=[
+                        {"id": str(number), "content": text}
+                        for number, text, _ in candidates
+                    ],
+                    top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
+                ),
+                timeout=PAGE_RERANK_TIMEOUT_SECONDS,
+            )
+            rerank_succeeded = outcome.succeeded
+            if rerank_succeeded:
+                scores = {
+                    result.index: result.relevance_score for result in outcome.results
+                }
+                accepted = [
+                    (number, text, length, scores[index])
+                    for index, (number, text, length) in enumerate(candidates)
+                    if index in scores
+                ]
+                model = cohere_rerank_service.model
+        except Exception:
+            logger.warning("retrieve_passages page rerank unavailable", exc_info=True)
+    # Refresh caller authority and document liveness after worker/provider
+    # awaits, including failures that would otherwise fall back to FTS.
+    try:
+        scope = await authorized_scope_filter(db, context)
+    except IntegrationAccessDenied:
+        return _unavailable().content[0]
+    if (
+        await db.scalar(
+            _live_project_documents(project_id, context.organization_id)
+            .where(scope, Document.id == UUID(document_id))
+            .with_only_columns(Document.id)
+        )
+        is None
+    ):
+        return _unavailable().content[0]
+    if not rerank_succeeded:
+        return None
+    accepted.sort(key=lambda page: page[0])
+    return _bound_page_result(
+        {
+            "chunks": [
+                {
+                    "document_id": document_id,
+                    "title": redact_pii(title) if title else title,
+                    "text": text,
+                    "score": score,
+                    "page_number": number,
+                    "total_chars": length,
+                }
+                for number, text, length, score in accepted
+            ],
+            "total": len(accepted),
+            "query": query,
+            "page_filter": {
+                "accepted_pages": [number for number, _, _, _ in accepted],
+                "total_pages": total_pages,
+                "short_circuited": short_circuited,
+                "model": model,
+            },
+        }
+    )
 
 
 def _split_pages(content_text: str) -> list[tuple[int, str]]:
@@ -1312,7 +1642,10 @@ def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
             refs.append(dict(ref))
     for paper in payload.get("papers") or []:
         if paper.get("id"):
-            refs.append({"arxiv_id": str(paper["id"])})
+            # discover_papers mixes library documents and arXiv papers; every
+            # other "papers" payload is an arXiv search.
+            key = "document_id" if paper.get("source") == "library" else "arxiv_id"
+            refs.append({key: str(paper["id"])})
     for hit in payload.get("results") or []:
         if hit.get("id"):
             # Per-result "source" is the connector that produced it.
@@ -1462,6 +1795,69 @@ def _library_page(
     }
 
 
+def _fit_discover_to_cap(payload: dict[str, Any]) -> None:
+    """Drop the lowest-ranked papers until the whole response fits the cap.
+
+    Measured as the ToolResult envelope (content plus the source_refs derived
+    from the papers), so the refs count against MAX_RESULT_BYTES too. The
+    fields are bounded, so 15 papers normally fit; multi-byte text can exceed it.
+    """
+
+    def wire() -> int:
+        return _wire_size(
+            {
+                "content": [payload],
+                "is_error": False,
+                "source_refs": _source_refs(payload),
+            }
+        )
+
+    while len(payload["papers"]) > 1 and wire() > MAX_RESULT_BYTES:
+        payload["papers"].pop()
+        payload["truncated"] = True
+
+
+async def _discover_papers(
+    db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
+) -> ToolResult:
+    """One discovery round over the grant's whole scope (library) and arXiv.
+
+    The library scope is ``authorized_scope_filter`` of this call: re-checked
+    access, then a condition on ``Collection`` (a project grant's one project or
+    a workspace grant's projects) that each library statement applies together
+    with the live-ancestor checks. It is never expanded into an id list, which a
+    large workspace would push past the bind-parameter limit. The searches run
+    in their own sessions (see ``discover_papers``), so the request session is
+    released before they start; nothing outside the scope can be read.
+    """
+    try:
+        request = discover_papers.parse_arguments(arguments)
+    except discover_papers.DiscoverArgumentError as error:
+        raise ToolArgumentError(str(error)) from error
+    # An arXiv-only round runs no library call; ``false()`` matches nothing.
+    library_scope: ColumnElement[bool] = false()
+    if "library" in request.sources:
+        library_scope = await authorized_scope_filter(db, context)
+    # Nothing below reads ``db``: the scope is a SQL condition, not loaded rows,
+    # and each search opens its own session. End the read-only request
+    # transaction now so its pooled connection is not held for the whole round
+    # beside the three the searches check out.
+    await db.rollback()
+    payload = await discover_papers.discover(
+        request,
+        organization_id=context.organization_id,
+        library_scope=library_scope,
+        # The public search_arxiv tool returns at most 5 papers; a discovery
+        # round reads arXiv to its difficulty depth through this internal cap.
+        arxiv_search=partial(
+            _tool_search_arxiv, max_results_cap=discover_papers.MAX_DEPTH
+        ),
+    )
+    if "papers" in payload:
+        _fit_discover_to_cap(payload)
+    return _finish(payload)
+
+
 async def invoke_read(
     db: AsyncSession, context: IntegrationContext, invocation: ToolInvocation
 ) -> ToolResult:
@@ -1489,6 +1885,8 @@ async def invoke_read(
             return _finish(await _list_library(db, context, arguments))
         if name == "get_arxiv_paper_content":
             return await _arxiv_paper_content(arguments)
+        if name == "discover_papers":
+            return await _discover_papers(db, context, arguments)
         return _finish(await _args_only(name, arguments))
     target = await _target_project(db, context, arguments)
     if target is None:

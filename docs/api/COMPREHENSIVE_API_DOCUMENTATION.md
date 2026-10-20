@@ -1,5 +1,7 @@
 # Comprehensive API Documentation - Multimodal Enterprise RAG System
 
+> **Stale / historical (2026-10-17):** It covers only part of the API and its paths and schemas may have drifted. The source of truth is the generated `backend/openapi.json` (also served at `/docs` when `DEBUG` is on). Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## 📋 Table of Contents
 
 1. [API Overview](#api-overview)
