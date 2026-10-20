@@ -961,11 +961,17 @@ jobs:
         if: matrix.shard == 1
         # These integration-marked tests live outside the sharded directory.
         # Give them a real database once, and reject a green all-skipped run.
+        # The PDF-chat branch suites (GOO-436) ride this lane: they own
+        # generated schemas and cover the pb01 migration round trip and the
+        # accept/select/read serialization only PostgreSQL can prove.
         run: |
           mkdir -p test-results
           pytest backend/tests/unit/tasks/test_stuck_processing_recovery.py \
             backend/tests/unit/tasks/test_stuck_recovery_terminal_retry.py \
             backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py \
+            backend/tests/unit/services/test_message_branches_postgres.py \
+            backend/tests/unit/services/test_alphaxiv_live_postgres.py \
+            backend/tests/unit/services/test_native_pdf_branch_reads_postgres.py \
             -c backend/pytest.ini -m integration \
             --junitxml=test-results/ingestion-recovery.xml -q -ra
           python - <<'PY'
