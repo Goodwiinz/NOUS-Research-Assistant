@@ -92,6 +92,7 @@ services:
       context: ..
       dockerfile: frontend/Dockerfile.prod
       args:
+        BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
     image: rag-frontend:hardened

@@ -20,6 +20,18 @@ variable "NODE_VERSION" {
   default = "24"
 }
 
+variable "BACKEND_URL" {
+  default = ""
+}
+
+variable "NEXT_PUBLIC_SUPABASE_URL" {
+  default = ""
+}
+
+variable "NEXT_PUBLIC_SUPABASE_ANON_KEY" {
+  default = ""
+}
+
 # Default group - builds all production services
 group "default" {
   targets = ["backend", "frontend"]
@@ -60,6 +72,9 @@ target "frontend" {
   ]
   args = {
     NODE_VERSION = "${NODE_VERSION}"
+    BACKEND_URL = "${BACKEND_URL}"
+    NEXT_PUBLIC_SUPABASE_URL = "${NEXT_PUBLIC_SUPABASE_URL}"
+    NEXT_PUBLIC_SUPABASE_ANON_KEY = "${NEXT_PUBLIC_SUPABASE_ANON_KEY}"
   }
 }
 

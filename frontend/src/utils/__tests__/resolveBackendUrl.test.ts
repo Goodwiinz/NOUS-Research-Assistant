@@ -45,4 +45,19 @@ describe('resolveBackendUrl', () => {
   it('keeps localhost fallback for local development', () => {
     expect(resolveBackendUrl({} as NodeJS.ProcessEnv)).toBe(LOCAL_BACKEND_URL);
   });
+
+  it('requires an explicit backend for production outside Vercel too', () => {
+    expect(() => resolveBackendUrl({ NODE_ENV: 'production' })).toThrow(
+      /BACKEND_URL or NEXT_PUBLIC_API_URL must be set/
+    );
+  });
+
+  it('permits an intentional local backend for a local production build', () => {
+    expect(
+      resolveBackendUrl({
+        NODE_ENV: 'production',
+        BACKEND_URL: 'http://127.0.0.1:8443',
+      })
+    ).toBe('http://127.0.0.1:8443');
+  });
 });

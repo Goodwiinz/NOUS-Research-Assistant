@@ -8,6 +8,8 @@ Feature- and run-specific evidence bundles. Keep each bundle’s source identity
 
 | Directory | Contents |
 | --- | --- |
+| [linear-endpoints-20261016/](linear-endpoints-20261016/README.md) | GOO-219/237–241: endpoint repairs, 3,039 frontend tests, strict type/lint gates, mutation proof and separate Fable code/security reviews |
+| [verify-login-20261016/](verify-login-20261016/README.md) | Local frontend + configured dev API: login assertions and both visual checkpoints PASS; backend SHA unknown |
 | [verify-chat-send-stream-reload-20261009-r2/](verify-chat-send-stream-reload-20261009-r2/README.md) | nous-verify deployed-lane run (backend `a0d4c6b`): HITL approve and deny and project creation via chat PASS; chat send/stream/reload PASS except the terminal-state criterion (run still in flight at the streamed checkpoint); screenshots reviewed |
 | [verify-chat-send-stream-reload-20261009/](verify-chat-send-stream-reload-20261009/README.md) | nous-verify deployed-lane run: document upload PASS; chat journeys failed on a test selector defect (superseded by -r2) |
 | [verify-login-20261009/](verify-login-20261009/README.md) | nous-verify deployed-lane run: login PASS; chat timed out at the 30 s default (superseded) |
