@@ -47,14 +47,8 @@ async def read_thread(
     conversation_id: UUID | None = None,
     workspace_id: UUID | None = None,
 ) -> ThreadRead | None:
-    # Binding, selection and canonical writers use this same lock. Hold it
-    # through projection/paging so a first binding or new head cannot mix views.
-    await db.execute(
-        select(Thread)
-        .where(Thread.id == thread_id)
-        .with_for_update(of=Thread)
-        .execution_options(populate_existing=True)
-    )
+    # Authorize before locking: a caller without access must not be able to
+    # hold, or queue on, another tenant's thread row.
     thread = await workspace_access.get_thread(
         db,
         thread_id,
@@ -66,8 +60,21 @@ async def read_thread(
     )
     if thread is None:
         return None
+    # Linear threads keep their lock-free reads. Branching is only enabled on
+    # an empty thread (prepare_branch_submission) and never turned off, so a
+    # read racing the first binding sees at most one single-path exchange,
+    # which the linear view renders the same way.
     if thread.message_branching is not True:
         return ThreadRead(thread)
+    # Binding, selection and canonical writers take FOR UPDATE on this row.
+    # FOR SHARE excludes them through projection/paging, so a new head cannot
+    # mix views, without serializing concurrent readers of the same thread.
+    await db.execute(
+        select(Thread)
+        .where(Thread.id == thread_id)
+        .with_for_update(of=Thread, read=True)
+        .execution_options(populate_existing=True)
+    )
     actor, thread = await message_branches.authorize_branch_thread(
         db, actor_id=actor_id, thread_id=thread_id, require_edit=False
     )
