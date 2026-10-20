@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-16T21:58:46.540885+00:00",
+  "status": "NOT RUN",
+  "preparation_source_revision": null,
+  "execution_repository_revision": null,
+  "invalidation_rule": "Changed verifier/task/repository inputs require a new declaration and new trials. Prior scores and identifier-audit passes are not current acceptance.",
+  "host_calibration": {
+    "source_parent": "8c7aa67638e9292fc13bc2c873a34293f324e88f",
+    "source_state": "final declared uncommitted review delta; bind published commit separately",
+    "cases": 36,
+    "failures": 0,
+    "skipped": 0,
+    "junit_sha256": "d995bf4e94eda65ae75027c9b45fedd604417fdb6881bc6569862d0870f89a89",
+    "input_declaration_sha256": "6e1b749febabd3533de6990fdfaa0c3c22d67a2ae9a134ee34cb40a277c13007",
+    "kind": "host-only calibration/source-integrity; not scored Harbor/provider execution"
+  },
+  "kind": "synthetic provider diagnostic",
+  "source_scope": "A future execution must declare and retain the complete clean Git-visible source HEAD/tree before imports and verify identity after cleanup.",
+  "provider_runtime_identity": null,
+  "measurements": null,
+  "reason": "Source guard changed; this revision has no new provider/PostgreSQL measurement. V3 retains only its declared fifteen-input scope.",
+  "previous_record": "evals/baselines/discovery-provider-2026-10-16-v3.json",
+  "previous_score_reused": false,
+  "preparation_parent_revision": "8c7aa67638e9292fc13bc2c873a34293f324e88f",
+  "preparation_source_state": "final declared uncommitted review delta; bind published commit separately",
+  "source_manifest": "evals/source-manifests/discovery-provider-2026-10-16-v4.json",
+  "prepared_first_at": "2026-10-16T21:34:41.627209+00:00"
+}
