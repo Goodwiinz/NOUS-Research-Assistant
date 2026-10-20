@@ -301,8 +301,8 @@ finding against the code, address real issues, and rerun affected tests. Review
 is evidence, not ceremony; an unavailable mandatory review ends as
 `ready-for-human`.
 
-Each review writes one verdict file, named after its lens (`code.md`,
-`security.md`), in the tick's review directory:
+Each review writes one verdict file, `review-<lens>.md` (`review-code.md`,
+`review-security.md`), in the tick's review directory:
 `$LOOP_BRIDGE_DIR/reviews/<branch>/round-<N>/` with each `/` in the branch
 name replaced by `__`, or `$NOUS_RECEIPT_DIR/<run-id>/review/round-<N>/` in
 `remote-required` mode. Every verdict file starts with these three lines,
