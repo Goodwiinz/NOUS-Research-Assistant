@@ -4221,6 +4221,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/devices/{device_id}/account-workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Account Workspace Bindings
+         * @description The device's account folders, while its account approval lives;
+         *     empty otherwise.
+         */
+        get: operations["get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get"];
+        put?: never;
+        /**
+         * Create Account Workspace Binding
+         * @description Register an account folder: needs a live account approval of this
+         *     device that can run Codex (403 otherwise).
+         */
+        post: operations["create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices/{device_id}/revoke": {
         parameters: {
             query?: never;
@@ -4248,7 +4274,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Workspace Bindings */
+        /**
+         * Get Workspace Bindings
+         * @description The device's project folders. Account folders are listed by
+         *     GET /devices/{device_id}/account-workspaces.
+         */
         get: operations["get_workspace_bindings_api_v1_integrations_devices__device_id__workspaces_get"];
         put?: never;
         /** Create Workspace Binding */
@@ -11273,6 +11303,32 @@ export interface components {
             project_count: number;
             /** Workspace Count */
             workspace_count: number;
+        };
+        /**
+         * AccountWorkspaceBindingCreate
+         * @description An account folder: a local write root that belongs to no project
+         *     (`bridge_workspace_bindings.project_id` NULL). Registering one needs a
+         *     live account run consent on the device; bind_account_workspace refuses
+         *     it otherwise.
+         */
+        AccountWorkspaceBindingCreate: {
+            /** Label */
+            label: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /** AccountWorkspaceBindingDTO */
+        AccountWorkspaceBindingDTO: {
+            /** Label */
+            label: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
         };
         /** ActionDecision */
         ActionDecision: {
@@ -24344,12 +24400,24 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
-        /** WorkspaceBindingCreate */
+        /**
+         * WorkspaceBindingCreate
+         * @description A project folder: a local write root tied to one project.
+         *
+         *     `project_id` stays a required string on the wire: the bridge and the chat
+         *     composer read these routes through the generated types, and a nullable
+         *     `project_id` is an ERR-level `oasdiff` break (pinned by
+         *     tests/unit/api/test_integration_device_folders_contract.py). Account
+         *     folders have their own models and routes below.
+         */
         WorkspaceBindingCreate: {
             /** Label */
             label: string;
-            /** Project Id */
-            project_id?: string | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /**
              * Workspace Id
              * Format: uuid
@@ -24360,8 +24428,11 @@ export interface components {
         WorkspaceBindingDTO: {
             /** Label */
             label: string;
-            /** Project Id */
-            project_id?: string | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /**
              * Workspace Id
              * Format: uuid
@@ -32138,6 +32209,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountWorkspaceBindingDTO"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountWorkspaceBindingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountWorkspaceBindingDTO"];
                 };
             };
             /** @description Validation Error */

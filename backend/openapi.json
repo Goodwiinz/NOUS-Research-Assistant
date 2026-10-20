@@ -194,6 +194,51 @@
         "title": "AccountSummaryDTO",
         "type": "object"
       },
+      "AccountWorkspaceBindingCreate": {
+        "additionalProperties": false,
+        "description": "An account folder: a local write root that belongs to no project\n(`bridge_workspace_bindings.project_id` NULL). Registering one needs a\nlive account run consent on the device; bind_account_workspace refuses\nit otherwise.",
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id"
+        ],
+        "title": "AccountWorkspaceBindingCreate",
+        "type": "object"
+      },
+      "AccountWorkspaceBindingDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "workspace_id"
+        ],
+        "title": "AccountWorkspaceBindingDTO",
+        "type": "object"
+      },
       "ActionDecision": {
         "additionalProperties": false,
         "properties": {
@@ -31021,6 +31066,7 @@
       },
       "WorkspaceBindingCreate": {
         "additionalProperties": false,
+        "description": "A project folder: a local write root tied to one project.\n\n`project_id` stays a required string on the wire: the bridge and the chat\ncomposer read these routes through the generated types, and a nullable\n`project_id` is an ERR-level `oasdiff` break (pinned by\ntests/unit/api/test_integration_device_folders_contract.py). Account\nfolders have their own models and routes below.",
         "properties": {
           "label": {
             "maxLength": 120,
@@ -31029,16 +31075,9 @@
             "type": "string"
           },
           "project_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project Id"
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
           },
           "workspace_id": {
             "format": "uuid",
@@ -31048,7 +31087,8 @@
         },
         "required": [
           "label",
-          "workspace_id"
+          "workspace_id",
+          "project_id"
         ],
         "title": "WorkspaceBindingCreate",
         "type": "object"
@@ -31063,16 +31103,9 @@
             "type": "string"
           },
           "project_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project Id"
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
           },
           "workspace_id": {
             "format": "uuid",
@@ -31082,7 +31115,8 @@
         },
         "required": [
           "label",
-          "workspace_id"
+          "workspace_id",
+          "project_id"
         ],
         "title": "WorkspaceBindingDTO",
         "type": "object"
@@ -44822,6 +44856,116 @@
         ]
       }
     },
+    "/api/v1/integrations/devices/{device_id}/account-workspaces": {
+      "get": {
+        "description": "The device's account folders, while its account approval lives;\nempty otherwise.",
+        "operationId": "get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccountWorkspaceBindingDTO"
+                  },
+                  "title": "Response Get Account Workspace Bindings Api V1 Integrations Devices  Device Id  Account Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Account Workspace Bindings",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "description": "Register an account folder: needs a live account approval of this\ndevice that can run Codex (403 otherwise).",
+        "operationId": "create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountWorkspaceBindingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountWorkspaceBindingDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Account Workspace Binding",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/api/v1/integrations/devices/{device_id}/revoke": {
       "post": {
         "description": "Disconnect this device and revoke its integration grants. Also ends all existing CLI sign-ins for this account because CLI tokens are not device bound, so every other connected device fails its next request until `nous-harness connect` runs on it again; that registers a new device and consent and leaves the old ones listed until revoked. Revoke the old consent rather than disconnecting the old device, which would end every CLI sign-in again; the old device then stays listed with no access. To remove one device's access without ending every sign-in, revoke its consents with POST /api/v1/integrations/grant-requests/{request_id}/revoke. Returns 503 without committing device revocation if the shared CLI cutoff fails.",
@@ -44870,6 +45014,7 @@
     },
     "/api/v1/integrations/devices/{device_id}/workspaces": {
       "get": {
+        "description": "The device's project folders. Account folders are listed by\nGET /devices/{device_id}/account-workspaces.",
         "operationId": "get_workspace_bindings_api_v1_integrations_devices__device_id__workspaces_get",
         "parameters": [
           {

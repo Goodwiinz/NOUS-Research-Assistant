@@ -196,11 +196,30 @@ class DeviceListItemDTO(DeviceDTO):
 
 
 class WorkspaceBindingCreate(DeviceCreate):
+    """A project folder: a local write root tied to one project.
+
+    `project_id` stays a required string on the wire: the bridge and the chat
+    composer read these routes through the generated types, and a nullable
+    `project_id` is an ERR-level `oasdiff` break (pinned by
+    tests/unit/api/test_integration_device_folders_contract.py). Account
+    folders have their own models and routes below."""
+
     workspace_id: UUID
-    # None or omitted: an account folder (needs a live account run consent
-    # on the device; bind_workspace refuses it otherwise).
-    project_id: UUID | None = None
+    project_id: UUID
 
 
 class WorkspaceBindingDTO(WorkspaceBindingCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AccountWorkspaceBindingCreate(DeviceCreate):
+    """An account folder: a local write root that belongs to no project
+    (`bridge_workspace_bindings.project_id` NULL). Registering one needs a
+    live account run consent on the device; bind_account_workspace refuses
+    it otherwise."""
+
+    workspace_id: UUID
+
+
+class AccountWorkspaceBindingDTO(AccountWorkspaceBindingCreate):
     model_config = ConfigDict(from_attributes=True)

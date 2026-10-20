@@ -8,7 +8,17 @@ from secrets import token_urlsafe
 from typing import Any, ClassVar, Iterable, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, exists, false, func, or_, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    and_,
+    exists,
+    false,
+    func,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.engine import CursorResult, Row
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -27,6 +37,7 @@ from src.models.workspace import Workspace, WorkspaceMember
 from src.schemas.integration_context import (
     STANDARD_SCOPES,
     AccountSummaryDTO,
+    AccountWorkspaceBindingCreate,
     BindingKind,
     DeviceCreate,
     DeviceListItemDTO,
@@ -1300,58 +1311,90 @@ async def list_devices(db: AsyncSession, user: Any) -> list[DeviceListItemDTO]:
 async def bind_workspace(
     db: AsyncSession, user: Any, device_id: UUID, data: WorkspaceBindingCreate
 ) -> WorkspaceBinding:
+    """Register a project folder: a write root tied to one authorized project."""
     await owned_device(db, device_id, user.id, user.organization_id)
-    if data.project_id is None:
-        # An account folder belongs to no project: only a live account
-        # approval of this device that can run Codex may register one.
-        if not await _holds_account_run_consent(
-            db, user.id, user.organization_id, device_id
-        ):
-            raise IntegrationAccessDenied()
-    else:
-        await authorized_project(db, user.id, user.organization_id, data.project_id)
+    await authorized_project(db, user.id, user.organization_id, data.project_id)
+    return await _bind_folder(
+        db, device_id, data.workspace_id, data.label, project_id=data.project_id
+    )
+
+
+async def bind_account_workspace(
+    db: AsyncSession, user: Any, device_id: UUID, data: AccountWorkspaceBindingCreate
+) -> WorkspaceBinding:
+    """Register an account folder: a write root that belongs to no project.
+
+    SECURITY-CRITICAL: only a live account approval of this device that can
+    run Codex may register one (test_account_connections.py pins it)."""
+    await owned_device(db, device_id, user.id, user.organization_id)
+    if not await _holds_account_run_consent(
+        db, user.id, user.organization_id, device_id
+    ):
+        raise IntegrationAccessDenied()
+    return await _bind_folder(
+        db, device_id, data.workspace_id, data.label, project_id=None
+    )
+
+
+async def _bind_folder(
+    db: AsyncSession,
+    device_id: UUID,
+    workspace_id: UUID,
+    label: str,
+    *,
+    project_id: UUID | None,
+) -> WorkspaceBinding:
     binding = await db.scalar(
         select(WorkspaceBinding).where(
             WorkspaceBinding.device_id == device_id,
-            WorkspaceBinding.workspace_id == data.workspace_id,
+            WorkspaceBinding.workspace_id == workspace_id,
         )
     )
     if binding is not None:
-        # A local workspace ID cannot silently change its approved project.
+        # A local workspace ID cannot silently change its approved project or
+        # its kind: an account folder stays one, a project folder keeps its
+        # project.
         if (
-            binding.project_id != data.project_id
-            or binding.label != data.label
+            binding.project_id != project_id
+            or binding.label != label
             or binding.is_deleted
         ):
             raise IntegrationConflict()
         return cast(WorkspaceBinding, binding)
-    binding = WorkspaceBinding(device_id=device_id, **data.model_dump())
+    binding = WorkspaceBinding(
+        device_id=device_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        label=label,
+    )
     db.add(binding)
     await db.commit()
     return cast(WorkspaceBinding, binding)
 
 
+def _live_folders_of(device_id: UUID) -> Select[tuple[WorkspaceBinding]]:
+    return select(WorkspaceBinding).where(
+        WorkspaceBinding.device_id == device_id,
+        WorkspaceBinding.is_deleted.is_(False),
+    )
+
+
 async def list_workspaces(
     db: AsyncSession, user: Any, device_id: UUID
 ) -> list[WorkspaceBinding]:
+    """The device's project folders whose project the user may still use.
+
+    Account folders are listed by list_account_workspaces, never here: this
+    route's `project_id` is a required string on the wire."""
     await owned_device(db, device_id, user.id, user.organization_id)
     bindings = (
         await db.scalars(
-            select(WorkspaceBinding).where(
-                WorkspaceBinding.device_id == device_id,
-                WorkspaceBinding.is_deleted.is_(False),
-            )
+            _live_folders_of(device_id).where(WorkspaceBinding.project_id.is_not(None))
         )
     ).all()
-    account = await _holds_account_run_consent(
-        db, user.id, user.organization_id, device_id
-    )
     authorized = []
     for binding in bindings:
-        if binding.project_id is None:
-            # An account folder: listed while the account approval lives.
-            if account:
-                authorized.append(binding)
+        if binding.project_id is None:  # excluded above; narrows the type
             continue
         try:
             await authorized_project(
@@ -1361,3 +1404,22 @@ async def list_workspaces(
             continue
         authorized.append(binding)
     return authorized
+
+
+async def list_account_workspaces(
+    db: AsyncSession, user: Any, device_id: UUID
+) -> list[WorkspaceBinding]:
+    """The device's account folders, while its account approval lives and the
+    user is active in a live organization; empty otherwise."""
+    await owned_device(db, device_id, user.id, user.organization_id)
+    if not await _holds_account_run_consent(
+        db, user.id, user.organization_id, device_id
+    ):
+        return []
+    return list(
+        (
+            await db.scalars(
+                _live_folders_of(device_id).where(WorkspaceBinding.project_id.is_(None))
+            )
+        ).all()
+    )
