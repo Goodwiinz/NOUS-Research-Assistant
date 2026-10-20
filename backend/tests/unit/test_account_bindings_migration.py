@@ -21,7 +21,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-PARENT = "jd01_document_embeddings"
+PARENT = "ho04_handoff_org_slots"
 REVISION = "ac01_account_bindings"
 REQUESTS, GRANTS, ACTIONS = (
     "integration_grant_requests",
