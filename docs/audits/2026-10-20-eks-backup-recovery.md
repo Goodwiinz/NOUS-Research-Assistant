@@ -29,7 +29,7 @@ unrelated infrastructure apply was performed.
 
 | Evidence | Identifier/result |
 | --- | --- |
-| On-demand parent | `18ca34bb-3eac-4ccd-8ee3-550cf71eaac8` |
+| On-demand parent | `18ca34bb-3eac-4ccd-8ee3-550cf71eaac8`, completed 22:40:34 UTC |
 | Cluster-state child | `42DB5F3C-BFB8-C1C8-9AC6-B965295739B4`, completed |
 | Neo4j EBS child | `A83E8CB3-6B4A-0D46-CC89-F3BCD657C1C3`, completed |
 | Other PVC child | `003D3F44-0970-B2CD-6125-AAF5DCEB7F4B`, completed |
@@ -81,6 +81,34 @@ notification delivery remain separate checks; alarm state alone proves neither.
   [runbook](../runbooks/eks-backup-recovery.md) before a stack apply.
 - No DigitalOcean resources or keys were changed.
 
-Parent aggregation, scheduled verification and temporary-resource cleanup
-are recorded in the issue as they reach terminal outcomes. Do not infer
-those outcomes from completed child jobs alone.
+The on-demand parent and all three children completed. The temporary restore
+pod, PVC, PV, namespace and detached clone volume were removed after
+verification; source resources and recovery points were retained. Both worker
+nodes remained Ready and the application pods remained Running without
+restarts during this repair.
+
+## Scheduled verification
+
+The dated verification plan `1a683f0d-62d0-48db-ba35-2d65fe23e140` used the
+same cluster, backup role and vault, with a one-time 22:35 UTC schedule.
+The job's `CreatedBy` metadata confirms plan/rule provenance.
+
+| Scheduled evidence | Result |
+| --- | --- |
+| Parent `8F68D699-579B-BE34-1233-09990B5882BF` | COMPLETED, 22:48:39 UTC, all three children completed |
+| Neo4j child `37DEE4F6-9EA5-CF9D-20E7-ADA51C108CD0` | COMPLETED, 22:46:29 UTC |
+| Neo4j snapshot | `snap-0c943c9b885c7686b`, completed, encrypted, source `vol-08afc9662c9442aab` |
+| Other PVC child `1FF4590F-4E61-F281-1ACC-5ECE1BE8406D` | COMPLETED, 22:45:46 UTC |
+| Other PVC snapshot | `snap-0ac3f7e83c9095f47` |
+| Cluster-state child `D8B8ED91-DF7D-5823-4F6C-FEC7427EB6CE` | COMPLETED, 22:41:54 UTC |
+
+The temporary selection and plan were deleted after parent completion.
+All recovery points were retained. Normal daily/weekly plan
+`750768fb-bbf9-424f-8f96-ff6861564104` was not changed. This verifies the
+scheduled execution path using a dated plan; the next execution of the
+normal recurring plan has not yet been observed.
+
+GOO-442 remains open for email subscription confirmation and end-to-end
+notification evidence, PR review/merge, and Terraform state reconciliation.
+At 22:49 UTC SNS still returned `PendingConfirmation` for the approved
+recipient. No successful notification delivery is claimed.
