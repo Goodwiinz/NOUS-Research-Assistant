@@ -127,6 +127,13 @@ python3 scripts/nous_run.py release --run-id <run-id> --claim-id <claim-id> \
   --reason <reason> --authorize coordinate
 ```
 
+`nous_run.py` exits 2 when a claim conflicts or is lost, 3 when the
+coordination backend is unavailable, and 4 when validation fails. Treat 2 like
+the local bridge's conflict or lost claim, and 3 or 4 as a missing required
+capability (`ready-for-human`). Its `claim` has no `--pr` option, so in
+`remote-required` mode the PR number goes in the tick report and PR
+description instead of on the claim.
+
 Schema migration is a separate, explicit, claim-free maintenance operation:
 
 ```bash
@@ -189,6 +196,14 @@ fencing rules; do not adopt another active owner's claim. Use the per-PR merge
 protocol in step 8. Resuming a prior tick consumes this invocation: after
 closing it or handing it off, stop rather than proceeding to step 2.
 
+An open PR whose review directory (step 6) contains `handoff.md` belongs to a
+human. Skip it unless the user names that PR or branch. Skipping is not
+resuming, so the tick continues with the next PR or with step 2. Once such a
+PR is merged, it is loop work again for the post-deploy rerun below. In
+`remote-required` mode the review directory is machine-local and keyed by a
+run-id that a later tick may not know, so this skip only works on the machine
+that wrote the marker.
+
 Reconciliation includes the post-deploy rerun from step 8 for every loop PR
 that is merged-but-unverified: when its deployed backend SHA is live on the
 dev lane, rerun its step 7b features there and record the result; while the
@@ -244,6 +259,18 @@ python3 scripts/loop_bridge.py claim \
 
 Exit code 2 means another loop owns overlapping work: choose a different bug.
 Heartbeat before the claim expires and after any long test or review phase.
+A local claim expires 45 minutes after its last claim or heartbeat; the
+three-hour TTL applies only to `remote-required` claims. Renew it at least
+every 30 minutes, including while waiting on hosted checks:
+
+```bash
+python3 scripts/loop_bridge.py heartbeat --branch "<branch>"
+```
+
+A heartbeat that exits non-zero means the claim is lost or the bridge refused
+it. Stop editing and pushing at once and end the tick as `ready-for-human`,
+naming the lost claim and the last pushed head. Never re-claim to continue:
+another loop may already own the area.
 
 ### 4. Establish root cause and scope
 
@@ -274,13 +301,24 @@ finding against the code, address real issues, and rerun affected tests. Review
 is evidence, not ceremony; an unavailable mandatory review ends as
 `ready-for-human`.
 
-Each review writes one verdict file, named after its lens (`code.md`,
-`security.md`), in the tick's review directory:
+Each review writes one verdict file, `review-<lens>.md` (`review-code.md`,
+`review-security.md`), in the tick's review directory:
 `$LOOP_BRIDGE_DIR/reviews/<branch>/round-<N>/` with each `/` in the branch
 name replaced by `__`, or `$NOUS_RECEIPT_DIR/<run-id>/review/round-<N>/` in
-`remote-required` mode. The first line is exactly `VERDICT: PASS` or
-`VERDICT: CHANGES`, followed by the reviewed head and base SHAs and the
-findings with `path:line` references. `CHANGES` is reserved for a blocking
+`remote-required` mode. Every verdict file starts with these three lines,
+followed by the findings with `path:line` references:
+
+```text
+VERDICT: PASS
+HEAD: <full 40-character head SHA reviewed>
+BASE: <full 40-character base SHA reviewed>
+```
+
+The first line is exactly `VERDICT: PASS` or `VERDICT: CHANGES`. The reviewer
+writes the file once; afterwards the primary agent may only append further
+`HEAD:` and `BASE:` line pairs, as described below, and never edits the
+verdict or the findings. A verdict covers a head only when its last `HEAD:`
+line equals that head. `CHANGES` is reserved for a blocking
 finding in this diff; pre-existing issues the diff did not worsen are notes
 under a `PASS`. The primary agent reads verdicts from these files, never from
 memory of a review conversation. A tick that reconciles the same branch reads
@@ -290,13 +328,20 @@ the PR description, or in the tick report when no PR exists.
 
 A review round is one set of required reviews of one diff. Every round counts,
 including rounds repeated in step 8 for review comments, hosted failures, or
-base updates that change the PR's own diff. A base update that leaves that
-diff unchanged is not a new round: keep the verdict files in the same
-`round-<N>` directory and add the new head and base SHAs to each. When round 3 ends with any `VERDICT: CHANGES`,
-stop fixing: end the tick as `ready-for-human`, list each outstanding finding
-with its verdict file, and leave the branch and any PR for a human. If a fourth
-round would be needed for any reason, including a diff change after a round-3
-`PASS`, end the same way. Never resolve a disagreement by dropping a reviewer.
+base updates that change the PR's own diff. Two kinds of new head are not a
+new round: a base update that leaves the PR's own diff unchanged, and a commit
+that only adds or edits files under `docs/testing/evidence/` (step 7b). For
+either, keep the verdict files in the same `round-<N>` directory and append
+the new `HEAD:` and `BASE:` pair to each. When round 3 ends with any
+`VERDICT: CHANGES`, stop fixing: end the tick as `ready-for-human`, list each
+outstanding finding with its verdict file, and leave the branch and any PR for
+a human. If a fourth round would be needed for any reason, including a diff
+change after a round-3 `PASS`, end the same way. Never resolve a disagreement
+by dropping a reviewer.
+
+Whenever the round cap or a step 6b match ends a tick as `ready-for-human`,
+write `handoff.md` in the review directory with the reason and the head SHA.
+Step 1 skips that open PR from then on.
 
 ### 6b. Check for human-gated changes
 
@@ -308,13 +353,23 @@ each matching item and its files in the report and the PR description:
 - adds or edits a database migration (`backend/alembic/versions/`,
   `supabase/migrations/`);
 - adds, removes, or upgrades a dependency, or changes a manifest or lockfile
-  (`pyproject.toml`, any `requirements*.txt`, `package.json`,
-  `pnpm-lock.yaml`);
+  anywhere in the tree (any `pyproject.toml`, `requirements*.txt`,
+  `package.json`, or `pnpm-lock.yaml`);
 - changes CI, deploy, or hosting configuration or the build scripts it runs
-  (`.github/workflows/`, `deployment/`, `infrastructure/`, Dockerfiles,
-  `docker-bake.hcl`, `vercel.json`, `scripts/ci/`);
+  (`.github/workflows/`, `deployment/`, `infrastructure/`, any Dockerfile or
+  `vercel.json`, `docker-bake.hcl`, `scripts/ci/`). This includes fixing a bug
+  in that tooling itself;
+- changes this loop's own gates: this file, [verification.md](verification.md),
+  `docs/engineering/feature-map.yaml`, `docs/engineering/flows/`,
+  `scripts/loop_bridge.py`, `scripts/nous_run.py`, `scripts/nous/`,
+  `scripts/verify/`, `tests/e2e/qa/`, `tests/unit/scripts/test_nous_*`, or a
+  runtime adapter that points to this file. A tick must never narrow the
+  checks that judge it;
 - breaks an API contract, i.e. it needs the `api-breaking-approved` label
-  described in [api-contracts.md](api-contracts.md);
+  described in [api-contracts.md](api-contracts.md). Only hosted `oasdiff`
+  decides this, so treat any change to `backend/openapi.json` as a possible
+  match and settle it in step 8 against the hosted result for the published
+  head;
 - writes production data, or sends email or other outbound messages;
 - rests on an assumption that is really a product decision, such as copy,
   pricing, or what a user is allowed to see. Record that assumption in the PR
@@ -353,9 +408,11 @@ README heading lists every selected feature. Credentials come only from
 `NOUS_QA_EMAIL` and `NOUS_QA_PASSWORD` (or `--storage-state`). Open every
 checkpoint screenshot under `.verify-artifacts/<run-id>/checkpoints/` and
 confirm the feature's pass criteria visually; assertions alone are not a `PASS`, and a screenshot that
-contradicts a criterion is `FAILED`. Commit the evidence README with the fix
-and add it to `docs/testing/evidence/README.md`; never attach, commit, or
-upload a `trace*.zip`, which carries session secrets.
+contradicts a criterion is `FAILED`. Commit the evidence README on the fix's
+branch and add it to `docs/testing/evidence/README.md`, in a commit that
+touches only `docs/testing/evidence/` so that it does not start a new review
+round (step 6). Never attach, commit, or upload a `trace*.zip`, which carries
+session secrets.
 
 The tick cannot be `merged` without a local `PASS` for every touched mapped
 feature. For a touched mapped feature, a result of `BLOCKED` or `NOT RUN` ends
@@ -443,7 +500,8 @@ Apply the following protocol to every PR, including reconciled work:
    head, base branch/SHA, open/draft state, reviews, and checks. Require the
    current task's merge authorization, destination `develop`, current base
    incorporation, the final reviewed head, a `VERDICT: PASS` file for every
-   required review of that head, no step 6b match, and every required gate.
+   required review whose last `HEAD:` line is that head, no step 6b match
+   (including the hosted `oasdiff` result), and every required gate.
    If relevant state moved, invalidate readiness and repeat the affected
    preparation and validation. Use an expected-head
    merge guard, such as REST `sha` or `gh pr merge --match-head-commit`.
@@ -466,9 +524,11 @@ Apply the following protocol to every PR, including reconciled work:
 
 For `ready-for-human`, report the exact blocker and stage reached. If a live
 claim exists, heartbeat it once and report its expiry; if preflight stopped
-before a claim, state that explicitly. If a PR exists, attach it by repeating
-the same idempotent claim command with the same agent, branch, area, and files
-plus `--pr <number>`. If publication was unavailable, state that no PR exists.
+before a claim, state that explicitly. If a PR exists and the claim is still
+live, attach it by repeating the same idempotent claim command with the same agent, branch, area, and files
+plus `--pr <number>` (in `remote-required` mode, record it as described under
+Cross-machine coordination). If publication was unavailable, state that no PR
+exists.
 Never label or release the claim as merged.
 
 Do not call a human handoff abandonment. If the user cancels, release any live
