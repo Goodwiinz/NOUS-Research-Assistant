@@ -39,6 +39,7 @@ from src.models import (
     Conversation,
     Organization,
     Thread,
+    ThreadStatus,
     User,
     UserRole,
     Workspace,
@@ -132,8 +133,9 @@ def _migrate(
 
 
 # The test migrates to HEAD, which is older than later revisions that add
-# columns to integration_grants (ac01's binding_kind), so a grant is written
-# through only the columns that exist at HEAD rather than the current model.
+# columns to integration_grants (ac01's binding_kind) and threads (pb01's
+# branch columns), so those rows are written through only the columns that
+# exist at HEAD rather than the current model.
 _GRANT_COLUMNS = (
     "id",
     "user_id",
@@ -151,6 +153,24 @@ _GRANT_COLUMNS = (
 _GRANTS = table(
     IntegrationGrant.__tablename__,
     *(column(name, IntegrationGrant.__table__.c[name].type) for name in _GRANT_COLUMNS),
+)
+
+_THREAD_COLUMNS = (
+    "id",
+    "conversation_id",
+    "source_project_id",
+    "created_by_id",
+    "status",
+    "last_message_at",
+    "message_count",
+    "token_count",
+    "created_at",
+    "updated_at",
+    "is_deleted",
+)
+_THREADS = table(
+    Thread.__tablename__,
+    *(column(name, Thread.__table__.c[name].type) for name in _THREAD_COLUMNS),
 )
 
 
@@ -231,15 +251,22 @@ def _seed(engine: Engine) -> dict[str, UUID]:
             )
         )
         db.flush()
-        db.add(
-            Thread(
+        now = datetime.now(timezone.utc)
+        db.execute(
+            insert(_THREADS).values(
                 id=ids["thread"],
                 conversation_id=ids["conversation"],
                 source_project_id=ids["project"],
                 created_by_id=ids["user"],
+                status=ThreadStatus.ACTIVE,
+                last_message_at=now,
+                message_count=0,
+                token_count=0,
+                created_at=now,
+                updated_at=now,
+                is_deleted=False,
             )
         )
-        db.flush()
         db.execute(_grant(ids, "org-a", "a"))
         db.commit()
     return ids

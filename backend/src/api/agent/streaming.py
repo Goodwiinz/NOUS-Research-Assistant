@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, cast
 
 from anyio import CancelScope
 from langgraph.errors import GraphInterrupt
+from pydantic import ValidationError
 
 from src.core.database import AsyncSessionLocal, get_async_session
 from src.middleware.disconnect_signal import AGENT_DISCONNECT_EVENT
@@ -69,6 +70,7 @@ from src.services.agent.confirmation_service import (
 from src.services.agent.job_store import process_local_confirmation_coordination_allowed
 from src.services.agent.observability import AgentStreamSLOTracker, record_token_usage
 from src.services.agent.run_event_types import MAX_PAYLOAD_BYTES, RunEventType
+from src.services.agent.schemas import PageFilterResponse
 from src.services.agent.state import (
     THREAD_PERSISTENCE_DURABLE,
     THREAD_PERSISTENCE_EPHEMERAL,
@@ -294,6 +296,14 @@ def _stream_failure_category(exc: BaseException) -> AgentErrorCategory:
     chat's project); anything else goes to ``classify_agent_error``, which
     returns ``internal`` unless it recognises a cancellation, timeout, rate
     limit or model error."""
+    from src.services.threads.message_branches import BranchAccessError
+
+    if isinstance(exc, BranchAccessError):
+        return (
+            AgentErrorCategory.CONFLICT
+            if exc.status_code == 409
+            else AgentErrorCategory.INVALID_REQUEST
+        )
     if isinstance(exc, ValueError) and _NO_USER_MESSAGE_SENTINEL in str(exc):
         return AgentErrorCategory.INVALID_REQUEST
     if isinstance(exc, ActiveRunConflict):
@@ -311,6 +321,10 @@ def _stream_failure_message(exc: BaseException) -> BaseException | str:
     """Wire message for the /stream catch-all: a safe literal for the
     failures a user can act on, otherwise the exception itself, which
     ``error_frame_payload`` turns into the generic client-safe message."""
+    from src.services.threads.message_branches import BranchAccessError
+
+    if isinstance(exc, BranchAccessError):
+        return str(exc)
     if isinstance(exc, ActiveRunConflict):
         return "A response is already in progress for this thread."
     if isinstance(exc, AgentThreadResolutionError):
@@ -1243,12 +1257,38 @@ def _changed_retrieved_context_snapshot(
     if not isinstance(contexts, list):
         return None, previous_fingerprint
     try:
-        fingerprint = _json.dumps(contexts, sort_keys=True, default=str)
+        fingerprint = _json.dumps(
+            [contexts, _page_filter_from_event(event)], sort_keys=True, default=str
+        )
     except (TypeError, ValueError):
         return None, previous_fingerprint
     if fingerprint == previous_fingerprint:
         return None, previous_fingerprint
     return contexts, fingerprint
+
+
+def _page_filter_from_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Project only typed public filter evidence, never provider configuration."""
+    data = event.get("data")
+    output = data.get("output") if isinstance(data, Mapping) else None
+    raw = output.get("page_filter") if isinstance(output, Mapping) else None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return PageFilterResponse.model_validate(raw).model_dump(mode="json")
+    except ValidationError:
+        logger.warning("Dropped invalid page_filter stream metadata", exc_info=True)
+        return None
+
+
+def _rag_context_event_payload(
+    event: Mapping[str, Any], contexts: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"contexts": contexts}
+    page_filter = _page_filter_from_event(event)
+    if page_filter is not None:
+        payload["page_filter"] = page_filter
+    return payload
 
 
 def _json_size_bytes(value: Any) -> int:
@@ -1308,6 +1348,7 @@ def _bound_rag_context_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     # therefore fit. Keep the assertion fail-closed during development rather
     # than handing this frame to the generic list-slicing ladder.
     minimal = {
+        **({"page_filter": data["page_filter"]} if "page_filter" in data else {}),
         "contexts": [
             {
                 key: value
@@ -2305,7 +2346,12 @@ async def stream_event_generator(
             page_context=page_context,
             use_rag=request_body.use_rag,
             max_input_chars=settings.AGENT_FAST_PATH_MAX_INPUT_CHARS,
-            has_attachments=bool(request_body.attachment_ids),
+            has_attachments=bool(
+                request_body.attachment_ids
+                or getattr(request_body, "selection_page_range", None) is not None
+                or getattr(request_body, "page_filter_model", None) is not None
+                or getattr(request_body, "document_only", False)
+            ),
         )
         if (
             settings.AGENT_FAST_PATH_ENABLED
@@ -2394,7 +2440,23 @@ async def stream_event_generator(
             )
 
         messages = None
-        if get_settings().AGENT_SERVER_SIDE_HISTORY:
+        if getattr(request_body, "branch_document_id", None) is not None:
+            from src.services.agent.branch_history import build_branch_input_messages
+
+            if acceptance is None or acceptance.user_message_id is None:
+                raise ValueError("Message branches require durable acceptance")
+            messages = await build_branch_input_messages(
+                db,
+                thread_id=acceptance.thread_id,
+                accepted_user_message_id=acceptance.user_message_id,
+                actor_id=_uuid.UUID(str(current_user.id)),
+                organization_id=(
+                    _uuid.UUID(str(current_user.organization_id))
+                    if current_user.organization_id is not None
+                    else None
+                ),
+            )
+        elif get_settings().AGENT_SERVER_SIDE_HISTORY:
             # Option B: rebuild context from the checkpoint (seeding from the DB
             # when empty); ignore all but the newest turn in the request array.
             # Best-effort: a DB/checkpoint failure (or a newest turn lacking a
@@ -2428,7 +2490,7 @@ async def stream_event_generator(
 
         # Project-scoped memory recall (best-effort; never blocks a turn).
         project_memories: list = []
-        if _pm_project_id:
+        if _pm_project_id and not getattr(request_body, "document_only", False):
             try:
                 from src.services.research.project_memory_service import (
                     load_project_memories,
@@ -2467,6 +2529,14 @@ async def stream_event_generator(
             "attachment_ids": [
                 str(document_id) for document_id in (request_body.attachment_ids or [])
             ],
+            "selection_page_range": getattr(request_body, "selection_page_range", None),
+            "page_filter_model": getattr(request_body, "page_filter_model", None),
+            "branch_document_id": (
+                str(getattr(request_body, "branch_document_id", None))
+                if getattr(request_body, "branch_document_id", None) is not None
+                else None
+            ),
+            "document_only": getattr(request_body, "document_only", False),
             "thread_id": request_body.thread_id or "",
             "thread_persistence": (
                 THREAD_PERSISTENCE_DURABLE
@@ -2476,9 +2546,16 @@ async def stream_event_generator(
             "project_memories": project_memories,
             "user_id": str(current_user.id),
             "model": request_body.model,
+            "reasoning_effort": getattr(request_body, "reasoning_effort", None),
             "use_rag": request_body.use_rag,
             **runtime_state_fields(runtime_snapshot, page_context.get("project_id")),
         }
+
+        if getattr(request_body, "branch_document_id", None) is not None:
+            # Identity observations can contain sibling names and references.
+            # Keep execution counters, but rebuild prompt evidence per branch.
+            initial_state["identity_ledger"] = {}
+            initial_state["identity_current_references"] = []
 
         stream_thread_id = request_body.thread_id or str(_uuid.uuid4())
         config = {
@@ -2650,6 +2727,7 @@ async def stream_event_generator(
             assistant_persisted = True
             stop_kwargs = dict(
                 thread_id=resolved_thread_id,
+                parent_message_id=(acceptance.user_message_id if acceptance else None),
                 content=partial,
                 model_name=request_body.model,
                 tool_executions_out=None,
@@ -2747,7 +2825,7 @@ async def stream_event_generator(
                             latest_retrieved_contexts = context_snapshot
                             frame = await emitter.emit(
                                 AgentStreamEvent.RAG_CONTEXT,
-                                {"contexts": context_snapshot},
+                                _rag_context_event_payload(event, context_snapshot),
                             )
                             if not client_disconnected:
                                 yield frame
@@ -3101,6 +3179,9 @@ async def stream_event_generator(
                     return
                 persist_kwargs = dict(
                     thread_id=resolved_thread_id,
+                    parent_message_id=(
+                        acceptance.user_message_id if acceptance else None
+                    ),
                     content=assistant_content,
                     model_name=request_body.model,
                     tool_executions_out=tool_executions_out,
@@ -3644,7 +3725,7 @@ async def stream_confirm_event_generator(
             # the live thread so deletion, ancestor deletion, membership
             # removal, and viewer downgrade all revoke confirmation.
             try:
-                await _resolve_thread(
+                resolved_thread, _ = await _resolve_thread(
                     db,
                     current_user,
                     AgentExecuteRequest.model_construct(
@@ -3684,6 +3765,21 @@ async def stream_confirm_event_generator(
                     ),
                 )
                 return
+
+            if getattr(resolved_thread, "message_branching", False) is True:
+                from src.services.threads.message_branches import (
+                    authorize_branch_resume,
+                )
+
+                # The checkpoint can contain PDF excerpts saved before a
+                # long approval wait. Recheck the bound document and accepted
+                # ancestry before exposing those excerpts or resuming tools.
+                await authorize_branch_resume(
+                    db,
+                    actor_id=_uuid.UUID(str(current_user.id)),
+                    thread_id=_uuid.UUID(request_body.thread_id),
+                    run_id=str(active_run.job_id),
+                )
 
         try:
             approval = require_approval(
@@ -3986,15 +4082,16 @@ async def stream_confirm_event_generator(
             carried_contexts if isinstance(carried_contexts, list) else []
         )
         if isinstance(carried_contexts, list):
-            try:
-                context_fingerprint = _json.dumps(
-                    carried_contexts, sort_keys=True, default=str
-                )
-            except (TypeError, ValueError):
-                context_fingerprint = None
+            carried_event = {
+                "event": "on_chain_end",
+                "data": {"output": current_snapshot.values},
+            }
+            _, context_fingerprint = _changed_retrieved_context_snapshot(
+                carried_event, None
+            )
             frame = await emitter.emit(
                 AgentStreamEvent.RAG_CONTEXT,
-                {"contexts": carried_contexts},
+                _rag_context_event_payload(carried_event, carried_contexts),
             )
             if not client_disconnected:
                 yield frame
@@ -4035,6 +4132,11 @@ async def stream_confirm_event_generator(
             disconnect_cmid: Optional[str] = await _resume_assistant_cmid()
             stop_kwargs = dict(
                 thread_id=request_body.thread_id,
+                parent_message_id=(
+                    str(active_run.user_message_id)
+                    if active_run is not None and active_run.user_message_id is not None
+                    else None
+                ),
                 content=partial,
                 model_name=getattr(request_body, "model", "") or None,
                 # ponytail: tool_executions/plan omitted — reading them needs
@@ -4178,7 +4280,7 @@ async def stream_confirm_event_generator(
                     latest_retrieved_contexts = context_snapshot
                     frame = await emitter.emit(
                         AgentStreamEvent.RAG_CONTEXT,
-                        {"contexts": context_snapshot},
+                        _rag_context_event_payload(event, context_snapshot),
                     )
                     if not client_disconnected:
                         yield frame
@@ -4464,6 +4566,12 @@ async def stream_confirm_event_generator(
             try:
                 persist_kwargs = dict(
                     thread_id=request_body.thread_id,
+                    parent_message_id=(
+                        str(active_run.user_message_id)
+                        if active_run is not None
+                        and active_run.user_message_id is not None
+                        else None
+                    ),
                     content=assistant_content,
                     model_name=getattr(request_body, "model", "") or None,
                     tool_executions_out=tool_executions_out,

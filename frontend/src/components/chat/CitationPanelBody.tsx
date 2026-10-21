@@ -25,6 +25,7 @@ export interface CitationPanelBodyProps {
   /** Retrieval trace id for the answer these sources grounded. */
   diagnosticsTraceId?: string;
   activeCitationId?: string;
+  activeCitationPage?: number;
 }
 
 type SortBy = 'relevance' | 'title';
@@ -140,6 +141,7 @@ function SourceGroupRow({
   onToggle,
   onOpen,
   onCite,
+  activePage,
 }: {
   group: SourceGroup;
   expanded: boolean;
@@ -148,6 +150,7 @@ function SourceGroupRow({
   onToggle: () => void;
   onOpen?: (c: Citation) => void;
   onCite?: (c: Citation) => void;
+  activePage?: number;
 }): React.ReactElement {
   const meta = sourceMeta(group.chunks[0]);
   const headingId = `src-${group.key}`;
@@ -218,14 +221,26 @@ function SourceGroupRow({
           >
             <div className="space-y-3 pb-3 pl-8 pr-3">
               {group.chunks.map((chunk, i) => (
-                <SourcePassage key={chunk.chunkId ?? i} chunk={chunk} />
+                <SourcePassage
+                  key={chunk.chunkId ?? i}
+                  chunk={chunk}
+                  onOpen={onOpen}
+                />
               ))}
 
               <div className="flex flex-wrap items-center gap-2 pt-0.5">
                 {group.documentId && onOpen && (
                   <button
                     type="button"
-                    onClick={() => onOpen(group.chunks[0])}
+                    onClick={() =>
+                      onOpen(
+                        (activePage === undefined
+                          ? undefined
+                          : group.chunks.find(
+                              (chunk) => chunk.pageNumber === activePage
+                            )) ?? group.chunks[0]
+                      )
+                    }
                     className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-nous-mono text-[10px] transition-colors hover:bg-(--nous-aurum) dark:hover:bg-(--nous-ember)"
                     style={{
                       border: '1px solid var(--nous-border-1)',
@@ -273,7 +288,13 @@ function SourceGroupRow({
   );
 }
 
-function SourcePassage({ chunk }: { chunk: Citation }): React.ReactElement {
+function SourcePassage({
+  chunk,
+  onOpen,
+}: {
+  chunk: Citation;
+  onOpen?: (citation: Citation) => void;
+}): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const content = chunk.content ?? '';
   const isLong = content.length > SOURCE_PREVIEW_LENGTH;
@@ -296,6 +317,18 @@ function SourcePassage({ chunk }: { chunk: Citation }): React.ReactElement {
         </span>
         <Relevance score={chunk.score} />
       </div>
+      {chunk.documentId &&
+        Number.isSafeInteger(chunk.pageNumber) &&
+        (chunk.pageNumber ?? 0) > 0 &&
+        onOpen && (
+          <button
+            type="button"
+            onClick={() => onOpen(chunk)}
+            className="min-h-11 rounded-md px-2 text-left text-xs underline underline-offset-2 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol)"
+          >
+            Open page {chunk.pageNumber}
+          </button>
+        )}
       {content ? (
         <blockquote
           data-testid="citation-source-text"
@@ -338,6 +371,7 @@ export function CitationPanelBody({
   onCite,
   diagnosticsTraceId,
   activeCitationId,
+  activeCitationPage,
 }: CitationPanelBodyProps): React.ReactElement {
   const reduce = useReducedMotion();
   const [searchQuery, setSearchQuery] = useState('');
@@ -440,6 +474,9 @@ export function CitationPanelBody({
               group={group}
               expanded={expandedKey === group.key}
               active={activeCitationId === group.key}
+              activePage={
+                activeCitationId === group.key ? activeCitationPage : undefined
+              }
               reduce={!!reduce}
               onToggle={() =>
                 setExpandedKey((k) => (k === group.key ? null : group.key))

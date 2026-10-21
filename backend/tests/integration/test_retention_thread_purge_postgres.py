@@ -48,6 +48,7 @@ from src.models.bridge_device import BridgeDevice
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.collection import Collection
 from src.models.conversation import Conversation
+from src.models.document import Document
 from src.models.generated_draft import GeneratedDraft
 from src.models.integration_context_selection import IntegrationContextSelection
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
@@ -69,6 +70,7 @@ NOW = datetime.now(timezone.utc)
 _MODELS: list[Any] = [
     Organization,
     User,
+    Document,
     Workspace,
     WorkspaceMember,
     Collection,

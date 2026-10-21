@@ -27,6 +27,9 @@ export function useCitationPanel(): UseCitationPanelReturn {
         citations,
         activeCitationId:
           clickedCitation.documentId || clickedCitation.externalReferenceId,
+        ...(clickedCitation.pageNumber
+          ? { activeCitationPage: clickedCitation.pageNumber }
+          : {}),
         traceId,
       });
     },

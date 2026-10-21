@@ -21,6 +21,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.services.agent._pii_redact import redact_pii, redact_tool_args
+from src.services.agent.chat_presentation_types import (
+    ChatPresentationFrame,
+    ChatPresentationStarted,
+)
 
 # Bounds. Delta text is capped per event (batching adjacent fragments is the
 # writer's job); the byte cap protects the event table and SSE frames from
@@ -51,6 +55,8 @@ class RunEventType(StrEnum):
     RUN_CANCELLED = "run.cancelled"
     # ID-only announcement; artifact metadata lives in the artifact tables.
     ARTIFACT_VERSION_CREATED = "artifact.version_created"
+    CHAT_PRESENTATION_STARTED = "chat.presentation_started"
+    CHAT_PRESENTATION_FRAME = "chat.presentation_frame"
 
 
 TERMINAL_RUN_EVENTS: frozenset[RunEventType] = frozenset(
@@ -214,7 +220,7 @@ class ArtifactVersionCreatedPayload(_Payload):
     version_id: str = Field(max_length=36)
 
 
-PAYLOAD_MODELS: dict[RunEventType, type[_Payload]] = {
+PAYLOAD_MODELS: dict[RunEventType, type[BaseModel]] = {
     RunEventType.RUN_CREATED: RunCreatedPayload,
     RunEventType.RUN_STARTED: RunStartedPayload,
     RunEventType.RUN_STOPPING: RunStoppingPayload,
@@ -231,6 +237,8 @@ PAYLOAD_MODELS: dict[RunEventType, type[_Payload]] = {
     RunEventType.RUN_FAILED: RunFailedPayload,
     RunEventType.RUN_CANCELLED: RunCancelledPayload,
     RunEventType.ARTIFACT_VERSION_CREATED: ArtifactVersionCreatedPayload,
+    RunEventType.CHAT_PRESENTATION_STARTED: ChatPresentationStarted,
+    RunEventType.CHAT_PRESENTATION_FRAME: ChatPresentationFrame,
 }
 
 

@@ -11277,6 +11277,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assistant/v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Chats */
+        get: operations["list_chats_assistant_v2_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Chat V2 */
+        post: operations["chat_v2_assistant_v2_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/{chat_id}/context-window-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Context Window Usage */
+        get: operations["context_window_usage_assistant_v2__chat_id__context_window_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/{chat_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Messages */
+        get: operations["get_messages_assistant_v2__chat_id__messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v2/{chat_id}/messages/{message_id}/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Message */
+        post: operations["select_message_assistant_v2__chat_id__messages__message_id__select_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v3/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Chat V3 */
+        post: operations["chat_v3_assistant_v3_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/assistant/v3/chat/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop V3 */
+        post: operations["stop_v3_assistant_v3_chat_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -11311,6 +11430,23 @@ export interface paths {
         get: operations["readiness_probe_health_readiness_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assistant/upload-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Assistant File */
+        post: operations["upload_assistant_file_v1_assistant_upload_file_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11498,8 +11634,19 @@ export interface components {
              * @description Document ids to attach to this user turn. The documents are uploaded separately (POST /documents) and referenced here, so the stream body never carries file bytes. Ids the caller's organization does not own are dropped server-side, not rejected — a mixed batch still attaches the owned ones.
              */
             attachment_ids?: string[] | null;
+            /**
+             * Branch Document Id
+             * @description Opt into PDF-bound message branches; requires the streaming API.
+             */
+            branch_document_id?: string | null;
             /** Device Id */
             device_id?: string | null;
+            /**
+             * Document Only
+             * @description Answer from attached document context only. Disables agent tools and prevents fallback to project or organization retrieval.
+             * @default false
+             */
+            document_only: boolean;
             /**
              * Execution Provider
              * @default nous
@@ -11524,6 +11671,29 @@ export interface components {
              */
             model: "" | "model-router" | "gpt-5-mini" | "gpt-5.6-luna";
             page_context?: components["schemas"]["PageContextRequest"];
+            /**
+             * Page Filter Model
+             * @description Explicitly enable the configured Cohere PDF page filter for one attached document. Explicit page selection takes precedence.
+             */
+            page_filter_model?: "cohere" | null;
+            /**
+             * Parent Message Id
+             * @description Canonical branch parent; null starts a new root in a PDF-bound chat.
+             */
+            parent_message_id?: string | null;
+            /**
+             * Reasoning Effort
+             * @description Per-turn answer reasoning override for document-only NOUS GPT-5 execution. Requires the configured Responses API. Null retains server defaults; supported values are low, medium, and high.
+             */
+            reasoning_effort?: ("low" | "medium" | "high") | null;
+            /**
+             * Selection Page Range
+             * @description Inclusive zero-based physical PDF page indices for a single attached document. Restricts attachment context to those pages; it is separate from automatic relevance ranking. Omitted on an unscoped follow-up.
+             */
+            selection_page_range?: [
+                number,
+                number
+            ] | null;
             /**
              * Supersedes Client Message Id
              * @description Edit-and-resend: the client_message_id of the USER turn being edited. The server tombstones that turn and everything after it in the thread atomically with persisting the new user turn, and drops the superseded messages from the LangGraph checkpoint. The edited turn itself must arrive as the normal last user message with a FRESH client_message_id — reusing the old one would be silently dropped by the ON CONFLICT dedup.
@@ -11568,6 +11738,222 @@ export interface components {
              * @description Optional acknowledgment note
              */
             note?: string | null;
+        };
+        /** AlphaXivChatRequest */
+        AlphaXivChatRequest: {
+            /** Assistantvariant */
+            assistantVariant?: string | null;
+            /** Customfilter */
+            customFilter?: {
+                [key: string]: unknown;
+            } | null;
+            /** Files */
+            files?: components["schemas"]["AlphaXivFileReference"][];
+            /**
+             * Filtermodel
+             * @description Omitted/null selects the native Cohere page ranker, as does cohere. An explicit selectionPageRange takes precedence and bypasses ranking. Native short-document and provider fallback policies still apply.
+             */
+            filterModel?: string | null;
+            /** Llmchatid */
+            llmChatId?: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Model
+             * @description A supported NOUS model, or pro to use the configured NOUS default deployment. The pro alias does not imply alphaXiv model equivalence.
+             * @default
+             */
+            model: string;
+            /** Overviewid */
+            overviewId?: string | null;
+            /**
+             * Paperversionid
+             * Format: uuid
+             * @description An authorized NOUS document UUID
+             */
+            paperVersionId: string;
+            /** Parentmessageid */
+            parentMessageId?: string | null;
+            /**
+             * Protocol
+             * @default 2
+             * @constant
+             */
+            protocol: 2;
+            /**
+             * Selectionpagerange
+             * @description Inclusive zero-based PDF page indices
+             */
+            selectionPageRange?: [
+                number,
+                number
+            ] | null;
+            /** Thinking */
+            thinking?: unknown;
+            /** Websearch */
+            webSearch?: string | null;
+        };
+        /** AlphaXivChatSummary */
+        AlphaXivChatSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Newestmessage
+             * Format: date-time
+             */
+            newestMessage: string;
+            /** Title */
+            title: string | null;
+        };
+        /** AlphaXivContextWindowUsage */
+        AlphaXivContextWindowUsage: {
+            /** Contextwindow */
+            contextWindow: number;
+            /** Inputtokens */
+            inputTokens: number;
+        };
+        /** AlphaXivFileReference */
+        AlphaXivFileReference: {
+            /** Contenttype */
+            contentType: string;
+            /** Url */
+            url: string;
+        };
+        /** AlphaXivHistoryMessage */
+        AlphaXivHistoryMessage: {
+            /** Content */
+            content: string;
+            /** Feedbacktype */
+            feedbackType?: null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind?: string | null;
+            /** Parentmessageid */
+            parentMessageId: string | null;
+            /** Selectedat */
+            selectedAt: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "input_text" | "input_file" | "output_text" | "output_reasoning";
+        };
+        /** AlphaXivLiveAck */
+        AlphaXivLiveAck: {
+            /**
+             * Llmchatid
+             * Format: uuid
+             */
+            llmChatId: string;
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+        };
+        /**
+         * AlphaXivLiveChatRequest
+         * @description The observed v3 request omits the v2 protocol selector.
+         */
+        AlphaXivLiveChatRequest: {
+            /** Assistantvariant */
+            assistantVariant?: string | null;
+            /** Customfilter */
+            customFilter?: {
+                [key: string]: unknown;
+            } | null;
+            /** Files */
+            files?: components["schemas"]["AlphaXivFileReference"][];
+            /**
+             * Filtermodel
+             * @description Omitted/null selects the native Cohere page ranker, as does cohere. An explicit selectionPageRange takes precedence and bypasses ranking. Native short-document and provider fallback policies still apply.
+             */
+            filterModel?: string | null;
+            /** Llmchatid */
+            llmChatId?: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Model
+             * @description A supported NOUS model, or pro to use the configured NOUS default deployment. The pro alias does not imply alphaXiv model equivalence.
+             * @default
+             */
+            model: string;
+            /** Overviewid */
+            overviewId?: string | null;
+            /**
+             * Paperversionid
+             * Format: uuid
+             * @description An authorized NOUS document UUID
+             */
+            paperVersionId: string;
+            /** Parentmessageid */
+            parentMessageId?: string | null;
+            /**
+             * Selectionpagerange
+             * @description Inclusive zero-based PDF page indices
+             */
+            selectionPageRange?: [
+                number,
+                number
+            ] | null;
+            /** Thinking */
+            thinking?: unknown;
+            /** Websearch */
+            webSearch?: string | null;
+        };
+        /** AlphaXivSelectedMessage */
+        AlphaXivSelectedMessage: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Selectedat */
+            selectedAt: string;
+        };
+        /**
+         * AlphaXivSelection
+         * @description NOUS selection acknowledgement; the observed client ignores the body.
+         */
+        AlphaXivSelection: {
+            /** Selections */
+            selections: components["schemas"]["AlphaXivSelectedMessage"][];
+        };
+        /** AlphaXivStopRequest */
+        AlphaXivStopRequest: {
+            /**
+             * Llmchatid
+             * Format: uuid
+             */
+            llmChatId: string;
+            /**
+             * Runid
+             * Format: uuid
+             */
+            runId: string;
+        };
+        /** AlphaXivUploadResponse */
+        AlphaXivUploadResponse: {
+            data: components["schemas"]["AlphaXivUploadedFile"];
+        };
+        /** AlphaXivUploadedFile */
+        AlphaXivUploadedFile: {
+            /**
+             * Documentid
+             * Format: uuid
+             */
+            documentId: string;
+            processingStatus: components["schemas"]["ApiDocumentStatus"];
+            /** Url */
+            url: string;
         };
         /**
          * AnalyticsExportRequest
@@ -13231,14 +13617,23 @@ export interface components {
          * @description Paginated message list
          */
         ChatMessageListResponse: {
+            /** Branch Document Id */
+            branch_document_id?: string | null;
             /** Has More */
             has_more: boolean;
             /** Limit */
             limit: number;
+            /**
+             * Message Branching
+             * @default false
+             */
+            message_branching: boolean;
             /** Messages */
             messages: components["schemas"]["ChatMessageResponse"][];
             /** Page */
             page: number;
+            /** Selected Message Id */
+            selected_message_id?: string | null;
             /** Total */
             total: number;
         };
@@ -13281,6 +13676,8 @@ export interface components {
             model_name?: string | null;
             /** Model Version */
             model_version?: string | null;
+            /** Parent Message Id */
+            parent_message_id?: string | null;
             /** Plan */
             plan?: {
                 [key: string]: unknown;
@@ -13295,6 +13692,8 @@ export interface components {
             reasoning_summary?: string | null;
             /** @default user */
             role: components["schemas"]["MessageRole-Output"];
+            /** Sibling User Message Ids */
+            sibling_user_message_ids?: string[];
             /** Stopped */
             stopped?: boolean | null;
             /**
@@ -18729,6 +19128,64 @@ export interface components {
              */
             workspace_id?: string | null;
         };
+        /** PageFilterPriority */
+        PageFilterPriority: {
+            /** Page */
+            page: number;
+            /** Score */
+            score: number;
+        };
+        /**
+         * PageFilterResponse
+         * @description Bounded public projection; provider configuration never crosses the wire.
+         */
+        PageFilterResponse: {
+            /** Accepted Pages */
+            accepted_pages: number[];
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Fallback
+             * @description Set when page ranking did not run or returned nothing and the context is a keyword excerpt of the whole document instead.
+             * @default null
+             */
+            fallback: ("disabled" | "provider_error" | "timeout" | "no_results" | "no_text" | "source_too_large") | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Priorities */
+            priorities?: components["schemas"]["PageFilterPriority"][];
+            /**
+             * Selection Page Range
+             * @default null
+             */
+            selection_page_range: [
+                number,
+                number
+            ] | null;
+            /** Short Circuited */
+            short_circuited: boolean;
+            /** @default null */
+            timing_ms: components["schemas"]["PageFilterTiming"] | null;
+            /** Total Pages */
+            total_pages: number;
+        };
+        /** PageFilterTiming */
+        PageFilterTiming: {
+            /** Average */
+            average: number;
+            /** Count */
+            count: number;
+            /** Max */
+            max: number;
+            /** Min */
+            min: number;
+        };
         /**
          * PaginatedEntitiesResponse
          * @description Paginated response for entity listings
@@ -19847,6 +20304,18 @@ export interface components {
             pending_messages: number;
             /** Queue Name */
             queue_name: string;
+        };
+        /**
+         * RagContextPayload
+         * @description Cumulative SSE data; source rows retain their heterogeneous provenance.
+         */
+        RagContextPayload: {
+            /** Contexts */
+            contexts: {
+                [key: string]: unknown;
+            }[];
+            /** @default null */
+            page_filter: components["schemas"]["PageFilterResponse"] | null;
         };
         /**
          * RealTimeEvaluationRequest
@@ -23834,6 +24303,8 @@ export interface components {
          * @description Thread with messages
          */
         ThreadDetailResponse: {
+            /** Branch Document Id */
+            branch_document_id?: string | null;
             /**
              * Conversation Id
              * Format: uuid
@@ -23859,6 +24330,11 @@ export interface components {
             /** Last Message Preview */
             last_message_preview?: string | null;
             /**
+             * Message Branching
+             * @default false
+             */
+            message_branching: boolean;
+            /**
              * Message Count
              * @default 0
              */
@@ -23868,6 +24344,8 @@ export interface components {
              * @default []
              */
             messages: components["schemas"]["ChatMessageResponse"][];
+            /** Selected Message Id */
+            selected_message_id?: string | null;
             /** Source Project Id */
             source_project_id?: string | null;
             /** @default active */
@@ -23904,6 +24382,8 @@ export interface components {
          * @description Thread response
          */
         ThreadResponse: {
+            /** Branch Document Id */
+            branch_document_id?: string | null;
             /**
              * Conversation Id
              * Format: uuid
@@ -23929,10 +24409,17 @@ export interface components {
             /** Last Message Preview */
             last_message_preview?: string | null;
             /**
+             * Message Branching
+             * @default false
+             */
+            message_branching: boolean;
+            /**
              * Message Count
              * @default 0
              */
             message_count: number;
+            /** Selected Message Id */
+            selected_message_id?: string | null;
             /** Source Project Id */
             source_project_id?: string | null;
             /** @default active */
@@ -44480,6 +44967,8 @@ export interface operations {
                 order?: string;
                 /** @description desc-order cursor: return only messages strictly OLDER than this message id. Ignored when order=asc. */
                 before_id?: string | null;
+                /** @description Pin continuation pages to the selected branch head; stale pins return 409. */
+                selected_message_id?: string | null;
             };
             header?: never;
             path: {
@@ -45485,6 +45974,8 @@ export interface operations {
             query?: {
                 page?: number;
                 limit?: number;
+                /** @description Pin continuation pages to the selected branch head; stale pins return 409. */
+                selected_message_id?: string | null;
             };
             header?: never;
             path: {
@@ -45885,6 +46376,230 @@ export interface operations {
             };
         };
     };
+    list_chats_assistant_v2_get: {
+        parameters: {
+            query: {
+                variant: "paper";
+                paperVersion: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivChatSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_v2_assistant_v2_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlphaXivChatRequest"];
+            };
+        };
+        responses: {
+            /** @description alphaXiv v2 SSE over a durable NOUS PDF chat */
+            200: {
+                headers: {
+                    "llm-chat-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    context_window_usage_assistant_v2__chat_id__context_window_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivContextWindowUsage"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_messages_assistant_v2__chat_id__messages_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivHistoryMessage"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_message_assistant_v2__chat_id__messages__message_id__select_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivSelection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_v3_assistant_v3_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlphaXivLiveChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivLiveAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_v3_assistant_v3_chat_stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlphaXivStopRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_check_health_get: {
         parameters: {
             query?: never;
@@ -45921,6 +46636,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    upload_assistant_file_v1_assistant_upload_file_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Filename": string;
+                "Content-Type"?: string;
+                "Content-Length"?: number | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/pdf": string;
+                "text/markdown": string;
+                "text/plain": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlphaXivUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

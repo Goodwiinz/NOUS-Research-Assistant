@@ -433,6 +433,20 @@ test('v1 verification scenarios are registered with honest prerequisites', () =>
 test('the real feature map covers every covered feature with registered scenarios', async () => {
   const map = await loadFeatureMap(join(import.meta.dirname, '../../../docs/engineering/feature-map.yaml'));
   const ids = new Set(registry.map((scenario) => scenario.id));
+  // Preserve the original coverage floor even when a newly mapped feature is
+  // honestly marked planned pending its user-level browser QA.
+  const v1Features = [
+    'login',
+    'chat-send-stream-reload',
+    'hitl-approve-deny',
+    'document-upload',
+    'project-creation-via-chat',
+  ];
+  for (const id of v1Features) {
+    const feature = map.features.find((entry) => entry.id === id);
+    assert.ok(feature, `missing v1 feature: ${id}`);
+    assert.equal(feature.status, 'covered', feature.id);
+  }
   for (const feature of map.features) {
     // Statuses are `planned` or `covered` (docs/plans/2026-10-08-nous-verify.md); only
     // `covered` features must map scenarios, but every mapped id must be registered.

@@ -285,3 +285,44 @@ async def test_confirm_stream_replaces_carried_snapshot_with_resumed_snapshot() 
         5,
         6,
     ]
+
+
+@pytest.mark.asyncio
+async def test_confirm_carries_filter_metadata_and_deduplicates_same_snapshot() -> None:
+    class PdfGraph(_ConfirmCitationGraph):
+        metadata = {
+            "document_id": "11111111-1111-4111-8111-111111111111",
+            "accepted_pages": [1],
+            "total_pages": 6,
+            "short_circuited": True,
+            "selection_page_range": [0, 0],
+            "provider_url": "must-not-leave-service",
+        }
+
+        async def aget_state(self, config: Any) -> Any:
+            snapshot = await super().aget_state(config)
+            snapshot.values["page_filter"] = self.metadata
+            return snapshot
+
+        async def astream_events(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[dict[str, Any]]:
+            event = _context_event("resume_wrapper", self.carried)
+            event["data"]["output"]["page_filter"] = self.metadata
+            yield event
+            event = _context_event("changed_filter", self.carried)
+            event["data"]["output"]["page_filter"] = {
+                **self.metadata,
+                "accepted_pages": [2],
+                "selection_page_range": [1, 1],
+            }
+            yield event
+
+    frames = frames_of_type(await _run_confirm(PdfGraph()), "rag_context")
+    payloads = [sse_data(frame) for frame in frames]
+    assert [payload["page_filter"]["accepted_pages"] for payload in payloads] == [
+        [1],
+        [2],
+    ]
+    assert len(payloads[0]["contexts"]) == len(payloads[1]["contexts"]) == 4
+    assert all("provider_url" not in payload["page_filter"] for payload in payloads)

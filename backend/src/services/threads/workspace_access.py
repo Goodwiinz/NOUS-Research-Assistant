@@ -264,6 +264,7 @@ async def get_thread(
     conversation_id: Optional[UUID] = None,
     workspace_id: Optional[UUID] = None,
     include_messages: bool = True,
+    authorize_bound_document: bool = False,
 ) -> Optional[Thread]:
     """Fetch a thread the caller can access, or ``None``.
 
@@ -283,7 +284,12 @@ async def get_thread(
     if include_messages:
         options.append(selectinload(Thread.messages))
 
-    stmt = select(Thread).options(*options).where(*conditions)
+    stmt = (
+        select(Thread)
+        .options(*options)
+        .where(*conditions)
+        .execution_options(populate_existing=True)
+    )
     result = await db.execute(stmt)
     thread: Optional[Thread] = result.scalars().first()
     if not thread:
@@ -299,6 +305,18 @@ async def get_thread(
         return None
     if not user_can_access_workspace(conversation.workspace, user_id):
         return None
+    if authorize_bound_document and thread.message_branching is True:
+        from src.services.threads.message_branches import (
+            BranchAccessError,
+            authorize_branch_document_read,
+        )
+
+        try:
+            await authorize_branch_document_read(
+                db, actor_id=user_id, document_id=thread.branch_document_id
+            )
+        except BranchAccessError:
+            return None
     return thread
 
 
@@ -346,6 +364,7 @@ async def get_message(
     thread_id: Optional[UUID] = None,
     conversation_id: Optional[UUID] = None,
     workspace_id: Optional[UUID] = None,
+    authorize_bound_document: bool = False,
 ) -> Optional[ChatMessage]:
     """Fetch a message the caller can access, or ``None``.
 
@@ -387,6 +406,7 @@ async def get_message(
             .selectinload(Workspace.members),
         )
         .where(*conditions)
+        .execution_options(populate_existing=True)
     )
     result = await db.execute(stmt)
     message: Optional[ChatMessage] = result.scalars().first()
@@ -413,6 +433,18 @@ async def get_message(
         return None
     if not user_can_access_workspace(thread.conversation.workspace, user_id):
         return None
+    if authorize_bound_document and thread.message_branching is True:
+        from src.services.threads.message_branches import (
+            BranchAccessError,
+            authorize_branch_document_read,
+        )
+
+        try:
+            await authorize_branch_document_read(
+                db, actor_id=user_id, document_id=thread.branch_document_id
+            )
+        except BranchAccessError:
+            return None
     return message
 
 

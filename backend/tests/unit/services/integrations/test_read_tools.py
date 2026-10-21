@@ -3514,6 +3514,70 @@ def test_page_candidates_bound_memory_and_preserve_counts(
     assert peak < 10 * 1024 * 1024
 
 
+def test_page_candidates_with_query_cover_the_whole_document() -> None:
+    source = "\n".join(
+        f"[Page {i}]\n" + ("zymurgy result" if i == 250 else "filler")
+        for i in range(1, 301)
+    )
+    pages, total = read_tools._scan_pages(
+        source, max_pages=100, max_chars=65536, query="What about zymurgy?"
+    )
+    assert total == 300
+    assert len(pages) == 100
+    assert 250 in [number for number, _, _ in pages]
+    assert [number for number, _, _ in pages] == sorted(n for n, _, _ in pages)
+    # No lexical signal: candidates span the document instead of its head.
+    spread, _ = read_tools._scan_pages(
+        source, max_pages=100, max_chars=65536, query="summarize"
+    )
+    numbers = [number for number, _, _ in spread]
+    assert len(numbers) == 100
+    assert numbers[0] == 1 and numbers[-1] == 300
+
+
+async def test_page_filter_long_document_reranks_pages_past_the_first_hundred(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankOutcome, RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="\n".join(
+                f"[Page {i}]\n" + ("zymurgy result" if i == 250 else f"page {i}")
+                for i in range(1, 301)
+            )
+        )
+    )
+    await db.commit()
+
+    async def rerank(query: str, documents: list[dict[str, Any]], **kwargs: Any) -> Any:
+        assert len(documents) == 100
+        return RerankOutcome(
+            [
+                RerankResult(document["id"], index, 0.9, 0.0)
+                for index, document in enumerate(documents)
+                if "zymurgy" in document["content"]
+            ]
+        )
+
+    monkeypatch.setattr(service, "rerank_with_outcome", rerank)
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages",
+            query="zymurgy findings",
+            document_ids=[str(DOC_IN_PROJECT)],
+        ),
+    )
+    payload = result.content[0]
+    assert [c["page_number"] for c in payload["chunks"]] == [250]
+    assert payload["page_filter"]["total_pages"] == 300
+
+
 async def _page_document(db: AsyncSession, pages: int, text: str = "page") -> None:
     await db.execute(
         update(Document)
@@ -3765,11 +3829,14 @@ async def test_page_filter_all_blank_candidates_use_fulltext(
     assert "page_filter" not in result.content[0]
 
 
-@pytest.mark.parametrize("failure", ["raise", "timeout", "disabled", "outcome"])
+@pytest.mark.parametrize(
+    "failure", ["raise", "timeout", "disabled", "outcome", "no_results"]
+)
 async def test_page_filter_failure_matches_fulltext(
     db: AsyncSession,
     context: IntegrationContext,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     failure: str,
 ) -> None:
     from src.core.config import settings
@@ -3790,14 +3857,26 @@ async def test_page_filter_failure_matches_fulltext(
         if failure == "outcome":
             service.last_failure = {"reason": "upstream_http_error", "error": "private"}
             return []
+        if failure == "no_results":
+            # A successful empty ranking must not answer with no context.
+            return []
         raise RuntimeError("private exception")
 
     monkeypatch.setattr(service, "rerank", fail)
     if failure == "disabled":
         monkeypatch.setattr(service, "_enabled", False)
     monkeypatch.setattr(read_tools, "PAGE_RERANK_TIMEOUT_SECONDS", 0.01, raising=False)
+    caplog.set_level("INFO", logger="src.services.search.page_filter")
     result = await _retrieve_one(db, context)
     assert result == old
+    reason = {"raise": "provider_error", "outcome": "provider_error"}.get(
+        failure, failure
+    )
+    assert any(
+        f"reason={reason}" in record.getMessage()
+        and str(DOC_IN_PROJECT) in record.getMessage()
+        for record in caplog.records
+    )
 
 
 # Mutation-verified: removing Collection.id == project_id from

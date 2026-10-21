@@ -4,6 +4,10 @@ FastAPI/Pydantic is the HTTP source of truth. Nothing downstream is
 hand-typed against a guess of the wire shape — it's generated from the app
 itself.
 
+The additive [alphaXiv PDF chat adapter](alphaxiv-compatibility.md) documents
+its supported v2/v3 requests, branch history, native identity mapping, and remaining
+compatibility limits.
+
 ## Pipeline
 
 1. `python scripts/ci/generate_openapi.py` rebuilds `backend/openapi.json`

@@ -25,7 +25,14 @@ import { useChatRag } from '@/components/chat/ChatRagContext';
 
 function ChatPageContent() {
   const session = useChatSession();
-  const { ragEnabled, setRagEnabled } = useChatRag();
+  const {
+    ragEnabled,
+    setRagEnabled,
+    pdfContext,
+    pdfIntentPending,
+    consumePdfSelection,
+    preparePdfThreadAdoption,
+  } = useChatRag();
 
   const streaming = useChatStreaming({
     messages: session.messages,
@@ -36,6 +43,10 @@ function ChatPageContent() {
     dbConversation: session.dbConversation,
     workspace: session.workspace,
     enableRAG: ragEnabled,
+    pdfContext,
+    pdfSubmissionBlocked: pdfIntentPending,
+    onPdfSelectionConsumed: consumePdfSelection,
+    onPdfThreadCreated: preparePdfThreadAdoption,
     authRecoveryRoute: session.authRecoveryRoute,
   });
 

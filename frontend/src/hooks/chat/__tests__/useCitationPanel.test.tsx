@@ -53,4 +53,19 @@ describe('useCitationPanel', () => {
       artifact?.kind === 'citations' ? artifact.activeCitationId : undefined
     ).toBe('2310.08419');
   });
+
+  it('retains the clicked physical page while opening the sources panel', () => {
+    const { result } = renderHook(() => useCitationPanel());
+    const citation = {
+      title: 'PDF',
+      documentId: 'doc-1',
+      pageNumber: 3,
+      score: 1,
+    };
+    act(() => result.current.handleCitationClick([citation], citation));
+    expect(useArtifactPanelStore.getState().artifact).toMatchObject({
+      activeCitationId: 'doc-1',
+      activeCitationPage: 3,
+    });
+  });
 });

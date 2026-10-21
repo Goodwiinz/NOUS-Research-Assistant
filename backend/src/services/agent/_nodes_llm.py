@@ -278,6 +278,7 @@ async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
     page_context = state.get("page_context", {})
     retrieved = state.get("retrieved_contexts", [])
     intent = state.get("intent", "general")
+    reasoning_effort = state.get("reasoning_effort")
 
     # The actual last HumanMessage, regardless of content shape — NOT
     # filtered on isinstance(content, str). That filter used to walk past an
@@ -303,6 +304,7 @@ async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
     # from stale coerced/previous-turn text (M4).
     if (
         intent == "general"
+        and reasoning_effort is None
         and not retrieved
         and (last_human_msg is None or isinstance(last_human_msg.content, str))
     ):
@@ -334,8 +336,10 @@ async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
     # disables the optimisation if quality regresses.
     settings = get_settings()
     last_is_tool_msg = bool(sanitized) and isinstance(sanitized[-1], ToolMessage)
-    use_synthesis = settings.AGENT_LIGHTWEIGHT_SYNTHESIS and (
-        last_is_tool_msg or not intent_tools
+    use_synthesis = (
+        reasoning_effort is None
+        and settings.AGENT_LIGHTWEIGHT_SYNTHESIS
+        and (last_is_tool_msg or not intent_tools)
     )
     try:
         if use_synthesis:
@@ -348,7 +352,14 @@ async def llm_node(state: AgentState, config: RunnableConfig) -> dict:
                 last_is_tool_msg,
             )
         else:
-            llm = _build_llm(model_override=state.get("model") or None)
+            llm = _build_llm(
+                model_override=state.get("model") or None,
+                **(
+                    {"reasoning_effort_override": reasoning_effort}
+                    if reasoning_effort
+                    else {}
+                ),
+            )
     except RuntimeError as exc:
         # Only the missing-Azure/OpenAI-config RuntimeError is degraded
         # gracefully; any other RuntimeError from the build propagates.
@@ -461,7 +472,7 @@ async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dic
     stray tool_calls (defective model).
     """
     from src.services.agent._builders import MAX_TOOL_LOOPS
-    from src.services.agent.graph import _sanitize_messages
+    from src.services.agent.graph import _build_llm, _sanitize_messages
     from src.services.agent.llm_factory import build_synthesis_llm
 
     # Two routes land here: the tool-loop ceiling (degraded answer from
@@ -479,8 +490,19 @@ async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dic
         messages.pop()
 
     sanitized = _sanitize_messages(messages)
-    llm = build_synthesis_llm(max_tokens=4096)
-    from src.services.agent.llm_factory import get_synthesis_model_name
+    reasoning_effort = state.get("reasoning_effort")
+    llm = (
+        _build_llm(
+            model_override=state.get("model") or None,
+            reasoning_effort_override=reasoning_effort,
+        )
+        if reasoning_effort is not None
+        else build_synthesis_llm(max_tokens=4096)
+    )
+    from src.services.agent.llm_factory import (
+        get_synthesis_model_name,
+        resolve_chat_deployment,
+    )
     from src.services.agent.runtime_context import (
         DEDUPED_BATCH_SYNTHESIS_GUIDANCE,
         forced_synthesis_static_prompt,
@@ -490,7 +512,11 @@ async def force_synthesis_node(state: AgentState, config: RunnableConfig) -> dic
     dynamic_context = render_dynamic_context(
         state,
         config,
-        resolved_model=get_synthesis_model_name(),
+        resolved_model=(
+            resolve_chat_deployment(state.get("model") or None)
+            if reasoning_effort is not None
+            else get_synthesis_model_name()
+        ),
         execution_closed=True,
         branch="main",
         messages=sanitized,

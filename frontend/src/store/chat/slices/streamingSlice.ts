@@ -1,3 +1,4 @@
+import { parsePageFilter } from '@/types/pdf-chat';
 /**
  * Streaming actions.
  *
@@ -55,14 +56,13 @@ export const createStreamingSlice: ChatSliceCreator<StreamingSlice> = (
       state.streamingContent = '';
       state.streamingMessageId = null;
       state.streamingCitations = [];
+      state.streamingPageFilter = null;
       state.streamingDiagnosticsTraceId = null;
       state.error = null;
     });
 
     try {
-      const { streamChatMessage } = await import(
-        '@/services/streamingService'
-      );
+      const { streamChatMessage } = await import('@/services/streamingService');
 
       for await (const event of streamChatMessage(
         targetThreadId,
@@ -85,9 +85,10 @@ export const createStreamingSlice: ChatSliceCreator<StreamingSlice> = (
 
           case 'rag_context':
             set((state) => {
+              state.streamingPageFilter =
+                parsePageFilter(event.data.page_filter) ?? null;
               state.streamingCitations =
-                (event.data.citations as Array<Record<string, unknown>>) ??
-                [];
+                (event.data.citations as Array<Record<string, unknown>>) ?? [];
               state.streamingDiagnosticsTraceId =
                 (event.data.diagnostics_trace_id as string) ?? null;
             });
@@ -137,6 +138,7 @@ export const createStreamingSlice: ChatSliceCreator<StreamingSlice> = (
         state.streamingContent = '';
         state.streamingMessageId = null;
         state.streamingCitations = [];
+        state.streamingPageFilter = null;
         state.streamingDiagnosticsTraceId = null;
       });
       setActiveAbortController(null);
@@ -159,6 +161,7 @@ export const createStreamingSlice: ChatSliceCreator<StreamingSlice> = (
       state.streamingContent = '';
       state.streamingMessageId = null;
       state.streamingCitations = [];
+      state.streamingPageFilter = null;
       state.streamingDiagnosticsTraceId = null;
       state.isRetrievingRag = false;
       state.streamingThreadId = null;

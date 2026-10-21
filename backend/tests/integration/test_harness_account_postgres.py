@@ -29,6 +29,7 @@ from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.chat_message import ChatMessage
 from src.models.collection import Collection
 from src.models.conversation import Conversation
+from src.models.document import Document
 from src.models.harness_session import (
     HarnessCommand,
     HarnessNativeRequest,
@@ -117,6 +118,7 @@ async def pg(
             models: list[Any] = [
                 Organization,
                 User,
+                Document,
                 Workspace,
                 WorkspaceMember,
                 Collection,

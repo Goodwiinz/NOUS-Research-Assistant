@@ -1268,3 +1268,31 @@ async def test_replayed_submission_does_not_double_attach(
         )
 
     assert await _count(db, MessageAttachment) == 1
+
+
+async def test_strict_branch_attachment_loss_rolls_back_question_and_links(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.threads.message_branches import BranchAccessError
+
+    paper, revoked = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(
+        "src.services.threads.workspace_access.filter_owned_document_ids",
+        AsyncMock(return_value=[paper]),
+    )
+    with pytest.raises(BranchAccessError, match="Attached file not found"):
+        async with db.begin():
+            await submission_mod._insert_user_message(
+                db,
+                thread_id=THREAD_ID,
+                user_id=USER_A,
+                content="Compare both attached sources",
+                client_message_id=uuid.uuid4(),
+                attachment_ids=[paper, revoked],
+                require_all_attachments=True,
+            )
+    assert await _count(db, ChatMessage) == 0
+    assert await _count(db, MessageAttachment) == 0
+    assert (
+        await db.scalar(select(Thread.message_count).where(Thread.id == THREAD_ID))
+    ) == 0
