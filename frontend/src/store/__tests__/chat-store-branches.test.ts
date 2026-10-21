@@ -247,6 +247,23 @@ describe('canonical PDF branch cache', () => {
     await currentSwitch;
   });
 
+  it('bumps the branch-selection count once per switch and keeps it across refreshes', async () => {
+    await seed();
+    expect(state().messagePagination.thread.branchSelectionCount).toBe(
+      undefined
+    );
+    select.mockResolvedValueOnce(undefined);
+    read.mockResolvedValueOnce(page('new-head', [message('new-root', 10)]));
+    const switching = state().selectMessageBranch('thread', 'new-root');
+    // The overlay owner must see the bump before the new page lands.
+    expect(state().messagePagination.thread.branchSelectionCount).toBe(1);
+    expect(await switching).toBe(true);
+    expect(state().messagePagination.thread.branchSelectionCount).toBe(1);
+    read.mockResolvedValueOnce(page('new-head', [message('new-root', 10)]));
+    await state().refreshMessages('thread');
+    expect(state().messagePagination.thread.branchSelectionCount).toBe(1);
+  });
+
   it('refuses arbitrary message IDs, linear chat selection, and active turns', async () => {
     await seed();
     expect(await state().selectMessageBranch('thread', 'unknown')).toBe(false);

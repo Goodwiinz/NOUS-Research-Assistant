@@ -155,7 +155,10 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
     branchSelectionTokens.set(threadId, token);
     get().markMessagesStale(threadId);
     set((state) => {
-      state.messagePagination[threadId].selectingBranch = true;
+      const pagination = state.messagePagination[threadId];
+      pagination.selectingBranch = true;
+      pagination.branchSelectionCount =
+        (pagination.branchSelectionCount ?? 0) + 1;
     });
     let selected = false;
     try {
@@ -276,6 +279,7 @@ export const createMessageSlice: ChatSliceCreator<MessageSlice> = (
           branch_document_id: response.branch_document_id ?? null,
           selected_message_id: response.selected_message_id ?? null,
           selectingBranch: existingPagination?.selectingBranch,
+          branchSelectionCount: existingPagination?.branchSelectionCount,
           hasMore:
             retainedOlderCount > 0 && existingPagination
               ? existingPagination.hasMore

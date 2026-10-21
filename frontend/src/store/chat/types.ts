@@ -81,6 +81,10 @@ export interface ChatState {
       loadedCount: number;
       /** Selection is a UI operation; binding fields come from the API page. */
       selectingBranch?: boolean;
+      /** Bumped each time the user switches the selected branch head. The
+       * transcript overlay owner drops the previous branch's local rows when
+       * it changes, so they cannot reappear beside the new branch. */
+      branchSelectionCount?: number;
     }
   >;
 

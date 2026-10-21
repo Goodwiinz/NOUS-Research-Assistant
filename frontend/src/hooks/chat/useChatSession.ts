@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  dropBranchOverlays,
   isThreadSwitchPending,
   mapDbMessageToChatPageMessage,
   selectDisplayedMessages,
@@ -201,6 +202,33 @@ export function useChatSession(): UseChatSessionReturn {
   );
   const storeLoadingThreadId = useChatStore((state) => state.loadingThreadId);
   const messagePagination = useChatStore((state) => state.messagePagination);
+
+  // Selecting another PDF-chat branch makes the previous branch's overlay
+  // (optimistic rows, failure bubbles) belong to a path that is no longer
+  // shown. Drop it as the switch starts, so a fresh page of the new branch
+  // never renders the old sibling's rows. Adjusted during render (React's
+  // "state from a changed value" pattern) rather than in an effect.
+  const branchSelectionCount = activeThreadId
+    ? messagePagination[activeThreadId]?.branchSelectionCount
+    : undefined;
+  const [seenBranchSelection, setSeenBranchSelection] = useState({
+    threadId: activeThreadId,
+    count: branchSelectionCount,
+  });
+  if (
+    seenBranchSelection.threadId !== activeThreadId ||
+    seenBranchSelection.count !== branchSelectionCount
+  ) {
+    setSeenBranchSelection({
+      threadId: activeThreadId,
+      count: branchSelectionCount,
+    });
+    if (
+      seenBranchSelection.threadId === activeThreadId &&
+      branchSelectionCount !== undefined
+    )
+      setMessages(dropBranchOverlays);
+  }
 
   // ---- Derived values ----
   const displayedMessages = useMemo(
