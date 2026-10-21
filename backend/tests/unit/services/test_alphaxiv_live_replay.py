@@ -907,3 +907,31 @@ async def test_update_without_any_run_is_a_no_op_until_one_starts(
     assert await replay.read_live_update(
         actor_id=ACTOR, chat_id=CHAT, known_run_id=None, after_seq=0
     ) == {"type": "replace", "payload": started}
+
+
+async def test_invalid_page_filter_is_dropped_without_ending_the_run(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    await harness.start()
+    with caplog.at_level("WARNING", logger=replay.logger.name):
+        await harness.record(
+            "rag_context",
+            {
+                "contexts": [
+                    {"source_position": 1, "document_id": str(PAPER), "page_number": 2}
+                ],
+                "page_filter": {"document_id": "not-a-uuid", "accepted_pages": [0]},
+            },
+        )
+    await harness.record("token", {"content": "Still answering [Doc 1]."})
+    frames = [
+        row.payload["frame"]
+        for row in await harness.rows()
+        if row.event_type == RunEventType.CHAT_PRESENTATION_FRAME.value
+    ]
+    complete = next(item for item in frames if item["kind"] == "context_complete")
+    assert complete.get("page_filter") is None
+    assert frames[-1] == {"kind": "token", "text": "Still answering [Doc 1]."}
+    assert 'page="2"' in _text(await harness.snapshot())
+    warned = [r for r in caplog.records if "page_filter" in r.getMessage()]
+    assert len(warned) == 1 and warned[0].exc_info is not None

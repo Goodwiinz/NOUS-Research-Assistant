@@ -18,6 +18,7 @@ Both mutations were restored byte-for-byte before rerunning this suite.
 import asyncio
 import copy
 import json
+import logging
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -347,6 +348,8 @@ def _socket_setup(
         return copy.deepcopy(state["snapshot"])
 
     async def update(**kwargs: Any) -> dict[str, Any]:
+        if state.get("fail") is not None:
+            raise state["fail"]
         current = await snapshot(actor_id=kwargs["actor_id"], chat_id=kwargs["chat_id"])
         if current is None or current["runId"] != str(kwargs["known_run_id"]):
             return {"type": "replace", "payload": current}
@@ -685,3 +688,139 @@ def test_v3_chat_requires_bearer_and_protocol_is_not_a_v3_field() -> None:
     assert (
         "llmChatId" in schema["components"]["schemas"]["AlphaXivLiveAck"]["properties"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [ConnectionRefusedError("postgres down"), RuntimeError("bad projection")],
+    ids=["db-outage-oserror", "runtime-error"],
+)
+async def test_live_read_failure_is_logged_and_reported_not_a_silent_close(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+) -> None:
+    socket, state = _socket_setup(monkeypatch)
+    serving = asyncio.create_task(route.live_socket(cast(WebSocket, socket)))
+    try:
+        await socket.send("a" + CHANNEL)
+        assert (await socket.next()).startswith("a")
+        with caplog.at_level(logging.ERROR, logger=route.logger.name):
+            state["fail"] = failure
+            reply = await socket.next()
+        assert reply[0] == "b"
+        assert json.loads(reply[1:]) == [CHANNEL, "Chat subscription unavailable"]
+        assert socket.closed == []
+        logged = [r for r in caplog.records if r.name == route.logger.name]
+        assert logged and logged[-1].exc_info is not None
+        assert logged[-1].exc_info[1] is failure
+    finally:
+        await socket.incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(serving, 1)
+
+
+@pytest.mark.asyncio
+async def test_live_5xx_compatibility_error_is_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    socket, state = _socket_setup(monkeypatch)
+    serving = asyncio.create_task(route.live_socket(cast(WebSocket, socket)))
+    try:
+        await socket.send("a" + CHANNEL)
+        assert (await socket.next()).startswith("a")
+        with caplog.at_level(logging.ERROR, logger=route.logger.name):
+            state["fail"] = CompatibilityError(503, "Live replay too large")
+            assert (await socket.next())[0] == "b"
+        logged = [r for r in caplog.records if r.name == route.logger.name]
+        assert logged and "503" in logged[-1].getMessage()
+        assert logged[-1].exc_info is not None
+    finally:
+        await socket.incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(serving, 1)
+
+
+@pytest.mark.asyncio
+async def test_failed_send_closes_1011_without_an_error_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    socket, state = _socket_setup(monkeypatch)
+
+    async def broken_send(text: str) -> None:
+        raise OSError("peer reset")
+
+    socket.send_text = broken_send  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING, logger=route.logger.name):
+        await socket.send("a" + CHANNEL)
+        await asyncio.wait_for(route.live_socket(cast(WebSocket, socket)), 1)
+    assert socket.closed == [1011]
+    assert not any(
+        r.levelno >= logging.ERROR
+        for r in caplog.records
+        if r.name == route.logger.name
+    )
+
+
+@pytest.mark.asyncio
+async def test_follower_finished_logs_escaped_failure_with_traceback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    socket, state = _socket_setup(monkeypatch)
+    serving = asyncio.create_task(route.live_socket(cast(WebSocket, socket)))
+    try:
+        await socket.send("a" + CHANNEL)
+        assert (await socket.next()).startswith("a")
+        failed = asyncio.Event()
+
+        async def broken_send(text: str) -> None:
+            failed.set()
+            raise RuntimeError("closed")
+
+        socket.send_text = broken_send  # type: ignore[method-assign]
+        with caplog.at_level(logging.WARNING, logger=route.logger.name):
+            # Revocation makes the follower reply "c"; that reply's send fails
+            # inside the handler and escapes to the task's done callback.
+            state["revoked"] = True
+            await asyncio.wait_for(failed.wait(), 1)
+            for _ in range(20):
+                if any("follower ended" in r.getMessage() for r in caplog.records):
+                    break
+                await asyncio.sleep(0.01)
+        logged = [r for r in caplog.records if "follower ended" in r.getMessage()]
+        assert len(logged) == 1
+        assert logged[0].exc_info is not None
+        assert isinstance(logged[0].exc_info[1], route._SendFailed)
+    finally:
+        await socket.incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(serving, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [CompatibilityError(503, "unavailable"), RuntimeError("database unavailable")],
+    ids=["compatibility", "unexpected"],
+)
+async def test_producer_failure_after_ack_is_logged_with_chat_and_run(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+) -> None:
+    body, user = _setup(monkeypatch)
+
+    async def source(*args: Any, **kwargs: Any) -> AsyncGenerator[str, None]:
+        yield _frame("status", phase="accepted", thread_id=CHAT, run_id=RUN)
+        yield _frame("token", content="answer")
+
+    monkeypatch.setattr(route.streaming, "stream_event_generator", source)
+    cast(AsyncMock, route.live_store.record_live_frame).side_effect = [None, failure]
+    with caplog.at_level(logging.ERROR, logger=route.logger.name):
+        assert await route.chat_v3(body, _request(), user) == {
+            "llmChatId": CHAT,
+            "runId": RUN,
+        }
+        await asyncio.gather(*tuple(route._LIVE_PRODUCERS))
+    logged = [r for r in caplog.records if "after acceptance" in r.getMessage()]
+    assert len(logged) == 1
+    assert CHAT in logged[0].getMessage() and RUN in logged[0].getMessage()
+    assert logged[0].exc_info is not None and logged[0].exc_info[1] is failure

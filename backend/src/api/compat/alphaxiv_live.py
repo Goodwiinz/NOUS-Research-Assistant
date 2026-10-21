@@ -89,6 +89,26 @@ async def shutdown_live_producers() -> None:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
+def _log_after_acceptance(
+    ready: asyncio.Future[dict[str, str]], chat_id: UUID | None, run_id: UUID | None
+) -> bool:
+    """Log a producer failure nobody else will see; call inside ``except``.
+
+    Before acknowledgement the HTTP caller receives the failure. Afterwards the
+    ack has already been sent, so an unlogged failure silently truncates the
+    durable replay for this run.
+    """
+    if not ready.done():
+        return False
+    logger.exception(
+        "Detached PDF producer failed after acceptance (chat_id=%s run_id=%s)",
+        chat_id,
+        run_id,
+        extra={"chat_id": str(chat_id), "run_id": str(run_id)},
+    )
+    return True
+
+
 async def _drive_live_turn(
     body: AlphaXivLiveChatRequest,
     native: AgentExecuteRequest,
@@ -99,6 +119,8 @@ async def _drive_live_turn(
 ) -> None:
     source: AsyncGenerator[str, None] | None = None
     failure: HTTPException | None = None
+    chat_id: UUID | None = None
+    run_id: UUID | None = None
     try:
         # First pull and every subsequent pull run in this same task, so
         # native cancellation ownership never points at the HTTP handler.
@@ -146,17 +168,21 @@ async def _drive_live_turn(
                 )
     except HTTPException as exc:
         failure = exc
+        _log_after_acceptance(ready, chat_id, run_id)
     except CompatibilityError as exc:
         failure = HTTPException(exc.status_code, str(exc))
+        _log_after_acceptance(ready, chat_id, run_id)
     except (KeyError, ValueError, StopAsyncIteration):
         failure = HTTPException(409, "A durable NOUS chat workspace is required")
-        logger.warning("Invalid native acceptance or live frame", exc_info=True)
+        if not _log_after_acceptance(ready, chat_id, run_id):
+            logger.warning("Invalid native acceptance or live frame", exc_info=True)
     except asyncio.CancelledError:
         failure = HTTPException(503, "The response was interrupted before acceptance")
         raise
     except Exception:
         failure = HTTPException(503, "The response could not be started")
-        logger.exception("Detached PDF chat failed")
+        if not _log_after_acceptance(ready, chat_id, run_id):
+            logger.exception("Detached PDF chat failed before acceptance")
     finally:
         try:
             if source is not None:
@@ -248,6 +274,10 @@ def _snapshot_cursor(snapshot: Any) -> tuple[UUID | None, int]:
     return UUID(str(snapshot["runId"])), len(events)
 
 
+class _SendFailed(Exception):
+    """The socket could not take a frame; the connection is unusable."""
+
+
 def _authentication_socket(websocket: WebSocket) -> WebSocket:
     """Adapt the observed token subprotocol to the native NOUS auth verifier."""
     prefix = "alphaxiv-live.auth."
@@ -315,9 +345,19 @@ async def live_socket(websocket: WebSocket) -> None:
             str(payload) if raw else json.dumps(payload, ensure_ascii=False)
         )
         async with send_lock:
-            await asyncio.wait_for(
-                websocket.send_text(frame), timeout=_SEND_TIMEOUT_SECONDS
-            )
+            try:
+                await asyncio.wait_for(
+                    websocket.send_text(frame), timeout=_SEND_TIMEOUT_SECONDS
+                )
+            except (
+                WebSocketDisconnect,
+                RuntimeError,
+                OSError,
+                asyncio.TimeoutError,
+            ) as exc:
+                # Only failures of the send itself mean "connection gone";
+                # database and projection errors must stay distinguishable.
+                raise _SendFailed from exc
 
     async def follow(channel: str, chat_id: UUID) -> None:
         subscribed = False
@@ -365,15 +405,22 @@ async def live_socket(websocket: WebSocket) -> None:
                 await send_record("c", channel, raw=True)
             await websocket.close(code=4001, reason="Authentication required")
         except CompatibilityError as exc:
+            if exc.status_code >= 500:
+                logger.error(
+                    "PDF live subscription unavailable (status=%s chat_id=%s)",
+                    exc.status_code,
+                    chat_id,
+                    exc_info=True,
+                )
             if subscribed and exc.status_code in {401, 403, 404}:
                 await send_record("c", channel, raw=True)
             else:
                 await send_record("b", [channel, "Chat subscription unavailable"])
-        except (WebSocketDisconnect, RuntimeError, OSError, asyncio.TimeoutError):
+        except (WebSocketDisconnect, _SendFailed):
             # A follower's failed socket send never affects the producer.
             await websocket.close(code=1011, reason="Live connection unavailable")
         except Exception:
-            logger.exception("PDF live subscription failed")
+            logger.exception("PDF live subscription failed (chat_id=%s)", chat_id)
             await send_record("b", [channel, "Chat subscription unavailable"])
         finally:
             if subscriptions.get(channel) is asyncio.current_task():
@@ -386,8 +433,11 @@ async def live_socket(websocket: WebSocket) -> None:
             await asyncio.gather(task, return_exceptions=True)
 
     def follower_finished(task: asyncio.Task[None]) -> None:
-        if not task.cancelled() and task.exception() is not None:
-            logger.warning("PDF live follower ended after connection failure")
+        if not task.cancelled() and (failure := task.exception()) is not None:
+            logger.warning(
+                "PDF live follower ended after connection failure",
+                exc_info=(type(failure), failure, failure.__traceback__),
+            )
 
     try:
         while True:
@@ -428,7 +478,8 @@ async def live_socket(websocket: WebSocket) -> None:
                     task.add_done_callback(follower_finished)
                 else:
                     await send_record("b", [channel, "Unsupported live command"])
-    except (WebSocketDisconnect, RuntimeError, OSError, asyncio.TimeoutError):
+    except (WebSocketDisconnect, _SendFailed, RuntimeError, OSError):
+        # Receive-side transport closure, or a failed reply on a dead socket.
         pass
     finally:
         pending = tuple(subscriptions.values())

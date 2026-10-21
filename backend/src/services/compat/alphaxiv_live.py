@@ -8,9 +8,11 @@ wire sequences are derived from the deterministic projection, not ledger seq.
 
 import hashlib
 import json
+import logging
 from typing import Any, cast
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import AsyncSessionLocal
@@ -41,6 +43,7 @@ from src.services.threads.workspace_access import (
     get_message,
 )
 
+logger = logging.getLogger(__name__)
 _READ_PAGE = 500
 _MAX_LEDGER_ROWS = 50000
 _MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
@@ -229,11 +232,19 @@ def _presentation_frames(kind: str, payload: dict[str, Any]) -> list[dict[str, A
                 }
             )
         metadata = payload.get("page_filter")
-        projected = (
-            PageFilterResponse.model_validate(metadata).model_dump(mode="json")
-            if metadata is not None
-            else None
-        )
+        projected: dict[str, Any] | None = None
+        if metadata is not None:
+            try:
+                projected = PageFilterResponse.model_validate(metadata).model_dump(
+                    mode="json"
+                )
+            except ValidationError:
+                # Page-filter metadata is optional presentation detail; an
+                # unexpected shape must not end the run. Drop only the field.
+                logger.warning(
+                    "Dropping invalid page_filter from a live presentation frame",
+                    exc_info=True,
+                )
         frames.append({"kind": "context_complete", "page_filter": projected})
         return frames
     if kind == "usage":
