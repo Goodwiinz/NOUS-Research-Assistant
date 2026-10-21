@@ -18996,6 +18996,12 @@ export interface components {
              */
             document_id: string;
             /**
+             * Fallback
+             * @description Set when page ranking did not run or returned nothing and the context is a keyword excerpt of the whole document instead.
+             * @default null
+             */
+            fallback: ("disabled" | "provider_error" | "timeout" | "no_results" | "no_text" | "source_too_large") | null;
+            /**
              * Model
              * @default null
              */
