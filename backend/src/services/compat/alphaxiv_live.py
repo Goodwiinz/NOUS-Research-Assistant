@@ -9,6 +9,7 @@ wire sequences are derived from the deterministic projection, not ledger seq.
 import hashlib
 import json
 import logging
+import time
 from typing import Any, cast
 from uuid import UUID
 
@@ -47,6 +48,8 @@ logger = logging.getLogger(__name__)
 _READ_PAGE = 500
 _MAX_LEDGER_ROWS = 50000
 _MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
+# A producer re-checks chat/run/paper access at most this often while writing.
+_RECORD_REAUTHORIZE_SECONDS = 30.0
 
 
 async def _owned_run(
@@ -296,6 +299,79 @@ async def record_live_frame(
                 payload={"frame": frame},
             )
         await db.commit()
+
+
+class LiveRecorder:
+    """Per-producer frame writer for one already-started presentation.
+
+    ``start_live_run`` validated the presentation header and its paper/files
+    under the run lock, so the producer caches that result here instead of
+    re-reading the header for every token. Access is re-checked on the first
+    write and then every ``reauthorize_seconds``; in between a frame costs the
+    ledger append alone (which still takes the run lock and refuses a terminal
+    run, preserving ordering and the late-frame guarantee).
+
+    Frames are deliberately NOT buffered across native generator pulls: native
+    finalization commits the terminal event inside the pull that yields the
+    terminal frame, so a buffered frame would be refused afterwards and lost.
+    """
+
+    def __init__(
+        self,
+        *,
+        actor_id: UUID,
+        chat_id: UUID,
+        run_id: UUID,
+        paper_id: UUID,
+        reauthorize_seconds: float = _RECORD_REAUTHORIZE_SECONDS,
+    ) -> None:
+        self.actor_id = actor_id
+        self.chat_id = chat_id
+        self.run_id = run_id
+        self.paper_id = paper_id
+        self.reauthorize_seconds = reauthorize_seconds
+        self._organization_id: Any = None
+        self._authorized_at: float | None = None
+
+    def _reauthorization_due(self) -> bool:
+        return (
+            self._authorized_at is None
+            or time.monotonic() - self._authorized_at >= self.reauthorize_seconds
+        )
+
+    async def _authorize(self, db: AsyncSession) -> None:
+        user, _ = await _owned_run(
+            db,
+            actor_id=self.actor_id,
+            chat_id=self.chat_id,
+            run_id=self.run_id,
+            write=True,
+        )
+        await _authorize_paper(db, user, self.paper_id)
+        self._organization_id = user.organization_id
+        self._authorized_at = time.monotonic()
+
+    async def authorize(self) -> None:
+        """Re-check chat, run and paper access now (fails closed)."""
+        async with AsyncSessionLocal() as db:
+            await self._authorize(db)
+
+    async def record(self, kind: str, payload: dict[str, Any]) -> None:
+        frames = _presentation_frames(kind, payload)
+        if not frames:
+            return
+        async with AsyncSessionLocal() as db:
+            if self._reauthorization_due():
+                await self._authorize(db)
+            for frame in frames:
+                await append_event(
+                    db,
+                    run_id=str(self.run_id),
+                    organization_id=self._organization_id,
+                    event_type=RunEventType.CHAT_PRESENTATION_FRAME,
+                    payload={"frame": frame},
+                )
+            await db.commit()
 
 
 def _project_events(

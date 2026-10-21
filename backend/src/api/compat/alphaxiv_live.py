@@ -146,26 +146,20 @@ async def _drive_live_turn(
             actor_id=actor_id, chat_id=chat_id, run_id=run_id, body=body
         )
         ready.set_result({"llmChatId": str(chat_id), "runId": str(run_id)})
-
-        await live_store.record_live_frame(
+        # start_live_run validated the header against this body; cache it.
+        recorder = live_store.LiveRecorder(
             actor_id=actor_id,
             chat_id=chat_id,
             run_id=run_id,
-            kind=kind,
-            payload=accepted,
+            paper_id=body.paper_version_id,
         )
+        await recorder.record(kind, accepted)
         async for frame in source:
             kind, payload = decode_native_frame(frame)
             # Terminal state is reconstructed from the native ledger. It is
             # already closed by the time the native terminal frame arrives.
             if kind not in {"heartbeat", "done", "error"}:
-                await live_store.record_live_frame(
-                    actor_id=actor_id,
-                    chat_id=chat_id,
-                    run_id=run_id,
-                    kind=kind,
-                    payload=payload,
-                )
+                await recorder.record(kind, payload)
     except HTTPException as exc:
         failure = exc
         _log_after_acceptance(ready, chat_id, run_id)

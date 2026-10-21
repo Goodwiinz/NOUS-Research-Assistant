@@ -73,13 +73,32 @@ def _setup(monkeypatch: pytest.MonkeyPatch) -> tuple[AlphaXivLiveChatRequest, Us
         ),
     )
     monkeypatch.setattr(route.live_store, "start_live_run", AsyncMock())
-    monkeypatch.setattr(route.live_store, "record_live_frame", AsyncMock())
+    recorded = AsyncMock()
+
+    class _Recorder:
+        """Producer-side frame writer; records (kind, payload) per write."""
+
+        instances: list[dict[str, Any]] = []
+        record_mock = recorded
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.instances.append(kwargs)
+
+        async def record(self, kind: str, payload: dict[str, Any]) -> None:
+            await recorded(kind=kind, payload=payload)
+
+    monkeypatch.setattr(route.live_store, "LiveRecorder", _Recorder)
     return (
         AlphaXivLiveChatRequest.model_validate(
             {"message": "Explain", "paperVersionId": PAPER}
         ),
         cast(User, SimpleNamespace(id=UUID(USER), organization_id=UUID(PAPER))),
     )
+
+
+def _recorded() -> AsyncMock:
+    """The (kind, payload) writes of the fake producer recorder from _setup."""
+    return cast(AsyncMock, getattr(route.live_store.LiveRecorder, "record_mock"))
 
 
 @pytest.fixture(autouse=True)
@@ -134,11 +153,17 @@ async def test_ack_waits_for_durable_start_and_same_task_drives_all_pulls(
     assert len(pulls) == 3 and all(task is producers[0] for task in pulls)
     assert pulls[0] is not handler
     assert closed == [True]
-    kinds = [
-        call.kwargs["kind"]
-        for call in cast(AsyncMock, route.live_store.record_live_frame).await_args_list
-    ]
+    kinds = [call.kwargs["kind"] for call in _recorded().await_args_list]
     assert kinds == ["status", "token"]
+    # One recorder per producer, bound to the validated presentation.
+    assert getattr(route.live_store.LiveRecorder, "instances") == [
+        {
+            "actor_id": UUID(USER),
+            "chat_id": UUID(CHAT),
+            "run_id": UUID(RUN),
+            "paper_id": UUID(PAPER),
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -194,7 +219,7 @@ async def test_replay_start_failure_closes_native_source_before_failed_ack(
         await route.chat_v3(body, _request(), user)
     assert caught.value.status_code == 503
     assert closed == [True]
-    cast(AsyncMock, route.live_store.record_live_frame).assert_not_awaited()
+    _recorded().assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -216,10 +241,7 @@ async def test_shutdown_closes_native_producer_without_writing_fake_terminal(
     await route.shutdown_live_producers()
     assert closed == [True]
     assert not route._LIVE_PRODUCERS
-    assert all(
-        call.kwargs["kind"] == "status"
-        for call in cast(AsyncMock, route.live_store.record_live_frame).await_args_list
-    )
+    assert all(call.kwargs["kind"] == "status" for call in _recorded().await_args_list)
 
 
 @pytest.mark.asyncio
@@ -813,7 +835,7 @@ async def test_producer_failure_after_ack_is_logged_with_chat_and_run(
         yield _frame("token", content="answer")
 
     monkeypatch.setattr(route.streaming, "stream_event_generator", source)
-    cast(AsyncMock, route.live_store.record_live_frame).side_effect = [None, failure]
+    _recorded().side_effect = [None, failure]
     with caplog.at_level(logging.ERROR, logger=route.logger.name):
         assert await route.chat_v3(body, _request(), user) == {
             "llmChatId": CHAT,

@@ -10,6 +10,13 @@ Mutation proof (2026-10-13): changed ``by_creation=True`` to ``False`` in
 failed because releasing the old lease replaced the newer snapshot with the
 old completed answer/run ID. The source was restored byte-for-byte; the
 focused regression passed again as part of the complete replay suite.
+
+Recorder cadence (2026-10-20): forcing LiveRecorder._reauthorization_due in
+src/services/compat/alphaxiv_live.py to always True failed
+``-k recorder_authorizes_once`` (per-frame authorize/paper checks returned);
+forcing it to False after the first write failed
+``-k recorder_reauthorizes_on_its_cadence`` (revocation never observed).
+Both were restored byte-for-byte and the ``-k recorder`` tests passed again.
 """
 
 from __future__ import annotations
@@ -935,3 +942,66 @@ async def test_invalid_page_filter_is_dropped_without_ending_the_run(
     assert 'page="2"' in _text(await harness.snapshot())
     warned = [r for r in caplog.records if "page_filter" in r.getMessage()]
     assert len(warned) == 1 and warned[0].exc_info is not None
+
+
+def _recorder(harness: Harness, **kwargs: Any) -> replay.LiveRecorder:
+    return replay.LiveRecorder(
+        actor_id=ACTOR, chat_id=CHAT, run_id=harness.run_id, paper_id=PAPER, **kwargs
+    )
+
+
+async def test_recorder_authorizes_once_and_never_rereads_the_header_per_frame(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await harness.start()
+    ledger_reads = AsyncMock(wraps=replay.read_events)
+    monkeypatch.setattr(replay, "read_events", ledger_reads)
+    authorizations = harness.authorize.await_count
+    paper_checks = harness.document.await_count
+    recorder = _recorder(harness)
+    for index in range(5):
+        await recorder.record("token", {"content": f"t{index} "})
+    assert harness.authorize.await_count == authorizations + 1
+    assert harness.document.await_count == paper_checks + 1
+    ledger_reads.assert_not_awaited()
+    assert _text(await harness.snapshot()) == "t0 t1 t2 t3 t4 "
+
+
+async def test_recorder_late_frame_after_native_terminal_does_not_append(
+    harness: Harness,
+) -> None:
+    await harness.start()
+    recorder = _recorder(harness)
+    await recorder.record("token", {"content": "Partial"})
+    await harness.append(RunEventType.RUN_COMPLETED)
+    before = len(await harness.rows())
+    with pytest.raises(RunAlreadyTerminalError):
+        await recorder.record("token", {"content": "MUST NOT APPEAR"})
+    assert len(await harness.rows()) == before
+    snapshot = await harness.snapshot()
+    assert _text(snapshot) == "Partial"
+    assert sum(item["type"] == "run_end" for item in snapshot["events"]) == 1
+
+
+async def test_recorder_reauthorizes_on_its_cadence_and_fails_closed(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await harness.start()
+    clock = [100.0]
+    monkeypatch.setattr(replay, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    recorder = _recorder(harness, reauthorize_seconds=30.0)
+    await recorder.record("token", {"content": "one "})
+    authorizations = harness.authorize.await_count
+    harness.authorize.side_effect = CompatibilityError(404, "Chat not found")
+    clock[0] += 29.0
+    # Inside the window the revocation is not yet observed (bounded staleness).
+    await recorder.record("token", {"content": "two "})
+    assert harness.authorize.await_count == authorizations
+    clock[0] += 1.0
+    before = len(await harness.rows())
+    with pytest.raises(CompatibilityError) as caught:
+        await recorder.record("token", {"content": "MUST NOT APPEAR"})
+    assert caught.value.status_code == 404
+    assert len(await harness.rows()) == before
+    harness.authorize.side_effect = None
+    assert _text(await harness.snapshot()) == "one two "

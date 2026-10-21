@@ -12,13 +12,22 @@ duplicate header sequences [1, 2], despite append_event's later lock. The
 unmodified source passed again; no production-file mutation was necessary.
 Focused command: PYTHONPATH=backend python -m pytest -q
 backend/tests/unit/services/test_alphaxiv_live_postgres.py
+
+Warm LiveRecorder (2026-10-20, PostgreSQL 14): the producer recorder skips
+per-frame re-authorization, so its late-frame guarantee rests on
+append_event's run lock + terminal check alone. Temporarily changing
+services/agent/run_event_store.py ``if await has_terminal_event(...)`` to
+``if False and ...`` made both
+``test_native_terminal_winner_rejects_presentation_append[record_live_frame]``
+and ``[warm_recorder]`` fail with DID NOT RAISE RunAlreadyTerminalError.
+Restored byte-for-byte (empty git diff); all five cases passed again.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -86,6 +95,24 @@ class PostgresHarness:
             kind="token",
             payload={"content": "A durable answer."},
         )
+
+    async def writer(self, kind: str) -> Callable[[], Awaitable[None]]:
+        """The stateless validated write, or a warm producer recorder whose
+        next write is the ledger append alone (no per-frame re-authorization)."""
+        if kind == "record_live_frame":
+            return self.record
+        recorder = replay.LiveRecorder(
+            actor_id=self.actor_id,
+            chat_id=self.chat_id,
+            run_id=self.run_id,
+            paper_id=self.paper_id,
+        )
+        await recorder.authorize()
+
+        async def record() -> None:
+            await recorder.record("token", {"content": "A durable answer."})
+
+        return record
 
     async def finalize(self, db: AsyncSession, *, commit: bool = True) -> bool:
         return await finalize_submission(
@@ -279,10 +306,12 @@ async def test_duplicate_start_has_exactly_one_header(
         )
 
 
+@pytest.mark.parametrize("writer_kind", ["record_live_frame", "warm_recorder"])
 async def test_native_terminal_winner_rejects_presentation_append(
-    postgres_harness: PostgresHarness,
+    postgres_harness: PostgresHarness, writer_kind: str
 ) -> None:
     await postgres_harness.start()
+    write = await postgres_harness.writer(writer_kind)
     attempted = asyncio.Event()
     writer: asyncio.Task[None] | None = None
 
@@ -309,7 +338,7 @@ async def test_native_terminal_winner_rejects_presentation_append(
     try:
         async with postgres_harness.factory() as finalizer:
             assert await postgres_harness.finalize(finalizer, commit=False)
-            writer = asyncio.create_task(postgres_harness.record())
+            writer = asyncio.create_task(write())
             await asyncio.wait_for(attempted.wait(), _WAIT_SECONDS)
             await finalizer.commit()
             with pytest.raises(RunAlreadyTerminalError):
@@ -328,10 +357,14 @@ async def test_native_terminal_winner_rejects_presentation_append(
         )
 
 
+@pytest.mark.parametrize("writer_kind", ["record_live_frame", "warm_recorder"])
 async def test_presentation_winner_commits_before_native_terminal(
-    postgres_harness: PostgresHarness, monkeypatch: pytest.MonkeyPatch
+    postgres_harness: PostgresHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    writer_kind: str,
 ) -> None:
     await postgres_harness.start()
+    write = await postgres_harness.writer(writer_kind)
     appended, finalizer_attempted, release = (
         asyncio.Event(),
         asyncio.Event(),
@@ -371,7 +404,7 @@ async def test_presentation_winner_commits_before_native_terminal(
         observe_finalizer_update,
     )
     try:
-        writer = asyncio.create_task(postgres_harness.record())
+        writer = asyncio.create_task(write())
         await asyncio.wait_for(appended.wait(), _WAIT_SECONDS)
         finalizer = asyncio.create_task(finish_run())
         await asyncio.wait_for(finalizer_attempted.wait(), _WAIT_SECONDS)
