@@ -3,7 +3,7 @@ Knowledge Graph API endpoints
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -80,6 +80,24 @@ def _get_org_document_ids(db, organization_id) -> List[str]:
         .filter(Document.organization_id == organization_id)
         .all()
     ]
+
+
+def _require_org_source_documents(
+    org_doc_ids: List[str], source_document_ids: Iterable[Optional[str]]
+) -> None:
+    """403 unless every client-supplied source_document_id is one of the org's.
+
+    Project- and document-scoped reads filter by source_document_id alone, so an
+    unchecked id lets a caller attach entities or edges to another org's
+    document and surface them in that org's project tree.
+    """
+    allowed = set(org_doc_ids)
+    for doc_id in source_document_ids:
+        if doc_id and str(doc_id) not in allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="source_document_id does not belong to your organization",
+            )
 
 
 def _get_project_document_ids(
@@ -202,12 +220,10 @@ def create_entity(
         str(current_user.organization_id) if current_user.organization_id else None
     )
     if request.source_document_id:
-        org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
-        if str(request.source_document_id) not in org_doc_ids:
-            raise HTTPException(
-                status_code=403,
-                detail="source_document_id does not belong to your organization",
-            )
+        _require_org_source_documents(
+            _get_org_document_ids(db, current_user.organization_id),
+            [request.source_document_id],
+        )
     try:
         entity = knowledge_graph_service.create_entity(request)
         return entity
@@ -495,14 +511,17 @@ def create_relationship(
     db=Depends(get_db_sync),
 ):
     """Create a new relationship between entities"""
+    # Force the caller's org onto the request (never trust a client-supplied
+    # value — a tenantless caller must not be able to set one). Both
+    # endpoints are then org-scoped; the org-doc-id list stays as a fallback.
+    request.organization_id = (
+        str(current_user.organization_id) if current_user.organization_id else None
+    )
+    org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+    # The edge's own source_document_id must be the caller's too: project
+    # relationship reads filter on r.source_document_id alone.
+    _require_org_source_documents(org_doc_ids, [request.source_document_id])
     try:
-        # Force the caller's org onto the request (never trust a client-supplied
-        # value — a tenantless caller must not be able to set one). Both
-        # endpoints are then org-scoped; the org-doc-id list stays as a fallback.
-        request.organization_id = (
-            str(current_user.organization_id) if current_user.organization_id else None
-        )
-        org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
         relationship = knowledge_graph_service.create_relationship(
             request, source_document_ids=org_doc_ids
         )
@@ -674,18 +693,25 @@ def batch_create_entities(
     db=Depends(get_db_sync),
 ):
     """Create multiple entities and relationships in a batch"""
+    # Force the caller's org onto every item — never trust client-supplied
+    # organization_id on batch entities/relationships (same cross-tenant
+    # poisoning vector as the single create_entity endpoint).
+    caller_org = (
+        str(current_user.organization_id) if current_user.organization_id else None
+    )
+    for entity in request.entities:
+        entity.organization_id = caller_org
+    for relationship in request.relationships:
+        relationship.organization_id = caller_org
+    org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+    # Every item's source_document_id is stamped as-is by the service, so reject
+    # the whole batch if any of them names another org's document.
+    _require_org_source_documents(
+        org_doc_ids,
+        [e.source_document_id for e in request.entities]
+        + [r.source_document_id for r in request.relationships],
+    )
     try:
-        # Force the caller's org onto every item — never trust client-supplied
-        # organization_id on batch entities/relationships (same cross-tenant
-        # poisoning vector as the single create_entity endpoint).
-        caller_org = (
-            str(current_user.organization_id) if current_user.organization_id else None
-        )
-        for entity in request.entities:
-            entity.organization_id = caller_org
-        for relationship in request.relationships:
-            relationship.organization_id = caller_org
-        org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
         result = knowledge_graph_service.create_entities_batch(
             request, source_document_ids=org_doc_ids
         )

@@ -50,10 +50,10 @@ def test_batch_overwrites_client_org_on_all_items(monkeypatch):
         or SimpleNamespace(),
     )
     ents = [
-        SimpleNamespace(organization_id="org-B"),
-        SimpleNamespace(organization_id=None),
+        SimpleNamespace(organization_id="org-B", source_document_id=None),
+        SimpleNamespace(organization_id=None, source_document_id=None),
     ]
-    rels = [SimpleNamespace(organization_id="org-EVIL")]
+    rels = [SimpleNamespace(organization_id="org-EVIL", source_document_id=None)]
     req = SimpleNamespace(entities=ents, relationships=rels)
     kg.batch_create_entities(request=req, current_user=_caller("org-A"), db=MagicMock())
     assert all(e.organization_id == "org-A" for e in captured["req"].entities)
