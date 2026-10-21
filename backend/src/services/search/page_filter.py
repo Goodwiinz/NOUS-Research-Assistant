@@ -7,20 +7,53 @@ already-authorized text and must recheck access after asynchronous work.
 from __future__ import annotations
 
 import asyncio
+import heapq
 import json
 import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
 MAX_RERANK_PAGES = 100
 MAX_PAGE_FILTER_SOURCE_CHARS = 1024 * 1024
+# Native PDF chat reads the whole extracted text up to this ceiling so a long
+# thesis is ranked across every page, not just the first megabyte.
+MAX_PAGE_SCAN_SOURCE_CHARS = 16 * 1024 * 1024
 PAGE_RERANK_TIMEOUT_SECONDS = 10.0
 Page = tuple[int, str, int]
 RankedPage = tuple[int, str, int, float]
+
+_PAGE_MARKER = re.compile(r"(?m)^[ \t]*\[Page[ \t]+(\d{1,9})\][ \t]*\r?$")
+_QUERY_TERM = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{3,}")
+_QUERY_STOPWORDS = frozenset(
+    {"only", "attached", "file", "document", "please", "what", "give"}
+)
+_MAX_QUERY_TERMS = 32
+
+
+def query_terms(query: str | None) -> list[str]:
+    """Distinct lowercased query terms used for cheap lexical page scoring."""
+    terms: list[str] = []
+    for match in _QUERY_TERM.findall(query or ""):
+        term = match.lower()
+        if term not in _QUERY_STOPWORDS and term not in terms:
+            terms.append(term)
+            if len(terms) >= _MAX_QUERY_TERMS:
+                break
+    return terms
+
+
+def highest_page_number(source: str) -> int | None:
+    """Largest ``[Page N]`` marker; blank pages may have no marker at all."""
+    highest = None
+    for marker in _PAGE_MARKER.finditer(source):
+        number = int(marker.group(1))
+        if highest is None or number > highest:
+            highest = number
+    return highest
 
 
 def scan_pages(
@@ -29,23 +62,31 @@ def scan_pages(
     max_pages: int | None = None,
     max_chars: int | None = None,
     page_range: tuple[int, int] | None = None,
+    query: str | None = None,
 ) -> tuple[list[tuple[int, str, int]], int]:
     """Count all markers while copying bounded candidate text.
 
     ``page_range`` uses the extracted text's one-based page numbers. Apply it
     before the candidate cap so a narrow selection beyond page 100 still works.
+
+    Without ``query`` the cap keeps the first ``max_pages`` pages. With a
+    ``query`` and more pages than the cap, candidates are the pages with the
+    best lexical overlap across the whole document (or, when the query has no
+    usable terms, pages spread evenly across it), returned in page order. The
+    scoring reads each page's bounded prefix once, so the work stays linear in
+    the source and memory stays at ``max_pages`` copied prefixes.
     """
+    terms = query_terms(query) if query is not None else None
+    if terms is not None and max_pages is not None:
+        return _scan_ranked_candidates(
+            source,
+            terms,
+            max_pages=max_pages,
+            max_chars=max_chars,
+            page_range=page_range,
+        )
     pages: list[tuple[int, str, int]] = []
     total = 0
-
-    def span_text(start: int, end: int) -> tuple[str, int]:
-        # Find stripped bounds without first allocating the entire page body.
-        while start < end and source[start].isspace():
-            start += 1
-        while end > start and source[end - 1].isspace():
-            end -= 1
-        stop = end if max_chars is None else min(end, start + max_chars)
-        return source[start:stop], end - start
 
     def append_page(marker: re.Match[str], end: int) -> None:
         nonlocal total
@@ -55,24 +96,106 @@ def scan_pages(
             return
         if max_pages is not None and len(pages) >= max_pages:
             return
-        text, length = span_text(marker.end(), end)
-        if total == 1:
-            preamble, prefix_length = span_text(0, marker.start())
-            if prefix_length:
-                text = preamble + (f"\n{text}" if length else "")
-                length = prefix_length + (1 + length if length else 0)
-        pages.append((int(marker.group(1)), text[:max_chars], length))
+        text, length = _page_text(source, marker, end, total == 1, max_chars)
+        pages.append((number, text, length))
 
     previous = None
     # Nine digits already allow implausibly large page counts. Longer markers
     # remain text, avoiding both integer conversion failures and huge metadata.
-    for marker in re.finditer(r"(?m)^[ \t]*\[Page[ \t]+(\d{1,9})\][ \t]*\r?$", source):
+    for marker in _PAGE_MARKER.finditer(source):
         if previous is not None:
             append_page(previous, marker.start())
         previous = marker
     if previous is not None:
         append_page(previous, len(source))
     return pages, total
+
+
+def _span_text(
+    source: str, start: int, end: int, max_chars: int | None
+) -> tuple[str, int]:
+    # Find stripped bounds without first allocating the entire page body.
+    while start < end and source[start].isspace():
+        start += 1
+    while end > start and source[end - 1].isspace():
+        end -= 1
+    stop = end if max_chars is None else min(end, start + max_chars)
+    return source[start:stop], end - start
+
+
+def _page_text(
+    source: str,
+    marker: re.Match[str],
+    end: int,
+    first: bool,
+    max_chars: int | None,
+) -> tuple[str, int]:
+    text, length = _span_text(source, marker.end(), end, max_chars)
+    if first:
+        preamble, prefix_length = _span_text(source, 0, marker.start(), max_chars)
+        if prefix_length:
+            text = preamble + (f"\n{text}" if length else "")
+            length = prefix_length + (1 + length if length else 0)
+    return text[:max_chars], length
+
+
+def _iter_page_bounds(source: str) -> Iterator[tuple[re.Match[str], int]]:
+    previous = None
+    for marker in _PAGE_MARKER.finditer(source):
+        if previous is not None:
+            yield previous, marker.start()
+        previous = marker
+    if previous is not None:
+        yield previous, len(source)
+
+
+def _scan_ranked_candidates(
+    source: str,
+    terms: list[str],
+    *,
+    max_pages: int,
+    max_chars: int | None,
+    page_range: tuple[int, int] | None,
+) -> tuple[list[tuple[int, str, int]], int]:
+    def in_range(marker: re.Match[str]) -> bool:
+        number = int(marker.group(1))
+        return page_range is None or page_range[0] <= number <= page_range[1]
+
+    spread: set[int] | None = None
+    if not terms:
+        eligible = sum(1 for marker, _ in _iter_page_bounds(source) if in_range(marker))
+        if eligible > max_pages:
+            # No lexical signal: sample the whole document, never its head.
+            step = (eligible - 1) / max(max_pages - 1, 1)
+            spread = {round(index * step) for index in range(max_pages)}
+    # Min-heap of the best candidates; ties keep the earlier page.
+    heap: list[tuple[int, int, int, int, str, int]] = []
+    total = 0
+    ordinal = -1
+    for marker, end in _iter_page_bounds(source):
+        total += 1
+        if not in_range(marker):
+            continue
+        ordinal += 1
+        if spread is not None and ordinal not in spread:
+            continue
+        text, length = _page_text(source, marker, end, total == 1, max_chars)
+        lowered = text.lower()
+        counts = [lowered.count(term) for term in terms]
+        matched = sum(1 for count in counts if count)
+        occurrences = sum(min(count, 50) for count in counts)
+        item = (matched, occurrences, -ordinal, int(marker.group(1)), text, length)
+        if len(heap) < max_pages:
+            heapq.heappush(heap, item)
+        elif item > heap[0]:
+            heapq.heapreplace(heap, item)
+    if terms and ordinal + 1 > max_pages and not any(item[0] for item in heap):
+        # No page shares a term with the query; spread instead of the head.
+        return _scan_ranked_candidates(
+            source, [], max_pages=max_pages, max_chars=max_chars, page_range=page_range
+        )
+    ordered = sorted(heap, key=lambda item: -item[2])
+    return [(number, text, length) for _, _, _, number, text, length in ordered], total
 
 
 @dataclass(frozen=True)

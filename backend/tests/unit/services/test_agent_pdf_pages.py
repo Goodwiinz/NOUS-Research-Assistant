@@ -247,9 +247,8 @@ async def test_native_selected_range_is_zero_based_and_never_reranks(
         ("[Page 1]\nfirst\n[Page 3]\nthird", (0, 2)),
         ("[Page 1]\nfirst\n[Page 2]\n ", (1, 1)),
         ("[Page 1]\nfirst", (1, 1)),
-        ("[Page 1]\n" + "x" * (1024 * 1024 + 1), (0, 0)),
     ],
-    ids=["unmarked", "gap", "blank", "out-of-range", "oversized"],
+    ids=["unmarked", "gap", "blank", "out-of-range"],
 )
 async def test_invalid_or_unavailable_selection_cannot_widen(
     pdf_env: SimpleNamespace, source: str, selected: tuple[int, int]
@@ -273,6 +272,78 @@ async def test_selected_pages_beyond_first_hundred_remain_addressable(
     contexts, _, metadata = await _load(pdf_env, selected=(121, 122))
     assert [item["page_number"] for item in contexts] == [122, 123]
     assert metadata["total_pages"] == 124
+
+
+def _long_thesis(filler: int) -> str:
+    """300 physical pages; only page 250 answers the zymurgy question."""
+    pad = "background discussion " * filler
+    return "\n".join(
+        f"[Page {number}]\n"
+        + ("Chapter seven: zymurgy fermentation yields" if number == 250 else pad)
+        for number in range(1, 301)
+    )
+
+
+@pytest.mark.parametrize("filler", [1, 200], ids=["under-1mib", "over-1mib"])
+async def test_long_pdf_candidates_cover_pages_beyond_the_first_hundred(
+    pdf_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, filler: int
+) -> None:
+    source = _long_thesis(filler)
+    assert (len(source) > 1024 * 1024) is (filler == 200)
+    await _change(pdf_env, content_text=source)
+    seen: list[str] = []
+
+    async def rerank(
+        query: str, documents: list[dict[str, Any]], **kwargs: Any
+    ) -> RerankOutcome:
+        seen.extend(document["id"] for document in documents)
+        return RerankOutcome(
+            [
+                RerankResult(document["id"], index, 0.9, 0)
+                for index, document in enumerate(documents)
+                if "zymurgy" in document["content"]
+            ]
+        )
+
+    monkeypatch.setattr(cohere_rerank_service, "rerank_with_outcome", rerank)
+    metadata: dict[str, Any] = {}
+    contexts, statuses = await _nodes_rag._load_attachment_contexts(
+        attachment_ids=[str(pdf_env.document)],
+        thread_id=str(pdf_env.thread),
+        user_id=str(pdf_env.user),
+        organization_id=str(pdf_env.org),
+        query="What does chapter seven say about zymurgy?",
+        page_filter_out=metadata,
+    )
+    assert len(seen) == 100
+    assert "250" in seen
+    assert [item["page_number"] for item in contexts] == [250]
+    assert "zymurgy" in contexts[0]["content"]
+    assert statuses[0]["status"] == "ready"
+    assert metadata["total_pages"] == 300
+
+
+async def test_long_pdf_excerpt_fallback_searches_the_whole_document(
+    pdf_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _change(pdf_env, content_text=_long_thesis(200))
+    monkeypatch.setattr(
+        cohere_rerank_service,
+        "rerank_with_outcome",
+        AsyncMock(side_effect=RuntimeError("provider unavailable")),
+    )
+    metadata: dict[str, Any] = {}
+    contexts, statuses = await _nodes_rag._load_attachment_contexts(
+        attachment_ids=[str(pdf_env.document)],
+        thread_id=str(pdf_env.thread),
+        user_id=str(pdf_env.user),
+        organization_id=str(pdf_env.org),
+        query="What does chapter seven say about zymurgy?",
+        page_filter_out=metadata,
+    )
+    assert len(contexts) == 1
+    assert "zymurgy" in contexts[0]["content"]
+    assert statuses[0]["status"] == "ready"
 
 
 async def test_native_reranks_without_database_session_and_preserves_scores(

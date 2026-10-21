@@ -508,7 +508,7 @@ async def _load_page_filtered_attachment(
     from src.services.agent._pii_redact import redact_pii
     from src.services.agent.tool_session import resolve_tool_user, tool_session
     from src.services.search.page_filter import (
-        MAX_PAGE_FILTER_SOURCE_CHARS,
+        MAX_PAGE_SCAN_SOURCE_CHARS,
         MAX_RERANK_PAGES,
         PageSelection,
         rank_pages,
@@ -544,7 +544,7 @@ async def _load_page_filtered_attachment(
                     Document.title,
                     Document.processing_status,
                     func.substr(
-                        Document.content_text, 1, MAX_PAGE_FILTER_SOURCE_CHARS + 1
+                        Document.content_text, 1, MAX_PAGE_SCAN_SOURCE_CHARS + 1
                     ),
                 ).where(
                     Document.id == document_id,
@@ -565,7 +565,7 @@ async def _load_page_filtered_attachment(
     # No connection is retained through the parser worker or provider await.
     source = source or ""
     selection = None
-    if len(source) <= MAX_PAGE_FILTER_SOURCE_CHARS:
+    if len(source) <= MAX_PAGE_SCAN_SOURCE_CHARS:
         page_range = None
         if selection_page_range is not None:
             first, last = selection_page_range
@@ -578,6 +578,8 @@ async def _load_page_filtered_attachment(
             max_pages=MAX_RERANK_PAGES,
             max_chars=64 * 1024,
             page_range=page_range,
+            # A long PDF's candidates come from every page, not its first 100.
+            query=query if page_range is None else None,
         )
         if page_range is not None:
             expected = list(range(page_range[0], page_range[1] + 1))
@@ -626,7 +628,10 @@ async def _load_page_filtered_attachment(
         "context_origin": "attachment",
     }
     if selection is None:
-        excerpt = _attachment_excerpt(source[:MAX_PAGE_FILTER_SOURCE_CHARS], query)
+        # Whole-document excerpt: the term search spans every page read.
+        excerpt = await run_in_threadpool(
+            _attachment_excerpt, source[:MAX_PAGE_SCAN_SOURCE_CHARS], query
+        )
         if not excerpt.strip():
             return unavailable
         return [

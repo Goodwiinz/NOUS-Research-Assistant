@@ -3514,6 +3514,70 @@ def test_page_candidates_bound_memory_and_preserve_counts(
     assert peak < 10 * 1024 * 1024
 
 
+def test_page_candidates_with_query_cover_the_whole_document() -> None:
+    source = "\n".join(
+        f"[Page {i}]\n" + ("zymurgy result" if i == 250 else "filler")
+        for i in range(1, 301)
+    )
+    pages, total = read_tools._scan_pages(
+        source, max_pages=100, max_chars=65536, query="What about zymurgy?"
+    )
+    assert total == 300
+    assert len(pages) == 100
+    assert 250 in [number for number, _, _ in pages]
+    assert [number for number, _, _ in pages] == sorted(n for n, _, _ in pages)
+    # No lexical signal: candidates span the document instead of its head.
+    spread, _ = read_tools._scan_pages(
+        source, max_pages=100, max_chars=65536, query="summarize"
+    )
+    numbers = [number for number, _, _ in spread]
+    assert len(numbers) == 100
+    assert numbers[0] == 1 and numbers[-1] == 300
+
+
+async def test_page_filter_long_document_reranks_pages_past_the_first_hundred(
+    db: AsyncSession, context: IntegrationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services.search.cohere_rerank_service import RerankOutcome, RerankResult
+
+    service = _enable_page_filter(monkeypatch)
+    await db.execute(
+        update(Document)
+        .where(Document.id == DOC_IN_PROJECT)
+        .values(
+            content_text="\n".join(
+                f"[Page {i}]\n" + ("zymurgy result" if i == 250 else f"page {i}")
+                for i in range(1, 301)
+            )
+        )
+    )
+    await db.commit()
+
+    async def rerank(query: str, documents: list[dict[str, Any]], **kwargs: Any) -> Any:
+        assert len(documents) == 100
+        return RerankOutcome(
+            [
+                RerankResult(document["id"], index, 0.9, 0.0)
+                for index, document in enumerate(documents)
+                if "zymurgy" in document["content"]
+            ]
+        )
+
+    monkeypatch.setattr(service, "rerank_with_outcome", rerank)
+    result = await invoke_read(
+        db,
+        context,
+        _invocation(
+            "retrieve_passages",
+            query="zymurgy findings",
+            document_ids=[str(DOC_IN_PROJECT)],
+        ),
+    )
+    payload = result.content[0]
+    assert [c["page_number"] for c in payload["chunks"]] == [250]
+    assert payload["page_filter"]["total_pages"] == 300
+
+
 async def _page_document(db: AsyncSession, pages: int, text: str = "page") -> None:
     await db.execute(
         update(Document)
