@@ -1,7 +1,8 @@
 # Engineering standards
 
-What this PR series (`docs/plans/2026-07-15-maintainability-foundation.md`)
-actually established and enforces today — not aspirational guidance. Each doc
+What the maintainability PR series actually established (its plan,
+`docs/plans/2026-07-15-maintainability-foundation.md`, is no longer in the tree;
+it was added in commit `ac946992b`) and enforces today — not aspirational guidance. Each doc
 is tight on purpose: rules plus the commands that check them, linked to the
 real module names and test files that own each guard. If a rule here isn't
 backed by a test, a CI gate, or a pre-commit hook, it doesn't belong here —

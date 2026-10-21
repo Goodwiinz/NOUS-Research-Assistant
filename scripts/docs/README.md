@@ -50,8 +50,9 @@ Tune the phrase list, marker, and word floor at the top of `check_dir_docs.py`.
 
 ## Where it runs
 
-- **CI**: the `lint` job in `.github/workflows/fast-ci.yml` runs `check_dir_docs.py`
-  on every push and PR to `develop`/`main`.
+- **CI**: the `lightweight-checks` and `lint-backend` jobs in
+  `.github/workflows/test-pipeline.yml` run `check_dir_docs.py` on every push and
+  PR to `develop`/`main` (the old `fast-ci.yml` workflow no longer exists).
 - **pre-commit**: the local `dir-docs` hook in `.pre-commit-config.yaml` checks
   staged `README.md` / `doc.md` files.
 - **Make**: `make docs-lint` and `make docs-scaffold DIR=...`.
