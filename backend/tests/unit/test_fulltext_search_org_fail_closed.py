@@ -62,6 +62,19 @@ def test_builders_scope_valid_org(builder: str) -> None:
     assert params["organization_id"] == org
 
 
+@pytest.mark.parametrize(
+    ("builder", "expected_query_count"),
+    [("_build_search_query", 4), ("_build_count_query", 1)],
+)
+def test_builders_parse_queries_with_the_search_vector_config(
+    builder: str, expected_query_count: int
+) -> None:
+    sql, _ = getattr(FullTextSearchService(), builder)(_request(), "u-1", str(uuid4()))
+
+    assert sql.count("plainto_tsquery('english', :query)") == expected_query_count
+    assert "plainto_tsquery(:query)" not in sql
+
+
 def test_search_with_valid_org_queries_scoped_rows() -> None:
     org = str(uuid4())
     db = MagicMock()

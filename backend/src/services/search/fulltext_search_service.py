@@ -329,21 +329,23 @@ class FullTextSearchService:
         # read better on this endpoint's plain response. HybridSearchService
         # ._normalize_score() undoes this x10 before fusing across sources —
         # if this multiplier ever changes, that undo must change with it.
+        # search_vector is built with English stemming, so pin query parsing
+        # to English instead of relying on a database's default text config.
         query_parts = [
             "SELECT",
             "    d.id, d.title, d.document_type, d.content_text, d.content_summary,",
             "    d.file_size_bytes, d.created_at, d.updated_at, d.processing_status,",
             "    d.tags, d.is_public, d.uploaded_by_user_id, d.organization_id, d.document_metadata,",
-            "    ts_rank_cd(search_vector, plainto_tsquery(:query)) * 10 as relevance_score,",
-            "    ts_headline('english', coalesce(d.content_text, ''), plainto_tsquery(:query),",
+            "    ts_rank_cd(search_vector, plainto_tsquery('english', :query)) * 10 as relevance_score,",
+            "    ts_headline('english', coalesce(d.content_text, ''), plainto_tsquery('english', :query),",
             f"           'StartSel={self.highlight_pre_tag}, StopSel={self.highlight_post_tag}, MaxWords={self.snippet_length}, MinWords={self.snippet_surround}') as highlighted_content,",
-            "    ts_headline('english', coalesce(d.title, ''), plainto_tsquery(:query),",
+            "    ts_headline('english', coalesce(d.title, ''), plainto_tsquery('english', :query),",
             f"           'StartSel={self.highlight_pre_tag}, StopSel={self.highlight_post_tag}, MaxWords=50, MinWords=10') as highlighted_title",
             "FROM documents d",
             "WHERE",
             "    d.is_deleted = false",
             "    AND d.processing_status = :completed_status",
-            "    AND search_vector @@ plainto_tsquery(:query)",
+            "    AND search_vector @@ plainto_tsquery('english', :query)",
             "    AND NOT (",
             "        coalesce(d.content_text, '') ILIKE :noise_pattern_1",
             "        OR coalesce(d.content_text, '') ILIKE :noise_pattern_2",
@@ -398,7 +400,7 @@ class FullTextSearchService:
             "WHERE",
             "    d.is_deleted = false",
             "    AND d.processing_status = :completed_status",
-            "    AND search_vector @@ plainto_tsquery(:query)",
+            "    AND search_vector @@ plainto_tsquery('english', :query)",
             "    AND NOT (",
             "        coalesce(d.content_text, '') ILIKE :noise_pattern_1",
             "        OR coalesce(d.content_text, '') ILIKE :noise_pattern_2",
