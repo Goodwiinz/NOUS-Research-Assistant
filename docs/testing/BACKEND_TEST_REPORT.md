@@ -1,5 +1,7 @@
 # Backend Testing Report - Multimodal Enterprise RAG System
 
+> **Stale (2026-10-17): a recorded backend test report from 2025-10-28. Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. Its pass counts and coverage numbers describe that run only. See the [testing contract](../engineering/testing.md) for current gates.**
+
 **Date**: 2025-10-28
 **Environment**: Docker Development Setup
 **Status**: ✅ **PASSED**

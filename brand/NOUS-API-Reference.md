@@ -1,5 +1,7 @@
 # NOUS — Backend API Reference
 
+> **Non-authoritative (2026-10-17): this hand-written endpoint inventory is a dated snapshot and has drifted. The source of truth for routes and schemas is the FastAPI/Pydantic code and the generated `backend/openapi.json`; see [API contracts](../docs/engineering/api-contracts.md).**
+
 **13 Route Domains · ~350 Endpoints · FastAPI · Base URL: `http://localhost:8000`**
 
 ---

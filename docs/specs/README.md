@@ -4,6 +4,8 @@ Feature and migration specifications retained as design and decision evidence. A
 
 [Documentation home](../README.md) · [Current engineering contracts](../engineering/README.md)
 
+Numbered feature specifications from earlier delivery phases (multimodal RAG, entity management, research assistant feature, local CI pipeline) live in the repository-root [`specs/`](../../specs/AGENTS.md) directory. They are dated design records governed by that directory's `AGENTS.md`; see the numbered subdirectories `001-multimodal-enterprise-rag` through `005-local-ci-pipeline`.
+
 ## Documents
 
 | File | Subject |

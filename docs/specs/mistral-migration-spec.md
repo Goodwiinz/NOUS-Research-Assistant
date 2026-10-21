@@ -1,5 +1,7 @@
 # Technical Spec: Mistral Migration
 
+> **Not implemented as of 2026-10-17: this March 2026 draft was never adopted. A search of `backend/src` finds Mistral only in two model-name prefix checks (`tasks/research_tasks.py`, `api/research_engine/runs.py`), not a provider migration. Current model and provider configuration lives in the backend code and the [engineering contracts](../engineering/README.md).**
+
 **Status:** Draft
 **Author:** Abdel
 **Date:** March 2026

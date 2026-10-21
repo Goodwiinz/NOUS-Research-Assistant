@@ -1,5 +1,7 @@
 # Video Processing Integration Test Results
 
+> **Stale (2026-10-17): a recorded run from October 2025. Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. The test files it cites do not exist at those paths; its results are not current status.**
+
 **Date:** October 9, 2025
 **System:** Multimodal Enterprise RAG System
 **Test Focus:** Video Processing Pipeline Integration

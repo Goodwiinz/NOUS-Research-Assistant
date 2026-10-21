@@ -192,3 +192,7 @@ rationale recorded in the baseline roadmap table.
 4. Volume: ~10-12k lines across 8 tasks + common module. Sequenced
    implementation (common module → clone-pattern tasks → double-dependent
    tasks) keeps each PR reviewable.
+
+## Status update 2026-10-17
+
+The original status ("approved (brainstorm), pending implementation plan") is kept as written. Checked on 2026-10-17: implementation plans 2 to 5 landed as #1360 (judge helper, writing flow, KB retrieval), #1362 (knowledge-graph flow, memory round trip), #1366 (arXiv, code execution, connectors) and #1376 (HITL lifecycle, tenant isolation, fast path). Plan 1 was not matched to a merge commit by subject, so its status is unverified here. Current benchmark behavior is defined by the code under `evals/`.

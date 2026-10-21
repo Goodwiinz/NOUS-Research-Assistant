@@ -377,3 +377,7 @@ as review input; fix Critical and Warning findings, then rerun focused tests.
 - Reworking general chat citations.
 - Migrating every background job to a new queue.
 - Adding collaborative/manual rich-text editing.
+
+## Status update 2026-10-17
+
+The original status line ("implemented on `codex/fix-draft-revision-contract`; not deployed") is kept as written. Checked on 2026-10-17: the branch was merged to `develop` as #1684 (merge commit `0691ffe3b`). Whether a given environment runs it depends on the deployed image, which this note does not verify.

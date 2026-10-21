@@ -420,4 +420,4 @@ metrics = {
 - [ArXiv API Documentation](https://arxiv.org/help/api)
 - [ArXiv Category Taxonomy](https://arxiv.org/category_taxonomy)
 - [RAG Evaluation Best Practices](https://docs.example.com/rag-evaluation)
-- [Performance Benchmarks](benchmarks/README.md)
+- Performance Benchmarks (the former `benchmarks/README.md` no longer exists)

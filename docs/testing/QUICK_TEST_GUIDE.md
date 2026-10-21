@@ -1,5 +1,7 @@
 # Quick Video Processing Test Guide
 
+> **Stale (2026-10-17): an undated quick-test note written for an earlier environment. Commands may no longer work. For current gates and commands use the [testing contract](../engineering/testing.md).**
+
 ## ✅ Current Status
 
 All systems are **OPERATIONAL**:

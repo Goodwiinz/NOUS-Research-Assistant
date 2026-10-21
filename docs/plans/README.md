@@ -97,4 +97,16 @@ Dated implementation proposals, task breakdowns, remediation roadmaps and delive
 | [2026-09-30-goo-320-superseding-reviews.md](2026-09-30-goo-320-superseding-reviews.md) | GOO-320 Superseding Review Versions + Reconciled Update Accounting Plan (Academic R8) |
 | [2026-10-01-agent-audit-round8-fixes.md](2026-10-01-agent-audit-round8-fixes.md) | Agent audit round 8 — fix plan |
 | [2026-10-01-daily-research-brief.md](2026-10-01-daily-research-brief.md) | Daily Research Brief: audited workflow ship plan |
+| [2026-10-04-academic-r8-acceptance-closure.md](2026-10-04-academic-r8-acceptance-closure.md) | Academic R8 Acceptance Closure Implementation Plan |
 | [2026-10-04-harness-plan-amendment.md](2026-10-04-harness-plan-amendment.md) | Harness bridge and artifact plans: 2026-10-04 amendment |
+| [2026-10-05-nous-mcp-alphaxiv-parity-design.md](2026-10-05-nous-mcp-alphaxiv-parity-design.md) | NOUS MCP server: alphaXiv feature parity — design (Plan 07) |
+| [2026-10-05-nous-mcp-alphaxiv-parity.md](2026-10-05-nous-mcp-alphaxiv-parity.md) | NOUS MCP alphaXiv Parity Implementation Plan (Plan 07) |
+| [2026-10-05-same-project-harness-continuation.md](2026-10-05-same-project-harness-continuation.md) | Same-project standalone harness continuation — implementation plan (Plan 06) |
+| [2026-10-08-nous-verify-design.md](2026-10-08-nous-verify-design.md) | nous-verify: user-level verification gate — design |
+| [2026-10-08-nous-verify.md](2026-10-08-nous-verify.md) | nous-verify Implementation Plan |
+| [2026-10-09-artifact-ui-migration-free.md](2026-10-09-artifact-ui-migration-free.md) | Migration-free artifact panel completion |
+| [2026-10-12-alphaxiv-discover-papers-reference.md](2026-10-12-alphaxiv-discover-papers-reference.md) | alphaXiv `discover_papers`: observed behaviour (Plan 07 Slice 5 reference) |
+| [2026-10-12-nous-rc-design.md](2026-10-12-nous-rc-design.md) | `nous --rc`: pair this folder with web NOUS in one command |
+| [2026-10-12-nous-rc.md](2026-10-12-nous-rc.md) | `nous --rc` Implementation Plan |
+| [2026-10-13-grant-resume-design.md](2026-10-13-grant-resume-design.md) | Resuming a lapsed harness pairing without a new browser approval |
+| [2026-10-13-grant-resume.md](2026-10-13-grant-resume.md) | Resume a lapsed harness pairing: implementation plan |

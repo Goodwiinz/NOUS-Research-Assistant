@@ -17,7 +17,7 @@ DETAIL: Key (name)=(Demo Organization) already exists.
 The registration service always tried to create a new organization without checking if one with that name already existed.
 
 ### Solution
-Modified [backend/src/services/auth_service.py](rag/backend/src/services/auth_service.py#L175-L198) to:
+Modified `backend/src/services/auth_service.py` (written against `rag/backend/src/services/auth_service.py`, which is no longer in the tree) to:
 1. Check if organization exists before creating
 2. If exists: Join existing organization as USER
 3. If doesn't exist: Create new organization and become ADMIN

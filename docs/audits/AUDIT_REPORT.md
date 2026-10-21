@@ -1,4 +1,7 @@
 # NOUS RAG System — Bug & Performance Audit Report
+
+> **Historical record (written 2025-05-04, moved here from the repository root on 2026-10-17). Findings and counts are not current status. Check the code before acting on any item, and see the other [audit records](README.md) for later dated evidence.**
+
 **Branch:** `audit/bug-perf-swarm`  
 **Worktree:** `.worktrees/audit-bug-perf`  
 **Date:** 2025-05-04

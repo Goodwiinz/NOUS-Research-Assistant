@@ -9,7 +9,7 @@ Operate and verify deterministic hybrid search behavior in development and test 
 Run deterministic backend checks:
 
 ```bash
-backend/.venv-tdd/bin/pytest \
+backend/.venv/bin/pytest \
   backend/tests/api/search/test_search_deterministic_response.py \
   backend/tests/services/search/test_hybrid_deterministic_ranking.py \
   backend/tests/api/search/test_search_failure_modes.py \
@@ -19,9 +19,8 @@ backend/.venv-tdd/bin/pytest \
 Run frontend checks for deterministic metadata mapping:
 
 ```bash
-cd frontend
-npm test -- src/services/__tests__/searchService.test.ts src/components/chat/shared/__tests__/messageViewModel.test.ts
-npm run type-check
+pnpm --dir frontend exec vitest run src/services/__tests__/searchService.test.ts src/components/chat/shared/__tests__/messageViewModel.test.ts
+pnpm --dir frontend type-check
 ```
 
 ## Operational Checks

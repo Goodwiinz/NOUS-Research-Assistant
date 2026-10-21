@@ -1,4 +1,7 @@
 # Implementation Status Report
+
+> **Historical, not current status (2026-10-17): this tracker records the state of one past fix session. Its percentages, checkboxes and remaining-issue lists are not maintained and must not be read as the current state of the code.**
+
 ## Multimodal Enterprise RAG System
 
 **Generated**: 2025-10-14

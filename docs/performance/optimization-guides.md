@@ -1,4 +1,7 @@
 # Performance Optimization Guides
+
+> **Stale (2026-10-17): Qdrant is fully removed and live retrieval is PostgreSQL full-text search, so statements about Qdrant or vector stores below are historical. Measurements and file paths below describe the system when the document was written and are not current performance evidence.**
+
 ## Comprehensive Best Practices for the Multimodal Enterprise RAG System
 
 This document provides comprehensive optimization guides and best practices for ensuring optimal performance of the Knowledge Graph Analytics Dashboard and the entire RAG system.

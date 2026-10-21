@@ -1063,3 +1063,7 @@ not gate cutover).
   refuses direct legacy mutations so they cannot bypass the remote board.
 - All new code is pure Python standard library; `git`/`gh` only via the
   guarded `gitio.py` subprocess wrapper.
+
+## Status update 2026-10-17
+
+The original status ("proposed design; awaiting owner review") is kept as written. Checked on 2026-10-17: the Git-backed cross-machine claims described here shipped as #1580 (`feat(nous): add Git-backed cross-machine claims`), and the Vercel deployment exclusion that made schema 2 necessary shipped as #1581. See the [Vercel deployment exclusion design](2026-08-29-nous-vercel-deployment-exclusion-design.md).
