@@ -475,3 +475,138 @@ describe('controlled PDF text selection', () => {
     expect(ask).toHaveBeenCalledWith([99, 100]);
   });
 });
+
+describe('read-only fallback preview', () => {
+  const warn = (): ReturnType<typeof vi.spyOn> =>
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('opens an over-limit PDF in the browser viewer at the cited page and reports why', async () => {
+    driver.pages = 240;
+    const warned = warn();
+    const ask = vi.fn();
+    render(
+      <PdfDocumentViewer
+        blob={file()}
+        title="long.pdf"
+        targetPage={150}
+        onAsk={ask}
+        documentId="doc-150"
+        fallbackUrl="blob:long"
+      />
+    );
+    const frame = await screen.findByTitle('Preview of long.pdf');
+    expect(frame.tagName).toBe('IFRAME');
+    expect(frame).toHaveAttribute('src', 'blob:long#page=150');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This PDF has more than 100 pages.'
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      "can't be quoted into chat"
+    );
+    expect(screen.queryByRole('region', { name: /PDF preview/ })).toBeNull();
+    expect(warned).toHaveBeenCalledWith(
+      expect.stringContaining('PDF preview failed'),
+      expect.objectContaining({
+        documentId: 'doc-150',
+        reason: 'too-many-pages',
+        pageCount: 240,
+      })
+    );
+    // Page-range questions still work; the known page count bounds them.
+    fireEvent.change(screen.getByLabelText('First page'), {
+      target: { value: '150' },
+    });
+    fireEvent.change(screen.getByLabelText('Last page'), {
+      target: { value: '151' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Ask about PDF' }));
+    });
+    expect(ask).toHaveBeenCalledWith([149, 150]);
+  });
+
+  it('falls back for an oversized file without reading it into pdf.js', async () => {
+    const warned = warn();
+    const big = file();
+    Object.defineProperty(big, 'size', { value: 33 * 1024 * 1024 });
+    render(
+      <PdfDocumentViewer
+        blob={big}
+        title="big.pdf"
+        documentId="doc-big"
+        fallbackUrl="blob:big"
+      />
+    );
+    expect(await screen.findByTitle('Preview of big.pdf')).toHaveAttribute(
+      'src',
+      'blob:big#page=1'
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'This PDF is larger than 32 MB.'
+    );
+    expect(driver.loads).toHaveLength(0);
+    expect(warned).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ documentId: 'doc-big', reason: 'too-large' })
+    );
+  });
+
+  it('falls back and reports the cause when pdf.js cannot open the file', async () => {
+    const warned = warn();
+    const rejected = Promise.reject(new Error('Invalid XRef stream'));
+    // Handled later by the viewer; keep the early rejection observed.
+    rejected.catch(() => {});
+    driver.loading = rejected;
+    render(
+      <PdfDocumentViewer
+        blob={file()}
+        title="broken.pdf"
+        targetPage={4}
+        documentId="doc-broken"
+        fallbackUrl="blob:broken"
+      />
+    );
+    expect(await screen.findByTitle('Preview of broken.pdf')).toHaveAttribute(
+      'src',
+      'blob:broken#page=4'
+    );
+    expect(warned).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        documentId: 'doc-broken',
+        reason: 'load-failed',
+        error: 'Invalid XRef stream',
+      })
+    );
+  });
+
+  it('names the limit when no fallback URL is available', async () => {
+    warn();
+    driver.pages = 101;
+    render(<PdfDocumentViewer blob={file()} title="large.pdf" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'PDF preview is unavailable. This PDF has more than 100 pages.'
+    );
+  });
+
+  it('does not fall back or report after the user stops the preview', async () => {
+    const warned = warn();
+    driver.loading = new Promise(() => {});
+    render(
+      <PdfDocumentViewer
+        blob={file()}
+        title="stopped.pdf"
+        fallbackUrl="blob:stopped"
+      />
+    );
+    await waitFor(() => expect(driver.loads).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop preview' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('PDF preview stopped');
+    expect(screen.queryByTitle('Preview of stopped.pdf')).toBeNull();
+    expect(warned).not.toHaveBeenCalled();
+  });
+});

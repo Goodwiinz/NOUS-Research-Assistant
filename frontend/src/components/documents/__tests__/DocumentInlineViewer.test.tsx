@@ -4,6 +4,7 @@ import { DocumentInlineViewer } from '../DocumentInlineViewer';
 import { api } from '@/services/api-client';
 import { useAuthStore } from '@/stores/authStore';
 import type { User } from '@/types/auth';
+import { APIErrorClass } from '@/types';
 
 vi.mock('@/services/api-client', () => ({
   api: { fetchBlob: vi.fn(), download: vi.fn() },
@@ -12,11 +13,19 @@ vi.mock('../PdfDocumentViewer', () => ({
   PdfDocumentViewer: ({
     title,
     targetPage,
+    documentId,
+    fallbackUrl,
   }: {
     title: string;
     targetPage?: number;
+    documentId?: string;
+    fallbackUrl?: string;
   }) => (
-    <div aria-label="Controlled PDF">
+    <div
+      aria-label="Controlled PDF"
+      data-document-id={documentId}
+      data-fallback-url={fallbackUrl}
+    >
       {title}, page {targetPage ?? 1}
     </div>
   ),
@@ -52,6 +61,15 @@ describe('document PDF identity and navigation', () => {
     expect(
       screen.getByRole('link', { name: 'Open in new tab' })
     ).toHaveAttribute('href', 'blob:pdf-1#page=3');
+    // The read-only fallback reuses the same object URL and reports the id.
+    expect(screen.getByLabelText('Controlled PDF')).toHaveAttribute(
+      'data-fallback-url',
+      'blob:pdf-1'
+    );
+    expect(screen.getByLabelText('Controlled PDF')).toHaveAttribute(
+      'data-document-id',
+      'doc-1'
+    );
     rerender(<DocumentInlineViewer {...props} targetPage={1} />);
     expect(screen.getByText('paper.pdf, page 1')).toBeInTheDocument();
     expect(api.fetchBlob).toHaveBeenCalledTimes(1);
@@ -105,5 +123,32 @@ describe('document PDF identity and navigation', () => {
     await act(async () => finish(new Blob(['late old bytes'])));
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('old.pdf, page 1')).toBeNull();
+  });
+});
+
+describe('document preview download failures', () => {
+  const apiError = (status: number): APIErrorClass =>
+    new APIErrorClass({
+      message: `raw server detail ${status}`,
+      status_code: status,
+      type: 'http_error',
+    });
+
+  it.each([
+    [apiError(404), 'This file could not be found. It may have been deleted.'],
+    [apiError(403), "You don't have access to this file."],
+    [apiError(410), 'This file is no longer available.'],
+    [
+      new TypeError('Failed to fetch'),
+      'Could not reach the server. Check your connection and try again.',
+    ],
+    [apiError(500), 'Could not load this file for preview.'],
+  ])('shows a specific, safe message for %s', async (error, message) => {
+    vi.mocked(api.fetchBlob).mockRejectedValueOnce(error);
+    render(
+      <DocumentInlineViewer documentId="doc" filename="paper.pdf" kind="pdf" />
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(screen.getByRole('alert')).not.toHaveTextContent('raw server');
   });
 });

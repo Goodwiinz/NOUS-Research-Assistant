@@ -9,6 +9,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '@/services/api-client';
+import { APIErrorClass } from '@/types';
 import { useAuthStore } from '@/stores/authStore';
 import { PdfDocumentViewer } from './PdfDocumentViewer';
 import type { PdfAskHandler } from '@/types/pdf-chat';
@@ -35,6 +36,26 @@ function resolveViewerKind(kind?: string, mimeType?: string): ViewerKind {
   if (k === 'audio' || k === 'mp3' || m.startsWith('audio/')) return 'audio';
   if (k === 'video' || k === 'mp4' || m.startsWith('video/')) return 'video';
   return 'unsupported';
+}
+
+/** Stable, user-safe copy for a failed download; never the raw server text. */
+function previewErrorMessage(err: unknown): string {
+  if (err instanceof APIErrorClass) {
+    switch (err.error.status_code) {
+      case 403:
+        return "You don't have access to this file.";
+      case 404:
+        return 'This file could not be found. It may have been deleted.';
+      case 410:
+        return 'This file is no longer available.';
+      default:
+        return 'Could not load this file for preview.';
+    }
+  }
+  // fetch() rejects with a TypeError when the request never reached the API.
+  if (err instanceof TypeError)
+    return 'Could not reach the server. Check your connection and try again.';
+  return 'Could not load this file for preview.';
 }
 
 interface LoadState {
@@ -106,12 +127,12 @@ export function DocumentInlineViewer({
           blob,
         });
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (cancelled) return;
         setLoad({
           key: requestKey,
           status: 'error',
-          message: 'Could not load this file for preview.',
+          message: previewErrorMessage(err),
         });
       });
 
@@ -250,6 +271,8 @@ export function DocumentInlineViewer({
           title={filename}
           targetPage={targetPage}
           onAsk={onAskAboutPdf}
+          documentId={documentId}
+          fallbackUrl={objectUrl}
         />
       )}
 
