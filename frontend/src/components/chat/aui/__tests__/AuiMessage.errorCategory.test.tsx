@@ -162,6 +162,16 @@ describe('AuiMessage error category', () => {
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 
+  it('names a computer not connected to this project and keeps Retry', () => {
+    // Retry re-sends with the composer's CURRENT computer and folder, so it
+    // succeeds once the user picks one that can run this chat's project.
+    renderErrorMessage('device_not_connected_to_project');
+    expect(
+      screen.getByText("This computer isn't connected to this project.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+  });
+
   it('keeps a late generated file reachable under a failed, id-less latest row', async () => {
     useChatStore.setState({ currentThreadId: 't1' });
     vi.mocked(artifactService.listThreadArtifacts).mockResolvedValueOnce([

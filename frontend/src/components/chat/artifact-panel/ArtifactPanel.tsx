@@ -14,6 +14,9 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { stagePdfQuoteIntent } from '@/lib/pdf/chat-intent';
+import { confirmArtifactNavigation } from '@/utils/artifactNavigation';
 
 import { IconButton } from '@/components/ui/icon-button';
 import { ChatMarkdown } from '@/components/chat/ChatMarkdown';
@@ -27,6 +30,7 @@ import {
 import { GeneratedArtifactBody } from '@/components/chat/artifact-panel/GeneratedArtifactBody';
 import { ThreadHandoffCard } from '@/components/chat/artifact-panel/HandoffCard';
 import { DocumentInlineViewer } from '@/components/documents/DocumentInlineViewer';
+import { useChatRag } from '@/components/chat/ChatRagContext';
 import { cn } from '@/lib/utils';
 import { documentService } from '@/services/documentService';
 import type { DraftCitation } from '@/services/projectService';
@@ -68,9 +72,13 @@ function artifactTitle(artifact: Artifact): string {
 
 function DocumentArtifactBody({
   documentId,
+  targetPage,
 }: {
   documentId: string;
+  targetPage?: number;
 }): React.ReactElement {
+  const { setPdfContext, pdfIntentPending } = useChatRag();
+  const router = useRouter();
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['document', documentId],
     queryFn: () => documentService.getDocument(documentId),
@@ -105,6 +113,61 @@ function DocumentArtifactBody({
         filename={data.filename || data.title}
         kind={data.file_type || data.document_type}
         mimeType={data.mime_type}
+        targetPage={targetPage}
+        onAskAboutPdf={(
+          selectionPageRange,
+          selectionQuote,
+          selectionQuoteRange
+        ) => {
+          const chat = useChatStore.getState();
+          const page = chat.currentThreadId
+            ? chat.messagePagination[chat.currentThreadId]
+            : undefined;
+          if (
+            chat.currentThreadId &&
+            (!page?.message_branching || page.branch_document_id !== data.id)
+          ) {
+            if (!confirmArtifactNavigation()) return false;
+            const params = new URLSearchParams({
+              new: '1',
+              pdfDocumentId: data.id,
+            });
+            if (selectionPageRange) {
+              params.set('pdfStartIndex', String(selectionPageRange[0]));
+              params.set('pdfEndIndex', String(selectionPageRange[1]));
+            }
+            const token = stagePdfQuoteIntent(
+              data.id,
+              selectionQuoteRange,
+              selectionQuote
+            );
+            if (selectionQuote && !token) return false;
+            if (token && selectionQuoteRange) {
+              params.set('pdfQuoteIntent', token);
+              params.set('pdfQuoteStartIndex', String(selectionQuoteRange[0]));
+              params.set('pdfQuoteEndIndex', String(selectionQuoteRange[1]));
+            }
+            chat.setCurrentThread(null);
+            router.push(`/chat?${params.toString()}`);
+            return true;
+          }
+          if (pdfIntentPending) return false;
+          setPdfContext({
+            documentId: data.id,
+            title: data.title || data.filename,
+            ...(selectionPageRange ? { selectionPageRange } : {}),
+            ...(selectionQuote ? { selectionQuote } : {}),
+            ...(selectionQuote && selectionQuoteRange
+              ? { selectionQuoteRange }
+              : {}),
+          });
+          if (window.matchMedia('(max-width: 767.98px)').matches) {
+            useArtifactPanelStore.getState().closePanel();
+          }
+          requestAnimationFrame(() =>
+            window.dispatchEvent(new CustomEvent('focus-chat-input'))
+          );
+        }}
       />
     </div>
   );
@@ -405,6 +468,7 @@ export function ArtifactPanel({
         kind: 'document',
         id: citation.documentId,
         title: citation.title || 'Untitled document',
+        ...(citation.pageNumber ? { targetPage: citation.pageNumber } : {}),
       });
     }
   };
@@ -530,7 +594,10 @@ export function ArtifactPanel({
             showEmpty={artifact.kind === 'handoff'}
           />
           {artifact.kind === 'document' && (
-            <DocumentArtifactBody documentId={artifact.id} />
+            <DocumentArtifactBody
+              documentId={artifact.id}
+              targetPage={artifact.targetPage}
+            />
           )}
           {artifact.kind === 'external' && (
             <ExternalArtifactBody artifact={artifact} />
@@ -539,6 +606,7 @@ export function ArtifactPanel({
             <CitationPanelBody
               citations={artifact.citations}
               activeCitationId={artifact.activeCitationId}
+              activeCitationPage={artifact.activeCitationPage}
               diagnosticsTraceId={artifact.traceId}
               onCitationClick={handleOpenCitedDocument}
               onCite={handleCite}

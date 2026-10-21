@@ -337,6 +337,7 @@ _RELEASE_CAUSE_FAMILIES = frozenset(
         "research_release",
         "research_synthesis",  # GOO-311: a successor synthesis result
         "research_experiment",  # GOO-312: a successor figure
+        "research_review_update",  # GOO-320: accepted changed/corrected sources
     }
 )
 _RELEASE_PAYLOAD_KEYS: dict[tuple[str, int], frozenset[str]] = {

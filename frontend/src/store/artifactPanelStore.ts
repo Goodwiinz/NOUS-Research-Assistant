@@ -8,7 +8,7 @@ import type { Citation } from '@/utils/citationParser';
  * the union is fixed here so every producer targets the same shape.
  */
 export type Artifact =
-  | { kind: 'document'; id: string; title: string }
+  | { kind: 'document'; id: string; title: string; targetPage?: number }
   | { kind: 'external'; id: string; title: string; source?: string }
   | { kind: 'note'; projectId: string; id: string; title: string }
   | { kind: 'draft'; projectId: string; id: string; title: string }
@@ -19,6 +19,7 @@ export type Artifact =
       kind: 'citations';
       citations: Citation[];
       activeCitationId?: string;
+      activeCitationPage?: number;
       traceId?: string;
     };
 

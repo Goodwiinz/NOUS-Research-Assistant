@@ -19,10 +19,17 @@ from src.models.chat_message import ChatMessage, MessageRole
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
 from src.models.integration_grant import IntegrationGrant
 from src.schemas.harness import BridgeCommand, BridgeEvent, Observation, ProducerEvent
-from src.schemas.integration_context import IntegrationContext
+from src.schemas.integration_context import BindingKind, IntegrationContext
 from src.services.agent.agent_submission_service import finalize_submission
 from src.services.agent.run_event_store import append_event, read_events
 from src.services.agent.run_event_types import RunEventType
+from src.services.harness.account import (
+    PROJECT_UNREACHABLE,
+    account_projects,
+    consent_kind,
+    project_in_account,
+    run_project,
+)
 from src.services.harness.prompt_context import build_harness_prompt, prompt_is_current
 from src.services.harness.runs import (
     authorize_external_submission,
@@ -51,6 +58,7 @@ def grant_context(grant: IntegrationGrant) -> IntegrationContext:
         user_id=grant.user_id,
         organization_id=grant.organization_id,
         project_id=grant.project_id,
+        binding_kind=cast(BindingKind, grant.binding_kind),
         thread_id=grant.thread_id,
         run_id=UUID(grant.run_id) if grant.run_id else None,
         grant_id=grant.id,
@@ -64,9 +72,14 @@ async def _authorize(
         run.execution_provider != "codex"
         or run.user_id != context.user_id
         or run.organization_id != context.organization_id
-        or run.project_id != context.project_id
         or (context.run_id and str(context.run_id) != run.job_id)
     ):
+        raise IntegrationAccessDenied()
+    # An account pairing grant (the bridge's, after lease_commands swapped it
+    # in) names no project: the run's own is used, and
+    # authorize_external_submission checks it against the account.
+    project_id = run_project(context, run)
+    if project_id is None or run.project_id != project_id:
         raise IntegrationAccessDenied()
     await authorize_external_submission(
         db,
@@ -74,6 +87,7 @@ async def _authorize(
         device_id=session.device_id,
         workspace_id=session.workspace_id,
         thread_id=run.thread_id,
+        project_id=project_id,
     )
     grant = await db.get(IntegrationGrant, context.grant_id, populate_existing=True)
     assert grant is not None
@@ -106,12 +120,39 @@ async def _locked(db: AsyncSession, run_id: str) -> tuple[Any, HarnessSession]:
     return run, session
 
 
+_DISPATCH_FAILED = "Local Codex could not be started."
+
+
+async def _start_failure(db: AsyncSession, run: Any, session: HarnessSession) -> str:
+    """Why a run cannot start: name a project that left the device's account.
+
+    Any refusal counts when the run's consent is an account approval and its
+    project is no longer in the account: a run grant minted under an account
+    approval fails earlier, in _validate_grant, with a plain denial.
+    """
+    grant = await db.get(IntegrationGrant, session.grant_id, populate_existing=True)
+    if (
+        grant is not None
+        and await consent_kind(db, grant.request_id) == "account"
+        and not await project_in_account(
+            db,
+            user_id=run.user_id,
+            organization_id=run.organization_id,
+            project_id=run.project_id,
+        )
+    ):
+        return PROJECT_UNREACHABLE
+    return _DISPATCH_FAILED
+
+
 async def dispatch_pending(db: AsyncSession) -> int:
     """Lease accepted outbox intents into durable device commands (no network)."""
     if not settings.HARNESS_BRIDGE_ENABLED:
         return 0
 
-    async def terminalize(outbox: Any, run: Any, *, cancelled: bool) -> None:
+    async def terminalize(
+        outbox: Any, run: Any, *, cancelled: bool, message: str = _DISPATCH_FAILED
+    ) -> None:
         """Close an accepted run that cannot be handed to the local process."""
         outbox.status = AgentOutboxStatus.FAILED.value
         outbox.updated_at = now()
@@ -127,7 +168,6 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 commit=False,
             )
             return
-        message = "Local Codex could not be started."
         await finalize_submission(
             db,
             run_id=run.job_id,
@@ -195,7 +235,12 @@ async def dispatch_pending(db: AsyncSession) -> int:
                 grant = await _validate_grant(db, grant)
                 await _authorize(db, grant_context(grant), run, session)
             except IntegrationAccessDenied:
-                await terminalize(outbox, run, cancelled=False)
+                await terminalize(
+                    outbox,
+                    run,
+                    cancelled=False,
+                    message=await _start_failure(db, run, session),
+                )
                 continue
             try:
                 prompt = await build_harness_prompt(db, run_id=run.job_id)
@@ -232,6 +277,31 @@ async def dispatch_pending(db: AsyncSession) -> int:
         raise
 
 
+def _lease_scope(context: IntegrationContext) -> list[Any]:
+    """Which of the device's locked runs this grant may lease (the caller
+    filters the device). A project grant leases its own project's runs; an
+    account pairing grant leases runs in any project the account rule admits
+    on this call. Each run is authorized again in _authorize."""
+    project: Any
+    if context.binding_kind == "account":
+        project = AgentRun.project_id.in_(
+            account_projects(context.user_id, context.organization_id)
+        )
+    else:
+        project = AgentRun.project_id == context.project_id
+    return [
+        AgentRun.user_id == context.user_id,
+        AgentRun.organization_id == context.organization_id,
+        project,
+        *([] if context.run_id is None else [AgentRun.job_id == str(context.run_id)]),
+        *(
+            []
+            if context.thread_id is None
+            else [AgentRun.thread_id == context.thread_id]
+        ),
+    ]
+
+
 async def lease_commands(
     db: AsyncSession, context: IntegrationContext, device_id: UUID
 ) -> list[BridgeCommand]:
@@ -248,20 +318,8 @@ async def lease_commands(
                 .join(AgentRun, AgentRun.job_id == HarnessSession.run_id)
                 .where(
                     HarnessSession.device_id == device_id,
-                    AgentRun.user_id == context.user_id,
-                    AgentRun.organization_id == context.organization_id,
-                    AgentRun.project_id == context.project_id,
                     HarnessSession.workspace_locked.is_(True),
-                    *(
-                        []
-                        if context.run_id is None
-                        else [AgentRun.job_id == str(context.run_id)]
-                    ),
-                    *(
-                        []
-                        if context.thread_id is None
-                        else [AgentRun.thread_id == context.thread_id]
-                    ),
+                    *_lease_scope(context),
                 )
                 .order_by(HarnessSession.run_id)
                 .limit(100)
@@ -356,6 +414,12 @@ async def lease_commands(
                         generation=session.generation,
                         expiresAt=utc(command.expires_at),
                         body=cast(Any, command.body),
+                        projectId=(
+                            run.project_id
+                            if context.binding_kind == "account"
+                            and command.kind == "start"
+                            else None
+                        ),
                     )
                 )
         await db.commit()
@@ -678,19 +742,7 @@ async def lease_runs(
                 .where(
                     HarnessSession.device_id == device_id,
                     HarnessSession.workspace_locked.is_(True),
-                    AgentRun.user_id == context.user_id,
-                    AgentRun.organization_id == context.organization_id,
-                    AgentRun.project_id == context.project_id,
-                    *(
-                        []
-                        if context.run_id is None
-                        else [AgentRun.job_id == str(context.run_id)]
-                    ),
-                    *(
-                        []
-                        if context.thread_id is None
-                        else [AgentRun.thread_id == context.thread_id]
-                    ),
+                    *_lease_scope(context),
                 )
                 .limit(100)
             )

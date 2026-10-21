@@ -1,0 +1,167 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-16T21:58:46.540885+00:00",
+  "status": "NOT RUN",
+  "preparation_source_revision": null,
+  "execution_repository_revision": null,
+  "invalidation_rule": "Changed verifier/task/repository inputs require a new declaration and new trials. Prior scores and identifier-audit passes are not current acceptance.",
+  "host_calibration": {
+    "source_parent": "8c7aa67638e9292fc13bc2c873a34293f324e88f",
+    "source_state": "final declared uncommitted review delta; bind published commit separately",
+    "cases": 36,
+    "failures": 0,
+    "skipped": 0,
+    "junit_sha256": "d995bf4e94eda65ae75027c9b45fedd604417fdb6881bc6569862d0870f89a89",
+    "input_declaration_sha256": "6e1b749febabd3533de6990fdfaa0c3c22d67a2ae9a134ee34cb40a277c13007",
+    "kind": "host-only calibration/source-integrity; not scored Harbor/provider execution"
+  },
+  "suite": "nous-harness-mcp-v1",
+  "pinned_bridge_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "task_digests": {
+    "harness-mcp-discovery-v1": "sha256:272a78795d8ad3cdbeef5bc5c4107590fe2e7cf2254b4df7a99a29bebb74be75"
+  },
+  "dataset_digests": {
+    "harness-mcp-discovery-v1": "sha256:dda540bfdc383c117e1a296596e28c24910559a965167969589c08d3e1866549"
+  },
+  "digest_algorithm": "SHA-256 of sorted repository-relative shasum -a 256 lines; __pycache__ and pyc excluded.",
+  "files": [
+    {
+      "path": "evals/harness-mcp-discovery-v1/.gitignore",
+      "sha256": "9a8dd8d9b6c3adb8e9e56328df27deef859a3e98fffc9b8133c8b22207c25953"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/Dockerfile",
+      "sha256": "6436e51725a777400407e7ca6069057a6329351af3e8a30dba678639ca167f6f"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/docker-compose.yaml",
+      "sha256": "189ebb5acd74c98377c61429778064210be6eab1efad640936d76861e946addd"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/launcher/forwarder.py",
+      "sha256": "16d5ec455608598699d73b5fb32dceb1d3dce53c90f59134c908e1c66743ffc8"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/launcher/launch.py",
+      "sha256": "db81fa5be8be738760cc349c86f7f961667f74d3bca785f70432f46ac5cc9b8a"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/launcher/start-mcp.sh",
+      "sha256": "457675dcc48eb69f5da78676107129021d3307519b2f95351518556831d2aac5"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/mock_nous/Dockerfile",
+      "sha256": "cdf69026aa5c7366eed1d42b18ecf0baa34951d30ea065742e6e8a2f105dc1fc"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/mock_nous/arxiv_query.json",
+      "sha256": "df6e67af5b324803b6de9bfeaeb6417f857804559107d72bfa43765900297c44"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/mock_nous/catalog.json",
+      "sha256": "4a079b78e7f24b1fd8a0b827eddff014c20d21f8cd24e6b5faf8924651bbdfbe"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/mock_nous/connectors.json",
+      "sha256": "cd9673a9794f82fc9744e082461eadb420c7f56551cde15e077f3a7ae0b3ce91"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/mock_nous/fixtures.json",
+      "sha256": "1e5473473324c700db2dc66c85d86b3ba31f69d32a11bc860ed117b249564ae3"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/mock_nous/generate_catalog.py",
+      "sha256": "6daca19d2bfe3681f180cf3d25c2b899f03e754d0f50f21138fc4abdd43165b8"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/environment/mock_nous/server.py",
+      "sha256": "6bf5df16c1964d44ee0768339d3a086dcb15b4acdf221756d0b21442a1b1d569"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/instruction.md",
+      "sha256": "cf8261e4d5b1277a2c8d9ad7f053919ffd644e9120e1e24f0727b0bdf1017180"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/task.toml",
+      "sha256": "4224a32500f9da23cacc8e548c44eac9998e82f4ac737d937b2dc6172e58f081"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/infra-no-catalog.json",
+      "sha256": "4b4538b70b15eb49c0b26186d5f8a1d260b25033d9884c44f9a8ded2b1023a75"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/infra-required-tool-error.json",
+      "sha256": "46a7c38e93802a4bdeeebf339d782888e122a38cad9a2bc18c10a4636962bb76"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/pass-after-tool-retry.json",
+      "sha256": "72df64809f685e1069a766dfbcd5d59a9a89fdbf565e728ebcbd988e5334ade4"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/pass.json",
+      "sha256": "f06a0c8f9060885875d20d95fbd444f96b1697c9b6a653212a0811ca5824648f"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-bypassed-bridge.json",
+      "sha256": "f25d621f07d4ae9cae950129e6db3fa5d7859f0f2532a02883cb4ea434f4dcb9"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-fabricated-doi.json",
+      "sha256": "407812f29e2431ae5fa6132f919643d56276b1fb06bd4e01e032933c35d8dba4"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-fabricated-id.json",
+      "sha256": "063737521e50393a832a7a120245b1c3d7d1d4203d470440003c93883eb2203b"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-missing-external.json",
+      "sha256": "9557ba2e9077af3cb0abe427fe1c5177f5e0fb1707a0464bf508a74a0c1ab509"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-symlinked-answer.json",
+      "sha256": "e62ee2e8218242fc016ebdc771046fb6921c265ff35b873a70f6655ce88725bd"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-truncated-answer.json",
+      "sha256": "9e4bf34ed1dec670bcf4ff5ba8e2765b819adba085be073954b0eff2a10add4c"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-uncited-row.json",
+      "sha256": "717e6a3173afcadda4c2c2ca867f2b1803334057b96b2df22b6cb84d03823a4e"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-unreturned-citations.json",
+      "sha256": "9ec11b0cacee15d6b682ad9c60f87d456b28e9881dc182e61fc687e7c19a153a"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/calibration/wrong-unsupported-list-block.json",
+      "sha256": "9fae2708b804c8e4444b8e484bf70fdef1b400ecc0a554c7674896eb1e3208bd"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/test.sh",
+      "sha256": "3c7e440e812f1229204e16bc3e2dcd32092becb215cd8c986b23416e07d45145"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/truth.json",
+      "sha256": "403e4017da3c5e536df0e19cd32273f046762bb46fedb784568791395a552638"
+    },
+    {
+      "path": "evals/harness-mcp-discovery-v1/tests/verify.py",
+      "sha256": "94596138002a5f3bb969b423822397eb8bfd213243b54d4c01b37181f1ebcf37"
+    }
+  ],
+  "prepared_support_inputs_sha256": "88675d24fe95d140b2cc63989e8e08972c2d0cfda97e74c20f533338f6ab50cc",
+  "runner_image_digest": null,
+  "agent_model_configuration": null,
+  "semantic": "N/A for this deterministic task",
+  "required_before_scoring": "Freeze authorized runner, harness/CLI/model and environment; calibrate; execute at least five declared scoreable trials plus applicable near-boundary trials. Keep infrastructure excluded.",
+  "prior_records_preserved": {
+    "evals/baselines/agent-flow-2026-10-16-harness-mcp-discovery-typed-http.json": "e79a0a946e93e976f3c66a0e7a16a86f7456b46791226abbd50b9ec04bc7ebbe",
+    "evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-typed-http.json": "d4582033cd80d80a7416a25d268d9117a539e50c2ea3eca5584217ee0571ae22",
+    "evals/baselines/discovery-provider-2026-10-16-v3.json": "56e1a8167f47201e17692624d34f904bef4e780fff30dd978e5f0cbe1200d31d",
+    "evals/source-manifests/discovery-provider-2026-10-16-v3.json": "d3b5163c9175aa1e203158e1a695f3e847f269b9792005e1a5bc01642b0951c2"
+  },
+  "preparation_parent_revision": "8c7aa67638e9292fc13bc2c873a34293f324e88f",
+  "preparation_source_state": "final declared uncommitted review delta; bind published commit separately",
+  "prepared_first_at": "2026-10-16T21:34:41.627209+00:00"
+}

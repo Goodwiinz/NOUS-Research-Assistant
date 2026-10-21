@@ -158,6 +158,10 @@ async def _persist_memory_async(  # noqa: PLR0913
 @track_node_execution("memory_retrieval_node")
 async def memory_retrieval_node(state: AgentState, config: RunnableConfig) -> dict:
     """Retrieve relevant long-term memories before the LLM call."""
+    # A PDF-only turn must not enrich its selected document with other
+    # conversations. Clear carried recall before opening the memory store.
+    if state.get("document_only"):
+        return {"user_memories": []}
     configurable = config.get("configurable", {})
     # Ids-only configurable (audit B8): memory is keyed by the scalar
     # user_id — no ORM User needed here.

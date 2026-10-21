@@ -11,6 +11,8 @@ from src.core.database import get_db
 from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.user import User
 from src.schemas.integration_context import (
+    AccountWorkspaceBindingCreate,
+    AccountWorkspaceBindingDTO,
     DeviceCreate,
     DeviceDTO,
     DeviceListItemDTO,
@@ -54,4 +56,35 @@ async def get_workspace_bindings(
     user: User = Depends(require_pairing_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[WorkspaceBinding]:
+    """The device's project folders. Account folders are listed by
+    GET /devices/{device_id}/account-workspaces."""
     return await call(service.list_workspaces(db, user, device_id))
+
+
+@router.post(
+    "/devices/{device_id}/account-workspaces",
+    response_model=AccountWorkspaceBindingDTO,
+)
+async def create_account_workspace_binding(
+    device_id: UUID,
+    data: AccountWorkspaceBindingCreate,
+    user: User = Depends(require_pairing_user),
+    db: AsyncSession = Depends(get_db),
+) -> WorkspaceBinding:
+    """Register an account folder: needs a live account approval of this
+    device that can run Codex (403 otherwise)."""
+    return await call(service.bind_account_workspace(db, user, device_id, data))
+
+
+@router.get(
+    "/devices/{device_id}/account-workspaces",
+    response_model=list[AccountWorkspaceBindingDTO],
+)
+async def get_account_workspace_bindings(
+    device_id: UUID,
+    user: User = Depends(require_pairing_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[WorkspaceBinding]:
+    """The device's account folders, while its account approval lives;
+    empty otherwise."""
+    return await call(service.list_account_workspaces(db, user, device_id))

@@ -145,6 +145,31 @@ def test_catalog_offers_the_project_selector_only_to_workspace_grants(
     }
 
 
+def test_catalog_offers_an_account_grant_the_selector_worded_for_the_account(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def resolve_account(_db: Any, token: str, *, required_scope: str) -> Any:
+        if token != "opaque-grant" or required_scope != "tools:read":
+            raise IntegrationAccessDenied()
+        return IntegrationContext(
+            user_id=USER,
+            organization_id=ORG,
+            binding_kind="account",
+            grant_id=GRANT,
+            scopes=frozenset({"tools:read"}),
+        )
+
+    monkeypatch.setattr(
+        "src.api.integrations.auth.resolve_integration_context", resolve_account
+    )
+    response = client.get("/api/v1/integrations/tools", headers=HEADERS)
+    assert response.status_code == 200
+    selector = {tool["name"]: tool for tool in response.json()}["search_documents"][
+        "input_schema"
+    ]["properties"]["project_id"]
+    assert selector["format"] == "uuid" and "account" in selector["description"]
+
+
 def _grant_holding(monkeypatch: pytest.MonkeyPatch, scopes: set[str]) -> None:
     """Resolve the grant header to a project grant holding exactly ``scopes``."""
 

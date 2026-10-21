@@ -70,7 +70,7 @@ vi.mock('@/services/agentChatService', () => ({
 vi.mock('@/services/harnessService', () => ({
   harnessService: {
     listDevices: (...args: unknown[]) => listHarnessDevicesMock(...args),
-    listWorkspaces: (...args: unknown[]) => listHarnessWorkspacesMock(...args),
+    listFolders: (...args: unknown[]) => listHarnessWorkspacesMock(...args),
     readRequest: vi.fn(),
     decideRequest: vi.fn(),
   },

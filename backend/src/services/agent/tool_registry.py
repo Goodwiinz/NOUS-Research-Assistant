@@ -354,6 +354,11 @@ def runtime_tool_descriptors(
     callers must hydrate it from the authorized snapshot row before invoking
     this function; until then the projection is empty.
     """
+    # PDF-only turns must not escape their attachment scope through a tool,
+    # including a pending tool call inherited from an earlier checkpoint.
+    # Model binding and execution both consume this same projection.
+    if state.get("document_only"):
+        return ()
     branch_key = str(branch or "").strip().lower()
     if branch_key == "main":
         intent = str(state.get("intent") or AgentIntent.GENERAL.value)

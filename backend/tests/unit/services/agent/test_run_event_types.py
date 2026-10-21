@@ -72,6 +72,8 @@ def test_public_vocabulary_is_exactly_the_design_set() -> None:
         "run.failed",
         "run.cancelled",
         "artifact.version_created",
+        "chat.presentation_started",
+        "chat.presentation_frame",
     }
 
 
@@ -158,6 +160,15 @@ def test_every_known_type_round_trips_through_the_envelope() -> None:
         RunEventType.ARTIFACT_VERSION_CREATED: {
             "artifact_id": "a" * 36,
             "version_id": "b" * 36,
+        },
+        RunEventType.CHAT_PRESENTATION_STARTED: {
+            "paper_id": str(uuid.uuid4()),
+            "user_content_sha256": "a" * 64,
+            "model": "",
+            "web_search": "off",
+        },
+        RunEventType.CHAT_PRESENTATION_FRAME: {
+            "frame": {"kind": "token", "text": "answer"},
         },
     }
     assert set(samples) == set(RunEventType)

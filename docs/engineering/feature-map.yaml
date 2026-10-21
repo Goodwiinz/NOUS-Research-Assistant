@@ -54,6 +54,28 @@ features:
       - "frontend/src/components/chat/aui/hitlConstants.ts"
       - "backend/src/services/agent/_nodes_tools.py"
       - "backend/src/services/agent/_builders.py"
+  - id: alphaxiv-pdf-chat
+    status: planned
+    surfaces:
+      web: ["/chat"]
+      api: ["POST /assistant/v2/chat", "POST /assistant/v3/chat", "POST /assistant/v3/chat/stop", "POST /v1/assistant/upload-file", "WS /live", "GET /assistant/v2", "GET /assistant/v2/{chat_id}/messages", "POST /assistant/v2/{chat_id}/messages/{message_id}/select", "GET /assistant/v2/{chat_id}/context-window-usage"]
+      cli: []
+    states: [loading, streaming, done, error]
+    pass_criteria:
+      - "An authorized PDF starts one durable NOUS run and exposes its chat id."
+      - "An inclusive selected page range restricts source context to those PDF pages."
+      - "Page citations retain physical page identity through streaming and reload."
+      - "Disconnected v2 responses finalize their producer; v3 readers reconnect without cancelling execution."
+      - "Live replay is ordered and complete; a stale stop cannot cancel a newer run."
+      - "Reloading or switching a message branch preserves ancestry and excludes sibling context."
+    scenarios: [workflow.pdf-chat-selection-stream-reload]
+    owns:
+      - "backend/src/api/compat/**"
+      - "backend/src/services/compat/**"
+      - "backend/src/schemas/alphaxiv*.py"
+      - "backend/src/services/threads/message_branches.py"
+      - "backend/src/services/agent/branch_history.py"
+      - "frontend/app/visual-test/pdf-selection/**"
   - id: document-upload
     status: covered
     surfaces:
@@ -101,6 +123,22 @@ features:
       - "frontend/src/hooks/chat/useArtifactSharing.ts"
       - "frontend/src/services/artifactService.ts"
       - "backend/src/services/artifacts/**"
+  - id: arxiv-paper-lifecycle
+    status: planned
+    surfaces:
+      web: []
+      api: ["GET /api/v1/arxiv/papers/metadata", "POST /api/v1/arxiv/papers/sync", "GET /api/v1/arxiv/papers/pdf", "POST /api/v1/arxiv/papers/recent"]
+      cli: []
+    states: [missing, cached, synced, queued, stored, error]
+    pass_criteria:
+      - "Metadata is fetched on cache miss and isolated by organization."
+      - "Explicit sync reports latest revision and withdrawal without rewriting a pin."
+      - "Administrators can queue bounded recent imports; PDFs use authenticated same-origin delivery."
+    scenarios: []
+    owns:
+      - "backend/src/api/arxiv/papers.py"
+      - "backend/src/services/arxiv/papers.py"
+      - "backend/src/services/arxiv/recent.py"
 ignore:
   # Shrink-only. Remove a path when a feature claims it; the checker fails on
   # entries that no longer exist, that a feature also claims, or (with --base)

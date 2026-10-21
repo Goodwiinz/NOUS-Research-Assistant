@@ -149,7 +149,11 @@ async def do_kb_retrieve(
     *,
     document_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Semantic retrieval over the organization's DigitalOcean Knowledge Base.
+    """Retrieve content evidence from the organization's knowledge base.
+
+    Uses DigitalOcean semantic retrieval when enabled. When it is disabled,
+    requests scoped to named documents use organization-scoped PostgreSQL
+    full-text search.
 
     When evidence mode is on, each chunk includes 'relevance' (0-10), a
     'summary' of how it bears on the query, and a verbatim 'quote'. Cite

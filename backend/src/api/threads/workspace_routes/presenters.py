@@ -167,6 +167,17 @@ def _thread_to_response(
         created_at=thread.created_at,
         updated_at=thread.updated_at,
         source_project_id=thread.source_project_id,
+        message_branching=getattr(thread, "message_branching", False) is True,
+        branch_document_id=(
+            thread.branch_document_id
+            if getattr(thread, "message_branching", False) is True
+            else None
+        ),
+        selected_message_id=(
+            thread.selected_message_id
+            if getattr(thread, "message_branching", False) is True
+            else None
+        ),
     )
 
 
@@ -203,6 +214,17 @@ def _thread_to_detail_response(
         created_at=thread.created_at,
         updated_at=thread.updated_at,
         source_project_id=thread.source_project_id,
+        message_branching=getattr(thread, "message_branching", False) is True,
+        branch_document_id=(
+            thread.branch_document_id
+            if getattr(thread, "message_branching", False) is True
+            else None
+        ),
+        selected_message_id=(
+            thread.selected_message_id
+            if getattr(thread, "message_branching", False) is True
+            else None
+        ),
         messages=messages,
     )
 
@@ -220,6 +242,8 @@ def _message_to_response(
     return ChatMessageResponse(
         id=message.id,
         thread_id=message.thread_id,
+        parent_message_id=getattr(message, "parent_message_id", None),
+        sibling_user_message_ids=getattr(message, "sibling_user_message_ids", []),
         client_message_id=message.client_message_id,
         user_id=message.user_id,
         role=message.role.value if message.role else "user",

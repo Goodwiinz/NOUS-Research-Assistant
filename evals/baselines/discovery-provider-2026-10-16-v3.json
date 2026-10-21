@@ -1,0 +1,440 @@
+{
+  "status": "completed",
+  "identity": {
+    "source_revision": "28de2ffa5402e4ce0baf6759cf5ccfc93c640513",
+    "source_dirty": true,
+    "files": {
+      "evals/discovery-provider-smoke-v1/probe.py": "7bcb34199b71479326dc6bcde47cf083673b736b0bc5bf0d186259ad2ec9222e",
+      "evals/discovery-provider-smoke-v1/fixture.json": "ae16fd472a22ba875b3c373fff899873b25379100fbee28f468eb1367ea299a2",
+      "backend/src/services/embedding/document_embedding_service.py": "725b7e26bee5b16e277a67eb0a0fbaaa9aed26981e5a184c46cabbc096ee420c",
+      "backend/src/services/embedding/embedding_service.py": "34adb1883491ed379c327312877fff6cf2b47179d89c70b359c1a5e2c62cc677",
+      "backend/src/services/embedding/cohere_embed_service.py": "d79369f922e8383b876fc42f9fa6b33bc60cc468b3d5d74815a8f77c6e91069f",
+      "backend/src/services/search/fulltext_search_service.py": "e5052ee29d204398bef95ec62e874e35db0021a6b11730675c5b83608b41b928",
+      "backend/src/core/config.py": "5bd2576da11314ac1328ac81910572f8bc37802374cca435506548227aa6c59f",
+      "backend/src/core/database.py": "2e30eca36a03f0a58e9784573e1a5e0837cc1cc78fbe960ce5c8d6e7ed3aa0fe",
+      "backend/alembic/versions/jd01_document_embeddings.py": "6ab5549cf965cf271b20530728960d0e5e150fa5dc36ddb59be650be29a6f873",
+      "backend/src/services/search/semantic_search_service.py": "cccee629241ad096270d295b94fd007767192a51b042ac076800a133f0f57f97",
+      "backend/src/services/search/keyword_search_service.py": "c24bbac4ca5c970a366bdfefde3a7d98ba058d5f490a794e0d57d79bd0908890",
+      "backend/src/services/search/cohere_rerank_service.py": "44fd65b74d1252f93b5e96103fc13b794d4c60133910876fd6d43f93e4174784",
+      "backend/src/services/integrations/discover_papers.py": "dd7f5d101cc7df3d7b8de43bb28928828845b2657609910b905499cfad2ff5b2",
+      "backend/src/services/integrations/read_tools.py": "99656660b6b5d8880c392b7448c6a724be3439e27493c5de64b46543a1ff8e31",
+      "backend/src/services/integrations/context.py": "48453d4f669bd516f2d54fc728a9011bba2c01c6b6dc7be6fccb967a25e4e8af"
+    },
+    "python": "3.11.13",
+    "packages": {
+      "SQLAlchemy": "2.0.51",
+      "asyncpg": "0.31.0",
+      "pgvector": "0.5.1",
+      "httpx": "0.28.1"
+    },
+    "flags": {
+      "DOCUMENT_EMBEDDINGS_ENABLED": true,
+      "SEMANTIC_SEARCH_ENABLED": true,
+      "AGENT_PAGE_FILTER": true,
+      "RETRIEVE_PASSAGES_PAGE_TOP_N": 6,
+      "RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT": 8
+    },
+    "process_env": {
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1"
+    },
+    "provider_endpoint_sha256": "6adb338c88648323f46e9110e87fbf9adcda8ac3f2c7129be6779c8695ba2b38",
+    "provider_endpoint_mode": "azure_openai_compatible",
+    "rerank_endpoint_sha256": "d430896d443d293c1981dfddf5a19e1f90377ad4d9be57c29f6d659af46cb3e9",
+    "rerank_model": "Cohere-rerank-v4.0-pro"
+  },
+  "migration_log_sha256": "05f3e8f3cd205bafd1444fc982fc4ec97d503f3a9c5b82dc01d7f5d8dbb938a1",
+  "migration_log": "provider_probe_f58776b2adc8-migration.log",
+  "served_rerank_endpoint_sha256": "88c33fc30e07dc29d35e997161ecef606f6df96b00e80c1b42a3c21163ca9a70",
+  "queries": [
+    {
+      "query": "rag-paraphrase",
+      "gold": [
+        "rag"
+      ],
+      "semantic": [
+        "rag",
+        "living",
+        "vector-old"
+      ],
+      "composite": [
+        "rag"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "retrieved evidence",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "How can a language model answer questions using retrieved evidence rather than relying only on parameter memory?",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": null
+    },
+    {
+      "query": "retry-paraphrase",
+      "gold": [
+        "retry"
+      ],
+      "semantic": [
+        "retry",
+        "browser",
+        "living"
+      ],
+      "composite": [
+        "retry"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "payment network timeout",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "How does a client retry a payment after a network timeout without creating a second charge?",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": null
+    },
+    {
+      "query": "vector-paraphrase",
+      "gold": [
+        "vector-new",
+        "vector-old"
+      ],
+      "semantic": [
+        "vector-new",
+        "vector-old",
+        "rag"
+      ],
+      "composite": [
+        "vector-new",
+        "vector-old"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "organization publication date",
+          "status": "ok",
+          "count": 2
+        },
+        {
+          "name": "library_semantic",
+          "query": "How can a query retrieve similar vectors while enforcing organization access predicates and a publication date window?",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 0.5,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 0.5,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": null
+    },
+    {
+      "query": "living-paraphrase",
+      "gold": [
+        "living"
+      ],
+      "semantic": [
+        "living",
+        "rag",
+        "vector-old"
+      ],
+      "composite": [
+        "living"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "evidence review screening decisions",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "How can a living evidence review carry unchanged screening decisions forward while correcting retracted studies?",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": null
+    },
+    {
+      "query": "rag-exact",
+      "gold": [
+        "rag"
+      ],
+      "semantic": [
+        "rag",
+        "vector-old",
+        "living"
+      ],
+      "composite": [
+        "rag"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "Evidence Retrieval for Language Model Answers",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "Evidence Retrieval for Language Model Answers",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": true
+    },
+    {
+      "query": "retry-exact",
+      "gold": [
+        "retry"
+      ],
+      "semantic": [
+        "retry",
+        "browser",
+        "churn"
+      ],
+      "composite": [
+        "retry"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "Idempotent Payment Requests After Network Timeouts",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "Idempotent Payment Requests After Network Timeouts",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": true
+    },
+    {
+      "query": "vector-exact",
+      "gold": [
+        "vector-old"
+      ],
+      "semantic": [
+        "vector-old",
+        "vector-new",
+        "rag"
+      ],
+      "composite": [
+        "vector-old"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "Organization Scoped Vector Retrieval in Archived Research",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "Organization Scoped Vector Retrieval in Archived Research",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": true
+    },
+    {
+      "query": "living-exact",
+      "gold": [
+        "living"
+      ],
+      "semantic": [
+        "living",
+        "rag",
+        "browser"
+      ],
+      "composite": [
+        "living"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "Superseding Evidence Reviews With Retained Decisions",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "Superseding Evidence Reviews With Retained Decisions",
+          "status": "ok",
+          "count": 10
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": false,
+      "exact_name_single_relevant_result": true
+    },
+    {
+      "query": "vector-window",
+      "gold": [
+        "vector-old"
+      ],
+      "semantic": [
+        "vector-old",
+        "rag",
+        "living"
+      ],
+      "composite": [
+        "vector-old"
+      ],
+      "channel_statuses": [
+        {
+          "name": "library_keyword",
+          "query": "organization publication date",
+          "status": "ok",
+          "count": 1
+        },
+        {
+          "name": "library_semantic",
+          "query": "How can a query retrieve similar vectors while enforcing organization access predicates and a publication date window?",
+          "status": "ok",
+          "count": 4
+        }
+      ],
+      "semantic_recall_at_1": 1.0,
+      "semantic_recall_at_3": 1.0,
+      "composite_recall_at_1": 1.0,
+      "composite_recall_at_3": 1.0,
+      "near_boundary": true,
+      "exact_name_single_relevant_result": null
+    }
+  ],
+  "query_phase_status": "completed",
+  "aggregate": {
+    "semantic_recall_at_1": 0.9444444444444444,
+    "semantic_recall_at_3": 1.0,
+    "composite_recall_at_1": 0.9444444444444444,
+    "composite_recall_at_3": 1.0
+  },
+  "canonical_aggregate": {
+    "semantic_recall_at_1": 0.9375,
+    "semantic_recall_at_3": 1.0,
+    "composite_recall_at_1": 0.9375,
+    "composite_recall_at_3": 1.0
+  },
+  "pages": [
+    {
+      "document": "long",
+      "status": "completed",
+      "metadata": {
+        "accepted_pages": [
+          1,
+          3,
+          9,
+          11,
+          12,
+          14
+        ],
+        "total_pages": 14,
+        "short_circuited": false,
+        "model": "Cohere-rerank-v4.0-pro"
+      },
+      "returned_page_numbers": [
+        1,
+        3,
+        9,
+        11,
+        12,
+        14
+      ]
+    },
+    {
+      "document": "short",
+      "status": "completed",
+      "metadata": {
+        "accepted_pages": [
+          1,
+          2,
+          3
+        ],
+        "total_pages": 3,
+        "short_circuited": true,
+        "model": null
+      },
+      "returned_page_numbers": [
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "classification": "NOT GATED: synthetic local service/provider diagnostic",
+  "page_gold_recall_at_6": 1.0,
+  "canonical_query_count": 8,
+  "near_boundary_query_count": 1,
+  "database": {
+    "server": "15.19 (Debian 15.19-1.pgdg12+2)",
+    "pgvector": "0.8.7",
+    "revision": "jd01_document_embeddings",
+    "embedding_rows": [
+      [
+        "cohere:embed-v-4-0",
+        1024,
+        13
+      ]
+    ]
+  },
+  "other_org_excluded": true,
+  "orgwide_isolation_control_query": "rag-paraphrase",
+  "arxiv": "not requested",
+  "http_grant_and_deployed_mcp": "not run",
+  "scratch_database_removed": true,
+  "recorded_at": "2026-10-16T11:12:38.078588+00:00"
+}

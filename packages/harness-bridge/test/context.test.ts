@@ -40,18 +40,101 @@ test("read_selected_context returns exactly what NOUS shared, with provenance", 
   };
   const server = await backend(() => ({ code: 200, body: shared }));
   try {
-    const outcome = await readSelectedContextTool(new ContextHttpClient(server.origin, credentials)).call({
-      memory_ids: ["m2"],
-      project_id: randomUUID(),
-    });
+    const outcome = await readSelectedContextTool(new ContextHttpClient(server.origin, credentials)).call({});
     assert.equal(outcome.isError, undefined);
+    // A result without next_offset (an older server, or an empty selection) passes through as is.
     assert.deepEqual(outcome.structured, { content: shared.content, source_refs: shared.source_refs });
-    // Model arguments never reach NOUS: the request has no body or query.
+    // Without an offset the request has no body and no query.
     assert.deepEqual(server.requests.map((r) => [r.method, r.path]), [["GET", "/api/v1/integrations/context"]]);
     assert.equal(server.requests[0]?.headers["x-nous-integration-grant"], credentials.grantToken);
   } finally {
     await server.close();
   }
+});
+
+test("read_selected_context forwards a page offset and returns the page with its next_offset", async () => {
+  const page = {
+    content: [{ memories: [{ memory_id: "m3", content: "Third" }], next_offset: 3, truncated: true, notice: "More selected memories remain" }],
+    is_error: false,
+    source_refs: [{ memory_id: "m3" }],
+  };
+  const server = await backend(() => ({ code: 200, body: page }));
+  try {
+    const tool = readSelectedContextTool(new ContextHttpClient(server.origin, credentials));
+    const outcome = await tool.call({ offset: 2 });
+    assert.deepEqual(outcome.structured, { content: page.content, source_refs: page.source_refs });
+    await tool.call({ offset: 0 });
+    await tool.call({ offset: 25 });
+    assert.deepEqual(server.requests.map((r) => [r.method, r.path]), [
+      ["GET", "/api/v1/integrations/context?offset=2"],
+      ["GET", "/api/v1/integrations/context?offset=0"],
+      ["GET", "/api/v1/integrations/context?offset=25"],
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("read_selected_context rejects anything but an integer offset from 0 to 25, without a request", async () => {
+  const server = await backend(() => ({ code: 200, body: { content: [], is_error: false, source_refs: [] } }));
+  try {
+    const tool = readSelectedContextTool(new ContextHttpClient(server.origin, credentials));
+    for (const args of [
+      { memory_ids: ["m2"] },
+      { project_id: randomUUID() },
+      { offset: 2, project_id: randomUUID() },
+      { offset: -1 },
+      { offset: 26 },
+      { offset: 1.5 },
+      { offset: "2" },
+      { offset: null },
+      { offset: Number.NaN },
+    ])
+      await assert.rejects(
+        tool.call(args),
+        (error: unknown) =>
+          error instanceof ToolRequestRejected &&
+          error.message === "read_selected_context takes only an optional offset, an integer from 0 to 25",
+        JSON.stringify(args),
+      );
+    assert.deepEqual(server.requests, []);
+  } finally {
+    await server.close();
+  }
+});
+
+test("the context client itself refuses an offset that is not an integer from 0 to 25", async () => {
+  const urls: string[] = [];
+  const fetchFn: typeof fetch = async (input) => {
+    urls.push(String(input));
+    return new Response(JSON.stringify({ content: [], is_error: false, source_refs: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new ContextHttpClient("http://127.0.0.1:1234/api/v1", credentials, fetchFn);
+  for (const offset of [-1, 26, 1.5, Number.NaN, Number.POSITIVE_INFINITY])
+    await assert.rejects(client.read(offset), ToolRequestRejected, String(offset));
+  assert.deepEqual(urls, []);
+  await client.read(3);
+  await client.read();
+  assert.deepEqual(urls, [
+    "http://127.0.0.1:1234/api/v1/integrations/context?offset=3",
+    "http://127.0.0.1:1234/api/v1/integrations/context",
+  ]);
+});
+
+test("read_selected_context advertises its offset and tells the model to follow next_offset", () => {
+  const { descriptor } = readSelectedContextTool(new ContextHttpClient("http://127.0.0.1:1234/api/v1", credentials));
+  assert.deepEqual(descriptor.inputSchema, {
+    type: "object",
+    additionalProperties: false,
+    properties: { offset: { type: "integer", minimum: 0, maximum: 25 } },
+  });
+  assert.match(
+    descriptor.description ?? "",
+    /Results are paged: when next_offset is not null, call again with offset set to next_offset until it is null\./,
+  );
 });
 
 test("an unavailable selection is an error result, and a missing scope names --context", async () => {

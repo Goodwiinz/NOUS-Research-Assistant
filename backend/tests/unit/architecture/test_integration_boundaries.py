@@ -40,6 +40,8 @@ import pytest
 
 from src.services.artifacts.service import authorize_artifact
 from src.services.integrations.context import (
+    authorized_account,
+    authorized_account_workspace,
     authorized_project,
     authorized_scope,
     authorized_scope_filter,
@@ -75,6 +77,11 @@ ACCESS_GETTERS: list[tuple[Callable[..., Any], dict[str, Any]]] = [
     (authorize_artifact, {"user_id": KEYWORD_ONLY, "organization_id": KEYWORD_ONLY}),
     (authorized_project, {"user_id": POSITIONAL, "organization_id": POSITIONAL}),
     (authorized_workspace, {"user_id": POSITIONAL, "organization_id": POSITIONAL}),
+    (authorized_account, {"user_id": POSITIONAL, "organization_id": POSITIONAL}),
+    (
+        authorized_account_workspace,
+        {"user_id": POSITIONAL, "organization_id": POSITIONAL},
+    ),
     (authorized_scope, {"context": POSITIONAL}),
     (authorized_scope_filter, {"context": POSITIONAL}),
     (
