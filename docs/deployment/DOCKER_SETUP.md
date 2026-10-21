@@ -1,5 +1,7 @@
 # Docker Setup for Multimodal Enterprise RAG System
 
+> **Status: historical (reconciled 2026-10-17).** This guide was written for earlier deployment generations (Docker Compose, single-host or DigitalOcean/DOKS setups). Current deployment: AWS EKS `nous-dev-cluster` (`us-east-1`), namespace `multimodal-rag-system`, Argo CD application `nous-dev-aws`. Qdrant is removed; live retrieval is PostgreSQL full-text. Start with the [AWS deployment overview](aws-overview.md) and [AWS on-call commands](../operations/aws-on-call.md). The text below is kept unedited as a record; do not run its commands without checking them against the current repo.
+
 This guide covers the Docker configuration for running the RAG system in local development. **Production runs on DOKS (DigitalOcean Kubernetes) + ArgoCD with Supabase-managed Postgres, DO Managed Redis, DO Spaces for storage, and the frontend on Vercel — not Docker Compose.**
 
 ## 🚀 Quick Start

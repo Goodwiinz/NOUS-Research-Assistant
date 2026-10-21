@@ -1,117 +1,35 @@
-# Production Deployment Infrastructure
+# deployment/ (legacy)
 
-## Overview
+> **Status: legacy, not the live deployment path.** Nothing in
+> `.github/workflows/` consumes this directory (checked 2026-10-17), and no
+> Argo CD application references it. Do not treat it as proof of what is
+> deployed.
 
-This directory contains the complete production deployment infrastructure for the Multimodal Enterprise RAG System with monitoring capabilities.
+## Where the live path is
 
-## Directory Structure
+The live deployment is AWS EKS `nous-dev-cluster` (`us-east-1`), namespace
+`multimodal-rag-system`, rendered by Argo CD from
+`infrastructure/helm/knowledge-graph-analytics` with `values.yaml` plus
+`values-aws.yaml`, tracking `develop`. Start with:
 
-```
-deployment/
-├── k8s/                    # Kubernetes manifests
-│   ├── namespace/          # Namespace configurations
-│   ├── configmaps/         # Configuration maps
-│   ├── secrets/            # Secret configurations
-│   ├── deployments/        # Deployment manifests
-│   ├── services/           # Service configurations
-│   ├── ingress/            # Ingress configurations
-│   ├── hpa/               # Horizontal Pod Autoscalers
-│   └── monitoring/        # Monitoring stack manifests
-├── helm/                  # Helm charts
-│   ├── rag-system/        # Main application chart
-│   ├── monitoring/        # Monitoring stack chart
-│   └── dependencies/      # Dependency charts
-├── terraform/             # Infrastructure as Code
-│   ├── aws/              # AWS infrastructure
-│   ├── gcp/              # GCP infrastructure
-│   └── azure/            # Azure infrastructure
-├── github-actions/        # CI/CD workflows
-│   ├── ci/               # Continuous Integration
-│   ├── cd/               # Continuous Deployment
-│   └── security/         # Security scanning
-└── monitoring/           # Monitoring configurations
-    ├── prometheus/       # Prometheus configurations
-    ├── grafana/         # Grafana dashboards
-    ├── alertmanager/    # Alert configurations
-    └── elk/             # ELK stack configurations
-```
+- [AWS deployment overview](../docs/deployment/aws-overview.md)
+- [AWS on-call commands](../docs/operations/aws-on-call.md)
+- [Chart contract (secrets, migrations)](../infrastructure/helm/knowledge-graph-analytics/README.md)
+- [Argo CD application](../infrastructure/argocd/applications/aws-dev.yaml)
+- [CI and release workflows](../.github/workflows/README.md)
+- [Agent guidance for this directory](AGENTS.md)
 
-## Quick Start
+## What is actually here
 
-### Prerequisites
+| Path | What it is |
+| --- | --- |
+| `AGENTS.md` | Scope rules for this directory. |
+| `deploy.sh` | Legacy `kubectl apply` script. It defaults `ENVIRONMENT=staging`, which has no live environment, and applies `kubernetes/...` paths relative to the working directory, which do not exist under `deployment/`. Do not run it against a cluster. |
+| `helm/rag-system/` | Legacy chart (`rag-system` 1.0.0). It still renders Redis and Neo4j Deployments and older API/ingestion services. Check it with `helm lint deployment/helm/rag-system/` only; a pass is syntax evidence, not deployability. |
+| `monitoring/` | Raw Prometheus, Alertmanager and Grafana manifests. See [monitoring/README.md](monitoring/README.md). |
 
-1. **Kubernetes Cluster** (v1.28+)
-2. **Helm 3** installed
-3. **kubectl** configured
-4. **Terraform** (optional, for IaC)
-5. **Domain name** for SSL certificates
-
-### Deployment Steps
-
-1. **Infrastructure Setup** (if using Terraform):
-   ```bash
-   cd terraform/aws
-   terraform init
-   terraform plan
-   terraform apply
-   ```
-
-2. **Deploy Monitoring Stack**:
-   ```bash
-   kubectl apply -f k8s/namespace/
-   helm install monitoring helm/monitoring/
-   ```
-
-3. **Deploy Application**:
-   ```bash
-   helm install rag-system helm/rag-system/
-   ```
-
-4. **Configure DNS and SSL**:
-   ```bash
-   kubectl apply -f k8s/ingress/
-   ```
-
-## Features
-
-### ✅ High Availability
-- Multi-zone deployment
-- Database replication
-- Auto-scaling support
-- Health checks and self-healing
-
-### ✅ Security
-- Network segmentation
-- Pod Security Policies
-- Secret management
-- SSL/TLS encryption
-
-### ✅ Monitoring
-- Prometheus metrics collection
-- Grafana dashboards
-- AlertManager notifications
-- ELK stack for logging
-
-### ✅ CI/CD
-- Automated testing
-- Blue-green deployments
-- Feature flags
-- Rollback capabilities
-
-### ✅ Scalability
-- Horizontal Pod Autoscaling
-- Cluster autoscaling
-- Load balancing
-- Performance optimization
-
-## SLA Compliance
-
-- **Uptime**: 99.5% (target)
-- **Response Time**: <3s (p95)
-- **Concurrent Users**: 500+
-- **Recovery Time**: <1 hour
-- **Recovery Point**: <15 minutes
-
-## Support
-
-For deployment issues, refer to the runbooks in the `docs/` directory or contact the DevOps team.
+The earlier README of this directory described `k8s/`, `terraform/{aws,gcp,azure}/`,
+`github-actions/`, `helm/monitoring`, `helm/dependencies`, an ELK stack,
+blue-green rollout and an SLA. None of those exist here; the claims were removed
+rather than carried forward. For Terraform see
+[../infrastructure/terraform/README.md](../infrastructure/terraform/README.md).

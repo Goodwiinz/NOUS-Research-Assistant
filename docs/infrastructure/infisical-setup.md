@@ -1,8 +1,22 @@
 # Infisical Setup — NOUS Platform
 
-Centralized secret management for the NOUS DOKS deployment. Replaces ad-hoc
-`kubectl create secret` and the dead AWS Secrets Manager ExternalSecret config
-that previously lived in `infrastructure/kubernetes/secrets.yaml`.
+Centralized secret management for the NOUS deployment.
+
+> **Current target (verified against the repo 2026-10-17):** EKS
+> `nous-dev-cluster` (`us-east-1`), application namespace
+> `multimodal-rag-system`, operator namespace `infisical-operator`, Infisical
+> environment slug `dev` (set in `values-aws.yaml`). Only the AWS dev
+> environment is live. The `rag-dev` DOKS namespace is frozen rollback
+> material, and the `staging`/`prod` environments and namespaces below are not
+> live. See [the AWS overview](../deployment/aws-overview.md).
+>
+> **The database credential is not from Infisical on AWS.** Application SQL
+> uses RDS PostgreSQL through `aws-database-credentials`, which an External
+> Secrets Operator `ExternalSecret` builds from the RDS-managed Secrets Manager
+> credential (`infrastructure/helm/knowledge-graph-analytics/templates/aws-rds-secret.yaml`).
+> The Infisical `/database` folder only feeds the DOKS rollback secret
+> `database-credentials`. See the chart's
+> [externally managed secrets section](../../infrastructure/helm/knowledge-graph-analytics/README.md#externally-managed-secrets).
 
 ## Architecture
 
@@ -13,9 +27,9 @@ Infisical Cloud (app.infisical.com)
     ├── env: staging  ──┤  ← machine identity: nous-k8s-operator (Universal Auth)
     └── env: prod     ──┘                       nous-ci-build       (Universal Auth)
 
-K8s cluster (DOKS)
-├── ns: infisical-operator   ← Helm release (ArgoCD app)
-└── ns: rag-{dev,staging,prod}
+K8s cluster (EKS nous-dev-cluster)
+├── ns: infisical-operator   ← Helm release (ArgoCD app `infisical-operator`)
+└── ns: multimodal-rag-system   (legacy DOKS rollback: rag-dev)
     ├── Secret: infisical-universal-auth     ← bootstrapped manually, never in Git
     ├── InfisicalSecret CRDs (Helm-templated, in Git)
     └── Secret: database-credentials, app-secrets, …  ← materialized by operator
@@ -73,13 +87,9 @@ The ArgoCD Application at
 `infrastructure/argocd/applications/infisical-operator.yaml` is picked up by the
 root app and installs the operator into the `infisical-operator` namespace.
 
-To register it on first run:
-
-```bash
-kubectl apply -f infrastructure/argocd/applications/infisical-operator.yaml
-```
-
-(Subsequent changes flow through ArgoCD on `develop`.)
+The root app (`aws-dev`) watches that directory, so the operator is installed
+by Argo CD from `develop`. Do not `kubectl apply` it by hand without explicit
+authorization for the target cluster.
 
 ### 4. Bootstrap the auth Secret per namespace
 
@@ -87,21 +97,22 @@ See `infrastructure/kubernetes/infisical-bootstrap.md`.
 
 ### 5. Enable in Helm values
 
-Edit `values-dev.yaml`, `values-staging.yaml`, `values-production.yaml` to set
-`infisical.enabled: true` and the matching `envSlug`. ArgoCD picks up the change
-on next sync.
+`values-aws.yaml` already sets `infisical.enabled: true` and `envSlug: "dev"`.
+The staging and production overlays are render fixtures with no live Argo CD
+application, so enabling Infisical there has no deployed effect.
 
 ### 6. Cut over the old secrets
 
-For each env namespace, after the InfisicalSecret CRDs are healthy and the
+This step was written for the DOKS cutover and is kept for reference. On the
+AWS target, for the namespace, after the InfisicalSecret CRDs are healthy and the
 Operator-owned Secrets are populated, delete any pre-existing kubectl-created
 Secrets with the same names — the InfisicalSecret will recreate them under its
 own ownership.
 
 ```bash
-# Dev only — verify before doing anything destructive
-kubectl -n rag-dev get infisicalsecret -o wide
-kubectl -n rag-dev describe infisicalsecret infisical-database-credentials | tail -20
+# Verify before doing anything destructive
+kubectl -n multimodal-rag-system get infisicalsecret -o wide
+kubectl -n multimodal-rag-system describe infisicalsecret infisical-database-credentials | tail -20
 ```
 
 If the InfisicalSecret status shows synced but the Secret already exists with a
@@ -109,7 +120,7 @@ different `ownerReferences`, the operator won't overwrite it (creationPolicy:
 Orphan). To hand over ownership:
 
 ```bash
-kubectl -n rag-dev delete secret database-credentials
+kubectl -n multimodal-rag-system delete secret <secret-name>   # needs explicit authorization
 # Operator recreates within resyncInterval (default 60s)
 ```
 
@@ -135,7 +146,7 @@ in Infisical now.
 
 ## Local development
 
-For `npm run dev` against local services, the Infisical CLI works but is
+For `pnpm dev` against local services, the Infisical CLI works but is
 optional — you can keep using `frontend/.env.local` and `backend/.env`. If you
 want consistency with cluster behavior:
 
@@ -143,7 +154,7 @@ want consistency with cluster behavior:
 brew install infisical/get-cli/infisical
 infisical login
 infisical init  # binds the working dir to the nous-platform project + dev env
-infisical run -- npm run dev   # in frontend/
+infisical run -- pnpm dev   # in frontend/
 infisical run -- uvicorn src.main:app --reload  # in backend/
 ```
 
@@ -159,7 +170,7 @@ kubectl -n infisical-operator logs -l control-plane=controller-manager --tail=10
 (`clientId`, `clientSecret` — note camelCase, not snake_case).
 
 ```bash
-kubectl -n rag-dev get secret infisical-universal-auth -o jsonpath='{.data}' | jq 'keys'
+kubectl -n multimodal-rag-system get secret infisical-universal-auth -o jsonpath='{.data}' | jq 'keys'
 # Should show ["clientId","clientSecret"]
 ```
 
@@ -168,3 +179,12 @@ exactly. Slugs are case-sensitive.
 
 **Operator can't reach app.infisical.com**: NetworkPolicy or egress rules. The
 operator needs HTTPS egress to `app.infisical.com:443`.
+
+## Verification status
+
+Not verified from the repository alone: the contents of the Infisical project,
+which GitHub secrets currently exist, and whether `Infisical/secrets-action` is
+still used by a workflow (the only workflow found referencing
+`INFISICAL_CLIENT_ID` is `trigger-deploy.yml`, 2026-10-17). The CI integration
+section above describes the original design and may be stale; the frontend
+deploys through Vercel.

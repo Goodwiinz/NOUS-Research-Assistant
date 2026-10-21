@@ -1,5 +1,15 @@
 # Monitoring Stack Setup Guide
 
+> **Scope:** this directory is the **local Docker Compose monitoring stack**
+> (`docker-compose.monitoring.yml`). It is not deployed to the AWS cluster by
+> Argo CD (checked 2026-10-17). Live AWS alerting is defined in
+> [`infrastructure/terraform/monitoring.tf`](../infrastructure/terraform/monitoring.tf)
+> (CloudWatch alarms and an SNS topic); see
+> [`infrastructure/terraform/README.md`](../infrastructure/terraform/README.md).
+> Unconsumed legacy cluster manifests live in
+> [`deployment/monitoring/`](../deployment/monitoring/README.md). Same-named
+> files across these trees are not shared copies.
+
 ## Security-First Setup
 
 This monitoring stack requires proper credential management to ensure security. Follow these steps carefully.

@@ -1,5 +1,7 @@
 # How to Run the Monitoring System
 
+> **Status: historical (reconciled 2026-10-17).** This document describes an observability design or setup; whether it is deployed on the AWS cluster is not verified. Alerting that Terraform defines for AWS resources is in [infrastructure/terraform/monitoring.tf](../../../infrastructure/terraform/monitoring.tf). Current deployment: AWS EKS `nous-dev-cluster` (`us-east-1`), namespace `multimodal-rag-system`, Argo CD application `nous-dev-aws`. Start with the [AWS deployment overview](../../deployment/aws-overview.md) and [AWS on-call commands](../aws-on-call.md). The text below is kept unedited as a record; do not run its commands without checking them against the current repo.
+
 ## Quick Start
 
 ### 1. Prerequisites
@@ -394,7 +396,7 @@ resources:
 ## Support
 
 For issues or questions:
-- Check the [troubleshooting guide](./TROUBLESHOOTING.md)
-- Review [architecture documentation](./ARCHITECTURE.md)
+- Check the [troubleshooting guide](MONITORING_TROUBLESHOOTING.md)
+- Review [architecture documentation](../observability/observability-architecture.md)
 - Contact the DevOps team at devops@company.com
 - Join the Slack channel: #rag-monitoring

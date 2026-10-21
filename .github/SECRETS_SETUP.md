@@ -1,147 +1,50 @@
-# GitHub Secrets & Environment Setup Guide
+# GitHub Actions secrets
 
-## Overview
+Which repository secrets the workflows read, and which AWS identity they use.
+Checked against `.github/workflows/*.yml` on 2026-10-17. There are no
+`staging` or `production` GitHub Environments in use: no workflow declares an
+`environment:`, and the earlier `STAGING_SSH_KEY`, `STAGING_HOST`,
+`STAGING_USER`, `STAGING_DEPLOY_PATH`, `STAGING_API_URL` and Docker Hub secrets
+are not referenced by any workflow. Only the AWS dev environment is live; see
+[workflows/README.md](workflows/README.md).
 
-The CI/CD pipeline warnings you're seeing are **NOT ERRORS** - they're informational messages indicating that certain GitHub Secrets and Environments need to be configured for deployment features to work.
+Set secrets under **Settings -> Secrets and variables -> Actions**. Never paste
+a secret value into an issue, PR, log or document. Which secrets are actually
+set in the repository is **not verified** from files; only code that reads them
+is.
 
-## ✅ What's Already Working
+## Secrets read by workflows
 
-Your CI/CD pipeline will run successfully for:
-- ✅ Code quality checks (linting, formatting)
-- ✅ Security scanning
-- ✅ Unit and integration tests
-- ✅ Docker image building
-- ✅ Container security scanning
+| Secret | Workflow | Purpose |
+| --- | --- | --- |
+| `RELEASE_PR_TOKEN` | `release-dev.yml` | Fine-grained PAT (Pull requests: read and write) used only to open the digest-pinned release PR so its checks start normally. Optional: without it the workflow falls back to the built-in token and warns that a human must approve the PR's workflow runs. Details in [workflows/README.md](workflows/README.md). |
+| `SUPABASE_DB_URL` | `supabase-migrations.yml` | Connection string for `supabase db push` against the hosted Supabase project. |
+| `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET` | `trigger-deploy.yml` | Universal Auth machine identity used to read Trigger.dev secrets from Infisical (project `nous-platform`, env `dev`, path `/trigger`) before `trigger.dev deploy`. |
+| `OPENCODE_API_KEY` | `opencode.yml` | Key for the `/oc` and `/opencode` comment bot, restricted to owner, member and collaborator comments. |
+| `CODECOV_TOKEN` | `test-pipeline.yml` | Coverage upload. |
+| `LANGSMITH_API_KEY`, `AZURE_OPENAI_*`, `EVAL_DATABASE_URL`, `EVAL_NEO4J_*`, `EVAL_REDIS_URL`, `EVAL_DO_API_TOKEN`, `EVAL_DO_KB_*` | `agent-eval.yml` | Weekly agent regression eval. It runs on a `[self-hosted, linux]` runner; see [../infrastructure/runner/README.md](../infrastructure/runner/README.md) for the unverified runner status. |
 
-## 🔧 Optional Setup (For Deployment Features)
+## AWS access (no static keys)
 
-The following configurations are **only needed if you want automated deployments**:
+`docker-build.yml` (called by `release-dev.yml`) requests `id-token: write` and
+assumes the IAM role `nous-github-ecr-push` in `us-east-1` through GitHub OIDC
+to push images to ECR. No AWS access key is stored in GitHub. The role and its
+trust policy are defined in
+[`infrastructure/terraform/github-oidc.tf`](../infrastructure/terraform/github-oidc.tf);
+see [../infrastructure/terraform/README.md](../infrastructure/terraform/README.md).
+A second role in the same file, for EKS deploys, is trusted for `develop` only;
+whether any workflow assumes it is not verified.
 
-### Step 1: Create GitHub Environments
+## Not secrets
 
-1. Go to your GitHub repository
-2. Click **Settings** → **Environments**
-3. Click **New environment**
-4. Create two environments:
-   - `staging`
-   - `production`
+The frontend deploys through Vercel; its environment is configured there, not
+in GitHub. Application runtime secrets (database, Redis, Supabase, LangSmith)
+live in Infisical and AWS Secrets Manager, not GitHub; see
+[../docs/infrastructure/infisical-setup.md](../docs/infrastructure/infisical-setup.md).
+The `secret-scan.yml` workflow (gitleaks) needs no secret.
 
-### Step 2: Add Required Secrets
+## Repository settings the release flow needs
 
-Go to **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
-
-Add these secrets:
-
-#### For Staging Deployment
-
-| Secret Name | Description | Example Value |
-|-------------|-------------|---------------|
-| `STAGING_SSH_KEY` | Private SSH key for staging server | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
-| `STAGING_HOST` | Staging server hostname/IP | `staging.example.com` or `192.168.1.100` |
-| `STAGING_USER` | SSH username | `deploy` or `ubuntu` |
-| `STAGING_DEPLOY_PATH` | Path to deployment directory | `/home/deploy/rag-system` |
-| `STAGING_API_URL` | Staging API URL for smoke tests | `https://staging-api.example.com` |
-
-#### For Docker Registry (Optional)
-
-| Secret Name | Description | Example Value |
-|-------------|-------------|---------------|
-| `DOCKER_USERNAME` | Docker Hub username | `your-docker-username` |
-| `DOCKER_PASSWORD` | Docker Hub password/token | `dckr_pat_xxx...` |
-
-> **Note**: If you're using GitHub Container Registry (ghcr.io), you don't need Docker Hub credentials. The workflow already uses `${{ secrets.GITHUB_TOKEN }}` for ghcr.io.
-
-### Step 3: Generate SSH Key (If Needed)
-
-If you need to set up SSH access for deployment:
-
-```bash
-# Generate a new SSH key pair
-ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/github_deploy_key
-
-# Copy the public key to your staging server
-ssh-copy-id -i ~/.ssh/github_deploy_key.pub user@staging-server
-
-# Copy the PRIVATE key content to GitHub Secrets as STAGING_SSH_KEY
-cat ~/.ssh/github_deploy_key
-```
-
-## 🚀 How to Use
-
-### Without Deployment (Current State)
-
-Your pipeline will automatically run on:
-- Push to `main`, `develop`, or `staging` branches
-- Pull requests to `main` or `develop`
-- Release creation
-
-It will execute:
-1. ✅ Code quality checks
-2. ✅ Security scanning
-3. ✅ Tests with coverage enforcement (80% minimum)
-4. ✅ Docker image builds
-5. ✅ Container security scans
-
-### With Deployment (After Secret Setup)
-
-Once secrets are configured:
-- **Staging**: Auto-deploys when pushing to `staging` or `develop` branches
-- **Production**: Requires manual approval, triggered by creating a release
-
-## 📝 Disabling Deployment Steps (If Not Needed)
-
-If you don't plan to use automated deployment, you can comment out or remove the deployment jobs:
-
-```yaml
-# Comment out these sections if not using deployment:
-# - deploy-staging job (lines 470-563)
-# - deploy-production job (lines 565-611)
-```
-
-Or add a conditional to skip them:
-
-```yaml
-deploy-staging:
-  if: false  # Temporarily disable
-  # ... rest of the job
-```
-
-## 🔍 Understanding the Warnings
-
-The VS Code YAML extension shows these as "errors" because it can't validate that secrets exist. This is normal and expected behavior:
-
-| Warning Message | What It Means | Impact |
-|----------------|---------------|--------|
-| `Context access might be invalid: STAGING_SSH_KEY` | Secret not configured yet | Deployment will skip/fail (tests still run) |
-| `Value 'staging' is not valid` | Environment not created yet | Can create environment when needed |
-| `Context access might be invalid: code-quality` | Job dependency reference | This is actually fine, just a linter issue |
-
-## ✅ Quick Test Without Secrets
-
-To verify your CI/CD works without deployment:
-
-1. Make a code change
-2. Commit and push to a feature branch
-3. Create a Pull Request to `develop`
-4. Watch the Actions tab - all quality/test jobs should pass
-5. Deployment jobs will be skipped (which is fine)
-
-## 📚 Additional Resources
-
-- [GitHub Actions Secrets Documentation](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
-- [GitHub Environments Documentation](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-- [SSH Key Setup Guide](https://docs.github.com/en/authentication/connecting-to-github-with-ssh)
-
-## 🎯 Recommended Approach
-
-**For now**: Leave the secrets unconfigured and just use CI/CD for:
-- Automated testing
-- Code quality enforcement  
-- Security scanning
-- Docker image builds
-
-**Later**: When you're ready to set up deployment, come back and configure the secrets following this guide.
-
----
-
-**Questions?** The pipeline is production-ready for CI/CD. Deployment is an optional feature you can enable when needed.
+Enable **Allow auto-merge** and **Allow GitHub Actions to create and approve
+pull requests**, and keep **Release Gate** required on `develop`. These are
+described in [workflows/README.md](workflows/README.md).
