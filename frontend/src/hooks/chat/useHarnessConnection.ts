@@ -78,6 +78,12 @@ function isTerminal(type: string): boolean {
 export const BOUND_TO_ANOTHER_CHAT_MESSAGE =
   'This computer is bound to another chat — connect it to this chat or pick another computer.';
 
+/** Shown in the chat bubble for the server's `device_not_connected_to_project`
+ * error category: the computer holds neither an account approval nor an
+ * approval for this chat's project, or the folder cannot be used here. */
+export const NOT_CONNECTED_TO_PROJECT_MESSAGE =
+  "This computer isn't connected to this project.";
+
 /** Query key prefix of the paired-computer list; the user id follows. */
 const DEVICES_QUERY_KEY = ['harness', 'devices'] as const;
 
@@ -97,6 +103,47 @@ function boundToAnotherChat(
     bound.length > 0 &&
     (threadId === null || !bound.includes(threadId))
   );
+}
+
+const NO_PROJECT_MESSAGE = 'Codex runs only in chats that belong to a project.';
+const NO_CONNECTED_COMPUTER_MESSAGE =
+  'None of your paired computers is connected to this project.';
+
+/**
+ * Whether this computer may run Codex for the chat's project: it holds an
+ * account approval, a project approval for that project, or a project
+ * approval bound to this chat (the server names a chat-bound approval only in
+ * bound_thread_ids, not in project_ids). A backend older than account
+ * connections sends neither account field; missing data never hides a
+ * computer, and the server still refuses one that cannot run here.
+ */
+function servesProject(
+  device: HarnessDevice,
+  projectId: string,
+  threadId: string | null
+): boolean {
+  const accountWide: unknown = device.account_wide;
+  const projectIds: unknown = device.project_ids;
+  if (typeof accountWide !== 'boolean' || !Array.isArray(projectIds)) {
+    return true;
+  }
+  const bound: unknown = device.bound_thread_ids;
+  const boundHere =
+    threadId !== null && Array.isArray(bound) && bound.includes(threadId);
+  return accountWide || projectIds.includes(projectId) || boundHere;
+}
+
+/**
+ * A folder this chat can use: one tied to the chat's project, or an account
+ * folder (no project) on a computer that holds an account approval.
+ */
+function usableFolder(
+  folder: HarnessWorkspace,
+  device: HarnessDevice | undefined,
+  projectId: string
+): boolean {
+  if (folder.project_id === projectId) return true;
+  return folder.project_id === null && device?.account_wide === true;
 }
 
 export interface HarnessConnectionController extends HarnessSelection {
@@ -132,9 +179,14 @@ export interface HarnessConnectionController extends HarnessSelection {
 /**
  * Thread-owned bridge controls. Only display preferences are persisted in the
  * browser; grant tokens and native process state remain server/device-owned.
+ *
+ * `projectId` is the chat's project. A string keeps only the computers and
+ * folders that can run Codex for it; `null` is a chat with no project, where
+ * Codex cannot run; `undefined` means not known yet and filters nothing.
  */
 export function useHarnessConnection(
-  threadId: string | null
+  threadId: string | null,
+  projectId?: string | null
 ): HarnessConnectionController {
   const userId = useAuthStore((state) => state.user?.id ?? null);
   const queryClient = useQueryClient();
@@ -202,7 +254,7 @@ export function useHarnessConnection(
   });
   const workspacesQuery = useQuery({
     queryKey: ['harness', 'workspaces', userId, selection.deviceId],
-    queryFn: () => harnessService.listWorkspaces(selection.deviceId!),
+    queryFn: () => harnessService.listFolders(selection.deviceId!),
     enabled: Boolean(
       userId && selection.executionProvider === 'codex' && selection.deviceId
     ),
@@ -325,10 +377,34 @@ export function useHarnessConnection(
     await stopMutation.mutateAsync();
   }, [patchRuntime, runId, stopMutation, threadId]);
 
-  const selectedDevice = devicesQuery.data?.find(
+  const pairedDevices = devicesQuery.data;
+  const devices = useMemo(
+    () =>
+      projectId === undefined
+        ? (pairedDevices ?? [])
+        : projectId === null
+          ? []
+          : (pairedDevices ?? []).filter((device) =>
+              servesProject(device, projectId, threadId)
+            ),
+    [pairedDevices, projectId, threadId]
+  );
+  const selectedDevice = devices.find(
     (device) => device.id === selection.deviceId
   );
-  const workspaceExists = workspacesQuery.data?.some(
+  const boundFolders = workspacesQuery.data;
+  const workspaces = useMemo(
+    () =>
+      projectId === undefined
+        ? (boundFolders ?? [])
+        : projectId === null
+          ? []
+          : (boundFolders ?? []).filter((folder) =>
+              usableFolder(folder, selectedDevice, projectId)
+            ),
+    [boundFolders, projectId, selectedDevice]
+  );
+  const workspaceExists = workspaces.some(
     (workspace) => workspace.workspace_id === selection.workspaceId
   );
   const disabledReason =
@@ -336,17 +412,21 @@ export function useHarnessConnection(
       ? null
       : !userId
         ? 'Sign in to connect Codex.'
-        : !devicesQuery.data?.length
-          ? 'Pair this computer with NOUS before using Codex.'
-          : !selection.deviceId || !selectedDevice
-            ? 'Choose a paired computer.'
-            : boundToAnotherChat(selectedDevice, threadId)
-              ? BOUND_TO_ANOTHER_CHAT_MESSAGE
-              : !workspacesQuery.data?.length
-                ? 'Bind a project workspace to this computer.'
-                : !selection.workspaceId || !workspaceExists
-                  ? 'Choose a bound project workspace.'
-                  : null;
+        : projectId === null
+          ? NO_PROJECT_MESSAGE
+          : !pairedDevices?.length
+            ? 'Pair this computer with NOUS before using Codex.'
+            : !devices.length
+              ? NO_CONNECTED_COMPUTER_MESSAGE
+              : !selection.deviceId || !selectedDevice
+                ? 'Choose a paired computer.'
+                : boundToAnotherChat(selectedDevice, threadId)
+                  ? BOUND_TO_ANOTHER_CHAT_MESSAGE
+                  : !workspaces.length
+                    ? 'Bind a project workspace to this computer.'
+                    : !selection.workspaceId || !workspaceExists
+                      ? 'Choose a bound project workspace.'
+                      : null;
   const blocked =
     connectionState === 'lost' ||
     connectionState === 'reconciling' ||
@@ -367,8 +447,8 @@ export function useHarnessConnection(
   return useMemo(
     () => ({
       ...selection,
-      devices: devicesQuery.data ?? [],
-      workspaces: workspacesQuery.data ?? [],
+      devices,
+      workspaces,
       pendingRequests,
       connectionState,
       statusLabel,
@@ -382,7 +462,7 @@ export function useHarnessConnection(
       selectWorkspace: (workspaceId: string | null) =>
         updateSelection({ workspaceId }),
       isBoundToAnotherChat: (deviceId: string) => {
-        const device = devicesQuery.data?.find((item) => item.id === deviceId);
+        const device = pairedDevices?.find((item) => item.id === deviceId);
         return device !== undefined && boundToAnotherChat(device, threadId);
       },
       refreshDevices,
@@ -396,10 +476,11 @@ export function useHarnessConnection(
       blocked,
       connectionState,
       decideRequest,
-      devicesQuery.data,
+      devices,
       disabledReason,
       loadApproval,
       markConnectionLost,
+      pairedDevices,
       pendingRequests,
       receive,
       refreshDevices,
@@ -409,7 +490,7 @@ export function useHarnessConnection(
       stop,
       threadId,
       updateSelection,
-      workspacesQuery.data,
+      workspaces,
     ]
   );
 }

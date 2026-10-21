@@ -32,6 +32,8 @@ router = APIRouter()
 async def call(operation: Awaitable[T]) -> T:
     try:
         return await operation
+    except service.AccountConnectionsDisabled as error:
+        raise HTTPException(503, "Account connections are disabled") from error
     except service.IntegrationAccessDenied as error:
         raise HTTPException(403, "Integration access denied") from error
     except service.IntegrationConflict as error:
