@@ -1,0 +1,135 @@
+{
+  "schema_version": "1.0",
+  "version": "provider-v7-20261017",
+  "status": "completed",
+  "recorded_at": "2026-10-17T15:35:26.664913+00:00",
+  "execution_repository_revision": "7d8e9ebb382ee700135b60b9bcbb2ff596a92d4c",
+  "execution_source_tree": "da15428ccc58d367aab62c772fc211c7b47b6111",
+  "source_identity": {
+    "source_revision": "7d8e9ebb382ee700135b60b9bcbb2ff596a92d4c",
+    "source_dirty": false,
+    "source_tree": "da15428ccc58d367aab62c772fc211c7b47b6111",
+    "source_scope": "complete clean Git-visible checkout at source_revision",
+    "files": {
+      "evals/discovery-provider-smoke-v1/probe.py": "65fa2e44c190709c618e4a4b375ee2b86cf11da8118e74ae15962f4ab7331aba",
+      "evals/discovery-provider-smoke-v1/fixture.json": "ae16fd472a22ba875b3c373fff899873b25379100fbee28f468eb1367ea299a2",
+      "backend/src/services/embedding/document_embedding_service.py": "725b7e26bee5b16e277a67eb0a0fbaaa9aed26981e5a184c46cabbc096ee420c",
+      "backend/src/services/embedding/embedding_service.py": "34adb1883491ed379c327312877fff6cf2b47179d89c70b359c1a5e2c62cc677",
+      "backend/src/services/embedding/cohere_embed_service.py": "d79369f922e8383b876fc42f9fa6b33bc60cc468b3d5d74815a8f77c6e91069f",
+      "backend/src/services/search/fulltext_search_service.py": "e5052ee29d204398bef95ec62e874e35db0021a6b11730675c5b83608b41b928",
+      "backend/src/core/config.py": "5bd2576da11314ac1328ac81910572f8bc37802374cca435506548227aa6c59f",
+      "backend/src/core/database.py": "2e30eca36a03f0a58e9784573e1a5e0837cc1cc78fbe960ce5c8d6e7ed3aa0fe",
+      "backend/alembic/versions/jd01_document_embeddings.py": "6ab5549cf965cf271b20530728960d0e5e150fa5dc36ddb59be650be29a6f873",
+      "backend/src/services/search/semantic_search_service.py": "cccee629241ad096270d295b94fd007767192a51b042ac076800a133f0f57f97",
+      "backend/src/services/search/keyword_search_service.py": "c24bbac4ca5c970a366bdfefde3a7d98ba058d5f490a794e0d57d79bd0908890",
+      "backend/src/services/search/cohere_rerank_service.py": "44fd65b74d1252f93b5e96103fc13b794d4c60133910876fd6d43f93e4174784",
+      "backend/src/services/integrations/discover_papers.py": "dd7f5d101cc7df3d7b8de43bb28928828845b2657609910b905499cfad2ff5b2",
+      "backend/src/services/integrations/read_tools.py": "99656660b6b5d8880c392b7448c6a724be3439e27493c5de64b46543a1ff8e31",
+      "backend/src/services/integrations/context.py": "48453d4f669bd516f2d54fc728a9011bba2c01c6b6dc7be6fccb967a25e4e8af"
+    },
+    "python": "3.11.13",
+    "packages": {
+      "SQLAlchemy": "2.0.51",
+      "asyncpg": "0.31.0",
+      "pgvector": "0.5.1",
+      "httpx": "0.28.1"
+    },
+    "interpreter": {
+      "implementation": "CPython",
+      "version": "3.11.13 (main, Sep  2 2025, 14:10:56) [Clang 20.1.4 ]",
+      "optimization": 0,
+      "cache_tag": "cpython-311"
+    },
+    "flags": {
+      "DOCUMENT_EMBEDDINGS_ENABLED": true,
+      "SEMANTIC_SEARCH_ENABLED": true,
+      "AGENT_PAGE_FILTER": true,
+      "RETRIEVE_PASSAGES_PAGE_TOP_N": 6,
+      "RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT": 8
+    },
+    "process_env": {
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1"
+    },
+    "provider_endpoint_sha256": "6adb338c88648323f46e9110e87fbf9adcda8ac3f2c7129be6779c8695ba2b38",
+    "provider_endpoint_mode": "azure_openai_compatible",
+    "rerank_endpoint_sha256": "d430896d443d293c1981dfddf5a19e1f90377ad4d9be57c29f6d659af46cb3e9",
+    "rerank_model": "Cohere-rerank-v4.0-pro",
+    "installed_distributions": {
+      "count": 297,
+      "canonical_json_sha256": "4d12d70400b6af769d0e4dd690340800721044ed9091b40233741f1951bc5f50",
+      "scope": "all installed distribution names/versions, not package-byte attestation",
+      "direct_execution_dependencies": [
+        {
+          "name": "alembic",
+          "version": "1.18.4"
+        },
+        {
+          "name": "asyncpg",
+          "version": "0.31.0"
+        },
+        {
+          "name": "httpx",
+          "version": "0.28.1"
+        },
+        {
+          "name": "pgvector",
+          "version": "0.5.1"
+        },
+        {
+          "name": "psycopg2-binary",
+          "version": "2.9.12"
+        },
+        {
+          "name": "SQLAlchemy",
+          "version": "2.0.51"
+        }
+      ]
+    }
+  },
+  "declaration_id": "72dee5cf81aa4f71a08ed86e2aaec21f",
+  "declaration_sha256": "20b455cae0718bf09e2646114c84fd85e5a4e01e300632242f8b987efaf86b83",
+  "pre_execution_manifest_sha256": "398377200346ceb7038c91b57cce17ea3edaff6c0dc0d19e252077cc9f11b9e1",
+  "result_sha256": "563c4363c7982b6e1c300b1349ecf16893ad35525d485a00d0eb7369210dacb1",
+  "terminal_claim_journal_sha256": "83ab7c8fd81cfaeb523de7e23db125e1c05c33e425ddb9d7b235957bad224429",
+  "atomic_claim_and_terminal_retained": true,
+  "fixture_sha256": "ae16fd472a22ba875b3c373fff899873b25379100fbee28f468eb1367ea299a2",
+  "runner_sha256": "65fa2e44c190709c618e4a4b375ee2b86cf11da8118e74ae15962f4ab7331aba",
+  "driver_sha256": "41cdc5f5d15c8b63dfccda143d83f5ff33d16c818ee4d6d3725ef7d96e236ce7",
+  "launcher_sha256": "9dfac7b090354e9b04e59b80eb590bc10d0c5387f6721342a0dcd3d1842b077b",
+  "runtime": {
+    "recorded_at": "2026-10-17T15:21:14.839445+00:00",
+    "container_id": "b912340f9f85b082acf6ac628be322592b0555228a56e4bf78a8027749355aee",
+    "image_id": "sha256:47af0b65960b14f1c6945aa4ccae37836c632e9a6fe0eea9160936e616e5b2e9",
+    "image_digest": [
+      "pgvector/pgvector@sha256:47af0b65960b14f1c6945aa4ccae37836c632e9a6fe0eea9160936e616e5b2e9"
+    ],
+    "architecture": "arm64",
+    "os": "linux",
+    "port_binding": "127.0.0.1:56517",
+    "owner_labels": {
+      "nous.owner.thread": "01a1435c-280e-70c3-b2ec-7edd21e82a1c",
+      "nous.owner.role": "discovery-provider-v7"
+    },
+    "server_identity": [
+      "CREATE EXTENSION",
+      "PostgreSQL 15.19 (Debian 15.19-1.pgdg12+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+      "0.8.7"
+    ]
+  },
+  "migration_log_sha256": "05f3e8f3cd205bafd1444fc982fc4ec97d503f3a9c5b82dc01d7f5d8dbb938a1",
+  "served_rerank_endpoint_sha256": "88c33fc30e07dc29d35e997161ecef606f6df96b00e80c1b42a3c21163ca9a70",
+  "source_after_matches": true,
+  "cleanup": {
+    "recorded_at": "2026-10-17T15:35:28.354726+00:00",
+    "owned_container_id": "b912340f9f85b082acf6ac628be322592b0555228a56e4bf78a8027749355aee",
+    "ownership_revalidated": true,
+    "scratch_inventory_exit_code": 0,
+    "scratch_database_count": 0,
+    "container_stop_exit_code": 0,
+    "container_remove_exit_code": 0
+  },
+  "wrapper_cleanup_sha256": "b3c4b19540449c9029e60e076a5a82e49da0690234b1da3bd70e9b211fed0b82",
+  "metrics": "synthetic fixture recall and labelled-page retention; no release threshold",
+  "raw_artifacts": "owner-only ignored pack; credentials and environment files excluded"
+}

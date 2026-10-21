@@ -68,6 +68,7 @@ from src.services.agent.llm_factory import (
 )
 from src.services.agent.observability import track_node_execution
 from src.services.agent.planner import make_planner_node
+from src.services.agent.reasoning import ReasoningEffort, validate_reasoning_override
 from src.services.agent.reflection import make_reflection_gate
 from src.services.agent.state import AgentState
 from src.services.agent.tools import ALL_TOOLS
@@ -124,16 +125,21 @@ def _safe_json_loads(s: str) -> Any:
 # LLM construction
 # ---------------------------------------------------------------------------
 
-_LLM_CACHE: dict[tuple[str, str, str], BaseChatModel] = {}
+_LLM_CACHE: dict[tuple[str, str, str, str, bool, str | None], BaseChatModel] = {}
 
 
-def _build_llm(model_override: str | None = None):
+def _build_llm(
+    model_override: str | None = None,
+    *,
+    reasoning_effort_override: ReasoningEffort | None = None,
+):
     """Build a LangChain chat model from the existing Azure/OpenAI config.
 
     ``model_override`` lets a per-request deployment name win over the configured
     default — used to make the agent honor ``request.model`` from the API.
 
-    Clients are cached by ``(endpoint_type, deployment, credential_fingerprint)``
+    Clients are cached by endpoint, deployment, credentials, API version,
+    Responses mode, and effective reasoning effort
     to avoid rebuilding the HTTP client on every ``llm_node`` invocation
     (~30-50 ms each). The fingerprint is part of the key (not just endpoint +
     deployment) so that rotating ``AZURE_OPENAI_CHAT_API_KEY``/endpoint in
@@ -168,7 +174,23 @@ def _build_llm(model_override: str | None = None):
     endpoint_type = classify_openai_endpoint(endpoint)
     # Shared with the llm_factory caches so a credential rotation invalidates
     # every cached client, not just this one.
-    cache_key = (endpoint_type, deployment, credential_fingerprint())
+    validate_reasoning_override(
+        reasoning_effort_override, model=deployment, document_only=True
+    )
+    use_responses_api = settings.AGENT_USE_RESPONSES_API
+    reasoning_effort = (
+        reasoning_effort_override or settings.AGENT_MAIN_REASONING_EFFORT
+        if use_responses_api
+        else None
+    )
+    cache_key = (
+        endpoint_type,
+        deployment,
+        credential_fingerprint(),
+        str(api_version),
+        use_responses_api,
+        reasoning_effort,
+    )
     if cache_key in _LLM_CACHE:
         return _LLM_CACHE[cache_key]
 
@@ -190,10 +212,6 @@ def _build_llm(model_override: str | None = None):
     #
     # Default stays Chat Completions; AGENT_USE_RESPONSES_API opts in once the
     # deployment's api-version is new enough. See config for the prerequisite.
-    use_responses_api = settings.AGENT_USE_RESPONSES_API
-    reasoning_effort = (
-        settings.AGENT_MAIN_REASONING_EFFORT if use_responses_api else None
-    )
     is_gpt5_family = deployment.startswith("gpt-5") if deployment else False
 
     # Bound LLM call wall-clock + cap retries. Prevents the model-router hang

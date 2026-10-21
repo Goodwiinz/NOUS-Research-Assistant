@@ -27,6 +27,7 @@ from starlette.middleware.gzip import GZipMiddleware
 logger = logging.getLogger(__name__)
 
 from src.api.agent import agent_router
+from src.api.agent.openapi import register_agent_stream_schemas
 from src.api.artifacts import router as artifacts_router
 from src.api.arxiv import (
     arxiv_bulk_router,
@@ -35,11 +36,13 @@ from src.api.arxiv import (
     arxiv_kg_router,
     arxiv_llm_bulk_router,
     arxiv_local_router,
+    arxiv_papers_router,
     arxiv_router,
 )
 from src.api.auth import auth_router, cli_auth_router
 from src.api.auth.api_keys import router as api_keys_router
 from src.api.auth_orcid import router as orcid_router
+from src.api.compat import router as alphaxiv_compat_router
 from src.api.connectors import connectors_router
 from src.api.diagnostics import diagnostics_router
 from src.api.documents import (
@@ -401,6 +404,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Detached v3 producers own native streams beyond HTTP/socket lifetime.
+        # Drain their durable cancellation before closing classifier/DB pools.
+        from src.api.compat.alphaxiv_live import shutdown_live_producers
+
+        await shutdown_live_producers()
         try:
             await close_typesafe_client()
         except Exception as exc:
@@ -629,6 +637,7 @@ app.include_router(
     realtime_quality_metrics_router, prefix="/api/v2"
 )  # Real-time quality metrics API
 app.include_router(arxiv_router)  # ArXiv integration endpoints
+app.include_router(arxiv_papers_router)
 app.include_router(
     arxiv_kg_router, prefix="/api/v1/arxiv/kg"
 )  # ArXiv Knowledge Graph endpoints
@@ -649,6 +658,8 @@ app.include_router(
 )  # LLM-powered bulk ingestion with embeddings
 app.include_router(chat_router, prefix="/api/v1")  # Chat completion endpoints
 app.include_router(agent_router)  # Agent execution endpoints
+app.include_router(alphaxiv_compat_router)  # alphaXiv-shaped PDF chat transport
+register_agent_stream_schemas(app)
 app.include_router(connectors_router)  # External database connectors
 app.include_router(
     workspaces_router

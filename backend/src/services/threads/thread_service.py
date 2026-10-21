@@ -50,6 +50,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from src.models.chat_message import ChatMessage, MessageRole
 from src.models.conversation import Conversation
@@ -66,6 +67,52 @@ logger = structlog.get_logger(__name__)
 # ``workspace_routes/presenters.py`` for backward compatibility — a few
 # characterization tests import it from that path.
 THREAD_PREVIEW_MAX_CHARS = 240
+
+
+async def get_thread_detail(
+    db: AsyncSession,
+    thread_id: UUID,
+    user_id: UUID,
+    *,
+    include_messages: bool = True,
+    conversation_id: UUID | None = None,
+    workspace_id: UUID | None = None,
+) -> Thread | None:
+    """Read selected canonical ancestry for a bound PDF, retaining linear reads."""
+    from src.services.threads import message_service
+    from src.services.threads.branch_reads import read_thread
+    from src.services.threads.message_branches import MAX_BRANCH_MESSAGES
+
+    view = await read_thread(
+        db,
+        thread_id=thread_id,
+        actor_id=user_id,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
+    if view is None:
+        return None
+    if view.path is None:
+        return await workspace_access.get_thread(
+            db,
+            thread_id,
+            user_id,
+            include_messages=include_messages,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+        )
+    if include_messages:
+        result = await message_service.list_messages(
+            db,
+            thread_id,
+            user_id,
+            limit=MAX_BRANCH_MESSAGES,
+            selected_message_id=view.thread.selected_message_id,
+        )
+        if result is None:
+            return None
+        set_committed_value(view.thread, "messages", result[0])
+    return view.thread
 
 
 def last_message_preview_expression() -> Any:

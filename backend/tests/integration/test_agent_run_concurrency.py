@@ -84,6 +84,7 @@ async def _postgres_run_schema(
             async with scoped_engine.begin() as conn:
                 for table in (
                     "conversations",
+                    "documents",
                     "collections",
                     "users",
                     "chat_messages",

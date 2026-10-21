@@ -725,12 +725,22 @@ async def test_upgrade_head_is_idempotent_after_a_repair(
     _apply_drift(scratch, "column_dropped")
     _alembic(scratch.name, "upgrade", "head")
     thread_xmins = _xmins(scratch, "threads")
+    # Downgrading to PARENT also reverts every later revision, which may
+    # legitimately drop and recreate its own objects on these tables (e.g.
+    # pb01's branch indexes). Only the repair's own objects must survive.
+    owned = {"trigger:" + name for name in TRIGGERS} | {
+        "index:" + name for name in GIN_INDEXES | BTREE_INDEXES | {CITATIONS_INDEX}
+    }
     identity = _object_identity(scratch)
-    _alembic(scratch.name, "downgrade", PARENT)  # a no-op that only re-stamps
+    assert owned <= set(identity)
+    _alembic(scratch.name, "downgrade", PARENT)  # sv01's downgrade only re-stamps
     assert _column_type(scratch, "threads") == "tsvector"
     _alembic(scratch.name, "upgrade", "head")
     assert _xmins(scratch, "threads") == thread_xmins
-    assert _object_identity(scratch) == identity
+    after = _object_identity(scratch)
+    assert {key: after.get(key) for key in owned} == {
+        key: identity[key] for key in owned
+    }
     assert _health(scratch)["search_functional"] is True
 
 

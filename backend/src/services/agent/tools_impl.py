@@ -231,9 +231,10 @@ AGENT_TOOLS = [
         "function": {
             "name": "do_kb_retrieve",
             "description": (
-                "Semantic retrieval over the organization's DigitalOcean Knowledge Base. "
-                "Returns text chunks ranked by semantic similarity to the query. "
-                "Use for content-level questions across ingested documents."
+                "Retrieve text evidence for content-level questions across ingested documents. "
+                "Uses DigitalOcean semantic retrieval when enabled; when it is disabled, "
+                "an explicitly named document is retrieved through organization-scoped "
+                "PostgreSQL full-text search."
             ),
             "parameters": {
                 "type": "object",
@@ -3416,6 +3417,86 @@ async def _tool_search_documents(
         return tool_error_payload("search_documents", e)
 
 
+async def _local_scoped_fulltext_retrieve(
+    *,
+    query: str,
+    document_ids: list[UUID],
+    current_user: User,
+    top_k: int,
+) -> Dict[str, Any]:
+    """Retrieve evidence locally when a named-document request cannot use DO KB.
+
+    The explicit document IDs have already been authorized by the caller.
+    PostgreSQL still applies both the organization predicate and those IDs, so
+    this AWS-side fallback cannot widen a named-source request.
+    """
+    from src.models.search_schemas import (
+        SearchFilter,
+        SearchQuery,
+        SearchSortOrder,
+        SearchType,
+    )
+    from src.services.agent._pii_redact import redact_pii
+    from src.services.search.fulltext_search_service import fulltext_search_service
+
+    request = SearchQuery(
+        query=query,
+        search_type=SearchType.FULLTEXT,
+        sort_order=SearchSortOrder.RELEVANCE,
+        limit=top_k,
+        filters=SearchFilter(document_ids=[str(doc_id) for doc_id in document_ids]),
+        snippet_length=500,
+    )
+    response = await asyncio.to_thread(
+        fulltext_search_service.search,
+        search_request=request,
+        user_id=str(current_user.id),
+        organization_id=str(current_user.organization_id),
+    )
+
+    chunks = []
+    for result in response.results[:top_k]:
+        evidence = "\n".join(
+            snippet.text.strip()
+            for snippet in (result.snippets or [])
+            if getattr(snippet, "text", "").strip()
+        )
+        if not evidence:
+            evidence = result.content_preview or ""
+        if not evidence.strip():
+            continue
+        chunks.append(
+            {
+                "text": redact_pii(evidence)[:3000],
+                "score": float(result.relevance_score or 0.0),
+                "score_source": "postgres_fulltext",
+                "document_id": str(result.document_id),
+                "title": redact_pii(result.title or "Untitled").strip() or "Untitled",
+                "metadata": {"retrieval_backend": "postgres_fulltext"},
+            }
+        )
+
+    if not chunks:
+        return {
+            "chunks": [],
+            "total": 0,
+            "source": "postgres_fulltext",
+            "reason": "no_scoped_chunks",
+            "note": (
+                "No matching evidence was found in the requested document(s). "
+                "No other document was substituted."
+            ),
+            "evidence_mode": False,
+        }
+    return {
+        "chunks": chunks,
+        "total": len(chunks),
+        "source": "postgres_fulltext",
+        "note": "Evidence is restricted to the authorized document IDs.",
+        "evidence_mode": False,
+    }
+
+
 async def _tool_do_kb_retrieve(
     args: Dict[str, Any],
     db: Optional[AsyncSession],
@@ -3423,10 +3504,12 @@ async def _tool_do_kb_retrieve(
     *,
     project_id: str = "",
 ) -> Dict[str, Any]:
-    """Semantic retrieval over the org's DigitalOcean Knowledge Base.
+    """Retrieve evidence from the org's knowledge base.
 
-    Returns an empty chunks list when the org has no provisioned KB or
-    when DO_KB_ENABLED is false — caller falls back to other tools.
+    Uses the DigitalOcean Knowledge Base when enabled. When it is disabled,
+    an explicitly named document is retrieved through organization-scoped
+    PostgreSQL full-text search; unscoped requests remain empty so the caller
+    can choose another retrieval path.
     ``project_id`` is the server-owned page project; ``args["project_id"]``
     remains for direct callers.
     """
@@ -3446,11 +3529,11 @@ async def _tool_do_kb_retrieve(
     requested_document_ids: list[UUID] = []
     provider_filters: Optional[dict[str, Any]] = None
 
-    def scoped_limitation(reason: str) -> Dict[str, Any]:
+    def scoped_limitation(reason: str, *, source: str = "do_kb") -> Dict[str, Any]:
         return {
             "chunks": [],
             "total": 0,
-            "source": "do_kb",
+            "source": source,
             "reason": reason,
             "note": (
                 "The requested document could not be retrieved as evidence. "
@@ -3568,7 +3651,26 @@ async def _tool_do_kb_retrieve(
             return scoped_limitation("requested_documents_unavailable")
 
         if not kb_enabled:
-            return scoped_limitation("scoped_retrieval_unavailable")
+            from src.core.database import engine
+
+            # FullTextSearchService uses PostgreSQL-only @@/ts_headline syntax.
+            if engine.dialect.name != "postgresql":
+                return scoped_limitation("scoped_retrieval_unavailable")
+            try:
+                return await _local_scoped_fulltext_retrieve(
+                    query=query,
+                    document_ids=requested_document_ids,
+                    current_user=current_user,
+                    top_k=top_k,
+                )
+            except Exception:
+                logger.warning(
+                    "PostgreSQL full-text fallback failed for scoped retrieval",
+                    exc_info=True,
+                )
+                return scoped_limitation(
+                    "local_fulltext_search_failed", source="postgres_fulltext"
+                )
 
     # Read kb_uuid from the org. Lazy import to keep cold-start light.
     from src.services.do_kb.retrieval import (

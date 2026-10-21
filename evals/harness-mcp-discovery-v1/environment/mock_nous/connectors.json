@@ -1,0 +1,192 @@
+{
+  "total": 11,
+  "available": 8,
+  "connectors": [
+    {
+      "name": "pubmed",
+      "display_name": "PubMed",
+      "description": "NCBI biomedical literature database with 35M+ citations",
+      "domains": [
+        "biomedical",
+        "literature"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [],
+      "requires_api_key": false,
+      "available": true
+    },
+    {
+      "name": "uniprot",
+      "display_name": "UniProt",
+      "description": "Protein sequence and functional information (250M+ entries)",
+      "domains": [
+        "biomedical",
+        "genomics"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [
+        "organism"
+      ],
+      "requires_api_key": false,
+      "available": true
+    },
+    {
+      "name": "chembl",
+      "display_name": "ChEMBL",
+      "description": "Bioactive molecules with drug-like properties (2.4M+ compounds)",
+      "domains": [
+        "chemistry",
+        "biomedical"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [],
+      "requires_api_key": false,
+      "available": true
+    },
+    {
+      "name": "pubchem",
+      "display_name": "PubChem",
+      "description": "NIH chemical compound database with 110M+ compounds",
+      "domains": [
+        "chemistry"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [],
+      "requires_api_key": false,
+      "available": true
+    },
+    {
+      "name": "sec_edgar",
+      "display_name": "SEC EDGAR",
+      "description": "U.S. Securities and Exchange Commission filing database",
+      "domains": [
+        "finance"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [
+        "end_date",
+        "form_type",
+        "start_date"
+      ],
+      "requires_api_key": false,
+      "available": true
+    },
+    {
+      "name": "fred",
+      "display_name": "FRED",
+      "description": "Federal Reserve Economic Data - 800K+ economic time series",
+      "domains": [
+        "economic",
+        "finance"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [
+        "frequency",
+        "order_by"
+      ],
+      "requires_api_key": true,
+      "available": false
+    },
+    {
+      "name": "alpha_vantage",
+      "display_name": "Alpha Vantage",
+      "description": "Stock prices, forex, crypto, technical indicators, fundamentals",
+      "domains": [
+        "finance"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [],
+      "requires_api_key": true,
+      "available": false
+    },
+    {
+      "name": "zinc",
+      "display_name": "ZINC",
+      "description": "230M+ purchasable compounds for virtual screening and docking",
+      "domains": [
+        "chemistry"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [],
+      "requires_api_key": false,
+      "available": true
+    },
+    {
+      "name": "cosmic",
+      "display_name": "COSMIC",
+      "description": "Curated database of somatic mutations in cancer (Cancer Gene Census)",
+      "domains": [
+        "biomedical",
+        "genomics"
+      ],
+      "capabilities": [
+        "search"
+      ],
+      "supported_filter_keys": [],
+      "requires_api_key": true,
+      "available": false
+    },
+    {
+      "name": "clinical_trials",
+      "display_name": "ClinicalTrials.gov",
+      "description": "U.S. National Library of Medicine clinical trial registry",
+      "domains": [
+        "clinical",
+        "biomedical"
+      ],
+      "capabilities": [
+        "search",
+        "fetch"
+      ],
+      "supported_filter_keys": [
+        "condition",
+        "phase",
+        "status"
+      ],
+      "requires_api_key": false,
+      "available": true
+    },
+    {
+      "name": "bioservices",
+      "display_name": "BioServices (5 supported services)",
+      "description": "Bridge to five configured BioServices integrations: KEGG, ChEBI, Reactome, BioModels, and WikiPathways.",
+      "domains": [
+        "biomedical",
+        "chemistry",
+        "genomics"
+      ],
+      "capabilities": [
+        "search"
+      ],
+      "supported_filter_keys": [
+        "service"
+      ],
+      "requires_api_key": false,
+      "available": true
+    }
+  ]
+}

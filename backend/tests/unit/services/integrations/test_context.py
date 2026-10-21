@@ -944,20 +944,52 @@ _BINDING_ROWS: dict[str, dict[str, Any]] = {
 }
 
 
+# Each shape: (columns, is the row accepted?) per table. Without binding_kind
+# a grant request or grant derives project or workspace from the one column
+# set, never account: a row naming neither is refused (NOT NULL), and one
+# naming both is refused by the kind CHECK. An action has no default: its
+# writer states the kind (_ACTION_KIND gives the one a shape without a stated
+# kind is written with). An action's project_id is its target and its
+# workspace_id the grant's binding, so a workspace action may name both.
 _BINDINGS: dict[str, dict[str, Any]] = {
     "project": {"project_id": PROJECT},
     "workspace": {"workspace_id": WORKSPACE},
     "both": {"project_id": PROJECT, "workspace_id": WORKSPACE},
     "neither": {},
+    "account": {"binding_kind": "account"},
+    "account-with-project": {"binding_kind": "account", "project_id": PROJECT},
+    "account-with-workspace": {"binding_kind": "account", "workspace_id": WORKSPACE},
+    "project-kind-without-project": {"binding_kind": "project"},
+    "account-action-with-target-workspace": {
+        "binding_kind": "account",
+        "target_workspace_id": WORKSPACE,
+    },
+    "account-action-with-project-and-target": {
+        "binding_kind": "account",
+        "project_id": PROJECT,
+        "target_workspace_id": WORKSPACE,
+    },
+    "project-action-with-target-workspace": {
+        "project_id": PROJECT,
+        "target_workspace_id": WORKSPACE,
+    },
 }
-# The shapes each table must refuse, and the constraint that refuses them.
-# Requests and grants bind exactly one of a Collection or a workspace. On an
-# action project_id is the target Collection and workspace_id the grant's
-# binding, so a workspace-grant action aimed at a Collection sets both.
-_REFUSED: dict[str, dict[str, str]] = {
-    "integration_grant_requests": {"both": "one_binding", "neither": "one_binding"},
-    "integration_grants": {"both": "one_binding", "neither": "one_binding"},
-    "integration_tool_actions": {"neither": "some_binding"},
+_ACCEPTED: dict[str, set[str]] = {
+    "integration_grant_requests": {"project", "workspace", "account"},
+    "integration_grants": {"project", "workspace", "account"},
+    "integration_tool_actions": {
+        "project",
+        "workspace",
+        "both",
+        "account-with-project",
+        "account-action-with-target-workspace",
+    },
+}
+_ACTION_KIND = {"project": "project", "workspace": "workspace", "both": "workspace"}
+_ACTION_ONLY = {
+    "account-action-with-target-workspace",
+    "account-action-with-project-and-target",
+    "project-action-with-target-workspace",
 }
 
 
@@ -968,16 +1000,69 @@ async def test_database_enforces_the_binding_rule(
 ) -> None:
     from src.models.base import Base
 
-    row = insert(Base.metadata.tables[table_name]).values(
-        **_BINDING_ROWS[table_name], **_BINDINGS[binding]
+    if binding in _ACTION_ONLY and table_name != "integration_tool_actions":
+        pytest.skip("target_workspace_id is an action column")
+    stated = (
+        {"binding_kind": _ACTION_KIND[binding]}
+        if table_name == "integration_tool_actions" and binding in _ACTION_KIND
+        else {}
     )
-    constraint = _REFUSED[table_name].get(binding)
-    if constraint is None:
+    row = insert(Base.metadata.tables[table_name]).values(
+        **_BINDING_ROWS[table_name], **_BINDINGS[binding], **stated
+    )
+    if binding in _ACCEPTED[table_name]:
         await db.execute(row)
         await db.commit()
         return
-    with pytest.raises(IntegrityError, match=f"ck_{table_name}_{constraint}"):
+    # NOT NULL (no kind derivable) or the kind CHECK: both name binding_kind.
+    with pytest.raises(IntegrityError, match="binding_kind"):
         await db.execute(row)
+
+
+@pytest.mark.parametrize(
+    "binding",
+    ["project", "workspace", "account", "account-action-with-target-workspace"],
+)
+async def test_an_action_that_omits_its_kind_is_refused_not_defaulted(
+    db: AsyncSession, binding: str
+) -> None:
+    """The writer states an action's kind: no shape, an account one included,
+    falls back to a derived "project" or "workspace"."""
+    from src.models.base import Base
+
+    shape = {k: v for k, v in _BINDINGS[binding].items() if k != "binding_kind"}
+    row = insert(Base.metadata.tables["integration_tool_actions"]).values(
+        **_BINDING_ROWS["integration_tool_actions"], **shape
+    )
+    with pytest.raises(IntegrityError, match="binding_kind"):
+        await db.execute(row)
+
+
+async def test_the_kind_is_derived_but_never_as_account(db: AsyncSession) -> None:
+    from src.models.integration_grant import IntegrationGrantRequest
+
+    device = uuid4()
+    for values in ({"project_id": PROJECT}, {"workspace_id": WORKSPACE}):
+        db.add(
+            IntegrationGrantRequest(
+                user_id=USER,
+                organization_id=ORG,
+                device_id=device,
+                scopes=["tools:read"],
+                status="pending",
+                expires_at=SOON,
+                **values,
+            )
+        )
+    await db.commit()
+    kinds = (
+        await db.scalars(
+            select(IntegrationGrantRequest.binding_kind).where(
+                IntegrationGrantRequest.device_id == device
+            )
+        )
+    ).all()
+    assert sorted(kinds) == ["project", "workspace"]
 
 
 # --- Workspace-scoped grants (Plan 07, slice 1) -----------------------------

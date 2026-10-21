@@ -17,6 +17,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, get_args
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     Field,
     StringConstraints,
@@ -26,8 +27,28 @@ from pydantic import (
 
 from src.services.agent._sanitize import sanitize_page_context
 from src.services.agent._uuid import UUID_STRICT_PATTERN
+from src.services.agent.reasoning import ReasoningEffort, validate_reasoning_override
+from src.services.search.page_filter import MAX_RERANK_PAGES, PageFilterFallbackReason
 
 StrictUUIDString = Annotated[str, StringConstraints(pattern=UUID_STRICT_PATTERN)]
+PdfPageIndex = Annotated[int, Field(strict=True, ge=0)]
+
+
+def validate_pdf_page_range(value: tuple[int, int]) -> tuple[int, int]:
+    """Ascending inclusive range no wider than one page-selection batch."""
+    first, last = value
+    if last < first:
+        raise ValueError("PDF page selection must be in ascending order")
+    if last - first >= MAX_RERANK_PAGES:
+        raise ValueError(
+            f"PDF page selection may span at most {MAX_RERANK_PAGES} pages"
+        )
+    return value
+
+
+PdfPageRange = Annotated[
+    tuple[PdfPageIndex, PdfPageIndex], AfterValidator(validate_pdf_page_range)
+]
 
 
 class AgentMessage(BaseModel):
@@ -170,8 +191,58 @@ class AgentExecuteRequest(BaseModel):
         ),
     )
     use_rag: bool = Field(default=True)
+    reasoning_effort: Optional[ReasoningEffort] = Field(
+        default=None,
+        description=(
+            "Per-turn answer reasoning override for document-only NOUS GPT-5 "
+            "execution. Requires the configured Responses API. Null retains "
+            "server defaults; supported values are low, medium, and high."
+        ),
+    )
+    document_only: bool = Field(
+        default=False,
+        description=(
+            "Answer from attached document context only. Disables agent tools "
+            "and prevents fallback to project or organization retrieval."
+        ),
+    )
     max_context_docs: int = Field(default=5, ge=1, le=10)
+
+    @model_validator(mode="after")
+    def _reasoning_capability(self) -> "AgentExecuteRequest":
+        validate_reasoning_override(
+            self.reasoning_effort, model=self.model, document_only=self.document_only
+        )
+        return self
+
     thread_id: Optional[StrictUUIDString] = None
+    branch_document_id: Optional[UUID] = Field(
+        default=None,
+        description="Opt into PDF-bound message branches; requires the streaming API.",
+    )
+    parent_message_id: Optional[UUID] = Field(
+        default=None,
+        description="Canonical branch parent; null starts a new root in a PDF-bound chat.",
+    )
+
+    @model_validator(mode="after")
+    def _branch_scope(self) -> "AgentExecuteRequest":
+        if self.branch_document_id is None:
+            if self.parent_message_id is not None:
+                raise ValueError("A branch parent requires a branch document")
+            return self
+        if self.execution_provider != "nous":
+            raise ValueError("Message branches require NOUS execution")
+        if (
+            not self.attachment_ids
+            or self.attachment_ids[0] != self.branch_document_id
+            or len(set(self.attachment_ids)) != len(self.attachment_ids)
+        ):
+            raise ValueError("A message branch requires its bound PDF attachment")
+        if self.supersedes_client_message_id is not None:
+            raise ValueError("Branching cannot supersede linear history")
+        return self
+
     supersedes_client_message_id: Optional[UUID] = Field(
         default=None,
         description=(
@@ -196,6 +267,49 @@ class AgentExecuteRequest(BaseModel):
             "a mixed batch still attaches the owned ones."
         ),
     )
+
+    selection_page_range: Optional[PdfPageRange] = Field(
+        default=None,
+        description=(
+            "Inclusive zero-based physical PDF page indices for a single attached "
+            "document. Restricts attachment context to those pages; it is separate "
+            "from automatic relevance ranking. Omitted on an unscoped follow-up."
+        ),
+    )
+
+    page_filter_model: Optional[Literal["cohere"]] = Field(
+        default=None,
+        description=(
+            "Explicitly enable the configured Cohere PDF page filter for one "
+            "attached document. Explicit page selection takes precedence."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _single_document_page_selection(self) -> "AgentExecuteRequest":
+        if self.document_only and self.execution_provider != "nous":
+            raise ValueError("Document-only context requires NOUS execution")
+        if self.page_filter_model is not None:
+            if self.execution_provider != "nous":
+                raise ValueError("PDF page filtering requires NOUS execution")
+            if (
+                self.branch_document_id is None
+                and self.attachment_ids is not None
+                and len(self.attachment_ids) != 1
+            ):
+                raise ValueError("PDF page filtering requires one attached document")
+        selection = self.selection_page_range
+        if selection is None:
+            return self
+        if self.execution_provider != "nous":
+            raise ValueError("PDF page selection requires NOUS execution")
+        if (
+            self.branch_document_id is None
+            and self.attachment_ids is not None
+            and len(self.attachment_ids) != 1
+        ):
+            raise ValueError("PDF page selection requires one attached document")
+        return self
 
     @model_validator(mode="after")
     def _edit_carries_a_fresh_cmid(self) -> "AgentExecuteRequest":
@@ -235,6 +349,47 @@ class RetrievedContextResponse(BaseModel):
     page_number: Optional[int] = None
 
 
+class PageFilterTiming(BaseModel):
+    average: float = Field(ge=0, allow_inf_nan=False)
+    min: float = Field(ge=0, allow_inf_nan=False)
+    max: float = Field(ge=0, allow_inf_nan=False)
+    count: int = Field(ge=0)
+
+
+class PageFilterPriority(BaseModel):
+    page: int = Field(strict=True, ge=1)
+    score: float = Field(allow_inf_nan=False)
+
+
+class PageFilterResponse(BaseModel):
+    """Bounded public projection; provider configuration never crosses the wire."""
+
+    document_id: UUID
+    accepted_pages: List[Annotated[int, Field(strict=True, ge=1)]] = Field(
+        max_length=100
+    )
+    total_pages: int = Field(strict=True, ge=0)
+    short_circuited: bool
+    model: Optional[str] = Field(default=None, max_length=128)
+    timing_ms: Optional[PageFilterTiming] = None
+    priorities: List[PageFilterPriority] = Field(default_factory=list, max_length=100)
+    selection_page_range: Optional[PdfPageRange] = None
+    fallback: Optional[PageFilterFallbackReason] = Field(
+        default=None,
+        description=(
+            "Set when page ranking did not run or returned nothing and the "
+            "context is a keyword excerpt of the whole document instead."
+        ),
+    )
+
+
+class RagContextPayload(BaseModel):
+    """Cumulative SSE data; source rows retain their heterogeneous provenance."""
+
+    contexts: List[Dict[str, Any]]
+    page_filter: Optional[PageFilterResponse] = None
+
+
 class ToolExecutionResponse(BaseModel):
     id: str
     tool_name: str
@@ -254,6 +409,7 @@ class AgentExecuteResponse(BaseModel):
     timestamp: str
     rag_enabled: bool = False
     retrieved_contexts: Optional[List[RetrievedContextResponse]] = None
+    page_filter: Optional[PageFilterResponse] = None
     tool_executions: Optional[List[ToolExecutionResponse]] = None
     thread_id: str = ""
     conversation_id: str = ""

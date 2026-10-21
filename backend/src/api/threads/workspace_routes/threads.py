@@ -38,8 +38,8 @@ from src.schemas.integration_handoff import HandoffDTO
 from src.services.integrations import handoffs
 from src.services.integrations.context import workspace_organization_id
 from src.services.threads import thread_service, workspace_access
+from src.services.threads.message_branches import BranchAccessError
 
-from .dependencies import _get_thread_or_404
 from .presenters import _thread_to_detail_response, _thread_to_response
 
 logger = logging.getLogger(__name__)
@@ -200,9 +200,19 @@ async def get_thread(
     current_user: User = Depends(get_current_user),
 ) -> ThreadDetailResponse:
     """Get thread details with messages"""
-    thread = await _get_thread_or_404(
-        db, workspace_id, conversation_id, thread_id, current_user
-    )
+    try:
+        thread = await thread_service.get_thread_detail(
+            db,
+            thread_id,
+            current_user.id,
+            include_messages=include_messages,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    if thread is None:
+        raise HTTPException(404, "Thread not found")
 
     return _thread_to_detail_response(
         thread,
@@ -308,9 +318,12 @@ async def get_thread_standalone(
     current_user: User = Depends(get_current_user),
 ) -> ThreadDetailResponse:
     """Get thread details with messages (standalone route)"""
-    thread = await workspace_access.get_thread(
-        db, thread_id, current_user.id, include_messages=include_messages
-    )
+    try:
+        thread = await thread_service.get_thread_detail(
+            db, thread_id, current_user.id, include_messages=include_messages
+        )
+    except BranchAccessError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -365,16 +378,16 @@ async def delete_thread_standalone(
     await db.commit()
 
 
-@standalone_router.get("/threads/{thread_id}/handoff", response_model=HandoffDTO)
-async def get_thread_handoff(
+@standalone_router.get(
+    "/threads/{thread_id}/handoff/latest", response_model=HandoffDTO | None
+)
+async def get_latest_thread_handoff(
     thread_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> HandoffDTO:
-    """Latest harness handoff left in this chat (standalone route)."""
-    thread = await workspace_access.get_thread(
-        db, thread_id, current_user.id, include_messages=False
-    )
+) -> HandoffDTO | None:
+    """Latest handoff, or null for an authorized chat without one."""
+    thread = await workspace_access.get_thread_lean(db, thread_id, current_user.id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
     # Scope by the chat's own workspace org: an authorized member or viewer
@@ -388,6 +401,17 @@ async def get_thread_handoff(
         if organization_id is not None
         else None
     )
+    return latest
+
+
+@standalone_router.get("/threads/{thread_id}/handoff", response_model=HandoffDTO)
+async def get_thread_handoff(
+    thread_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> HandoffDTO:
+    """Preserve the original object-or-404 contract for existing clients."""
+    latest = await get_latest_thread_handoff(thread_id, db, current_user)
     if latest is None:
         raise HTTPException(status_code=404, detail="No handoff for this chat")
     return latest

@@ -1,0 +1,63 @@
+schema_version = "1.2"
+source = "git+https://github.com/Goodwiinz/rag.git@57fc21bc740e086c9e5880b1e1f26634c6a0f1c5"
+artifacts = ["/app/answer.md"]
+
+[task]
+name = "goodwiinz/harness-mcp-discovery-v1"
+description = "An external harness (Claude Code or Codex) combines the NOUS MCP primitives search_documents, search_arxiv and search_external_database, served by the real harness bridge against a deterministic gateway double, into one cited literature scan (Plan 07 Slice 5 decision eval)."
+authors = [{ name = "Goodwiinz" }]
+keywords = ["mcp", "harness-bridge", "claude-code", "codex", "search_arxiv", "search_documents", "search_external_database", "plan07-slice5"]
+
+[metadata]
+benchmark_id = "harness-mcp-discovery-v1"
+source_revision = "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5"
+# The agent is not NOUS code: it is Harbor's built-in claude-code or codex
+# agent. Their CLI versions are resolved at trial setup and recorded by
+# Harbor in each trial's result.json; agent_revision pins the NOUS side the
+# harness talks to (bridge + generated catalog).
+agent_revision = "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5"
+harbor_version = "0.6.6"
+bridge_transport = "isolated-stdio-tcp-private-bearer"
+authoritative_verifier = "host VERIFICATION_START hook using evals/verify_discovery_trial.py"
+# node:24-bookworm-slim index digest (main image FROM), resolved 2026-10-07.
+base_image_digest = "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+
+[verifier]
+timeout_sec = 120.0
+
+[verifier.env]
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 1800.0
+os = "linux"
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+# The harness needs public egress for its model API and for Harbor's agent
+# install, and Harbor's false setting forces network_mode:none on main, which
+# would also cut the mock backend off. Compose keeps the mock on an
+# internal-only network that main joins in addition to the default one.
+allow_internet = true
+workdir = "/app"
+
+# Harbor's claude-code and codex agents write this into their native MCP
+# config; the CLI then spawns it inside main. MCPServerConfig has no env or
+# headers fields, so the launcher relays stdio to the isolated bridge service.
+# Its private credential volume is absent from main. No args: codex folds args
+# into a single command string.
+[[environment.mcp_servers]]
+name = "nous"
+transport = "stdio"
+command = "/opt/nous-eval/start-mcp.sh"
+args = []
+
+# Model credentials never go here. Harbor's claude-code agent reads
+# ANTHROPIC_API_KEY and codex reads OPENAI_API_KEY from the host environment
+# that runs `harbor run` (see evals/specs/harness-mcp-discovery-v1/harness.md).
+[environment.env]
+
+[solution.env]

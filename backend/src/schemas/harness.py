@@ -73,12 +73,26 @@ class Envelope(WireModel):
 class BridgeCommand(Envelope):
     expiresAt: datetime
     body: Annotated[Start | Interrupt | Respond, Field(discriminator="kind")]
+    # The run's project, on a start command leased under an account pairing,
+    # so the bridge pins the run's NOUS tools to it. Never on an event.
+    projectId: UUID | None = None
 
     @model_validator(mode="after")
     def utc_expiry(self) -> "BridgeCommand":
         if self.expiresAt.utcoffset() != timezone.utc.utcoffset(None):
             raise ValueError("expiresAt must be UTC")
+        if self.projectId is not None and not isinstance(self.body, Start):
+            raise ValueError("projectId names a start command's project only")
         return self
+
+    def wire(self) -> dict[str, Any]:
+        """The frame sent to the bridge. Bridges before account connections
+        refuse any unknown key (parseCommand), so an absent project is left
+        out rather than sent as null."""
+        value: dict[str, Any] = self.model_dump(mode="json")
+        if value.get("projectId") is None:
+            value.pop("projectId", None)
+        return value
 
 
 TypedRunPayload = (

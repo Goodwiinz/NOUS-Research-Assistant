@@ -565,17 +565,20 @@ export default function ProjectDetailPage() {
   const handleUploadComplete = useCallback(
     async (documentIds: string[]) => {
       setShowUploadWizard(false);
-      try {
-        await Promise.all(
-          documentIds.map((docId) =>
-            projectService.addDocumentToProject(projectId, docId)
-          )
+      // The wizard already reported success; linking can still fail per document.
+      const results = await Promise.allSettled(
+        documentIds.map((docId) =>
+          projectService.addDocumentToProject(projectId, docId)
+        )
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) {
+        toast.error(
+          `${failed} of ${documentIds.length} documents could not be added to this project`
         );
-        await fetchProjectDocuments(projectId);
-      } catch {
-        // linking may partially fail, still refresh to show what succeeded
-        await fetchProjectDocuments(projectId);
       }
+      // Refresh regardless so the documents that did link are shown.
+      await fetchProjectDocuments(projectId);
     },
     [projectId, fetchProjectDocuments]
   );

@@ -53,13 +53,15 @@ def _dsn() -> str:
 
 
 @contextmanager
-def _ingestion() -> Iterator[SimpleNamespace]:
+def _ingestion(**engine_options: Any) -> Iterator[SimpleNamespace]:
     """Isolated schema with one PENDING document and its QUEUED ingestion job."""
     schema = "stage_guard_" + uuid.uuid4().hex
     admin = create_engine(_dsn())
     with admin.begin() as conn:
         conn.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
-    engine = create_engine(_dsn(), connect_args={"options": f"-csearch_path={schema}"})
+    engine = create_engine(
+        _dsn(), connect_args={"options": f"-csearch_path={schema}"}, **engine_options
+    )
     try:
         Base.metadata.create_all(
             engine,
@@ -1254,3 +1256,36 @@ def test_deleted_do_kb_cleanup_removes_duplicates_without_tokens(
         assert deleted == {"ds-A", "ds-B"}
         with env.Session() as db:
             assert db.get(Document, env.doc_id).do_kb_data_source_uuid is None
+
+
+@pytest.mark.parametrize("indexed", [True, False])
+def test_graph_acknowledgement_with_single_connection_pool(
+    stubbed: pytest.MonkeyPatch, indexed: bool
+) -> None:
+    """GOO-447: expired ORM reads must not starve the outcome session."""
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc)
+    with _ingestion(pool_size=1, max_overflow=0, pool_timeout=0.2) as env:
+
+        def index(document: Document, entities: Any) -> int:
+            # Reproduce the real helper's expired-attribute reads after commit.
+            assert document.organization_id == env.org_id
+            assert entities[0].name
+            document.neo4j_index_status = "completed" if indexed else "failed"
+            document.neo4j_indexed_at = stamp if indexed else None
+            return len(entities) if indexed else 0
+
+        stubbed.setattr(pt, "_index_entities_to_graph", index)
+        result = _run(env, stubbed)
+        result.get()
+        assert _state(env) == (JobStatus.COMPLETED, ProcessingStatus.COMPLETED, 2)
+        with env.Session() as db:
+            document = db.get(Document, env.doc_id)
+            assert document.neo4j_index_status == ("completed" if indexed else "failed")
+            assert document.neo4j_indexed_at == (stamp if indexed else None)
+            assert (
+                not (document.document_metadata or {})
+                .get("pending_satellite_writes", {})
+                .get("graph")
+            )

@@ -344,6 +344,19 @@ export const workspaceService = {
     );
   },
 
+  async selectMessageBranch(
+    threadId: string,
+    messageId: string
+  ): Promise<void> {
+    // Same-origin proxy preserves the normal API client's account fencing.
+    // The compatibility endpoint owns the branch mutation; reads reconcile
+    // through the native message cache after it acknowledges the selection.
+    await api.post(
+      `/api/assistant/v2/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}/select`,
+      {}
+    );
+  },
+
   async updateThread(
     threadId: string,
     data: ApiThreadUpdate
@@ -413,6 +426,7 @@ export const workspaceService = {
       limit?: number;
       offset?: number;
       before_id?: string;
+      selected_message_id?: string;
       order?: 'asc' | 'desc';
       signal?: AbortSignal;
     } = {}
@@ -425,6 +439,9 @@ export const workspaceService = {
     }
     if (options.before_id) {
       params.append('before_id', options.before_id);
+    }
+    if (options.selected_message_id) {
+      params.append('selected_message_id', options.selected_message_id);
     }
     if (options.order) {
       params.append('order', options.order);

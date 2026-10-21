@@ -2,9 +2,9 @@
 
 Identity (actor, organization, project) comes from the resolved
 ``IntegrationContext``; model-supplied arguments never choose it. The one
-exception is the ``project_id`` selector of a workspace grant, which picks one
-of the workspace's live projects and is checked against ``authorized_scope``
-on every call. The allowlist is deliberately narrow: the absence of a
+exception is the ``project_id`` selector of a workspace or account grant, which
+picks one of the grant's live projects and is checked against its scope on
+every call. The allowlist is deliberately narrow: the absence of a
 ``DESTRUCTIVE`` tag is not evidence that a registry tool is safe to expose
 outside the agent graph. Each tool names the scope a grant must hold to call
 it (``TOOL_SCOPES``): ``tools:read`` for the registry tools, and the scope in
@@ -59,6 +59,15 @@ from src.services.integrations.context import (
     workspace_in_org,
 )
 from src.services.search.fulltext_search_service import fulltext_search_service
+from src.services.search.page_filter import (
+    MAX_PAGE_FILTER_SOURCE_CHARS,
+    MAX_RERANK_PAGES,
+    PAGE_RERANK_TIMEOUT_SECONDS,
+    PageFilterFallback,
+)
+from src.services.search.page_filter import json_text_prefix as _json_text_prefix
+from src.services.search.page_filter import rank_pages, record_page_filter_fallback
+from src.services.search.page_filter import scan_pages as _scan_pages
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +150,24 @@ _PROJECT_SELECTOR: dict[str, Any] = {
     "format": "uuid",
     "description": "Required for workspace grants: which project to act on.",
 }
+# An account grant spans every project of the account; list_library names them.
+_ACCOUNT_PROJECT_SELECTOR: dict[str, Any] = {
+    "type": "string",
+    "format": "uuid",
+    "description": (
+        "Required for account connections: which project to act on "
+        "(list_library names them)."
+    ),
+}
+
+
+def _selector(workspace_bound: bool, account_bound: bool) -> dict[str, Any] | None:
+    if account_bound:
+        return dict(_ACCOUNT_PROJECT_SELECTOR)
+    if workspace_bound:
+        return dict(_PROJECT_SELECTOR)
+    return None
+
 
 _UUID_ITEMS = {"type": "string", "format": "uuid"}
 _OFFSET = {"type": "integer", "minimum": 0, "default": 0}
@@ -421,7 +448,7 @@ class ToolArgumentError(ValueError):
 
 
 def _registry_schema(
-    name: str, *, workspace_bound: bool = False
+    name: str, *, workspace_bound: bool = False, account_bound: bool = False
 ) -> tuple[str, dict[str, Any], type[BaseModel]]:
     if name in _GATEWAY_TOOLS:
         description, model = _GATEWAY_TOOLS[name]
@@ -447,9 +474,10 @@ def _registry_schema(
         properties[key] = (
             override if "type" in override else {**properties[key], **override}
         )
-    if workspace_bound and name not in _PROJECTLESS_TOOLS:
+    selector = _selector(workspace_bound, account_bound)
+    if selector is not None and name not in _PROJECTLESS_TOOLS:
         # Optional in the schema: omitting it is a structured error, not a 422.
-        properties["project_id"] = dict(_PROJECT_SELECTOR)
+        properties["project_id"] = selector
     schema["properties"] = properties
     schema["required"] = [
         key for key in schema.get("required", []) if key in properties
@@ -459,24 +487,29 @@ def _registry_schema(
 
 
 def _local_schema(
-    name: str, *, workspace_bound: bool = False
+    name: str, *, workspace_bound: bool = False, account_bound: bool = False
 ) -> tuple[str, dict[str, Any]]:
     """Description and advertised schema of a LOCAL_TOOLS entry (a private copy)."""
     description, schema, _scope = LOCAL_TOOLS[name]
     schema = deepcopy(schema)
-    if workspace_bound and name not in _PROJECTLESS_TOOLS:
-        schema["properties"]["project_id"] = dict(_PROJECT_SELECTOR)
+    selector = _selector(workspace_bound, account_bound)
+    if selector is not None and name not in _PROJECTLESS_TOOLS:
+        schema["properties"]["project_id"] = selector
     return description, schema
 
 
 def list_read_tools(
-    scopes: Iterable[str] | None = None, *, workspace_bound: bool = False
+    scopes: Iterable[str] | None = None,
+    *,
+    workspace_bound: bool = False,
+    account_bound: bool = False,
 ) -> list[ToolDescriptorDTO]:
     """The registry tools plus the local ones.
 
     Given a grant's ``scopes``, only the tools those scopes may call are
     listed; without them, every tool. A workspace grant also sees the optional
-    project selector on the tools that act on one project.
+    project selector on the tools that act on one project. An account grant
+    sees the same selector, worded for the account.
     """
     held = None if scopes is None else frozenset(scopes)
     catalog: list[ToolDescriptorDTO] = []
@@ -484,10 +517,12 @@ def list_read_tools(
         if held is not None and TOOL_SCOPES[name] not in held:
             continue
         if name in LOCAL_TOOLS:
-            description, schema = _local_schema(name, workspace_bound=workspace_bound)
+            description, schema = _local_schema(
+                name, workspace_bound=workspace_bound, account_bound=account_bound
+            )
         else:
             description, schema, _model = _registry_schema(
-                name, workspace_bound=workspace_bound
+                name, workspace_bound=workspace_bound, account_bound=account_bound
             )
         catalog.append(
             ToolDescriptorDTO(name=name, description=description, input_schema=schema)
@@ -528,9 +563,12 @@ def _validate_arguments(
     if name not in TOOL_SCOPES:
         raise ToolArgumentError("tool is not available to integrations")
     arguments = invocation.arguments
-    workspace_bound = context.workspace_id is not None
+    workspace_bound = context.binding_kind == "workspace"
+    account_bound = context.binding_kind == "account"
     if name in LOCAL_TOOLS:
-        _, schema = _local_schema(name, workspace_bound=workspace_bound)
+        _, schema = _local_schema(
+            name, workspace_bound=workspace_bound, account_bound=account_bound
+        )
         if set(arguments) - set(schema["properties"]):
             raise ToolArgumentError("unknown arguments")
         if set(schema["required"]) - set(arguments):
@@ -546,12 +584,14 @@ def _validate_arguments(
         # _target_project checks it is a UUID inside the grant's scope.
         _check_local_arguments(schema, arguments)
         return arguments
-    _, schema, model = _registry_schema(name, workspace_bound=workspace_bound)
+    _, schema, model = _registry_schema(
+        name, workspace_bound=workspace_bound, account_bound=account_bound
+    )
     # Identity keys were stripped from the advertised schema, so a caller
     # supplying user_id/organization_id/... is rejected here as an unknown
-    # argument, and so is project_id on a project grant. Only a workspace
-    # grant advertises (and so accepts) the project_id selector, and only on
-    # the tools that act on one project.
+    # argument, and so is project_id on a project grant. Only a workspace or
+    # account grant advertises (and so accepts) the project_id selector, and
+    # only on the tools that act on one project.
     allowed = set(schema["properties"])
     if set(arguments) - allowed:
         raise ToolArgumentError("unknown arguments")
@@ -747,69 +787,12 @@ async def _document_content(
 
 
 _MARK_TAGS = ("<mark>", "</mark>")
-PAGE_RERANK_TIMEOUT_SECONDS = 10.0
-MAX_RERANK_PAGES = 100
-MAX_PAGE_FILTER_SOURCE_CHARS = 1024 * 1024
 
 
 def _split_pages(content_text: str) -> list[tuple[int, str]]:
     """Preserve a leading preamble in the first marked page, never lose it."""
     pages, _ = _scan_pages(content_text)
     return [(number, text) for number, text, _ in pages]
-
-
-def _scan_pages(
-    source: str, *, max_pages: int | None = None, max_chars: int | None = None
-) -> tuple[list[tuple[int, str, int]], int]:
-    """Count all pages while copying only bounded candidates and text prefixes."""
-    pages: list[tuple[int, str, int]] = []
-    total = 0
-
-    def span_text(start: int, end: int) -> tuple[str, int]:
-        # Find stripped bounds without first allocating the entire page body.
-        while start < end and source[start].isspace():
-            start += 1
-        while end > start and source[end - 1].isspace():
-            end -= 1
-        stop = end if max_chars is None else min(end, start + max_chars)
-        return source[start:stop], end - start
-
-    def append_page(marker: re.Match[str], end: int) -> None:
-        nonlocal total
-        total += 1
-        if max_pages is not None and total > max_pages:
-            return
-        text, length = span_text(marker.end(), end)
-        if total == 1:
-            preamble, prefix_length = span_text(0, marker.start())
-            if prefix_length:
-                text = preamble + (f"\n{text}" if length else "")
-                length = prefix_length + (1 + length if length else 0)
-        pages.append((int(marker.group(1)), text[:max_chars], length))
-
-    previous = None
-    # Nine digits already allow implausibly large page counts. Longer markers
-    # remain text, avoiding both integer conversion failures and huge metadata.
-    for marker in re.finditer(r"(?m)^[ \t]*\[Page[ \t]+(\d{1,9})\][ \t]*\r?$", source):
-        if previous is not None:
-            append_page(previous, marker.start())
-        previous = marker
-    if previous is not None:
-        append_page(previous, len(source))
-    return pages, total
-
-
-def _json_text_prefix(text: str, budget: int) -> str:
-    """Longest prefix fitting an escaped UTF-8 JSON string's content budget."""
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        size = len(json.dumps(text[:mid], ensure_ascii=False).encode()) - 2
-        if size <= budget:
-            lo = mid
-        else:
-            hi = mid - 1
-    return text[:lo]
 
 
 def _bound_page_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -867,7 +850,6 @@ async def _retrieve_document_pages(
     """None means use FTS; unavailable means the document's access was revoked."""
     from src.core.config import settings
     from src.services.agent._pii_redact import redact_pii
-    from src.services.search.cohere_rerank_service import cohere_rerank_service
 
     row = (
         await db.execute(
@@ -883,54 +865,29 @@ async def _retrieve_document_pages(
         return _unavailable().content[0]
     title, content_text = row
     if len(content_text or "") > MAX_PAGE_FILTER_SOURCE_CHARS:
+        # Full-text search still covers the whole document; record the reason.
+        record_page_filter_fallback(
+            "source_too_large", document_id=document_id, surface="integration"
+        )
         return None
     pages, total_pages = await run_in_threadpool(
         _scan_pages,
         content_text or "",
         max_pages=MAX_RERANK_PAGES,
         max_chars=MAX_RESULT_BYTES,
+        # Past the cap, choose candidates across the whole document by lexical
+        # overlap rather than reranking only its first pages.
+        query=query,
     )
-    short_circuited = any(page[1] for page in pages) and (
-        total_pages <= settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT
+    selection = await rank_pages(
+        pages,
+        total_pages,
+        query,
+        top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
+        short_circuit=settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT,
+        timeout_seconds=PAGE_RERANK_TIMEOUT_SECONDS,
+        before_provider=db.rollback,
     )
-    model = None
-    rerank_succeeded = short_circuited
-    accepted = []
-    if short_circuited:
-        accepted = [(number, text, length, 1.0) for number, text, length in pages]
-    elif cohere_rerank_service.is_enabled and any(page[1] for page in pages):
-        # Blank extracted pages count toward pagination but Cohere rejects
-        # empty documents. Preserve the filtered list for response-index mapping.
-        candidates = [page for page in pages if page[1]]
-        # This endpoint owns a read-only request transaction. Copy scalar data
-        # above, then return its connection to the pool during the remote call.
-        # The post-provider authorization queries start a fresh transaction.
-        await db.rollback()
-        try:
-            outcome = await asyncio.wait_for(
-                cohere_rerank_service.rerank_with_outcome(
-                    query,
-                    documents=[
-                        {"id": str(number), "content": text}
-                        for number, text, _ in candidates
-                    ],
-                    top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
-                ),
-                timeout=PAGE_RERANK_TIMEOUT_SECONDS,
-            )
-            rerank_succeeded = outcome.succeeded
-            if rerank_succeeded:
-                scores = {
-                    result.index: result.relevance_score for result in outcome.results
-                }
-                accepted = [
-                    (number, text, length, scores[index])
-                    for index, (number, text, length) in enumerate(candidates)
-                    if index in scores
-                ]
-                model = cohere_rerank_service.model
-        except Exception:
-            logger.warning("retrieve_passages page rerank unavailable", exc_info=True)
     # Refresh caller authority and document liveness after worker/provider
     # awaits, including failures that would otherwise fall back to FTS.
     try:
@@ -946,9 +903,12 @@ async def _retrieve_document_pages(
         is None
     ):
         return _unavailable().content[0]
-    if not rerank_succeeded:
+    if isinstance(selection, PageFilterFallback):
+        record_page_filter_fallback(
+            selection.reason, document_id=document_id, surface="integration"
+        )
         return None
-    accepted.sort(key=lambda page: page[0])
+    accepted = selection.pages
     return _bound_page_result(
         {
             "chunks": [
@@ -967,8 +927,8 @@ async def _retrieve_document_pages(
             "page_filter": {
                 "accepted_pages": [number for number, _, _, _ in accepted],
                 "total_pages": total_pages,
-                "short_circuited": short_circuited,
-                "model": model,
+                "short_circuited": selection.short_circuited,
+                "model": selection.model,
             },
         }
     )
@@ -1533,6 +1493,15 @@ def _source_refs(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return refs[:MAX_RESULTS]
 
 
+def _selector_uuid(raw: Any) -> UUID:
+    if not isinstance(raw, str):
+        raise ToolArgumentError("project_id must be a UUID")
+    try:
+        return UUID(raw)
+    except ValueError as error:
+        raise ToolArgumentError("project_id must be a UUID") from error
+
+
 async def _target_project(
     db: AsyncSession, context: IntegrationContext, arguments: dict[str, Any]
 ) -> UUID | None:
@@ -1541,22 +1510,34 @@ async def _target_project(
     Project grants: always the bound Collection (a client project_id was
     already refused as an unknown argument). Workspace grants: ``project_id``
     is a *selector* and must be one of the workspace's live Collections as
-    ``authorized_scope`` computes them on this call. Returns None when a
-    workspace grant omits the selector. The selector is a UUID, never a name:
-    the agent helpers resolve any other string as a project NAME.
+    ``authorized_scope`` computes them on this call. Account grants: the
+    selector must satisfy the account rule in the statement that looks it up
+    (``authorized_scope_filter``; the account may hold more Collections than
+    one statement may bind). Returns None when a workspace or account grant
+    omits the selector. The selector is a UUID, never a name: the agent
+    helpers resolve any other string as a project NAME.
     """
     if context.project_id is not None:
         return context.project_id
+    if context.binding_kind == "account":
+        scope = await authorized_scope_filter(db, context)
+        raw = arguments.get("project_id")
+        if raw is None:
+            return None
+        chosen = _selector_uuid(raw)
+        found = await db.scalar(
+            select(Collection.id).where(
+                Collection.id == chosen, scope, Collection.is_deleted.is_(False)
+            )
+        )
+        if found is None:
+            raise IntegrationAccessDenied()
+        return chosen
     allowed = await authorized_scope(db, context)
     raw = arguments.get("project_id")
     if raw is None:
         return None
-    if not isinstance(raw, str):
-        raise ToolArgumentError("project_id must be a UUID")
-    try:
-        chosen = UUID(raw)
-    except ValueError as error:
-        raise ToolArgumentError("project_id must be a UUID") from error
+    chosen = _selector_uuid(raw)
     if chosen not in allowed:
         raise IntegrationAccessDenied()
     return chosen
@@ -1568,6 +1549,8 @@ async def _library_folders(
     organization_id: UUID,
     offset: int,
     limit: int,
+    *,
+    with_workspace: bool = False,
 ) -> Sequence[Row[Any]]:
     """One page of live Collections in ``scope``, with live document counts.
 
@@ -1589,8 +1572,16 @@ async def _library_folders(
         .correlate(Collection)
         .scalar_subquery()
     )
+    columns: list[Any] = [
+        Collection.id,
+        Collection.name,
+        Collection.description,
+        live_documents,
+    ]
+    if with_workspace:
+        columns += [Workspace.id, Workspace.name]
     rows = await db.execute(
-        select(Collection.id, Collection.name, Collection.description, live_documents)
+        select(*columns)
         .join(Workspace, Workspace.id == Collection.workspace_id)
         .where(
             scope,
@@ -1610,24 +1601,30 @@ async def _list_library(
     """The folders (projects) the grant may use, with live document counts.
 
     A project grant sees its own project, a workspace grant the live projects
-    of its workspace; the scope is resolved afresh on every call.
+    of its workspace, an account grant every project of the account, each with
+    its workspace id and name; the scope is resolved afresh on every call.
     """
     # The shape was checked by _validate_arguments; this only applies defaults.
     limit = _clamp(arguments.get("limit", MAX_RESULTS), 1, MAX_RESULTS, MAX_RESULTS)
     offset = _clamp(arguments.get("offset", 0), 0, MAX_OFFSET, 0)
     scope = await authorized_scope_filter(db, context)
+    account = context.binding_kind == "account"
     found = await _library_folders(
-        db, scope, context.organization_id, offset, limit + 1
+        db, scope, context.organization_id, offset, limit + 1, with_workspace=account
     )
-    folders = [
-        {
-            "id": str(folder_id),
-            "name": name,
-            "description": (description or "")[:MAX_FOLDER_DESCRIPTION_CHARS],
-            "document_count": int(document_count),
+    folders = []
+    for row in found[:limit]:
+        folder = {
+            "id": str(row[0]),
+            "name": row[1],
+            "description": (row[2] or "")[:MAX_FOLDER_DESCRIPTION_CHARS],
+            "document_count": int(row[3]),
         }
-        for folder_id, name, description, document_count in found[:limit]
-    ]
+        if account:
+            # Projects of several workspaces may share a name.
+            folder["workspace_id"] = str(row[4])
+            folder["workspace_name"] = row[5]
+        folders.append(folder)
     # Rows are bounded by characters, the cap by UTF-8 bytes: 50 long CJK or
     # emoji descriptions pass it. End the page at the longest prefix that fits
     # and let next_offset resume there, rather than failing the whole page.

@@ -38,11 +38,15 @@ def _request(attachment_ids: Any = None, thread_id: Any = None) -> Any:
 
 
 def _db(returned_row_id: Any) -> Any:
-    """A session whose INSERT ... RETURNING yields ``returned_row_id``."""
+    """Lock a linear thread, then return the requested INSERT result."""
+    thread_result = MagicMock()
+    thread_result.scalar_one_or_none.return_value = SimpleNamespace(
+        message_branching=False
+    )
     result = MagicMock(rowcount=1 if returned_row_id else 0)
     result.scalar_one_or_none.return_value = returned_row_id
     return SimpleNamespace(
-        execute=AsyncMock(return_value=result),
+        execute=AsyncMock(side_effect=[thread_result, result], return_value=result),
         commit=AsyncMock(),
         get=AsyncMock(return_value=None),
         add=MagicMock(),

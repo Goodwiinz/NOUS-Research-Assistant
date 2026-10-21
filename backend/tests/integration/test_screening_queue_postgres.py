@@ -198,7 +198,9 @@ def _upgrade(connection: Connection) -> None:
 async def screening_factory(
     request: pytest.FixtureRequest,
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    configured = os.getenv("RESEARCH_DECISION_DATABASE_URL")
+    configured = os.getenv("RESEARCH_DECISION_DATABASE_URL") or os.getenv(
+        "ORCHESTRATION_TEST_DATABASE_URL"
+    )
     url = make_url(
         configured or str(request.getfixturevalue("postgres_container")["url"])
     ).set(drivername="postgresql+asyncpg")

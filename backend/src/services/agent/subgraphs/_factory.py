@@ -301,7 +301,15 @@ def make_specialist_subgraph(
             render_dynamic_context,
         )
 
-        llm_client = _build_llm(state.get("model") or None)
+        reasoning_effort = state.get("reasoning_effort")
+        llm_client = _build_llm(
+            state.get("model") or None,
+            **(
+                {"reasoning_effort_override": reasoning_effort}
+                if reasoning_effort
+                else {}
+            ),
+        )
         dynamic_context = render_dynamic_context(
             state,
             config,
@@ -338,6 +346,9 @@ def make_specialist_subgraph(
                 llm_client.ainvoke(full, config=invoke_config),
                 timeout=AGENT_LLM_TIMEOUT_SECONDS,
             )
+            from src.services.agent._nodes_llm import normalize_ai_content
+
+            response = normalize_ai_content(response)
         except asyncio.TimeoutError:
             # Error, not warning: the turn still completes "successfully"
             # with the canned fallback below, so this log line is the only

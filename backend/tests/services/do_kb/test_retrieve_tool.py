@@ -25,6 +25,7 @@ from src.services.agent.tools_impl import (
 from src.services.do_kb.client import DOKnowledgeBaseError
 from src.services.do_kb.models import Chunk, RetrieveResult
 from src.services.do_kb.retrieval import DOKBRetrieveOutcome, DOKBRetrieveStatus
+from src.services.search.fulltext_search_service import fulltext_search_service
 
 TARGET_ID = UUID("11111111-1111-4111-8111-111111111111")
 DISTRACTOR_ID = UUID("22222222-2222-4222-8222-222222222222")
@@ -159,7 +160,7 @@ async def test_returns_empty_when_disabled(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_named_scope_is_authorized_before_disabled_limitation():
+async def test_named_scope_uses_org_scoped_fulltext_when_do_kb_is_disabled():
     user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
     db = MagicMock()
     db.execute = AsyncMock(
@@ -167,13 +168,31 @@ async def test_named_scope_is_authorized_before_disabled_limitation():
     )
     kb_lookup = AsyncMock(return_value="kb-1")
     provider = AsyncMock()
+    fulltext_search = MagicMock(
+        return_value=SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    document_id=str(TARGET_ID),
+                    title="Acceptance fixture",
+                    snippets=[SimpleNamespace(text="exactly seven sample sensors")],
+                    content_preview="Acceptance fixture content",
+                    relevance_score=0.8,
+                )
+            ]
+        )
+    )
     disabled_settings = _settings()
     disabled_settings.DO_KB_ENABLED = False
 
     with (
         patch("src.core.config.settings", disabled_settings),
+        patch(
+            "src.core.database.engine",
+            SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        ),
         patch("src.services.do_kb.retrieval.resolve_org_kb_uuid", kb_lookup),
         patch("src.services.do_kb.retrieval.retrieve_kb_chunks", provider),
+        patch.object(fulltext_search_service, "search", fulltext_search),
     ):
         result = await _tool_do_kb_retrieve(
             {
@@ -187,10 +206,81 @@ async def test_named_scope_is_authorized_before_disabled_limitation():
     authorization_sql = str(db.execute.await_args.args[0]).lower()
     assert "documents.organization_id" in authorization_sql
     assert "documents.is_deleted = false" in authorization_sql
-    assert result["reason"] == "scoped_retrieval_unavailable"
-    assert "No other document was substituted" in result["note"]
+    assert result["source"] == "postgres_fulltext"
+    assert result["chunks"][0]["document_id"] == str(TARGET_ID)
+    assert result["chunks"][0]["title"] == "Acceptance fixture"
+    assert result["chunks"][0]["text"] == "exactly seven sample sensors"
+    request = fulltext_search.call_args.kwargs["search_request"]
+    assert request.search_type.value == "fulltext"
+    assert request.filters.document_ids == [str(TARGET_ID)]
+    assert fulltext_search.call_args.kwargs["organization_id"] == str(
+        user.organization_id
+    )
     kb_lookup.assert_not_awaited()
     provider.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_disabled_local_fulltext_fallback_does_not_substitute_other_documents():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    db = MagicMock()
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
+    fulltext_search = MagicMock(return_value=SimpleNamespace(results=[]))
+    disabled_settings = _settings()
+    disabled_settings.DO_KB_ENABLED = False
+
+    with (
+        patch("src.core.config.settings", disabled_settings),
+        patch(
+            "src.core.database.engine",
+            SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        ),
+        patch.object(fulltext_search_service, "search", fulltext_search),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {"query": "sample sensors", "document_ids": [str(TARGET_ID)]},
+            db,
+            user,
+        )
+
+    assert result["source"] == "postgres_fulltext"
+    assert result["reason"] == "no_scoped_chunks"
+    assert "No other document was substituted" in result["note"]
+    request = fulltext_search.call_args.kwargs["search_request"]
+    assert request.filters.document_ids == [str(TARGET_ID)]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_disabled_local_fulltext_fallback_is_unavailable_on_non_postgres():
+    user = SimpleNamespace(id="user-1", organization_id=UUID(int=10))
+    db = MagicMock()
+    db.execute = AsyncMock(
+        return_value=_authorized_document_result([(TARGET_ID, None, "local")])
+    )
+    fulltext_search = MagicMock()
+    disabled_settings = _settings()
+    disabled_settings.DO_KB_ENABLED = False
+
+    with (
+        patch("src.core.config.settings", disabled_settings),
+        patch(
+            "src.core.database.engine",
+            SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+        ),
+        patch.object(fulltext_search_service, "search", fulltext_search),
+    ):
+        result = await _tool_do_kb_retrieve(
+            {"query": "sample sensors", "document_ids": [str(TARGET_ID)]},
+            db,
+            user,
+        )
+
+    assert result["reason"] == "scoped_retrieval_unavailable"
+    fulltext_search.assert_not_called()
 
 
 @pytest.mark.unit
@@ -250,7 +340,7 @@ async def test_happy_path_returns_chunks():
     with (
         patch(
             "src.core.config.settings",
-            MagicMock(DO_KB_ENABLED=True),
+            MagicMock(DO_KB_ENABLED=True, AGENT_DOKB_COHERE_RERANK=False),
         ),
         patch("src.services.do_kb.get_do_kb_client", return_value=fake_client),
     ):
@@ -1363,7 +1453,7 @@ async def test_no_project_id_keeps_all_chunks():
     with (
         patch(
             "src.core.config.settings",
-            MagicMock(DO_KB_ENABLED=True),
+            MagicMock(DO_KB_ENABLED=True, AGENT_DOKB_COHERE_RERANK=False),
         ),
         patch("src.services.do_kb.get_do_kb_client", return_value=fake_client),
     ):
