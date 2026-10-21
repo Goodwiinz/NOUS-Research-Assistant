@@ -11,6 +11,9 @@ import {
   type ToolDescriptor,
 } from "./client.ts";
 
+/** The part of the capability client the MCP server uses; a pinned catalog wraps it (pin.ts). */
+export type ToolCatalog = Pick<CapabilityClient, "listTools" | "invokeRead">;
+
 /** A tool served locally by this process (e.g. artifact publication). */
 export type LocalTool = {
   descriptor: ToolDescriptor;
@@ -28,7 +31,7 @@ export type LocalTool = {
  * never take identity, root or credentials from the model.
  */
 export function createNousMcpServer(
-  client: CapabilityClient,
+  client: ToolCatalog,
   localTools: LocalTool[] = [],
 ): Server {
   const server = new Server(

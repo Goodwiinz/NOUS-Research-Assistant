@@ -54,7 +54,8 @@ async def _binding_label(
 ) -> str | None:
     """The name of the consent's workspace (when workspace_bound) or project
     while the user may still reach it, else None. A consent binds exactly
-    one of the two (ck_integration_grant_requests_one_binding)."""
+    one of the two, or the whole account, which `list_connections` handles
+    before calling this (ck_integration_grant_requests_binding_kind)."""
     target = consent.workspace_id if workspace_bound else consent.project_id
     if target is None:
         return None
@@ -135,6 +136,26 @@ async def list_connections(db: AsyncSession, user: User) -> list[ConnectedDevice
     by_device: dict[UUID, list[ConnectionConsent]] = {d.id: [] for d in devices}
     labels: dict[tuple[bool, UUID], str | None] = {}
     for consent in consents:
+        if consent.binding_kind == "account":
+            # The whole account: there is no project or workspace name to
+            # look up, and it is never dropped, so it can always be revoked
+            # here. The page words it "Whole account".
+            by_device[consent.device_id].append(
+                ConnectionConsent(
+                    request_id=consent.id,
+                    kind="account",
+                    project_id=None,
+                    project_label=None,
+                    workspace_id=None,
+                    workspace_label=None,
+                    thread_id=None,
+                    thread_label=None,
+                    scopes=sorted(consent.scopes or []),
+                    status=str(consent.status),
+                    approved_at=consent.approved_at,
+                )
+            )
+            continue
         workspace_bound = consent.workspace_id is not None
         label = await _binding_label(
             db, user_id, organization_id, consent, workspace_bound, labels
@@ -184,7 +205,8 @@ async def _revoke_grants(db: AsyncSession, **match: Any) -> None:
 
 
 async def revoke_consent(db: AsyncSession, user: User, request_id: UUID) -> None:
-    """End one device's access to one project or workspace, and every grant issued under it."""
+    """End one device's access to one project, workspace or the whole account,
+    and every grant issued under it (an account approval's run grants too)."""
     user_id, organization_id = _identity(user)
     revoked = await db.execute(
         update(IntegrationGrantRequest)

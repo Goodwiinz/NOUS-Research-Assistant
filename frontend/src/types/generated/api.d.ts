@@ -4289,6 +4289,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/devices/{device_id}/account-workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Account Workspace Bindings
+         * @description The device's account folders, while its account approval lives;
+         *     empty otherwise.
+         */
+        get: operations["get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get"];
+        put?: never;
+        /**
+         * Create Account Workspace Binding
+         * @description Register an account folder: needs a live account approval of this
+         *     device that can run Codex (403 otherwise).
+         */
+        post: operations["create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/devices/{device_id}/revoke": {
         parameters: {
             query?: never;
@@ -4316,7 +4342,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Workspace Bindings */
+        /**
+         * Get Workspace Bindings
+         * @description The device's project folders. Account folders are listed by
+         *     GET /devices/{device_id}/account-workspaces.
+         */
         get: operations["get_workspace_bindings_api_v1_integrations_devices__device_id__workspaces_get"];
         put?: never;
         /** Create Workspace Binding */
@@ -11352,6 +11382,42 @@ export interface components {
             /** Rate Limit Per Hour */
             rate_limit_per_hour: number;
         };
+        /**
+         * AccountSummaryDTO
+         * @description What an account approval covers at the moment it is shown.
+         */
+        AccountSummaryDTO: {
+            /** Project Count */
+            project_count: number;
+            /** Workspace Count */
+            workspace_count: number;
+        };
+        /**
+         * AccountWorkspaceBindingCreate
+         * @description An account folder: a local write root that belongs to no project
+         *     (`bridge_workspace_bindings.project_id` NULL). Registering one needs a
+         *     live account run consent on the device; bind_account_workspace refuses
+         *     it otherwise.
+         */
+        AccountWorkspaceBindingCreate: {
+            /** Label */
+            label: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /** AccountWorkspaceBindingDTO */
+        AccountWorkspaceBindingDTO: {
+            /** Label */
+            label: string;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
         /** ActionDecision */
         ActionDecision: {
             /** Approved */
@@ -14272,7 +14338,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "project" | "workspace";
+            kind: "project" | "workspace" | "account";
             /** Project Id */
             project_id: string | null;
             /** Project Label */
@@ -15224,8 +15290,13 @@ export interface components {
         /**
          * DeviceListItemDTO
          * @description A paired computer as the chat composer lists it.
+         *
+         *     All three lists come from the device's live run consents: consumed, not
+         *     revoked, holding harness:execute. The mint stays the authority.
          */
         DeviceListItemDTO: {
+            /** Account Wide */
+            account_wide: boolean;
             /** Bound Thread Ids */
             bound_thread_ids: string[];
             /**
@@ -15235,6 +15306,8 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Project Ids */
+            project_ids: string[];
         };
         /** DiffHunk */
         DiffHunk: {
@@ -17040,6 +17113,11 @@ export interface components {
         /** GrantRequestCreate */
         GrantRequestCreate: {
             /**
+             * Account
+             * @default false
+             */
+            account: boolean;
+            /**
              * Device Id
              * Format: uuid
              */
@@ -17055,8 +17133,14 @@ export interface components {
         };
         /** GrantRequestDTO */
         GrantRequestDTO: {
+            account_summary?: components["schemas"]["AccountSummaryDTO"] | null;
             /** Approval Url */
             approval_url: string;
+            /**
+             * Binding Kind
+             * @enum {string}
+             */
+            binding_kind: "project" | "workspace" | "account";
             /**
              * Device Id
              * Format: uuid
@@ -24477,7 +24561,11 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
-        /** WorkspaceBindingCreate */
+        /**
+         * WorkspaceBindingCreate
+         * @description A project folder: a local write root tied to one project. Account
+         *     folders are registered at /devices/{device_id}/account-workspaces.
+         */
         WorkspaceBindingCreate: {
             /** Label */
             label: string;
@@ -32414,6 +32502,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_workspace_bindings_api_v1_integrations_devices__device_id__account_workspaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountWorkspaceBindingDTO"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_account_workspace_binding_api_v1_integrations_devices__device_id__account_workspaces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountWorkspaceBindingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountWorkspaceBindingDTO"];
                 };
             };
             /** @description Validation Error */

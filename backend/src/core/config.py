@@ -106,6 +106,15 @@ class Settings(BaseSettings):
     HARNESS_BRIDGE_ENABLED: bool = False
     # Kill switch for the scoped integration read gateway (/integrations/tools).
     NOUS_MCP_ENABLED: bool = False
+    # Rollout gate for account-wide harness connections: new account approval
+    # requests answer 503 while false. Keep it off until the website's approval
+    # page understands binding_kind (PR 3 of the account-connection plan): today
+    # it renders an account request as "Project: ()" with Approve enabled.
+    # It gates only CREATING account requests: a pending account request made
+    # just before the flag is turned off can still be decided and exchanged
+    # within its 10-minute window. Existing account approvals keep working;
+    # revoke them under Connected devices.
+    ACCOUNT_CONNECTIONS_ENABLED: bool = False
     # Artifact workspace rollout flags; reads stay available when writes are off.
     ARTIFACTS_ENABLED: bool = False
     ARTIFACT_EDITING_ENABLED: bool = False

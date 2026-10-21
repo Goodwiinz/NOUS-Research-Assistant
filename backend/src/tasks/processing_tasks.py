@@ -561,12 +561,21 @@ def process_document_ingestion(self, job_id: str):
             finally:
                 # SIGKILL cannot reach this acknowledgement. Its token then
                 # keeps successful earlier cleanup from hiding the late write.
+                # Expired ORM reads during graph fan-out reacquire the outer
+                # session's connection. Release it before the independent
+                # acknowledgement: workers may have a one-connection pool.
+                # Keep only the satellite outcome, never commit a stale row.
+                graph_outcome = (
+                    document.neo4j_index_status,
+                    document.neo4j_indexed_at,
+                )
+                db.rollback()
                 with SessionLocal() as outcome_db:
                     current = (
                         outcome_db.query(Document)
                         .filter(
-                            Document.id == document.id,
-                            Document.organization_id == document.organization_id,
+                            Document.id == document_ids[0],
+                            Document.organization_id == document_ids[1],
                         )
                         .populate_existing()
                         .with_for_update()
@@ -586,6 +595,10 @@ def process_document_ingestion(self, job_id: str):
                             )
                         outcome_db.commit()
                 db.refresh(document, attribute_names=["document_metadata"])
+                (
+                    document.neo4j_index_status,
+                    document.neo4j_indexed_at,
+                ) = graph_outcome
             commit_if_active()
 
         # Step 3: Embedding Generation — push the document to DO KB, the
