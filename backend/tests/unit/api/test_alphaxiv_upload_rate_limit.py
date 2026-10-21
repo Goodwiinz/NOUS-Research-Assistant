@@ -55,11 +55,12 @@ def _client(monkeypatch: pytest.MonkeyPatch, user_ids: list[UUID]) -> TestClient
 
 
 def _post(client: TestClient) -> int:
-    return client.post(
+    status: int = client.post(
         "/v1/assistant/upload-file",
         content=b"notes",
         headers={"X-Filename": "notes.txt", "Content-Type": "text/plain"},
     ).status_code
+    return status
 
 
 def test_thirty_first_upload_in_window_is_rejected_with_429(

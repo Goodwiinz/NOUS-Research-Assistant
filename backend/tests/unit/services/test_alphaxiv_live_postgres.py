@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -96,7 +96,7 @@ class PostgresHarness:
             payload={"content": "A durable answer."},
         )
 
-    async def writer(self, kind: str) -> Callable[[], Awaitable[None]]:
+    async def writer(self, kind: str) -> Callable[[], Coroutine[Any, Any, None]]:
         """The stateless validated write, or a warm producer recorder whose
         next write is the ledger append alone (no per-frame re-authorization)."""
         if kind == "record_live_frame":

@@ -1025,7 +1025,8 @@ def _apply(
 ) -> dict[str, Any] | None:
     """Client-side cursor application with the route's no-gap/no-dup rule."""
     if update["type"] == "replace":
-        return copy.deepcopy(update["payload"])
+        replaced: dict[str, Any] = copy.deepcopy(update["payload"])
+        return replaced
     for payload in update["payloads"]:
         assert view is not None and payload["runId"] == view["runId"]
         assert payload["seq"] == view["seq"] + 1, "gap or duplicate"

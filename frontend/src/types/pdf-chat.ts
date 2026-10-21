@@ -94,6 +94,16 @@ const isPage = (value: unknown): value is number =>
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value);
 
+type PageFilterFallback = NonNullable<PageFilter['fallback']>;
+const PAGE_FILTER_FALLBACKS: readonly PageFilterFallback[] = [
+  'disabled',
+  'provider_error',
+  'timeout',
+  'no_results',
+  'no_text',
+  'source_too_large',
+];
+
 /** SSE bodies are untyped JSON. Project only the bounded public contract;
  * malformed or older-server metadata never becomes a claimed page selection. */
 export function parsePageFilter(value: unknown): PageFilter | undefined {
@@ -146,6 +156,9 @@ export function parsePageFilter(value: unknown): PageFilter | undefined {
         ? data.model
         : null,
     selection_page_range: range ?? null,
+    fallback: PAGE_FILTER_FALLBACKS.includes(data.fallback as PageFilterFallback)
+      ? (data.fallback as PageFilterFallback)
+      : null,
     timing_ms: validTiming
       ? {
           average: timing.average as number,
