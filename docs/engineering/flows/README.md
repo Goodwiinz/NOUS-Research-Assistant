@@ -16,3 +16,4 @@ The contract for this directory is [../verification.md](../verification.md).
 | [document-upload.md](document-upload.md) | document upload and detail |
 | [project-creation-via-chat.md](project-creation-via-chat.md) | project creation via chat |
 | [alphaxiv-pdf-chat.md](alphaxiv-pdf-chat.md) | PDF chat compatibility; user-level QA planned |
+| [arxiv-paper-lifecycle.md](arxiv-paper-lifecycle.md) | metadata cache, explicit sync, recent import and stored PDF delivery |

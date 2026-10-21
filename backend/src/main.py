@@ -36,6 +36,7 @@ from src.api.arxiv import (
     arxiv_kg_router,
     arxiv_llm_bulk_router,
     arxiv_local_router,
+    arxiv_papers_router,
     arxiv_router,
 )
 from src.api.auth import auth_router, cli_auth_router
@@ -636,6 +637,7 @@ app.include_router(
     realtime_quality_metrics_router, prefix="/api/v2"
 )  # Real-time quality metrics API
 app.include_router(arxiv_router)  # ArXiv integration endpoints
+app.include_router(arxiv_papers_router)
 app.include_router(
     arxiv_kg_router, prefix="/api/v1/arxiv/kg"
 )  # ArXiv Knowledge Graph endpoints

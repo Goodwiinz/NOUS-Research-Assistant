@@ -430,7 +430,7 @@ test('v1 verification scenarios are registered with honest prerequisites', () =>
   assert.ok(byId['workflow.document-upload-and-attachment'].prerequisites.includes('browser'));
 });
 
-test('the real feature map covers every v1 feature with registered scenarios', async () => {
+test('the real feature map covers every covered feature with registered scenarios', async () => {
   const map = await loadFeatureMap(join(import.meta.dirname, '../../../docs/engineering/feature-map.yaml'));
   const ids = new Set(registry.map((scenario) => scenario.id));
   // Preserve the original coverage floor even when a newly mapped feature is
@@ -447,8 +447,11 @@ test('the real feature map covers every v1 feature with registered scenarios', a
     assert.ok(feature, `missing v1 feature: ${id}`);
     assert.equal(feature.status, 'covered', feature.id);
   }
-  for (const feature of map.features.filter((entry) => entry.status === 'covered')) {
-    assert.ok(feature.scenarios.length > 0, feature.id);
+  for (const feature of map.features) {
+    // Statuses are `planned` or `covered` (docs/plans/2026-10-08-nous-verify.md); only
+    // `covered` features must map scenarios, but every mapped id must be registered.
+    assert.ok(['planned', 'covered'].includes(feature.status), feature.id);
+    if (feature.status === 'covered') assert.ok(feature.scenarios.length > 0, feature.id);
     for (const id of feature.scenarios) assert.ok(ids.has(id), `${feature.id}: ${id}`);
   }
   assert.deepEqual(scenariosForFeatures(map, ['hitl-approve-deny']), ['workflow.project-creation-via-chat', 'workflow.hitl-deny']);

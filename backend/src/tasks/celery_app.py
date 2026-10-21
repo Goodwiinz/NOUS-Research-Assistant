@@ -47,6 +47,7 @@ celery_app = Celery(
         "src.tasks.deposit_tasks",
         "src.tasks.search_update_tasks",
         "src.tasks.document_embedding_tasks",
+        "src.tasks.arxiv_paper_tasks",
     ],
 )
 
