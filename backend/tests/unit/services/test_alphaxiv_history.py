@@ -254,6 +254,28 @@ async def test_recent_chats_require_explicit_binding_and_real_newest_message(
     assert recent[0].newest_message == START + timedelta(seconds=5)
 
 
+async def test_recent_chat_aggregate_is_scoped_to_the_selected_paper(
+    db: AsyncSession,
+) -> None:
+    """The newest-message aggregate must not group every thread in the table."""
+    statements: list[str] = []
+    engine = db.bind.sync_engine  # type: ignore[union-attr]
+
+    def capture(*args: Any) -> None:
+        statements.append(str(args[2]))
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        recent = await history.list_paper_chats(db, actor_id=ACTOR, paper_id=PAPER)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert [row.id for row in recent] == [CHAT]
+    grouped = [sql for sql in statements if "GROUP BY" in sql.upper()]
+    assert len(grouped) == 1
+    inner = grouped[0].upper().split("GROUP BY")[0].rsplit("FROM CHAT_MESSAGES", 1)[1]
+    assert "BRANCH_DOCUMENT_ID" in inner
+
+
 async def test_selection_uses_native_transaction_and_keeps_sibling_history(
     db: AsyncSession,
 ) -> None:

@@ -112,12 +112,18 @@ async def list_paper_chats(
     try:
         actor = await _fresh_actor(db, actor_id)
         await _paper(db, actor, paper_id)
+        # Aggregate only this paper's bound threads. Grouping every thread in
+        # chat_messages scaled with the whole table, not with the result.
         newest = (
             select(
                 ChatMessage.thread_id,
                 func.max(ChatMessage.created_at).label("newest_message"),
             )
+            .join(Thread, Thread.id == ChatMessage.thread_id)
             .where(
+                Thread.message_branching.is_(True),
+                Thread.branch_document_id == paper_id,
+                Thread.is_deleted.is_(False),
                 ChatMessage.is_deleted.is_(False),
                 ChatMessage.superseded_by_message_id.is_(None),
                 ChatMessage.role.in_((MessageRole.USER, MessageRole.ASSISTANT)),
