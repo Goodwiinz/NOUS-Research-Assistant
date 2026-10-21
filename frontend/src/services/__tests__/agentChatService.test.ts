@@ -113,8 +113,31 @@ describe('agentChatService.streamMessage SSE parsing', () => {
     expect(onRagContext).toHaveBeenNthCalledWith(1, contexts, {
       ...pageFilter,
       selection_page_range: null,
+      fallback: null,
     });
     expect(onRagContext).toHaveBeenNthCalledWith(2, []);
+  });
+
+  it('keeps a known page-filter fallback reason and drops an unknown one', async () => {
+    const pageFilter = {
+      document_id: 'doc-1',
+      accepted_pages: [],
+      total_pages: 8,
+      short_circuited: false,
+      model: 'reranker',
+      priorities: [],
+      timing_ms: null,
+    };
+    const contexts = [{ document_id: 'doc-1', page_number: 1 }];
+    global.fetch = fetchWith([
+      `event: rag_context\ndata: ${JSON.stringify({ contexts, page_filter: { ...pageFilter, fallback: 'timeout' } })}\n\n`,
+      `event: rag_context\ndata: ${JSON.stringify({ contexts, page_filter: { ...pageFilter, fallback: 'made_up' } })}\n\n`,
+      'event: done\ndata: {}\n\n',
+    ]);
+    const onRagContext = vi.fn();
+    await agentChatService.streamMessage(request, { onRagContext });
+    expect(onRagContext.mock.calls[0][1]).toMatchObject({ fallback: 'timeout' });
+    expect(onRagContext.mock.calls[1][1]).toMatchObject({ fallback: null });
   });
 
   it('ignores non-string answer and reasoning deltas', async () => {
