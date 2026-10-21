@@ -52,7 +52,7 @@ qdrant-client==1.19.1
 neo4j==6.4.1
 
 # Multimodal Processing
-pypdf>=6.20.0
+pypdf>=6.21.1
 PyMuPDF==1.28.2
 weasyprint==70.0
 pytesseract==0.3.13
