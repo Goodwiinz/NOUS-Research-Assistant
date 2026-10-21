@@ -1,7 +1,7 @@
 """Add opt-in canonical PDF message branches.
 
 Revision ID: pb01_pdf_message_branches
-Revises: ho04_handoff_org_slots
+Revises: ac01_account_bindings
 
 Existing threads retain chronological/tombstone behavior. No parent edges
 are inferred for historical messages. Nullable SET NULL links preserve the
@@ -27,7 +27,7 @@ Index lookups use ``to_regclass`` so they follow ``search_path``.
 import alembic.op as op
 
 revision = "pb01_pdf_message_branches"
-down_revision = "ho04_handoff_org_slots"
+down_revision = "ac01_account_bindings"
 branch_labels = None
 depends_on = None
 

@@ -13,3 +13,7 @@
 # commit/file/rule/line findings, not other credentials or scripts.
 3ffe5f60da7b13da43d1d5077cff3505d1779cdf:backend/scripts/validation/r8_live_proof.py:generic-api-key:940
 a707c4aaa39a47d72958c7bc417599f3142f3260:.gitleaksignore:generic-api-key:10
+
+# Historical discovery launcher: a fixed synthetic bearer label for the local
+# gateway double, never a provider or user credential. Match only this finding.
+fa2ecf5f17f358e3843e7f63d54f13ac25c6ae78:evals/harness-mcp-discovery-v1/environment/launcher/launch.py:generic-api-key:50

@@ -76,7 +76,10 @@ from src.services.agent.state import (
     THREAD_PERSISTENCE_EPHEMERAL,
 )
 from src.services.agent.trace_metadata import TraceSource, build_trace_metadata
-from src.services.integrations.context import DeviceBoundToAnotherChat
+from src.services.integrations.context import (
+    DeviceBoundToAnotherChat,
+    DeviceNotConnectedToProject,
+)
 from src.shared.enums import (
     TERMINAL_STREAM_EVENTS,
     AgentErrorCategory,
@@ -289,9 +292,11 @@ _CONFIRM_NOT_FOUND_CATEGORY = AgentErrorCategory.INVALID_REQUEST
 def _stream_failure_category(exc: BaseException) -> AgentErrorCategory:
     """Category for the /stream catch-all: a named category for the
     failures a user can act on (missing user message, concurrent writer,
-    unknown thread, a device bound to another chat); anything else goes to
-    ``classify_agent_error``, which returns ``internal`` unless it recognises
-    a cancellation, timeout, rate limit or model error."""
+    unknown thread, a device bound to another chat or not connected to this
+    chat's project); anything else goes to ``classify_agent_error``, which
+    returns ``internal`` unless it recognises a cancellation, timeout, rate
+    limit or model error."""
+
     from src.services.threads.message_branches import BranchAccessError
 
     if isinstance(exc, BranchAccessError):
@@ -308,6 +313,8 @@ def _stream_failure_category(exc: BaseException) -> AgentErrorCategory:
         return AgentErrorCategory.INVALID_REQUEST
     if isinstance(exc, DeviceBoundToAnotherChat):
         return AgentErrorCategory.DEVICE_BOUND_TO_ANOTHER_CHAT
+    if isinstance(exc, DeviceNotConnectedToProject):
+        return AgentErrorCategory.DEVICE_NOT_CONNECTED_TO_PROJECT
     return classify_agent_error(exc)
 
 
@@ -325,6 +332,8 @@ def _stream_failure_message(exc: BaseException) -> BaseException | str:
         return _CONFIRM_NOT_FOUND_MESSAGE
     if isinstance(exc, DeviceBoundToAnotherChat):
         return DeviceBoundToAnotherChat.client_message
+    if isinstance(exc, DeviceNotConnectedToProject):
+        return DeviceNotConnectedToProject.client_message
     return exc
 
 
@@ -2027,9 +2036,9 @@ async def stream_event_generator(
 
     stream_thread_id = request_body.thread_id or "unknown"
     trace_run_id = _uuid.uuid4()
-    config: Dict[str, Any] = (
-        {}
-    )  # Initialize before try block for safe access in except handlers
+    config: Dict[
+        str, Any
+    ] = {}  # Initialize before try block for safe access in except handlers
     db = AsyncSessionLocal()
     graph = None  # type: ignore[assignment]
     resolved_thread_id: Optional[str] = None

@@ -1,0 +1,52 @@
+services:
+  main:
+    build:
+      context: ../../..
+      dockerfile: evals/harness-mcp-discovery-v1/environment/Dockerfile
+    depends_on:
+      mock-nous:
+        condition: service_healthy
+      bridge:
+        condition: service_healthy
+    # `default` keeps public egress for the harness's model API and Harbor's
+    # agent install; `nous-eval` is the private link to the mock backend.
+    networks:
+      - default
+      - nous-eval
+
+  mock-nous:
+    build:
+      context: ./mock_nous
+    networks:
+      - nous-eval
+    volumes:
+      - bridge-credential:/run/nous-bridge:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2).read()"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  bridge:
+    build:
+      context: ../../..
+      dockerfile: evals/harness-mcp-discovery-v1/environment/Dockerfile
+    command: ["/usr/bin/python3", "-I", "/opt/nous-eval/bridge_host.py"]
+    networks:
+      - nous-eval
+    volumes:
+      - bridge-credential:/run/nous-bridge
+    healthcheck:
+      test: ["CMD", "/usr/bin/python3", "-c", "from pathlib import Path; raise SystemExit(0 if Path('/tmp/nous-bridge-ready').is_file() else 1)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  # Never mounted in main: the agent can call MCP but cannot impersonate it.
+  bridge-credential:
+
+networks:
+  # internal: the mock has no route out, and nothing but main can reach it.
+  nous-eval:
+    internal: true

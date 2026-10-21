@@ -11,6 +11,7 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -20,6 +21,31 @@ from src.core.config import settings
 logger = logging.getLogger(__name__)
 
 _MAX_ATTEMPTS = 2
+
+
+def _normalize_rerank_endpoint(endpoint: Optional[str]) -> Optional[str]:
+    """Accept Azure SDK bases while preserving full/custom operation URLs."""
+    if not endpoint:
+        return endpoint
+    try:
+        parsed = urlsplit(endpoint)
+    except ValueError:
+        return endpoint
+    azure_suffixes = (
+        ".services.ai.azure.com",
+        ".cognitiveservices.azure.com",
+        ".openai.azure.com",
+    )
+    if (
+        parsed.scheme in {"https", "http"}
+        and parsed.hostname
+        and parsed.hostname.endswith(azure_suffixes)
+        and parsed.path.rstrip("/") == "/openai/v1"
+    ):
+        return urlunsplit(
+            parsed._replace(path="/providers/cohere/v2/rerank", fragment="")
+        )
+    return endpoint
 
 
 def _retry_delay(response: httpx.Response, attempt: int) -> float:
@@ -65,7 +91,7 @@ class CohereRerankService:
     """
 
     def __init__(self):
-        self.endpoint = settings.COHERE_RERANK_ENDPOINT
+        self.endpoint = _normalize_rerank_endpoint(settings.COHERE_RERANK_ENDPOINT)
         self.api_key = settings.COHERE_RERANK_API_KEY
         self.model = settings.COHERE_RERANK_MODEL
         self.default_top_n = settings.COHERE_RERANK_TOP_N

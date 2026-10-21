@@ -21,7 +21,7 @@ from src.models.research_project import ResearchProject
 from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.thread import Thread
 from src.models.user import User
-from src.models.workspace import Workspace, WorkspaceMember
+from src.models.workspace import Workspace, WorkspaceMember, WorkspaceRole
 from src.schemas.artifact import ArtifactNotFound
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_tools import ToolInvocation
@@ -4128,3 +4128,196 @@ async def test_page_filter_refuses_document_with_foreign_organization(
     result = await _retrieve_one(db, context)
     assert result.is_error
     assert result.content[0]["error"] == "requested_documents_unavailable"
+
+
+# --- account grants: the selector across the whole account ------------------
+
+OUTSIDE_ORG, OUTSIDER_USER, OUTSIDE_WORKSPACE, OUTSIDE_PROJECT = (
+    uuid4() for _ in range(4)
+)
+
+
+def _account_context(scopes: Iterable[str] = TOOLS_READ) -> IntegrationContext:
+    return IntegrationContext(
+        user_id=USER,
+        organization_id=ORG,
+        binding_kind="account",
+        grant_id=uuid4(),
+        scopes=frozenset(scopes),
+    )
+
+
+async def _outside_the_account(db: AsyncSession) -> None:
+    """A live project USER may open as an explicit member of another
+    organization's workspace: authorized_project admits it, the account rule
+    does not."""
+    await db.execute(
+        insert(Organization).values(
+            id=OUTSIDE_ORG, name="Outside", storage_limit_bytes=1000000
+        )
+    )
+    await db.execute(
+        text(
+            "INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role, is_active, login_count, created_at, updated_at, is_deleted) VALUES (:id, :org, 'outsider@example.test', 'unused', 'Test', 'User', 'USER', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ),
+        {"id": str(OUTSIDER_USER), "org": str(OUTSIDE_ORG)},
+    )
+    await db.execute(
+        insert(Workspace).values(
+            id=OUTSIDE_WORKSPACE,
+            name="Outside",
+            owner_id=OUTSIDER_USER,
+            organization_id=OUTSIDE_ORG,
+        )
+    )
+    await db.execute(
+        insert(WorkspaceMember).values(
+            id=uuid4(),
+            workspace_id=OUTSIDE_WORKSPACE,
+            user_id=USER,
+            role=WorkspaceRole.EDITOR,
+        )
+    )
+    await db.execute(
+        insert(Collection).values(
+            id=OUTSIDE_PROJECT, name="Outside", workspace_id=OUTSIDE_WORKSPACE
+        )
+    )
+    await db.commit()
+
+
+def test_an_account_catalog_has_the_selector_where_a_workspace_catalog_has_it() -> None:
+    account = {t.name: t for t in list_read_tools(LIBRARY_READ, account_bound=True)}
+    workspace = {t.name: t for t in list_read_tools(LIBRARY_READ, workspace_bound=True)}
+    assert set(account) == set(workspace)
+    for name, tool in workspace.items():
+        selects = "project_id" in tool.input_schema["properties"]
+        assert ("project_id" in account[name].input_schema["properties"]) is selects
+    selector = account["search_documents"].input_schema["properties"]["project_id"]
+    assert selector["format"] == "uuid" and "account" in selector["description"]
+    # The workspace wording is unchanged, byte for byte.
+    assert workspace["search_documents"].input_schema["properties"]["project_id"] == {
+        "type": "string",
+        "format": "uuid",
+        "description": "Required for workspace grants: which project to act on.",
+    }
+
+
+async def test_an_account_tool_without_a_selector_asks_for_one(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    result = await invoke_read(
+        db, _account_context(), _invocation("list_project_documents")
+    )
+    assert result.content == [{"error": "project_id_required"}]
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+async def test_an_account_tool_is_denied_before_it_asks_for_a_selector(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    """Whether the account is still live is answered first, so a caller outside
+    it learns nothing from the missing-selector error."""
+    await db.execute(
+        update(Organization).where(Organization.id == ORG).values(is_active=False)
+    )
+    await db.commit()
+    with pytest.raises(IntegrationAccessDenied):
+        await invoke_read(db, _account_context(), _invocation("list_project_documents"))
+    adapters["_tool_list_project_documents"].assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("selected", "expected"),
+    [(PROJECT, DOC_IN_PROJECT), (FOREIGN_PROJECT, DOC_FOREIGN)],
+    ids=["first-workspace", "second-workspace"],
+)
+async def test_an_account_selector_reaches_projects_across_workspaces(
+    db: AsyncSession, selected: UUID, expected: UUID
+) -> None:
+    listed = await invoke_read(
+        db,
+        _account_context(),
+        _invocation("list_project_documents", project_id=str(selected)),
+    )
+    assert listed.is_error is False
+    assert listed.source_refs == [{"document_id": str(expected)}]
+
+
+async def test_an_account_selector_outside_the_account_is_denied(
+    db: AsyncSession, adapters: dict[str, AsyncMock]
+) -> None:
+    await _outside_the_account(db)
+    for project in (OUTSIDE_PROJECT, uuid4()):
+        with pytest.raises(IntegrationAccessDenied):
+            await invoke_read(
+                db,
+                _account_context(),
+                _invocation("list_project_documents", project_id=str(project)),
+            )
+    with pytest.raises(read_tools.ToolArgumentError):
+        await invoke_read(
+            db,
+            _account_context(),
+            _invocation("list_project_documents", project_id="Project"),
+        )
+    for adapter in adapters.values():
+        adapter.assert_not_awaited()
+
+
+async def test_list_library_of_an_account_names_each_folders_workspace(
+    db: AsyncSession,
+) -> None:
+    await _outside_the_account(db)
+    result = await invoke_read(
+        db, _account_context(LIBRARY_READ), _invocation("list_library")
+    )
+    assert result.is_error is False
+    folders = result.content[0]["folders"]
+    assert [(f["name"], f["workspace_name"]) for f in folders] == [
+        ("Foreign", "Other workspace"),
+        ("None", "Other workspace"),
+        ("Other", "Workspace"),
+        ("Project", "Workspace"),
+    ]
+    assert {f["workspace_id"] for f in folders} == {
+        str(WORKSPACE),
+        str(OTHER_WORKSPACE),
+    }
+
+
+@pytest.mark.parametrize(
+    "make_context", [_project_context, _workspace_context], ids=["project", "workspace"]
+)
+async def test_list_library_of_other_grants_keeps_its_exact_shape(
+    db: AsyncSession, make_context: Any
+) -> None:
+    result = await invoke_read(
+        db, make_context(LIBRARY_READ), _invocation("list_library")
+    )
+    for folder in result.content[0]["folders"]:
+        assert set(folder) == {"id", "name", "description", "document_count"}
+
+
+async def test_list_library_of_an_account_binds_no_value_per_collection(
+    db: AsyncSession, executed_sql: list[tuple[str, Any]]
+) -> None:
+    async def most_bound() -> int:
+        executed_sql.clear()
+        result = await invoke_read(
+            db, _account_context(LIBRARY_READ), _invocation("list_library")
+        )
+        assert result.is_error is False
+        return max(len(list(_bound_values(p))) for _sql, p in executed_sql)
+
+    before = await most_bound()
+    await db.execute(
+        insert(Collection).values(
+            [
+                dict(id=uuid4(), name=f"Folder {n:03}", workspace_id=WORKSPACE)
+                for n in range(60)
+            ]
+        )
+    )
+    await db.commit()
+    assert await most_bound() == before

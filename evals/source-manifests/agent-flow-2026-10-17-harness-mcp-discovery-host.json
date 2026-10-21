@@ -1,0 +1,1753 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-17T16:01:22.439600+00:00",
+  "status": "completed; NOT GATED",
+  "execution_repository_revision": "7d8e9ebb382ee700135b60b9bcbb2ff596a92d4c",
+  "execution_source_tree": "da15428ccc58d367aab62c772fc211c7b47b6111",
+  "bridge_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "task_digests": {
+    "harness-mcp-discovery-v1": "sha256:df2004c74d10a36b70d12444cbb16d3e37b57521022441b7ccc4f29909ac9b3b"
+  },
+  "dataset_digests": {
+    "harness-mcp-discovery-v1": "sha256:cceefadfb349344a40b7b9348491738cd442d87fa451387a10828efde94aed2f"
+  },
+  "source_inputs_sha256": "eb60b55f46771cf456f1cf351cd5911b54c55048ad3d176f90faf4069cbf838f",
+  "prepared_task_matches_clean_checkout": true,
+  "prepared_inputs_unchanged": true,
+  "pre_registration_sha256": "412cb1f0af96ab327816dc937ffe824c03bdb0d6271e6a96880e016e2c8bc228",
+  "classifier_sha256": "5dae281f4e713b1b141bc0e13a435e4c61b067db5a3e6b91394ae57796240d46",
+  "host_expected_hashes": {
+    "verifier_sha256": "af5d9e177f10a393a8e1adf27e2d77968d8c9666cb12e2cf66ac671a93d9ca69",
+    "truth_sha256": "128ddc7de986fdbcebe0522497bef58793d60fbc5a91a89bd5f9bd8d480a52b7",
+    "host_checker_sha256": "04a923a8f15d8852a162be8dd45dae23b3e474362bef2602a3a716bf7d8d54ae"
+  },
+  "harness": {
+    "version": "0.6.6",
+    "codex_cli_version": "0.161.0",
+    "model": "openai/gpt-5.6-terra",
+    "transport": "Azure Responses HTTP; websockets off",
+    "OPENAI_BASE_URL_forwarded": false,
+    "aggregate_sha256": "sha256:ab208148ce726605e3f3dc913c69e1afaf6191094f1559260c03fa34654bc9d3",
+    "digest_scope": "paths relative to installed Harbor package plus named controllers/repository helpers; all282 files exclude pycache, with no transitive dependency byte attestation",
+    "file_count": 282,
+    "files": [
+      {
+        "path": "evals/prepare_harness_discovery.py",
+        "sha256": "e7e3b91256ac0309815d5ccd11c9ab7a1a21f7ca2680780bb6678153531c9cdf"
+      },
+      {
+        "path": "evals/verify_discovery_trial.py",
+        "sha256": "04a923a8f15d8852a162be8dd45dae23b3e474362bef2602a3a716bf7d8d54ae"
+      },
+      {
+        "path": "harbor/__init__.py",
+        "sha256": "2c38e371ad59e72a824866a48e36b40bfdcbc3a201b885d8768d71fa93f2476f"
+      },
+      {
+        "path": "harbor/agents/base.py",
+        "sha256": "5d3f521d7c94e6c23b8713d89d6a32470d8ddadcb4879cd22ac8bd628fd1ff42"
+      },
+      {
+        "path": "harbor/agents/factory.py",
+        "sha256": "e07f9a5bec7cb61805fc0478b5015dd2dfdf8b0f1d1f6fb946ece2beb979de66"
+      },
+      {
+        "path": "harbor/agents/installed/aider.py",
+        "sha256": "dc67c9d8c7b9b7f37026f883f07aa194decfb2425c9579c02436babeffc0a6fd"
+      },
+      {
+        "path": "harbor/agents/installed/base.py",
+        "sha256": "f3905f73910ae22fcac23b8712f729ffd0806d946df286afb22b8dcc1079b41f"
+      },
+      {
+        "path": "harbor/agents/installed/claude_code.py",
+        "sha256": "ecd83757f19c1a89edf92df3c815c3814f2a31b25c4001fa3148d05b28d54715"
+      },
+      {
+        "path": "harbor/agents/installed/cline/__init__.py",
+        "sha256": "84d019c7c793122881ba953a0fdb972ea6a13953a0f11b473c9bb97a97ab698f"
+      },
+      {
+        "path": "harbor/agents/installed/cline/cline.py",
+        "sha256": "3da267bc16a74b09c3e867371774e9af251f59fa8bdea622b546c331b8d143f9"
+      },
+      {
+        "path": "harbor/agents/installed/codex.py",
+        "sha256": "653bcf38c7e2319f2866d81c6ca1cd3fd909265b053fc7e10d7daef36269415a"
+      },
+      {
+        "path": "harbor/agents/installed/copilot_cli.py",
+        "sha256": "08f4c87c9b8e7290973b25c6969ed83f7d238243b3043b10521404dbd1ff16d7"
+      },
+      {
+        "path": "harbor/agents/installed/cursor_cli.py",
+        "sha256": "e453cf10f9aac3955f8fca5393a0d39f692012c622c9c698c55be2d2902c2c3d"
+      },
+      {
+        "path": "harbor/agents/installed/devin.py",
+        "sha256": "f390d0fb29f60cd633e6d4d1896392c0f88168c4bb37a43478438ae4300aa8b2"
+      },
+      {
+        "path": "harbor/agents/installed/gemini_cli.py",
+        "sha256": "0600eb56b290bc1a075a1a92f08d7c0cad205bc0c88dc4126614a30f4cf4ec53"
+      },
+      {
+        "path": "harbor/agents/installed/goose.py",
+        "sha256": "6f4aa8984d5351c1db1d30cf355d4eec102b02d633dae0ab1d5c6cb747b1c630"
+      },
+      {
+        "path": "harbor/agents/installed/hermes.py",
+        "sha256": "8963cb15f02e895296c5224b07de2d40ab62af4c2e296f94ff0f62887ff8f67d"
+      },
+      {
+        "path": "harbor/agents/installed/kimi_cli.py",
+        "sha256": "61e72526200eaa78130dfe8d12074a719ee41caec8347cf587d756b46817fd90"
+      },
+      {
+        "path": "harbor/agents/installed/mini_swe_agent.py",
+        "sha256": "971594bd255d636172677b5c9ab59a147f64a2a56d096900b4e6088948320716"
+      },
+      {
+        "path": "harbor/agents/installed/nemo_agent.py",
+        "sha256": "cfa318671f4092c31599513eb59fbeb058757c43eab840df8d9c558d31668865"
+      },
+      {
+        "path": "harbor/agents/installed/nemo_agent_run_wrapper.py",
+        "sha256": "38b665fa752870bbabb4540d8bce83d2113fe91f94785cb2fdb8b54586b6b8cb"
+      },
+      {
+        "path": "harbor/agents/installed/opencode.py",
+        "sha256": "47d962c8d5b1d5ace0e50a1293f55c6f368489c5d335bdc283148c9dda32b0d4"
+      },
+      {
+        "path": "harbor/agents/installed/openhands.py",
+        "sha256": "b95a8dc6eb15ab9f022aad1e6babbf45ac0e9c950aef09f470c3cc2188cd0322"
+      },
+      {
+        "path": "harbor/agents/installed/openhands_sdk.py",
+        "sha256": "9c8acfb010b790c7eb2166b4e553f3e28afebfa68a406b00b729f258a74aa09f"
+      },
+      {
+        "path": "harbor/agents/installed/openhands_sdk_runner.py",
+        "sha256": "aa962e42775f929786b0ce02ff260089bf011dd525dec7f6712645e7895ecadc"
+      },
+      {
+        "path": "harbor/agents/installed/pi.py",
+        "sha256": "d8d99ebca41406eff52bfb4788ce164ef018af9654695bfdcfd5c9db19ee6e93"
+      },
+      {
+        "path": "harbor/agents/installed/qwen_code.py",
+        "sha256": "db277f448d365f7bfeb97f8bc9773addb3abf8fd9718ec2cfcc0d51b149b2286"
+      },
+      {
+        "path": "harbor/agents/installed/rovodev_cli.py",
+        "sha256": "1e1865afb6b8df2f4901d924208b92f1293cfb7eebf92eba0de8382df5688fb6"
+      },
+      {
+        "path": "harbor/agents/installed/swe_agent.py",
+        "sha256": "eebaec4b6041a058e964491e6f0ae6e31326a0063b8da958763a845fee1a0462"
+      },
+      {
+        "path": "harbor/agents/installed/trae_agent.py",
+        "sha256": "20b1e0770bd194beaf35909b3715c411edbb20ad6b74b1ca5427ab695106d1be"
+      },
+      {
+        "path": "harbor/agents/nop.py",
+        "sha256": "90dbc7db23f56d4585ba81acc00a0f3f457af2fc83b04c0c722a8d3df0bbade3"
+      },
+      {
+        "path": "harbor/agents/oracle.py",
+        "sha256": "bb5d535ded3b2da9875ff4bc747c090426b2e2a654429f2ef26915c3054cb52d"
+      },
+      {
+        "path": "harbor/agents/terminus_2/__init__.py",
+        "sha256": "d8cebb1fbd7e3ca6390879d747acc261fe9604107514ded06be5c1c787c84c62"
+      },
+      {
+        "path": "harbor/agents/terminus_2/asciinema_handler.py",
+        "sha256": "98a58cd8640745d5712ec6f7c3313b8d622706249b795378b914926ff563738d"
+      },
+      {
+        "path": "harbor/agents/terminus_2/get-asciinema-timestamp.sh",
+        "sha256": "a75362b93fd028504d0f7e89ec777f5ecb2db3b74ce1bece2641cfbc0e01262f"
+      },
+      {
+        "path": "harbor/agents/terminus_2/templates/terminus-json-plain.txt",
+        "sha256": "89a3dc3a15752b748a99fb907c9251ab31a464e13386583fb48476b078b54a34"
+      },
+      {
+        "path": "harbor/agents/terminus_2/templates/terminus-xml-plain.txt",
+        "sha256": "721c0ada54921cbb7bb9f817f2306c79ff4ba3381d08be7eb97fbeb0d99d298d"
+      },
+      {
+        "path": "harbor/agents/terminus_2/templates/timeout.txt",
+        "sha256": "32bf9aa7b157a6a0e0ba0d33b81e59dd67204276f158afc1fe6cb684ced68872"
+      },
+      {
+        "path": "harbor/agents/terminus_2/terminus_2.py",
+        "sha256": "4a6433f17e186010dcd3f57fb44f79c9121da9b0b0a3ac8f7fba7bc3edb3185b"
+      },
+      {
+        "path": "harbor/agents/terminus_2/terminus_json_plain_parser.py",
+        "sha256": "6c82599ace43feab6ce3f95a351bd0cdab8f30abe8183fc578641f1d7215723b"
+      },
+      {
+        "path": "harbor/agents/terminus_2/terminus_xml_plain_parser.py",
+        "sha256": "6a1883b7013b1c4d44a80f80f489c10d85e40abbc0effb6796e1afd4298be5b3"
+      },
+      {
+        "path": "harbor/agents/terminus_2/tmux_session.py",
+        "sha256": "59fbd4c0ac97a37d5e9f614877d5183252ccb50c9ef513ad91155314d93c3801"
+      },
+      {
+        "path": "harbor/agents/utils.py",
+        "sha256": "be00760e765b1f89e00e572e5f08b2781a4df17737a2385d9352c5b967d9d83c"
+      },
+      {
+        "path": "harbor/analyze/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/analyze/analyzer.py",
+        "sha256": "f261f4caf1b80d33b3a45e0f2ae1ac45f5688af5ac14642baf006e1d6a1e1d72"
+      },
+      {
+        "path": "harbor/analyze/backend.py",
+        "sha256": "50c85f09143cc6ec3cb3272154cd7e47422aaac8c8f061f06ec0118d5f826ea0"
+      },
+      {
+        "path": "harbor/analyze/checker.py",
+        "sha256": "cc28c7ecb4c86bb8c67063bb13ab4183dbb2053c9ccdb42a4934cc527789e40a"
+      },
+      {
+        "path": "harbor/analyze/models.py",
+        "sha256": "7b7846d94ed4c92e473b7687038613f3323fd150db03e3e62f241599de20746d"
+      },
+      {
+        "path": "harbor/analyze/prompts/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/analyze/prompts/analyze-job.txt",
+        "sha256": "d0c6f5227207995892e42b7b863c7db038fbaafb20d5398f5fce515852607112"
+      },
+      {
+        "path": "harbor/analyze/prompts/analyze-rubric.toml",
+        "sha256": "01f7a994577501d94105352c6a1f35759c4c74c54deac5e81afe235e3738d5c2"
+      },
+      {
+        "path": "harbor/analyze/prompts/analyze.txt",
+        "sha256": "adcb79fa7d94b298e5264d1cb4fcee2d3f91d78c4431539270a19a3e291bbecd"
+      },
+      {
+        "path": "harbor/analyze/prompts/check-rubric.toml",
+        "sha256": "aba65265c5066a6e6b7724f2b6d4cf538b56562bd894e9ef0c357e07ea009777"
+      },
+      {
+        "path": "harbor/analyze/prompts/check.txt",
+        "sha256": "228b257f4b848b88f6f1e4f2c43d99fa36d83a5e90ffc9bd6bd9e1480e8dcd5b"
+      },
+      {
+        "path": "harbor/auth/__init__.py",
+        "sha256": "914472d261e8cbbc84b985d6912bcf3783bce48346a2834d675252bf701a11cd"
+      },
+      {
+        "path": "harbor/auth/callback_server.py",
+        "sha256": "057c42299478a954b9e811e633745a125fe0a30a3b41e58523402a105474c4c1"
+      },
+      {
+        "path": "harbor/auth/client.py",
+        "sha256": "3afa657b3b501283c3305f7bcd085125f031b59350ec62ff759e804142fc6d79"
+      },
+      {
+        "path": "harbor/auth/constants.py",
+        "sha256": "4a23f193784e8ebdb7a1547383f1d8df7f738d273f7ec214280ca3ba073f8966"
+      },
+      {
+        "path": "harbor/auth/errors.py",
+        "sha256": "0c9b126a6de6566464146ee298c2df61b36f3d381a1768b865145269b04678aa"
+      },
+      {
+        "path": "harbor/auth/file_storage.py",
+        "sha256": "1a20c56066b46ea201a9b5a2239caf3a35164759154b882376bb3ca60f6372e2"
+      },
+      {
+        "path": "harbor/auth/handler.py",
+        "sha256": "9ac5626fa25183c5567ec61143e7aac16d2e513e986ae1d8067d05f476c8c43b"
+      },
+      {
+        "path": "harbor/auth/retry.py",
+        "sha256": "40002c790f730840ac95863e9e6b06fb0250b2044bd8edac6dd396692bcb3fd5"
+      },
+      {
+        "path": "harbor/cli/adapter_review.py",
+        "sha256": "afe56ec1c9644de6976c08baa2a754be789cf0a72537e8c96e4c39192e5b0325"
+      },
+      {
+        "path": "harbor/cli/adapter_wizard.py",
+        "sha256": "d045ee1834c840aee7967a5e37f3f7fdce6a4218a2952757ed407760f504de28"
+      },
+      {
+        "path": "harbor/cli/adapters.py",
+        "sha256": "b63106de8914e6eb753c6ad4511bc32e9b32dad0f76dec21a6ea271926db8930"
+      },
+      {
+        "path": "harbor/cli/add.py",
+        "sha256": "d1077df29670ee44d40d934add787a0570ab8777f373ed64a8b9d301f4f296f1"
+      },
+      {
+        "path": "harbor/cli/admin/admin.py",
+        "sha256": "693763331a7329b0127e6a14c3a288d075c48c28829b3711753c40e63155e352"
+      },
+      {
+        "path": "harbor/cli/admin/docker-compose.build.yaml",
+        "sha256": "ea84a2e07997eb3ed750fd5c5ea8f11cf5b981bc7b1fd97d3c1ca14dd3ef9ec0"
+      },
+      {
+        "path": "harbor/cli/analyze.py",
+        "sha256": "8cb9564f7381e1307377fee3e84a4cf9e76222e281e1fd1a5ba3661b0e1aac83"
+      },
+      {
+        "path": "harbor/cli/annotator/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/cli/annotator/annotate-task.md",
+        "sha256": "91ea960cb6ff1891ac0be37da85e229e8d1f6b5aec46334a8bb3b5a858c12d00"
+      },
+      {
+        "path": "harbor/cli/annotator/annotator.py",
+        "sha256": "fa6378a407b3651d3fc1c6ab59cae92e241239bfca123e39be80e7437848e5df"
+      },
+      {
+        "path": "harbor/cli/auth.py",
+        "sha256": "27efe45e82daf9fc7576fedd6714bb320322680cdc310b8a9eb5d42cf51430a6"
+      },
+      {
+        "path": "harbor/cli/cache.py",
+        "sha256": "1a980972288335d8068ecb5c66100a3bce936635b4eeed1eee7e5185c730a7c7"
+      },
+      {
+        "path": "harbor/cli/datasets.py",
+        "sha256": "0a9f84571f4b97875ea7b794b7fc1a147d17373729f847251ed84a45a0ed1dec"
+      },
+      {
+        "path": "harbor/cli/debug_checker/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/cli/debug_checker/debug_checker.py",
+        "sha256": "4f29fe60246c0aabae2aab7f81b428050a641e14b508d616005df4362c6f3194"
+      },
+      {
+        "path": "harbor/cli/debug_checker/debug_prompt.txt",
+        "sha256": "3788cd1d639a2f4003e6d54d080b4933b171ec048b4c081a619f9eaab0c6e86f"
+      },
+      {
+        "path": "harbor/cli/debug_checker/models.py",
+        "sha256": "de8ec36f0df744cb66b700bb95df696583c46edd5fcdb389633bb280785899c2"
+      },
+      {
+        "path": "harbor/cli/download.py",
+        "sha256": "61cf3b6d2b7ada3de44dcc072781c207693821157e70d104e3ea06e7e9394ec5"
+      },
+      {
+        "path": "harbor/cli/init.py",
+        "sha256": "ede7016ca1119fa3670644667c614396dee6f3fbc8c82b1d3f34bc3632ce46d8"
+      },
+      {
+        "path": "harbor/cli/job_sharing.py",
+        "sha256": "72e7d2e2039f601956f7bf7daf9ed4556ea7ef759065185ff53e7d6b732d6869"
+      },
+      {
+        "path": "harbor/cli/jobs.py",
+        "sha256": "f7b6313d50f19bd0b78ca036ebaf56f1a42fca90965d49e60185681a359a4901"
+      },
+      {
+        "path": "harbor/cli/main.py",
+        "sha256": "903d04ef0d4c5a77e7c13343e78a29d32797a211d50ff1338c3afb4eb521cbe6"
+      },
+      {
+        "path": "harbor/cli/notifications.py",
+        "sha256": "0f59f5529a0edfc257fee92c70668ec17718f40c3d6f5df608375b1fd74f3ae2"
+      },
+      {
+        "path": "harbor/cli/publish.py",
+        "sha256": "356a5e225a2a25df557080f6cf17cef27b470b3c4904cec7f148e0339a610d12"
+      },
+      {
+        "path": "harbor/cli/quality_checker/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/cli/quality_checker/check_prompt.txt",
+        "sha256": "19afd967bef82e2d823cec8e731e02e18e714416de86ce0691ecbfefc6ed7989"
+      },
+      {
+        "path": "harbor/cli/quality_checker/default_rubric.toml",
+        "sha256": "0b2bf9e42e8a6290d9f43dab68c9ba61e5e00784deef0f586ca53af608f2903d"
+      },
+      {
+        "path": "harbor/cli/quality_checker/models.py",
+        "sha256": "781af146898c881703b89eab38a6fc4fdf3075a5d1fe0939f5c4665e636d6431"
+      },
+      {
+        "path": "harbor/cli/quality_checker/quality_checker.py",
+        "sha256": "c6d41c6fc5fa62f40cf8345af43cefbe407277ecb917cc5262fc6290e6751457"
+      },
+      {
+        "path": "harbor/cli/remove.py",
+        "sha256": "398711b160eb36dcfce445e3ee421f8946f02422ba6ed8d07d1f6821c4138115"
+      },
+      {
+        "path": "harbor/cli/sweeps.py",
+        "sha256": "69563db119922355300abb78db7a6f76fcf38b3cec7e68484ae907bda0f36f52"
+      },
+      {
+        "path": "harbor/cli/sync.py",
+        "sha256": "80acf33d7490ee082d2a4fcc25624b7426d33a37fd1fa6ba134b58b7a4516a82"
+      },
+      {
+        "path": "harbor/cli/tasks.py",
+        "sha256": "e29a38337ffbd32df185b077af40844c32d4c6a46e2c13c03ae68a0790e1fe4c"
+      },
+      {
+        "path": "harbor/cli/template-adapter/README.md",
+        "sha256": "8ac4f506e9122299647d9e99383a2c68af8920918e625e3ea1b2ac3d88563391"
+      },
+      {
+        "path": "harbor/cli/template-adapter/adapter-oracle.yaml.tmpl",
+        "sha256": "8348ddb15197f437646fd726ac6d7de8112e5f9476b2a8a3b35eb4a5185c8370"
+      },
+      {
+        "path": "harbor/cli/template-adapter/adapter.py.tmpl",
+        "sha256": "7424871fb6d99907edf023a61d62d50b65adc03c8f2a21b82432618128f90fbf"
+      },
+      {
+        "path": "harbor/cli/template-adapter/adapter_metadata.json",
+        "sha256": "47003b3ee4bc2c29ed2490672bcdca883def2721244cd020f119273cd5aedbd8"
+      },
+      {
+        "path": "harbor/cli/template-adapter/main.py.tmpl",
+        "sha256": "f6bdd5a0add5edf8d56aa3b241e89dd06422dd939955f2c8be0222722dff6d0b"
+      },
+      {
+        "path": "harbor/cli/template-adapter/parity_experiment.json",
+        "sha256": "81c0b28e96db8a390d94172f6b47f2c23e8b39b550502b312e348ac2777aada6"
+      },
+      {
+        "path": "harbor/cli/template-adapter/task-template/environment/Dockerfile",
+        "sha256": "6043e6667589022a3658b967bb17cb8d9e4bcdd3dc0931a7aaee2d6cbe941141"
+      },
+      {
+        "path": "harbor/cli/template-adapter/task-template/instruction.md",
+        "sha256": "e7b6b784bdac1dea28c8a3a1f29ea58cb4c6a60e400baf2b19d3d036aa750d66"
+      },
+      {
+        "path": "harbor/cli/template-adapter/task-template/solution/solve.sh",
+        "sha256": "a4df1c2f163bad31bb3d085db7049b198a3dc660c2f5d7f711716e60a5ce976e"
+      },
+      {
+        "path": "harbor/cli/template-adapter/task-template/task.toml",
+        "sha256": "33a27445fe08c9d614eae1e4afb32f24f60c2ac81a2e6e739d5bf9f91704f537"
+      },
+      {
+        "path": "harbor/cli/template-adapter/task-template/tests/test.sh",
+        "sha256": "609e701993c6ce220f13e5cebee4da53543297a5b6e8fd9f7eb838601ecb577b"
+      },
+      {
+        "path": "harbor/cli/template-metric/metric.py",
+        "sha256": "52904120417c9a58c21750ce5e2eb721c4b0ef1c1536d0b31d208e55e377ead9"
+      },
+      {
+        "path": "harbor/cli/template-task/.gitignore",
+        "sha256": "9a8dd8d9b6c3adb8e9e56328df27deef859a3e98fffc9b8133c8b22207c25953"
+      },
+      {
+        "path": "harbor/cli/template-task/environment/Dockerfile",
+        "sha256": "609c87cda17b93e63c8f9c6c9286fbc3dcceb761c2cfb0f1c0d74bf8141a543e"
+      },
+      {
+        "path": "harbor/cli/template-task/instruction.md",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/cli/template-task/pytest-tests/test.sh",
+        "sha256": "e26daee2de02446ae541140c19d4616cc85818bb3291713657e2bd360db6248a"
+      },
+      {
+        "path": "harbor/cli/template-task/pytest-tests/test_outputs.py",
+        "sha256": "24d63c4308ecfbacbeac9c5cb2fb6c104b1e170dc40deb3cf61e9f2091f9310e"
+      },
+      {
+        "path": "harbor/cli/template-task/solution/solve.sh",
+        "sha256": "38241b65dbe53dbd55be479a71261f6ad9578589a0c0a324dca795c13056d996"
+      },
+      {
+        "path": "harbor/cli/template-task/task.toml",
+        "sha256": "ff538c8d5752442a5bdf6dcb8269953b401c4b768e8a624d2ac1b15f43250898"
+      },
+      {
+        "path": "harbor/cli/template-task/tests/test.sh",
+        "sha256": "24df404270a12e1197b51059eded2c8a03935849a81913e18baeceec9bee84a2"
+      },
+      {
+        "path": "harbor/cli/traces.py",
+        "sha256": "ef319919f0ecb37fa6cfb2710333ed2383702aec7ad00bd2608452bec5e77aa2"
+      },
+      {
+        "path": "harbor/cli/trials.py",
+        "sha256": "a72795955f78c1fe7f0083eb7d69ee6d648235ff8f3fee7c70b48d0d7bcafdfd"
+      },
+      {
+        "path": "harbor/cli/upload.py",
+        "sha256": "fca26e77c16e25e3752abb95ef684431b571dd15189b02d10d3da417bc0ba337"
+      },
+      {
+        "path": "harbor/cli/utils.py",
+        "sha256": "e0fcad9a758da59d105f4b14f6b21bd1516f00e17e2dc78726d64be67c696fdd"
+      },
+      {
+        "path": "harbor/cli/view.py",
+        "sha256": "94eaf1e35184d39b4a564b6b508e39ee6e8caf805b471c3f7c9aa79318bbb3f3"
+      },
+      {
+        "path": "harbor/constants.py",
+        "sha256": "5cd8cc32f48fe7873032ef38bfc99af79ae881aeb306bd1519b390b9f8680023"
+      },
+      {
+        "path": "harbor/db/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/db/client.py",
+        "sha256": "ecf1fc03cf1f5f5c40cfbc6767de70aeaac41ae0aa0def9ad759c71fd21c3924"
+      },
+      {
+        "path": "harbor/db/types.py",
+        "sha256": "4bfc388bc70096b92530b103ce9f8c4dba3bc422d68346c32e093a84f00eaeed"
+      },
+      {
+        "path": "harbor/download/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/download/downloader.py",
+        "sha256": "1e02ea0c605de2d2db2f781ddce15f170cd2c79b4d9617021643ce2fbc74d99b"
+      },
+      {
+        "path": "harbor/environments/apple_container.py",
+        "sha256": "3d2387174ccd5e98a75ce5875ecdee4ba8e19927b72c1f6526b32c3e465b4214"
+      },
+      {
+        "path": "harbor/environments/base.py",
+        "sha256": "64a8d6138c417cf8fc2bd7d51bdddd86d43fd0e691faad5f2b962ad2a54d1f0d"
+      },
+      {
+        "path": "harbor/environments/capabilities.py",
+        "sha256": "608283a71263acded7648bd9ef39cf3715d8706779309cd94766d013762c07bd"
+      },
+      {
+        "path": "harbor/environments/daytona.py",
+        "sha256": "8aec7563ce2cc655ff7730fb7cc9aaee9a3d9bc3e79bec5793d2535b96b1cca8"
+      },
+      {
+        "path": "harbor/environments/docker/__init__.py",
+        "sha256": "16fb19fda068ae3ccfc96c02896831196385fee2c21f45198a1d86789dd2ab34"
+      },
+      {
+        "path": "harbor/environments/docker/docker-compose-base.yaml",
+        "sha256": "440387e00b822fe9fa175033057f3f050a9c140595808482d40d6dc6a8e14cc8"
+      },
+      {
+        "path": "harbor/environments/docker/docker-compose-build.yaml",
+        "sha256": "e363cbb606a6a2b9781b8e7c26fb31a83140536d4d55c4a3cb937e3d176b762f"
+      },
+      {
+        "path": "harbor/environments/docker/docker-compose-no-network.yaml",
+        "sha256": "17ceef0a82e7dfb63d9f5ce974350f392dd8a323eac174ec69d28a90c7de8388"
+      },
+      {
+        "path": "harbor/environments/docker/docker-compose-prebuilt.yaml",
+        "sha256": "1dfdd58a598685bb60fb90ca11c4fc16024b5cb1cdf73d83f8f84a2a4978e4d4"
+      },
+      {
+        "path": "harbor/environments/docker/docker-compose-windows-keepalive.yaml",
+        "sha256": "dc9900d924b2d75ba03c4e02167e51929a084fd89580320bbf30abc7f84b4bea"
+      },
+      {
+        "path": "harbor/environments/docker/docker.py",
+        "sha256": "37e1f54df10aeed766a2e750bea51c692bcd7323ce3ba7607214e4506010798a"
+      },
+      {
+        "path": "harbor/environments/docker/docker_unix.py",
+        "sha256": "6b9773d3d6a1fff04f28e479be87569314d98c0652b88505b9e64b045b39e27d"
+      },
+      {
+        "path": "harbor/environments/docker/docker_windows.py",
+        "sha256": "7d076cdc04f5cc5fec93e712a472b0c3c1e1b76a45d78fb1ad37d8f0dfbe6252"
+      },
+      {
+        "path": "harbor/environments/e2b.py",
+        "sha256": "cb841b708f3d4babeedf02506d3feebbf6eb798635d21da10d9e3e28b08351e3"
+      },
+      {
+        "path": "harbor/environments/factory.py",
+        "sha256": "32841136a07702f446d6f61eb6020a205eb2710f1310005ebbc1909ec3826591"
+      },
+      {
+        "path": "harbor/environments/gke.py",
+        "sha256": "9fe7c288302f6a789fb9fb9c735af980a8aca56a1242c2379722fb67d6d2157a"
+      },
+      {
+        "path": "harbor/environments/islo.py",
+        "sha256": "c38ebf6382a4fe5f6a0ab36d6a7573c4a5190b9479d542c90da95ace78c08025"
+      },
+      {
+        "path": "harbor/environments/modal.py",
+        "sha256": "9c033141a622a61ac6fb16bf494c3d43da02441d746edeee0cb7153e0b2ab277"
+      },
+      {
+        "path": "harbor/environments/runloop.py",
+        "sha256": "5b38dfc7d1397220d3c808bfefc9cc7ba0e0dcb55d69953a3f01f0bd303efbe1"
+      },
+      {
+        "path": "harbor/environments/singularity/README.md",
+        "sha256": "c4bac8f68dfb3cff07754b811a3fb94a64bb4d4c6983d6448c27d22e4fa12e29"
+      },
+      {
+        "path": "harbor/environments/singularity/__init__.py",
+        "sha256": "c29f8e06a85f6b6529157fb3a62ec2bb40b9a13cd9f15f04ba30137974dfad2c"
+      },
+      {
+        "path": "harbor/environments/singularity/bootstrap.sh",
+        "sha256": "97be6fadd9d3eeeaa9905c0de5de6dc2699e07c599de26d3037910adfb6af193"
+      },
+      {
+        "path": "harbor/environments/singularity/server.py",
+        "sha256": "bf0a43321edb39ec553dfd9e7795fdff69bb90c580c4af67b536121e87564324"
+      },
+      {
+        "path": "harbor/environments/singularity/singularity.py",
+        "sha256": "9f51d3ce0be00793b370c75d76102651fc1b9ecda90eecb6284e2b4fca7bb076"
+      },
+      {
+        "path": "harbor/environments/tensorlake.py",
+        "sha256": "17188b31f0d7020abf08b94af9b4ca6eff0d07eaaeaf6d961179a1075d52d098"
+      },
+      {
+        "path": "harbor/job.py",
+        "sha256": "d363d7c0d7fa4c66655b1952d4bf66724b0b511a1ed040713faa7fcc0d14818c"
+      },
+      {
+        "path": "harbor/llms/base.py",
+        "sha256": "7a6b03a835d8f62f770291a94bc6269291675e60a38c74c0b8a764c692a522a9"
+      },
+      {
+        "path": "harbor/llms/chat.py",
+        "sha256": "74b8c42d9dcd416e468ca9092e2982ccf657d8c4ef444508baced80b9d9405cf"
+      },
+      {
+        "path": "harbor/llms/lite_llm.py",
+        "sha256": "f32a2bb940d498ed481d91329bd6dd0ae57117325e1f904f1df251b5f161914d"
+      },
+      {
+        "path": "harbor/llms/tinker.py",
+        "sha256": "b21254845695e2cc229e35e43e26afee834806fa06034fc27894b38923a2bef8"
+      },
+      {
+        "path": "harbor/llms/utils.py",
+        "sha256": "caeafb2fde61ef764e2ad3bba4755018f59325b07cf08cc3bdd4af7c24f7f5ff"
+      },
+      {
+        "path": "harbor/mappers/terminal_bench.py",
+        "sha256": "4a67cb011de30cd558aecc8331d26ff113671e7b52460d1e474ee646d6ab69e8"
+      },
+      {
+        "path": "harbor/metrics/base.py",
+        "sha256": "2ee9dfef4a5d9cbc115f6b1e669527cd21f5475e0a8993de64dbb55a5762902c"
+      },
+      {
+        "path": "harbor/metrics/factory.py",
+        "sha256": "0da2cd698a0bd1f5efeb1f5fc3ce134409fb82bf6ec239dc52029ed83be3fe2e"
+      },
+      {
+        "path": "harbor/metrics/max.py",
+        "sha256": "d81af99d156944a2500ea5c268ea4cdb8893927861c38a403a28677ea77d278f"
+      },
+      {
+        "path": "harbor/metrics/mean.py",
+        "sha256": "475a6901d296483b6e7474ba5856c6ee1b526a960d982ebc25b55fce7e84fe57"
+      },
+      {
+        "path": "harbor/metrics/min.py",
+        "sha256": "91813f5f1161f8379d4084a130582d0f2b3f0b77e735847b0dcd6be2eefe10e6"
+      },
+      {
+        "path": "harbor/metrics/sum.py",
+        "sha256": "08df39140f4e9ac219ef0dfa5984e6889c120d17726ff7d72f0bc55b93dfa9f0"
+      },
+      {
+        "path": "harbor/metrics/uv_script.py",
+        "sha256": "f6809317e30792bf72d2f7587c42b4f721df36339ce30dfa71ce28b4fb2ef6b7"
+      },
+      {
+        "path": "harbor/models/.DS_Store",
+        "sha256": "65ba14670dc4582f23568a33495d5b5ade7a3403afb6cfe3afb35a7c064d55b3"
+      },
+      {
+        "path": "harbor/models/agent/context.py",
+        "sha256": "323e4708716bc011bd9bf80b20c5c96ccc17a6515934dc59e2d9d14b49f60d91"
+      },
+      {
+        "path": "harbor/models/agent/name.py",
+        "sha256": "331f59461e9b0f64cb28ff2ab677835d74034ac8434b4412e2985eb5e1148658"
+      },
+      {
+        "path": "harbor/models/agent/rollout_detail.py",
+        "sha256": "6af5970f5a8c28341287e5304bb7aa8ed91a3edeb5f8a27d8d11203d00d34306"
+      },
+      {
+        "path": "harbor/models/agent/trajectory_config.py",
+        "sha256": "4b2a1d81f95ece116a2156383e18da17479b25d60bc1bd562bafc4500301fa93"
+      },
+      {
+        "path": "harbor/models/dataset/manifest.py",
+        "sha256": "8b0244eb5cba9ecc7819805a40b907dc837718d823bc751370bf1ff5c3333d26"
+      },
+      {
+        "path": "harbor/models/dataset/paths.py",
+        "sha256": "13ade60a6e5d95bcebfef5904ba422cc0719848e02c8a4977b2f84e3c6037091"
+      },
+      {
+        "path": "harbor/models/dataset_item.py",
+        "sha256": "cb8a7edd3410d428330d25e2c1ded58e2d96713136073868dce081d0dde4a3bd"
+      },
+      {
+        "path": "harbor/models/difficulty.py",
+        "sha256": "600e413ade9af5bcd5c5c5b9bb18198abc1389869167dfc9bf530ff9c52c08c5"
+      },
+      {
+        "path": "harbor/models/environment_type.py",
+        "sha256": "b49450d5c270574331b624a14b8597284e7e7c9a10e77f3abd140a4f44c0a69b"
+      },
+      {
+        "path": "harbor/models/job/config.py",
+        "sha256": "e32fa80f6a43e5d60d5916b3a5f9923e597993af08100bdd25619ea02a07b3a7"
+      },
+      {
+        "path": "harbor/models/job/lock.py",
+        "sha256": "4021769937f3d29c741d89c3d27cdbd62b59cfd64a5dcca471202cabcbde76a6"
+      },
+      {
+        "path": "harbor/models/job/result.py",
+        "sha256": "9a55089a001c86e4fa0e3cd1ee01a4e13f8aad160a1e2be4c4fa3d37a01ebdac"
+      },
+      {
+        "path": "harbor/models/metric/__init__.py",
+        "sha256": "6083695ee6e0c83ed140b7efc844fd48799f3e5de9506e0fb7f7eb7ffb591b17"
+      },
+      {
+        "path": "harbor/models/metric/config.py",
+        "sha256": "f22910afecc04a95a8171cbad80dd4ab16e5b056cd42da1d46b1495a6b587b28"
+      },
+      {
+        "path": "harbor/models/metric/type.py",
+        "sha256": "6c4110638a8176d6bcaa383600079fa081bec6fef3820fbafbe44458b79cf087"
+      },
+      {
+        "path": "harbor/models/metric/usage_info.py",
+        "sha256": "28cdbbfb5f2ef1d59bde2c6aef26a1b4195c0838564687b751276b53c8534cf5"
+      },
+      {
+        "path": "harbor/models/package/reference.py",
+        "sha256": "12a1137c6ab786c0997acebdb656d8573c2bb81e94d92beffb6eafad3e2e3be5"
+      },
+      {
+        "path": "harbor/models/package/version_ref.py",
+        "sha256": "ecb6f6e53675d23f855af309033dce780a7911c18943920814cdb1416ad5f7d5"
+      },
+      {
+        "path": "harbor/models/registry.py",
+        "sha256": "1dac233bb49a1e601dd9735a51fa2414af87cf690773925bd9144d75bd8e2a89"
+      },
+      {
+        "path": "harbor/models/task/config.py",
+        "sha256": "77aac5109927ff827c5b9ee4b47da57c0920e2c5e76b11e396bbd2c60dd9237d"
+      },
+      {
+        "path": "harbor/models/task/id.py",
+        "sha256": "c18ff1f48abba2699d57f9963e1b9da751c01a5a8798bd4b1f638cabffa428fc"
+      },
+      {
+        "path": "harbor/models/task/paths.py",
+        "sha256": "75dfa2c649b8a16e372d06799269ef0163d3c7f87d1254eb020419d05ca46785"
+      },
+      {
+        "path": "harbor/models/task/task.py",
+        "sha256": "b037188aeacdf1fed64c4964672967bee02964d0cca5714da229364881cfe47a"
+      },
+      {
+        "path": "harbor/models/trajectories/__init__.py",
+        "sha256": "6d42a5d2832d055387b72436309aea0cba669659bb16b664a742639fe58ecbad"
+      },
+      {
+        "path": "harbor/models/trajectories/agent.py",
+        "sha256": "ae26f91b1aa9cba2f9f308b3b1b6a8e92c0851bb191e4bd8df3042b49a0425c6"
+      },
+      {
+        "path": "harbor/models/trajectories/content.py",
+        "sha256": "f7ebfb9d0d77969d75e0d9172f84827c5463fd6ea8e83f9a0ef7e1177875c2c3"
+      },
+      {
+        "path": "harbor/models/trajectories/final_metrics.py",
+        "sha256": "c4897c3b7f6d6be0d891d5fc9a72d13407d01c897c099e3ca195c50424734caf"
+      },
+      {
+        "path": "harbor/models/trajectories/metrics.py",
+        "sha256": "c6d724d80d250dd27fefc4462a3f70aff2333fe42775382cb8073b889becf165"
+      },
+      {
+        "path": "harbor/models/trajectories/observation.py",
+        "sha256": "2bb40e781053428e172af45110b0119bda4143594d592e414e9af0a60f057d28"
+      },
+      {
+        "path": "harbor/models/trajectories/observation_result.py",
+        "sha256": "edbe26ca85aa8ef5f13a08a62d4d777d20832a7a5b67dcfa9162d6dbdaaf4c0a"
+      },
+      {
+        "path": "harbor/models/trajectories/step.py",
+        "sha256": "6d8cc176449e0d5be46b40fdc9802bcb417f6b11d295c111e670055552abaa4a"
+      },
+      {
+        "path": "harbor/models/trajectories/subagent_trajectory_ref.py",
+        "sha256": "207388b30eec20aaba3d21effb66f984caecfa0cb23dbaaa8fc055abd6347aea"
+      },
+      {
+        "path": "harbor/models/trajectories/tool_call.py",
+        "sha256": "b28fc0526c45a5a253edaaaa305a8f53ac436e5fd44918fe4dadbe573214030b"
+      },
+      {
+        "path": "harbor/models/trajectories/trajectory.py",
+        "sha256": "75efa9fa53720099814df1895f8f84d9dc414037df3b8bdb36887640bbaf69f5"
+      },
+      {
+        "path": "harbor/models/trial/config.py",
+        "sha256": "53b9d1d418acd8de7a7e9abc5f0f2df2350b0d7eb5d7fa2a5f7247cea4d66ab7"
+      },
+      {
+        "path": "harbor/models/trial/paths.py",
+        "sha256": "ceb2b961342e702a4afca9558ee77ae63a932bdd52e779a5ea2cfb721d39229e"
+      },
+      {
+        "path": "harbor/models/trial/result.py",
+        "sha256": "08e59cba3e2d792910a8555ddc07785d191dceb6cae98d537c9a2f33ac1e33de"
+      },
+      {
+        "path": "harbor/models/verifier/result.py",
+        "sha256": "4ce7378d3782f9f11082db66341e55058919145955b17745167e987d6bad93df"
+      },
+      {
+        "path": "harbor/publisher/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/publisher/packager.py",
+        "sha256": "9a1ae0a18575f98798bcfe0d9746ea8a792861430db77605a6106b28c36e1c73"
+      },
+      {
+        "path": "harbor/publisher/publisher.py",
+        "sha256": "0327772a9d8235b3158da6be57942418d10c289cfa9dbcd31a186f3ae8d38cbb"
+      },
+      {
+        "path": "harbor/registry/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/registry/client/__init__.py",
+        "sha256": "d569731aa7943f5304084762b0da62862f3c580cea390e790052b1108835fed1"
+      },
+      {
+        "path": "harbor/registry/client/base.py",
+        "sha256": "42cb2517fc4f8ee66bdd532e5a0068a5864a3c272edc72e171a17ccc5cceacf9"
+      },
+      {
+        "path": "harbor/registry/client/factory.py",
+        "sha256": "4b0b791f208cd8ad64e22b12109ea5d526a79f2d0319ae0b2361dba93cd04397"
+      },
+      {
+        "path": "harbor/registry/client/harbor/config.py",
+        "sha256": "bd059802800e86ef9e7a7239a9a14faec13cb7b1c75211ddccc394fb34f6fd40"
+      },
+      {
+        "path": "harbor/registry/client/harbor/harbor.py",
+        "sha256": "7f6a47eecde6a9e5fbd52db513974f63765f27d823aa1b855086c6bb5b49f5a4"
+      },
+      {
+        "path": "harbor/registry/client/json.py",
+        "sha256": "904092157aac4a9e247ef0fb5d8494e8c5df4066c66130986302f7d0c8f019e2"
+      },
+      {
+        "path": "harbor/registry/client/package.py",
+        "sha256": "6d614dbbbc023e17809a957e0d7b7492da63cfac6eb8b9e96869a607acf0d863"
+      },
+      {
+        "path": "harbor/storage/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/storage/base.py",
+        "sha256": "09a7ad1456520229cdac5ffb617c9552889f4971ec3bf7e50ff619e59b706ca2"
+      },
+      {
+        "path": "harbor/storage/resumable.py",
+        "sha256": "1a503715315e19957d144e8124bc170990b8b17c02166b0590089461e2b7cee2"
+      },
+      {
+        "path": "harbor/storage/supabase.py",
+        "sha256": "686925899605f5f29e4245baca26cb6763dc67c25e91fe9e97795a7bee147e8f"
+      },
+      {
+        "path": "harbor/tasks/client.py",
+        "sha256": "1cf8a9bac475024ccbb8d3d5cbeb9df821ac53f4fdb456c6bb4e651af29c5127"
+      },
+      {
+        "path": "harbor/trial/hooks.py",
+        "sha256": "dee7b6e1768a7a1b3e3bd5baaa573974de6f5b78a4e45e00d08f7b1731bf452d"
+      },
+      {
+        "path": "harbor/trial/queue.py",
+        "sha256": "d5dc93cf30fb95c9cd8b2687801b2a51820ff71fab09d24f9f130e77e1634882"
+      },
+      {
+        "path": "harbor/trial/trial.py",
+        "sha256": "3cd6cd879c2ccda62c283aa85951f372480e1ada616c57a679bfd4f08bff0515"
+      },
+      {
+        "path": "harbor/upload/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "harbor/upload/db_client.py",
+        "sha256": "66ddb48c8fe941b2aa0824f14544e1a7c854af7d6099f81ab1c6fd649e40a2f9"
+      },
+      {
+        "path": "harbor/upload/storage.py",
+        "sha256": "f285aaf8b623985af3b7b185850389c346dd1eb89f6b893f00a80caee2836b9a"
+      },
+      {
+        "path": "harbor/upload/uploader.py",
+        "sha256": "1f5c4010d66a9aef3c9e4f5ed415b3ab5ae6eed034b8774f1c28a5eff2bfa0ee"
+      },
+      {
+        "path": "harbor/utils/env.py",
+        "sha256": "bd0a94dfc593fcf2f076bab355c99e6e1a9850d4e4fba34a9584c9fe0050ebec"
+      },
+      {
+        "path": "harbor/utils/logger.py",
+        "sha256": "7469fb9db0164020138a9d1b357d568353005bb685d585e0b135c0f66a4724f0"
+      },
+      {
+        "path": "harbor/utils/optional_import.py",
+        "sha256": "f4fb04cf55c3797aec142165496bdf0a2415fcbe88300a1b2c2ce6885a96cb55"
+      },
+      {
+        "path": "harbor/utils/pass_at_k.py",
+        "sha256": "a81e63e0d4caae56b6cf2e5847bed123e3895a77f24f5b7e34cc11901aafc2c4"
+      },
+      {
+        "path": "harbor/utils/scripts.py",
+        "sha256": "e8fbe52e7c29cb92f9730ad31efbb68dfa8aaa3e0a38c5439700d23aa803ec8c"
+      },
+      {
+        "path": "harbor/utils/templating.py",
+        "sha256": "22c72a6f2d83b2223baf7bf90e4fb5f6b9639f3eb6467eb86817e1122d1837f0"
+      },
+      {
+        "path": "harbor/utils/traces_utils.py",
+        "sha256": "07cfe5bece97e8b9c12562f4478666cbc7ddac01c6576c80ae0b02ba522b2941"
+      },
+      {
+        "path": "harbor/utils/trajectory_utils.py",
+        "sha256": "0c7e42303b521ce001a56aba3b3ea64d5d8d0bf5da37c9bf83d4b9c0769eff60"
+      },
+      {
+        "path": "harbor/utils/trajectory_validator.py",
+        "sha256": "e6399e9754a0339b6280f6173a7589a3613e08f806414e3e18da0a0b5c657d8a"
+      },
+      {
+        "path": "harbor/verifier/verifier.py",
+        "sha256": "8efc67f46713a7cbbfa27b41826b814889851fd0d2e2e0ca0d8f19432e4c9363"
+      },
+      {
+        "path": "harbor/viewer/__init__.py",
+        "sha256": "30ff12b83172d711b317b4273c6b96e14da433a8547460d4f879ddc61cd9b4bd"
+      },
+      {
+        "path": "harbor/viewer/chat.py",
+        "sha256": "27277be84aee6363c1c766fada9cff2a889f727abc1e8f4db576f42d1c193bb7"
+      },
+      {
+        "path": "harbor/viewer/models.py",
+        "sha256": "d99920d377c62a26dda826676c483f8ab9354bf6dab5becbf6d80c1eec298d42"
+      },
+      {
+        "path": "harbor/viewer/scanner.py",
+        "sha256": "9b11c3c1dc8177b3a7bb3063d0d97665cb697a0e916c5ebe2473cfae4a00540c"
+      },
+      {
+        "path": "harbor/viewer/server.py",
+        "sha256": "0aefcafaa3f71f9562a7ea10eacf8ed07dc50ec3532d63d318fa132603e387c5"
+      },
+      {
+        "path": "harbor/viewer/static/assets/QueryClientProvider-DyOTpkps.js",
+        "sha256": "58d17e7d36608279f425fdbb58d60e26d534683bf1efe1c78071c8908c959e3f"
+      },
+      {
+        "path": "harbor/viewer/static/assets/api-B4mMK7V3.js",
+        "sha256": "a084fbe8b3e4cfaa2c90502f181bd490e6bfa2cd7d9ed4cdb5d610cec85be234"
+      },
+      {
+        "path": "harbor/viewer/static/assets/card-C3VloV4t.js",
+        "sha256": "1792027c4fecda955d124e4ac140a456f3ad65bedd217ef7a859684585fbd080"
+      },
+      {
+        "path": "harbor/viewer/static/assets/code-block-DKZ54R7Q.js",
+        "sha256": "0241eb0dfd04bc58f9af4a5ff2fca6e3629b89cddd6eb4562ff954b0b503572b"
+      },
+      {
+        "path": "harbor/viewer/static/assets/compare-6uZxrj59.js",
+        "sha256": "2e9aa58a0de7e997c22b034e280410d10c07914e68c0ce6b78eedc3384afa376"
+      },
+      {
+        "path": "harbor/viewer/static/assets/compare-Br3z3FUS-jQxQ-aQQ.js",
+        "sha256": "14a13ae1e84747e33ff75a712c463e602ea7e10b124feb0d8341d12b29227000"
+      },
+      {
+        "path": "harbor/viewer/static/assets/copy-button-BEz9QhwL.js",
+        "sha256": "c1103c4aa29553db43ec04d20debcaae483d3569f2b580a0ae668d7a8ca3bc03"
+      },
+      {
+        "path": "harbor/viewer/static/assets/empty-B4TigCd6.js",
+        "sha256": "0d05f2215a4d35480f207f986c232cd5f56c98013ad44c89b4aca106990efac4"
+      },
+      {
+        "path": "harbor/viewer/static/assets/entry.client-Cm5j2mFM.js",
+        "sha256": "4c294a7bf1878bd6c5152a8fc37d08c920aefdc440c84f7ac91d2c07594cef15"
+      },
+      {
+        "path": "harbor/viewer/static/assets/folder-open-Ci7AlUva.js",
+        "sha256": "68c5f078edda5b432d0db0722dbf4445dbd0778b154991b37b8d600889cbf808"
+      },
+      {
+        "path": "harbor/viewer/static/assets/home-D0quKx2d.js",
+        "sha256": "752eabff2ec1169442a59a2977fde1afd8aebba15e343c229864f66863797ea4"
+      },
+      {
+        "path": "harbor/viewer/static/assets/hooks-cOzo79aD.js",
+        "sha256": "f678baa91545d159cea3017f6fb13ef618236cf7f5f0211a45da86e7483025cd"
+      },
+      {
+        "path": "harbor/viewer/static/assets/index-Bjz4zLE_.js",
+        "sha256": "b77004e0c34f6bfbc5a17c1772e8fedbdacc07f73e3ddaae104ed06f6ee778e7"
+      },
+      {
+        "path": "harbor/viewer/static/assets/index-C-H0-wcS.js",
+        "sha256": "35c6a73e0bb8ff4dd214eb7f1dbbf6d8849760f1551e37885db9f4518b41a948"
+      },
+      {
+        "path": "harbor/viewer/static/assets/index-CMF2uIAM.js",
+        "sha256": "0986feb3a9722e4302fff2988b5ea3fd81342d11a3c98d72b9a30969ce3b4e3d"
+      },
+      {
+        "path": "harbor/viewer/static/assets/index-DkPzhUU3.js",
+        "sha256": "436f985fdef3b78c8433eaa2e7916c5df4f2f1106d166ac4796616ec2c465e70"
+      },
+      {
+        "path": "harbor/viewer/static/assets/input-TF5-nt3O.js",
+        "sha256": "fae5b4fe3df6941b8427505afe61abbf66daea22e444a29e977208f9a67ae19f"
+      },
+      {
+        "path": "harbor/viewer/static/assets/job-Br18gPj-.js",
+        "sha256": "ceca965268063f3f981c4b9b80a3a241eb909ed7ca78d43e6d38b92e649865ec"
+      },
+      {
+        "path": "harbor/viewer/static/assets/manifest-ea7bd61b.js",
+        "sha256": "cd6de19b8c1741a29ce889134a74f520ac9d680aaf686caea51c4d7bab61c81a"
+      },
+      {
+        "path": "harbor/viewer/static/assets/mutation-DV3ZYF3_.js",
+        "sha256": "6f07eb0efd8b9a5ebf6c2378a6ae5bf5f34862b385479960f9f84daa6a37212d"
+      },
+      {
+        "path": "harbor/viewer/static/assets/root-BnaAShbE.js",
+        "sha256": "49777bb2d30537e422a8b4c59f67599d8cdc0740081e4fea0e97957ddc7e07c9"
+      },
+      {
+        "path": "harbor/viewer/static/assets/root-C6Dg3jWB.css",
+        "sha256": "9483010f28b2115f7a214dd6d07c261fe2f8fa883e8ce39b45b274925238584f"
+      },
+      {
+        "path": "harbor/viewer/static/assets/select-CjMawuJE.js",
+        "sha256": "d47ae4b44b2f8aef9cadcf682cd7081f9163d67b240c19a1be75d9aafc0b3b90"
+      },
+      {
+        "path": "harbor/viewer/static/assets/table-D-Ndg6WA.js",
+        "sha256": "dbc17cb691bb729a967fc98e4de5ec2e8950c3193b9c12fffde1e5ec9e281b0e"
+      },
+      {
+        "path": "harbor/viewer/static/assets/tabs-CiVLqDbZ.js",
+        "sha256": "697fa2dbfb92d5c711f04488339df9be2ad41e27a583368372adfab8adbcc33e"
+      },
+      {
+        "path": "harbor/viewer/static/assets/task-definition-B-T_tD9Z.js",
+        "sha256": "3be57096efa43804c24ab08f09ae5d35681bddb0d53cfc80b4548da1de8613fd"
+      },
+      {
+        "path": "harbor/viewer/static/assets/task-definitions-B5tIF0M-.js",
+        "sha256": "d4dec39121f2cc89de4e2d9f4bcdfddfa18130948fb0d7238d40f90ddaabef38"
+      },
+      {
+        "path": "harbor/viewer/static/assets/task-yp59vFvG.js",
+        "sha256": "590014c2c0786f7f63621a6f717c71a3694e518c6a93f9ba565246b977c0a6f0"
+      },
+      {
+        "path": "harbor/viewer/static/assets/tooltip-ReyIYpcM.js",
+        "sha256": "5509abd2de4972e74dbe4891c749460ee9634bd3b113ee44b401a0f3f56629f8"
+      },
+      {
+        "path": "harbor/viewer/static/assets/trash-2-FGFsGQUd.js",
+        "sha256": "89978a4c0f6e7ac9fc5719b1edd6c63ab50214c7d92696a2b42ec25dc64192cd"
+      },
+      {
+        "path": "harbor/viewer/static/assets/trial-suUVa1-z.js",
+        "sha256": "c00acc41471adf1cb3282df9b59448c4c124903834272566dfc2b36b7de13c14"
+      },
+      {
+        "path": "harbor/viewer/static/assets/useMutation--PsCgCWS.js",
+        "sha256": "518786ca1766a589b7c1caecf09fbc8066944c79f081a6458806797676f5e3ae"
+      },
+      {
+        "path": "harbor/viewer/static/favicon.ico",
+        "sha256": "7758780c9a56645aa7e509e8d6719bfc8495575fd78430bcdb90ec2089257ea7"
+      },
+      {
+        "path": "harbor/viewer/static/fonts/GoogleSansCode-VariableFont_wght.ttf",
+        "sha256": "88be64849506a7a70a57668a8d580c999718bdac0a85a59ff47e1ab2173f77b4"
+      },
+      {
+        "path": "harbor/viewer/static/index.html",
+        "sha256": "fe18a2f76148a3d5eb1ce0206bf7c8332c371f69a65a72f6c0ecae8052f5cd21"
+      },
+      {
+        "path": "harbor/viewer/task_scanner.py",
+        "sha256": "4adf34bf7e48ea84ad56934218ba20b8521892174f8b6ab2841f08e41ce470b4"
+      },
+      {
+        "path": "owner-controller/discovery-host-classify.py",
+        "sha256": "5dae281f4e713b1b141bc0e13a435e4c61b067db5a3e6b91394ae57796240d46"
+      },
+      {
+        "path": "owner-controller/harbor-discovery-host-hook.py",
+        "sha256": "fba7f4d6a07d53738860b3588f1be5be8ef2cd795598b1452483c102606e9626"
+      },
+      {
+        "path": "owner-controller/launch-discovery-host-verified-20261017.py",
+        "sha256": "8af96d7143b240e82b503609ff78c1f0e696bd3fa85214bdd7c0bd77b3312348"
+      },
+      {
+        "path": "owner-controller/run-discovery-host-verified-20261017.py",
+        "sha256": "c01834a71bb6e0b2c6df998bb62ca99eb50a89a9c91c7c89f4282cac997a035f"
+      }
+    ]
+  },
+  "pre_registration": {
+    "scoreable_trials": 5,
+    "initial_attempts": 5,
+    "attempt_cap": 10,
+    "decision_pass_threshold": 4,
+    "infrastructure_excluded": true,
+    "provider_errors": "all top-level Codex error/turn.failed/response.failed events, including recovered errors; non-JSON registered transport-error pattern",
+    "nonjson_provider_error_pattern": "(stream disconnected before completion|upstream connect error|connection reset by peer|HTTP(?:/\\S+)?\\s+(?:401|403|429|5\\d\\d)\\b|rate limit exceeded|TLS handshake failed)",
+    "host_native_agreement_required": true,
+    "missing_host_evidence": "infrastructure",
+    "task_or_runner_defect_invalidates_whole_series": true,
+    "replacement_policy": "only excluded infrastructure attempts replaced unchanged until5 scoreable or cap10",
+    "near_boundary_scope": "19 verifier calibrations; agent phrasing/order variants NOT RUN",
+    "semantic": "N/A deterministic protocol verifier"
+  },
+  "provider_preflight_sha256": "3610fa1b75c669b05b2546d99de588d3f8a7d1abd75241da46e4ee6031924f3a",
+  "catalog_check_sha256": "67ecec1e654d8f37cd02878cc01f839f2a4623b02210771de7a517dbc1666f65",
+  "construction_admission_sha256": "5cc9023c363f76ae4e9115802648fea10b4c934119a2fd50b0483a2e5671f140",
+  "driver_python": "3.11.13 (main, Sep  2 2025, 14:10:56) [Clang 20.1.4 ]",
+  "harbor_host_python": "3.12.11",
+  "runtime_captures": [
+    {
+      "attempt": 1,
+      "trial_name": "harness-mcp-discovery-v1__XzQpTSG",
+      "project": "harness-mcp-discovery-v1__xzqptsg",
+      "containers": [
+        {
+          "service": "bridge",
+          "container_id": "e8af0d134abfd8491335e8054c5c565f9a039ceb86c73e74741541d441e86b00",
+          "image_id": "sha256:4847214a82a6e15dc48ae7f341479b856059f902e633dc717fbe96c33800efa7",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:1d6aea9024008b4fe971ab95fae747e84af95d9c430fc3ffb4b8365f2ea09916",
+              "sha256:18fb330c4e73a6da9e7eb72f2e693b820b6b9c8d9cc513dcb6fd470f6a044e69",
+              "sha256:61600e573d1e6de0047558e16b05386b717f02ba2998614ac0da874fee53af6c",
+              "sha256:0eae2bc585b35060deaedcfcf3128b2ec1e75eada694678a6aadf469d820c00e",
+              "sha256:4d5448102daaa0fa81b0617bc621c2fe6f42fe7b06791f06338cb8aad7396acf",
+              "sha256:943dd4f4d4ef4dfc6566480171652f02dd47b63f875e37e7f71c4cb3be67107d",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "main",
+          "container_id": "21fd4e08fd04a6b3f9258c7c1226a977bb6bccf5c09eaed4bdfbe43741db7690",
+          "image_id": "sha256:ba3db16d4818519190bc85e328c1f4763fcec4335e124370a35f6221a4a0e2e5",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:1d6aea9024008b4fe971ab95fae747e84af95d9c430fc3ffb4b8365f2ea09916",
+              "sha256:18fb330c4e73a6da9e7eb72f2e693b820b6b9c8d9cc513dcb6fd470f6a044e69",
+              "sha256:61600e573d1e6de0047558e16b05386b717f02ba2998614ac0da874fee53af6c",
+              "sha256:0eae2bc585b35060deaedcfcf3128b2ec1e75eada694678a6aadf469d820c00e",
+              "sha256:4d5448102daaa0fa81b0617bc621c2fe6f42fe7b06791f06338cb8aad7396acf",
+              "sha256:943dd4f4d4ef4dfc6566480171652f02dd47b63f875e37e7f71c4cb3be67107d",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "mock-nous",
+          "container_id": "462f5bcfd96970dba7d0791d46684e624d160989e843aeb5522f03e417d3f26c",
+          "image_id": "sha256:eea4759c7a073805fe7ef36291e6bf2c4a460e91994a050737d578fa7ad780c8",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:258ba1f62b513e7bb7492d3cc8ce445e4ef176a14980f193f789b6d7270ae61c",
+              "sha256:e608bc52e64389b35f8ddd810bd219299785ba45a063ee9571fa75cf7fd106ad",
+              "sha256:d378fb5ec83eb7b6fe50bb189f5d1933741713980ee9a81a999429c117e03832",
+              "sha256:e497a1edfdd33c45a8881175e57e55f9f520cfb306d7cbf8ae18243633edde86",
+              "sha256:39fcd611ae34be83a5b208932504ca95033bbd3be64756f732e5a5665d5c68a0",
+              "sha256:9c38079ec57a8cb86a71f53aa6074327bdc057f3bc0473193d33a64640d4097d",
+              "sha256:e14b9fde83359c2716d81455cb3e328a026282603e9a36740115db18c3f7d592"
+            ]
+          },
+          "model_keys_in_config": false
+        }
+      ]
+    },
+    {
+      "attempt": 2,
+      "trial_name": "harness-mcp-discovery-v1__zscMXQt",
+      "project": "harness-mcp-discovery-v1__zscmxqt",
+      "containers": [
+        {
+          "service": "bridge",
+          "container_id": "c3ca7d898cb5a6e8df3a64d7ce285f7e84a26f20eb6cb2633afdd6a98047e8de",
+          "image_id": "sha256:6f07f0a72131ea3fd6c721090cdd5495505fd57e86d86598a51792973ec1c47d",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "main",
+          "container_id": "cd6b3febc9299209b68878c6be6a3a069652d1c45ffb63e5b04a547e59276fda",
+          "image_id": "sha256:d7c0d9959bb3e1059c27188d69b9c155c510d795039f80ca7b9a8f364dfefab8",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "mock-nous",
+          "container_id": "cc460fb69cd4e42e91bdbb2f2cc492804ab0a7aae1235325f693a0348eab8ff5",
+          "image_id": "sha256:2513af5f8c0cce7b50059f48036bfac22ee698165e2297333350e6708e885854",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:258ba1f62b513e7bb7492d3cc8ce445e4ef176a14980f193f789b6d7270ae61c",
+              "sha256:e608bc52e64389b35f8ddd810bd219299785ba45a063ee9571fa75cf7fd106ad",
+              "sha256:d378fb5ec83eb7b6fe50bb189f5d1933741713980ee9a81a999429c117e03832",
+              "sha256:e497a1edfdd33c45a8881175e57e55f9f520cfb306d7cbf8ae18243633edde86",
+              "sha256:39fcd611ae34be83a5b208932504ca95033bbd3be64756f732e5a5665d5c68a0",
+              "sha256:9c38079ec57a8cb86a71f53aa6074327bdc057f3bc0473193d33a64640d4097d",
+              "sha256:e14b9fde83359c2716d81455cb3e328a026282603e9a36740115db18c3f7d592"
+            ]
+          },
+          "model_keys_in_config": false
+        }
+      ]
+    },
+    {
+      "attempt": 3,
+      "trial_name": "harness-mcp-discovery-v1__TvLRCSE",
+      "project": "harness-mcp-discovery-v1__tvlrcse",
+      "containers": [
+        {
+          "service": "bridge",
+          "container_id": "0861e7bd5f879995040995a8aa9527975e1c42e2e0e78a3895a7eb77a274cca7",
+          "image_id": "sha256:9df67759bfaac746ea34d8386f4c850fbd75535e4dede0fe815e23b860a0af96",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "main",
+          "container_id": "1e4bb56a3cee54d5b262fb715dbd3d7aaa9afface0dfc8561d4349861fde0e29",
+          "image_id": "sha256:06a2a3121becb52bfe92db09532ec2abb51f0643e54bcc9be4e3e78434db8296",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "mock-nous",
+          "container_id": "e2ca07baa1ccf9b84f8f1ac276214c038d5822f95511475956d122e3e1b04d06",
+          "image_id": "sha256:e984d0b31ee375d835b5c33197e5bd23e712bae0c051d7774443af917ffa9799",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:258ba1f62b513e7bb7492d3cc8ce445e4ef176a14980f193f789b6d7270ae61c",
+              "sha256:e608bc52e64389b35f8ddd810bd219299785ba45a063ee9571fa75cf7fd106ad",
+              "sha256:d378fb5ec83eb7b6fe50bb189f5d1933741713980ee9a81a999429c117e03832",
+              "sha256:e497a1edfdd33c45a8881175e57e55f9f520cfb306d7cbf8ae18243633edde86",
+              "sha256:39fcd611ae34be83a5b208932504ca95033bbd3be64756f732e5a5665d5c68a0",
+              "sha256:9c38079ec57a8cb86a71f53aa6074327bdc057f3bc0473193d33a64640d4097d",
+              "sha256:e14b9fde83359c2716d81455cb3e328a026282603e9a36740115db18c3f7d592"
+            ]
+          },
+          "model_keys_in_config": false
+        }
+      ]
+    },
+    {
+      "attempt": 4,
+      "trial_name": "harness-mcp-discovery-v1__nyHxDk7",
+      "project": "harness-mcp-discovery-v1__nyhxdk7",
+      "containers": [
+        {
+          "service": "bridge",
+          "container_id": "86dd18bbc9888f57ab6fb12789331f750db0230563bad732a51992a9dc4c4bd2",
+          "image_id": "sha256:0b7dd9e97355b82680987d851eb9bc7e83b0ba466dcc2ed2c8be63b1d21019f2",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "main",
+          "container_id": "f5b692a8f3d4cb4a7dee4623e5a0f21f5bbebbb0a2a45f2c6bc62ffee4810587",
+          "image_id": "sha256:47c8bae2b57743b6be3a94e1322a4fa90ed828a0c667b3f0d88431dc7e23ff63",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "mock-nous",
+          "container_id": "9c0e98a1912f85cf8ded1dfb135012cbe5e3f5dbe062912cf672e1921965e4fc",
+          "image_id": "sha256:25a0f219ea0ee4fc5c89d350f7cc1388aad0999c431978f4b935cfab0ee2144b",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:258ba1f62b513e7bb7492d3cc8ce445e4ef176a14980f193f789b6d7270ae61c",
+              "sha256:e608bc52e64389b35f8ddd810bd219299785ba45a063ee9571fa75cf7fd106ad",
+              "sha256:d378fb5ec83eb7b6fe50bb189f5d1933741713980ee9a81a999429c117e03832",
+              "sha256:e497a1edfdd33c45a8881175e57e55f9f520cfb306d7cbf8ae18243633edde86",
+              "sha256:39fcd611ae34be83a5b208932504ca95033bbd3be64756f732e5a5665d5c68a0",
+              "sha256:9c38079ec57a8cb86a71f53aa6074327bdc057f3bc0473193d33a64640d4097d",
+              "sha256:e14b9fde83359c2716d81455cb3e328a026282603e9a36740115db18c3f7d592"
+            ]
+          },
+          "model_keys_in_config": false
+        }
+      ]
+    },
+    {
+      "attempt": 5,
+      "trial_name": "harness-mcp-discovery-v1__pHkMsLe",
+      "project": "harness-mcp-discovery-v1__phkmsle",
+      "containers": [
+        {
+          "service": "bridge",
+          "container_id": "b21ad5bb78749f3303e90c2b3b825f9dc0c4315a0164e28e81fa8ffa4e39911a",
+          "image_id": "sha256:74d4a4c81237b7a41ec894214ab41f62feedc4f24227927c6b5b35efa76c4412",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "main",
+          "container_id": "01898c9f12d3945bb5a4116748f976a642cf27d2311bf3e7d051d1ebb26a8ec5",
+          "image_id": "sha256:e2c474cf511e915179fe8d076618f1e707ff2104a6d297530655e7e452914612",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "mock-nous",
+          "container_id": "aea716ccd8c8d6ef403e8309da670ab21ca888029347e3ca51edbb68e9316aa4",
+          "image_id": "sha256:1bf4b376eaa64efe649ca7f0c652147fdd605d4550c3ee7da9db3792adf86264",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:258ba1f62b513e7bb7492d3cc8ce445e4ef176a14980f193f789b6d7270ae61c",
+              "sha256:e608bc52e64389b35f8ddd810bd219299785ba45a063ee9571fa75cf7fd106ad",
+              "sha256:d378fb5ec83eb7b6fe50bb189f5d1933741713980ee9a81a999429c117e03832",
+              "sha256:e497a1edfdd33c45a8881175e57e55f9f520cfb306d7cbf8ae18243633edde86",
+              "sha256:39fcd611ae34be83a5b208932504ca95033bbd3be64756f732e5a5665d5c68a0",
+              "sha256:9c38079ec57a8cb86a71f53aa6074327bdc057f3bc0473193d33a64640d4097d",
+              "sha256:e14b9fde83359c2716d81455cb3e328a026282603e9a36740115db18c3f7d592"
+            ]
+          },
+          "model_keys_in_config": false
+        }
+      ]
+    },
+    {
+      "attempt": 6,
+      "trial_name": "harness-mcp-discovery-v1__vcjQSbt",
+      "project": "harness-mcp-discovery-v1__vcjqsbt",
+      "containers": [
+        {
+          "service": "bridge",
+          "container_id": "8f20f0f43b1f2bf6316e2e7cf0629062317c1fb7443d29d939b445856d439fe9",
+          "image_id": "sha256:c887aec22f84ccc7565fe4426f4b7eb5a84fecb10b53b8e2eb3dba908d02578a",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "main",
+          "container_id": "169c2b3d5466df5422f51042b8456430aa34933b70831b28e03be84350a793d1",
+          "image_id": "sha256:975b63fab68a54b2c5c45daac81ccc862b4acc2764af85d632646227e6de959b",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:dca69811453d69d10b6c0345a5c49147162abe20a2f77802d66efc60667949ea",
+              "sha256:be7b11afbdd507af50ab686e9c03e283480401f9dadbcd124e9abcb7c1ec18f1",
+              "sha256:febf75648937fc5bbdb17342aeacd1e9171395f3f7fede471775dba226d68229",
+              "sha256:493f95ff90f0c1f6ef5da3b29e68ab23c51d318a13070e6036e82e698b5e2a53",
+              "sha256:2a3b79c3871c9361034c48a68d2b05ecacf389ff5570ca7ad4269b333da54417",
+              "sha256:7edba606226b6f795b7da6a89fff1fcfad418033c9bbe2c30b4f81d143caaade",
+              "sha256:e55a673708cd940cdeeb14bd5cac61683806ca341f6a9bd2f7880fa557da5560",
+              "sha256:93d53c116df5e8da8446cde8e1cf750e5981ba6f64992800e3dca6934d697e6f",
+              "sha256:fdfce732d09a27c0208f68bf2b907bf6d65ca91c02a56aa75f48af4436c06f31",
+              "sha256:61f4a30b8561806550824036dab3329bb404a6d6ad9b56c48e225f9af8dc786b",
+              "sha256:0ed98e367506ed4f3b5d03f3b0160652f3a1d14f16e186bc3621d3856f736017",
+              "sha256:f5ccdb406a6f9ef479c6a1b2a2f329bfc11f055ee1ec7414867f75e01ccaf9f9",
+              "sha256:56e13f8f44ae2e2572aaed5c5c5bcaee02a5a66a9c02ad3e42cc8f8cfbeb3840",
+              "sha256:f3958b65d6c869a5a630f8e73eebf8659ea2f743ba8e7c7e40e5d719aeaefb71",
+              "sha256:1bae367be1fb19aa5560e1061e954ef8095a766c3c5f3fd539048c2be3f64eab",
+              "sha256:7ebc20ae0b700140a7c62e1623cfa933f3a326bb625a9d4adfbb06d15ba864a9",
+              "sha256:70af99b81e7bb553ce72986166013ced9086ee6544da9b1ad9ea9e90c44fbf81",
+              "sha256:c7dd95eaa1cbaf416139d1bf333b9a9e5dc80096ae67a904121d638c428de29b",
+              "sha256:7f1e60fdb1402cb9425efe91282d880e86e986c2e7aed0937e955c2cc964caaa",
+              "sha256:aecf355a373ef874452788cf01db15a9c29b60bc0823bc0333d9d7133187e54b",
+              "sha256:b00bd8cd3c0f0a960f8c1fb3cc9ab8c02aeab8a3f6040161b024121c93612a48",
+              "sha256:bdbd92a36b09373b000cf17f5c05cec201f7414a7bd878aba1166d5f367e4287",
+              "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+          },
+          "model_keys_in_config": false
+        },
+        {
+          "service": "mock-nous",
+          "container_id": "5f8cce02935557f395ae364096eeb36963664cdf5ec8e43aec53a2ebfc054cce",
+          "image_id": "sha256:4a3ac9ce1ab038cfb222b40386214398f3097263bc005c0b64417d1bd06a6c9a",
+          "rootfs": {
+            "Type": "layers",
+            "Layers": [
+              "sha256:258ba1f62b513e7bb7492d3cc8ce445e4ef176a14980f193f789b6d7270ae61c",
+              "sha256:e608bc52e64389b35f8ddd810bd219299785ba45a063ee9571fa75cf7fd106ad",
+              "sha256:d378fb5ec83eb7b6fe50bb189f5d1933741713980ee9a81a999429c117e03832",
+              "sha256:e497a1edfdd33c45a8881175e57e55f9f520cfb306d7cbf8ae18243633edde86",
+              "sha256:39fcd611ae34be83a5b208932504ca95033bbd3be64756f732e5a5665d5c68a0",
+              "sha256:9c38079ec57a8cb86a71f53aa6074327bdc057f3bc0473193d33a64640d4097d",
+              "sha256:e14b9fde83359c2716d81455cb3e328a026282603e9a36740115db18c3f7d592"
+            ]
+          },
+          "model_keys_in_config": false
+        }
+      ]
+    }
+  ],
+  "runtime_capture_scope": "all three service identities/RootFS captured at AGENT_START for all six attempts; configuration key-presence check is not a process-wide credential audit",
+  "cleanup_sha256": "f47e3f9f443fd9c7143093dfe6e70fcf50e4bc67506e6c6d39a77b92d404cb65",
+  "owned_container_count_removed": 18,
+  "raw_classification_sha256": "aabd8b385e6c01c7c961e62bf1c113a49188a0d4ab858cea43cc27f1c9e5c9b5",
+  "primary_validation_sha256": "89804cab2b8b9f5d735c02c86aaf9aafab6122697d9476d7b627898c6ccd0e1a",
+  "env_flags": "N/A deterministic gateway double; no NOUS backend/judge",
+  "scope": "fixed synthetic primitive-composition task with real isolated bridge; not deployed MCP/grant or broad scientific quality",
+  "first_preparation": "NOT RUN: key absent from /app; zero model requests/trials; fresh context uses existing /azure-openai key",
+  "old_scores_reused": false
+}

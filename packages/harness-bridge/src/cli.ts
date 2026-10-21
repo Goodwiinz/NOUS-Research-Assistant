@@ -16,7 +16,7 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { mkdir, open, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { parseArgs, stripVTControlCharacters } from "node:util";
+import { parseArgs } from "node:util";
 import { createInterface } from "node:readline/promises";
 import { CredentialStore } from "./credentials.ts";
 import { GRANT_LIFETIME_MS, GrantExpired, GrantKeeper } from "./grants.ts";
@@ -39,17 +39,20 @@ import {
 import { runStdioMcp } from "./mcp/stdio.ts";
 import type { HarnessAdapter, SessionOptions } from "./contracts.ts";
 
-// Harness sessions need one project; a workspace grant cannot hold harness:execute.
+// Harness sessions need a project or the whole account; a workspace grant cannot hold harness:execute.
 const WORKSPACE_MCP_ONLY =
   "workspace connections are MCP-only; reconnect with --project to run harness sessions";
 
 export type LocalState = {
   apiUrl: string;
   deviceId: string;
-  // Exactly one binding. A project connection can run harness sessions; a
-  // workspace connection (every project in one NOUS workspace) is MCP-only.
+  // Exactly one binding. A project connection, or an account connection
+  // (every project in the user's NOUS account, design 2026-10-14), can run
+  // harness sessions; a workspace connection (every project in one NOUS
+  // workspace) is MCP-only.
   projectId?: string;
   workspaceId?: string;
+  account?: true;
   // The NOUS chat standalone publications land in; absent = project only.
   threadId?: string;
   // Absent on connections made before `status` existed.
@@ -57,7 +60,9 @@ export type LocalState = {
   credentialHandle: string;
   // Absent on connections made before tools:read existed.
   scopes?: string[];
-  workspaces: { id: string; root: string; label: string; projectId: string }[];
+  // A folder of an account connection has no projectId: any chat in the
+  // account can run Codex in it.
+  workspaces: { id: string; root: string; label: string; projectId?: string }[];
 };
 type ClientOptions = {
   stateDir: string;
@@ -168,11 +173,14 @@ function storedConnection(value: unknown): LocalState | null {
     !record(value) ||
     typeof value.apiUrl !== "string" ||
     !uuid(value.deviceId) ||
-    // Exactly one binding: a project, or a workspace (MCP-only).
-    uuid(value.projectId) === uuid(value.workspaceId) ||
     typeof value.credentialHandle !== "string" ||
     !Array.isArray(value.workspaces)
   )
+    return null;
+  // Exactly one binding: a project, a workspace (MCP-only) or the account.
+  // State written before account connections names a project or a workspace.
+  const bindings = [uuid(value.projectId), uuid(value.workspaceId), value.account === true];
+  if (bindings.filter(Boolean).length !== 1 || (value.account !== undefined && value.account !== true))
     return null;
   return value as LocalState;
 }
@@ -292,13 +300,37 @@ export async function login(base: string, options: ClientOptions): Promise<strin
     throw new Error("missing CLI access token");
   return auth.token;
 }
+/** What `connect` prints when NOUS cannot serve an account pairing. */
+export const ACCOUNT_UNSUPPORTED = "this NOUS server doesn't support account connections yet";
+/**
+ * fetch for the account consent request: a server before account connections
+ * answers 422 (GrantRequestCreate refuses the unknown `account` field) and
+ * one with them switched off 503 "Account connections are disabled"; both
+ * become ACCOUNT_UNSUPPORTED. Any other answer passes through.
+ */
+function refusingAccount(fetchFn: typeof fetch): typeof fetch {
+  return (async (...args: Parameters<typeof fetch>) => {
+    const response = await fetchFn(...args);
+    if (response.status === 422) throw new Error(ACCOUNT_UNSUPPORTED);
+    if (response.status === 503) {
+      const data: unknown = await response
+        .clone()
+        .json()
+        .catch(() => null);
+      if (record(data) && data.detail === "Account connections are disabled")
+        throw new Error(ACCOUNT_UNSUPPORTED);
+    }
+    return response;
+  }) as typeof fetch;
+}
 /** Login uses the existing CLI device flow; only the browser can approve the grant. */
 export async function connect(
   options: ClientOptions & {
     apiUrl: string;
-    // Exactly one of projectId / workspaceId.
+    // Exactly one of projectId / workspaceId / account.
     projectId?: string;
     workspaceId?: string;
+    account?: boolean;
     threadId?: string;
     label: string;
     tools?: boolean;
@@ -317,39 +349,47 @@ export async function connect(
 ): Promise<{ deviceId: string; credentialHandle: string }> {
   const base = apiBase(options.apiUrl);
   const projectId = options.projectId;
+  const account = options.account === true;
+  if ([projectId !== undefined, options.workspaceId !== undefined, account].filter(Boolean).length !== 1)
+    throw new Error("--project, --workspace or --account (exactly one) required");
+  const target = projectId !== undefined ? "project" : options.workspaceId !== undefined ? "workspace" : "account";
+  // An account approval runs Codex for any chat in the account and serves
+  // tools across it, but publishing, a chat's handoff and a project's selected
+  // memories each belong to one project (NOUS refuses those scopes there).
+  if (account)
+    for (const [flag, on] of [
+      ["--publish", options.publish],
+      ["--context", options.context],
+      ["--chat", options.threadId !== undefined],
+      ["--handoff", options.handoff],
+    ] as const)
+      if (on) throw new Error(`--account cannot be combined with ${flag}`);
   if (options.threadId !== undefined) {
     if (!options.projectId) throw new Error("--chat requires --project");
     if (!uuid(options.threadId)) throw new Error("--chat must be a chat UUID");
   }
-  if ((projectId === undefined) === (options.workspaceId === undefined))
-    throw new Error("--project or --workspace (not both) required");
-  const target = projectId !== undefined ? "project" : "workspace";
-  if (!uuid(projectId ?? options.workspaceId) || !options.label.trim())
-    throw new Error(`${target} UUID and device label required`);
+  if ((!account && !uuid(projectId ?? options.workspaceId)) || !options.label.trim())
+    throw new Error(account ? "device label required" : `${target} UUID and device label required`);
+  // An account connection always reads NOUS tools; the others opt in.
+  const tools = options.tools === true || account;
   // NOUS capabilities are opt-in and each scope is shown on the consent page.
-  if (options.publish && !options.tools)
-    throw new Error("--publish requires --tools");
-  if (options.write && !options.tools)
-    throw new Error("--write requires --tools");
-  if (options.handoff && !options.tools)
-    throw new Error("--handoff requires --tools");
+  if (options.publish && !tools) throw new Error("--publish requires --tools");
+  if (options.write && !tools) throw new Error("--write requires --tools");
+  if (options.handoff && !tools) throw new Error("--handoff requires --tools");
   // A handoff lives in one chat of one project; a workspace grant has neither.
-  if (options.handoff && projectId === undefined)
+  if (options.handoff && target === "workspace")
     throw new Error("--workspace cannot be combined with --handoff");
   // A handoff lives in one chat; an unbound grant could never use the scopes.
   if (options.handoff && options.threadId === undefined)
     throw new Error("--handoff requires --chat");
-  if (options.library && !options.tools)
-    throw new Error("--library requires --tools");
-  if (options.library && !options.write)
-    throw new Error("--library requires --write");
-  if (options.context && !options.tools)
-    throw new Error("--context requires --tools");
+  if (options.library && !tools) throw new Error("--library requires --tools");
+  if (options.library && !options.write) throw new Error("--library requires --write");
+  if (options.context && !tools) throw new Error("--context requires --tools");
   // A workspace grant is MCP-only: harness runs, artifact publication and a
   // project's selected memories stay bound to one project (NOUS refuses all
   // three scopes for a workspace grant), and without tools:read it could do
   // nothing at all.
-  if (projectId === undefined) {
+  if (target === "workspace") {
     if (options.publish)
       throw new Error("--workspace cannot be combined with --publish");
     if (options.context)
@@ -357,15 +397,15 @@ export async function connect(
     if (!options.tools) throw new Error("--workspace requires --tools");
   }
   const scopes = [
-    ...(projectId !== undefined ? ["harness:execute"] : []),
-    ...(options.tools ? ["tools:read"] : []),
+    ...(target !== "workspace" ? ["harness:execute"] : []),
+    ...(tools ? ["tools:read"] : []),
     ...(options.publish ? ["artifacts:publish"] : []),
     ...(options.write ? ["tools:write"] : []),
     ...(options.handoff ? ["handoff:read", "handoff:write"] : []),
-    // A workspace grant's project tools all need a project_id, and only
-    // list_library (library:read) names them (WG-3). library:write, which
-    // auto-runs library changes, still needs --library.
-    ...(options.library || projectId === undefined ? ["library:read"] : []),
+    // Workspace and account grants need a project_id on every project tool,
+    // and only list_library (library:read) names them (WG-3). library:write,
+    // which auto-runs library changes, still needs --library.
+    ...(options.library || target !== "project" ? ["library:read"] : []),
     ...(options.library ? ["library:write"] : []),
     ...(options.context ? ["context:read"] : []),
   ];
@@ -384,6 +424,7 @@ export async function connect(
     sameApi &&
     previous.projectId === options.projectId &&
     previous.workspaceId === options.workspaceId &&
+    (previous.account === true) === account &&
     (previous.threadId ?? undefined) === (options.threadId ?? undefined);
   // Same API, project and chat, and every requested scope already granted:
   // keep the binding while its grant still renews, or once it has lapsed
@@ -396,21 +437,23 @@ export async function connect(
     // Reuse never narrows a grant (the documented superset rule): name any
     // stored scope this command did not ask for, and how to drop it (BR-3).
     const retained = (previous.scopes ?? []).filter((scope) => !scopes.includes(scope));
+    const subject = account ? "your NOUS account" : `${target} ${projectId ?? options.workspaceId}`;
     announce(
-      `${kept} binding: ${target} ${projectId ?? options.workspaceId}${options.threadId ? `, chat ${options.threadId}` : ""}; ${
+      `${kept} binding: ${subject}${options.threadId ? `, chat ${options.threadId}` : ""}; ${
         kept === "Reusing"
           ? "no new login or consent needed."
           : "your earlier approval still holds, so no new login or consent was needed."
       }` +
         (retained.length
           ? ` It keeps scopes this command did not request: ${retained.join(", ")}. To drop them (which also ${
-              // Only a project connection runs Codex on the device and has
-              // registered folders to lose; a workspace one only serves tools.
-              projectId !== undefined
+              // Only a project or account connection runs Codex on the device
+              // and has registered folders to lose; a workspace one only
+              // serves tools.
+              target !== "workspace"
                 ? "stops the device's runs"
                 : "cuts this device's NOUS tools until it reconnects"
             }), revoke this device's access at /integrations/devices, or run nous-harness disconnect, then connect again` +
-            (projectId !== undefined
+            (target !== "workspace"
               ? "; after disconnect, register its folders again with nous-harness workspace add."
               : ".")
           : ""),
@@ -427,14 +470,16 @@ export async function connect(
   );
   if (!uuid(device.id)) throw new Error("invalid device ID");
   const consent = await request(
-    fetchFn,
+    account ? refusingAccount(fetchFn) : fetchFn,
     base,
     "/integrations/grant-requests",
     token,
     {
-      ...(projectId !== undefined
+      ...(target === "project"
         ? { project_id: projectId }
-        : { workspace_id: options.workspaceId }),
+        : target === "workspace"
+          ? { workspace_id: options.workspaceId }
+          : { account: true }),
       device_id: device.id,
       scopes,
       ...(options.threadId ? { thread_id: options.threadId } : {}),
@@ -447,8 +492,11 @@ export async function connect(
     consent.approval_url,
     options.websiteOrigin ?? (await storedWebsiteOrigin(store, base)),
   );
+  const where = approval.startsWith("/") ? " (open this path on your NOUS website)" : "";
   announce(
-    `Approve this device and ${target} in your browser: ${approval}${approval.startsWith("/") ? " (open this path on your NOUS website)" : ""}`,
+    account
+      ? `Approve this device's access to your whole NOUS account in your browser: ${approval}${where}`
+      : `Approve this device and ${target} in your browser: ${approval}${where}`,
   );
   await poll(
     () =>
@@ -476,9 +524,10 @@ export async function connect(
   });
   // A reconnect (e.g. to add --publish) must not drop registered folders:
   // re-register each root with the new device so managed runs and
-  // standalone installs keep working. Roots that vanished are skipped.
+  // standalone installs keep working. Roots that vanished are skipped. An
+  // account connection's folders carry no project.
   const carried: LocalState["workspaces"] = [];
-  if (projectId !== undefined && previous !== null) {
+  if (target !== "workspace" && previous !== null) {
     for (const old of previous.workspaces as LocalState["workspaces"]) {
       if (typeof old?.root !== "string" || typeof old?.label !== "string") continue;
       const root = await realpath(old.root).catch(() => null);
@@ -490,11 +539,20 @@ export async function connect(
       await request(
         fetchFn,
         base,
-        `/integrations/devices/${device.id}/workspaces`,
+        folderRoute(device.id, projectId),
         token,
-        { workspace_id: workspaceId, label: old.label, project_id: projectId },
+        {
+          workspace_id: workspaceId,
+          label: old.label,
+          ...(projectId !== undefined ? { project_id: projectId } : {}),
+        },
       );
-      carried.push({ id: workspaceId, root, label: old.label, projectId });
+      carried.push({
+        id: workspaceId,
+        root,
+        label: old.label,
+        ...(projectId !== undefined ? { projectId } : {}),
+      });
     }
   } else if (previous !== null && previous.workspaces.length) {
     // Only reached for a workspace connection: registered folders are
@@ -506,9 +564,11 @@ export async function connect(
   await store.writeLocal("connection", {
     apiUrl: base,
     deviceId: device.id,
-    ...(projectId !== undefined
+    ...(target === "project"
       ? { projectId }
-      : { workspaceId: options.workspaceId }),
+      : target === "workspace"
+        ? { workspaceId: options.workspaceId }
+        : { account: true as const }),
     ...(options.threadId ? { threadId: options.threadId } : {}),
     label: options.label,
     credentialHandle,
@@ -533,7 +593,9 @@ export async function connect(
   announce(
     options.threadId
       ? `Connected to project ${projectId}, chat ${chatLabel}(${options.threadId}).`
-      : `Connected to ${target} ${projectId ?? options.workspaceId}.`,
+      : account
+        ? "Connected to your NOUS account."
+        : `Connected to ${target} ${projectId ?? options.workspaceId}.`,
   );
   return { deviceId: device.id, credentialHandle };
 }
@@ -610,6 +672,17 @@ export async function disconnect(
   }
   throw new Error(`NOUS could not revoke this device (${response.status}); nothing was removed, try again`);
 }
+/**
+ * Where a folder is registered. A project folder goes to the device's
+ * `/workspaces` (project_id required on the wire); an account folder, which
+ * belongs to no project, to `/account-workspaces`. NOUS keeps the two apart so
+ * the project route's contract never changes.
+ */
+export function folderRoute(deviceId: string, projectId: string | undefined): string {
+  return projectId !== undefined
+    ? `/integrations/devices/${deviceId}/workspaces`
+    : `/integrations/devices/${deviceId}/account-workspaces`;
+}
 export async function addWorkspace(
   options: ClientOptions & { root: string; label?: string },
 ): Promise<{ workspaceId: string; root: string }> {
@@ -623,14 +696,16 @@ export async function addWorkspace(
   if (
     !record(value) ||
     !uuid(value.deviceId) ||
-    !uuid(value.projectId) ||
+    !(uuid(value.projectId) || value.account === true) ||
     typeof value.apiUrl !== "string" ||
     !Array.isArray(value.workspaces) ||
     typeof value.credentialHandle !== "string"
   )
     throw new Error("connect this device first");
   const state = value as LocalState;
-  const projectId = value.projectId;
+  // A project connection's folder is tied to its project; an account
+  // connection's folder (no project) serves every chat in the account.
+  const projectId = uuid(value.projectId) ? value.projectId : undefined;
   const root = await realpath(options.root);
   if (!(await stat(root)).isDirectory())
     throw new Error("workspace must be a directory");
@@ -642,15 +717,15 @@ export async function addWorkspace(
   await request(
     options.fetchFn ?? fetch,
     apiBase(state.apiUrl),
-    `/integrations/devices/${state.deviceId}/workspaces`,
+    folderRoute(state.deviceId, projectId),
     credentials.accessToken,
-    { workspace_id: workspaceId, label, project_id: projectId },
+    { workspace_id: workspaceId, label, ...(projectId !== undefined ? { project_id: projectId } : {}) },
   );
   state.workspaces.push({
     id: workspaceId,
     root,
     label,
-    projectId,
+    ...(projectId !== undefined ? { projectId } : {}),
   });
   await store.writeLocal("connection", state);
   (options.announce ?? console.log)(
@@ -658,23 +733,6 @@ export async function addWorkspace(
   );
   return { workspaceId, root };
 }
-/** One NOUS project as `rc` lists it. */
-type RcProject = { id: string; name: string; documentCount?: number };
-/** The `/projects` page `rc` shows; `more` when NOUS has projects beyond it. */
-type RcProjectPage = { projects: RcProject[]; total?: number; more: boolean };
-/** `rc` lists one page of projects. */
-const PROJECT_PAGE = 50;
-/**
- * Terminal-safe display name: NOUS project names are user data. Whole CSI
- * sequences go first, as a terminal reads them: stripVTControlCharacters alone
- * takes `ESC [31m name BEL` for one sequence and drops "name". It then removes
- * OSC and the other escape sequences, and the last pass any stray control or
- * format character.
- */
-const plain = (value: string): string =>
-  stripVTControlCharacters(
-    value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""),
-  ).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
 /** A GET signed with the CLI token; request()'s redirect and time limits. */
 function authorizedGet(
   fetchFn: typeof fetch,
@@ -687,141 +745,12 @@ function authorizedGet(
     signal: AbortSignal.timeout(15_000),
   });
 }
-/** A 1-based menu answer: digits only, since parseInt takes "1abc" for 1. */
-function menuChoice(answer: string, count: number): number | null {
-  const trimmed = answer.trim();
-  if (!/^\d+$/.test(trimmed)) return null;
-  const index = Number.parseInt(trimmed, 10);
-  return index >= 1 && index <= count ? index - 1 : null;
-}
-/** The first `/projects` page, or null once NOUS rejects the CLI token. */
-async function listProjects(
-  fetchFn: typeof fetch,
-  base: string,
-  token: string,
-): Promise<RcProjectPage | null> {
-  const response = await authorizedGet(
-    fetchFn,
-    `${base}/projects?limit=${PROJECT_PAGE}`,
-    token,
-  );
-  if (response.status === 401) return null;
-  if (!response.ok)
-    throw new Error(`NOUS request failed (${response.status}) /projects`);
-  const data: unknown = await response.json().catch(() => null);
-  if (!record(data) || !Array.isArray(data.projects))
-    throw new Error("invalid NOUS response");
-  const total = typeof data.total === "number" ? data.total : undefined;
-  return {
-    projects: data.projects.flatMap((p: unknown): RcProject[] =>
-      record(p) && uuid(p.id) && typeof p.name === "string"
-        ? [
-            {
-              id: p.id,
-              name: plain(p.name),
-              ...(typeof p.document_count === "number"
-                ? { documentCount: p.document_count }
-                : {}),
-            },
-          ]
-        : [],
-    ),
-    ...(total !== undefined ? { total } : {}),
-    more:
-      data.has_next === true ||
-      (total !== undefined && total > data.projects.length),
-  };
-}
-/** Create a project, asking which workspace only when the user has several. */
-async function createProject(
-  fetchFn: typeof fetch,
-  base: string,
-  token: string,
-  prompt: (question: string) => Promise<string>,
-  announce: (message: string) => void,
-): Promise<RcProject> {
-  // Projects live in a NOUS workspace (not a local folder), listed by the v2
-  // API beside v1; any other API path fails closed instead of guessing.
-  if (!/\/api\/v1$/.test(base))
-    throw new Error(`cannot derive the workspaces endpoint from ${base}`);
-  const response = await authorizedGet(
-    fetchFn,
-    `${base.replace(/\/api\/v1$/, "/api/v2")}/workspaces`,
-    token,
-  );
-  if (!response.ok)
-    throw new Error(`NOUS request failed (${response.status}) /workspaces`);
-  const list: unknown = await response.json().catch(() => null);
-  if (!Array.isArray(list)) throw new Error("invalid NOUS response");
-  const choices = list.flatMap((w: unknown) =>
-    record(w) && uuid(w.id) && typeof w.name === "string"
-      ? [{ id: w.id, name: plain(w.name) }]
-      : [],
-  );
-  if (!choices.length)
-    throw new Error("no NOUS workspace to create the project in");
-  let name = "";
-  while (!name) name = plain(await prompt("Project name: ")).trim();
-  let workspace = choices[0];
-  if (choices.length > 1) {
-    announce(
-      [
-        "Workspaces:",
-        ...choices.map((w, i) => `  ${i + 1}) ${w.name}`),
-      ].join("\n"),
-    );
-    for (;;) {
-      const index = menuChoice(
-        await prompt(`Pick a workspace [1-${choices.length}]: `),
-        choices.length,
-      );
-      if (index !== null) {
-        workspace = choices[index];
-        break;
-      }
-      announce("Not a listed choice.");
-    }
-  }
-  const created = await request(fetchFn, base, "/projects", token, {
-    workspace_id: workspace.id,
-    name,
-  });
-  if (!uuid(created.id)) throw new Error("invalid NOUS response");
-  return { id: created.id, name, documentCount: 0 };
-}
-/** Numbered picker: a listed project by number, or `n` for a new one. */
-async function pickProject(
-  page: RcProjectPage,
-  prompt: (question: string) => Promise<string>,
-  announce: (message: string) => void,
-  create: () => Promise<RcProject>,
-): Promise<RcProject> {
-  const { projects } = page;
-  announce(
-    [
-      "Your projects:",
-      ...projects.map(
-        (p, i) =>
-          `  ${i + 1}) ${p.name}${p.documentCount !== undefined ? `  ${p.documentCount} docs` : ""}`,
-      ),
-      "  n) New project",
-      ...(page.more
-        ? [
-            page.total !== undefined
-              ? `Showing the first ${PROJECT_PAGE} of ${page.total} projects.`
-              : `Showing the first ${PROJECT_PAGE} projects.`,
-          ]
-        : []),
-    ].join("\n"),
-  );
-  const range = projects.length ? `1-${projects.length}, n` : "n";
-  for (;;) {
-    const answer = await prompt(`Pick a project [${range}]: `);
-    if (answer.trim().toLowerCase() === "n") return create();
-    const index = menuChoice(answer, projects.length);
-    if (index !== null) return projects[index];
-    announce("Not a listed choice.");
-  }
+/** Whether NOUS still accepts this CLI sign-in: false on 401 only. */
+async function signedIn(fetchFn: typeof fetch, base: string, token: string): Promise<boolean> {
+  const response = await authorizedGet(fetchFn, `${base}/auth/me`, token);
+  if (response.status === 401) return false;
+  if (!response.ok) throw new Error(`NOUS request failed (${response.status}) /auth/me`);
+  return true;
 }
 /**
  * One browser approval step (sign-in or pairing consent); poll()'s refusal or
@@ -888,17 +817,18 @@ export type RcOptions = ClientOptions & {
   /** The home folder, which is too broad to work in; defaults to homedir(). */
   home?: string;
   label?: string;
-  prompt: (question: string) => Promise<string>;
   /** Checks the local Codex before anything else; resolves with its version. */
   probe: () => Promise<{ version: string }>;
   /** Runs the bridge in the foreground until the caller stops it. */
   run: (stateDir: string) => Promise<void>;
 };
 /**
- * `nous --rc`: sign in, pick or create a project, pair this computer for
- * harness runs with read access to the project's documents, register the
- * current folder, run. Reuses the stored pairing when it is for the same
- * project; a different project replaces it (one pairing per computer).
+ * `nous --rc`: sign in, pair this computer with the whole NOUS account
+ * (account-connection design 2026-10-14: harness:execute, tools:read,
+ * tools:write, library:read, library:write), register the current folder as
+ * an account folder, run. No project picker: any chat in the account can
+ * choose this computer and folder. Reuses a stored account pairing; replaces
+ * a project or workspace one (one pairing per computer).
  */
 export async function rc(options: RcOptions): Promise<void> {
   const base = apiBase(options.apiUrl);
@@ -941,12 +871,10 @@ export async function rc(options: RcOptions): Promise<void> {
           .then((c) => c.accessToken)
           .catch(() => undefined)
       : undefined;
-  let page =
-    token === undefined ? null : await listProjects(fetchFn, base, token);
-  if (token === undefined || page === null) {
+  if (token === undefined || !(await signedIn(fetchFn, base, token))) {
     token = await approved(() => login(base, { ...options, fetchFn }));
-    page = await listProjects(fetchFn, base, token);
-    if (page === null) throw new Error("NOUS refused the new sign-in");
+    if (!(await signedIn(fetchFn, base, token)))
+      throw new Error("NOUS refused the new sign-in");
     // connect keeps a reused pairing's stored credential, which grant renewal
     // and folder registration sign with: give it the new sign-in.
     if (sameApi && previous !== null) {
@@ -960,12 +888,8 @@ export async function rc(options: RcOptions): Promise<void> {
         });
     }
   }
-  const signedIn = token;
-  const { projects } = page;
+  const signedInToken = token;
   announce("Signed in.");
-  const project = await pickProject(page, options.prompt, announce, () =>
-    createProject(fetchFn, base, signedIn, options.prompt, announce),
-  );
   const label = options.label ?? hostname();
   // Recorded by this run's login(), or by the one whose sign-in it reuses.
   const websiteOrigin = await storedWebsiteOrigin(store, base);
@@ -976,26 +900,25 @@ export async function rc(options: RcOptions): Promise<void> {
       announce,
       delay: options.delay,
       apiUrl: base,
-      projectId: project.id,
+      account: true,
       label,
-      tools: true,
-      accessToken: signedIn,
+      write: true,
+      library: true,
+      accessToken: signedInToken,
       websiteOrigin,
     }),
   );
-  // The new pairing replaced the stored one; its consent outlives it in NOUS.
-  if (sameApi && previous !== null && previous.projectId !== project.id) {
+  // The account pairing replaced a project or workspace one on this NOUS;
+  // that approval outlives it there, and only the browser can revoke it now
+  // (the bridge no longer holds its grant).
+  if (sameApi && previous !== null && previous.account !== true) {
     const until =
       "stays active until you revoke it under Settings → Connected devices (/integrations/devices) in NOUS.";
-    if (previous.projectId !== undefined) {
-      const old = projects.find((p) => p.id === previous.projectId);
-      announce(
-        `Your approval for project ${old ? `"${old.name}" (${old.id})` : previous.projectId} ${until}`,
-      );
-    } else
-      announce(
-        `Your previous workspace connection (${previous.workspaceId}) ${until}`,
-      );
+    announce(
+      previous.projectId !== undefined
+        ? `Your previous approval for project ${previous.projectId} ${until}`
+        : `Your previous workspace connection (${previous.workspaceId}) ${until}`,
+    );
   }
   const { workspaceId } = await addWorkspace({
     stateDir: options.stateDir,
@@ -1013,9 +936,9 @@ export async function rc(options: RcOptions): Promise<void> {
   const folder =
     stored?.workspaces.find((w) => w.id === workspaceId)?.label ??
     basename(root);
-  announce(`Connected: "${project.name}" ↔ ${root}  (Codex ${version})`);
+  announce(`Connected: your NOUS account ↔ ${root}  (Codex ${version})`);
   announce(
-    `In a chat for this project on NOUS, choose Local Codex → ${device} → ${folder}.\nPress Ctrl-C to stop.`,
+    `In any chat on NOUS, choose Local Codex → ${device} → ${folder}.\nPress Ctrl-C to stop.`,
   );
   await options.run(options.stateDir);
 }
@@ -1244,8 +1167,8 @@ export async function runBridge(
     console.error(
       "NOUS tools are not enabled for managed sessions; reconnect with `nous-harness connect --tools` to expose them.",
     );
-  const journal = new Journal(join(stateDir, "journal.sqlite"), (workspaceId) =>
-    sessionOptionsFor(stateDir, state, workspaceId),
+  const journal = new Journal(join(stateDir, "journal.sqlite"), (workspaceId, projectId) =>
+    sessionOptionsFor(stateDir, state, workspaceId, projectId),
   );
   const adapterFor = (_workspaceId: string, runId: string): CodexAdapter => {
     let adapter = adapters.get(runId);
@@ -1312,6 +1235,9 @@ function mcpSession(
   stateDir: string,
   state: LocalState,
   outputRoot?: string,
+  // The run's NOUS project, on an account connection: the MCP child holds
+  // every tool call to it (mcp/pin.ts).
+  project?: string,
 ): McpSession {
   return {
     apiOrigin: apiBase(state.apiUrl),
@@ -1319,9 +1245,9 @@ function mcpSession(
     // Codex launches the MCP child from the workspace cwd, never from here.
     stateDir: resolve(stateDir),
     // Publication is bound to a registered root only; never to the cwd, and
-    // never on a workspace connection, whatever its stored scopes say.
+    // never on a workspace or account connection, whatever its stored scopes say.
     ...(outputRoot &&
-    state.workspaceId === undefined &&
+    state.projectId !== undefined &&
     state.scopes?.includes("artifacts:publish")
       ? { outputRoot }
       : {}),
@@ -1334,10 +1260,12 @@ function mcpSession(
     ...(state.scopes?.includes("library:write") ? { library: true } : {}),
     // read_selected_context reads the memories chosen for the granted project.
     // A workspace grant has none and NOUS refuses it context:read, so the tool
-    // is not offered there whatever the stored scopes say.
-    ...(state.workspaceId === undefined && state.scopes?.includes("context:read")
+    // is not offered there whatever the stored scopes say; nor on an account
+    // connection (no one project).
+    ...(state.projectId !== undefined && state.scopes?.includes("context:read")
       ? { context: true }
       : {}),
+    ...(project ? { project } : {}),
   };
 }
 /** Managed sessions get the NOUS MCP server only when the grant carries tools:read. */
@@ -1345,11 +1273,18 @@ export function sessionOptionsFor(
   stateDir: string,
   state: LocalState,
   workspaceId: string,
+  projectId?: string,
 ): SessionOptions {
   // `workspaceId` here is a registered local folder; a NOUS workspace connection has none.
   if (state.workspaceId !== undefined) throw new Error(WORKSPACE_MCP_ONLY);
   const workspace = state.workspaces.find((w) => w.id === workspaceId);
   if (!workspace) throw new Error("unregistered local workspace");
+  // An account connection reaches every project in the account; each run's
+  // NOUS tools are pinned to the project NOUS names in its start command.
+  // Without one, the run gets no NOUS tools rather than unpinned ones.
+  const pin = state.account === true ? (uuid(projectId) ? projectId : null) : undefined;
+  if (pin === null)
+    console.error("NOUS did not name this run's project; starting it without NOUS tools.");
   // Local operator choice: the pinned Codex CLI may reject the user's global
   // default model under their login (e.g. a ChatGPT account), so allow pinning
   // one for bridge sessions without touching ~/.codex/config.toml.
@@ -1365,10 +1300,10 @@ export function sessionOptionsFor(
       writableRoots: [workspace.root],
     },
     ...(model ? { model } : {}),
-    ...(state.scopes?.includes("tools:read")
+    ...(state.scopes?.includes("tools:read") && pin !== null
       ? {
           mcpConfig: buildManagedMcpConfig(
-            mcpSession(stateDir, state, workspace.root),
+            mcpSession(stateDir, state, workspace.root, pin),
           ),
         }
       : {}),
@@ -1420,6 +1355,10 @@ export async function mcpInstallCommand(
   announce(
     `After you run the command below, add tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC} under [mcp_servers.nous] in ~/.codex/config.toml: Codex stops waiting for an MCP tool after 60 s by default, and NOUS's arXiv tools can take up to 125 s.`,
   );
+  if (state.account === true)
+    announce(
+      "This registration reaches every project in your NOUS account: its NOUS tools take a project_id, and list_library lists the projects and their workspaces.",
+    );
   if (publish)
     announce(
       root
@@ -1469,7 +1408,9 @@ export async function status(options: {
             `Project: ${state.projectId}`,
             `Chat: ${state.threadId ?? "none (project only)"}`,
           ]
-        : [`Workspace: ${state.workspaceId} (every project in it; MCP-only)`]),
+        : state.account === true
+          ? ["Account: your whole NOUS account (every project you own or belong to in your organization)"]
+          : [`Workspace: ${state.workspaceId} (every project in it; MCP-only)`]),
       `Device: ${state.label ?? "unlabelled"} (${state.deviceId})`,
       `API: ${state.apiUrl}`,
       `Scopes: ${state.scopes?.join(" ") ?? "unknown"}`,
@@ -1487,7 +1428,12 @@ async function handoffContext(
   const store = new CredentialStore(options.stateDir);
   const state = storedConnection(await store.readLocal("connection").catch(() => null));
   if (state === null) throw new Error("connect this device first");
-  // A handoff belongs to one chat of one project; a workspace connection has neither.
+  // A handoff belongs to one chat of one project; neither a workspace nor an
+  // account connection has one.
+  if (state.account === true)
+    throw new Error(
+      "this device is connected to your whole NOUS account, which has no chat handoff; reconnect with nous-harness connect --project UUID --chat UUID --tools --handoff",
+    );
   if (state.projectId === undefined)
     throw new Error(
       "this device is connected to a workspace, which is MCP-only and has no chat handoff; reconnect with nous-harness connect --project UUID --chat UUID --tools --handoff",
@@ -1618,15 +1564,16 @@ export function recoverInterrupt(
     journal.close();
   }
 }
-const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | rc --api URL --root PATH [--label NAME] | status | handoff show|save|flush|list|discard ID
+const help = `Usage: nous-harness connect --api https://host/api/v1 (--project UUID | --workspace UUID | --account) --label NAME [--chat UUID] [--tools [--publish] [--write [--library]] [--handoff] [--context]] | workspace add --root PATH [--label NAME] | run | rc --api URL --root PATH [--label NAME] | status | handoff show|save|flush|list|discard ID
   connect --chat UUID    Bind this device to one NOUS chat in --project: harness runs are leased and files are published only in that chat; if the chat is deleted or unlinked from --project, reconnect. Reconnect without --chat to unbind.
   New browser-started runs need a device bound to the chat's current project. Other live linked-project bindings retain MCP and handoff access.
   connect --chat UUID --tools --handoff also lets sessions read and save the chat's structured handoff (get_nous_handoff / save_nous_handoff).
   connect --workspace UUID binds the grant to every project in one NOUS workspace (not a local folder; see workspace add). It is MCP-only: it needs --tools, cannot take --publish, --chat, --handoff or --context, and cannot run harness sessions. It always requests library:read, so list_library can name the projects its tools need.
+  connect --account binds the grant to your whole NOUS account (every project in workspaces of your organization that you own or belong to). It runs Local Codex from any chat in the account and always requests harness:execute, tools:read and library:read (list_library names the projects tools need); --write and --library add theirs; it cannot take --publish, --chat, --handoff or --context. workspace add registers folders that any chat in the account can use.
   connect --library (needs --tools and --write) also requests library:read and library:write.
   connect reuses the stored binding (no browser login or consent) when the API, project or workspace, and chat match, every requested scope is already granted, and the grant still renews or, once lapsed, resumes from its browser consent (same device; refused once revoked or 30 days after it lapsed); otherwise it runs the full flow. Reuse never drops a scope and names any it keeps; to narrow scopes, revoke this device's access at /integrations/devices (or disconnect), then connect.
-  nous-harness status    Show the binding (project or workspace, chat, device, grant expiry) and the handoff queue; works offline.
-  nous-harness rc --api URL --root PATH [--label NAME]    Interactive: sign in, pick or create a project, pair this computer (harness:execute + tools:read), register PATH as the folder Codex works in, and run. The repository's \`nous --rc\` launcher calls this with the current folder.
+  nous-harness status    Show the binding (project, workspace or account, chat, device, grant expiry) and the handoff queue; works offline.
+  nous-harness rc --api URL --root PATH [--label NAME]    Interactive: sign in, pair this computer with your whole NOUS account (harness:execute, tools:read, tools:write, library:read, library:write), register PATH as a folder any chat in the account can use, and run. The repository's \`nous --rc\` launcher calls this with the current folder.
   nous-harness handoff show    Print the bound chat's latest handoff.
   nous-harness handoff save --file handoff.json [--parent N]    Journal the handoff locally, then save it; --parent sets expected_parent_version (default null, the first handoff).
   nous-harness handoff flush    Retry pending saves journaled for the current chat; a conflict (409) or rejection (403/422) is kept, never retried or merged.
@@ -1648,6 +1595,7 @@ async function main(): Promise<void> {
       api: { type: "string" },
       project: { type: "string" },
       workspace: { type: "string" },
+      account: { type: "boolean" },
       chat: { type: "string" },
       label: { type: "string" },
       store: { type: "string" },
@@ -1680,12 +1628,12 @@ async function main(): Promise<void> {
     console.log(
       remaining.length ? remaining.join("\n") : "No uncertain interrupts.",
     );
-  } else if (positionals.join(" ") === "connect" && values.chat && !values.project)
+  } else if (positionals.join(" ") === "connect" && values.chat && !values.project && !values.account)
     throw new Error("--chat requires --project");
   else if (
     positionals.join(" ") === "connect" &&
     values.api &&
-    (values.project || values.workspace) &&
+    (values.project || values.workspace || values.account) &&
     values.label
   )
     await connect({
@@ -1693,6 +1641,7 @@ async function main(): Promise<void> {
       apiUrl: values.api,
       projectId: values.project,
       workspaceId: values.workspace,
+      account: values.account,
       threadId: values.chat,
       label: values.label,
       tools: values.tools,
@@ -1721,6 +1670,8 @@ async function main(): Promise<void> {
   else if (positionals.join(" ") === "mcp") {
     if (!values.session || !values.api)
       throw new Error("mcp requires --api and --session");
+    if (values.project !== undefined && !uuid(values.project))
+      throw new Error("--project must be a project UUID");
     await runStdioMcp({
       apiOrigin: apiBase(values.api),
       credentialHandle: values.session,
@@ -1730,6 +1681,7 @@ async function main(): Promise<void> {
       ...(values.handoff ? { handoff: true } : {}),
       ...(values.library ? { library: true } : {}),
       ...(values.context ? { context: true } : {}),
+      ...(values.project ? { project: values.project } : {}),
     });
   } else if (positionals.join(" ") === "workspace add" && values.root)
     await addWorkspace({ stateDir, root: values.root, label: values.label });
@@ -1767,7 +1719,6 @@ async function main(): Promise<void> {
         apiUrl: values.api,
         dir: resolve(values.root),
         label: values.label,
-        prompt: terminal.prompt,
         probe: () => probeCodex(),
         run: (stateDir) => {
           // Hand the terminal back so Ctrl-C reaches the process, and stops

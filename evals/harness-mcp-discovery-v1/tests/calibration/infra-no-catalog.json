@@ -1,0 +1,17 @@
+{
+  "_calibration": "expect exit 2: no GET /api/v1/integrations/tools recorded, so the MCP server never connected; the from-memory answer is never scored",
+  "evidence": {
+    "schema_version": "1.0",
+    "benchmark_id": "harness-mcp-discovery-v1",
+    "answer_path": "/app/answer.md",
+    "answer_exists": true,
+    "answer_is_regular_file": true,
+    "answer_file_mode": "-rw-r--r--",
+    "answer_bytes": 177,
+    "answer_truncated": false,
+    "answer": "# Literature scan: retrieval-augmented generation for clinical question answering\n\n- Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks | arXiv:2005.11401 | arXiv\n"
+  },
+  "state": {
+    "events": []
+  }
+}
