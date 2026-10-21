@@ -1,0 +1,402 @@
+[
+  {
+    "name": "search_documents",
+    "description": "Look up documents by title/filename substring match.\n\n    Does NOT search document content — for content-level questions\n    (\"what do my documents say about X\", comparisons, quotes) use\n    do_kb_retrieve instead. A multi-word query here must appear verbatim\n    in a single title/filename to match.",
+    "input_schema": {
+      "description": "Look up documents by title/filename substring match.\n\nDoes NOT search document content — for content-level questions\n(\"what do my documents say about X\", comparisons, quotes) use\ndo_kb_retrieve instead. A multi-word query here must appear verbatim\nin a single title/filename to match.",
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "max_results": {
+          "default": 10,
+          "title": "Max Results",
+          "type": "integer",
+          "maximum": 50
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "search_documents",
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_project_documents",
+    "description": "List documents in a research project, ordered newest first.\n\n    Args:\n        project_id: Project UUID. If omitted and the user is on a project\n            page, the project is inferred from the page context.\n        limit: Maximum number of documents to return (default 100, max 500).\n        offset: Number of documents to skip for pagination (default 0).\n\n    Returns pagination fields (``total``/``returned``/``has_more``).",
+    "input_schema": {
+      "description": "List documents in a research project, ordered newest first.\n\nArgs:\n    project_id: Project UUID. If omitted and the user is on a project\n        page, the project is inferred from the page context.\n    limit: Maximum number of documents to return (default 100, max 500).\n    offset: Number of documents to skip for pagination (default 0).\n\nReturns pagination fields (``total``/``returned``/``has_more``).",
+      "properties": {
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer",
+          "maximum": 50
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "list_project_documents",
+      "type": "object",
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "do_kb_retrieve",
+    "description": "Semantic retrieval over the organization's DigitalOcean Knowledge Base.\n\n    When evidence mode is on, each chunk includes 'relevance' (0-10), a\n    'summary' of how it bears on the query, and a verbatim 'quote'. Cite\n    using the quote. If top relevance is below 5, call this tool again\n    with a narrower or broader reformulation instead of settling for weak\n    evidence.",
+    "input_schema": {
+      "description": "Semantic retrieval over the organization's DigitalOcean Knowledge Base.\n\nWhen evidence mode is on, each chunk includes 'relevance' (0-10), a\n'summary' of how it bears on the query, and a verbatim 'quote'. Cite\nusing the quote. If top relevance is below 5, call this tool again\nwith a narrower or broader reformulation instead of settling for weak\nevidence.",
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "top_k": {
+          "default": 8,
+          "title": "Top K",
+          "type": "integer",
+          "maximum": 20
+        },
+        "document_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 1,
+          "maxItems": 20,
+          "description": "Project document UUIDs to retrieve from (required)."
+        }
+      },
+      "required": [
+        "query",
+        "document_ids"
+      ],
+      "title": "do_kb_retrieve",
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_current_draft",
+    "description": "Get the latest completed draft for a research project.\n\n    Use this before answering follow-ups about a draft being ready, missing,\n    or available to show. Set ``include_content`` only when the user asks to\n    read or continue the draft in chat.",
+    "input_schema": {
+      "description": "Get the latest completed draft for a research project.\n\nUse this before answering follow-ups about a draft being ready, missing,\nor available to show. Set ``include_content`` only when the user asks to\nread or continue the draft in chat.",
+      "properties": {
+        "include_content": {
+          "default": false,
+          "title": "Include Content",
+          "type": "boolean"
+        }
+      },
+      "title": "get_current_draft",
+      "type": "object",
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_project_artifacts",
+    "description": "List the current version of each artifact published to this project (newest first), with sha256, size and the chat it came from, if any.",
+    "input_schema": {
+      "properties": {
+        "limit": {
+          "default": 50,
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "title": "_ListProjectArtifactsArgs",
+      "type": "object",
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_arxiv",
+    "description": "Search arXiv for academic papers.\n\n    Use when the user asks to find, search, or look up research papers.\n    Pass clean topic KEYWORDS in query — not filler like 'recent' or 'latest';\n    recency is controlled by recency_days. arXiv has NO venue field, so never\n    put conference names (NeurIPS, ICML, ICLR, ACL, etc.) in query — they\n    match almost nothing and empty the whole result. Do not repeat a term\n    (quoted or not) more than once. By default only papers from the\n    last 365 days are returned. Pass recency_days=0 to disable the date\n    filter for historical or all-time searches (e.g. papers from 2022-2024),\n    or a larger N to widen the window. Set chronological=true to sort\n    newest-first instead of by relevance.",
+    "input_schema": {
+      "description": "Search arXiv for academic papers.\n\nUse when the user asks to find, search, or look up research papers.\nPass clean topic KEYWORDS in query — not filler like 'recent' or 'latest';\nrecency is controlled by recency_days. arXiv has NO venue field, so never\nput conference names (NeurIPS, ICML, ICLR, ACL, etc.) in query — they\nmatch almost nothing and empty the whole result. Do not repeat a term\n(quoted or not) more than once. By default only papers from the\nlast 365 days are returned. Pass recency_days=0 to disable the date\nfilter for historical or all-time searches (e.g. papers from 2022-2024),\nor a larger N to widen the window. Set chronological=true to sort\nnewest-first instead of by relevance.",
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "max_results": {
+          "default": 5,
+          "title": "Max Results",
+          "type": "integer",
+          "maximum": 20
+        },
+        "categories": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categories"
+        },
+        "recency_days": {
+          "default": 365,
+          "title": "Recency Days",
+          "type": "integer"
+        },
+        "chronological": {
+          "default": false,
+          "title": "Chronological",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "search_arxiv",
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_external_database",
+    "description": "Search external databases (PubMed, UniProt, ChEMBL, PubChem, FRED, SEC EDGAR, etc.).\n\n    Provides a single entry point to the registered scientific and financial\n    connector adapters. Supply ``connector`` to target one (e.g. ``\"pubmed\"``),\n    ``domain`` to fan out across a category (``biomedical``, ``chemistry``,\n    ``finance``, ``clinical``, ``genomics``, ``economic``, ``literature``),\n    or omit both to search every available connector concurrently.\n\n    Use when the user asks for proteins, compounds, mutations, clinical trials,\n    economic time series, SEC filings, or any other domain-specific data not\n    available in the local document store.",
+    "input_schema": {
+      "description": "Search external databases (PubMed, UniProt, ChEMBL, PubChem, FRED, SEC EDGAR, etc.).\n\nProvides a single entry point to the registered scientific and financial\nconnector adapters. Supply ``connector`` to target one (e.g. ``\"pubmed\"``),\n``domain`` to fan out across a category (``biomedical``, ``chemistry``,\n``finance``, ``clinical``, ``genomics``, ``economic``, ``literature``),\nor omit both to search every available connector concurrently.\n\nUse when the user asks for proteins, compounds, mutations, clinical trials,\neconomic time series, SEC filings, or any other domain-specific data not\navailable in the local document store.",
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "connector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connector"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain"
+        },
+        "max_results": {
+          "default": 10,
+          "title": "Max Results",
+          "type": "integer",
+          "maximum": 20
+        },
+        "filters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filters"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "search_external_database",
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_external_databases",
+    "description": "List the external database connectors available to the agent.\n\n    Use when the user asks \"what databases can you search\", or before invoking\n    ``search_external_database`` to discover the right connector name. Pass\n    ``domain`` to filter by category.",
+    "input_schema": {
+      "description": "List the external database connectors available to the agent.\n\nUse when the user asks \"what databases can you search\", or before invoking\n``search_external_database`` to discover the right connector name. Pass\n``domain`` to filter by category.",
+      "properties": {
+        "domain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain"
+        }
+      },
+      "title": "list_external_databases",
+      "type": "object",
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_document_content",
+    "description": "Read a project document's summary or full text. Paginated by characters; follow next_offset until it is null.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "full"
+          ],
+          "default": "summary"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 48000,
+          "default": 48000,
+          "description": "Characters per page."
+        }
+      },
+      "required": [
+        "document_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "retrieve_passages",
+    "description": "Full-text passage retrieval over the granted project's documents (PostgreSQL ranking; works without a semantic knowledge base). Omit document_ids to search the whole project.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "document_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "minItems": 1,
+          "maxItems": 20
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 8
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_arxiv_paper_content",
+    "description": "Read the full text of an arXiv paper by id without ingesting it. Paginated by characters; follow next_offset until it is null.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "arxiv_id": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 48000,
+          "default": 48000,
+          "description": "Characters per page."
+        }
+      },
+      "required": [
+        "arxiv_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "find_researchers",
+    "description": "Find researchers by name among the author lists of papers ingested into this project (arXiv metadata). Case-insensitive substring match; most papers first, at most 25 (limit). Documents without author metadata are invisible, and there are no affiliations or career history. Only the 2,000 newest documents are scanned. truncated=true means the list is incomplete: it was cut by limit, or older documents were not scanned. Pass a researcher_id to get_researcher.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25,
+          "default": 10
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_researcher",
+    "description": "Read one researcher by researcher_id (from find_researchers or a co-author entry): their papers in the granted project (up to 100, newest published first, with arxiv_id and published when known) and co-authors with shared-paper counts (up to 100). Coverage is author lists of papers ingested into this project (arXiv metadata); no affiliations or career history. Only the 2,000 newest documents are scanned. researcher_not_found means no scanned document of this project lists that author; with truncated=true older documents were not scanned, so the author may exist there.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "researcher_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "researcher_id"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

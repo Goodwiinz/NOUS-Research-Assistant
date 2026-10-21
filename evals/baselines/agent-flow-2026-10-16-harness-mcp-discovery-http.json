@@ -1,0 +1,358 @@
+{
+  "schema_version": "1.0",
+  "suite": "nous-harness-mcp-v1",
+  "capability": 18,
+  "recorded_at": "2026-10-16T08:30:58.208244+00:00",
+  "status": "NOT GATED",
+  "source_manifest": "evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-http.json",
+  "repository_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "agent_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "task_digests": {
+    "harness-mcp-discovery-v1": "sha256:1c2006820db7721a59772133e531e92da650be95918ce5fcee2946fc612a4340"
+  },
+  "dataset_digests": {
+    "harness-mcp-discovery-v1": "sha256:44325af56deb0d66b69ff2a268309c5ba9a5fb0f38ded500f70158e9b76fb022"
+  },
+  "harness_digest": "62ffbe5a0ef8bc404b2bdc4c816aa7ad33c8429f3b70aa4770bf5bf4e4402ee9",
+  "harbor_version": "0.6.6",
+  "runner_base_image_digest": "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20",
+  "runner_image_digest": null,
+  "runner_image_digest_note": "Harbor removed trial images during cleanup; no final per-trial image digest was retained. This record remains exploratory, NOT GATED.",
+  "env_flags": "N/A: deterministic gateway double; no NOUS backend process",
+  "decision": {
+    "scope": "Codex-only, historical primitive composition at pinned bridge revision",
+    "result": "PRIMITIVES INSUFFICIENT",
+    "objective_passes": 1,
+    "scoreable_trials": 5,
+    "pass_threshold": 4,
+    "claude": "NOT RUN: requested Fable Bedrock invocation denied; local Fable source reviews are separate"
+  },
+  "infrastructure": {
+    "accepted_series_failures": 0,
+    "excluded_first_series_attempts": 5,
+    "total_attempts": 10,
+    "reason": "All initial attempts encountered Azure WebSocket HTTP302 provider errors before HTTPS recovery; excluded under the pre-registered provider-error rule. New HTTP task digest and baseline declared before replacement trial one."
+  },
+  "metrics": {
+    "agent_seconds_p50": 30.223169,
+    "agent_seconds_p95": 160.24744679999998,
+    "percentile_method": "linear interpolation on sorted five observations",
+    "first_token_seconds": null,
+    "terminalization_seconds": null,
+    "unknown_metrics_reason": "not captured by this task/runner; do not substitute total elapsed"
+  },
+  "trials": [
+    {
+      "trial": "harness-mcp-discovery-v1__JXW3cyN",
+      "task_checksum": "5e2cad8026884877950a508869d5e68511261b0a977ef2f21d4c3af1b96128af",
+      "objective": 0,
+      "semantic": "N/A",
+      "infrastructure": "pass",
+      "failures": [
+        "search_documents was never called through the bridge with a non-empty query"
+      ],
+      "library_tools_used": [
+        "list_project_documents",
+        "retrieve_passages"
+      ],
+      "tool_call_counts": {
+        "list_external_databases": 1,
+        "list_project_documents": 1,
+        "retrieve_passages": 1,
+        "search_arxiv": 1,
+        "search_external_database": 1
+      },
+      "non_bridge_requests": [],
+      "fabricated_identifiers": {
+        "fabricated_arxiv_ids": [],
+        "fabricated_dois": [],
+        "fabricated_pmcids": [],
+        "fabricated_pmids": [],
+        "fabricated_uuids": []
+      },
+      "agent_info": {
+        "name": "codex",
+        "version": "0.161.0",
+        "model_info": {
+          "name": "gpt-5.6-terra",
+          "provider": "openai"
+        }
+      },
+      "agent_seconds": 30.223169,
+      "total_seconds": 61.383868,
+      "tokens": {
+        "n_input_tokens": 65515,
+        "n_cache_tokens": 49698,
+        "n_output_tokens": 991,
+        "cost_usd": 0.053465599999999995,
+        "rollout_details": null,
+        "metadata": null
+      },
+      "artifacts": {
+        "result.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__JXW3cyN/result.json",
+          "sha256": "4a38c602a6c60a12660adda2536f78b1524b3a54327619fb65c3a200fbae2b3a"
+        },
+        "verifier/audit.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__JXW3cyN/verifier/audit.json",
+          "sha256": "94940ef3c611cf8ae6a26e41b73999346ba6593fa83f258bf31d7326e6543075"
+        },
+        "verifier/reward.txt": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__JXW3cyN/verifier/reward.txt",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      }
+    },
+    {
+      "trial": "harness-mcp-discovery-v1__ensTBt2",
+      "task_checksum": "5e2cad8026884877950a508869d5e68511261b0a977ef2f21d4c3af1b96128af",
+      "objective": 0,
+      "semantic": "N/A",
+      "infrastructure": "pass",
+      "failures": [
+        "search_documents was never called through the bridge with a non-empty query"
+      ],
+      "library_tools_used": [
+        "retrieve_passages"
+      ],
+      "tool_call_counts": {
+        "list_external_databases": 1,
+        "retrieve_passages": 1,
+        "search_arxiv": 1,
+        "search_external_database": 1
+      },
+      "non_bridge_requests": [],
+      "fabricated_identifiers": {
+        "fabricated_arxiv_ids": [],
+        "fabricated_dois": [],
+        "fabricated_pmcids": [],
+        "fabricated_pmids": [],
+        "fabricated_uuids": []
+      },
+      "agent_info": {
+        "name": "codex",
+        "version": "0.161.0",
+        "model_info": {
+          "name": "gpt-5.6-terra",
+          "provider": "openai"
+        }
+      },
+      "agent_seconds": 189.752277,
+      "total_seconds": 212.154985,
+      "tokens": {
+        "n_input_tokens": 64807,
+        "n_cache_tokens": 49495,
+        "n_output_tokens": 954,
+        "cost_usd": 0.051970999999999996,
+        "rollout_details": null,
+        "metadata": null
+      },
+      "artifacts": {
+        "result.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__ensTBt2/result.json",
+          "sha256": "a7f5c550c768d7fc4b92fd6e3c248f6d6b452816ce75ed81a2455aade4d4ea7e"
+        },
+        "verifier/audit.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__ensTBt2/verifier/audit.json",
+          "sha256": "fc475981b7638d7a88c09f9546f412794f9b452bc6ea7b049ffd61f68d08551a"
+        },
+        "verifier/reward.txt": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__ensTBt2/verifier/reward.txt",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      }
+    },
+    {
+      "trial": "harness-mcp-discovery-v1__j9x8hK7",
+      "task_checksum": "5e2cad8026884877950a508869d5e68511261b0a977ef2f21d4c3af1b96128af",
+      "objective": 0,
+      "semantic": "N/A",
+      "infrastructure": "pass",
+      "failures": [
+        "search_documents was never called through the bridge with a non-empty query"
+      ],
+      "library_tools_used": [
+        "list_project_documents"
+      ],
+      "tool_call_counts": {
+        "get_document_content": 2,
+        "list_external_databases": 1,
+        "list_project_documents": 1,
+        "search_arxiv": 1,
+        "search_external_database": 1
+      },
+      "non_bridge_requests": [],
+      "fabricated_identifiers": {
+        "fabricated_arxiv_ids": [],
+        "fabricated_dois": [],
+        "fabricated_pmcids": [],
+        "fabricated_pmids": [],
+        "fabricated_uuids": []
+      },
+      "agent_info": {
+        "name": "codex",
+        "version": "0.161.0",
+        "model_info": {
+          "name": "gpt-5.6-terra",
+          "provider": "openai"
+        }
+      },
+      "agent_seconds": 42.228126,
+      "total_seconds": 63.706908,
+      "tokens": {
+        "n_input_tokens": 97940,
+        "n_cache_tokens": 81346,
+        "n_output_tokens": 1248,
+        "cost_usd": 0.0644332,
+        "rollout_details": null,
+        "metadata": null
+      },
+      "artifacts": {
+        "result.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__j9x8hK7/result.json",
+          "sha256": "2fe2a4beddf403d95efef6888f82fed0fa34bbf5ddc952087808cdfc4f8d319a"
+        },
+        "verifier/audit.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__j9x8hK7/verifier/audit.json",
+          "sha256": "c7236950accdc5b47f77b5461322395c985d7e81b774c4b68e77f9f4e1bf7204"
+        },
+        "verifier/reward.txt": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__j9x8hK7/verifier/reward.txt",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      }
+    },
+    {
+      "trial": "harness-mcp-discovery-v1__pR5e9dw",
+      "task_checksum": "5e2cad8026884877950a508869d5e68511261b0a977ef2f21d4c3af1b96128af",
+      "objective": 1,
+      "semantic": "N/A",
+      "infrastructure": "pass",
+      "failures": [],
+      "library_tools_used": [
+        "list_project_documents",
+        "search_documents"
+      ],
+      "tool_call_counts": {
+        "list_external_databases": 1,
+        "list_project_documents": 1,
+        "search_arxiv": 1,
+        "search_documents": 4,
+        "search_external_database": 1
+      },
+      "non_bridge_requests": [],
+      "fabricated_identifiers": {
+        "fabricated_arxiv_ids": [],
+        "fabricated_dois": [],
+        "fabricated_pmcids": [],
+        "fabricated_pmids": [],
+        "fabricated_uuids": []
+      },
+      "agent_info": {
+        "name": "codex",
+        "version": "0.161.0",
+        "model_info": {
+          "name": "gpt-5.6-terra",
+          "provider": "openai"
+        }
+      },
+      "agent_seconds": 27.076352,
+      "total_seconds": 49.420005,
+      "tokens": {
+        "n_input_tokens": 76789,
+        "n_cache_tokens": 61659,
+        "n_output_tokens": 1405,
+        "cost_usd": 0.0594518,
+        "rollout_details": null,
+        "metadata": null
+      },
+      "artifacts": {
+        "result.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__pR5e9dw/result.json",
+          "sha256": "4a64f8a2de2777164cf852f6fa07264d396594b74368f28713fb02ce436be957"
+        },
+        "verifier/audit.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__pR5e9dw/verifier/audit.json",
+          "sha256": "01b114eab86899887b0bba58376d78368e9c45443c733522d306ff8817dcdb3b"
+        },
+        "verifier/reward.txt": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__pR5e9dw/verifier/reward.txt",
+          "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        }
+      }
+    },
+    {
+      "trial": "harness-mcp-discovery-v1__tLrUKPu",
+      "task_checksum": "5e2cad8026884877950a508869d5e68511261b0a977ef2f21d4c3af1b96128af",
+      "objective": 0,
+      "semantic": "N/A",
+      "infrastructure": "pass",
+      "failures": [
+        "search_documents was never called through the bridge with a non-empty query"
+      ],
+      "library_tools_used": [
+        "list_project_documents"
+      ],
+      "tool_call_counts": {
+        "get_document_content": 2,
+        "list_external_databases": 1,
+        "list_project_documents": 1,
+        "search_arxiv": 1,
+        "search_external_database": 2
+      },
+      "non_bridge_requests": [],
+      "fabricated_identifiers": {
+        "fabricated_arxiv_ids": [],
+        "fabricated_dois": [],
+        "fabricated_pmcids": [],
+        "fabricated_pmids": [],
+        "fabricated_uuids": []
+      },
+      "agent_info": {
+        "name": "codex",
+        "version": "0.161.0",
+        "model_info": {
+          "name": "gpt-5.6-terra",
+          "provider": "openai"
+        }
+      },
+      "agent_seconds": 21.930828,
+      "total_seconds": 43.822769,
+      "tokens": {
+        "n_input_tokens": 68389,
+        "n_cache_tokens": 51497,
+        "n_output_tokens": 1191,
+        "cost_usd": 0.0583754,
+        "rollout_details": null,
+        "metadata": null
+      },
+      "artifacts": {
+        "result.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__tLrUKPu/result.json",
+          "sha256": "acd5760e8e61dd5f039325305f5108e8defea3772d54960b87322a57bc8fef47"
+        },
+        "verifier/audit.json": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__tLrUKPu/verifier/audit.json",
+          "sha256": "d382b70bd2314f17d017cf8c55a51240d76593cc338de1df27e77e8302e65aca"
+        },
+        "verifier/reward.txt": {
+          "path": "evals/jobs/harness-mcp-discovery-v1-codex-http-20261016-02/harness-mcp-discovery-v1__tLrUKPu/verifier/reward.txt",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      }
+    }
+  ],
+  "limits": [
+    "One deterministic topic; five repeated fixed-task trials, not general topic robustness.",
+    "Gateway/search ranking/authentication/tenancy/provider data are doubles; bridge and advertised primitive surface are real.",
+    "Four failures used list_project_documents instead of required search_documents; all five answers passed the identifier/fabrication audit.",
+    "The registered objective decision does not prove poor semantic answer quality or current discover_papers quality.",
+    "Not a current-develop, live-backend, deployed, composite-tool or labelled-recall acceptance result."
+  ],
+  "record_corrections": [
+    {
+      "date": "2026-10-16",
+      "finding": "Fable artifact audit corrected the diagnostic count: three failed trials used list_project_documents, one used only retrieve_passages. The passing trial also used list_project_documents. Objective scores and identifier audits are unchanged."
+    }
+  ]
+}
