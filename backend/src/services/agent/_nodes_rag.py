@@ -497,8 +497,10 @@ async def _load_page_filtered_attachment(
 ) -> tuple[list[dict], list[dict]]:
     """Read bounded scalars, release the session, then select and reauthorize.
 
-    Explicit ranges are a NOUS constraint: missing or blank selected pages
-    fail closed. They never widen into whole-document fallback content.
+    Explicit ranges are a NOUS constraint. A range must end within the
+    document's marked pages and select at least one page with text; blank or
+    figure-only pages inside it (no marker, or empty text) are skipped. A
+    range never widens into whole-document fallback content.
     """
     from sqlalchemy import func, select
     from starlette.concurrency import run_in_threadpool
@@ -511,6 +513,7 @@ async def _load_page_filtered_attachment(
         MAX_PAGE_SCAN_SOURCE_CHARS,
         MAX_RERANK_PAGES,
         PageSelection,
+        highest_page_number,
         rank_pages,
         scan_pages,
     )
@@ -582,13 +585,14 @@ async def _load_page_filtered_attachment(
             query=query if page_range is None else None,
         )
         if page_range is not None:
-            expected = list(range(page_range[0], page_range[1] + 1))
-            if sorted(page[0] for page in pages) != expected or not all(
-                page[1] for page in pages
-            ):
+            # Extractors write no marker (or empty text) for blank pages, so
+            # the highest marker is the document's known extent.
+            highest = await run_in_threadpool(highest_page_number, source)
+            text_pages = [page for page in pages if page[1]]
+            if highest is None or page_range[1] > highest or not text_pages:
                 return unavailable
             selection = PageSelection(
-                [(number, text, length, 1.0) for number, text, length in pages],
+                [(number, text, length, 1.0) for number, text, length in text_pages],
                 total,
                 True,
             )

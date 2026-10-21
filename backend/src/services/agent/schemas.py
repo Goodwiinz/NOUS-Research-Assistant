@@ -17,6 +17,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, get_args
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     Field,
     StringConstraints,
@@ -27,10 +28,27 @@ from pydantic import (
 from src.services.agent._sanitize import sanitize_page_context
 from src.services.agent._uuid import UUID_STRICT_PATTERN
 from src.services.agent.reasoning import ReasoningEffort, validate_reasoning_override
+from src.services.search.page_filter import MAX_RERANK_PAGES
 
 StrictUUIDString = Annotated[str, StringConstraints(pattern=UUID_STRICT_PATTERN)]
 PdfPageIndex = Annotated[int, Field(strict=True, ge=0)]
-PdfPageRange = tuple[PdfPageIndex, PdfPageIndex]
+
+
+def validate_pdf_page_range(value: tuple[int, int]) -> tuple[int, int]:
+    """Ascending inclusive range no wider than one page-selection batch."""
+    first, last = value
+    if last < first:
+        raise ValueError("PDF page selection must be in ascending order")
+    if last - first >= MAX_RERANK_PAGES:
+        raise ValueError(
+            f"PDF page selection may span at most {MAX_RERANK_PAGES} pages"
+        )
+    return value
+
+
+PdfPageRange = Annotated[
+    tuple[PdfPageIndex, PdfPageIndex], AfterValidator(validate_pdf_page_range)
+]
 
 
 class AgentMessage(BaseModel):
@@ -285,8 +303,6 @@ class AgentExecuteRequest(BaseModel):
             return self
         if self.execution_provider != "nous":
             raise ValueError("PDF page selection requires NOUS execution")
-        if selection[0] > selection[1]:
-            raise ValueError("PDF page selection must be in ascending order")
         if (
             self.branch_document_id is None
             and self.attachment_ids is not None

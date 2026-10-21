@@ -29,7 +29,7 @@ def _request(**fields: Any) -> AgentExecuteRequest:
     )
 
 
-@pytest.mark.parametrize("selection", [[0, 0], [2, 8]])
+@pytest.mark.parametrize("selection", [[0, 0], [2, 8], [150, 249]])
 def test_pdf_range_preserves_zero_based_endpoints(selection: list[int]) -> None:
     request = _request(attachment_ids=[uuid4()], selection_page_range=selection)
     assert request.selection_page_range == tuple(selection)
@@ -42,6 +42,34 @@ def test_pdf_range_preserves_zero_based_endpoints(selection: list[int]) -> None:
 def test_invalid_pdf_ranges_are_rejected(selection: list[Any]) -> None:
     with pytest.raises(ValidationError):
         _request(selection_page_range=selection)
+
+
+@pytest.mark.parametrize(
+    "selection,message",
+    [([3, 1], "ascending order"), ([0, 100], "at most 100 pages")],
+)
+def test_pdf_range_type_rejects_reversed_or_oversized_spans(
+    selection: list[int], message: str
+) -> None:
+    from pydantic import TypeAdapter
+
+    from src.services.agent.schemas import PageFilterResponse, PdfPageRange
+
+    # The constraint lives in the shared type, so every user of it agrees.
+    with pytest.raises(ValidationError, match=message):
+        TypeAdapter(PdfPageRange).validate_python(tuple(selection))
+    with pytest.raises(ValidationError, match=message):
+        PageFilterResponse.model_validate(
+            {
+                "document_id": str(uuid4()),
+                "accepted_pages": [],
+                "total_pages": 1,
+                "short_circuited": True,
+                "selection_page_range": selection,
+            }
+        )
+    with pytest.raises(ValidationError, match=message):
+        _request(attachment_ids=[uuid4()], selection_page_range=selection)
 
 
 @pytest.mark.parametrize("count", [0, 2])

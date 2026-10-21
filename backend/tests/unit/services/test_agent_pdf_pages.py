@@ -244,11 +244,12 @@ async def test_native_selected_range_is_zero_based_and_never_reranks(
     "source,selected",
     [
         ("unmarked unrelated content", (0, 0)),
-        ("[Page 1]\nfirst\n[Page 3]\nthird", (0, 2)),
         ("[Page 1]\nfirst\n[Page 2]\n ", (1, 1)),
+        ("[Page 1]\nfirst\n[Page 3]\n ", (1, 2)),
         ("[Page 1]\nfirst", (1, 1)),
+        ("[Page 1]\nfirst\n[Page 2]\nsecond", (1, 5)),
     ],
-    ids=["unmarked", "gap", "blank", "out-of-range"],
+    ids=["unmarked", "blank", "all-blank-span", "out-of-range", "past-the-end"],
 )
 async def test_invalid_or_unavailable_selection_cannot_widen(
     pdf_env: SimpleNamespace, source: str, selected: tuple[int, int]
@@ -258,6 +259,53 @@ async def test_invalid_or_unavailable_selection_cannot_widen(
     assert contexts == []
     assert statuses[0]["status"] == "unavailable"
     assert metadata == {}
+
+
+@pytest.mark.parametrize(
+    "source,selected,pages,contents",
+    [
+        (
+            "[Page 1]\nfirst\n[Page 2]\n \n[Page 4]\nfourth",
+            (0, 3),
+            [1, 4],
+            ["first", "fourth"],
+        ),
+        ("[Page 1]\nfirst\n[Page 3]\nthird", (1, 2), [3], ["third"]),
+        (
+            "[Page 1]\n" + "x" * (1024 * 1024 + 1) + "\n[Page 2]\nsecond",
+            (1, 1),
+            [2],
+            ["second"],
+        ),
+    ],
+    ids=["blank-and-unmarked-pages-skipped", "figure-only-page", "over-1mib"],
+)
+async def test_valid_selection_with_blank_pages_or_large_text_is_ready(
+    pdf_env: SimpleNamespace,
+    source: str,
+    selected: tuple[int, int],
+    pages: list[int],
+    contents: list[str],
+) -> None:
+    await _change(pdf_env, content_text=source)
+    contexts, statuses, metadata = await _load(pdf_env, selected=selected)
+    assert [item["page_number"] for item in contexts] == pages
+    assert [item["content"] for item in contexts] == contents
+    assert statuses[0]["status"] == "ready"
+    assert metadata["accepted_pages"] == pages
+    assert metadata["selection_page_range"] == list(selected)
+
+
+async def test_large_document_selection_reads_bounded_page_text(
+    pdf_env: SimpleNamespace,
+) -> None:
+    await _change(
+        pdf_env, content_text="[Page 1]\n" + "x" * (2 * 1024 * 1024) + "\n[Page 2]\nb"
+    )
+    contexts, statuses, _ = await _load(pdf_env, selected=(0, 0))
+    assert statuses[0]["status"] == "ready"
+    assert contexts[0]["total_chars"] == 2 * 1024 * 1024
+    assert len(contexts[0]["content"]) <= 64 * 1024
 
 
 async def test_selected_pages_beyond_first_hundred_remain_addressable(
@@ -747,9 +795,13 @@ async def test_bound_selection_and_extra_pdf_have_independent_ranges_and_authori
     provider.assert_not_awaited()
 
 
+@pytest.mark.parametrize("blank_page", [False, True])
 @pytest.mark.parametrize("unavailable", [False, True])
 async def test_branch_preprocessing_cannot_answer_after_attachment_becomes_unavailable(
-    pdf_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, unavailable: bool
+    pdf_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    unavailable: bool,
+    blank_page: bool,
 ) -> None:
     from src.services.agent import _nodes_classify
     from src.services.threads.message_branches import BranchAccessError
@@ -764,11 +816,16 @@ async def test_branch_preprocessing_cannot_answer_after_attachment_becomes_unava
     )
     if unavailable:
         await _change(pdf_env, processing_status=ProcessingStatus.FAILED)
+    if blank_page:
+        # A figure-only page inside a valid range must not fail the turn.
+        await _change(
+            pdf_env, content_text="[Page 1]\nFirst\n[Page 2]\nSecond source\n[Page 3]\n"
+        )
     state = {
         "messages": [HumanMessage(content="Explain this selected page")],
         "attachment_ids": [str(pdf_env.document)],
         "branch_document_id": str(pdf_env.document),
-        "selection_page_range": (1, 1),
+        "selection_page_range": (1, 2) if blank_page else (1, 1),
         "document_only": True,
     }
     config = {
