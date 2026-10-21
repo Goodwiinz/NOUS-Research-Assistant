@@ -11,7 +11,11 @@ Mutation checks (PostgreSQL 14.23, test-process patches; source untouched):
 - message_branches._stamp_path: replacing its 1 ms increment with 1 us repeats
   a client millisecond timestamp; the selected-history test fails.
 - pb01_pdf_message_branches.upgrade: skipping the unique reply index accepts a
-  duplicate assistant; the migration test fails its IntegrityError assertion.
+  duplicate assistant; the migration test fails its IntegrityError assertion
+  (and, first, its CONCURRENTLY statement count).
+- pb01_pdf_message_branches.upgrade: skipping _drop_index_if_invalid keeps an
+  INVALID unique index left by a failed concurrent build; dropping NOT VALID
+  or VALIDATE CONSTRAINT changes the emitted DDL. Each fails the migration test.
 - agent_submission_service.reserve_branch_reply_capacity: bypassing the check
   accepts a question without answer space; the capacity test fails.
 Focused command: PYTHONPATH=backend python -m pytest -q
@@ -720,6 +724,32 @@ async def test_accept_and_select_serialize_on_thread(
         )
 
 
+BRANCH_INDEXES = ("ix_chat_messages_parent", "uq_chat_messages_branch_assistant")
+BRANCH_FOREIGN_KEYS = (
+    "fk_chat_messages_parent_message_id",
+    "fk_threads_branch_document_id",
+    "fk_threads_selected_message_id",
+)
+
+
+async def _branch_schema_state(engine: AsyncEngine) -> dict[str, bool]:
+    async with engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT c.relname, i.indisvalid FROM pg_index i "
+                    "JOIN pg_class c ON c.oid = i.indexrelid "
+                    "WHERE c.relnamespace = current_schema()::regnamespace "
+                    "UNION ALL "
+                    "SELECT conname, convalidated FROM pg_constraint "
+                    "WHERE connamespace = current_schema()::regnamespace"
+                )
+            )
+        ).all()
+    wanted = (*BRANCH_INDEXES, *BRANCH_FOREIGN_KEYS)
+    return {name: valid for name, valid in rows if name in wanted}
+
+
 async def test_migration_roundtrip_unique_reply_and_retention_links(
     postgres_schema: AsyncEngine,
 ) -> None:
@@ -731,22 +761,47 @@ async def test_migration_roundtrip_unique_reply_and_retention_links(
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
+    executed: list[str] = []
 
     def migrate(connection: Any, direction: str) -> None:
-        with Operations.context(MigrationContext.configure(connection)):
+        # Mirrors alembic/env.py: one context transaction that the migration's
+        # autocommit_block commits before its CONCURRENTLY / VALIDATE steps.
+        context = MigrationContext.configure(connection)
+        with Operations.context(context), context.begin_transaction():
             getattr(migration, direction)()
 
-    async with postgres_schema.begin() as db:
-        await db.execute(text("CREATE TABLE documents (id UUID PRIMARY KEY)"))
-        await db.execute(text("CREATE TABLE threads (id UUID PRIMARY KEY)"))
-        await db.execute(
-            text(
-                "CREATE TABLE chat_messages (id UUID PRIMARY KEY, thread_id UUID REFERENCES threads(id) ON DELETE CASCADE, role TEXT NOT NULL)"
+    def record(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        executed.append(" ".join(statement.split()))
+
+    async def run(direction: str) -> None:
+        async with postgres_schema.connect() as connection:
+            await connection.run_sync(lambda sync: migrate(sync, direction))
+
+    event.listen(postgres_schema.sync_engine, "before_cursor_execute", record)
+    try:
+        async with postgres_schema.begin() as db:
+            await db.execute(text("CREATE TABLE documents (id UUID PRIMARY KEY)"))
+            await db.execute(text("CREATE TABLE threads (id UUID PRIMARY KEY)"))
+            await db.execute(
+                text(
+                    "CREATE TABLE chat_messages (id UUID PRIMARY KEY, thread_id UUID REFERENCES threads(id) ON DELETE CASCADE, role TEXT NOT NULL)"
+                )
             )
-        )
-        await db.run_sync(lambda connection: migrate(connection, "upgrade"))
-        await db.run_sync(lambda connection: migrate(connection, "upgrade"))
-        chat, user, assistant = (uuid4() for _ in range(3))
+        await run("upgrade")
+        await run("upgrade")
+    finally:
+        event.remove(postgres_schema.sync_engine, "before_cursor_execute", record)
+    # The table scans happen outside the column transaction, without blocking.
+    assert sum("CREATE UNIQUE INDEX CONCURRENTLY" in sql for sql in executed) == 2
+    assert sum("CREATE INDEX CONCURRENTLY" in sql for sql in executed) == 2
+    assert sum(sql.endswith("NOT VALID; END IF; END $$") for sql in executed) == 6
+    assert sum("VALIDATE CONSTRAINT" in sql for sql in executed) == 6
+    assert await _branch_schema_state(postgres_schema) == dict.fromkeys(
+        (*BRANCH_INDEXES, *BRANCH_FOREIGN_KEYS), True
+    )
+
+    chat, user, assistant = (uuid4() for _ in range(3))
+    async with postgres_schema.begin() as db:
         await db.execute(text("INSERT INTO threads(id) VALUES (:id)"), {"id": chat})
         await db.execute(
             text(
@@ -760,6 +815,50 @@ async def test_migration_roundtrip_unique_reply_and_retention_links(
             ),
             {"id": assistant, "chat": chat, "parent": user},
         )
+        with pytest.raises(IntegrityError):
+            async with db.begin_nested():
+                await db.execute(
+                    text(
+                        "INSERT INTO chat_messages(id,thread_id,role,parent_message_id) VALUES (:id,:chat,'assistant',:parent)"
+                    ),
+                    {"id": uuid4(), "chat": chat, "parent": user},
+                )
+
+    # An interrupted concurrent build leaves an INVALID index that IF NOT EXISTS
+    # would accept. Produce a real one: rebuild the unique index over a
+    # duplicate reply, then remove the duplicate and re-run the upgrade.
+    duplicate = uuid4()
+    async with postgres_schema.connect() as connection:
+        autocommit = await connection.execution_options(isolation_level="AUTOCOMMIT")
+        await autocommit.execute(
+            text("DROP INDEX CONCURRENTLY uq_chat_messages_branch_assistant")
+        )
+        await autocommit.execute(
+            text(
+                "INSERT INTO chat_messages(id,thread_id,role,parent_message_id) VALUES (:id,:chat,'assistant',:parent)"
+            ),
+            {"id": duplicate, "chat": chat, "parent": user},
+        )
+        with pytest.raises(IntegrityError):
+            await autocommit.execute(
+                text(
+                    "CREATE UNIQUE INDEX CONCURRENTLY uq_chat_messages_branch_assistant "
+                    "ON chat_messages (parent_message_id) "
+                    "WHERE parent_message_id IS NOT NULL AND role = 'assistant'"
+                )
+            )
+        await autocommit.execute(
+            text("DELETE FROM chat_messages WHERE id=:id"), {"id": duplicate}
+        )
+    assert (await _branch_schema_state(postgres_schema))[
+        "uq_chat_messages_branch_assistant"
+    ] is False
+    await run("upgrade")
+    assert await _branch_schema_state(postgres_schema) == dict.fromkeys(
+        (*BRANCH_INDEXES, *BRANCH_FOREIGN_KEYS), True
+    )
+
+    async with postgres_schema.begin() as db:
         with pytest.raises(IntegrityError):
             async with db.begin_nested():
                 await db.execute(
@@ -783,7 +882,9 @@ async def test_migration_roundtrip_unique_reply_and_retention_links(
             is None
         )
         await db.execute(text("DELETE FROM threads WHERE id=:chat"), {"chat": chat})
-        await db.run_sync(lambda connection: migrate(connection, "downgrade"))
+    await run("downgrade")
+    await run("downgrade")
+    async with postgres_schema.connect() as db:
         columns = list(
             (
                 await db.execute(
@@ -793,5 +894,9 @@ async def test_migration_roundtrip_unique_reply_and_retention_links(
                 )
             ).scalars()
         )
-        assert columns == ["id"]
-        await db.run_sync(lambda connection: migrate(connection, "upgrade"))
+    assert columns == ["id"]
+    assert await _branch_schema_state(postgres_schema) == {}
+    await run("upgrade")
+    assert await _branch_schema_state(postgres_schema) == dict.fromkeys(
+        (*BRANCH_INDEXES, *BRANCH_FOREIGN_KEYS), True
+    )
