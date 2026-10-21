@@ -15,3 +15,4 @@ The contract for this directory is [../verification.md](../verification.md).
 | [hitl-approve-deny.md](hitl-approve-deny.md) | HITL approve and deny |
 | [document-upload.md](document-upload.md) | document upload and detail |
 | [project-creation-via-chat.md](project-creation-via-chat.md) | project creation via chat |
+| [arxiv-paper-lifecycle.md](arxiv-paper-lifecycle.md) | metadata cache, explicit sync, recent import and stored PDF delivery |
