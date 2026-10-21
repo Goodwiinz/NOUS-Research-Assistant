@@ -1,7 +1,7 @@
 """Tenant-scoped arXiv metadata cache.
 
 Revision ID: ax01_arxiv_paper_cache
-Revises: ho04_handoff_org_slots
+Revises: ac01_account_bindings
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "ax01_arxiv_paper_cache"
-down_revision = "ho04_handoff_org_slots"
+down_revision = "ac01_account_bindings"
 branch_labels = None
 depends_on = None
 
