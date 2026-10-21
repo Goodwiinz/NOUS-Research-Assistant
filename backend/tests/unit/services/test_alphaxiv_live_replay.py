@@ -17,11 +17,20 @@ src/services/compat/alphaxiv_live.py to always True failed
 forcing it to False after the first write failed
 ``-k recorder_reauthorizes_on_its_cadence`` (revocation never observed).
 Both were restored byte-for-byte and the ``-k recorder`` tests passed again.
+
+LiveFollower (2026-10-20), each restored byte-for-byte and rerun green:
+- ``after_seq=current.last_seq`` -> ``after_seq=0`` in LiveFollower.poll failed
+  ``-k follower_poll_reads_only_new_rows`` (ledger re-read from 0).
+- ``if current.terminal:`` -> ``if False:`` failed
+  ``-k follower_goes_idle_after_terminal`` (ledger read after the terminal).
+- ``if _header(rows) is not None:`` -> ``if False:`` failed
+  ``-k follower_run_switch_yields_exactly_one`` (new run never replaced).
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
 from collections.abc import AsyncIterator
@@ -1005,3 +1014,227 @@ async def test_recorder_reauthorizes_on_its_cadence_and_fails_closed(
     assert len(await harness.rows()) == before
     harness.authorize.side_effect = None
     assert _text(await harness.snapshot()) == "one two "
+
+
+def _follower() -> replay.LiveFollower:
+    return replay.LiveFollower(actor_id=ACTOR, chat_id=CHAT)
+
+
+def _apply(
+    view: dict[str, Any] | None, update: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Client-side cursor application with the route's no-gap/no-dup rule."""
+    if update["type"] == "replace":
+        return copy.deepcopy(update["payload"])
+    for payload in update["payloads"]:
+        assert view is not None and payload["runId"] == view["runId"]
+        assert payload["seq"] == view["seq"] + 1, "gap or duplicate"
+        view["events"].append(payload["event"])
+        view["seq"] = payload["seq"]
+    return view
+
+
+async def test_follower_poll_reads_only_new_rows_and_matches_fresh_snapshots(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await harness.start()
+    await harness.record("token", {"content": "Alpha "})
+    follower = _follower()
+    view = copy.deepcopy(await follower.snapshot())
+    assert view == await harness.snapshot()
+    ledger_reads = AsyncMock(wraps=replay.read_events)
+    monkeypatch.setattr(replay, "read_events", ledger_reads)
+    steps: list[tuple[str, dict[str, Any]]] = [
+        (
+            "rag_context",
+            {
+                "contexts": [
+                    {"source_position": 1, "document_id": str(PAPER), "page_number": 4}
+                ]
+            },
+        ),
+        ("token", {"content": "beta [D"}),
+        ("token", {"content": "oc 1] gamma."}),
+    ]
+    for kind, payload in steps:
+        consumed = (await harness.rows())[-1].seq
+        await harness.record(kind, payload)
+        ledger_reads.reset_mock()
+        update = await follower.poll(reauthorize=False)
+        # Incremental: the ledger is read only after the consumed sequence.
+        assert [call.kwargs["after_seq"] for call in ledger_reads.await_args_list] == [
+            consumed
+        ]
+        view = _apply(view, update)
+        assert view == await harness.snapshot()
+    await harness.append(RunEventType.RUN_COMPLETED)
+    view = _apply(view, await follower.poll(reauthorize=False))
+    assert view == await harness.snapshot()
+    assert view is not None and view["events"][-1] == {
+        "type": "run_end",
+        "kind": "completed",
+    }
+    assert await follower.poll(reauthorize=False) == {"type": "delta", "payloads": []}
+
+
+async def test_follower_rechecks_access_only_when_asked_and_fails_closed(
+    harness: Harness,
+) -> None:
+    await harness.start()
+    follower = _follower()
+    await follower.snapshot()
+    await harness.record("token", {"content": "Visible."})
+    counts = (
+        harness.authorize.await_count,
+        harness.document.await_count,
+        harness.message.await_count,
+    )
+    assert (await follower.poll(reauthorize=False))["type"] == "delta"
+    assert (
+        harness.authorize.await_count,
+        harness.document.await_count,
+        harness.message.await_count,
+    ) == counts
+    await follower.poll(reauthorize=True)
+    assert harness.authorize.await_count == counts[0] + 1
+    assert harness.document.await_count == counts[1] + 1
+    assert harness.message.await_count == counts[2] + 1
+    for revoke in ("membership", "document", "message"):
+        if revoke == "membership":
+            harness.authorize.side_effect = CompatibilityError(404, "Chat not found")
+        elif revoke == "document":
+            harness.authorize.side_effect = None
+            harness.document.return_value = None
+        else:
+            harness.document.return_value = SimpleNamespace(
+                id=PAPER,
+                document_type=DocumentType.PDF,
+                processing_status=ProcessingStatus.COMPLETED,
+            )
+            harness.message.return_value = None
+        with pytest.raises(CompatibilityError):
+            await follower.poll(reauthorize=True)
+
+
+async def test_follower_org_change_on_recheck_replaces_with_empty_view(
+    harness: Harness,
+) -> None:
+    await harness.start()
+    follower = _follower()
+    assert await follower.snapshot() is not None
+    harness.authorize.return_value = SimpleNamespace(id=ACTOR, organization_id=uuid4())
+    assert await follower.poll(reauthorize=True) == {
+        "type": "replace",
+        "payload": None,
+    }
+    assert await follower.poll(reauthorize=True) == {"type": "delta", "payloads": []}
+
+
+async def test_follower_goes_idle_after_terminal_and_only_probes(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await harness.start()
+    follower = _follower()
+    await follower.snapshot()
+    assert not follower.idle
+    await harness.append(RunEventType.RUN_CANCELLED, {"reason": "user_requested"})
+    update = await follower.poll(reauthorize=False)
+    assert update["payloads"][-1]["event"] == {"type": "run_end", "kind": "aborted"}
+    assert follower.idle
+    ledger_reads = AsyncMock(wraps=replay.read_events)
+    monkeypatch.setattr(replay, "read_events", ledger_reads)
+    for _ in range(3):
+        assert await follower.poll(reauthorize=False) == {
+            "type": "delta",
+            "payloads": [],
+        }
+    ledger_reads.assert_not_awaited()
+
+
+async def _new_run(harness: Harness) -> Harness:
+    new_id = uuid4()
+    async with harness.factory() as db:
+        await db.execute(
+            update(AgentRun)
+            .where(AgentRun.job_id == str(harness.run_id))
+            .values(status="completed")
+        )
+        db.add(
+            AgentRun(
+                job_id=str(new_id),
+                status="running",
+                user_id=ACTOR,
+                organization_id=ORG,
+                thread_id=CHAT,
+                user_message_id=MESSAGE,
+                execution_provider="nous",
+                created_at=datetime.now(timezone.utc) + timedelta(seconds=5),
+            )
+        )
+        await db.commit()
+    return Harness(
+        harness.factory, new_id, harness.authorize, harness.document, harness.message
+    )
+
+
+async def test_follower_run_switch_yields_exactly_one_replace(
+    harness: Harness,
+) -> None:
+    await harness.start()
+    await harness.record("token", {"content": "Old answer"})
+    await harness.append(RunEventType.RUN_COMPLETED)
+    follower = _follower()
+    view = await follower.snapshot()
+    assert follower.idle
+    newer = await _new_run(harness)
+    # The new run exists but has no presentation yet: the old view is replaced
+    # by the empty one exactly once (the stateless contract does the same).
+    first = await follower.poll(reauthorize=False)
+    assert first == await replay.read_live_update(
+        actor_id=ACTOR,
+        chat_id=CHAT,
+        known_run_id=harness.run_id,
+        after_seq=len(view["events"]),  # type: ignore[index]
+    )
+    assert first == {"type": "replace", "payload": None}
+    await newer.append(RunEventType.RUN_STARTED)
+    assert await follower.poll(reauthorize=False) == {"type": "delta", "payloads": []}
+    await newer.start()
+    await newer.record("token", {"content": "New answer"})
+    replaced = await follower.poll(reauthorize=False)
+    assert replaced == {"type": "replace", "payload": await newer.snapshot()}
+    assert not follower.idle
+    await newer.record("token", {"content": " continues"})
+    delta = await follower.poll(reauthorize=False)
+    assert delta["type"] == "delta" and len(delta["payloads"]) == 1
+    assert delta["payloads"][0]["runId"] == str(newer.run_id)
+    assert _text(await newer.snapshot()) == "New answer continues"
+
+
+def test_incremental_snapshot_size_matches_whole_encoding() -> None:
+    events: list[dict[str, Any]] = [
+        {"type": "run_start", "userContent": "Aβ🧪"},
+        {"type": "delta_output_text", "index": 0, "delta": 'quote " and \\n'},
+        {"type": "run_end", "kind": "completed"},
+    ]
+    for count in range(len(events) + 1):
+        shown = events[:count]
+        whole = replay._encoded_size({"runId": "r", "seq": count, "events": shown})
+        assert whole == replay._snapshot_size(
+            "r", count, sum(replay._encoded_size(item) for item in shown)
+        )
+
+
+async def test_follower_enforces_snapshot_bound_incrementally(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await harness.start()
+    follower = _follower()
+    snapshot = await follower.snapshot()
+    monkeypatch.setattr(
+        replay, "_MAX_SNAPSHOT_BYTES", replay._encoded_size(snapshot) + 10
+    )
+    await harness.record("token", {"content": "x" * 200})
+    with pytest.raises(CompatibilityError) as caught:
+        await follower.poll(reauthorize=False)
+    assert caught.value.status_code == 503

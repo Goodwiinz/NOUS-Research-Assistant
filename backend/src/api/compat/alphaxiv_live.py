@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import Counter
 from collections.abc import AsyncGenerator, Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -44,6 +45,12 @@ logger = logging.getLogger(__name__)
 
 _LIVE_PRODUCERS: set[asyncio.Task[None]] = set()
 _LIVE_POLL_SECONDS = 0.5
+# After a run's terminal event has been delivered, only probe for a new run.
+_LIVE_IDLE_POLL_SECONDS = 2.0
+# Per-process cap on concurrent live sockets for one user. Extra sockets are
+# accepted only to be closed with 1013 (try again later).
+_MAX_SOCKETS_PER_USER = 4
+_LIVE_SOCKETS: Counter[UUID] = Counter()
 _MAX_CHANNELS = 8
 _MAX_FRAME_CHARS = 8192
 _MAX_FRAME_RECORDS = 16
@@ -305,8 +312,28 @@ async def live_socket(websocket: WebSocket) -> None:
     if "alphaxiv-live" not in protocols:
         await websocket.close(code=1002, reason="alphaxiv-live protocol required")
         return
-    await websocket.accept(subprotocol="alphaxiv-live")
+    if _LIVE_SOCKETS[actor_id] >= _MAX_SOCKETS_PER_USER:
+        await websocket.accept(subprotocol="alphaxiv-live")
+        await websocket.close(code=1013, reason="Too many live connections")
+        return
+    # Counted before the first await so concurrent handshakes cannot overshoot.
+    _LIVE_SOCKETS[actor_id] += 1
+    try:
+        await websocket.accept(subprotocol="alphaxiv-live")
+        await _serve_live_socket(websocket, auth, auth_socket, actor_id)
+    finally:
+        _LIVE_SOCKETS[actor_id] -= 1
+        if _LIVE_SOCKETS[actor_id] <= 0:
+            del _LIVE_SOCKETS[actor_id]
 
+
+async def _serve_live_socket(
+    websocket: WebSocket,
+    auth: dict[str, Any],
+    auth_socket: WebSocket,
+    actor_id: UUID,
+) -> None:
+    """Serve one accepted, authenticated and counted live socket."""
     send_lock = asyncio.Lock()
     auth_lock = asyncio.Lock()
     authenticated_at = time.monotonic()
@@ -355,23 +382,29 @@ async def live_socket(websocket: WebSocket) -> None:
 
     async def follow(channel: str, chat_id: UUID) -> None:
         subscribed = False
+        follower = live_store.LiveFollower(actor_id=actor_id, chat_id=chat_id)
         try:
             await refresh_auth()
-            snapshot = await live_store.read_live_snapshot(
-                actor_id=actor_id, chat_id=chat_id
-            )
+            snapshot = await follower.snapshot()
+            # The snapshot was a full authorized read; later polls re-check
+            # chat/paper/file/message access on the token recheck cadence.
+            access_checked_at = time.monotonic()
             run_id, after_seq = _snapshot_cursor(snapshot)
             await send_record("a", [channel, snapshot])
             subscribed = True
             while True:
-                await asyncio.sleep(_LIVE_POLL_SECONDS)
-                await refresh_auth()
-                update = await live_store.read_live_update(
-                    actor_id=actor_id,
-                    chat_id=chat_id,
-                    known_run_id=run_id,
-                    after_seq=after_seq,
+                # After the run's terminal event only a new run can change
+                # this view, so probe for one less often.
+                await asyncio.sleep(
+                    _LIVE_IDLE_POLL_SECONDS if follower.idle else _LIVE_POLL_SECONDS
                 )
+                await refresh_auth()
+                reauthorize = (
+                    time.monotonic() - access_checked_at >= _AUTH_RECHECK_SECONDS
+                )
+                update = await follower.poll(reauthorize=reauthorize)
+                if reauthorize:
+                    access_checked_at = time.monotonic()
                 if update["type"] == "replace":
                     snapshot = update["payload"]
                     run_id, after_seq = _snapshot_cursor(snapshot)
@@ -384,9 +417,8 @@ async def live_socket(websocket: WebSocket) -> None:
                         ):
                             # Never emit a gap or duplicate. A fresh whole-log
                             # replacement gives the client its own replay cursor.
-                            snapshot = await live_store.read_live_snapshot(
-                                actor_id=actor_id, chat_id=chat_id
-                            )
+                            snapshot = await follower.snapshot()
+                            access_checked_at = time.monotonic()
                             run_id, after_seq = _snapshot_cursor(snapshot)
                             await send_record("e", [channel, snapshot])
                             break

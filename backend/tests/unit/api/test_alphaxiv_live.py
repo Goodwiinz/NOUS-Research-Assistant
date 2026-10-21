@@ -13,6 +13,14 @@ Mutation proof (2026-10-13), src/api/compat/alphaxiv_live.py:
   test_live_gap_uses_full_replacement_and_revocation_removes_follower`` fail
   with a delta ('d') instead of the required complete replacement ('e').
 Both mutations were restored byte-for-byte before rerunning this suite.
+
+Polling cost guards (2026-10-20), each restored byte-for-byte and rerun green:
+- follow()'s ``reauthorize = ... >= _AUTH_RECHECK_SECONDS`` forced True failed
+  ``-k rechecked_on_the_auth_cadence`` (access re-checked every tick).
+- the idle sleep forced to ``_LIVE_POLL_SECONDS`` failed
+  ``-k backs_off_after_the_terminal`` (42 polls instead of <= 5).
+- the per-user cap compared against 10**6 failed ``-k capped_per_user``
+  (the fifth socket was served instead of closed with 1013).
 """
 
 import asyncio
@@ -384,8 +392,48 @@ def _socket_setup(
             ],
         }
 
+    class _StatelessFollower:
+        """Route-facing follower adapter over the (patchable) stateless reads.
+
+        Real incremental behavior has database-backed coverage in
+        tests/unit/services/test_alphaxiv_live_replay.py.
+        """
+
+        def __init__(self, *, actor_id: UUID, chat_id: UUID) -> None:
+            self.actor_id, self.chat_id = actor_id, chat_id
+            self.run_id: UUID | None = None
+            self.after_seq = 0
+            state.setdefault("followers", []).append(self)
+            state.setdefault("reauthorize", [])
+
+        @property
+        def idle(self) -> bool:
+            return bool(state.get("idle"))
+
+        async def snapshot(self) -> Any:
+            value = await route.live_store.read_live_snapshot(
+                actor_id=self.actor_id, chat_id=self.chat_id
+            )
+            self.run_id, self.after_seq = route._snapshot_cursor(value)
+            return value
+
+        async def poll(self, *, reauthorize: bool) -> dict[str, Any]:
+            state["reauthorize"].append(reauthorize)
+            result: dict[str, Any] = await route.live_store.read_live_update(
+                actor_id=self.actor_id,
+                chat_id=self.chat_id,
+                known_run_id=self.run_id,
+                after_seq=self.after_seq,
+            )
+            if result["type"] == "replace":
+                self.run_id, self.after_seq = route._snapshot_cursor(result["payload"])
+            elif result["payloads"]:
+                self.after_seq = result["payloads"][-1]["seq"]
+            return result
+
     monkeypatch.setattr(route.live_store, "read_live_snapshot", snapshot)
     monkeypatch.setattr(route.live_store, "read_live_update", update)
+    monkeypatch.setattr(route.live_store, "LiveFollower", _StatelessFollower)
     return _Socket(), state
 
 
@@ -846,3 +894,91 @@ async def test_producer_failure_after_ack_is_logged_with_chat_and_run(
     assert len(logged) == 1
     assert CHAT in logged[0].getMessage() and RUN in logged[0].getMessage()
     assert logged[0].exc_info is not None and logged[0].exc_info[1] is failure
+
+
+async def _until(predicate: Any, timeout: float = 1.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not reached")
+        await asyncio.sleep(0.001)
+
+
+@pytest.mark.asyncio
+async def test_live_access_is_rechecked_on_the_auth_cadence_not_every_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    socket, state = _socket_setup(monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(route, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    serving = asyncio.create_task(route.live_socket(cast(WebSocket, socket)))
+    try:
+        await socket.send("a" + CHANNEL)
+        assert (await socket.next()).startswith("a")
+        await _until(lambda: len(state["reauthorize"]) >= 5)
+        assert not any(state["reauthorize"])
+        clock[0] += route._AUTH_RECHECK_SECONDS
+        await _until(lambda: any(state["reauthorize"]))
+        seen = len(state["reauthorize"])
+        await _until(lambda: len(state["reauthorize"]) >= seen + 5)
+        assert state["reauthorize"].count(True) == 1
+        # A failed re-check still fails closed for the subscription.
+        state["revoked"] = True
+        assert await socket.next() == "c" + CHANNEL
+    finally:
+        await socket.incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(serving, 1)
+
+
+@pytest.mark.asyncio
+async def test_live_polling_backs_off_after_the_terminal_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    socket, state = _socket_setup(monkeypatch)
+    monkeypatch.setattr(route, "_LIVE_IDLE_POLL_SECONDS", 3600.0)
+    serving = asyncio.create_task(route.live_socket(cast(WebSocket, socket)))
+    try:
+        await socket.send("a" + CHANNEL)
+        assert (await socket.next()).startswith("a")
+        await _until(lambda: len(state["reauthorize"]) >= 3)
+        state["snapshot"]["events"].append({"type": "run_end", "kind": "completed"})
+        state["idle"] = True
+        assert (await socket.next()).startswith("d")
+        settled = len(state["reauthorize"])
+        await asyncio.sleep(0.05)
+        # At most the in-flight tick completes; then only the slow probe runs.
+        assert len(state["reauthorize"]) <= settled + 1
+    finally:
+        await socket.incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(serving, 1)
+
+
+@pytest.mark.asyncio
+async def test_live_sockets_are_capped_per_user_with_a_clear_close_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _socket_setup(monkeypatch)
+    sockets = [_Socket() for _ in range(route._MAX_SOCKETS_PER_USER)]
+    serving = [
+        asyncio.create_task(route.live_socket(cast(WebSocket, item)))
+        for item in sockets
+    ]
+    try:
+        await _until(lambda: all(item.accepted for item in sockets))
+        extra = _Socket()
+        await asyncio.wait_for(route.live_socket(cast(WebSocket, extra)), 1)
+        assert extra.closed == [1013]
+        # Closing one connection frees its slot.
+        await sockets[0].incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(serving[0], 1)
+        again = _Socket()
+        task = asyncio.create_task(route.live_socket(cast(WebSocket, again)))
+        await _until(lambda: again.accepted is not None)
+        assert again.closed == []
+        await again.incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(task, 1)
+    finally:
+        for item in sockets:
+            await item.incoming.put({"type": "websocket.disconnect"})
+        await asyncio.gather(*serving, return_exceptions=True)
+    assert not route._LIVE_SOCKETS
