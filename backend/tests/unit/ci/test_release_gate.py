@@ -155,7 +155,7 @@ def test_workflow_has_one_named_fail_closed_release_gate() -> None:
     ]
     assert checkout_indexes == [0]
     checkout = job["steps"][checkout_indexes[0]]["uses"]
-    assert checkout == ("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd")
+    assert checkout == ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")
     assert len(assertion_steps) == 1
     assertion_index, step = assertion_steps[0]
     assert checkout_indexes[0] < assertion_index
