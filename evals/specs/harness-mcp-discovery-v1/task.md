@@ -1,0 +1,28 @@
+Status: draft (pre-registered 2026-10-07; no trial run yet)
+
+Capability: an external coding harness (Claude Code or Codex), connected to NOUS only through the real harness-bridge MCP server, combines the read primitives `search_documents`, `search_arxiv` and `search_external_database` into one literature scan and cites only what those tools returned.
+
+Purpose: this is the decision eval for Plan 07 Slice 5 (`docs/plans/2026-10-05-nous-mcp-alphaxiv-parity.md`, "Slice 5 — `discover_papers` composite (eval-gated)"). Slice 5 opens only if a harness LLM fails to combine the three primitives; the pre-registered decision rule is in `harness.md`.
+
+Request (`instruction.md`, never names a tool): a literature scan on retrieval-augmented generation for clinical question answering covering the user's NOUS library, recent arXiv preprints and the published biomedical literature, written to `/app/answer.md` one paper per line with title, identifier (library document id, arXiv id, or PMID/DOI) and source, searching only with the NOUS tools (not the web) and listing only papers the tools returned.
+
+Initial conditions: the harness sees the 13-tool catalog a project-scoped `tools:read` grant sees on the real gateway (generated from `backend/src/services/integrations/read_tools.py`). Each source holds two planted items whose identifiers appear nowhere else: two library documents (fixed UUIDs, distinctive titles), two arXiv preprints (`2509.17001`, `2509.17002`) and two PubMed articles (PMIDs `40517001`, `40517002`, with `10.5555/nouseval.*` DOIs). A search returns its source's items only when the lowercased query contains one of `retrieval`, `rag`, `clinical`, `question answering`, `medical`, `qa`.
+
+Why this requires the capability: no single tool reaches all three sources. The library is reachable only through the project tools, arXiv only through `search_arxiv`, and PubMed only through `search_external_database` (with `connector="pubmed"`, a domain containing PubMed, or no connector filter). A harness that searches one or two sources, fills gaps from memory (any unserved identifier, or a list row with no served identifier or title), or bypasses the bridge fails deterministically. Residual limit: a client that sets `User-Agent: node` itself would pass as bridge traffic; nothing in the instruction or the image suggests that.
+
+Pass iff:
+
+- every recorded integration request came from the bridge (User-Agent `node`, Node's built-in `fetch`); a request from any other client (curl, python, ...) bypassed the MCP primitives under test and fails the trial, whatever its status;
+- the gateway double accepted (HTTP 200) at least one bridge `search_documents`, one `search_arxiv` and one `search_external_database` call, each with a non-empty `query`;
+- `/app/answer.md` exists, is a regular file with a single link (a symlink, hard link or special file is recorded but never read) and is not blank;
+- the answer cites at least one planted library document (id or exact title), at least one planted arXiv id, and at least one planted PMID or DOI;
+- the answer contains no identifier the double never served: arXiv-style id (also glued to `arXiv`, after `_`, or in a `10.48550/arXiv.` DOI), PMID (after a `PMID`/`PMIDs`/`pmid=` label including every number of a following list, after a `PubMed:`/`PubMed ID` label, in a PubMed URL, or any standalone 7-9 digit number on a line, or in a table whose header row, mentions PubMed/PMID/MEDLINE), PMCID, DOI (a `10.48550/arXiv.<id>` DOI counts as served when the id was served) or UUID. Markdown backslash escapes are removed first;
+- every row of the paper list (an unindented `-`/`*`/`+`/numbered item or `|` table row, with its indented continuation lines, in a block that cites at least one served paper; table headers and separators excluded) names a served identifier or an exact served title. Notes belong after a heading or paragraph line, which ends the block.
+
+Infrastructure (no reward): the double is unreachable; no successful bridge `GET /api/v1/integrations/tools` was recorded (the MCP server never connected, even if the agent reached the gateway some other way); a bridge request lacked `Authorization` or `X-NOUS-Integration-Grant`.
+
+Verifier: `tests/verify.py`, deterministic, built on `evals/harbor_common` (`run_verifier_main`: 0 pass, 10 scoreable failure, 2 infrastructure). Semantic scoring is N/A: no judge is configured or consumed.
+
+Verifier evidence: `/app/answer.md` (captured to `/logs/verifier/evidence.json`) and the double's read-only `GET /events` log. The audit (`/logs/verifier/audit.json`) also reports per-tool call counts, the order of first calls, every `search_external_database` call's connector/domain/filters, whether `list_external_databases` was called, which library tools were used, the ids the double returned, and the answer's cited and fabricated identifiers. It also lists every non-bridge request (`non_bridge_requests`) and every paper-list row without a served citation. These diagnostics never change the verdict beyond the gates above.
+
+Accepted alternatives: query wording, call order, extra tool calls (including `list_external_databases`, `list_project_documents`, `retrieve_passages` and the content readers), answer formatting (list, table, nested sub-bullets, bold, italics, backticks, links, escapes, curly quotes) and partial coverage beyond one planted item per source are all free. Using `list_project_documents` instead of `search_documents` reaches the same library items but does not satisfy the pre-registered `search_documents` requirement; the audit's `library_tools_used` makes that case visible.

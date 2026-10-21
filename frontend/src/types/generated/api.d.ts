@@ -4446,6 +4446,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/grants/{grant_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Grant
+         * @description Re-issue this device's lapsed grant from the browser consent it was
+         *     exchanged from, without a new approval or a new device.
+         *
+         *     Send the stored grant token, even expired, in `X-NOUS-Integration-Grant`:
+         *     a CLI sign-in is not bound to a device, so the grant's own token proves
+         *     which pairing is resumed, and it works once. Refused (403) once the grant
+         *     was renewed or revoked, its consent or device revoked, its project,
+         *     workspace or chat out of reach, or 30 days after it expired; 409 when
+         *     the grant was replaced or revoked meanwhile (another resume or renewal
+         *     won, or a revoke landed).
+         */
+        post: operations["resume_grant_api_v1_integrations_grants__grant_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/handoffs": {
         parameters: {
             query?: never;
@@ -10573,9 +10602,29 @@ export interface paths {
         };
         /**
          * Get Thread Handoff
-         * @description Latest harness handoff left in this chat (standalone route).
+         * @description Preserve the original object-or-404 contract for existing clients.
          */
         get: operations["get_thread_handoff_api_v2_threads__thread_id__handoff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/threads/{thread_id}/handoff/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Latest Thread Handoff
+         * @description Latest handoff, or null for an authorized chat without one.
+         */
+        get: operations["get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -32199,7 +32248,9 @@ export interface operations {
     };
     get_selected_context_api_v1_integrations_context_get: {
         parameters: {
-            query?: never;
+            query?: {
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -32213,6 +32264,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -32658,6 +32718,37 @@ export interface operations {
         };
     };
     renew_grant_api_v1_integrations_grants__grant_id__renew_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedGrant"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_grant_api_v1_integrations_grants__grant_id__resume_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -44182,6 +44273,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HandoffDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandoffDTO"] | null;
                 };
             };
             /** @description Validation Error */

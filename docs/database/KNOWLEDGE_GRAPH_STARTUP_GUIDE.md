@@ -1,5 +1,7 @@
 # Knowledge Graph System Startup Guide
 
+> **Stale / historical (2026-10-17):** Qdrant is fully removed and live retrieval is PostgreSQL full-text search (`DO_KB_ENABLED` defaults to `False`; pgvector semantic search is flag-gated). Treat Qdrant, DO KB and vector-store statements below as historical. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This guide provides comprehensive instructions for starting the corrected Knowledge Graph Architecture for the Multimodal Enterprise RAG System. The system consists of three microservices that handle entity extraction, graph analytics, and visualization computations in the backend, resolving the architectural violation where graph algorithms were incorrectly placed in the frontend.

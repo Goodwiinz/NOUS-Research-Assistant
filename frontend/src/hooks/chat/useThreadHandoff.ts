@@ -23,21 +23,27 @@ export async function fetchThreadHandoff(
   threadId: string
 ): Promise<ApiHandoff | null> {
   try {
-    return await api.get<ApiHandoff>(
-      `/api/v2/threads/${encodeURIComponent(threadId)}/handoff`
+    // A readable chat with no handoff yet answers 200 with a null body.
+    return await api.get<ApiHandoff | null>(
+      `/api/v2/threads/${encodeURIComponent(threadId)}/handoff/latest`
     );
   } catch (error: unknown) {
+    // 404: the chat is gone or not readable by this account (servers before
+    // HO-3 also answered 404 for "no handoff yet").
     if (isNotFound(error)) return null;
     throw error;
   }
 }
 
 /**
- * A standalone CLI save emits no event to this browser, so poll while a
- * handoff view is mounted and refresh on focus. Ceiling: a push event for
+ * A standalone CLI save emits no event to this browser, so poll: every 30 s
+ * while the chat has a handoff (newer versions), every 5 min while it has
+ * none. Focus and a harness `artifact` frame (useInvalidateThreadArtifacts)
+ * still refresh at once, and a hidden tab never polls. A push event for
  * handoff saves is the upgrade path if this is too slow or too chatty.
  */
 export const HANDOFF_POLL_MS = 30_000;
+export const HANDOFF_IDLE_POLL_MS = 5 * 60_000;
 
 export function useThreadHandoff(
   threadId: string | null | undefined
@@ -47,7 +53,8 @@ export function useThreadHandoff(
     queryFn: () => fetchThreadHandoff(threadId ?? ''),
     enabled: Boolean(threadId),
     staleTime: 5_000,
-    refetchInterval: HANDOFF_POLL_MS,
+    refetchInterval: (query) =>
+      query.state.data ? HANDOFF_POLL_MS : HANDOFF_IDLE_POLL_MS,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: false,

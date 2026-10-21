@@ -10,4 +10,5 @@ Target-specific procedures for AWS lifecycle operations and DNS migration. Confi
 | --- | --- |
 | [2026-09-14-aws-cutover.md](2026-09-14-aws-cutover.md) | Cutover Runbook: DigitalOcean → AWS (dev) |
 | [aws-decommission.md](aws-decommission.md) | Decommission Runbook: DigitalOcean (post-AWS cutover) |
+| [eks-backup-recovery.md](eks-backup-recovery.md) | EKS backup prerequisites, isolated Neo4j recovery and failure alerts |
 | [cloudflare-dns-migration.md](cloudflare-dns-migration.md) | Cloudflare DNS migration for goodwiinz.tech |

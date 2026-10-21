@@ -51,10 +51,11 @@ interface ProjectChatState {
     projectId: string,
     request: LinkThreadRequest
   ) => Promise<ProjectThread | null>;
+  /** Resolves true only when the backend confirmed the unlink. */
   unlinkThreadFromProject: (
     projectId: string,
     threadId: string
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   saveThreadToNote: (
     projectId: string,
     request: SaveThreadToNoteRequest
@@ -322,7 +323,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
           '[ProjectChatStore] unlinkThreadFromProject called with invalid projectId:',
           projectId
         );
-        return;
+        return false;
       }
 
       const requestToken = {};
@@ -337,7 +338,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
 
       try {
         await projectChatService.unlinkThreadFromProject(projectId, threadId);
-        if (!isCurrentAccount()) return;
+        if (!isCurrentAccount()) return false;
 
         // Optimistic update - remove from local state immediately. Reflects
         // genuine backend state regardless of call ordering, so it's
@@ -366,8 +367,12 @@ export const useProjectChatStore = create<ProjectChatState>()(
         if (threadBindingTokens.get(threadId) === bindingToken) {
           useChatStore.getState().setThreadProjectBinding(threadId, null);
         }
+        // Operation-specific outcome: `errors[projectId]` is shared with the
+        // thread fetch and the other actions, so callers must not infer this
+        // call's result from it.
+        return true;
       } catch (error: any) {
-        if (!isCurrentAccount()) return;
+        if (!isCurrentAccount()) return false;
         console.error(
           '[ProjectChatStore] unlinkThreadFromProject failed:',
           error
@@ -379,6 +384,7 @@ export const useProjectChatStore = create<ProjectChatState>()(
             state.unlinkingThread[projectId] = false;
           });
         }
+        return false;
       } finally {
         if (unlinkingThreadTokens.get(projectId) === requestToken) {
           unlinkingThreadTokens.delete(projectId);

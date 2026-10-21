@@ -5,10 +5,61 @@
 # "just works" with `./nous login` and `./nous`. Override by exporting
 # NOUS_API_URL before invocation (e.g. NOUS_API_URL=http://localhost:8000/api/v1
 # ./nous) or by setting it in your shell rc.
+#
+# `nous --rc` pairs the current folder with a NOUS project for Local Codex
+# (packages/harness-bridge). Symlink this file into ~/.local/bin from a
+# checkout that tracks origin/develop to run it from any folder.
 set -euo pipefail
+unset CDPATH
 export NOUS_DEFAULT_API_URL="https://dev-api.goodwiinz.tech/api/v1"
+# The checkout this script lives in, resolved through a symlink.
+self="${BASH_SOURCE[0]}"
+while [[ -L "$self" ]]; do
+  target="$(readlink "$self")"
+  [[ "$target" == /* ]] || target="$(cd -P -- "$(dirname -- "$self")" && pwd -P)/$target"
+  self="$target"
+done
+repo="$(cd -P -- "$(dirname -- "$self")" && pwd -P)"
+if [[ "${1:-}" == "--rc" ]]; then
+  shift
+  # Pick a Node 24 binary without changing PATH, so Codex and the tools it
+  # runs in this folder keep the user's own node, npm and pnpm.
+  node_version="$(node --version 2>/dev/null || echo none)"
+  node_bin=""
+  if [[ "$node_version" == v24.* ]]; then
+    node_bin="$(command -v node)"
+    # A relative PATH entry would break after the cd below.
+    [[ "$node_bin" == /* ]] || node_bin="$PWD/$node_bin"
+  else
+    for dir in /opt/homebrew/opt/node@24/bin /usr/local/opt/node@24/bin; do
+      if [[ -x "$dir/node" && "$("$dir/node" --version 2>/dev/null)" == v24.* ]]; then
+        node_bin="$dir/node"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$node_bin" ]]; then
+    echo "nous --rc needs Node 24 (found ${node_version#v}); switch your default node to 24 (for example nvm use 24) or install it with: brew install node@24" >&2
+    exit 1
+  fi
+  if [[ ! -f "$repo/packages/harness-bridge/package.json" ]]; then
+    echo "nous: $repo is not a NOUS checkout; link this launcher with ln -s instead of copying it" >&2
+    exit 1
+  fi
+  if [[ ! -e "$repo/node_modules/tsx/package.json" ]]; then
+    echo "nous --rc: dependencies are missing; run: pnpm --dir \"$repo\" install" >&2
+    exit 1
+  fi
+  root="$PWD"
+  # Mirrors the `start` script in packages/harness-bridge/package.json, but runs
+  # Node 24 directly so the user's PATH (and so Codex's tools) stay untouched.
+  # The launcher's --api and --root come last: the CLI keeps the last value.
+  cd "$repo/packages/harness-bridge"
+  exec "$node_bin" --import tsx src/cli.ts rc "$@" \
+    --api "${NOUS_API_URL:-$NOUS_DEFAULT_API_URL}" --root "$root"
+fi
 if [[ $# -eq 0 || "${1:-}" == "--ink" || "${1:-}" == "--new" || "${1:-}" == "--help" ]]; then
   if [[ "${1:-}" == "--ink" ]]; then shift; fi
-  exec pnpm --prefix terminal start "$@"
+  exec pnpm --prefix "$repo/terminal" start "$@"
 fi
-exec pnpm --prefix frontend cli "$@"
+exec pnpm --prefix "$repo/frontend" cli "$@"

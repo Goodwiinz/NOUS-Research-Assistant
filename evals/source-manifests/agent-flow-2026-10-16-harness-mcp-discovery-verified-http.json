@@ -1,0 +1,306 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-17T02:37:11.216294+00:00",
+  "suite": "nous-harness-mcp-v1",
+  "status": "completed; NOT GATED",
+  "execution_repository_revision": "5f682a33412ed9eaaf816b9c42ea90784d62b89b",
+  "execution_source_tree": "79b73c7fe2779cff09cc52e9a5885714fe4e9598",
+  "bridge_revision": "57fc21bc740e086c9e5880b1e1f26634c6a0f1c5",
+  "source_scope": "Codex-only historical primitive composition; real bridge at 57fc21bc7 and gateway double; not current composite, deployed MCP/grant or broader quality",
+  "task_digests": {
+    "harness-mcp-discovery-v1": "sha256:272a78795d8ad3cdbeef5bc5c4107590fe2e7cf2254b4df7a99a29bebb74be75"
+  },
+  "dataset_digests": {
+    "harness-mcp-discovery-v1": "sha256:dda540bfdc383c117e1a296596e28c24910559a965167969589c08d3e1866549"
+  },
+  "source_inputs_sha256": "88675d24fe95d140b2cc63989e8e08972c2d0cfda97e74c20f533338f6ab50cc",
+  "harness": {
+    "kind": "Harbor built-in Codex agent",
+    "version": "0.6.6",
+    "model": "openai/gpt-5.6-terra on Azure Responses HTTP",
+    "cli_version": "0.161.0",
+    "supports_websockets": false,
+    "OPENAI_BASE_URL_forwarded": false,
+    "aggregate_sha256": "sha256:2d74e74ede5d41cad2ae9add9c75d0bfe77d9312645f2723fedb2002757210cd",
+    "digest_scope": "derived from the exact file hashes frozen in pre-registration; selected files, not all transitive dependencies",
+    "files": [
+      {
+        "path": "evals/harbor_common/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/db.py",
+        "sha256": "c58f42e130c7d0d5b85a56d66f20ed31c4e79e075caeb4e972141e3931716d7a",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/envelope.py",
+        "sha256": "bcd762a0e34f310bc1bc5bb3489a2106e2e592c846862a8102bc0cacc9325f73",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/judge.py",
+        "sha256": "dc26f92e0530971dbafd00b0a81d1b71e23e103271661b13618ba294f809a4f5",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/network.py",
+        "sha256": "9e049a9f6c73d41c416446c324428f0d84cc7719c4cb1761105084d9062b85cd",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/selftest.py",
+        "sha256": "2b51cf8101ed1f82eb4edf6f416667d0d1a6a741d4a4128b7261c58aa1e6dc81",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/serialization.py",
+        "sha256": "a88e5b3caddb254d306b8f2827f3f12f4b2be770fa3f19220930c376960281ba",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/templates/proxy/Dockerfile",
+        "sha256": "2cf4fb6258750657fcee67df6fe52188985cb782be21aba988aae7a2cb9d8c24",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/templates/proxy/entrypoint.sh",
+        "sha256": "4e35de38b4d9375ca44d4f87967df7eaaaf89d833a2d6f5ef4045b51354a4f99",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/templates/test.sh",
+        "sha256": "c45372bcae1665615aab55fcebc3477ea1dba70f59d3af267a83bff713cb9733",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "evals/harbor_common/trajectory.py",
+        "sha256": "78191f73087ba20ba8bb6729e9dad2833bd1e8ed8c53ff295e27322a3b4f01b4",
+        "scope": "prepared context at bridge revision 57fc21bc7"
+      },
+      {
+        "path": "harbor/agents/installed/base.py",
+        "sha256": "f3905f73910ae22fcac23b8712f729ffd0806d946df286afb22b8dcc1079b41f",
+        "scope": "Harbor 0.6.6 installed package source"
+      },
+      {
+        "path": "harbor/agents/installed/claude_code.py",
+        "sha256": "ecd83757f19c1a89edf92df3c815c3814f2a31b25c4001fa3148d05b28d54715",
+        "scope": "Harbor 0.6.6 installed package source"
+      },
+      {
+        "path": "harbor/agents/installed/codex.py",
+        "sha256": "653bcf38c7e2319f2866d81c6ca1cd3fd909265b053fc7e10d7daef36269415a",
+        "scope": "Harbor 0.6.6 installed package source"
+      },
+      {
+        "path": "harbor/environments/docker/docker.py",
+        "sha256": "37e1f54df10aeed766a2e750bea51c692bcd7323ce3ba7607214e4506010798a",
+        "scope": "Harbor 0.6.6 installed package source"
+      },
+      {
+        "path": "harbor/environments/docker/docker-compose-base.yaml",
+        "sha256": "440387e00b822fe9fa175033057f3f050a9c140595808482d40d6dc6a8e14cc8",
+        "scope": "Harbor 0.6.6 installed package source"
+      },
+      {
+        "path": "harbor/environments/docker/docker-compose-build.yaml",
+        "sha256": "e363cbb606a6a2b9781b8e7c26fb31a83140536d4d55c4a3cb937e3d176b762f",
+        "scope": "Harbor 0.6.6 installed package source"
+      },
+      {
+        "path": "evals/prepare_harness_discovery.py",
+        "sha256": "e7e3b91256ac0309815d5ccd11c9ab7a1a21f7ca2680780bb6678153531c9cdf",
+        "scope": "repository source at 5f682a33"
+      },
+      {
+        "path": "run-discovery-codex-verified.py",
+        "sha256": "a2975f1708c4f5fb91022d4213406b51d66dd3a25b45d3709d61f38de979eb18",
+        "scope": "owner-only orchestration artifact"
+      }
+    ]
+  },
+  "env_flags": "N/A: deterministic gateway double; no NOUS backend process or judge",
+  "calibration": {
+    "in_image_cases": 13,
+    "expected_exits_matched": 13,
+    "main_python": "3.11.2",
+    "record_sha256": "0a7dc75cfc7907a8d668a815f40fcdc70effbfea78e02b010b394d707d602d45",
+    "pinned_catalog_check": "PASS",
+    "catalog_record_sha256": "4c0111c6d669388fa32a7e330cc5a59ad3384d9f28c7e958700c6586cf43c57a"
+  },
+  "preflight_images": {
+    "main": "sha256:beff5e96d92cdb43eaa2e6c40e982419defb7ffa7a6758044c6f10792a2b9c61",
+    "mock": "sha256:baf75575fb73a90c07d8aa1fdf7b0dd45ff955a2b0dd1925d9573bae30fcb551"
+  },
+  "runtime_versions": {
+    "bridge_node": "v24.21.0",
+    "mock_python": "Python 3.11.17",
+    "verifier_python": "3.11.2"
+  },
+  "harbor_host_python": "3.12.11",
+  "driver_python": "3.11.13",
+  "trial_image_records": [
+    {
+      "attempt": 1,
+      "direct_container_snapshot": false,
+      "components": {
+        "main": {
+          "build_export_index_digest": "sha256:8534b18e41629725e858658fd248b31b1c965e76578e0e0a0505aa62c534342c",
+          "build_export_platform_manifest_digest": "sha256:2bea965914ffbdeebd5850cf4f7942c87590c7860acf46763fc24637229ba392",
+          "build_completed_at": "2026-10-16T18:56:11.406891804-04:00",
+          "build_record_sha256": "82b70c6c35e653e0e413c1c7e3a04d5f5c85fbef11a059664e6f684e8bce54b0",
+          "direct_container_image_id": null
+        },
+        "mock-nous": {
+          "build_export_index_digest": "sha256:9495e81622ca2fe3f3465e466ce6db5812fffcb4855fdd642328c29527b4bdf7",
+          "build_export_platform_manifest_digest": "sha256:d885e298312cd3ae051cc55ea2d5a5246167d8063bc164bfd11250594625a0da",
+          "build_completed_at": "2026-10-16T18:56:10.938124304-04:00",
+          "build_record_sha256": "c46423d80b4d9e6799f6f74c8c17af08a6f8b7f1429f1b3e8a1198f16545c1c7",
+          "direct_container_image_id": null
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "direct_container_snapshot": false,
+      "components": {
+        "main": {
+          "build_export_index_digest": "sha256:5dd077b023e98c23285d06d661e74a020d52511de3676555434c9ca4a4b63f16",
+          "build_export_platform_manifest_digest": "sha256:32aa9f0a8809051f3183faa3a137cd5474c8b2b8ee8d126e55bc49f1dd4b2025",
+          "build_completed_at": "2026-10-16T19:01:54.611279959-04:00",
+          "build_record_sha256": "39ac7c55765e75316080d3f5ad346d2adb41f291e85d359e8b0918fdd82c2efb",
+          "direct_container_image_id": null
+        },
+        "mock-nous": {
+          "build_export_index_digest": "sha256:06c3da9efc324a37e2b7860e348d0f25780627b3805bbf1ccda38bfd68d5c5cf",
+          "build_export_platform_manifest_digest": "sha256:7a02b612e5b70b2406b8daa8e9015218eef7dd45b897b8513788bdb43dca9f25",
+          "build_completed_at": "2026-10-16T19:01:54.166234917-04:00",
+          "build_record_sha256": "142bbe8bcf1f9846650f28f4dd307a8c7957ec79e8da8eeb7792151b6293ca3b",
+          "direct_container_image_id": null
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "direct_container_snapshot": false,
+      "components": {
+        "main": {
+          "build_export_index_digest": "sha256:01c8fef1648e10463df0846ba51b71d4611a737b1f8c7841655c62d260077334",
+          "build_export_platform_manifest_digest": "sha256:e5e354241e68aae6bc898cedb470784bbe2d508610d21514e4f33b99e3ef7916",
+          "build_completed_at": "2026-10-16T19:12:50.643258293-04:00",
+          "build_record_sha256": "438670f48f0bccdfeb44084c96505fb9617e00c3327600663642b37f5f6bb28c",
+          "direct_container_image_id": null
+        },
+        "mock-nous": {
+          "build_export_index_digest": "sha256:0234c75ff95950205957ef11dbef89cd72fc8cdb2f0017b3844c85209ad42a7f",
+          "build_export_platform_manifest_digest": "sha256:97b529ce1d92e3abee0350183b8d45cab67460b6c1a091fa241453009dc5b941",
+          "build_completed_at": "2026-10-16T19:12:50.216000585-04:00",
+          "build_record_sha256": "27d7b2fd4588c44cc611a2c3681bd1b83df2ea69d828b37b65e7cf2e0a9721ef",
+          "direct_container_image_id": null
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "direct_container_snapshot": false,
+      "components": {
+        "main": {
+          "build_export_index_digest": "sha256:00ca4baa106813852e19b8208f541ffc3460b6c90cedec3ea0b85191c625d75b",
+          "build_export_platform_manifest_digest": "sha256:04ec1e333c0b87af5a612b1e7b05e4048edec6f8d6469daf5972d7c2648838ce",
+          "build_completed_at": "2026-10-16T19:13:31.63918434-04:00",
+          "build_record_sha256": "f1c3ded0ad5d6f9ac1581e4a6fb613bed674406ff6ff1e3cb7ec0ba0051f739c",
+          "direct_container_image_id": null
+        },
+        "mock-nous": {
+          "build_export_index_digest": "sha256:363f427b350febb4aaf8849deb15edbc808b71e932a8fc04c6756a7c298f4be7",
+          "build_export_platform_manifest_digest": "sha256:5558a298e03f6b449f994646308ecd5ed6d58b7a8a9d652f5754c6704bdb2aa7",
+          "build_completed_at": "2026-10-16T19:13:31.202877257-04:00",
+          "build_record_sha256": "04068dce8bfbe26bd8bd6e2086ba51362cd4e36104cc4c78dbef2071825850ed",
+          "direct_container_image_id": null
+        }
+      }
+    },
+    {
+      "attempt": 5,
+      "direct_container_snapshot": false,
+      "components": {
+        "main": {
+          "build_export_index_digest": "sha256:f4d52ae34eb1a3e384fe33cda2d56ecc8c658c02cf2eeee516b9127eecc51481",
+          "build_export_platform_manifest_digest": "sha256:f7457e28508f67dc66e4e51b7b169cd540a869d6fd01ea8b2bfec3eca36bf50a",
+          "build_completed_at": "2026-10-16T19:14:12.079456512-04:00",
+          "build_record_sha256": "0c08c7fef9244e499cc5cfb4ce9bcf8eb4850ce00b692ca1b1aef7be7a523a6e",
+          "direct_container_image_id": null
+        },
+        "mock-nous": {
+          "build_export_index_digest": "sha256:222639a838c1d152eae14fda71fc992e1866ecef7373d4723a55374358605c31",
+          "build_export_platform_manifest_digest": "sha256:faab16e8e605b5374d3cf46c7a6d53c676f4978097850de474fa548d8b64a62e",
+          "build_completed_at": "2026-10-16T19:14:11.66470922-04:00",
+          "build_record_sha256": "58ac9d2c543e5d43b419f38a032da4dfe3c6b85578401e7ee941e46de2c85852",
+          "direct_container_image_id": null
+        }
+      }
+    },
+    {
+      "attempt": 6,
+      "direct_container_snapshot": true,
+      "components": {
+        "main": {
+          "build_export_index_digest": "sha256:cf260a3ff094780f44ea09c559685149a11948a735ab28e60f452e22bdfc2373",
+          "build_export_platform_manifest_digest": "sha256:9d731978e119f0b2f792411468e446a35a0f2cccdd07a8a6a2e682b97a888165",
+          "build_completed_at": "2026-10-16T22:32:53.760919254-04:00",
+          "build_record_sha256": "67b9f81bb6df174cb4cc7874947ac372782ba812d875d2d008a8db26e4961ddb",
+          "direct_container_image_id": "sha256:cf260a3ff094780f44ea09c559685149a11948a735ab28e60f452e22bdfc2373"
+        },
+        "mock-nous": {
+          "build_export_index_digest": "sha256:2cbf8173f2974e07c4fea012ddcced2bc92a2f87ed3d38df7a119cd966d7ac34",
+          "build_export_platform_manifest_digest": "sha256:259858bb8a3e2c319d185360b26f05c63eb23430ff3762d6a68ce2d60fb4b416",
+          "build_completed_at": "2026-10-16T22:32:53.325396171-04:00",
+          "build_record_sha256": "234b27f3b682bb8a62b36fc9d6a21474d63e33e8f8fe2417320826ef0937f4ea",
+          "direct_container_image_id": "sha256:2cbf8173f2974e07c4fea012ddcced2bc92a2f87ed3d38df7a119cd966d7ac34"
+        }
+      }
+    },
+    {
+      "attempt": 7,
+      "direct_container_snapshot": true,
+      "components": {
+        "main": {
+          "build_export_index_digest": "sha256:7461fbcf7dc57fb2de24d013f5bdb4c9a7f96c284a5cfaa2b6df0c5ee2e98fa1",
+          "build_export_platform_manifest_digest": "sha256:bd88e6d4abfdfc751f159cd16504ae6f278abc51ae0fe37f18c1fc5238aa3196",
+          "build_completed_at": "2026-10-16T22:33:32.474789384-04:00",
+          "build_record_sha256": "8f0fad43fd09ff546fee7c76d669b36d93b20730cf7f8bb17f8906377167a7ae",
+          "direct_container_image_id": "sha256:7461fbcf7dc57fb2de24d013f5bdb4c9a7f96c284a5cfaa2b6df0c5ee2e98fa1"
+        },
+        "mock-nous": {
+          "build_export_index_digest": "sha256:48be308096e4a204dbdf6f41b672b3128745ea05071f418645cdc7cad7bbd2ab",
+          "build_export_platform_manifest_digest": "sha256:3dbdbfa37bf1e2fd357637fe90804c505432a2f105efdda5c6782e3e23867942",
+          "build_completed_at": "2026-10-16T22:33:32.04528855-04:00",
+          "build_record_sha256": "d733c2f519c24efa7cd97910a9aed4806f52943d5be0fee9f4efdae18547202f",
+          "direct_container_image_id": "sha256:48be308096e4a204dbdf6f41b672b3128745ea05071f418645cdc7cad7bbd2ab"
+        }
+      }
+    }
+  ],
+  "runtime_identity_limit": "Build export receipts retained for all seven attempts. Direct container image snapshots retained only for replacements 6 and 7; the initial path-filter collector missed /private/tmp mounts. No direct runtime-observation claim for attempts 1 to 5.",
+  "pre_registration_sha256": "f508a05b22300d88691a07aa8878cc592cf9d5319e03d2ea6bf878aa81c9bd73",
+  "retry_declaration_sha256": "da129ad0f80991404f8fb9f921d72c199d9e4e635574241009732e09b95e4f77",
+  "classification_sha256": "844e4ffc76faeb78538788c362e328984534fc7a20988edcc39f07b35b0787a3",
+  "prepared_inputs_unchanged_after_both_jobs": true,
+  "pre_registration": {
+    "scoreable_trials": 5,
+    "initial_attempts": 5,
+    "attempt_cap": 10,
+    "decision_pass_threshold": 4,
+    "infrastructure_excluded": true,
+    "task_defect_invalidates_whole_series": true,
+    "canonical_series": "five repeated fixed-task decision trials under the registered task protocol",
+    "near_boundary_scope": "13 verifier calibration cases; no agent phrasing/order variants or suite GATED promotion",
+    "semantic": "N/A; deterministic verifier with no judge"
+  },
+  "previous_preparation_record": "evals/source-manifests/agent-flow-2026-10-16-harness-mcp-discovery-verified-results.json",
+  "previous_record_edited": false,
+  "prior_scores_reused": false,
+  "raw_artifacts": "ignored owner-only evals/jobs/discovery-harness-verified-20261016/; raw traces and credentials are not committed"
+}

@@ -1,5 +1,7 @@
 # Analytics Dashboard - Caching Architecture and Data Flow
 
+> **Stale / historical (2026-10-17):** It covers only part of the API and its paths and schemas may have drifted. The source of truth is the generated `backend/openapi.json` (also served at `/docs` when `DEBUG` is on). Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## 1. Multi-Level Caching Strategy
 
 ### Cache Hierarchy Overview

@@ -1,5 +1,7 @@
 # Monitoring Resilience Patterns and Error Handling
 
+> **Stale / historical (2026-10-17):** It is a design document for a subsystem; the described service layout may not match the current code. Verify against `backend/src/` and `backend/openapi.json` before relying on it. Current contracts: [`docs/engineering/`](../../docs/engineering/README.md).
+
 ## Overview
 
 This document outlines comprehensive resilience patterns and error handling strategies for the Multimodal RAG System's monitoring infrastructure. The design ensures system reliability, graceful degradation, and automatic recovery from failures.

@@ -96,6 +96,32 @@ class _User:
         self.organization_id = organization_id
 
 
+class _Workspace:
+    def __init__(
+        self, workspace_id: str = "ws-1", organization_id: Optional[str] = "org-1"
+    ) -> None:
+        self.id = workspace_id
+        self.owner_id = "user-1"
+        self.organization_id = organization_id
+        self.is_deleted = False
+
+
+class _LogRecorder:
+    """Captures structured log calls so a test can assert on the warning."""
+
+    def __init__(self) -> None:
+        self.calls: List[tuple[str, str, dict]] = []
+
+    def _record(self, level: str) -> Any:
+        def _emit(event: str, **fields: Any) -> None:
+            self.calls.append((level, event, fields))
+
+        return _emit
+
+    def __getattr__(self, level: str) -> Any:
+        return self._record(level)
+
+
 # ---------------------------------------------------------------------------
 # R5-L21 — refuse to run outside a dev-like environment
 # ---------------------------------------------------------------------------
@@ -182,10 +208,85 @@ async def test_missing_workspace_is_recreated() -> None:
 
 @pytest.mark.asyncio
 async def test_existing_workspace_is_reused() -> None:
-    existing = object()
+    existing = _Workspace(organization_id="org-1")
     db = _FakeDB(_FakeResult(existing))
 
     assert await _ensure_workspace(db, _User(), "org-1") is existing
+    assert db.added == []
+    assert db.commits == 0
+
+
+# ---------------------------------------------------------------------------
+# R5-M28 follow-up — a workspace left behind in a REAL org never heals
+# ---------------------------------------------------------------------------
+#
+# Mutation check (docs/engineering/testing.md): the guard is the effective-org
+# filter in ``_ensure_workspace`` (backend/scripts/synthetic_traffic.py). Make
+# it accept any owned workspace again and run
+#   pytest -q tests/unit/scripts/test_synthetic_traffic_guards.py \
+#       -k "real_org or null_org or preferred_over"
+# — the first test must fail with the stale ``org-real`` workspace returned.
+
+
+@pytest.mark.asyncio
+async def test_workspace_left_in_a_real_org_is_not_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live bug: the user was re-pinned to the synthetic org, its only
+    workspace was not, so ``accessible_research_workspace_ids`` returned []
+    and ``create_project`` failed on every run with "No workspace found".
+    """
+    import scripts.synthetic_traffic as module
+
+    recorder = _LogRecorder()
+    monkeypatch.setattr(module, "log", recorder)
+    stale = _Workspace(workspace_id="ws-stale", organization_id="org-real")
+    db = _FakeDB(_FakeResult(stale))
+
+    ws = await _ensure_workspace(db, _User(organization_id="org-1"), "org-1")
+
+    assert ws is not stale
+    assert db.added == [ws]
+    assert ws.owner_id == "user-1"
+    assert ws.organization_id == "org-1"
+    assert db.commits == 1
+    # The stale workspace belongs to a real tenant: never re-pinned, moved or
+    # deleted here — that is a human decision. Only the lookup SELECT ran.
+    assert stale.organization_id == "org-real"
+    assert stale.is_deleted is False
+    assert len(db.statements) == 1
+    assert _sql(db.statements[0]).upper().startswith("SELECT")
+    warnings = [c for c in recorder.calls if c[0] == "warning"]
+    assert len(warnings) == 1
+    _, event, fields = warnings[0]
+    assert event == "synthetic_traffic.bootstrap"
+    assert fields["workspace_id"] == "ws-stale"
+    assert fields["workspace_org_id"] == "org-real"
+    assert fields["org_id"] == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_workspace_with_null_org_owned_by_synth_user_is_reused() -> None:
+    """``coalesce(workspace.organization_id, owner.organization_id)`` is the
+    canonical rule (project_access.py): a NULL-org workspace owned by the
+    (already re-pinned) synthetic user resolves to the synthetic org.
+    """
+    existing = _Workspace(organization_id=None)
+    db = _FakeDB(_FakeResult(existing))
+
+    assert await _ensure_workspace(db, _User(), "org-1") is existing
+    assert db.added == []
+    assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_synth_org_workspace_is_preferred_over_a_stale_one() -> None:
+    """Once healed, the next fire finds both; it must keep using the good one."""
+    stale = _Workspace(workspace_id="ws-stale", organization_id="org-real")
+    good = _Workspace(workspace_id="ws-good", organization_id="org-1")
+    db = _FakeDB(_FakeResult([stale, good]))
+
+    assert await _ensure_workspace(db, _User(), "org-1") is good
     assert db.added == []
     assert db.commits == 0
 

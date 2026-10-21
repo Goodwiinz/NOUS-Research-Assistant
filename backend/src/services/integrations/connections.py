@@ -79,8 +79,8 @@ async def _thread_label(
 ) -> str | None:
     """The bound chat's title while the binding still holds, by the same
     check a grant mint runs (validate_binding). None once the chat is
-    deleted, linked to another project or out of reach: the consent can no
-    longer mint, but stays listed so it can be revoked."""
+    deleted, unlinked from the consent's project or out of reach: the
+    consent can no longer mint, but stays listed so it can be revoked."""
     try:
         await validate_binding(
             db,

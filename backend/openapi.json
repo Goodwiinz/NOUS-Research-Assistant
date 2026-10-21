@@ -44903,6 +44903,20 @@
     "/api/v1/integrations/context": {
       "get": {
         "operationId": "get_selected_context_api_v1_integrations_context_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 25,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -44913,6 +44927,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -45624,6 +45648,55 @@
           }
         ],
         "summary": "Renew Grant",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/v1/integrations/grants/{grant_id}/resume": {
+      "post": {
+        "description": "Re-issue this device's lapsed grant from the browser consent it was\nexchanged from, without a new approval or a new device.\n\nSend the stored grant token, even expired, in `X-NOUS-Integration-Grant`:\na CLI sign-in is not bound to a device, so the grant's own token proves\nwhich pairing is resumed, and it works once. Refused (403) once the grant\nwas renewed or revoked, its consent or device revoked, its project,\nworkspace or chat out of reach, or 30 days after it expired; 409 when\nthe grant was replaced or revoked meanwhile (another resume or renewal\nwon, or a revoke landed).",
+        "operationId": "resume_grant_api_v1_integrations_grants__grant_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Resume Grant",
         "tags": [
           "integrations"
         ]
@@ -65527,7 +65600,7 @@
     },
     "/api/v2/threads/{thread_id}/handoff": {
       "get": {
-        "description": "Latest harness handoff left in this chat (standalone route).",
+        "description": "Preserve the original object-or-404 contract for existing clients.",
         "operationId": "get_thread_handoff_api_v2_threads__thread_id__handoff_get",
         "parameters": [
           {
@@ -65569,6 +65642,63 @@
           }
         ],
         "summary": "Get Thread Handoff",
+        "tags": [
+          "workspaces-flat"
+        ]
+      }
+    },
+    "/api/v2/threads/{thread_id}/handoff/latest": {
+      "get": {
+        "description": "Latest handoff, or null for an authorized chat without one.",
+        "operationId": "get_latest_thread_handoff_api_v2_threads__thread_id__handoff_latest_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HandoffDTO"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Latest Thread Handoff Api V2 Threads  Thread Id  Handoff Latest Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Latest Thread Handoff",
         "tags": [
           "workspaces-flat"
         ]

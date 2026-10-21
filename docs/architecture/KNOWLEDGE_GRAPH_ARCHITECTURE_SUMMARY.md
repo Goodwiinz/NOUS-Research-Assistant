@@ -1,5 +1,7 @@
 # Knowledge Graph Backend Architecture Summary
 
+> **Stale / historical (2026-10-17):** It describes a design from an earlier infrastructure generation (standalone microservices, Qdrant, multiple environments) that is not what runs today. Only `dev` is live and services run inside the single FastAPI backend. Check the code before relying on any statement here. Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Critical Architecture Fix Completed
 
 **PROBLEM SOLVED**: Tasks 3.1.1-3.3.5 incorrectly placed graph algorithms (centrality, pathfinding, clustering) in frontend components - a **CONSTITUTIONAL VIOLATION**.

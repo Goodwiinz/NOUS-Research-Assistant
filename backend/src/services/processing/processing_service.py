@@ -39,6 +39,50 @@ logger = logging.getLogger(__name__)
 # is imported lazily inside queue_processing_job (module-level would cycle
 # through src.tasks.__init__ → processing_tasks → this module).
 
+# job_type -> (registered task name, queue) for the document pipeline stages.
+_PIPELINE_TASK_ROUTES: Dict[JobType, Tuple[str, str]] = {
+    JobType.DOCUMENT_INGESTION: ("process_document_ingestion", "document_processing"),
+    JobType.TEXT_EXTRACTION: ("extract_text_content", "text_processing"),
+    JobType.EMBEDDING_GENERATION: ("generate_embeddings", "vector_processing"),
+    JobType.ENTITY_EXTRACTION: ("extract_entities", "entity_processing"),
+    JobType.GRAPH_INDEXING: ("index_in_graph", "graph_processing"),
+}
+
+# Knowledge-graph jobs reuse pipeline job types but belong to their own tasks,
+# keyed by parameters["operation"] exactly as their origin sites dispatch them
+# (api/search/knowledge_graph.py, api/research/projects.py; the lost-job
+# reconciler in src/tasks/reconcile_jobs.py re-drives the extraction one the
+# same way). The generic ``extract_entities`` task reads
+# parameters["document_id"] and cannot run a KG extraction job.
+_KG_MERGE_OPERATION = "entity_merge"
+_KG_EXTRACTION_OPERATION = "document_entity_extraction"
+_KG_TASK_ROUTES: Dict[str, Tuple[str, str]] = {
+    _KG_MERGE_OPERATION: ("kg_merge_entities_job", "graph_processing"),
+    _KG_EXTRACTION_OPERATION: ("kg_extract_entities_job", "entity_processing"),
+}
+
+
+def resolve_task_route(job: ProcessingJob) -> Optional[Tuple[str, str]]:
+    """Return the (task name, queue) a job must be published to, or None.
+
+    The route derives from the job type and, for job types shared with the
+    knowledge graph, from ``parameters["operation"]``: a BATCH_PROCESSING job is
+    only routable as a KG entity merge, and an ENTITY_EXTRACTION job goes to the
+    KG extraction task when its origin site tagged it (or when it carries only
+    ``document_ids``, which the generic task cannot read).
+    """
+    parameters = job.parameters or {}
+    operation = parameters.get("operation")
+    if job.job_type == JobType.BATCH_PROCESSING:
+        if operation == _KG_MERGE_OPERATION:
+            return _KG_TASK_ROUTES[_KG_MERGE_OPERATION]
+        return None
+    if job.job_type == JobType.ENTITY_EXTRACTION:
+        kg_shaped = "document_ids" in parameters and "document_id" not in parameters
+        if operation == _KG_EXTRACTION_OPERATION or kg_shaped:
+            return _KG_TASK_ROUTES[_KG_EXTRACTION_OPERATION]
+    return _PIPELINE_TASK_ROUTES.get(job.job_type)
+
 
 class ProcessingPipeline:
     """Main processing pipeline for multimodal documents"""
@@ -113,7 +157,7 @@ class ProcessingPipeline:
 
         return job
 
-    async def queue_processing_job(self, job_id: str):
+    async def queue_processing_job(self, job_id: str) -> bool:
         """Reserve a fresh attempt durably before publishing it to the broker.
 
         A reservation identifies an attempt, not proof of delivery. If the
@@ -121,21 +165,14 @@ class ProcessingPipeline:
         row. Publication must never write QUEUED over a worker's newer state.
         Callers commit input rows first; expected no-ops complete the read-only
         transaction so the request's expire_on_commit=False objects stay usable.
+
+        Returns True only when the task was handed to the broker. A job with no
+        task to run (see ``resolve_task_route``) is marked FAILED with the
+        reason rather than left PENDING/RETRYING for the stuck-job sweeper.
         """
         # Lazy: see module-level NOTE — a top-level import cycles through
         # src.tasks.__init__ back into this module.
         from src.tasks.celery_app import celery_app
-
-        task_routes = {
-            JobType.DOCUMENT_INGESTION: (
-                "process_document_ingestion",
-                "document_processing",
-            ),
-            JobType.TEXT_EXTRACTION: ("extract_text_content", "text_processing"),
-            JobType.EMBEDDING_GENERATION: ("generate_embeddings", "vector_processing"),
-            JobType.ENTITY_EXTRACTION: ("extract_entities", "entity_processing"),
-            JobType.GRAPH_INDEXING: ("index_in_graph", "graph_processing"),
-        }
 
         try:
             result = await self.db.execute(
@@ -148,20 +185,32 @@ class ProcessingPipeline:
             if job is None:
                 logger.error("Job %s not found", job_id)
                 await self.db.commit()
-                return
+                return False
             if (
                 job.is_deleted
                 or job.status not in (JobStatus.PENDING, JobStatus.RETRYING)
                 or (job.status == JobStatus.PENDING and job.celery_task_id is not None)
             ):
                 await self.db.commit()
-                return
+                return False
 
-            route = task_routes.get(job.job_type)
+            route = resolve_task_route(job)
             if route is None:
-                logger.error("Unknown job type: %s", job.job_type)
+                operation = (job.parameters or {}).get("operation")
+                job_type = job.job_type.value if job.job_type else None
+                logger.error(
+                    "Job %s has no Celery task for job_type=%s operation=%r",
+                    job_id,
+                    job_type,
+                    operation,
+                )
+                job.fail_job(
+                    f"No Celery task routes job_type={job_type} "
+                    f"operation={operation!r}; the job cannot be dispatched",
+                    error_type="UnroutableJob",
+                )
                 await self.db.commit()
-                return
+                return False
 
             task_name, queue = route
             task_id = str(uuid.uuid4())
@@ -177,6 +226,7 @@ class ProcessingPipeline:
             # No database lock or trailing lifecycle write spans publication.
             celery_app.send_task(task_name, args=[job_id], queue=queue, task_id=task_id)
             logger.info("Published job %s with task ID %s", job_id, task_id)
+            return True
         except Exception as e:
             logger.error("Failed to queue job %s: %s", job_id, e)
             # A broker can accept the message and still raise. Reload rather
@@ -213,7 +263,7 @@ class ProcessingPipeline:
                     or job.celery_task_id != task_id
                 ):
                     await self.db.commit()
-                    return
+                    return False
                 job.fail_job(f"Failed to queue job: {e}")
                 if document and document.processing_status in (
                     ProcessingStatus.PENDING,
@@ -243,6 +293,7 @@ class ProcessingPipeline:
                         document.processing_status = ProcessingStatus.FAILED
                         document.processing_error = f"Failed to queue: {e}"
                 await self.db.commit()
+                return False
             except Exception:
                 await self.db.rollback()
                 raise
@@ -758,7 +809,7 @@ class ProcessingPipeline:
         }
 
     async def retry_failed_jobs(self, organization_id: str = None) -> int:
-        """Retry failed processing jobs"""
+        """Retry failed processing jobs; returns how many were re-dispatched."""
         stmt = select(ProcessingJob).where(
             ProcessingJob.status == JobStatus.FAILED,
             ProcessingJob.retry_count < ProcessingJob.max_retries,
@@ -774,8 +825,8 @@ class ProcessingPipeline:
             if job.can_retry:
                 job.retry_job()
                 await self.db.commit()
-                await self.queue_processing_job(job.id)
-                retried_count += 1
+                if await self.queue_processing_job(job.id):
+                    retried_count += 1
 
         return retried_count
 

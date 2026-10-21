@@ -9,6 +9,7 @@ import { CredentialStore } from "../src/credentials.ts";
 
 const API = "https://nous.test/api/v1";
 const GRANT = "33333333-3333-4333-8333-333333333333";
+const RESUMED = "44444444-4444-4444-8444-444444444444";
 
 type Call = { url: string; method: string; headers: Headers };
 
@@ -85,6 +86,76 @@ test("a network or server failure keeps everything so the command can be retried
     const c = await connected();
     try {
       await assert.rejects(c.run(reply), /nothing was removed/);
+      assert.equal(await c.exists(c.credentialHandle), true);
+      assert.equal(await c.exists("connection"), true);
+    } finally {
+      c.cleanup();
+    }
+  }
+});
+
+/** A grant last renewed 20 minutes ago: expired, so its renewal is refused. */
+async function lapsed(resume: () => Response) {
+  const c = await connected({ grantId: GRANT, renewedAt: Date.now() - 20 * 60_000 });
+  const reply = () => {
+    const url = c.calls.at(-1)!.url;
+    if (url.endsWith("/renew")) return new Response("{}", { status: 403 });
+    if (url.endsWith("/resume")) return resume();
+    return new Response(null, { status: 204 });
+  };
+  return { ...c, run: () => c.run(reply) };
+}
+
+test("a lapsed grant is resumed from its consent so disconnect still revokes it", async () => {
+  const c = await lapsed(
+    () => new Response(JSON.stringify({ token: "grant-resumed", grant_id: RESUMED }), { status: 200 }),
+  );
+  try {
+    assert.deepEqual(await c.run(), { revoked: true });
+    assert.deepEqual(
+      c.calls.map((call) => `${call.method} ${call.url}`),
+      [
+        `POST ${API}/integrations/grants/${GRANT}/renew`,
+        `POST ${API}/integrations/grants/${GRANT}/resume`,
+        `DELETE ${API}/integrations/grants/${RESUMED}`,
+      ],
+    );
+    assert.equal(c.calls[1]?.headers.get("x-nous-integration-grant"), "grant-live");
+    assert.equal(c.calls[2]?.headers.get("x-nous-integration-grant"), "grant-resumed");
+    assert.equal(await c.exists(c.credentialHandle), false);
+    assert.equal(await c.exists("connection"), false);
+    assert.match(c.announced.join("\n"), /Disconnected/);
+  } finally {
+    c.cleanup();
+  }
+});
+
+test("a lapsed grant NOUS will not resume is forgotten locally with a pointer to the browser", async () => {
+  for (const status of [401, 403, 404]) {
+    const c = await lapsed(() => new Response("{}", { status }));
+    try {
+      assert.deepEqual(await c.run(), { revoked: false });
+      assert.ok(c.calls.some((call) => call.url.endsWith("/resume")), `resume tried before ${status}`);
+      assert.equal(c.calls.some((call) => call.method === "DELETE"), false);
+      assert.equal(await c.exists(c.credentialHandle), false);
+      assert.equal(await c.exists("connection"), false);
+      assert.match(c.announced.join("\n"), /\/integrations\/devices/);
+    } finally {
+      c.cleanup();
+    }
+  }
+});
+
+test("a lapsed grant whose resume gets no answer keeps everything so disconnect can be retried", async () => {
+  for (const resume of [
+    () => new Response("{}", { status: 503 }),
+    () => {
+      throw new TypeError("fetch failed");
+    },
+  ]) {
+    const c = await lapsed(resume);
+    try {
+      await assert.rejects(c.run(), /nothing was removed/);
       assert.equal(await c.exists(c.credentialHandle), true);
       assert.equal(await c.exists("connection"), true);
     } finally {

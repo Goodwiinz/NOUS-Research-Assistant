@@ -624,4 +624,4 @@ Log categories:
 For additional information, refer to:
 - [Real-time Processing Guide](../REALTIME_PROCESSING_GUIDE.md)
 - [WebSocket Services Documentation](../websocket_services.md)
-- [Quick Start Guide](../guides/REALTIME_QUICK_START.md)
+- [Quick Start Guide](../archive/guides/REALTIME_QUICK_START.md)

@@ -110,6 +110,48 @@ def test_canonical_workflow_enforces_core_evidence_gates() -> None:
         assert clause in normalized
 
 
+def test_canonical_workflow_bounds_review_and_gates_human_only_changes() -> None:
+    workflow = _canonical_text()
+    normalized = " ".join(workflow.split())
+
+    required_clauses = [
+        "VERDICT: PASS",
+        "VERDICT: CHANGES",
+        "HEAD: <full 40-character head SHA reviewed>",
+        "BASE: <full 40-character base SHA reviewed>",
+        "When round 3 ends with any `VERDICT: CHANGES`",
+        "If a fourth round would be needed for any reason",
+        "write `handoff.md` in the review directory",
+        "An open PR whose review directory (step 6) contains `handoff.md` belongs to a human",
+        "### 6b. Check for human-gated changes",
+        "it ends as `ready-for-human` instead of merging",
+        "A tick must never narrow the checks that judge it",
+        "required review whose last `HEAD:` line is that head, no step 6b match",
+        "A local claim expires 45 minutes after its last claim or heartbeat",
+        "python3 scripts/loop_bridge.py heartbeat --branch",
+    ]
+
+    for clause in required_clauses:
+        assert clause in normalized, clause
+
+    human_gate = workflow[
+        workflow.index("### 6b.") : workflow.index("### 7. Run local gates")
+    ]
+    for gated_path in [
+        "backend/alembic/versions/",
+        "supabase/migrations/",
+        "pnpm-lock.yaml",
+        ".github/workflows/",
+        "scripts/ci/",
+        "docs/engineering/feature-map.yaml",
+        "scripts/loop_bridge.py",
+        "scripts/verify/",
+        "tests/e2e/qa/",
+        "api-breaking-approved",
+    ]:
+        assert gated_path in human_gate, gated_path
+
+
 def test_workflow_contract_tests_run_in_blocking_local_and_hosted_gates() -> None:
     local_ci = _local_ci_text()
     hosted_ci = (REPO_ROOT / ".github" / "workflows" / "test-pipeline.yml").read_text(
