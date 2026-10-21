@@ -122,7 +122,7 @@ langgraph-checkpoint>=2.0,<5.0
 langgraph-checkpoint-postgres>=2.0,<5.0
 
 # Testing
-pytest>=9.0.3
+pytest>=9.1.1
 pytest-asyncio>=1.4.0
 pytest-cov>=7.1.0
 testcontainers[postgres,redis]>=4.0.0

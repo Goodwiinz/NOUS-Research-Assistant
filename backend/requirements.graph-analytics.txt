@@ -51,7 +51,7 @@ python-json-logger==4.2.0
 prometheus-client==0.26.0
 
 # Development and testing
-pytest>=9.0.3
+pytest>=9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 pytest-mock==3.17.0
