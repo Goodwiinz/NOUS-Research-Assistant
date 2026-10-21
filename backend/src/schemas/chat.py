@@ -230,6 +230,9 @@ class ThreadResponse(ThreadBase, TimestampMixin):
     token_count: int = 0
     created_by_id: Optional[UUID] = None
     source_project_id: Optional[UUID] = None
+    message_branching: bool = False
+    branch_document_id: Optional[UUID] = None
+    selected_message_id: Optional[UUID] = None
 
 
 class ThreadDetailResponse(ThreadResponse):
@@ -400,6 +403,8 @@ class ChatMessageResponse(ChatMessageBase, TimestampMixin):
 
     id: UUID
     thread_id: UUID
+    parent_message_id: Optional[UUID] = None
+    sibling_user_message_ids: List[UUID] = Field(default_factory=list)
     # Stable client/runtime identity carried across optimistic rendering,
     # persistence, and reload. Legacy rows predate this field and remain null.
     client_message_id: Optional[UUID] = None
@@ -447,6 +452,9 @@ class ChatMessageListResponse(BaseModel):
     page: int
     limit: int
     has_more: bool
+    message_branching: bool = False
+    branch_document_id: Optional[UUID] = None
+    selected_message_id: Optional[UUID] = None
 
 
 # ============================================================================

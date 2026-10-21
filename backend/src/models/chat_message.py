@@ -78,6 +78,16 @@ class ChatMessage(BaseModel):
             "thread_id",
             postgresql_where=text("superseded_by_message_id IS NOT NULL"),
         ),
+        Index("ix_chat_messages_parent", "thread_id", "parent_message_id"),
+        Index(
+            "uq_chat_messages_branch_assistant",
+            "parent_message_id",
+            unique=True,
+            postgresql_where=text(
+                "parent_message_id IS NOT NULL AND role = 'assistant'"
+            ),
+            sqlite_where=text("parent_message_id IS NOT NULL AND role = 'assistant'"),
+        ),
     )
 
     # Parent relationship
@@ -96,6 +106,19 @@ class ChatMessage(BaseModel):
 
     # Content
     content = Column(Text, nullable=False)
+
+    # Opt-in PDF branches retain siblings instead of tombstoning their tail.
+    # The canonical row id is also the immutable history-selection identity.
+    parent_message_id = Column(
+        GUID(),
+        ForeignKey(
+            "chat_messages.id",
+            name="fk_chat_messages_parent_message_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+    selected_at = Column(DateTime(timezone=True), nullable=True)
 
     # Metrics
     token_count = Column(Integer, default=0, nullable=False)
@@ -164,7 +187,7 @@ class ChatMessage(BaseModel):
     feedback_text = Column(Text, nullable=True)
 
     # Relationships
-    thread = relationship("Thread", back_populates="messages")
+    thread = relationship("Thread", back_populates="messages", foreign_keys=[thread_id])
     user = relationship("User", foreign_keys=[user_id])
     citations = relationship(
         "Citation",

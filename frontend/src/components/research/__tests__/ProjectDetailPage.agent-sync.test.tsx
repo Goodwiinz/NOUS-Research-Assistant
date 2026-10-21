@@ -8,6 +8,7 @@ import ProjectDetailPage from '../../../../app/(dashboard)/projects/[id]/page';
 import { useProjectStore } from '@/store/projectStore';
 import { projectService } from '@/services/projectService';
 import { projectSkillService } from '@/services/projectSkillService';
+import toast from 'react-hot-toast';
 
 const mockPush = vi.fn();
 
@@ -34,6 +35,13 @@ vi.mock('@/services/projectService', () => ({
     generateDraft: vi.fn(),
     getGenerationStatus: vi.fn(),
     downloadDraftExport: vi.fn(),
+    addDocumentToProject: vi.fn(),
+  },
+}));
+vi.mock('react-hot-toast', () => ({
+  default: {
+    success: vi.fn(),
+    error: vi.fn(),
   },
 }));
 vi.mock('@/services/projectSkillService', () => ({
@@ -108,7 +116,17 @@ vi.mock('@/components/research-engine/ProjectWorkflow', () => ({
   ),
 }));
 vi.mock('@/components/upload', () => ({
-  DocumentUploadWizard: () => null,
+  // Simulates the wizard's "Done" step.
+  DocumentUploadWizard: ({
+    isOpen,
+    onComplete,
+  }: {
+    isOpen: boolean;
+    onComplete?: (documentIds: string[]) => void;
+  }) =>
+    isOpen ? (
+      <button onClick={() => onComplete?.(['d1', 'd2'])}>Wizard Done</button>
+    ) : null,
 }));
 
 const mockUseProjectStore = useProjectStore as unknown as Mock;
@@ -396,6 +414,51 @@ describe('ProjectDetailPage agent sync', () => {
 
     expect(await screen.findByText('Project Skills Tab')).toBeInTheDocument();
   });
+
+  describe('linking wizard uploads to the project', () => {
+    const openWizardAndFinish = async (): Promise<void> => {
+      const { user } = render(<ProjectDetailPage />);
+      await screen.findByText('Project One');
+      mockFetchProjectDocuments.mockClear();
+      await user.click(screen.getByRole('button', { name: /upload/i }));
+      await user.click(
+        await screen.findByRole('button', { name: 'Wizard Done' })
+      );
+    };
+
+    it('tells the user when a document could not be added to the project', async () => {
+      mockProjectService.addDocumentToProject
+        .mockResolvedValueOnce({} as never)
+        .mockRejectedValueOnce(new Error('403 Forbidden'));
+
+      await openWizardAndFinish();
+
+      await waitFor(() => {
+        expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+          '1 of 2 documents could not be added to this project'
+        );
+      });
+      expect(mockProjectService.addDocumentToProject.mock.calls).toEqual([
+        ['proj-1', 'd1'],
+        ['proj-1', 'd2'],
+      ]);
+      // Still refresh so the documents that did link are shown.
+      expect(mockFetchProjectDocuments).toHaveBeenCalledWith('proj-1');
+    });
+
+    it('stays quiet when every uploaded document links to the project', async () => {
+      mockProjectService.addDocumentToProject.mockResolvedValue({} as never);
+
+      await openWizardAndFinish();
+
+      await waitFor(() => {
+        expect(mockFetchProjectDocuments).toHaveBeenCalledWith('proj-1');
+      });
+      expect(mockProjectService.addDocumentToProject).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(['resolve', 'reject'] as const)(
     'stops draft polling after account reset when A poll %s',
     async (outcome) => {

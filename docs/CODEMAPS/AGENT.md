@@ -1,7 +1,7 @@
 # NOUS — Agent CODEMAP
 
 > LangGraph agent: graph topology, nodes, subgraphs, tools, HITL, streaming, observability.
-> Last generated: 2026-04-26
+> Last generated: 2026-04-26; `document_search` row corrected 2026-10-17. The graph facade is `graph.py`, with construction in `_builders.py`; see `backend/src/services/agent/README.md` for the maintained file list.
 
 ## Entry points
 
@@ -65,7 +65,7 @@ On interrupt: graph pauses → client polls `/api/v1/agent/jobs/{job_id}` → us
 |---|---|---|
 | `arxiv_search` | No | Search arXiv papers |
 | `arxiv_ingest` | **Yes** | Download + ingest arXiv papers |
-| `document_search` | No | Semantic search in Qdrant |
+| `document_search` | No | PostgreSQL full-text search (Qdrant is removed) |
 | `kg_query` | No | Cypher query against Neo4j |
 | `entity_extraction` | No | Extract entities from text |
 | `create_note` | **Yes** | Create a research note |

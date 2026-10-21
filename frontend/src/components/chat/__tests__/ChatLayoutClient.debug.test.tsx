@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render } from '@/test/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ChatLayoutClient from '../../../../app/(dashboard)/chat/chat-layout-client';

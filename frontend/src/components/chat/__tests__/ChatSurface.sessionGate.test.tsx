@@ -8,9 +8,9 @@
  * anyway. These tests FAIL against the old behavior.
  */
 
-import { render } from '@testing-library/react';
+import { render, fireEvent, screen } from '@testing-library/react';
 import type { ComponentProps, ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatSurface } from '@/components/chat/ChatSurface';
 import type { UseChatSessionReturn } from '@/hooks/chat/useChatSession';
@@ -20,6 +20,22 @@ import type { UseChatDrawerReturn } from '@/hooks/chat/useChatDrawer';
 import type { UseCitationPanelReturn } from '@/hooks/chat/useCitationPanel';
 import type { UseChatComposerActionsReturn } from '@/hooks/chat/useChatComposerActions';
 import type { UseSlashCommandsReturn } from '@/hooks/chat/useSlashCommands';
+
+const pdf = vi.hoisted(() => ({
+  pdfContext: null as { documentId: string; title: string } | null,
+  pdfIsBound: false,
+  pdfIntentPending: false,
+  pdfBindingError: null,
+  setPdfContext: vi.fn(),
+  retryPdfBinding: vi.fn(),
+}));
+vi.mock('@/components/chat/ChatRagContext', () => ({ useChatRag: () => pdf }));
+beforeEach(() => {
+  pdf.pdfContext = null;
+  pdf.pdfIsBound = false;
+  pdf.pdfIntentPending = false;
+  vi.clearAllMocks();
+});
 
 type RuntimeCapture = {
   isSendDisabled?: boolean;
@@ -188,6 +204,24 @@ const fireAllSubmissionPaths = (): void => {
 };
 
 describe('ChatSurface session-interactivity gate', () => {
+  it.each([false, true])(
+    'removing PDF scope respects durable binding=%s',
+    (bound) => {
+      pdf.pdfContext = { documentId: 'pdf', title: 'Paper' };
+      pdf.pdfIsBound = bound;
+      const { props } = makeProps(makeSession());
+      render(<ChatSurface {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Remove PDF scope' }));
+      if (bound) {
+        expect(props.slashCommands.startNewChat).toHaveBeenCalledOnce();
+        expect(pdf.setPdfContext).not.toHaveBeenCalled();
+      } else {
+        expect(pdf.setPdfContext).toHaveBeenCalledWith(null);
+        expect(props.slashCommands.startNewChat).not.toHaveBeenCalled();
+      }
+    }
+  );
+
   it.each([
     ['unauthenticated', { isAuthenticated: false }],
     ['initializing', { isInitializing: true }],

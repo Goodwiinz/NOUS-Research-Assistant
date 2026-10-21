@@ -1,0 +1,121 @@
+{
+  "schema": "nous.release-invalidation-proof.v1",
+  "recorded_at": "2026-10-16T15:31:48.632959+00:00",
+  "source_base": "aaed1d70773d32e9099d7199e91a205dcaeefed7",
+  "source_patch": "uncommitted final follow-up; bind published commit separately",
+  "declaration": {
+    "declared_at": "2026-10-16T15:25:37.978896+00:00",
+    "base_head": "aaed1d70773d32e9099d7199e91a205dcaeefed7",
+    "source_state": "uncommitted final follow-up; bind published commit separately",
+    "files": {
+      "backend/src/services/research_engine/review_update_service.py": "b42713fc61b1c9f56e8579db3607ef90cd36322aa257e13fef526ce3d1c9443e",
+      "backend/src/services/research_decisions/ledger.py": "1a343a68d20deb4fabcd31757e7ced62c57ea8099bc39fd9b5652c9ea21f4aaf",
+      "backend/tests/integration/test_review_release_chain_postgres.py": "dab3161d217b90ac52423be309b7eba08906a567fe05f3f21db97da8bdc7985d",
+      "backend/src/services/research/manuscript_release_service.py": "f10cd55dbedbabef1b44ec1cfbaeb701d08dc46fa47f1e49e834a9191c993c39"
+    },
+    "scope": "native plain/statements chains; known invalidation survives subsequent unknown notice check; package bytes/row unchanged, unrelated releases verified, one invalidation event; approved protocol/run conformance remain declared fixtures; invalidation event joins the exact accepted review event",
+    "previous_attempt": "strict ledger rejected unregistered family/extra cause keys; no version commit succeeded"
+  },
+  "reproduction": {
+    "source_head": "aaed1d70773d32e9099d7199e91a205dcaeefed7",
+    "observation": {
+      "prior_source_class": "corrected_retracted",
+      "later_source_class": "unknown",
+      "before_outage_parent_release_status": "stale",
+      "after_outage_parent_release_status": "verified",
+      "after_outage_unrelated_release_status": "verified",
+      "after_outage_successor_release_status": "verified",
+      "parent_package_unchanged": true,
+      "accepted_later_review_created": true,
+      "notice_provider_failure": "controlled crossref outage",
+      "classification": "observed current behavior; policy acceptance remains open"
+    },
+    "observational_declaration_sha256": "3c4c1165eed97f6e3ff33142fcc943f1f85c22154f330adf742bdb628ba9b0fb",
+    "observational_result_sha256": "e753e02ac19e4e7c938dcac9e7d2f5e043715665ed41a732f402180fd2560d66",
+    "observed_sha256": "49e109181cc083a290bdc989e66769d03347bf280e13807dc1b582c4cda90c1a",
+    "regression_red_junit_sha256": "c32740935d278617160fefd8bd2d02093bbc66bf5b2d9dcf6960fe879ad56d87",
+    "regression_red": "one failure at later_listing[parent_release.id].status: verified instead of stale before the production fix"
+  },
+  "test_reports": [
+    {
+      "label": "final native plain and statement-bound chains",
+      "artifact": "fixed-native.xml",
+      "sha256": "4bf70c65dfa96364cf627bb934df4b5de50c236104e903ab54850c508d7dc0ea",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "label": "restored causal guard: plain chain plus existing review-version proof",
+      "artifact": "restored-green.xml",
+      "sha256": "b63465f83e3cd47a13ffd540071925f7c9c85ad3a18840aab0e6887f76ba486e",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "label": "architecture API owning-service and decision-ledger unit matrix",
+      "artifact": "unit-matrix.xml",
+      "sha256": "07642c9bcf3358fbfc7ca620885150549b513cbdfe0723bda3c2ae236d47cb06",
+      "tests": 1765,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "unique_native_cases": 3,
+  "overlap_note": "The restored plain chain repeats one of the two parameterized cases; report counts are not pooled.",
+  "mutation": {
+    "guard": "durable invalidation on accepted review delta",
+    "temporary_change": "omit only the new invalidate_dependents call",
+    "detected": true,
+    "failure": "old package lists verified instead of stale after accepting the unknown notice-check delta",
+    "source_original_sha256": "b42713fc61b1c9f56e8579db3607ef90cd36322aa257e13fef526ce3d1c9443e",
+    "source_mutant_sha256": "39c9e681102e9d708a31e0764bbc4bf478b101d9f3a4029f3e82ac97363cd377",
+    "source_restored_sha256": "b42713fc61b1c9f56e8579db3607ef90cd36322aa257e13fef526ce3d1c9443e",
+    "test_sha256": "dab3161d217b90ac52423be309b7eba08906a567fe05f3f21db97da8bdc7985d",
+    "junit_sha256": "91aa718acf7e1934b2f105179668abbe0623d41619409629b8a42612e27c0664",
+    "result_sha256": "6720d6e9c6a66178dac4179515d1508d54a32c6f664cff0cad964d812f4cec29"
+  },
+  "implementation": {
+    "transaction": "accept review version, its decision event and targeted existing-draft invalidations in one commit",
+    "cause": "release.staled references the exact review_update.versioned event UUID; strict payload shape remains enforced",
+    "immutable_artifacts": "parent manuscript row and original package bytes remain unchanged",
+    "retry": "one durable invalidation event after acceptance replay",
+    "unrelated_releases": "remain verified"
+  },
+  "runtime": {
+    "python": "3.11.13",
+    "sqlalchemy": "2.0.51",
+    "postgresql": "15.19 (Debian 15.19-1.pgdg12+2)",
+    "providers": "controlled Crossref and OpenAlex replies"
+  },
+  "local_quality": {
+    "command": "scripts/ci/run_local_ci.sh --base origin/develop --skip-tests",
+    "exit_code": 0,
+    "log_sha256": "1973b1bb7503610c8a91204d6bb21ea16679b42e7208652c53be9049ecad1d97",
+    "conditional_checks_not_run": [
+      "generated API types: committed contract unchanged",
+      "targeted migration delta: migration files unchanged",
+      "advisory empty-database upgrade: migration files unchanged"
+    ]
+  },
+  "cleanup": {
+    "recorded_at": "2026-10-16T15:30:40.252048+00:00",
+    "resource": "owned loopback nous-linear-retraction-pg",
+    "postgresql_version": "15.19 (Debian 15.19-1.pgdg12+2)",
+    "test_schemas_before_stop": 0,
+    "stopped": true,
+    "removed_after_stop": true,
+    "scope": "only the container created for this regression was stopped"
+  },
+  "limits": [
+    "Protocol approval, search journal and conformant-run status remain declared fixtures.",
+    "This is native local evidence, not deployed acceptance or human methods-expert acceptance.",
+    "The durable stamp is applied to releases reachable when a successor is accepted; historical accepted updates and any already-revived statuses need separate assessment before rollout.",
+    "Original package/chase proof and prior hosted CI retain their own source identities. Fresh follow-up review and hosted CI are reported separately for the published commit."
+  ],
+  "raw_artifacts": "owner-only evals/jobs/r8-retraction-persistence-20261016/ and /tmp/nous-linear-review/r8-retraction-persistence-20261016/"
+}

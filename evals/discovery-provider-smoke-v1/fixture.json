@@ -1,0 +1,50 @@
+{
+  "schema": "nous.discovery-provider-smoke.v1",
+  "classification": "NOT GATED: synthetic local service/provider diagnostic",
+  "top_k": 3,
+  "provider": "cohere",
+  "model": "embed-v-4-0",
+  "dimensions": 1024,
+  "corpus": [
+    {"key": "rag", "title": "Evidence Retrieval for Language Model Answers", "text": "A language model answers knowledge questions by retrieving relevant evidence passages from a document collection. The answer cites the retrieved passages instead of relying only on facts in model parameters.", "published": "2020-03-01"},
+    {"key": "retry", "title": "Idempotent Payment Requests After Network Timeouts", "text": "Clients retry a payment after an uncertain network timeout using the same idempotency key. A database transaction reserves the key and stores the original outcome so retries cannot create a second charge.", "published": "2020-04-01"},
+    {"key": "vector-old", "title": "Organization Scoped Vector Retrieval in Archived Research", "text": "Similar document vectors are retrieved with cosine distance. Organization access predicates and publication date bounds belong inside the database query before ordering and limiting nearest neighbours.", "published": "2020-05-01"},
+    {"key": "living", "title": "Superseding Evidence Reviews With Retained Decisions", "text": "A living evidence review carries unchanged screening decisions forward with their original attribution. Corrected or retracted studies trigger targeted review and invalidate affected claims without rewriting the parent release.", "published": "2020-06-01"},
+    {"key": "vector-new", "title": "Recent Organization Scoped Vector Retrieval", "text": "Similar document vectors are retrieved with cosine distance. Organization access predicates and publication date bounds belong inside the database query before ordering and limiting nearest neighbours.", "published": "2024-05-01"},
+    {"key": "plants", "title": "Photosynthetic Pigments During Drought", "text": "Leaf chlorophyll concentration and stomatal closure change during water stress. Plant experiments measure photosynthetic pigment abundance under controlled irrigation.", "published": "2024-01-01"},
+    {"key": "browser", "title": "Automated Browser Authentication Sessions", "text": "Chromium browser tests sign in through an authentication form, retain session cookies, reload a page, and check navigation after a redirect.", "published": "2024-02-01"},
+    {"key": "ocean", "title": "Plate Tectonics at Ocean Ridges", "text": "Oceanic plates separate at spreading ridges. Rising magma cools into basalt and creates new seafloor whose magnetic stripes record geological history.", "published": "2024-03-01"},
+    {"key": "optics", "title": "Telescope Mirror Calibration", "text": "An optical telescope aligns mirror segments by measuring wavefront errors. Adaptive optics correct atmospheric distortion to sharpen stellar images.", "published": "2024-04-01"},
+    {"key": "keyboard", "title": "Keyboard Focus in Accessible Dialogs", "text": "An accessible dialog traps keyboard focus while open, announces its title to a screen reader, and restores focus to the trigger after dismissal.", "published": "2024-06-01"},
+    {"key": "audio", "title": "Fourier Transforms for Audio Spectra", "text": "A fast Fourier transform converts sampled audio into frequency bins. Window functions reduce spectral leakage when analysing musical tones.", "published": "2024-07-01"},
+    {"key": "churn", "title": "Customer Churn Survival Analysis", "text": "Survival models estimate the time until a customer cancels a subscription. Censoring distinguishes active accounts from observed cancellation events.", "published": "2024-08-01"}
+  ],
+  "queries": [
+    {"key": "rag-paraphrase", "question": "How can a language model answer questions using retrieved evidence rather than relying only on parameter memory?", "keywords": ["retrieved evidence"], "gold": ["rag"], "scope": "organization"},
+    {"key": "retry-paraphrase", "question": "How does a client retry a payment after a network timeout without creating a second charge?", "keywords": ["payment", "network timeout"], "gold": ["retry"]},
+    {"key": "vector-paraphrase", "question": "How can a query retrieve similar vectors while enforcing organization access predicates and a publication date window?", "keywords": ["organization", "publication date"], "gold": ["vector-old", "vector-new"]},
+    {"key": "living-paraphrase", "question": "How can a living evidence review carry unchanged screening decisions forward while correcting retracted studies?", "keywords": ["evidence review", "screening decisions"], "gold": ["living"]},
+    {"key": "rag-exact", "question": "Evidence Retrieval for Language Model Answers", "keywords": ["Evidence Retrieval for Language Model Answers"], "gold": ["rag"], "exact_name": true},
+    {"key": "retry-exact", "question": "Idempotent Payment Requests After Network Timeouts", "keywords": ["Idempotent Payment Requests After Network Timeouts"], "gold": ["retry"], "exact_name": true},
+    {"key": "vector-exact", "question": "Organization Scoped Vector Retrieval in Archived Research", "keywords": ["Organization Scoped Vector Retrieval in Archived Research"], "gold": ["vector-old"], "exact_name": true},
+    {"key": "living-exact", "question": "Superseding Evidence Reviews With Retained Decisions", "keywords": ["Superseding Evidence Reviews With Retained Decisions"], "gold": ["living"], "exact_name": true},
+    {"key": "vector-window", "question": "How can a query retrieve similar vectors while enforcing organization access predicates and a publication date window?", "keywords": ["organization", "publication date"], "gold": ["vector-old"], "published_after": "2020-01-01", "published_before": "2020-12-31", "near_boundary": true}
+  ],
+  "page_filter": {
+    "total_pages": 14,
+    "top_n": 6,
+    "gold_pages": [3, 11],
+    "question": "How does a client retry a payment after a network timeout without creating a second charge?",
+    "short_pages": 3
+  },
+  "rules": [
+    "Freeze declaration and all source hashes before any provider call.",
+    "One attempt; report provider/database errors as infrastructure, never recall zero.",
+    "Measure macro recall at 1 and 3; no invented release threshold or generalization.",
+    "Semantic and deterministic composite library channels use real provider embeddings and SQL.",
+    "Other-organization duplicate content must never appear; the date case excludes the newer duplicate.",
+    "Page cases are added after recall so the eligible corpus stays twelve.",
+    "Only synthetic content; in-process flags only; no deployed MCP, flag change, backfill or rollout.",
+    "The synthetic IntegrationContext checks service authorization, not HTTP grant minting."
+  ]
+}

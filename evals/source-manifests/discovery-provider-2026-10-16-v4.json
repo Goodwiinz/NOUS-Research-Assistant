@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-16T21:58:46.540885+00:00",
+  "status": "NOT RUN",
+  "preparation_source_revision": null,
+  "execution_repository_revision": null,
+  "invalidation_rule": "Changed verifier/task/repository inputs require a new declaration and new trials. Prior scores and identifier-audit passes are not current acceptance.",
+  "host_calibration": {
+    "source_parent": "8c7aa67638e9292fc13bc2c873a34293f324e88f",
+    "source_state": "final declared uncommitted review delta; bind published commit separately",
+    "cases": 36,
+    "failures": 0,
+    "skipped": 0,
+    "junit_sha256": "d995bf4e94eda65ae75027c9b45fedd604417fdb6881bc6569862d0870f89a89",
+    "input_declaration_sha256": "6e1b749febabd3533de6990fdfaa0c3c22d67a2ae9a134ee34cb40a277c13007",
+    "kind": "host-only calibration/source-integrity; not scored Harbor/provider execution"
+  },
+  "kind": "synthetic provider diagnostic",
+  "source_scope": "A future execution must declare and retain the complete clean Git-visible source HEAD/tree before imports and verify identity after cleanup.",
+  "prepared_files": [
+    {
+      "path": "backend/alembic/versions/jd01_document_embeddings.py",
+      "sha256": "6ab5549cf965cf271b20530728960d0e5e150fa5dc36ddb59be650be29a6f873"
+    },
+    {
+      "path": "backend/src/core/config.py",
+      "sha256": "5bd2576da11314ac1328ac81910572f8bc37802374cca435506548227aa6c59f"
+    },
+    {
+      "path": "backend/src/core/database.py",
+      "sha256": "2e30eca36a03f0a58e9784573e1a5e0837cc1cc78fbe960ce5c8d6e7ed3aa0fe"
+    },
+    {
+      "path": "backend/src/services/embedding/cohere_embed_service.py",
+      "sha256": "d79369f922e8383b876fc42f9fa6b33bc60cc468b3d5d74815a8f77c6e91069f"
+    },
+    {
+      "path": "backend/src/services/embedding/document_embedding_service.py",
+      "sha256": "725b7e26bee5b16e277a67eb0a0fbaaa9aed26981e5a184c46cabbc096ee420c"
+    },
+    {
+      "path": "backend/src/services/embedding/embedding_service.py",
+      "sha256": "34adb1883491ed379c327312877fff6cf2b47179d89c70b359c1a5e2c62cc677"
+    },
+    {
+      "path": "backend/src/services/integrations/context.py",
+      "sha256": "48453d4f669bd516f2d54fc728a9011bba2c01c6b6dc7be6fccb967a25e4e8af"
+    },
+    {
+      "path": "backend/src/services/integrations/discover_papers.py",
+      "sha256": "dd7f5d101cc7df3d7b8de43bb28928828845b2657609910b905499cfad2ff5b2"
+    },
+    {
+      "path": "backend/src/services/integrations/read_tools.py",
+      "sha256": "99656660b6b5d8880c392b7448c6a724be3439e27493c5de64b46543a1ff8e31"
+    },
+    {
+      "path": "backend/src/services/search/cohere_rerank_service.py",
+      "sha256": "44fd65b74d1252f93b5e96103fc13b794d4c60133910876fd6d43f93e4174784"
+    },
+    {
+      "path": "backend/src/services/search/fulltext_search_service.py",
+      "sha256": "e5052ee29d204398bef95ec62e874e35db0021a6b11730675c5b83608b41b928"
+    },
+    {
+      "path": "backend/src/services/search/keyword_search_service.py",
+      "sha256": "c24bbac4ca5c970a366bdfefde3a7d98ba058d5f490a794e0d57d79bd0908890"
+    },
+    {
+      "path": "backend/src/services/search/semantic_search_service.py",
+      "sha256": "cccee629241ad096270d295b94fd007767192a51b042ac076800a133f0f57f97"
+    },
+    {
+      "path": "evals/discovery-provider-smoke-v1/fixture.json",
+      "sha256": "ae16fd472a22ba875b3c373fff899873b25379100fbee28f468eb1367ea299a2"
+    },
+    {
+      "path": "evals/discovery-provider-smoke-v1/probe.py",
+      "sha256": "a4843090915377274065b1d7130ff79cfbd26d7dc993260618763271eef68977"
+    }
+  ],
+  "aggregate_source_digest": "sha256:c83d873e05a2e7725836eba51e5d885dc02cd3e0388a178626656b81f29e1d22",
+  "provider_runtime_identity": null,
+  "measurements": null,
+  "reason": "Source guard changed; this revision has no new provider/PostgreSQL measurement. V3 retains only its declared fifteen-input scope.",
+  "previous_record": "evals/baselines/discovery-provider-2026-10-16-v3.json",
+  "previous_score_reused": false,
+  "preparation_parent_revision": "8c7aa67638e9292fc13bc2c873a34293f324e88f",
+  "preparation_source_state": "final declared uncommitted review delta; bind published commit separately",
+  "prepared_first_at": "2026-10-16T21:34:41.627209+00:00"
+}

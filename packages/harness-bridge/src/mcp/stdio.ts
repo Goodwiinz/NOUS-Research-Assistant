@@ -12,6 +12,7 @@ import { HandoffHttpClient } from "../handoffs/client.ts";
 import { getHandoffTool, saveHandoffTool } from "../handoffs/mcp.ts";
 import { HandoffQueue, localBinding } from "../handoffs/queue.ts";
 import { CapabilityClient, type McpSession } from "./client.ts";
+import { pinCatalog } from "./pin.ts";
 import { createNousMcpServer, type LocalTool } from "./server.ts";
 
 /** Serves NOUS read tools, plus publication, action and handoff tools when granted, over stdio. */
@@ -54,7 +55,7 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
   if (session.actions || session.library) {
     // Requests only: approval stays a browser action the model cannot take.
     const actions = new ActionHttpClient(session.apiOrigin, credentials, keeper.fetch);
-    local.push(requestActionTool(actions), actionStatusTool(actions));
+    local.push(requestActionTool(actions, session.project), actionStatusTool(actions));
   }
   if (session.handoff) {
     // The chat is the grant's binding; the model never names it.
@@ -69,8 +70,9 @@ export async function runStdioMcp(session: McpSession): Promise<void> {
     const context = new ContextHttpClient(session.apiOrigin, credentials, keeper.fetch);
     local.push(readSelectedContextTool(context), loadSelectedSkillTool(context));
   }
+  const catalog = new CapabilityClient(session.apiOrigin, credentials, keeper.fetch);
   const server = createNousMcpServer(
-    new CapabilityClient(session.apiOrigin, credentials, keeper.fetch),
+    session.project ? pinCatalog(catalog, session.project) : catalog,
     local,
   );
   // Diagnostics go to stderr only; stdout is the JSON-RPC channel.

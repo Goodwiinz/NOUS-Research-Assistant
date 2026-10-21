@@ -176,6 +176,9 @@ module "vpc" {
 # =============================================================================
 
 module "eks" {
+  # v19 has no authentication_mode input. Before enabling backup selection,
+  # bootstrap API_AND_CONFIG_MAP using the EKS API (preserves aws-auth).
+  # backup.tf verifies the live mode. See docs/runbooks/eks-backup-recovery.md.
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 19.0"
 

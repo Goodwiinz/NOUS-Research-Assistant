@@ -31,6 +31,7 @@ import type { UseCitationPanelReturn } from '@/hooks/chat/useCitationPanel';
 import type { UseChatComposerActionsReturn } from '@/hooks/chat/useChatComposerActions';
 import { appendToDraft } from '@/components/chat/shared/appendToDraft';
 import { QuoteToolbar } from '@/components/chat/shared/QuoteToolbar';
+import { useChatRag } from '@/components/chat/ChatRagContext';
 import type { UseSlashCommandsReturn } from '@/hooks/chat/useSlashCommands';
 
 interface ChatSurfaceProps {
@@ -67,6 +68,14 @@ export function ChatSurface({
   onSelectThread,
 }: ChatSurfaceProps): ReactElement {
   const {
+    pdfContext,
+    setPdfContext,
+    pdfIntentPending,
+    pdfIsBound,
+    pdfBindingError,
+    retryPdfBinding,
+  } = useChatRag();
+  const {
     conversations,
     workspace,
     activeThreadId,
@@ -96,7 +105,11 @@ export function ChatSurface({
     streamingThreadId,
   } = streaming;
   const harnessConnection = streaming.harnessConnection;
-  const harnessCanSend = harnessConnection?.canSend ?? true;
+  const pdfNeedsNous = Boolean(
+    pdfContext && harnessConnection?.executionProvider === 'codex'
+  );
+  const harnessCanSend =
+    (harnessConnection?.canSend ?? true) && !pdfNeedsNous && !pdfIntentPending;
 
   const {
     renameDialog,
@@ -281,7 +294,10 @@ export function ChatSurface({
       'populate-chat-input',
       handlePopulateChatInput as EventListener
     );
+    const focusInput = (): void => chatInputRef.current?.focus();
+    window.addEventListener('focus-chat-input', focusInput);
     return () => {
+      window.removeEventListener('focus-chat-input', focusInput);
       window.removeEventListener(
         'populate-chat-input',
         handlePopulateChatInput as EventListener
@@ -437,6 +453,65 @@ export function ChatSurface({
           {/* Raises a Quote action on a selection inside a committed
               answer; mounted once rather than per message. */}
           <QuoteToolbar />
+          {pdfIntentPending && (
+            <p role="status" className="px-4 py-2 text-xs text-(--nous-fg-2)">
+              PDF chat is not ready. Resolve or dismiss the PDF request before
+              sending.
+            </p>
+          )}
+
+          {pdfBindingError && (
+            <div role="alert" className="px-4 py-2 text-xs text-(--nous-fg-2)">
+              <p>{pdfBindingError}</p>
+              <button
+                type="button"
+                onClick={retryPdfBinding}
+                className="min-h-11 underline"
+              >
+                Retry PDF access
+              </button>
+              <button
+                type="button"
+                onClick={startNewChat}
+                className="ml-3 min-h-11 underline"
+              >
+                Start new chat
+              </button>
+            </div>
+          )}
+          {pdfContext && (
+            <div className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-md border border-(--nous-border-1) px-3 py-2 text-xs text-(--nous-fg-2)">
+              <div>
+                <p>PDF only: {pdfContext.title}</p>
+                <p>
+                  {pdfContext.selectionPageRange
+                    ? `Pages ${pdfContext.selectionPageRange[0] + 1}–${pdfContext.selectionPageRange[1] + 1} (inclusive)`
+                    : 'Use the PDF for your question'}
+                </p>
+                {pdfContext.selectionQuote && (
+                  <blockquote
+                    aria-label="Selected PDF passage"
+                    className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap border-l-2 border-(--nous-border-1) pl-2"
+                  >
+                    {pdfContext.selectionQuote}
+                  </blockquote>
+                )}
+                {pdfNeedsNous && (
+                  <p role="status">Select NOUS to ask about this PDF.</p>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() =>
+                  pdfIsBound ? startNewChat() : setPdfContext(null)
+                }
+                className="min-h-11 shrink-0 rounded-md px-2 underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-(--nous-sol) disabled:opacity-50"
+              >
+                Remove PDF scope
+              </button>
+            </div>
+          )}
 
           <ChatInput
             value={input}
@@ -455,8 +530,14 @@ export function ChatSurface({
             }}
             isLoading={isBusy}
             disabled={!isSessionInteractive || !harnessCanSend}
-            enableRAG={enableRAG}
-            onRAGToggle={setEnableRAG}
+            enableRAG={enableRAG || Boolean(pdfContext)}
+            onRAGToggle={(enabled) => {
+              setEnableRAG(enabled);
+              if (!enabled) {
+                if (pdfIsBound) startNewChat();
+                else setPdfContext(null);
+              }
+            }}
             inputRef={chatInputRef}
             onAttach={handleAttach}
             onCommand={(id) => {

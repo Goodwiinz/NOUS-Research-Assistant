@@ -1,6 +1,6 @@
 # NOUS terminal
 
-Use Node 24 and pnpm 10.18.2. From this worktree:
+Use Node 24 and pnpm 10.18.2. From the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -35,8 +35,8 @@ loading legacy credentials repairs their permissions.
 
 ## `nous --rc`: run Local Codex here from a web chat
 
-`nous --rc` pairs this computer with a NOUS project so that a chat on NOUS can
-run Codex in the current folder.
+`nous --rc` pairs this computer with your whole NOUS account so that any chat
+on NOUS can run Codex in the current folder.
 
 ```sh
 # Once, from the root of a checkout that tracks origin/develop, after pnpm install
@@ -64,12 +64,16 @@ from the launcher. It needs an interactive terminal (otherwise:
 while you use Local Codex.
 
 It checks Codex first, then signs you in (a browser link and a code, unless
-the saved sign-in still works), lists your projects with `n) New project`,
-asks you to approve this computer in the browser when needed (see below),
-registers the current folder, and runs the bridge. Then, in a chat for that
-project on NOUS, choose **Local Codex**, this computer and the folder; the
-last lines `nous --rc` prints name both. If NOUS cannot be reached, it says
-`Could not reach NOUS at <url> (<reason>)`. The approval link is printed in
+the saved sign-in still works), asks you to approve this computer for your
+whole NOUS account in the browser when needed (see below), registers the
+current folder, and runs the bridge. Then, in any chat on NOUS, choose **Local
+Codex**, this computer and the folder; the last lines `nous --rc` prints name
+both: `Connected: your NOUS account ↔ <folder>  (Codex <version>)` and `In any
+chat on NOUS, choose Local Codex → <device> → <folder>.` A server without
+account connections prints `this NOUS server doesn't support account
+connections yet`; pair one project by hand there with `nous-harness connect
+--project` (see the bridge README). If NOUS cannot be reached, it says `Could
+not reach NOUS at <url> (<reason>)`. The approval link is printed in
 full once a sign-in to that server has shown it your NOUS website address
 (saved as `website.json` in the state folder); until then it prints a path
 followed by `(open this path on your NOUS website)`.
@@ -79,30 +83,36 @@ folder, or any folder that contains its state folder
 (`<folder> is too broad for Codex to work in; run nous --rc in a project
 folder`), because Codex writes inside the registered folder without asking.
 
-Codex runs in that folder and can read the project's documents. Registering
-the folder is not read isolation: Codex's sandbox writes only there (a command
-you approve in the chat may get more), but it may read other files on this
-computer. A pairing `nous --rc` creates cannot publish
-files or change your library; if it reuses a pairing made earlier with
-`nous-harness connect` and more scopes, it keeps them and names them.
+Codex runs in that folder. The approval covers every project in workspaces of
+your organization that you own or belong to (not archived), checked again on
+every call, so new projects are included and removed ones drop out. It allows
+reading documents, requesting notes and library changes, and running Codex.
+Reversible library changes (saving papers to a folder, renaming one, editing a
+paper's title or tags) run without asking; deleting a folder and ingesting
+papers still ask in the browser. A Codex run started from a chat uses only
+that chat's project. A pairing `nous --rc` creates cannot publish files, read a
+chat's handoff or a project's selected memories. Registering the folder is not
+read isolation: Codex's sandbox writes only there (a command you approve in the
+chat may get more), but it may read other files on this computer.
 
-Each computer holds one pairing. Running `nous --rc` again for the same
-project skips the browser only while that pairing is still live (it lapses 3
-to 15 minutes after the bridge stops), already allows reading documents, and
-is not bound to a single chat. Otherwise it asks you to approve again, and
-NOUS lists this computer as a new device. The old approval stays active until
-you revoke it under Settings → Connected devices (`/integrations/devices`); no
-note is printed for this case. Revoking does not remove the old entry, and the
+Each computer holds one pairing. Running `nous --rc` again skips the browser
+while the account pairing is still live (it lapses 3 to 15 minutes after the
+bridge stops) or can resume from your approval (up to 30 days after it
+lapsed). Otherwise it asks you to approve again, and NOUS lists this computer
+as a new device. The old approval stays active until you revoke it under
+Settings → Connected devices (`/integrations/devices`); no note is printed for
+this case. Revoking does not remove the old entry, and the
 chat composer shows both under the same name, so pass a label that differs
 each time, for example `nous --rc --label "MacBook $(date +%F-%H%M)"` (it
 names only a new device; a reused pairing keeps its name). **Disconnect** in
 Connected devices does remove the old entry, but it also ends every CLI
 sign-in on your account, so every paired computer, this one included, must
 sign in again (run `nous --rc`, or `nous-harness connect`).
-Picking a different project also asks for approval (so does going back to an
-earlier one) and prints that the old project's approval stays active until
-you revoke it there. Folders you registered earlier move to the new pairing,
-also when you switch NOUS servers; a server switch prints no revoke note.
+If this computer was paired with one project (or one workspace) before, the
+first `nous --rc` replaces that pairing, moves the folders you registered to
+the account pairing, and prints that the old approval stays active until you
+revoke it under Settings → Connected devices (`/integrations/devices`); a
+server switch prints no such note.
 
 Only one `nous --rc` or `nous-harness run` can use a state folder (by default
 `~/.nous/harness-bridge`) at a time; a second one is refused with

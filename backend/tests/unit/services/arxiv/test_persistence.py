@@ -88,6 +88,79 @@ async def test_exact_arxiv_replay_reuses_before_storage() -> None:
     store.assert_not_called()
 
 
+async def test_require_pdf_upgrades_durable_abstract_in_place() -> None:
+    existing = _existing_document()
+    existing.document_type = DocumentType.TEXT
+    existing.mime_type = "text/plain"
+    lookup_db = MockAsyncSession().set_scalars_result([existing])
+    write_db = MockAsyncSession().set_scalar_result(existing)
+    sessions = iter([lookup_db, write_db])
+    storage_fields = {**_storage_fields(), "document_type": DocumentType.PDF}
+
+    with (
+        patch(
+            "src.core.database.AsyncSessionLocal", side_effect=lambda: next(sessions)
+        ),
+        patch.object(settings, "DO_KB_ENABLED", False),
+        patch(
+            "src.services.arxiv.persistence.store_arxiv_pdf",
+            return_value=storage_fields,
+        ) as store,
+        patch(
+            "src.services.search.fulltext_search_service.fulltext_search_service.async_update_document_search_vectors",
+            AsyncMock(),
+        ),
+        patch("src.services.arxiv.persistence.delete_arxiv_storage") as delete,
+    ):
+        result = await persist_arxiv_documents(
+            [_source()],
+            user_id=uuid4(),
+            organization_id=existing.organization_id,
+            require_pdf=True,
+        )
+
+    assert result.document_ids == [str(existing.id)]
+    assert existing.document_type == DocumentType.PDF
+    assert existing.mime_type == "application/pdf"
+    assert write_db._added_items == []
+    store.assert_called_once()
+    delete.assert_called_once()
+
+
+async def test_fulltext_ingest_enriches_pdf_only_row_without_reupload() -> None:
+    existing = _existing_document()
+    existing.document_metadata["has_full_text"] = False
+    existing.content_text = "abstract only"
+    source = _source()
+    source.content_text = "extracted full paper body"
+    source.document_metadata["has_full_text"] = True
+    lookup_db = MockAsyncSession().set_scalars_result([existing])
+    write_db = MockAsyncSession().set_scalar_result(existing)
+    sessions = iter([lookup_db, write_db])
+    update = AsyncMock()
+    with (
+        patch(
+            "src.core.database.AsyncSessionLocal", side_effect=lambda: next(sessions)
+        ),
+        patch.object(settings, "DO_KB_ENABLED", False),
+        patch("src.services.arxiv.persistence.store_arxiv_pdf") as store,
+        patch(
+            "src.services.search.fulltext_search_service.fulltext_search_service.async_update_document_search_vectors",
+            update,
+        ),
+    ):
+        result = await persist_arxiv_documents(
+            [source], user_id=uuid4(), organization_id=existing.organization_id
+        )
+    assert result.document_ids == [str(existing.id)]
+    assert existing.content_text == "extracted full paper body"
+    assert existing.document_metadata["has_full_text"] is True
+    assert existing.storage_path == "key"
+    assert write_db._added_items == []
+    store.assert_not_called()
+    update.assert_awaited_once_with([str(existing.id)], write_db)
+
+
 async def test_checksum_conflict_is_reported_and_deletes_promoted_object() -> None:
     existing = _existing_document("other-paper-v1")
     lookup_db = MockAsyncSession()

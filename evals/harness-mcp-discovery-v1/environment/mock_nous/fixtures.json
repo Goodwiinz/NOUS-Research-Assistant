@@ -1,0 +1,104 @@
+{
+  "topic": "retrieval-augmented generation for clinical question answering",
+  "match_terms": [
+    "retrieval",
+    "rag",
+    "clinical",
+    "question answering",
+    "medical",
+    "qa"
+  ],
+  "project": {
+    "id": "e51a8d27-6c4f-4b93-a0d8-3f7b2c9e6a40",
+    "name": "Clinical QA literature review"
+  },
+  "corpus": {
+    "documents": [
+      {
+        "id": "4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19",
+        "title": "Ward-Round Notes on Citation-Grounded RAG for Clinical Question Answering",
+        "type": "pdf",
+        "status": "indexed",
+        "created_at": "2026-06-02T14:11:07.412093+00:00",
+        "summary": "Internal reading notes comparing citation-grounded retrieval-augmented generation pipelines for bedside clinical question answering; recommends passage-level citations and abstention when retrieval confidence is low.",
+        "passage": "Citation-grounded RAG answered 41 of 50 bedside clinical questions with every claim linked to a retrieved guideline passage; the remaining 9 were correctly deferred because no passage cleared the confidence threshold."
+      },
+      {
+        "id": "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73",
+        "title": "Hallucination Audit of a Hospital Formulary RAG Assistant",
+        "type": "pdf",
+        "status": "indexed",
+        "created_at": "2026-07-19T09:42:55.031677+00:00",
+        "summary": "Audit of a retrieval-augmented medical question answering assistant built on a hospital formulary; catalogues unsupported dosing claims and shows that retrieval re-ranking halves them.",
+        "passage": "Re-ranking retrieved formulary passages before generation reduced unsupported dosing statements from 12.4% to 5.9% of answers in the medical QA audit set."
+      }
+    ]
+  },
+  "arxiv": {
+    "papers": [
+      {
+        "id": "2509.17001v1",
+        "title": "Chart-Aware Retrieval-Augmented Generation for Clinical Question Answering over Electronic Health Records",
+        "authors": [
+          "Imani R. Okonkwo",
+          "Tobias Lindqvist",
+          "Mei-Ling Hsu"
+        ],
+        "abstract": "We present a retrieval-augmented generation system that retrieves structured chart segments and free-text notes from electronic health records to answer clinicians' patient-specific questions, improving exact-match accuracy over note-only retrieval.",
+        "published": "2025-09-21T17:58:42Z",
+        "categories": [
+          "cs.CL",
+          "cs.IR"
+        ],
+        "full_text": "Chart-Aware Retrieval-Augmented Generation for Clinical Question Answering over Electronic Health Records. Abstract: We retrieve structured chart segments alongside free-text notes and condition generation on both. On a held-out set of 1,200 clinician questions, chart-aware retrieval improves exact-match accuracy from 61.3% to 72.8% over note-only retrieval while keeping every answer linked to a retrieved record segment."
+      },
+      {
+        "id": "2509.17002v1",
+        "title": "Guideline Graph Re-Ranking Reduces Hallucination in Medical Retrieval-Augmented Question Answering",
+        "authors": [
+          "Santiago Ferreira-Lopes",
+          "Anika Brandt",
+          "Wen-Jun Zhao"
+        ],
+        "abstract": "Re-ranking retrieved passages with a clinical guideline graph before generation cuts unsupported statements in medical question answering, measured on a benchmark of guideline-derived questions.",
+        "published": "2025-09-22T08:14:05Z",
+        "categories": [
+          "cs.CL",
+          "cs.AI"
+        ],
+        "full_text": "Guideline Graph Re-Ranking Reduces Hallucination in Medical Retrieval-Augmented Question Answering. Abstract: Passages retrieved for a medical question are re-ranked by their distance to the question's concepts in a clinical guideline graph. Unsupported statements fall from 18.2% to 7.5% of generated sentences on 900 guideline-derived questions."
+      }
+    ]
+  },
+  "external": {
+    "pubmed": {
+      "articles": [
+        {
+          "pmid": "40517001",
+          "title": "Retrieval-augmented large language models for answering clinicians' drug-dosing questions: a prospective evaluation",
+          "abstract": "Prospective study of a retrieval-augmented assistant answering 300 drug-dosing questions from ward clinicians.",
+          "journal": "Journal of Biomedical Informatics",
+          "doi": "10.5555/nouseval.2025.40517001",
+          "authors": [
+            "Haddad N",
+            "Kowalczyk P",
+            "Osei A"
+          ],
+          "pub_year": "2025"
+        },
+        {
+          "pmid": "40517002",
+          "title": "Citation fidelity of retrieval-augmented generation in emergency medicine question answering",
+          "abstract": "Benchmark of citation fidelity for retrieval-augmented answers to emergency medicine questions.",
+          "journal": "npj Digital Medicine",
+          "doi": "10.5555/nouseval.2025.40517002",
+          "authors": [
+            "Varga E",
+            "Mbeki T"
+          ],
+          "pub_year": "2025"
+        }
+      ]
+    }
+  }
+}

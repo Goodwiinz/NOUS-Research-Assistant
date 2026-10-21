@@ -1,7 +1,7 @@
 # NOUS — Frontend CODEMAP
 
 > Next.js 15 App Router structure, feature index, store slices, services index.
-> Last generated: 2026-04-26
+> Last generated: 2026-04-26; entry points, services, stores and dedup tables corrected 2026-10-17 against `ls frontend/app frontend/src`. The route tree and LOC figures are still the April snapshot; re-verify with `ls` and treat `frontend/AGENTS.md` and `docs/engineering/frontend.md` as the maintained contracts.
 
 ## Entry points
 
@@ -11,15 +11,14 @@
 | `app/providers.tsx`     | QueryClient, AuthProvider, ToastProvider       |
 | `app/page.tsx`          | Root redirect → dashboard                      |
 | `app/not-found.tsx`     | 404 page                                       |
-| `frontend/cli/index.ts` | Node.js REPL CLI (`./nous`) — separate package |
+| `terminal/src/index.tsx` | Terminal client launched by `./nous` (separate workspace at `terminal/`, not under `frontend/`) |
 
 ## App Router tree (`app/`)
 
 ```
 app/
   (auth)/
-    login/        Sign-in page
-    signup/       Registration
+    login/, register/, forgot-password/, reset-password/, verify-email/, cli-auth/
   (dashboard)/
     layout.tsx    Shell: sidebar, nav, auth guard
     dashboard/    Overview / home
@@ -54,37 +53,22 @@ src/
     knowledge-graph/ Graph visualizer
     research/       Citation cards, draft editor
     …               Feature widgets not yet moved to features/
-  services/         API + real-time service layer
-    api.ts          Primary REST client (keep — used most widely)
-    api-client.ts   Alternate client (consolidation target)
-    apiClient.ts    Third client (consolidation target)
-    typeSafeApiClient.ts  Type-safe wrapper
-    websocketService.ts        Chat WebSocket
-    realtime-websocket-service.ts  Realtime status (consolidation target)
-    realtimeWebSocketService.ts    (consolidation target)
-    websocket-client.ts            (consolidation target)
-    analytics/      Analytics-specific event clients
-    documentService.ts  Document CRUD helpers
-    agentChatService.ts  Agent chat helpers
-    threadSearchService.ts  Thread search
-    … (28 service files total)
-  store/            Zustand slices (canonical — retire src/stores/)
-    chat-store.ts        Conversation state (1,379 LOC — split pending)
-    agentChatStore.ts    Agent streaming state
-    llm-chat-store.ts    LLM chat state
-    projectChatStore.ts  Project-chat state
-    citationStore.ts     Citations
-    projectStore.ts      Research projects
-    pipelineStore.ts     Pipeline builder
-    realtime-store.ts    Document processing progress
-    realtimeProcessingStore.ts  (duplicate — consolidation target)
-    research-engine-store.ts   Research engine
-    sidebar-store.ts     Sidebar open/close
-  stores/           LEGACY — retire and redirect imports to store/
+  services/         API and real-time service layer (about 40 files)
+    api-client.ts   Shared REST client
+    searchService.ts, documentService.ts, projectService.ts, workspaceService.ts,
+    agentChatService.ts, streamingService.ts, threadSearchService.ts, artifactService.ts,
+    researchEngineService.ts, integration*Service.ts, harnessService.ts, ...
+    analytics/      Analytics-specific clients
+  store/            Zustand slices (import chat state only via `@/store/chat-store`)
+    chat-store.ts + chat/   Conversation transcript (the one sanctioned Zustand cache of server data)
+    agentChatStore.ts, llm-chat-store.ts, projectChatStore.ts, citationStore.ts,
+    projectStore.ts, pipelineStore.ts, research-engine-store.ts, sidebar-store.ts,
+    artifactPanelStore.ts, notificationStore.ts
+  stores/           Remaining legacy stores (authStore, graphStore, monitoringStore, analyticsStore, ...)
   hooks/            Cross-feature React hooks
   lib/              Framework glue (cn, Supabase client, animations)
   types/            Cross-feature TypeScript types
-  utils/            Shared utilities (format, string, date)
+  utils/            Shared utilities (formatUtils.ts, analytics/formatUtils.ts, ...)
   contexts/         React contexts (auth, theme)
   providers/        Provider wrappers
   styles/           Additional CSS
@@ -103,27 +87,14 @@ Set `BACKEND_URL` in env for server-side rewrites. Vercel builds fail if neither
 
 ## Store slices (src/store/)
 
-| File                       | State                                                |
-| -------------------------- | ---------------------------------------------------- |
-| `chat-store.ts`            | Messages, streaming state, drafts, tool call results |
-| `agentChatStore.ts`        | Agent job polling, HITL confirm flow                 |
-| `llm-chat-store.ts`        | LLM-direct chat (non-agent)                          |
-| `projectChatStore.ts`      | Project-scoped chat                                  |
-| `citationStore.ts`         | Citation list, selected citations                    |
-| `projectStore.ts`          | Research project CRUD cache                          |
-| `pipelineStore.ts`         | Multi-step pipeline wizard state                     |
-| `realtime-store.ts`        | Document ingestion progress                          |
-| `research-engine-store.ts` | Research engine runs + results                       |
-| `sidebar-store.ts`         | Sidebar open/collapsed                               |
+State that comes from requests is owned by TanStack Query; the chat Zustand store is the single exception. See `docs/engineering/frontend.md` for the one-cache-owner rule and `frontend/src/store/README.md` for the slice list.
 
 ## Known deduplication targets
 
-| Concept      | Files                                                                           | Target                     |
-| ------------ | ------------------------------------------------------------------------------- | -------------------------- |
-| REST client  | `api.ts`, `api-client.ts`, `apiClient.ts`                                       | Keep `api.ts`              |
-| WebSocket    | 4 implementations                                                               | Keep `websocketService.ts` |
-| Store root   | `src/store/` + `src/stores/`                                                    | Keep `src/store/`          |
-| Format utils | `lib/format-utils.ts`, `utils/formatUtils.ts`, `utils/analytics/formatUtils.ts` | `utils/format.ts`          |
+| Concept | Files | Note |
+|---|---|---|
+| Store root | `src/store/` and `src/stores/` | `src/stores/` still holds several stores; migrate deliberately |
+| Format utils | `src/lib/format-utils.ts`, `src/utils/formatUtils.ts`, `src/utils/analytics/formatUtils.ts` | Three files, no single `utils/format.ts` exists |
 
 ## Adding a new feature
 

@@ -106,6 +106,15 @@ class Settings(BaseSettings):
     HARNESS_BRIDGE_ENABLED: bool = False
     # Kill switch for the scoped integration read gateway (/integrations/tools).
     NOUS_MCP_ENABLED: bool = False
+    # Rollout gate for account-wide harness connections: new account approval
+    # requests answer 503 while false. Keep it off until the website's approval
+    # page understands binding_kind (PR 3 of the account-connection plan): today
+    # it renders an account request as "Project: ()" with Approve enabled.
+    # It gates only CREATING account requests: a pending account request made
+    # just before the flag is turned off can still be decided and exchanged
+    # within its 10-minute window. Existing account approvals keep working;
+    # revoke them under Connected devices.
+    ACCOUNT_CONNECTIONS_ENABLED: bool = False
     # Artifact workspace rollout flags; reads stay available when writes are off.
     ARTIFACTS_ENABLED: bool = False
     ARTIFACT_EDITING_ENABLED: bool = False
@@ -211,7 +220,9 @@ class Settings(BaseSettings):
         "Last-Event-ID"
     )
     CORS_ALLOWED_METHODS: str = "GET,POST,PUT,DELETE,PATCH,OPTIONS,HEAD"
-    CORS_EXPOSE_HEADERS: str = "X-Request-ID,X-Correlation-ID,X-Process-Time"
+    CORS_EXPOSE_HEADERS: str = (
+        "X-Request-ID,X-Correlation-ID,X-Process-Time,llm-chat-id"
+    )
     CORS_MAX_AGE: int = 86400  # 24 hours preflight cache
 
     # R4-M13: gate the process-wide X-Forwarded-For patch (security.py
@@ -870,6 +881,9 @@ class Settings(BaseSettings):
 
     # Opt-in page relevance for an explicitly selected single document.
     AGENT_PAGE_FILTER: bool = False
+    # Trusted public NOUS API origin for compatibility file references. Empty
+    # accepts canonical relative references only; never infer it from Host.
+    ALPHAXIV_FILE_BASE_URL: str = ""
     RETRIEVE_PASSAGES_PAGE_TOP_N: int = Field(6, ge=1, le=100)
     RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT: int = Field(8, ge=0, le=100)
 

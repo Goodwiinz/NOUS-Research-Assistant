@@ -19,6 +19,7 @@ from .agent_run_event import AgentRunEvent
 from .agent_runtime_snapshot import AgentRuntimeSnapshot
 from .agent_tool_receipt import AgentToolOperation, AgentToolReceipt
 from .analytics_event import AnalyticsEvent, EventSeverity, EventType
+from .arxiv_paper import ArxivPaper
 
 # Audit models
 from .audit import (
@@ -227,6 +228,7 @@ __all__ = [
     "AgentToolOperation",
     "AgentRuntimeSnapshot",
     "BaseModel",
+    "ArxivPaper",
     # User models
     "User",
     "UserRole",

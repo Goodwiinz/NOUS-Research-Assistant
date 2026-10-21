@@ -6,7 +6,7 @@ The browser owner lists and saves the shared memories; a harness with a
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.integrations.auth import (
@@ -18,6 +18,7 @@ from src.core.database import get_db
 from src.models.user import User
 from src.schemas.integration_context import IntegrationContext
 from src.schemas.integration_selected_context import (
+    MAX_SELECTED_MEMORIES,
     ContextOptions,
     ContextSelectionUpdate,
     SelectedSkillLoad,
@@ -78,18 +79,19 @@ async def put_context_selection(
         ) from error
     except ContextSelectionTooLarge as error:
         raise HTTPException(
-            422, "Selected memories exceed the 64 KiB sharing limit"
+            422, "A selected memory is too large to share (64 KiB limit per read)"
         ) from error
 
 
 @router.get("", response_model=ToolResult)
 async def get_selected_context(
+    offset: int = Query(0, ge=0, le=MAX_SELECTED_MEMORIES),
     context: IntegrationContext = Depends(require_integration_context("context:read")),
     db: AsyncSession = Depends(get_db),
 ) -> ToolResult:
     if not settings.NOUS_MCP_ENABLED:
         raise HTTPException(503, "NOUS integration tools are disabled")
-    return await read_selected_context(db, context)
+    return await read_selected_context(db, context, offset=offset)
 
 
 @router.post("/skills/load", response_model=ToolResult)

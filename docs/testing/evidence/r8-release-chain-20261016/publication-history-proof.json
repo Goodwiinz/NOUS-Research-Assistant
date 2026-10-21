@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-17T09:40:14.345999+00:00",
+  "baseline_head": "bce9bf7d4d896f401171953caffb52e029cd0ca8",
+  "source_state": "uncommitted follow-up bound by exact file hashes; published commit recorded separately",
+  "files": {
+    "backend/src/services/research_engine/review_update_service.py": "ea2c297b054ee70b32b8c97e3ddadf7864a49d0731e4d805575f11788851aedf",
+    "backend/tests/integration/test_review_release_chain_postgres.py": "4c7ea369b8978426ac1c3e381520a34ac2aa92ff101009ea143e47f045195e99",
+    "backend/tests/unit/services/test_review_update_graph_history.py": "396e609ac397196a5b3f436ae7576149284240a0985867e166c89127e8325be5"
+  },
+  "reproduction": {
+    "final_test_hash": "4c7ea369b8978426ac1c3e381520a34ac2aa92ff101009ea143e47f045195e99",
+    "old_graph_exit": 1,
+    "failure": "new retracted-source draft promotion did not raise ReleaseBlocked",
+    "restored_source_sha256": "ea2c297b054ee70b32b8c97e3ddadf7864a49d0731e4d805575f11788851aedf"
+  },
+  "native": {
+    "passed": 3,
+    "failed": 0,
+    "skipped": 0,
+    "cases": [
+      "release chain plain",
+      "release chain statements",
+      "existing superseding review versions"
+    ],
+    "assertions": [
+      "new retracted-source draft refused with stale_evidence and no release row",
+      "new unrelated-source draft promoted and verified",
+      "other project graph empty",
+      "parent manuscript row and package bytes unchanged",
+      "one durable invalidation after replay"
+    ]
+  },
+  "unit": {
+    "focused_history_cases": 7,
+    "broader_unit_api_architecture_cases": 1785,
+    "failed": 0,
+    "skipped": 0,
+    "environment": "synthetic in-memory encryption initialized before pytest; no real encryption key used"
+  },
+  "static": "pinned changed-file Ruff/Black/isort, strict typing on new file, full local CI gates that ran passed; generated types and migration delta/replay skipped as unchanged",
+  "review": {
+    "model": "claude-fable-5-1",
+    "session_id": "2526e57a-d9ca-4d15-b6bc-9176e2564aed",
+    "status": "completed",
+    "read_only_violation": false,
+    "verdict": "no blocking defect established",
+    "binding": "primary matched all three reviewed source fingerprints after review; reviewer inspected current source but did not recompute hashes or run tests"
+  },
+  "cleanup": {
+    "recorded_at": "2026-10-17T09:40:14.345508+00:00",
+    "owned_container_removed": true,
+    "test_schemas_before_stop": 0
+  },
+  "limitations": [
+    "local PostgreSQL fixture evidence, not deployment or human methods acceptance",
+    "accepted corrections and retractions persist conservatively; no clearance or waiver policy is added",
+    "historical notices first reaching a live release later are invalidated with that later accepted review event as cause",
+    "all accepted delta payloads are read per project graph construction",
+    "initial local broad run had four unrelated missing-encryption setup errors; initialized rerun passed",
+    "two earlier fixture corrections are retained as failed attempts, not counted as passes"
+  ]
+}

@@ -368,6 +368,9 @@ class AgentErrorCategory(StrEnum):
     #: The chosen computer may run Codex only in another chat (Plan 06 slice
     #: 2); connect it to this chat or pick another computer.
     DEVICE_BOUND_TO_ANOTHER_CHAT = "device_bound_to_another_chat"
+    #: The chosen computer holds no approval covering this chat's project
+    #: (account or project), or the chosen folder is not usable here.
+    DEVICE_NOT_CONNECTED_TO_PROJECT = "device_not_connected_to_project"
 
 
 # Terminal frames: after one of these the live stream ends and the resumable

@@ -94,7 +94,7 @@ async def command(
 
 
 def event(command: Any, seq: int = 1, body: Any = None, **changes: Any) -> BridgeEvent:
-    values = command.model_dump(exclude={"expiresAt", "body"})
+    values = command.model_dump(exclude={"expiresAt", "body", "projectId"})
     values.update(
         sourceId="stable-source",
         sourceSeq=seq,

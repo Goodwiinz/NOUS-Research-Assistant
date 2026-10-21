@@ -1,103 +1,68 @@
 # NOUS — Ops CODEMAP
 
-> Docker Compose files, monitoring stack, scripts catalog.
-> Last generated: 2026-04-26
+> Compose files, monitoring stack, scripts catalog, CI workflows.
+> Regenerated 2026-10-17 from `ls` of `config/docker-compose/`, `monitoring/`, `scripts/` and `.github/workflows/`. The earlier 2026-04-26 version named files that no longer exist (`docker-compose.graph-services.yml`, `deploy-graph-services.sh`, `build-push.yml`, `security-scan.yml`).
 
-## Compose files (`config/docker-compose/`)
+## Compose files
 
-Root symlinks point here. Use the full path for explicit invocation.
+Local development does not use Docker (see `CLAUDE.md`), and the root `Makefile` targets that `exec` into containers are not reliable. Compose files live in `config/docker-compose/`; the root symlinks cover only `docker-compose.yml`, `.ci.yml`, `.development.yml` and `.prod.yml`.
 
-| File | Use case | Notes |
-|---|---|---|
-| `docker-compose.development.yml` | **Local dev (primary)** | All services + hot-reload |
-| `docker-compose.yml` | Backend + DBs only | Lighter alternative |
-| `docker-compose.services.yml` | Infrastructure only | PG, Neo4j, Qdrant, Redis — no app |
-| `docker-compose.ci.yml` | CI pipeline | No named volumes |
-| `docker-compose.prod.yml` | Prod-equivalent local | YAML anchors for secrets |
-| `docker-compose.staging.yml` | Staging-equivalent local | |
-| `docker-compose.observability.yml` | Prometheus + Grafana + AlertManager | Run alongside dev compose |
-| `docker-compose.security.yml` | Security scanning | |
-| `docker-compose.websocket.yml` | WebSocket testing | |
-| `docker-compose.azure.yml` | Azure OpenAI endpoint | |
-| `docker-compose.graph-services.yml` | Neo4j + graph analytics | |
-
-Quick-start:
-```sh
-docker compose -f config/docker-compose/docker-compose.development.yml up -d
-```
+| File | Use case |
+|---|---|
+| `docker-compose.development.yml` | Full local stack |
+| `docker-compose.yml` | Minimal backend and databases |
+| `docker-compose.services.yml` | Infrastructure only; may still reference Qdrant, which is removed |
+| `docker-compose.ci.yml` | CI pipeline |
+| `docker-compose.prod.yml`, `docker-compose.staging.yml` | Prod/staging-equivalent local tests (staging and production deploys are dead) |
+| `docker-compose.observability.yml`, `docker-compose.security.yml`, `docker-compose.websocket.yml`, `docker-compose.azure.yml` | Specialised variants |
 
 ## Monitoring stack (`monitoring/`)
 
-Self-contained observability stack — run alongside the app.
-
 | File / Dir | Purpose |
 |---|---|
-| `prometheus.yml` | Prometheus scrape config |
-| `prometheus-rules/` | Recording + alerting rules |
-| `alert_rules.yml` | Alert rule definitions |
-| `performance_alerts.yml` | Performance-specific alerts |
-| `alertmanager.yml` | AlertManager routing + receivers |
-| `alertmanager/` | Alertmanager templates |
-| `grafana/` | Dashboard JSON exports |
-| `grafana-dashboard.json` | Main NOUS dashboard |
-| `otel-collector-config.yaml` | OpenTelemetry collector |
-| `loki-config.yaml` | Loki log aggregation |
-| `filebeat/` + `logstash/` | Log shipping |
-| `docker-compose.monitoring.yml` | Monitoring stack compose |
+| `prometheus.yml`, `prometheus/`, `prometheus-rules/` | Scrape config, recording and alerting rules |
+| `alert_rules.yml`, `performance_alerts.yml` | Alert definitions |
+| `alertmanager.yml`, `alertmanager/` | Routing and templates |
+| `grafana/`, `grafana-dashboard.json` | Dashboards |
+| `otel-collector-config.yaml`, `otel-collector/` | OpenTelemetry collector |
+| `loki-config.yaml`, `promtail-config.yml`, `filebeat/`, `logstash/` | Log aggregation and shipping |
+| `docker-compose.monitoring.yml`, `setup.sh` | Stack compose and setup |
 
-Docs: `docs/operations/monitoring/`
+Docs: `docs/operations/`. Cluster manifests: `infrastructure/kubernetes/monitoring/`.
 
-Start monitoring stack:
-```sh
-docker compose -f monitoring/docker-compose.monitoring.yml up -d
-```
-
-## Scripts catalog (`scripts/` — 84 files)
-
-### Active / maintained
+## Scripts (`scripts/`, about 78 entries)
 
 | Script | Purpose |
 |---|---|
-| `deploy.sh` | Full stack deployment (Helm + ArgoCD) |
-| `deploy-graph-services.sh` | Deploy Neo4j + graph analytics |
-| `deploy_performance_optimizations.sh` | Apply PG + Qdrant optimizations |
-| `health-check.sh` | End-to-end health probe (all services) |
-| `backup_all_data.sh` | PG + Neo4j + Qdrant full backup |
-| `backup-and-recovery.sh` | Backup with recovery test |
-| `backup-and-restore.sh` | Backup + restore pipeline |
-| `ci/stages.sh` | CI stage detection |
-| `ci/detect-changes.sh` | Changed-paths detection for selective CI |
-| `sync-to-obsidian.sh` | Push docs/memory to Obsidian vault |
-| `Makefile` → `Makefile` (root) | Top-level dev shortcuts |
+| `ci/run_local_ci.sh` | Run the blocking CI gates locally against a base branch |
+| `ci/generate_openapi.py`, `ci/check_alembic.py` | OpenAPI snapshot and drift check; Alembic single-head and revision-id length check |
+| `ci/select_ci_jobs.py`, `ci/detect-changes.sh`, `ci/stages.sh`, `ci/shard_tests.py` | Selective CI and test sharding |
+| `ci/check_*.py`, `ci/check_*.mjs` | Tool-version, tsconfig-exclusion, feature-map, frontend quality and release-protection gates |
+| `docs/check_dir_docs.py` | Directory README lint behind `make docs-lint` |
+| `deploy.sh`, `deploy_performance_optimizations.sh` | Older deploy helpers; verify before use |
+| `health-check.sh` | Health probe |
+| `backup/backup_database.sh`, `backup/disaster_recovery.py` | Backup and recovery helpers |
+| `sync-to-obsidian.sh` (root and `scripts/`) | Push docs/memory to an Obsidian vault |
 
-### Audit-and-delete candidates (pre-CI one-off scripts)
-
-41× `test_*.py` — ad-hoc exploration scripts written before the test suite existed.  
-21× `check_*.py` — one-off diagnostic scripts.  
-2× `debug_*.py` — debug sessions, not reusable.
-
-These are candidates for deletion once confirmed unused. Audit: `grep -rn "test_\|check_\|debug_" .github/` to confirm CI doesn't reference them.
-
-### Backup directory (`scripts/backup/`)
-
-Periodic backup scripts organized by target (postgres, neo4j, qdrant, storage).
+`scripts/` also holds many one-off `test_*.py` (13), `check_*.py` (6) and `debug_*.py` exploration scripts written before the test suite; they are deletion candidates once confirmed unreferenced by `.github/`.
 
 ## CI/CD (`.github/workflows/`)
 
-| Workflow | Trigger | Purpose |
-|---|---|---|
-| `test-pipeline.yml` | push / PR | Lint + type-check + unit + integration tests |
-| `build-push.yml` | push to develop/staging/main | Build Docker images + push to GHCR |
-| `deploy-*.yml` | manual / tag | Environment-specific deploy |
-| `security-scan.yml` | schedule | Dependency + container scanning |
-| Additional workflows (up to 8 total) | various | |
+| Workflow | Purpose |
+|---|---|
+| `test-pipeline.yml` | Lint, type-check, unit and integration tests (Python 3.11) |
+| `docker-build.yml` | Build images and push to Amazon ECR |
+| `release-dev.yml` | After a green pipeline on `develop`, open the digest-pinned GitOps PR for dev |
+| `helm-validate.yml`, `workflow-lint.yml`, `secret-scan.yml` | Chart, workflow and secret validation |
+| `supabase-migrations.yml` | Supabase migration checks/apply |
+| `trigger-deploy.yml` | Trigger.dev job deploy |
+| `agent-eval.yml` | Agent eval harness |
+| `opencode.yml` | Agent automation workflow |
 
-CI uses self-hosted Depot runners for fast builds (linux/amd64). Frontend CI uses `pnpm` (not npm) — only `pnpm-lock.yaml` is committed.
+Frontend CI uses `pnpm` only; `pnpm-lock.yaml` at the root is the single lockfile.
 
 ## Runbooks and docs
 
-- Monitoring setup → `docs/operations/monitoring/`
-- Observability (LangSmith, tracing) → `docs/operations/observability/`
-- Oncall / incident response → `docs/operations/`
-- k8s manifests for monitoring → `infrastructure/kubernetes/monitoring/`
-- Helm values for Prometheus/Grafana → `infrastructure/helm/kube-prometheus-stack-values.yaml`
+- Monitoring and observability → `docs/operations/`, `docs/runbooks/`
+- Cluster monitoring manifests → `infrastructure/kubernetes/monitoring/`
+- Prometheus/Grafana Helm values → `infrastructure/helm/kube-prometheus-stack-values.yaml`

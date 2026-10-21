@@ -38,7 +38,34 @@ const workspaceRequest = {
   scopes: ['tools:read', 'library:read', 'library:write'],
 };
 
+// An account request binds neither a project nor a workspace (PR 1:
+// binding_kind 'account'; account_summary holds today's counts).
+const accountRequest = {
+  ...request,
+  project_id: null,
+  project_label: null,
+  workspace_id: null,
+  workspace_label: null,
+  binding_kind: 'account',
+  account_summary: { workspace_count: 5, project_count: 33 },
+  scopes: [
+    'harness:execute',
+    'library:read',
+    'library:write',
+    'tools:read',
+    'tools:write',
+  ],
+};
+
 describe('IntegrationApprovalPage', () => {
+  it('asks the user to check a project, workspace or whole account', async () => {
+    mockGet.mockResolvedValue(request);
+    render(<IntegrationApprovalPage />);
+    expect(
+      await screen.findByText(/project, workspace or whole account/)
+    ).toBeInTheDocument();
+  });
+
   it('shows the chat a request is bound to', async () => {
     mockGet.mockResolvedValue({
       ...request,
@@ -102,5 +129,173 @@ describe('IntegrationApprovalPage', () => {
     expect(
       await screen.findByText('weird:scope', { selector: 'code' })
     ).toBeInTheDocument();
+  });
+
+  it('names the whole account and what it covers today', async () => {
+    mockGet.mockResolvedValue(accountRequest);
+    render(<IntegrationApprovalPage />);
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Laptop wants access to your whole NOUS account',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Covers')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Every project in the workspaces you own or belong to in your organization, including projects added later/
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Archived and deleted workspaces and projects are not included/
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Today: 5 workspaces and 33 projects.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Project')).not.toBeInTheDocument();
+    expect(screen.queryByText('Workspace')).not.toBeInTheDocument();
+  });
+
+  it('counts one workspace and one project in the singular', async () => {
+    mockGet.mockResolvedValue({
+      ...accountRequest,
+      account_summary: { workspace_count: 1, project_count: 1 },
+    });
+    render(<IntegrationApprovalPage />);
+    expect(
+      await screen.findByText('Today: 1 workspace and 1 project.')
+    ).toBeInTheDocument();
+  });
+
+  it('leaves the counts out when the server sends none', async () => {
+    mockGet.mockResolvedValue({ ...accountRequest, account_summary: null });
+    render(<IntegrationApprovalPage />);
+    expect(await screen.findByText('Covers')).toBeInTheDocument();
+    expect(screen.queryByText(/^Today:/)).not.toBeInTheDocument();
+  });
+
+  it('words each permission for the whole account and still shows every raw scope', async () => {
+    mockGet.mockResolvedValue(accountRequest);
+    render(<IntegrationApprovalPage />);
+    expect(
+      await screen.findByText(
+        /Run Local Codex on this computer from a chat in any project in your account/
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/List the workspaces and projects in your account/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/in this workspace/)).not.toBeInTheDocument();
+    for (const scope of accountRequest.scopes) {
+      expect(screen.getByText(scope, { selector: 'code' })).toBeInTheDocument();
+    }
+  });
+
+  it('warns plainly that library changes run without asking', async () => {
+    mockGet.mockResolvedValue(accountRequest);
+    render(<IntegrationApprovalPage />);
+    const warning = await screen.findByRole('alert');
+    expect(warning).toHaveTextContent(
+      'This device can change your library without asking.'
+    );
+    expect(warning).toHaveTextContent(
+      /every project in your account without asking you first/
+    );
+    // Every auto-running action, including the two that reach beyond the
+    // chat's own project.
+    expect(warning).toHaveTextContent(/adding, removing and moving papers/);
+    expect(warning).toHaveTextContent(/creating folders in any workspace/);
+    expect(warning).toHaveTextContent(/renaming any project/);
+    expect(warning).toHaveTextContent(/changing a paper's title and tags/);
+    expect(warning).toHaveTextContent(
+      /Deleting folders and ingesting papers still ask you first/
+    );
+  });
+
+  it('shows no warning for an account request without library:write', async () => {
+    mockGet.mockResolvedValue({
+      ...accountRequest,
+      scopes: ['harness:execute', 'tools:read'],
+    });
+    render(<IntegrationApprovalPage />);
+    expect(await screen.findByText('Covers')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the workspace page as it was', async () => {
+    mockGet.mockResolvedValue({
+      ...workspaceRequest,
+      binding_kind: 'workspace',
+      account_summary: null,
+    });
+    render(<IntegrationApprovalPage />);
+    expect(await screen.findByText('Workspace')).toBeInTheDocument();
+    expect(screen.getByText(/items in this workspace/)).toBeInTheDocument();
+    expect(screen.queryByText(/whole NOUS account/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Covers')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+  describe('a request it cannot describe', () => {
+    const cannotShow = "This request can't be shown here.";
+
+    it.each([
+      ['an unknown binding kind', { ...request, binding_kind: 'organization' }],
+      [
+        'a project request without its project',
+        {
+          ...request,
+          binding_kind: 'project',
+          project_id: null,
+          project_label: null,
+        },
+      ],
+      [
+        'a workspace request without its workspace',
+        {
+          ...workspaceRequest,
+          binding_kind: 'workspace',
+          workspace_id: null,
+          workspace_label: null,
+        },
+      ],
+    ])('refuses %s and cannot be approved', async (_name, body) => {
+      mockGet.mockResolvedValue(body);
+      render(<IntegrationApprovalPage />);
+      expect(await screen.findByText(cannotShow)).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Approve access' })
+      ).toBeDisabled();
+      expect(screen.queryByText('Project')).not.toBeInTheDocument();
+      expect(screen.queryByText(/null/)).not.toBeInTheDocument();
+    });
+
+    it('treats a request with no binding kind and no ids as the whole account', async () => {
+      const { binding_kind: _kind, ...legacy } = accountRequest;
+      mockGet.mockResolvedValue(legacy);
+      render(<IntegrationApprovalPage />);
+      expect(
+        await screen.findByRole('heading', {
+          name: 'Laptop wants access to your whole NOUS account',
+        })
+      ).toBeInTheDocument();
+      expect(screen.getByText('Covers')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'This device can change your library without asking.'
+      );
+      expect(screen.queryByText(cannotShow)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Approve access' })
+      ).toBeEnabled();
+    });
+
+    it('still approves a project request an older backend sent without a kind', async () => {
+      mockGet.mockResolvedValue(request);
+      render(<IntegrationApprovalPage />);
+      expect(await screen.findByText('Thesis (project-1)')).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Approve access' })
+      ).toBeEnabled();
+    });
   });
 });
