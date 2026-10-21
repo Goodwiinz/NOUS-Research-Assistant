@@ -134,6 +134,58 @@ async def authorize_files(
     return documents
 
 
+async def readable_files(
+    db: AsyncSession, *, user: User, document_ids: Sequence[UUID]
+) -> dict[UUID, Document]:
+    """Attachment metadata for READS (history and live replay) only.
+
+    Ownership is still enforced: only the caller's organization's live,
+    supported files are returned. Unlike ``authorize_files``, an attachment that
+    was later deleted, moved or made unsupported is omitted instead of failing
+    the whole transcript. New turns must keep using ``authorize_files``.
+    """
+    if not document_ids or user.organization_id is None:
+        return {}
+    documents = (
+        (
+            await db.execute(
+                select(Document)
+                .where(
+                    Document.id.in_(document_ids),
+                    Document.organization_id == user.organization_id,
+                    Document.is_deleted.is_(False),
+                )
+                .options(
+                    load_only(
+                        Document.id,
+                        Document.title,
+                        Document.mime_type,
+                        Document.document_type,
+                        Document.organization_id,
+                        Document.is_deleted,
+                    )
+                )
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    readable: dict[UUID, Document] = {}
+    for document in documents:
+        try:
+            document_content_type(document)
+        except CompatibilityError:
+            continue
+        readable[document.id] = document
+    if len(readable) != len(set(document_ids)):
+        logger.info(
+            "Omitting %d unavailable attachment(s) from a compatibility read",
+            len(set(document_ids)) - len(readable),
+        )
+    return readable
+
+
 async def normalize_files(
     db: AsyncSession,
     *,

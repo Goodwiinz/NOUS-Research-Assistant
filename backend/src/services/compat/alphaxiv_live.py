@@ -32,6 +32,7 @@ from src.services.compat.alphaxiv_files import (
     authorize_files,
     document_content_type,
     file_url,
+    readable_files,
     reference_id,
 )
 from src.services.compat.alphaxiv_stop import authorize_pdf_chat
@@ -363,11 +364,10 @@ async def read_live_snapshot(*, actor_id: UUID, chat_id: UUID) -> dict[str, Any]
         if metadata is None:
             return None
         await _authorize_paper(db, user, UUID(metadata["paper_id"]))
-        documents = await authorize_files(
-            db,
-            user=user,
-            document_ids=[UUID(item) for item in metadata.get("file_ids", [])],
-        )
+        # Reads omit a later-deleted attachment instead of failing the replay.
+        file_ids = [UUID(item) for item in metadata.get("file_ids", [])]
+        readable = await readable_files(db, user=user, document_ids=file_ids)
+        documents = [readable[item] for item in file_ids if item in readable]
         content = await _user_content(db, run, user, chat_id)
         if (
             hashlib.sha256(content.encode()).hexdigest()

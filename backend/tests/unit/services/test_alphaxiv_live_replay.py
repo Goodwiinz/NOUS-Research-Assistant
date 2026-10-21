@@ -820,9 +820,19 @@ async def test_replay_reauthorizes_durable_file_refs(harness: Harness) -> None:
             update(Document).where(Document.id == file_id).values(is_deleted=True)
         )
         await db.commit()
-    with pytest.raises(CompatibilityError) as caught:
-        await harness.snapshot()
-    assert caught.value.status_code == 404
+    # A later-deleted attachment is omitted from reads; the replay survives.
+    after = await harness.snapshot()
+    assert after["events"][0]["userFiles"] == []
+    assert after["events"][1:] == snapshot["events"][1:]
+    # A foreign-organization reference is never exposed either.
+    async with harness.factory() as db:
+        await db.execute(
+            update(Document)
+            .where(Document.id == file_id)
+            .values(is_deleted=False, organization_id=uuid4())
+        )
+        await db.commit()
+    assert (await harness.snapshot())["events"][0]["userFiles"] == []
 
 
 async def test_live_start_rejects_file_missing_from_canonical_accepted_message(

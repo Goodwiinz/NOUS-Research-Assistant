@@ -220,11 +220,55 @@ async def test_history_file_blocks_chain_before_canonical_input_and_are_stable(
     assert block.parent_message_id is None
     assert next(row for row in first if row.id == U1).parent_message_id == block.id
     assert next(row for row in second if row.type == "input_file").id == block.id
+
+
+async def test_deleting_one_old_attachment_leaves_history_readable(
+    db: AsyncSession,
+) -> None:
+    kept = await _file(db, message_id=U1)
+    removed = await _file(db, message_id=U1)
+    before = await alphaxiv_history.get_chat_messages(db, actor_id=ACTOR, chat_id=CHAT)
+    assert {row.content for row in before if row.type == "input_file"} == {
+        files.file_url(kept.id),
+        files.file_url(removed.id),
+    }
     await db.execute(
-        update(Document).where(Document.id == document.id).values(is_deleted=True)
+        update(Document).where(Document.id == removed.id).values(is_deleted=True)
     )
-    with pytest.raises(CompatibilityError):
-        await alphaxiv_history.get_chat_messages(db, actor_id=ACTOR, chat_id=CHAT)
+    await db.commit()
+    after = await alphaxiv_history.get_chat_messages(db, actor_id=ACTOR, chat_id=CHAT)
+    blocks = [row for row in after if row.type == "input_file"]
+    assert [row.content for row in blocks] == [files.file_url(kept.id)]
+    # The kept block keeps its stable identity and the chain stays connected.
+    assert blocks[0].id == next(
+        row.id for row in before if row.content == files.file_url(kept.id)
+    )
+    assert blocks[0].parent_message_id is None
+    assert next(row for row in after if row.id == U1).parent_message_id == blocks[0].id
+    assert [row.id for row in after if row.type != "input_file"] == [
+        row.id for row in before if row.type != "input_file"
+    ]
+    # New turns stay strict: the deleted attachment cannot be reused.
+    actor = await db.get(User, ACTOR)
+    assert actor is not None
+    with pytest.raises(CompatibilityError) as caught:
+        await files.authorize_files(db, user=actor, document_ids=[removed.id])
+    assert caught.value.status_code == 404
+
+
+async def test_history_never_exposes_a_foreign_organization_attachment(
+    db: AsyncSession,
+) -> None:
+    foreign = await _file(db, message_id=U1)
+    await db.execute(
+        update(Document)
+        .where(Document.id == foreign.id)
+        .values(organization_id=uuid4())
+    )
+    await db.commit()
+    rows = await alphaxiv_history.get_chat_messages(db, actor_id=ACTOR, chat_id=CHAT)
+    assert all(row.type != "input_file" for row in rows)
+    assert all(str(foreign.id) not in row.content for row in rows)
 
 
 async def test_selected_branch_prior_files_reach_rendered_model_context_without_siblings(

@@ -29,9 +29,9 @@ from src.schemas.alphaxiv_history import (
 )
 from src.services.compat.alphaxiv import CompatibilityError, EventProjection
 from src.services.compat.alphaxiv_files import (
-    authorize_files,
     document_content_type,
     file_url,
+    readable_files,
 )
 from src.services.compat.alphaxiv_stop import authorize_pdf_chat
 from src.services.threads import message_branches, workspace_access
@@ -303,14 +303,15 @@ async def get_chat_messages(
             },
             key=str,
         )
-        documents = (
-            await authorize_files(
+        # A later-deleted attachment must not make the whole transcript
+        # unreadable: reads omit it, while new turns stay strict.
+        by_id = (
+            await readable_files(
                 db, user=await _fresh_actor(db, actor_id), document_ids=file_ids
             )
             if file_ids
-            else []
+            else {}
         )
-        by_id = {document.id: document for document in documents}
         return [
             block
             for message in messages
