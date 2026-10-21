@@ -17,7 +17,17 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import create_engine, delete, insert, select, text, update
+from sqlalchemy import (
+    Insert,
+    column,
+    create_engine,
+    delete,
+    insert,
+    select,
+    table,
+    text,
+    update,
+)
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -29,6 +39,7 @@ from src.models import (
     Conversation,
     Organization,
     Thread,
+    ThreadStatus,
     User,
     UserRole,
     Workspace,
@@ -121,9 +132,51 @@ def _migrate(
     )
 
 
-def _grant(ids: dict[str, UUID], organization: str, suffix: str) -> IntegrationGrant:
+# The test migrates to HEAD, which is older than later revisions that add
+# columns to integration_grants (ac01's binding_kind) and threads (pb01's
+# branch columns), so those rows are written through only the columns that
+# exist at HEAD rather than the current model.
+_GRANT_COLUMNS = (
+    "id",
+    "user_id",
+    "organization_id",
+    "project_id",
+    "thread_id",
+    "scopes",
+    "token_hash",
+    "expires_at",
+    "consented_at",
+    "created_at",
+    "updated_at",
+    "is_deleted",
+)
+_GRANTS = table(
+    IntegrationGrant.__tablename__,
+    *(column(name, IntegrationGrant.__table__.c[name].type) for name in _GRANT_COLUMNS),
+)
+
+_THREAD_COLUMNS = (
+    "id",
+    "conversation_id",
+    "source_project_id",
+    "created_by_id",
+    "status",
+    "last_message_at",
+    "message_count",
+    "token_count",
+    "created_at",
+    "updated_at",
+    "is_deleted",
+)
+_THREADS = table(
+    Thread.__tablename__,
+    *(column(name, Thread.__table__.c[name].type) for name in _THREAD_COLUMNS),
+)
+
+
+def _grant(ids: dict[str, UUID], organization: str, suffix: str) -> Insert:
     now = datetime.now(timezone.utc)
-    return IntegrationGrant(
+    return insert(_GRANTS).values(
         id=ids[f"grant-{suffix}"],
         user_id=ids["user"],
         organization_id=ids[organization],
@@ -133,6 +186,9 @@ def _grant(ids: dict[str, UUID], organization: str, suffix: str) -> IntegrationG
         token_hash=hashlib.sha256(str(ids[f"grant-{suffix}"]).encode()).hexdigest(),
         expires_at=now + timedelta(hours=1),
         consented_at=now,
+        created_at=now,
+        updated_at=now,
+        is_deleted=False,
     )
 
 
@@ -195,16 +251,23 @@ def _seed(engine: Engine) -> dict[str, UUID]:
             )
         )
         db.flush()
-        db.add(
-            Thread(
+        now = datetime.now(timezone.utc)
+        db.execute(
+            insert(_THREADS).values(
                 id=ids["thread"],
                 conversation_id=ids["conversation"],
                 source_project_id=ids["project"],
                 created_by_id=ids["user"],
+                status=ThreadStatus.ACTIVE,
+                last_message_at=now,
+                message_count=0,
+                token_count=0,
+                created_at=now,
+                updated_at=now,
+                is_deleted=False,
             )
         )
-        db.flush()
-        db.add(_grant(ids, "org-a", "a"))
+        db.execute(_grant(ids, "org-a", "a"))
         db.commit()
     return ids
 
@@ -257,7 +320,7 @@ async def test_org_scoped_slots_preserve_history_and_refuse_lossy_downgrade(
             .where(User.id == ids["user"])
             .values(organization_id=ids["org-b"])
         )
-        db.add(_grant(ids, "org-b", "b"))
+        await db.execute(_grant(ids, "org-b", "b"))
         await db.commit()
         context = _context(ids, "org-b", "b")
         assert await read_latest(db, context) is None

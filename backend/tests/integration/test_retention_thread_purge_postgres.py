@@ -355,6 +355,7 @@ def _bind_everything(
             organization_id=owner.org,
             user_id=owner.user,
             project_id=owner.project,
+            binding_kind="project",
             thread_id=thread_id,
             grant_id=ids.grant,
             consent_id=ids.consent,

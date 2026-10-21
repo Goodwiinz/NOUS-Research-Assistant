@@ -33,6 +33,20 @@ ACTION_STATES = (
     "outcome_unknown",
 )
 
+# The kind of the grant that stored the row. project: the Collection it
+# targets is the grant's. workspace: workspace_id is the grant's workspace and
+# project_id, when set, the Collection it targets. account: workspace_id is
+# NULL and the row targets exactly one Collection (project_id) or, for
+# create_folder, one workspace (target_workspace_id).
+ACTION_BINDING_KIND_CHECK = (
+    "(binding_kind = 'project' AND project_id IS NOT NULL AND workspace_id IS NULL"
+    " AND target_workspace_id IS NULL)"
+    " OR (binding_kind = 'workspace' AND workspace_id IS NOT NULL"
+    " AND target_workspace_id IS NULL)"
+    " OR (binding_kind = 'account' AND workspace_id IS NULL"
+    " AND (project_id IS NULL) <> (target_workspace_id IS NULL))"
+)
+
 
 class IntegrationToolAction(BaseModel):
     id: Mapped[UUID] = mapped_column(GUID(), primary_key=True, default=uuid4, index=True)  # type: ignore[assignment]  # Typed override of legacy BaseModel.id.
@@ -44,12 +58,9 @@ class IntegrationToolAction(BaseModel):
             "invocation_id",
             name="uq_integration_tool_actions_invocation",
         ),
-        # project_id is the action's target Collection and workspace_id the
-        # binding of the grant that authorised it. A workspace-grant action
-        # aimed at one Collection sets both, so only "at least one" holds.
         CheckConstraint(
-            "project_id IS NOT NULL OR workspace_id IS NOT NULL",
-            name="ck_integration_tool_actions_some_binding",
+            ACTION_BINDING_KIND_CHECK,
+            name="ck_integration_tool_actions_binding_kind",
         ),
     )
     organization_id: Mapped[UUID] = mapped_column(
@@ -62,6 +73,13 @@ class IntegrationToolAction(BaseModel):
         GUID(), ForeignKey("collections.id"), nullable=True
     )
     workspace_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
+    )
+    # No default: the writer states the kind (request_action), so an omitted
+    # one fails NOT NULL instead of storing "project" for an account action.
+    binding_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Where an account grant's create_folder creates the folder.
+    target_workspace_id: Mapped[UUID | None] = mapped_column(
         GUID(), ForeignKey("workspaces.id"), nullable=True, index=True
     )
     thread_id: Mapped[UUID | None] = mapped_column(

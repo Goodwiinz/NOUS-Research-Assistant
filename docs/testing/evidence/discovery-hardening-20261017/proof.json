@@ -1,0 +1,399 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-10-17T15:09:12.926973+00:00",
+  "baseline_source": "aa887a68b88c6d8da0297b3bc752583883150ca2",
+  "source_state": "uncommitted hardening; exact source hashes recorded; publish identity separately",
+  "files": {
+    "evals/harness-mcp-discovery-v1/tests/verify.py": "af5d9e177f10a393a8e1adf27e2d77968d8c9666cb12e2cf66ac671a93d9ca69",
+    "evals/discovery-provider-smoke-v1/probe.py": "65fa2e44c190709c618e4a4b375ee2b86cf11da8118e74ae15962f4ab7331aba",
+    "evals/harness-mcp-discovery-v1/environment/mock_nous/server.py": "daee91ceba6affaedfb21c79daa89a3f2af8af07b7b789f6253e0fe09cc790e7",
+    "evals/harness-mcp-discovery-v1/environment/launcher/launch.py": "25120e4c6abadd6d136ea488e5ee76d6619923c04e52f8ffc7da049067da0534",
+    "evals/harness-mcp-discovery-v1/environment/launcher/bridge_host.py": "9f9b74760061aa37e6f134a0dede66dbca6d5f75f441c7bea285b29e6ca8cc96",
+    "evals/harness-mcp-discovery-v1/environment/launcher/stdio_relay.py": "00a6734d7eda3f0aa1d42282359c2a1c5b77503fb06e930a263d60f5cd0f844b",
+    "backend/tests/unit/evals/test_harness_discovery_verifier.py": "5e43af8ecc98fd93dfcbf0df19ecbe48472a0a99af7b22afca93b98693a6cf91",
+    "backend/tests/unit/evals/test_provider_probe_source_identity.py": "abb63a785d0b11961424e1650aae6651684266dfe75fa79f0407ad958334f766",
+    "backend/tests/unit/evals/test_discovery_bridge_provenance.py": "c99ec97de72321fe8b474230429eacd6401be758d439d4ce13f35e9d2836fdfa",
+    "evals/verify_discovery_trial.py": "04a923a8f15d8852a162be8dd45dae23b3e474362bef2602a3a716bf7d8d54ae",
+    "backend/tests/unit/evals/test_discovery_host_verifier.py": "ef6d31547d09f6786c007230d25323d7a77ca17714108685f343d45bf30a8821"
+  },
+  "reproductions": {
+    "verifier_false_passes": [
+      {
+        "case": "mismatched-paper-fields",
+        "exit_code": 0,
+        "local_uncommitted_audit": "before-mismatched-paper-fields-audit.json"
+      },
+      {
+        "case": "empty-required-search-plus-listing",
+        "exit_code": 0,
+        "local_uncommitted_audit": "before-empty-required-search-plus-listing-audit.json"
+      },
+      {
+        "case": "raw-http-spoofed-node-user-agent",
+        "exit_code": 0,
+        "local_uncommitted_audit": "before-raw-http-spoofed-node-user-agent-audit.json"
+      }
+    ],
+    "optimized_python_compilation_only": {
+      "source_assertions": 13,
+      "normal_prerequisite_assertions": 13,
+      "optimized_prerequisite_assertions": 0,
+      "parser": "LOAD_ASSERTION_ERROR or Python 3.14 LOAD_COMMON_CONSTANT AssertionError"
+    },
+    "scope": "host calibration and local HTTP double, no provider or model trial",
+    "artifact_scope": "owner-only local reproduction records, not committed sibling files"
+  },
+  "declaration_repeat_before": {
+    "same_declaration_execution_calls": 2,
+    "scope": "CLI with execution stub, not provider requests"
+  },
+  "unit": {
+    "passed": 65,
+    "failed": 0,
+    "skipped": 0,
+    "registered_calibration_cases": 19,
+    "scope": "one final combined matrix, not pooled across earlier52/56/62 phases",
+    "optimization": "explicit prerequisite exception observed under python -O",
+    "runtime_identity": "complete distribution/version inventory and interpreter/optimization flags",
+    "attempt_retention": "completed/infrastructure/exception lifecycle plus causal concurrent-claim guard"
+  },
+  "causal_declaration_claim": {
+    "exit_code": 1,
+    "failure": "second concurrent declaration did not raise SourceIdentityError",
+    "source_original_sha256": "8f2363fca4799e122124935a6e0dbc58eacce7c2db5976b5f412c1fc38ad2d12",
+    "restored_full_matrix_exit_code": 0
+  },
+  "manual_isolation_preflight": {
+    "scope": "manual real-MCP isolation preflight, not model trials",
+    "positive_exit": 0,
+    "spoofed_user_agent_http_status": 401,
+    "spoofed_user_agent_verifier_exit": 10,
+    "main_private_credential_visible": false,
+    "prepared_inputs_sha256": "07f5fea7ecdbee3ab72ca3f366f4cbe91b6c301618db6e4cb302588c611efee2"
+  },
+  "limits": [
+    "construction checks are not model trials or deployment evidence",
+    "earlier52/56/62 matrices and16/18-calibration image phases remain separate records",
+    "the current host checker runs in VERIFICATION_START before upload/cleanup; stock in-agent rewards alone cannot gate this task",
+    "the host controller snapshots the answer outside every agent mount and requires native/host agreement plus registered infrastructure exclusions",
+    "complete package versions are bound; arbitrary same-version byte tampering is not attested",
+    "Docker isolation assumes no container escape; deliberate owner deletion/tampering with local claims is outside the guard",
+    "historical Harbor/V5 records remain at their original sources and are not current gates"
+  ],
+  "current_harbor": "NOT RUN for scored models at the hardened source",
+  "current_provider": "NOT RUN at the hardened source",
+  "final_image_admission": {
+    "recorded_at": "2026-10-17T14:04:20.590617+00:00",
+    "scope": "final-source image construction admission, no model trials",
+    "prepared_input_sha256": "95a84dbd1849cc60e1daadd0d32dbacab7139761f6e6bb83f40ddf8bd713e7f8",
+    "three_real_mcp_searches": true,
+    "positive_exit": 0,
+    "spoof_http_status": 401,
+    "spoof_verifier_exit": 10,
+    "calibrations": [
+      {
+        "fixture": "infra-no-catalog.json",
+        "expected": 2,
+        "actual": 2
+      },
+      {
+        "fixture": "infra-required-tool-error.json",
+        "expected": 2,
+        "actual": 2
+      },
+      {
+        "fixture": "pass-after-tool-retry.json",
+        "expected": 0,
+        "actual": 0
+      },
+      {
+        "fixture": "pass.json",
+        "expected": 0,
+        "actual": 0
+      },
+      {
+        "fixture": "wrong-bypassed-bridge.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-empty-required-search-plus-listing.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-fabricated-doi.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-fabricated-id.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-mismatched-paper-fields.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-missing-external.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-spoofed-node-user-agent.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-symlinked-answer.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-truncated-answer.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-uncited-row.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-unreturned-citations.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-unsupported-list-block.json",
+        "expected": 10,
+        "actual": 10
+      }
+    ],
+    "snapshots": [
+      {
+        "service": "bridge",
+        "id": "9b50f35c17f8eb8ed8a4d49502e8005ab24d8e033c60c0528634292456a2cc86",
+        "image": "sha256:f3b7c24be31beebfb48a0696c3aa4c3c1643a085c2f8c115f6e1eb51bb40e576",
+        "credential_mount": true,
+        "networks": [
+          "nous-discovery-hardening-final-20261017_nous-eval"
+        ],
+        "model_keys_present": false
+      },
+      {
+        "service": "main",
+        "id": "790ab8e6535d9c0afec85d7c3fe12c1a4842b278ee7be38de205a96d6cacf978",
+        "image": "sha256:0cd92744501be143ea5e27d268328ed6e37ea6eaf4760fc71628b905683c6be2",
+        "credential_mount": false,
+        "networks": [
+          "nous-discovery-hardening-final-20261017_default",
+          "nous-discovery-hardening-final-20261017_nous-eval"
+        ],
+        "model_keys_present": false
+      },
+      {
+        "service": "mock-nous",
+        "id": "10d129bc7687d9dafc801de33a77d1888c7a38554df44b9c0c25f9cc0681e4b2",
+        "image": "sha256:5c3420019a4c3cba3a7ed68269055582f515ae3910e79eccc0add0f29d44af92",
+        "credential_mount": true,
+        "networks": [
+          "nous-discovery-hardening-final-20261017_nous-eval"
+        ],
+        "model_keys_present": false
+      }
+    ]
+  },
+  "final_image_cleanup": {
+    "owned_project_removed": true,
+    "credential_volume_removed": true,
+    "recorded_at": "2026-10-17T14:04:23.396329+00:00"
+  },
+  "additional_reproductions": {
+    "mixed_record_identifiers": {
+      "exit_before": 0,
+      "scope": "earlier working-tree hardening phase"
+    },
+    "source_label_borrowed_from_identifier_field": {
+      "exit_before": 0,
+      "scope": "earlier working-tree hardening phase"
+    },
+    "root_dns_forged_state": {
+      "scope": "controlled root/DNS state forgery; no model/provider calls",
+      "native_verifier_exit": 0,
+      "authoritative_private_mock_event_count": 0,
+      "hosts_restored": true,
+      "owned_fake_server_stopped": true
+    }
+  },
+  "prior_verifier_delta_mutations": {
+    "records": [
+      {
+        "guard": "spoof-predicate",
+        "exit_code": 1,
+        "causal_failure": "incorrect verifier exit0 instead of10",
+        "fixture": "wrong-spoofed-node-user-agent",
+        "original_source_sha256": "6ce26a8cd021be00d39702a84e076e0d0a78b7fb5740acd641ebba743242100f"
+      },
+      {
+        "guard": "mixed-record",
+        "exit_code": 1,
+        "causal_failure": "incorrect verifier exit0 instead of10",
+        "fixture": "wrong-mixed-record-identifiers",
+        "original_source_sha256": "6ce26a8cd021be00d39702a84e076e0d0a78b7fb5740acd641ebba743242100f"
+      },
+      {
+        "guard": "nested-row",
+        "exit_code": 1,
+        "causal_failure": "incorrect verifier exit0 instead of10",
+        "fixture": "wrong-nested-unsupported-paper",
+        "original_source_sha256": "6ce26a8cd021be00d39702a84e076e0d0a78b7fb5740acd641ebba743242100f"
+      }
+    ],
+    "byte_exact_restoration": true,
+    "restored_full_matrix_exit": 0,
+    "scope": "measured earlier working-tree verifier hash; after exact field parsing, folding nested rows is independently rejected by the field grammar too"
+  },
+  "host_boundary_admission": {
+    "scope": "unscored delta construction; host rejects fake main-state, accepts real isolated mock; 18 in-image calibration exits match",
+    "forged_main_exit": 0,
+    "forged_host_exit": 2,
+    "real_mcp_host_exit": 0,
+    "calibrations": [
+      {
+        "fixture": "infra-no-catalog.json",
+        "expected": 2,
+        "actual": 2
+      },
+      {
+        "fixture": "infra-required-tool-error.json",
+        "expected": 2,
+        "actual": 2
+      },
+      {
+        "fixture": "pass-after-tool-retry.json",
+        "expected": 0,
+        "actual": 0
+      },
+      {
+        "fixture": "pass.json",
+        "expected": 0,
+        "actual": 0
+      },
+      {
+        "fixture": "wrong-bypassed-bridge.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-empty-required-search-plus-listing.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-fabricated-doi.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-fabricated-id.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-mismatched-paper-fields.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-missing-external.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-mixed-record-identifiers.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-nested-unsupported-paper.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-spoofed-node-user-agent.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-symlinked-answer.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-truncated-answer.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-uncited-row.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-unreturned-citations.json",
+        "expected": 10,
+        "actual": 10
+      },
+      {
+        "fixture": "wrong-unsupported-list-block.json",
+        "expected": 10,
+        "actual": 10
+      }
+    ],
+    "prepared_input_sha256": "64c72f0437de799237f2294a830406f1fbd7fa57b7a9deb884cb70a160425a51",
+    "verifier_overlay_sha256": "b6683c4a266fc84f75733b34061f1b8d52c9ab0e1ff7dfb48c892dedefc7776b",
+    "overlay_scope": "current tests uploaded after only diagnostic/comment and host fixture-location changes to the prepared verifier",
+    "mock_container_id": "83ec7d7f71c80ceaeea708b99bd32c0cdb63a962f833d6c41d29bbda02a04045"
+  },
+  "oracle_fields_admission": {
+    "scope": "unscored Oracle construction control;19 in-image calibration exits match, native reward1 and authoritative host exit0; not model acceptance",
+    "host_exit": 0,
+    "native_reward": 1.0,
+    "calibration_count": 19,
+    "expected_exits_match": true,
+    "hook_phase": "verification_start",
+    "before_native_verifier_upload": true,
+    "cleanup": "Harbor delete=True completed; verify remaining owned containers separately",
+    "configuration_sha256": "6c5797a708e1b89e9c03a8956366bf06cd66730c6e49a9a7887b82b276b009bb",
+    "controller_sha256": "fba7f4d6a07d53738860b3588f1be5be8ef2cd795598b1452483c102606e9626"
+  },
+  "local_quality_gate": {
+    "exit_code": 0,
+    "unit_suite": "separate65-case matrix; whole-branch script used --skip-tests",
+    "log_sha256": "b227a3de8828f56f9f0533c94402125c78b505526fa4ebb4e00d086347c4cfe7",
+    "skipped": [
+      "generated types unchanged",
+      "targeted migration delta unchanged",
+      "empty migration replay unchanged"
+    ]
+  },
+  "oracle_controls_cleanup": {
+    "inspected_owned_container_ids": 6,
+    "remaining": [],
+    "scope": "both unscored Harbor controls; SDK delete=True"
+  },
+  "final_fable_delta": {
+    "session_id": "4c8f07a0-8cb6-4d76-b954-21fc4809600c",
+    "model": "Fable",
+    "relay_exit_code": 0,
+    "read_only_violation": false,
+    "frozen_files": 44,
+    "primary_fingerprints_match": true,
+    "verdict": "no confirmed blocker for construction publication or fresh declared experiments",
+    "result_sha256": "33093f90cbf2a2909b777b8662e8991d78ba31a6997f5d21a12cacddaec1749a",
+    "scope": "read-only source/evidence review; reviewer ran no commands or measurements and recomputed no hashes"
+  }
+}

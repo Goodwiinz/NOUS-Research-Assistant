@@ -9,9 +9,9 @@ from pydantic import BaseModel
 
 class ConnectionConsent(BaseModel):
     request_id: UUID
-    # Exactly one binding (ck_integration_grant_requests_one_binding): one
-    # project, or one workspace and every live project in it (Plan 07).
-    kind: Literal["project", "workspace"]
+    # One project, one workspace and every live project in it (Plan 07), or
+    # the whole account (ids and labels null; the page says "Whole account").
+    kind: Literal["project", "workspace", "account"]
     project_id: UUID | None
     project_label: str | None
     workspace_id: UUID | None

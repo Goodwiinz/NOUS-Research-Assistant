@@ -1,4 +1,5 @@
 import { ReauthenticationRequired, ToolRequestRejected } from "../mcp/client.ts";
+import { pinnedArguments, pinnedMessage, pinnedProperty } from "../mcp/pin.ts";
 import type { LocalTool } from "../mcp/server.ts";
 import type { ActionHttpClient, ActionStatus } from "./client.ts";
 
@@ -31,6 +32,7 @@ const FIELDS = {
   project_id: { valid: uuid, expected: "a project UUID" },
   from_project_id: { valid: uuid, expected: "a project UUID" },
   to_project_id: { valid: uuid, expected: "a project UUID" },
+  workspace_id: { valid: uuid, expected: "a NOUS workspace UUID" },
   name: { valid: text, expected: "non-empty text" },
   description: { valid: (value: unknown) => typeof value === "string", expected: "text" },
   paper_ids: {
@@ -56,11 +58,11 @@ type ActionFields = {
  * is a selector NOUS checks against the grant before storing anything.
  */
 const ACTION_FIELDS: Record<string, ActionFields> = {
-  create_project_note: { required: ["title", "content"], optional: ["tags"] },
+  create_project_note: { required: ["title", "content"], optional: ["tags", "project_id"] },
   save_papers_to_folder: { required: ["document_ids", "project_id"] },
   remove_papers_from_folder: { required: ["document_ids", "project_id"] },
   move_papers_between_folders: { required: ["document_ids", "from_project_id", "to_project_id"] },
-  create_folder: { required: ["name"], optional: ["description"], nullable: ["description"] },
+  create_folder: { required: ["name"], optional: ["description", "workspace_id"], nullable: ["description"] },
   rename_folder: { required: ["project_id", "name"] },
   delete_folder: { required: ["project_id"] },
   update_document_metadata: { required: ["document_id"], optional: ["title", "tags"], atLeastOneOptional: true },
@@ -124,7 +126,11 @@ const INPUT_PROPERTIES = {
   project_id: {
     ...UUID_STRING,
     description:
-      "The folder (NOUS project) to act on; list_library gives the ids. A project connection can only name its own project. ingest_arxiv_papers: the folder that receives the papers, required on a workspace connection",
+      "The folder (NOUS project) to act on; list_library gives the ids. A project connection can only name its own project. ingest_arxiv_papers: the folder that receives the papers, required on a workspace connection; on an account connection every action that names a folder needs it, and create_project_note takes the note's project",
+  },
+  workspace_id: {
+    ...UUID_STRING,
+    description: "create_folder on an account connection: the NOUS workspace the new folder goes in; list_library gives the ids",
   },
   from_project_id: { ...UUID_STRING, description: "move_papers_between_folders: the folder the papers leave" },
   to_project_id: { ...UUID_STRING, description: "move_papers_between_folders: the folder the papers join" },
@@ -175,21 +181,29 @@ function result(status: ActionStatus): { text: string; structured: Record<string
 }
 
 /**
+ * Actions a run pinned to one project cannot take: a new folder or a move
+ * between two (a project connection cannot either), and a paper's metadata,
+ * which names a document, not a project the bridge can hold to the pin.
+ */
+const UNPINNED_ACTIONS = new Set(["create_folder", "move_papers_between_folders", "update_document_metadata"]);
+
+/**
  * `request_action`: ask NOUS for one note or library action. NOUS decides
  * whether it runs at once (a reversible library change under library:write)
  * or waits for the user's approval; the model can never approve.
  */
-export function requestActionTool(client: ActionHttpClient): LocalTool {
+export function requestActionTool(client: ActionHttpClient, pin?: string): LocalTool {
   return {
     descriptor: {
       name: "request_action",
       description:
-        "Ask NOUS to change the user's library or to add a note to the granted project. Library actions save papers to a folder (a NOUS project), remove them from one or move them between two, create, rename or delete a folder, edit a paper's title or tags, or ingest arXiv papers into a folder; list_library gives the folder ids. Pass the action and only its fields. A project connection acts on its own project only (no new folders, no moves); a workspace connection cannot add a note. With library:write the reversible changes run at once; a note, a folder deletion, an arXiv ingest, and any action without library:write wait until the user approves it in NOUS, and the reply gives the approval link. Reuse the same invocation_id to retry safely; NOUS returns the stored request.",
+        "Ask NOUS to change the user's library or to add a note to the granted project. Library actions save papers to a folder (a NOUS project), remove them from one or move them between two, create, rename or delete a folder, edit a paper's title or tags, or ingest arXiv papers into a folder; list_library gives the folder ids. Pass the action and only its fields. A project connection acts on its own project only (no new folders, no moves); a workspace connection cannot add a note. With library:write the reversible changes run at once; a note, a folder deletion, an arXiv ingest, and any action without library:write wait until the user approves it in NOUS, and the reply gives the approval link. Reuse the same invocation_id to retry safely; NOUS returns the stored request." +
+        (pin ? ` This Local Codex run acts on NOUS project ${pin} only; project_id is filled in.` : ""),
       inputSchema: {
         type: "object",
         additionalProperties: false,
         required: ["action", "invocation_id"],
-        properties: INPUT_PROPERTIES,
+        properties: pin ? { ...INPUT_PROPERTIES, project_id: pinnedProperty(pin) } : INPUT_PROPERTIES,
       },
     },
     async call(args) {
@@ -197,7 +211,19 @@ export function requestActionTool(client: ActionHttpClient): LocalTool {
       if (typeof action !== "string" || !Object.hasOwn(ACTION_FIELDS, action))
         return { text: `request_action supports action=${ACTIONS.join(" | ")}`, isError: true };
       if (!uuid(invocationId)) return { text: "request_action requires a UUID invocation_id", isError: true };
-      const fields = actionArguments(action, args);
+      let given = args;
+      if (pin !== undefined) {
+        if (UNPINNED_ACTIONS.has(action))
+          return {
+            text: `request_action ${action}: ${pinnedMessage(pin)}; start Codex yourself with this computer's account connection (nous-harness mcp install) for this action`,
+            isError: true,
+          };
+        const { required, optional = [] } = ACTION_FIELDS[action]!;
+        const pinned = pinnedArguments(pin, args, [...required, ...optional].includes("project_id"));
+        if (typeof pinned === "string") return { text: `request_action ${action}: ${pinned}`, isError: true };
+        given = pinned;
+      }
+      const fields = actionArguments(action, given);
       if (typeof fields === "string") return { text: `request_action ${action}: ${fields}`, isError: true };
       try {
         return result(await client.request(action, invocationId, fields));

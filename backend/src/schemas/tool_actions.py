@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from src.schemas.integration_context import BindingKind
 from src.schemas.integration_tools import ToolResult
 
 ActionState = Literal[
@@ -28,6 +29,10 @@ class ActionActor(BaseModel):
     # grant its workspace. Native requests are project-bound.
     project_id: UUID | None
     workspace_id: UUID | None = None
+    # Set by the integrations router from the resolved grant. None: derived
+    # from project_id / workspace_id (services/agent/tool_actions._actor_kind),
+    # never "account".
+    binding_kind: BindingKind | None = None
     thread_id: UUID | None = None
     run_id: UUID | None = None
     # None only for trusted native NOUS requests.
