@@ -19,6 +19,7 @@ The guards returned automatically when each process ended. All focused tests
 passed again under the unchanged production modules.
 """
 
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -362,6 +363,46 @@ async def test_invalid_raw_upload_never_stores_or_schedules(
     assert list((await db.scalars(select(Document.id))).all()) == before
     assert not list(tmp_path.rglob("*.txt"))
     assert not list(tmp_path.rglob("*.pdf"))
+
+
+@pytest.mark.parametrize(
+    "native_status,public_status,level",
+    [(500, 503, logging.ERROR), (502, 503, logging.ERROR), (422, 400, logging.WARNING)],
+)
+async def test_native_upload_http_errors_are_logged_and_mapped_safely(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    native_status: int,
+    public_status: int,
+    level: int,
+) -> None:
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    secret = "connection to db-internal:5432 refused"
+
+    async def failing_upload(*_args: Any, **_kwargs: Any) -> None:
+        raise HTTPException(native_status, secret)
+
+    monkeypatch.setattr(files.FileService, "upload_file", failing_upload)
+    payload = b"Native failure evidence."
+    with caplog.at_level(logging.WARNING, logger=files.logger.name):
+        with pytest.raises(CompatibilityError) as caught:
+            await files.upload_file(
+                db,
+                actor_id=ACTOR,
+                encoded_filename="failure.txt",
+                content_type="text/plain",
+                content_length=len(payload),
+                chunks=_chunks(payload),
+            )
+    assert caught.value.status_code == public_status
+    assert str(caught.value) == "File upload failed"
+    assert secret not in str(caught.value)
+    records = [r for r in caplog.records if r.name == files.logger.name]
+    assert [r.levelno for r in records] == [level]
+    assert records[0].exc_info is not None
+    assert str(native_status) in records[0].getMessage()
 
 
 async def test_streamed_size_limit_applies_without_content_length(

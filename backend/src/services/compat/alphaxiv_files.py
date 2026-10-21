@@ -290,6 +290,19 @@ async def upload_file(
             raise CompatibilityError(
                 409, "Identical file already exists in this organization"
             ) from exc
+        # The native detail may carry internal text; log it, answer generically.
+        if exc.status_code >= 500:
+            logger.error(
+                "Compatibility upload failed in FileService (status=%s)",
+                exc.status_code,
+                exc_info=True,
+            )
+            raise CompatibilityError(503, "File upload failed") from exc
+        logger.warning(
+            "Compatibility upload rejected by FileService (status=%s)",
+            exc.status_code,
+            exc_info=True,
+        )
         raise CompatibilityError(400, "File upload failed") from exc
     except FileStorageError as exc:
         logger.exception("Compatibility file storage failed")
