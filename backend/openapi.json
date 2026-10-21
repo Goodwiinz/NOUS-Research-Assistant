@@ -18140,6 +18140,27 @@
             "title": "Document Id",
             "type": "string"
           },
+          "fallback": {
+            "anyOf": [
+              {
+                "enum": [
+                  "disabled",
+                  "provider_error",
+                  "timeout",
+                  "no_results",
+                  "no_text",
+                  "source_too_large"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set when page ranking did not run or returned nothing and the context is a keyword excerpt of the whole document instead.",
+            "title": "Fallback"
+          },
           "model": {
             "anyOf": [
               {

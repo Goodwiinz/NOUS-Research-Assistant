@@ -3829,11 +3829,14 @@ async def test_page_filter_all_blank_candidates_use_fulltext(
     assert "page_filter" not in result.content[0]
 
 
-@pytest.mark.parametrize("failure", ["raise", "timeout", "disabled", "outcome"])
+@pytest.mark.parametrize(
+    "failure", ["raise", "timeout", "disabled", "outcome", "no_results"]
+)
 async def test_page_filter_failure_matches_fulltext(
     db: AsyncSession,
     context: IntegrationContext,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     failure: str,
 ) -> None:
     from src.core.config import settings
@@ -3854,14 +3857,26 @@ async def test_page_filter_failure_matches_fulltext(
         if failure == "outcome":
             service.last_failure = {"reason": "upstream_http_error", "error": "private"}
             return []
+        if failure == "no_results":
+            # A successful empty ranking must not answer with no context.
+            return []
         raise RuntimeError("private exception")
 
     monkeypatch.setattr(service, "rerank", fail)
     if failure == "disabled":
         monkeypatch.setattr(service, "_enabled", False)
     monkeypatch.setattr(read_tools, "PAGE_RERANK_TIMEOUT_SECONDS", 0.01, raising=False)
+    caplog.set_level("INFO", logger="src.services.search.page_filter")
     result = await _retrieve_one(db, context)
     assert result == old
+    reason = {"raise": "provider_error", "outcome": "provider_error"}.get(
+        failure, failure
+    )
+    assert any(
+        f"reason={reason}" in record.getMessage()
+        and str(DOC_IN_PROJECT) in record.getMessage()
+        for record in caplog.records
+    )
 
 
 # Mutation-verified: removing Collection.id == project_id from

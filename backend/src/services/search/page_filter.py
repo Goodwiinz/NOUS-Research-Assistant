@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Iterator
+from typing import Any, Awaitable, Callable, Iterator, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,9 @@ MAX_PAGE_SCAN_SOURCE_CHARS = 16 * 1024 * 1024
 PAGE_RERANK_TIMEOUT_SECONDS = 10.0
 Page = tuple[int, str, int]
 RankedPage = tuple[int, str, int, float]
+PageFilterFallbackReason = Literal[
+    "disabled", "provider_error", "timeout", "no_results", "no_text", "source_too_large"
+]
 
 _PAGE_MARKER = re.compile(r"(?m)^[ \t]*\[Page[ \t]+(\d{1,9})\][ \t]*\r?$")
 _QUERY_TERM = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{3,}")
@@ -227,6 +230,62 @@ class PageSelection:
         return result
 
 
+@dataclass(frozen=True)
+class PageFilterFallback:
+    """Ranking did not run or produced nothing; callers use a text excerpt."""
+
+    reason: PageFilterFallbackReason
+    total_pages: int
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "accepted_pages": [],
+            "total_pages": self.total_pages,
+            "short_circuited": False,
+            "model": None,
+            "fallback": self.reason,
+        }
+
+
+try:
+    from prometheus_client import REGISTRY, Counter
+
+    _existing = getattr(REGISTRY, "_names_to_collectors", {}).get(
+        "pdf_page_filter_fallback_total"
+    )
+    _FALLBACKS: Any = _existing or Counter(
+        "pdf_page_filter_fallback_total",
+        "PDF page selections that fell back to a keyword excerpt or full-text search",
+        ["surface", "reason"],
+    )
+except Exception:  # pragma: no cover - metrics are optional
+    _FALLBACKS = None
+
+
+def record_page_filter_fallback(
+    reason: PageFilterFallbackReason, *, document_id: str, surface: str
+) -> None:
+    """Log and count a degraded page selection at the point of fallback."""
+    level = logging.WARNING if reason in {"provider_error", "timeout"} else logging.INFO
+    logger.log(
+        level,
+        "PDF page filter fell back: reason=%s document_id=%s surface=%s",
+        reason,
+        document_id,
+        surface,
+        extra={
+            "page_filter_fallback": reason,
+            "document_id": document_id,
+            "surface": surface,
+        },
+    )
+    if _FALLBACKS is not None:
+        try:
+            _FALLBACKS.labels(surface=surface, reason=reason).inc()
+        except Exception:  # pragma: no cover - never fail a turn on metrics
+            logger.debug("page filter fallback metric failed", exc_info=True)
+
+
 async def rank_pages(
     pages: list[Page],
     total_pages: int,
@@ -234,10 +293,10 @@ async def rank_pages(
     *,
     top_n: int,
     short_circuit: int,
-    timeout_seconds: float = PAGE_RERANK_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
     before_provider: Callable[[], Awaitable[Any]] | None = None,
-) -> PageSelection | None:
-    """Return selected pages in page order; None requests the caller's fallback.
+) -> PageSelection | PageFilterFallback:
+    """Return selected pages in page order, or the reason to fall back.
 
     An optional hook lets a read-only caller release a connection before remote
     I/O. Native chat closes its own read session before calling this function.
@@ -245,14 +304,14 @@ async def rank_pages(
     from src.services.search.cohere_rerank_service import cohere_rerank_service
 
     if not any(page[1] for page in pages):
-        return None
+        return PageFilterFallback("no_text", total_pages)
     if total_pages <= short_circuit:
         accepted = [(number, text, length, 1.0) for number, text, length in pages]
         return PageSelection(
             sorted(accepted, key=lambda page: page[0]), total_pages, True
         )
     if not cohere_rerank_service.is_enabled:
-        return None
+        return PageFilterFallback("disabled", total_pages)
     candidates = [page for page in pages if page[1]]
     if before_provider is not None:
         await before_provider()
@@ -267,16 +326,23 @@ async def rank_pages(
                 ],
                 top_n=top_n,
             ),
-            timeout=timeout_seconds,
+            timeout=(
+                PAGE_RERANK_TIMEOUT_SECONDS
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
         )
         if not outcome.succeeded:
-            return None
+            return PageFilterFallback("provider_error", total_pages)
         scores = {result.index: result.relevance_score for result in outcome.results}
         accepted = [
             (number, text, length, scores[index])
             for index, (number, text, length) in enumerate(candidates)
             if index in scores
         ]
+        if not accepted:
+            # An empty ranking would answer with no paper context at all.
+            return PageFilterFallback("no_results", total_pages)
         accepted.sort(key=lambda page: page[0])
         return PageSelection(
             accepted,
@@ -285,9 +351,11 @@ async def rank_pages(
             cohere_rerank_service.model,
             (time.monotonic() - started) * 1000,
         )
+    except asyncio.TimeoutError:
+        return PageFilterFallback("timeout", total_pages)
     except Exception:
         logger.warning("PDF page rerank unavailable", exc_info=True)
-        return None
+        return PageFilterFallback("provider_error", total_pages)
 
 
 def json_text_prefix(text: str, budget: int, *, ensure_ascii: bool = False) -> str:

@@ -556,7 +556,68 @@ async def test_provider_failure_falls_back_only_inside_selected_document(
     assert contexts[0]["score_source"] == "attachment"
     assert "page_number" not in contexts[0]
     assert statuses[0]["status"] == "ready"
-    assert metadata == {}
+    assert metadata["fallback"] == "provider_error"
+    assert metadata["accepted_pages"] == []
+
+
+def _rerank_failure(kind: str) -> Any:
+    if kind == "timeout":
+
+        async def slow(*args: Any, **kwargs: Any) -> RerankOutcome:
+            import asyncio
+
+            await asyncio.sleep(5)
+            raise AssertionError("timeout should fire first")
+
+        return slow
+    if kind == "provider_error":
+        return AsyncMock(
+            return_value=RerankOutcome([], failure={"reason": "http_error"})
+        )
+    return AsyncMock(return_value=RerankOutcome([]))
+
+
+@pytest.mark.parametrize(
+    "kind", ["disabled", "provider_error", "timeout", "no_results", "too_large"]
+)
+async def test_page_filter_fallback_reason_reaches_metadata_and_log(
+    pdf_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+) -> None:
+    from src.services.agent.schemas import PageFilterResponse
+    from src.services.search import page_filter
+
+    await _change(
+        pdf_env,
+        content_text="\n".join(
+            f"[Page {number}]\nsource {number}" for number in range(1, 10)
+        ),
+    )
+    monkeypatch.setattr(
+        cohere_rerank_service, "rerank_with_outcome", _rerank_failure(kind)
+    )
+    if kind == "disabled":
+        monkeypatch.setattr(cohere_rerank_service, "_enabled", False)
+    if kind == "timeout":
+        monkeypatch.setattr(page_filter, "PAGE_RERANK_TIMEOUT_SECONDS", 0.01)
+    if kind == "too_large":
+        monkeypatch.setattr(page_filter, "MAX_PAGE_SCAN_SOURCE_CHARS", 16)
+    reason = "source_too_large" if kind == "too_large" else kind
+    caplog.set_level("INFO", logger=page_filter.logger.name)
+    contexts, statuses, metadata = await _load(pdf_env)
+    # The excerpt is still the selected paper, now with a visible reason.
+    assert len(contexts) == 1 and "page_number" not in contexts[0]
+    assert statuses[0]["status"] == "ready"
+    assert metadata["fallback"] == reason
+    assert metadata["document_id"] == str(pdf_env.document)
+    assert PageFilterResponse.model_validate(metadata).fallback == reason
+    assert any(
+        f"reason={reason}" in record.getMessage()
+        and str(pdf_env.document) in record.getMessage()
+        for record in caplog.records
+    )
 
 
 async def test_native_rag_update_carries_selected_page_provenance(

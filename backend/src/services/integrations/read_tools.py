@@ -63,9 +63,10 @@ from src.services.search.page_filter import (
     MAX_PAGE_FILTER_SOURCE_CHARS,
     MAX_RERANK_PAGES,
     PAGE_RERANK_TIMEOUT_SECONDS,
+    PageFilterFallback,
 )
 from src.services.search.page_filter import json_text_prefix as _json_text_prefix
-from src.services.search.page_filter import rank_pages
+from src.services.search.page_filter import rank_pages, record_page_filter_fallback
 from src.services.search.page_filter import scan_pages as _scan_pages
 
 logger = logging.getLogger(__name__)
@@ -833,6 +834,10 @@ async def _retrieve_document_pages(
         return _unavailable().content[0]
     title, content_text = row
     if len(content_text or "") > MAX_PAGE_FILTER_SOURCE_CHARS:
+        # Full-text search still covers the whole document; record the reason.
+        record_page_filter_fallback(
+            "source_too_large", document_id=document_id, surface="integration"
+        )
         return None
     pages, total_pages = await run_in_threadpool(
         _scan_pages,
@@ -867,7 +872,10 @@ async def _retrieve_document_pages(
         is None
     ):
         return _unavailable().content[0]
-    if selection is None:
+    if isinstance(selection, PageFilterFallback):
+        record_page_filter_fallback(
+            selection.reason, document_id=document_id, surface="integration"
+        )
         return None
     accepted = selection.pages
     return _bound_page_result(

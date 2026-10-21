@@ -1269,6 +1269,7 @@ def _page_filter_from_event(event: Mapping[str, Any]) -> Optional[Dict[str, Any]
     try:
         return PageFilterResponse.model_validate(raw).model_dump(mode="json")
     except ValidationError:
+        logger.warning("Dropped invalid page_filter stream metadata", exc_info=True)
         return None
 
 

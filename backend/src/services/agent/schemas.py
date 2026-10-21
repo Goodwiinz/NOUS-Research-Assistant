@@ -28,7 +28,7 @@ from pydantic import (
 from src.services.agent._sanitize import sanitize_page_context
 from src.services.agent._uuid import UUID_STRICT_PATTERN
 from src.services.agent.reasoning import ReasoningEffort, validate_reasoning_override
-from src.services.search.page_filter import MAX_RERANK_PAGES
+from src.services.search.page_filter import MAX_RERANK_PAGES, PageFilterFallbackReason
 
 StrictUUIDString = Annotated[str, StringConstraints(pattern=UUID_STRICT_PATTERN)]
 PdfPageIndex = Annotated[int, Field(strict=True, ge=0)]
@@ -374,6 +374,13 @@ class PageFilterResponse(BaseModel):
     timing_ms: Optional[PageFilterTiming] = None
     priorities: List[PageFilterPriority] = Field(default_factory=list, max_length=100)
     selection_page_range: Optional[PdfPageRange] = None
+    fallback: Optional[PageFilterFallbackReason] = Field(
+        default=None,
+        description=(
+            "Set when page ranking did not run or returned nothing and the "
+            "context is a keyword excerpt of the whole document instead."
+        ),
+    )
 
 
 class RagContextPayload(BaseModel):

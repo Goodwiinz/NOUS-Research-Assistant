@@ -151,10 +151,33 @@ def test_filter_only_change_emits_new_snapshot() -> None:
     assert updated != fingerprint
 
 
-def test_invalid_filter_metadata_is_not_exposed() -> None:
+def test_invalid_filter_metadata_is_not_exposed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     event = _filter_event()
     event["data"]["output"]["page_filter"]["accepted_pages"] = [-1]
+    caplog.set_level("WARNING", logger="src.api.agent.streaming")
     assert "page_filter" not in _rag_context_event_payload(event, [])
+    # Dropping evidence is logged with the validation error, never silent.
+    assert any(
+        "invalid page_filter" in record.getMessage() and record.exc_info
+        for record in caplog.records
+    )
+
+
+def test_fallback_reason_reaches_the_stream_projection() -> None:
+    event = _filter_event()
+    event["data"]["output"]["page_filter"] = {
+        "document_id": str(uuid4()),
+        "accepted_pages": [],
+        "total_pages": 300,
+        "short_circuited": False,
+        "model": None,
+        "fallback": "timeout",
+    }
+    payload = _rag_context_event_payload(event, [])
+    assert payload["page_filter"]["fallback"] == "timeout"
+    assert payload["page_filter"]["accepted_pages"] == []
 
 
 def test_new_turn_clears_page_range_filter_and_document_only_mode() -> None:

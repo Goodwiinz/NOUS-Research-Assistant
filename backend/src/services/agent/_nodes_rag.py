@@ -512,9 +512,11 @@ async def _load_page_filtered_attachment(
     from src.services.search.page_filter import (
         MAX_PAGE_SCAN_SOURCE_CHARS,
         MAX_RERANK_PAGES,
+        PageFilterFallback,
         PageSelection,
         highest_page_number,
         rank_pages,
+        record_page_filter_fallback,
         scan_pages,
     )
     from src.services.threads import workspace_access
@@ -567,7 +569,9 @@ async def _load_page_filtered_attachment(
 
     # No connection is retained through the parser worker or provider await.
     source = source or ""
-    selection = None
+    selection: PageSelection | PageFilterFallback = PageFilterFallback(
+        "source_too_large", 0
+    )
     if len(source) <= MAX_PAGE_SCAN_SOURCE_CHARS:
         page_range = None
         if selection_page_range is not None:
@@ -604,8 +608,12 @@ async def _load_page_filtered_attachment(
                 top_n=settings.RETRIEVE_PASSAGES_PAGE_TOP_N,
                 short_circuit=settings.RETRIEVE_PASSAGES_PAGE_SHORT_CIRCUIT,
             )
-    if selection_page_range is not None and selection is None:
-        return unavailable
+    if isinstance(selection, PageFilterFallback):
+        if selection_page_range is not None:
+            return unavailable
+        record_page_filter_fallback(
+            selection.reason, document_id=str(document_id), surface="native"
+        )
 
     # A caller, document, or ancestor revoked during parsing/reranking must
     # lose access even when the provider failed and we'd use an excerpt.
@@ -631,13 +639,18 @@ async def _load_page_filtered_attachment(
         "title": safe_title,
         "context_origin": "attachment",
     }
-    if selection is None:
+    if isinstance(selection, PageFilterFallback):
         # Whole-document excerpt: the term search spans every page read.
         excerpt = await run_in_threadpool(
             _attachment_excerpt, source[:MAX_PAGE_SCAN_SOURCE_CHARS], query
         )
         if not excerpt.strip():
             return unavailable
+        # The client sees why page ranking degraded to a keyword excerpt.
+        if page_filter_out is not None:
+            page_filter_out.update(
+                {"document_id": str(document_id), **selection.metadata()}
+            )
         return [
             {**base, "content": excerpt, "score": 1.0, "score_source": "attachment"}
         ], [_attachment_status(document_id, "ready", title)]
