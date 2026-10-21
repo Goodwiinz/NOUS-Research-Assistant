@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from src.schemas.alphaxiv_files import AlphaXivFileReference
+from src.services.agent.schemas import validate_pdf_page_range
 
 
 class AlphaXivChatFields(BaseModel):
@@ -65,9 +66,13 @@ class AlphaXivChatFields(BaseModel):
     def ordered_page_range(
         cls, value: Optional[Tuple[int, int]]
     ) -> Optional[Tuple[int, int]]:
-        if value is not None and (value[0] < 0 or value[1] < value[0]):
-            raise ValueError("selectionPageRange must be nonnegative and ordered")
-        return value
+        if value is None:
+            return None
+        if value[0] < 0:
+            raise ValueError("selectionPageRange must be nonnegative")
+        # Same order and span bounds as the native request, so an oversized
+        # range is a 422 here rather than a failure inside prepare_request.
+        return validate_pdf_page_range(value)
 
 
 class AlphaXivChatRequest(AlphaXivChatFields):

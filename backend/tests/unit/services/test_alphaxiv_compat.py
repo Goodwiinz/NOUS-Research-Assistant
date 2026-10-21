@@ -457,3 +457,12 @@ def test_reasoning_and_output_keep_distinct_stable_content_indices() -> None:
     assert [event["index"] for event in events] == [0, 1, 1]
     assert projection.project("done", {}) == [{"type": "run_end", "kind": "completed"}]
     assert projection.project("error", {"error": "late"}) == []
+
+
+@pytest.mark.parametrize(
+    "page_range", [[0, 100], [5, 2], [-1, 3]], ids=["too-wide", "reversed", "negative"]
+)
+def test_selection_page_range_matches_native_bounds(page_range: list[int]) -> None:
+    with pytest.raises(ValidationError):
+        _body(selectionPageRange=page_range)
+    assert _body(selectionPageRange=[0, 99]).selection_page_range == (0, 99)
