@@ -908,9 +908,13 @@ def test_a_project_folder_names_its_project_and_an_account_folder_names_none() -
     # The wire contract of /devices/{id}/workspaces keeps project_id required:
     # an account folder is registered through its own model and route.
     with pytest.raises(ValidationError):
-        WorkspaceBindingCreate(label="repo", workspace_id=uuid4())
+        WorkspaceBindingCreate(  # type: ignore[call-arg]
+            label="repo", workspace_id=uuid4()
+        )
     with pytest.raises(ValidationError):
-        WorkspaceBindingCreate(label="repo", workspace_id=uuid4(), project_id=None)
+        WorkspaceBindingCreate(
+            label="repo", workspace_id=uuid4(), project_id=None  # type: ignore[arg-type]
+        )
     with pytest.raises(ValidationError):
         AccountWorkspaceBindingCreate(
             label="repo", workspace_id=uuid4(), project_id=None  # type: ignore[call-arg]
