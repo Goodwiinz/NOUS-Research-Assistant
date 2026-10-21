@@ -88,6 +88,7 @@ from src.models.document import Document, DocumentType, ProcessingStatus
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.integration_handoff import IntegrationHandoff
 from src.models.organization import Organization
+from src.models.project_thread import ProjectThread
 from src.models.research_project import ResearchProject
 from src.models.research_project_role import ResearchProjectRoleAssignment
 from src.models.thread import Thread
@@ -124,6 +125,7 @@ _MODELS: list[Any] = [
     CollectionDocument,
     Conversation,
     Thread,
+    ProjectThread,
     ChatMessage,
     AgentRuntimeSnapshot,
     AgentRun,

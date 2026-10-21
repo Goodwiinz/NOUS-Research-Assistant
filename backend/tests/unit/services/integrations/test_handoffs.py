@@ -14,6 +14,7 @@ from src.models.collection import Collection
 from src.models.conversation import Conversation
 from src.models.integration_handoff import IntegrationHandoff
 from src.models.organization import Organization
+from src.models.project_thread import ProjectThread
 from src.models.thread import Thread
 from src.models.user import User
 from src.models.workspace import Workspace, WorkspaceMember
@@ -87,6 +88,7 @@ async def db() -> AsyncIterator[AsyncSession]:
         Collection,
         Conversation,
         Thread,
+        ProjectThread,
         Artifact,
         ArtifactVersion,
         IntegrationHandoff,
@@ -478,6 +480,55 @@ async def test_reattached_thread_starts_a_fresh_chain(db: AsyncSession) -> None:
         await read_latest_for_thread(db, organization_id=ORG, thread_id=THREAD)
     ) == first
     assert await _count(db) == 4
+
+
+@pytest.mark.parametrize("invalid_project", ["unlinked", "deleted", "other-workspace"])
+async def test_browser_sees_newest_save_from_live_linked_projects(
+    db: AsyncSession, invalid_project: str
+) -> None:
+    await db.execute(
+        update(Thread)
+        .where(Thread.id == THREAD)
+        .values(source_project_id=OTHER_PROJECT)
+    )
+    await db.execute(insert(ProjectThread).values(project_id=PROJECT, thread_id=THREAD))
+    await db.commit()
+    other = _ctx(project=OTHER_PROJECT)
+    await save(db, other, _payload(results=[], goal="Q version 1"))
+    await save(db, other, _payload(parent=1, results=[], goal="Q version 2"))
+    older = await save(db, other, _payload(parent=2, results=[], goal="Q version 3"))
+    newest = await save(db, _ctx(), _payload(results=[], goal="P new version 1"))
+
+    # Versions are chain-local: the later P1 must beat the older Q3.
+    assert newest.version == 1 and older.version == 3
+    assert await read_latest(db, _ctx()) == newest
+    assert (
+        await read_latest_for_thread(db, organization_id=ORG, thread_id=THREAD)
+        == newest
+    )
+
+    if invalid_project == "unlinked":
+        await db.execute(
+            update(ProjectThread)
+            .where(
+                ProjectThread.project_id == PROJECT, ProjectThread.thread_id == THREAD
+            )
+            .values(is_deleted=True)
+        )
+    elif invalid_project == "deleted":
+        await db.execute(
+            update(Collection).where(Collection.id == PROJECT).values(is_deleted=True)
+        )
+    else:
+        await db.execute(
+            update(Collection)
+            .where(Collection.id == PROJECT)
+            .values(workspace_id=OTHER_WORKSPACE)
+        )
+    await db.commit()
+    assert (
+        await read_latest_for_thread(db, organization_id=ORG, thread_id=THREAD) == older
+    )
 
 
 async def test_non_chain_integrity_error_is_not_a_conflict(

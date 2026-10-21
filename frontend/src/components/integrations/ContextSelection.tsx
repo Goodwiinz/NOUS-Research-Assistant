@@ -92,8 +92,8 @@ export function ContextSelection({
       )}
       {currentSave && save.isError && (
         <p role="alert">
-          The selection was not saved. It may exceed the sharing limit or be out
-          of date; reload and try again.
+          The selection was not saved. A selected memory may be too large to
+          share (64 KiB per read): remove it, or reload and try again.
         </p>
       )}
       {currentSave && save.isSuccess && options.data && (

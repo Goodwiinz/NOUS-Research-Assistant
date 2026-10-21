@@ -1,5 +1,7 @@
 # Comprehensive Backend Monitoring and Observability Implementation
 
+> **Stale / historical (2026-10-17):** It is a dated status or implementation report, kept as a record. File paths, test counts and completion claims reflect the state when it was written, not the current tree. Current contracts: [`docs/engineering/`](../../../docs/engineering/README.md).
+
 This document provides a complete overview of the implemented monitoring and observability services for the Multimodal Enterprise RAG System.
 
 ## Overview

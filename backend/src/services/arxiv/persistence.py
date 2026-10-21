@@ -14,7 +14,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.document import Document, ProcessingStatus
+from src.models.document import Document, DocumentType, ProcessingStatus
 
 from .storage import delete_arxiv_storage, store_arxiv_pdf
 
@@ -148,18 +148,25 @@ def _repair_document(
     arxiv_id: str,
     storage_fields: dict[str, Any],
 ) -> None:
+    preserve_full_text = (document.document_metadata or {}).get(
+        "has_full_text"
+    ) is True and (getattr(source_document, "document_metadata", {}) or {}).get(
+        "has_full_text"
+    ) is not True
     document.arxiv_id = arxiv_id
     document.title = _arxiv_document_title(source_document)
     for name, value in storage_fields.items():
         setattr(document, name, value)
     source_text = getattr(source_document, "content_text", None)
-    if str(source_text or "").strip():
+    if str(source_text or "").strip() and not preserve_full_text:
         document.content_text = source_text
     source_summary = getattr(source_document, "content_summary", None)
     if source_summary is not None:
         document.content_summary = source_summary
     metadata = dict(document.document_metadata or {})
     metadata.update(jsonable_encoder(getattr(source_document, "document_metadata", {})))
+    if preserve_full_text:
+        metadata["has_full_text"] = True
     document.document_metadata = metadata
     document.processing_status = ProcessingStatus.COMPLETED
     document.processing_error = None
@@ -170,8 +177,35 @@ def _canonicalize_arxiv_identity(
 ) -> None:
     document.arxiv_id = arxiv_id
     metadata = dict(document.document_metadata or {})
+    had_full_text = metadata.get("has_full_text") is True
     metadata.update(jsonable_encoder(getattr(source_document, "document_metadata", {})))
+    if had_full_text:
+        metadata["has_full_text"] = True
     document.document_metadata = metadata
+
+
+def _needs_full_text_upgrade(document: Document, source_document: Any) -> bool:
+    metadata = getattr(source_document, "document_metadata", {}) or {}
+    text = getattr(source_document, "content_text", None)
+    return (
+        metadata.get("has_full_text") is True
+        and bool(str(text or "").strip())
+        and (
+            (document.document_metadata or {}).get("has_full_text") is not True
+            or document.content_text != text
+        )
+    )
+
+
+def _upgrade_full_text(document: Document, source_document: Any) -> bool:
+    """Enrich a reused artifact without uploading it again or losing its identity."""
+    if not _needs_full_text_upgrade(document, source_document):
+        return False
+    document.content_text = source_document.content_text
+    metadata = dict(document.document_metadata or {})
+    metadata.update(jsonable_encoder(source_document.document_metadata))
+    document.document_metadata = metadata
+    return True
 
 
 def _managed_storage_fields(document: Document) -> Optional[dict[str, Any]]:
@@ -248,9 +282,15 @@ async def persist_arxiv_documents(
     *,
     user_id: Optional[str | UUID],
     organization_id: str | UUID,
+    require_pdf: bool = False,
 ) -> ArxivPersistenceResult:
     """Persist arXiv documents once, with durable storage and KB dual-write."""
     from src.core.database import AsyncSessionLocal
+
+    def has_required_storage(document: Document) -> bool:
+        return _has_durable_storage(document) and (
+            not require_pdf or document.document_type == DocumentType.PDF
+        )
 
     sources = list(source_documents)
     document_ids_by_index: list[Optional[str]] = [None] * len(sources)
@@ -277,12 +317,14 @@ async def persist_arxiv_documents(
                 existing = await existing_arxiv_document(
                     lookup_db, organization_id, arxiv_id
                 )
-                if existing is not None and _has_durable_storage(existing):
+                if existing is not None and has_required_storage(existing):
                     document_id = str(existing.id)
                     document_ids_by_index[index] = document_id
                     reused_document_ids.add(document_id)
                     needs_write = (
-                        existing.arxiv_id is None or existing.search_vector is None
+                        existing.arxiv_id is None
+                        or existing.search_vector is None
+                        or _needs_full_text_upgrade(existing, source_document)
                     )
                     if needs_write:
                         reuse_repairs.append((index, arxiv_id, existing.id))
@@ -330,6 +372,10 @@ async def persist_arxiv_documents(
                 failed_papers[arxiv_id] = "durable storage promotion failed"
                 continue
             promoted_storage.append(storage_fields)
+            if require_pdf and storage_fields.get("document_type") != DocumentType.PDF:
+                discarded_storage.append(storage_fields)
+                failed_papers[arxiv_id] = "source PDF is unavailable"
+                continue
             staged_documents.append(
                 (
                     index,
@@ -383,7 +429,8 @@ async def persist_arxiv_documents(
                             reused_document_ids.add(str(winner.id))
                             document = winner
                             document_ids_by_index[index] = str(winner.id)
-                        if document.search_vector is None:
+                        enriched = _upgrade_full_text(document, sources[index])
+                        if document.search_vector is None or enriched:
                             vector_documents[str(document.id)] = document
                         if _needs_kb_sync(document):
                             kb_document_ids.add(str(document.id))
@@ -412,7 +459,7 @@ async def persist_arxiv_documents(
 
                         was_existing = document is not None
                         uses_promoted_storage = not (
-                            document is not None and _has_durable_storage(document)
+                            document is not None and has_required_storage(document)
                         )
                         replaced_storage = (
                             _managed_storage_fields(document)
@@ -436,7 +483,7 @@ async def persist_arxiv_documents(
                                     )
                                     continue
                                 try:
-                                    if _has_durable_storage(checksum_winner):
+                                    if has_required_storage(checksum_winner):
                                         if checksum_winner.arxiv_id is None:
                                             async with db.begin_nested():
                                                 _canonicalize_arxiv_identity(
@@ -470,14 +517,17 @@ async def persist_arxiv_documents(
                                     if concurrent_exact is None:
                                         raise
                                     discarded_storage.append(storage_fields)
-                                    if not _has_durable_storage(concurrent_exact):
+                                    if not has_required_storage(concurrent_exact):
                                         failed_papers[arxiv_id] = (
                                             "concurrent exact arXiv revision is "
                                             "not durably stored"
                                         )
                                         continue
                                     checksum_winner = concurrent_exact
-                                if checksum_winner.search_vector is None:
+                                enriched = _upgrade_full_text(
+                                    checksum_winner, source_document
+                                )
+                                if checksum_winner.search_vector is None or enriched:
                                     vector_documents[str(checksum_winner.id)] = (
                                         checksum_winner
                                     )
@@ -546,7 +596,7 @@ async def persist_arxiv_documents(
                                         "arXiv revision"
                                     )
                                     continue
-                            if _has_durable_storage(winner):
+                            if has_required_storage(winner):
                                 discarded_storage.append(storage_fields)
                                 if not exact_winner and winner.arxiv_id is None:
                                     async with db.begin_nested():
@@ -567,7 +617,8 @@ async def persist_arxiv_documents(
                                 if old_storage is not None:
                                     discarded_storage.append(old_storage)
                                 vector_documents[str(winner.id)] = winner
-                            if winner.search_vector is None:
+                            enriched = _upgrade_full_text(winner, source_document)
+                            if winner.search_vector is None or enriched:
                                 vector_documents[str(winner.id)] = winner
                             document_id = str(winner.id)
                             document_ids_by_index[index] = document_id
@@ -581,11 +632,12 @@ async def persist_arxiv_documents(
                         document_ids_by_index[index] = str(document.id)
                         if was_existing:
                             reused_document_ids.add(str(document.id))
+                        enriched = _upgrade_full_text(document, source_document)
                         if uses_promoted_storage:
                             vector_documents[str(document.id)] = document
                         else:
                             discarded_storage.append(storage_fields)
-                            if document.search_vector is None:
+                            if document.search_vector is None or enriched:
                                 vector_documents[str(document.id)] = document
                         if _needs_kb_sync(document):
                             kb_document_ids.add(str(document.id))

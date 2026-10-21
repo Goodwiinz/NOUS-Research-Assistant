@@ -1,105 +1,64 @@
 # NOUS — Infra CODEMAP
 
-> Cluster topology, ArgoCD apps, Helm releases, Compose files, CI runners.
-> Last generated: 2026-04-26
+> Cluster topology, ArgoCD apps, Helm charts, Compose files, CI runners.
+> Regenerated 2026-10-17 from the files named below. The earlier 2026-04-26 version described three DOKS environments, Qdrant and registry details that no longer match. Deployment truth lives in `docs/engineering/gotchas.md` and the workflows.
 
-## Cluster (DOKS — DigitalOcean Kubernetes)
+## Environments
 
-Three environments, all managed by ArgoCD GitOps:
+Only `dev` is live, on AWS EKS (`nous-dev-cluster`, `us-east-1`). `values-staging.yaml` and `values-production.yaml` exist under `infrastructure/helm/knowledge-graph-analytics/` but are render fixtures only; do not deploy from them.
 
-| Environment | Namespace | ArgoCD app | Notes |
+`infrastructure/argocd/applications/` holds two dev application definitions, both tracking `develop` and the chart `infrastructure/helm/knowledge-graph-analytics`:
+
+| File | Values files | Destination namespace | Status |
 |---|---|---|---|
-| dev | `nous-dev` | `nous-dev` | Auto-syncs from `develop` branch |
-| staging | `nous-staging` | `nous-staging` | Auto-syncs from `staging` branch |
-| prod | `nous-prod` | `nous-prod` | Manual sync gate |
+| `aws-dev.yaml` (`nous-dev-aws`) | `values.yaml`, `values-aws.yaml` | `multimodal-rag-system` | **Live.** ECR images, RDS and ElastiCache, ALB ingress |
+| `dev.yaml` (`nous-dev`) | `values.yaml`, `values-dev.yaml` | `rag-dev` | Retired DigitalOcean (DOKS) app; `values-dev.yaml` is frozen rollback material |
 
-ArgoCD is installed in the `argocd` namespace. All apps are defined under `infrastructure/argocd/applications/`.
+Source of truth: `docs/engineering/gotchas.md` and `.github/workflows/README.md`. Other applications there: `root.yaml`, `aws-dev-root.yaml`, `infisical-operator.yaml`, `nous-dev-aws-ingress.yaml`. Project definition: `infrastructure/argocd/project.yaml`.
 
-**Rule:** Never `kubectl patch` ArgoCD-managed resources directly — selfHeal will revert. All changes must be committed to the relevant branch.
+**Rule:** never `kubectl patch` ArgoCD-managed resources directly; selfHeal reverts it. Commit the change instead.
 
-## Helm releases
+## Release flow
 
-| Chart | Path | Purpose |
-|---|---|---|
-| `nous-backend` | `infrastructure/helm/` | FastAPI + Celery workers |
-| `nous-frontend` | `infrastructure/helm/` | Next.js app |
-| `knowledge-graph-analytics` | `infrastructure/helm/knowledge-graph-analytics/` | Neo4j analytics sidecar |
-| `kube-prometheus-stack` | `infrastructure/helm/` (values only) | Prometheus + Grafana |
-| `cert-manager` | `infrastructure/helm/` (values only) | TLS cert provisioning |
+After a green Test Pipeline on `develop`, `.github/workflows/release-dev.yml` builds the SHA and opens a digest-pinned GitOps PR to `values-aws.yaml`; merging it deploys. `docker-build.yml` pushes images to Amazon ECR (`REGISTRY` in that workflow). The frontend deploys separately via Vercel.
 
-Helm values per env live in `infrastructure/kubernetes/overlays/<env>/`.
+## Workflows (`.github/workflows/`, 11 files)
 
-## Kubernetes manifests (`infrastructure/kubernetes/`)
+`agent-eval.yml`, `docker-build.yml`, `helm-validate.yml`, `opencode.yml`, `release-dev.yml`, `secret-scan.yml`, `supabase-migrations.yml`, `test-pipeline.yml`, `trigger-deploy.yml`, `workflow-lint.yml`, plus `README.md`.
 
-```
-kubernetes/
-  base/             Base manifests (Deployments, Services, HPA)
-  overlays/         Kustomize overlays per env (dev / staging / prod)
-  configmaps/       App configuration (non-secret)
-  secrets/          ExternalSecret references (DO Secrets Manager)
-  manifests/        One-off manifests not managed by Helm
-  monitoring/       Prometheus ServiceMonitors, AlertManager rules
-  namespace.yaml    Namespace definitions
-```
+## Helm and Kubernetes
+
+| Path | Purpose |
+|---|---|
+| `infrastructure/helm/knowledge-graph-analytics/` | The deployed chart (values, values-dev, values-aws, templates, tests) |
+| `infrastructure/helm/` | Values for `argocd`, `cert-manager`, `kube-prometheus-stack`; `monitoring-stack/` |
+| `deployment/helm/rag-system/` | Older chart (`values.yaml` only); legacy, carries dead Qdrant references |
+| `infrastructure/kubernetes/base`, `configmaps`, `secrets`, `manifests`, `monitoring`, `services`, `jobs` | Kustomize bases and one-off manifests |
+| `infrastructure/kubernetes/overlays/aws-dev`, `overlays/production` | Overlays (`aws-dev` has ingress and kustomization) |
+| `infrastructure/kubernetes/aws-bootstrap`, `aws-addons.md`, `infisical-bootstrap.md` | AWS cluster bootstrap notes and manifests |
 
 ## Terraform (`infrastructure/terraform/`)
 
-Manages the DOKS cluster, load balancers, DNS, managed databases, and DigitalOcean Spaces (S3-compatible).
+AWS resources: ACM, ALB controller and IRSA roles, ECR, EBS CSI, cluster autoscaler, GitHub OIDC, app S3 access, external-secrets/RDS access, backup and monitoring (`*.tf` files plus `modules/`).
 
-## CI runners (`infrastructure/arc/` + `infrastructure/runner/`)
+## CI runners
 
-Self-hosted GitHub Actions runners on DOKS via Actions Runner Controller (ARC). Runner pod spec in `infrastructure/arc/`. Runner registration config in `infrastructure/runner/`. Both are CI concerns; consolidation target: `infrastructure/ci/`.
+`infrastructure/arc/runner-deployment.yaml` (Actions Runner Controller) and `infrastructure/runner/README.md`.
 
-## Docker Compose files (`config/docker-compose/`)
+## Docker Compose
 
-| File | Use |
-|---|---|
-| `docker-compose.development.yml` | Local full-stack dev |
-| `docker-compose.yml` | Minimal (backend + DBs only) |
-| `docker-compose.prod.yml` | Production-equivalent local test |
-| `docker-compose.staging.yml` | Staging-equivalent local test |
-| `docker-compose.ci.yml` | CI pipeline (no volumes) |
-| `docker-compose.services.yml` | Infrastructure services only (PG, Neo4j, Qdrant, Redis) |
-| `docker-compose.observability.yml` | Prometheus + Grafana + AlertManager |
-| `docker-compose.security.yml` | Security scanning stack |
-| `docker-compose.websocket.yml` | WebSocket testing setup |
-| `docker-compose.azure.yml` | Azure OpenAI endpoint variant |
-| `docker-compose.graph-services.yml` | Neo4j + graph analytics |
-| `docker-compose.backend/` | Backend-only multi-stage build context |
-| `docker-compose.frontend/` | Frontend-only multi-stage build context |
+Compose files live in `config/docker-compose/`. Root symlinks exist for only four: `docker-compose.yml`, `docker-compose.ci.yml`, `docker-compose.development.yml`, `docker-compose.prod.yml`. Others in the directory: `staging`, `services`, `observability`, `security`, `websocket`, `azure`. Local development does not use Docker (see `CLAUDE.md`); `docker-compose.services.yml` and the `development` file may still reference Qdrant, which is removed.
 
-Root symlinks (`docker-compose.development.yml`, etc.) point into this directory.
-
-## Key service ports
+## Key service ports (local)
 
 | Service | Port | Notes |
 |---|---|---|
-| PostgreSQL | 5432 | DB name: `multimodal_rag_dev`; container: `rag-postgres-1` |
+| PostgreSQL | 5432 | DB `multimodal_rag_dev`; container `rag-postgres-1` |
 | Neo4j | 7687 (bolt) / 7474 (HTTP) | |
-| Qdrant | 6333 | |
-| Redis / Valkey | 6379 | Managed cache on DO is Valkey — wire-compatible |
+| Redis / Valkey | 6379 | Valkey is wire-compatible |
 | Backend | 8000 | |
 | Frontend | 3000 | |
 
-## Monitoring stack
+## Monitoring
 
-Prometheus + Grafana + AlertManager run as a sidecar stack.  
-Configs: `monitoring/` (root) — Prometheus rules, Grafana dashboards, AlertManager routing.  
-k8s manifests: `infrastructure/kubernetes/monitoring/`.  
-Helm values: `infrastructure/helm/kube-prometheus-stack-values.yaml`.  
-Docs: `docs/operations/monitoring/`.
-
-## Image registry
-
-Docker images are built by Depot (linux/amd64 only) and pushed to GHCR (`ghcr.io/goodwiins/rag`).  
-Tags: `develop-YYYYMMDD-<sha>` (develop builds), `staging-*`, `prod-*`.  
-CI: `.github/workflows/test-pipeline.yml` builds + pushes; ArgoCD picks up new tags.
-
-## Adding a new service to k8s
-
-1. Add Helm chart or kustomize base manifest under `infrastructure/kubernetes/base/`.
-2. Add overlay patches under `infrastructure/kubernetes/overlays/<env>/`.
-3. If it needs a secret: add ExternalSecret in `infrastructure/kubernetes/secrets/`.
-4. Add a ServiceMonitor in `infrastructure/kubernetes/monitoring/` for Prometheus scraping.
-5. Update `infrastructure/argocd/applications/` if it's a new ArgoCD app.
-6. Add a Compose entry in the relevant `config/docker-compose/` file for local dev.
+Configs in `monitoring/` (Prometheus rules, Grafana dashboards, Alertmanager routing); cluster manifests in `infrastructure/kubernetes/monitoring/`; Helm values in `infrastructure/helm/kube-prometheus-stack-values.yaml`; docs in `docs/operations/`.

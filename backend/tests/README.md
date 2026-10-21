@@ -39,46 +39,37 @@ pytest -v --tb=long
 | `slow` | Long-running tests | Very slow | Depends |
 | `smoke` | Quick validation | Very fast | None |
 | `regression` | Previously fixed bugs | Fast | None |
+| `feature` | Feature-specific tests | Varies | Depends |
+| `chat` | Chat API and messaging tests | Varies | Depends |
+| `database` | Database connection and operation tests | Varies | Database |
+| `langsmith` | LangSmith evaluation tests | Slow | `LANGCHAIN_API_KEY` and LLM credentials |
+| `golden` | Local golden-case agent regression | Slow | LLM credentials, no LangSmith dataset |
+| `eval` | Slow evaluation benchmarks running the agent against a dataset | Very slow | LLM credentials |
+
+`backend/pytest.ini` registers exactly these 14 markers and runs with `--strict-markers`, so an unregistered marker fails collection. Its `slow` description says such tests are skipped unless `--run-slow` is passed, but no `--run-slow` option is defined in any `conftest.py` under `backend/`; treat that flag as unverified.
 
 ## Directory Structure
 
+Configuration is `backend/pytest.ini` (there is no `tests/pytest.ini`). `norecursedirs` skips `templates`, `standalone`, `performance` and `scaffolding`. Top level of `backend/tests/` (check with `ls`):
+
 ```
 tests/
-├── conftest.py              # Base fixtures
-├── conftest_enhanced.py     # Enhanced fixtures for feature dev
-├── pytest.ini               # Pytest configuration
-├── README.md                # This file
-│
-├── templates/               # Test templates for new features
-│   ├── test_feature_template.py
-│   ├── test_api_template.py
-│   └── test_resilience_template.py
-│
-├── unit/                    # Unit tests
-│   ├── test_services/
-│   ├── test_models/
-│   └── test_utils/
-│
-├── integration/             # Integration tests
-│   ├── test_api/
-│   ├── test_services/
-│   └── test_database/
-│
-├── resilience/              # Resilience pattern tests
-│   ├── test_retry.py
-│   ├── test_circuit_breaker.py
-│   └── test_bulkhead.py
-│
-├── e2e/                     # End-to-end tests
-│   └── test_workflows/
-│
-├── fixtures/                # Shared test data
-│   ├── documents/
-│   └── responses/
-│
-└── factories/               # Test data factories
-    └── document_factory.py
+├── conftest.py, conftest_fastapi.py, fixtures.py   # shared fixtures
+├── unit/            # fast isolated tests: agent, api, architecture, core, models, services, tasks, ...
+├── api/             # API-level tests (see also unit/api)
+├── integration/     # service integration tests
+├── contract/        # API contract tests
+├── security/        # security and tenancy tests
+├── services/, agent/, core/, db/, evidence/, tasks/, eval/   # additional per-area suites
+├── fixtures/        # shared test data (ai_responses.py, file_fixtures.py, migrations/, ...)
+├── factories/       # test data factories
+├── mocks/           # mock AI client and service doubles
+├── templates/       # copy-paste templates (test_feature_template.py, test_api_template.py, test_resilience_template.py)
+├── standalone/, scaffolding/, performance/, perf/      # excluded or manual suites
+└── test_*.py        # root-level regression tests
 ```
+
+Resilience tests have no dedicated directory; mark them with `@pytest.mark.resilience` wherever they live.
 
 ## Creating Tests for New Features
 
@@ -92,7 +83,7 @@ cp tests/templates/test_feature_template.py tests/unit/test_my_feature.py
 cp tests/templates/test_api_template.py tests/integration/test_my_api.py
 
 # For resilience testing
-cp tests/templates/test_resilience_template.py tests/resilience/test_my_service_resilience.py
+cp tests/templates/test_resilience_template.py tests/unit/test_my_service_resilience.py
 ```
 
 ### 2. Replace placeholder names

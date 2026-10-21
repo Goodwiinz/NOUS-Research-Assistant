@@ -1,3 +1,5 @@
+> **Dated design (2026-10-17 review): an upfront component design, not a description of the shipped upload UI. The implementation lives in `frontend/src/components/upload/` and `frontend/src/services/uploadService.ts`; check the code before relying on this.**
+
 # Document Upload Frontend Component Design
 
 ## Overview

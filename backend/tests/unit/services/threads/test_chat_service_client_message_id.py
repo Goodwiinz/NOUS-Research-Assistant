@@ -35,6 +35,7 @@ def _service(*, insert_returns: Optional[UUID]) -> tuple[ChatService, MagicMock]
     select_result = MagicMock()
     select_result.scalar_one_or_none.return_value = ChatMessage(id=uuid4())
     db.execute = AsyncMock(side_effect=[insert_result, select_result, MagicMock()])
+    db.scalar = AsyncMock(return_value=False)
     db.get = AsyncMock(return_value=ChatMessage(id=uuid4()))
     db.flush = AsyncMock()
     db.commit = AsyncMock()
@@ -97,3 +98,23 @@ async def test_without_a_client_message_id_the_orm_path_is_unchanged() -> None:
 
     assert message is not None
     db.add.assert_called_once()
+
+
+async def test_generic_message_writer_rejects_branch_after_locked_reload() -> None:
+    service, db = _service(insert_returns=uuid4())
+    db.scalar.return_value = True
+
+    assert await _create(service, _payload(uuid4())) is None
+    db.execute.assert_not_awaited()
+    db.add.assert_not_called()
+    sql = str(db.scalar.await_args.args[0].compile(dialect=asyncpg.dialect()))
+    assert "FOR UPDATE OF threads" in sql
+
+
+async def test_generic_assistant_writer_rejects_branch_before_insert() -> None:
+    service, db = _service(insert_returns=uuid4())
+    db.scalar.return_value = True
+
+    assert await service.create_assistant_message(uuid4(), "answer") is None
+    db.execute.assert_not_awaited()
+    db.add.assert_not_called()

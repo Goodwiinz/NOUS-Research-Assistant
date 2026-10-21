@@ -305,11 +305,12 @@ jobs:
     needs: ci-plan
     if: needs.ci-plan.outputs.backend == 'true'
     # Throwaway CI-local Postgres for the advisory execution probes. Credentials
-    # are disposable (postgres/postgres) — no secrets, by design. Docker's
-    # official ECR Public images avoid Docker Hub's shared-runner pull quota.
+    # are disposable (postgres/postgres) — no secrets, by design. These official
+    # image digests match passing CI pulls; ECR exhausted its anonymous data quota.
+    # Refresh pins using docs/testing/evidence/r8-release-chain-20261016/README.md.
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:15-alpine
+        image: docker.io/library/postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -845,7 +846,8 @@ jobs:
         shard: [1, 2, 3]
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:15
+        # Same PostgreSQL 15 digest verified in the passing shards; avoid ECR's data quota.
+        image: docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
@@ -855,7 +857,7 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
-        image: public.ecr.aws/docker/library/redis:7
+        image: docker.io/library/redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
         ports:
           - 6379/tcp
         options: >-
@@ -959,11 +961,17 @@ jobs:
         if: matrix.shard == 1
         # These integration-marked tests live outside the sharded directory.
         # Give them a real database once, and reject a green all-skipped run.
+        # The PDF-chat branch suites (GOO-436) ride this lane: they own
+        # generated schemas and cover the pb01 migration round trip and the
+        # accept/select/read serialization only PostgreSQL can prove.
         run: |
           mkdir -p test-results
           pytest backend/tests/unit/tasks/test_stuck_processing_recovery.py \
             backend/tests/unit/tasks/test_stuck_recovery_terminal_retry.py \
             backend/tests/unit/tasks/test_ingestion_stage_guard_postgres.py \
+            backend/tests/unit/services/test_message_branches_postgres.py \
+            backend/tests/unit/services/test_alphaxiv_live_postgres.py \
+            backend/tests/unit/services/test_native_pdf_branch_reads_postgres.py \
             -c backend/pytest.ini -m integration \
             --junitxml=test-results/ingestion-recovery.xml -q -ra
           python - <<'PY'
@@ -1004,10 +1012,13 @@ jobs:
         # scratch databases with the real alembic chain (CREATE DATABASE needs
         # the service's superuser) and guards the thread/message full-text
         # objects and /api/v2/search/health on a migration-built schema.
+        # GOO-423 also replays handoff-key migration/rollback on a disposable
+        # database; it needs PostgreSQL but deliberately does not need pgvector.
         run: |
           mkdir -p test-results
           pytest backend/tests/integration/two_account/test_search_isolation_postgres.py \
             backend/tests/integration/test_search_vector_repair_postgres.py \
+            backend/tests/integration/test_handoff_org_slots_postgres.py \
             -c backend/pytest.ini -m integration \
             --junitxml=test-results/two-account-pg-search.xml -q -ra
           python - <<'PY'
@@ -1516,7 +1527,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:15
+        image: docker.io/library/postgres:15@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test

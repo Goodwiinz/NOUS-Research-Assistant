@@ -15,8 +15,9 @@ class AgentDisconnectSignalMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope.get("path", "").startswith(
-            "/api/v1/agent/stream"
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not (
+            path.startswith("/api/v1/agent/stream") or path == "/assistant/v2/chat"
         ):
             await self.app(scope, receive, send)
             return

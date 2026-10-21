@@ -1,4 +1,15 @@
 import { getPublicApiOrigin } from '@/utils/publicEndpoints';
+import {
+  metricsApi,
+  graphApi,
+  dashboardApi,
+  reportApi,
+  alertApi,
+  exportApi,
+  isApiError,
+  handleApiError,
+} from './analyticsApi';
+import { createWebSocketService, analyticsWebSocket } from './websocketService';
 
 // API Services
 export {
@@ -190,7 +201,7 @@ export const getServiceStatus = () => {
       stats: ws.getConnectionStats(),
     },
     api: {
-      baseUrl: getPublicApiOrigin() || 'http://localhost:8000',
+      baseUrl: getPublicApiOrigin(),
       authenticated: !!localStorage.getItem('authToken'),
     },
   };

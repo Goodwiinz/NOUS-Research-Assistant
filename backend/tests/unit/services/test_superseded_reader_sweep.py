@@ -191,12 +191,13 @@ async def test_list_messages_page_and_count_are_in_lockstep(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """base_conditions is shared, so a drifted count is structurally impossible."""
-    from src.services.threads import message_service, workspace_access
+    from src.services.threads import message_service
+    from src.services.threads.branch_reads import ThreadRead
 
     async def _thread(*a: Any, **k: Any) -> Any:
-        return SimpleNamespace(id=uuid4())
+        return ThreadRead(SimpleNamespace(id=uuid4(), message_branching=False))
 
-    monkeypatch.setattr(workspace_access, "get_thread", _thread)
+    monkeypatch.setattr(message_service, "read_thread", _thread)
 
     db = _CapturingDB([_Result(value=0), _Result(rows=[])])
     await message_service.list_messages(db, uuid4(), uuid4())

@@ -17,6 +17,7 @@ from src.models.bridge_device import BridgeDevice, WorkspaceBinding
 from src.models.chat_message import ChatMessage
 from src.models.collection import Collection
 from src.models.conversation import Conversation
+from src.models.document import Document
 from src.models.harness_session import HarnessCommand, HarnessReceipt, HarnessSession
 from src.models.integration_grant import IntegrationGrant, IntegrationGrantRequest
 from src.models.organization import Organization
@@ -70,6 +71,7 @@ async def pg_factory(
             models: list[Any] = [
                 Organization,
                 User,
+                Document,
                 Workspace,
                 WorkspaceMember,
                 Collection,

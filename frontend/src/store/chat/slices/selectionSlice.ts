@@ -79,7 +79,12 @@ export const createSelectionSlice: ChatSliceCreator<SelectionSlice> = (
     // background; a fresh (or legacy unclassified) cache makes no request.
     if (threadId && !hasCachedPage) {
       get().loadMessages(threadId);
-    } else if (threadId && freshness === 'stale') {
+    } else if (
+      threadId &&
+      (freshness === 'stale' ||
+        (snapshot.currentThreadId !== threadId &&
+          snapshot.messagePagination[threadId]?.message_branching))
+    ) {
       void get().refreshMessages(threadId);
     }
   },

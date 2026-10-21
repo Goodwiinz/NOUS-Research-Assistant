@@ -16,9 +16,24 @@ This package contains the business logic for research projects, document ingesti
 | `message_citation_service.py`    | Parses `[Doc N]` markers from AI responses and persists them as `Citation` rows                                                                                                                                                 |
 | `extraction_matrix_service.py`   | Structured data extraction from documents via OpenAI; runs as a background task with in-memory status tracking                                                                                                                  |
 | `draft_generation_service.py`    | Generates literature review drafts from project documents; uses a fresh `AsyncSessionLocal()` to avoid session rollback conflicts with the calling request                                                                      |
-| `writer_service.py`              | AI writing assistance (inline completion, section generation, outline); currently returns structured mock responses pending full LLM integration                                                                                |
+| `writer_service.py`              | AI writing assistance (inline completion, section generation, outline); the module still returns mock responses pending LLM integration                                                                                |
 | `tone_engine_service.py`         | Rewrites text at an adjustable academic tone via OpenAI while preserving `[N]` citation markers                                                                                                                                 |
 | `export_service.py`              | Exports thread conversations to Markdown, PDF, JSON, or HTML using Jinja2 templates                                                                                                                                             |
+
+## Evidence, review and release services
+
+Newer services (tickets in the module docstrings) cover the manuscript lifecycle. Each `*_rules.py` file is pure (no database, no FastAPI) and is paired with a service that owns persistence.
+
+| File(s) | Purpose |
+| --- | --- |
+| `claims_service.py`, `claim_rules.py`, `claims_export.py` | Versioned claims, evidence links, stance snapshots and assessments (GOO-306); reconstructable evidence export |
+| `extraction_forms_service.py`, `extraction_rules.py`, `source_anchors.py` | Versioned extraction forms, observations, accepted values and source anchors (GOO-304/305) |
+| `draft_release_service.py`, `release_rules.py` | Verified draft promotion gate and selective invalidation (GOO-307) |
+| `peer_review_service.py`, `peer_review_rules.py` | External peer-review rounds, anchored comments, responses and decisions (GOO-314) |
+| `manuscript_release_service.py`, `manuscript_rules.py` | Immutable candidate and verified manuscript releases (GOO-315) |
+| `statements_service.py`, `venue_rules.py` | Statement sets, author approvals, ORCID receipts and venue checks (GOO-316) |
+| `deposit_service.py`, `deposit_rules.py`, `archives/zenodo.py` | Resumable archive deposits of verified releases (GOO-318) |
+| `citation_verification_service.py`, `evidence_selection.py` | Citation faithfulness verification for drafts; bounded evidence selection for prompts |
 
 ## arXiv integration
 
@@ -33,6 +48,5 @@ arXiv ingestion lives in `../arxiv/arxiv_service.py` (`ArXivIngestionService`) a
 ## Connections to other services
 
 - **Documents service** (`src/api/documents/`): arXiv ingest writes document records there; the research services read them back via SQLAlchemy sessions.
-- **Search service** (`src/services/search/`): `ArXivSearchService` extends the base `SearchService` with category/author/recency boosts.
 - **Neo4j** (`bolt://localhost:7687`): `CitationGraphService` writes citation nodes and edges; requires the Neo4j APOC plugin for subgraph traversal (plain Cypher fallback is active if APOC is absent).
 - **Agent** (`src/services/agent/`): `project_memory_service.load_project_memories` and `citation_extraction_service` are called on the agent hot path; `draft_generation_service` is triggered by the `create_draft` destructive tool which fires a HITL interrupt before execution.

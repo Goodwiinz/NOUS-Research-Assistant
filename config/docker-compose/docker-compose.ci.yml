@@ -195,6 +195,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile.prod
       args:
+        BACKEND_URL: http://backend:8000
         # Browser inside the Playwright container reaches gotrue via docker DNS.
         # The anon JWT is signed with SUPABASE_JWT_SECRET — gotrue accepts it
         # as the apikey on /auth/v1/* endpoints.

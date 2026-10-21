@@ -41,6 +41,7 @@ from src.models.base import Base
 from src.models.chat_message import ChatMessage
 from src.models.collection import Collection
 from src.models.conversation import Conversation
+from src.models.document import Document
 from src.models.organization import Organization
 from src.models.thread import Thread
 from src.models.user import User
@@ -60,6 +61,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_postgres]
 _MODELS: list[Any] = [
     Organization,
     User,
+    Document,
     Workspace,
     WorkspaceMember,
     Collection,

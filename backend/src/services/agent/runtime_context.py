@@ -125,6 +125,10 @@ def _memory_text(memory: Any) -> str:
 
 
 def _memory_blocks(state: Mapping[str, Any]) -> tuple[list[str], int]:
+    # Prompt-time enforcement also covers recall carried by an older
+    # checkpoint or a caller that bypassed the normal preprocessing path.
+    if state.get("document_only"):
+        return [], 0
     blocks: list[str] = []
     records: list[tuple[str, Any]] = []
     records.extend(("memory", item) for item in (state.get("user_memories") or []))

@@ -1,3 +1,5 @@
+> **Dated design guide (2026-10-17 review): describes the sidebar enhancement as designed. Verify against `frontend/src/contexts/sidebar-context.tsx` and the dashboard layout before relying on it.**
+
 # Enhanced Sidebar System Documentation
 
 ## Overview
@@ -51,7 +53,7 @@ The enhanced sidebar system provides a premium navigation experience with smooth
 ### Dependencies
 
 ```bash
-npm install framer-motion zustand
+pnpm --dir frontend add framer-motion zustand
 ```
 
 ### Required Components

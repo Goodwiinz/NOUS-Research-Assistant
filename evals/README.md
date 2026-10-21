@@ -29,6 +29,7 @@ records positive and negative network probes.
 | `agent-fast-path-cancel-v1` | Keep fast-path cancellation terminal and prefix-safe | Deterministic stream and durability checks |
 | `agent-hitl-lifecycle-v1` | Preserve confirm, reject, timeout, and replay semantics | Deterministic interrupt, mutation, and idempotency checks |
 | `agent-tenant-isolation-v1` | Reject cross-tenant probes across agent read paths | Deterministic tenant-state and leakage checks |
+| `harness-mcp-discovery-v1` | An external harness (Claude Code or Codex) combines `search_documents`, `search_arxiv` and `search_external_database` through the real harness-bridge MCP server into one cited literature scan (Plan 07 Slice 5 decision eval) | Deterministic gateway-double request log plus answer-file containment and anti-fabrication checks (no judge) |
 
 GOO-293's current-writing evaluation uses
 [`academic-writing-baseline-v1`](academic-writing-baseline-v1/README.md). That
@@ -66,6 +67,19 @@ their first recorded run. `agent-code-execution-v1` and
 `agent-external-databases-v1` send real turns through production intent
 classification; see `AGENT_FLOW_BASELINE.md` capabilities 16/17 for their
 routing and grounding contracts.
+
+`harness-mcp-discovery-v1` is the exception to the run boundary above: its
+agent is an external harness, not the production graph. Harbor's built-in
+`claude-code` and `codex` agents run in a Node 24 container with public egress
+(for the model API and Harbor's agent install) and reach NOUS only through the
+real `packages/harness-bridge` stdio MCP server, which talks to a deterministic
+gateway double on an internal network. It needs no production image or Azure
+credentials; the harness reads `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from the
+shell running Harbor. Run it with `--agent claude-code` or `--agent codex`
+instead of `--agent-import-path`; the commands, models and the pre-registered
+Slice 5 decision rule are in
+[`specs/harness-mcp-discovery-v1/harness.md`](specs/harness-mcp-discovery-v1/harness.md).
+It is NOT YET GATED, awaiting its first recorded run.
 
 Tasks added after 2026-08-07 import their adapter and verifier helpers from the
 shared `harbor_common/` package; the original three tasks keep their inline
@@ -153,3 +167,87 @@ agent-eval run --task evals/tasks/regression/ --agent claude-code --runs 3
 # Generate report
 agent-eval report --format table
 ```
+
+### External harness discovery decision
+
+[`harness-mcp-discovery-v1`](harness-mcp-discovery-v1/task.toml) measures an
+external harness combining the primitive MCP searches through the pinned real
+bridge and a deterministic gateway double. The
+[specification](specs/harness-mcp-discovery-v1/harness.md) fixes its scoring and
+infrastructure exclusions. Use `prepare_harness_discovery.py --output <new-dir>`
+to prepare its declared source before running Harbor. The
+[2026-10-16 record](baselines/agent-flow-2026-10-16-harness-mcp-discovery-http.json)
+is Codex-only, objective 1/5, **NOT GATED**. It does not validate the current
+composite tool or deployed search quality. Trial traces remain ignored locally.
+
+The [corrected-task record](baselines/agent-flow-2026-10-16-harness-mcp-discovery-typed-http.json)
+contains a fresh 0/5 series after mandatory typing fixes changed the digest.
+The earlier 1/5 series is preserved as historical evidence; neither record is
+GATED, and neither establishes current composite or deployed quality.
+The [verified-results revision](baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-results.json)
+corrects successful-tool-result, per-trial citation, unsupported-list and answer
+truncation guards. It is NOT RUN as a new scored benchmark. Earlier discovery
+scores remain archival after the task-defect invalidation rule; 36 host
+calibration/source-integrity cases do not substitute for new agent trials.
+The [provider V4 record](baselines/discovery-provider-2026-10-16-v4.json) likewise
+records no new provider measurement after the complete-checkout guard changed.
+
+The separate [provider V5 record](baselines/discovery-provider-2026-10-16-v5.json)
+records one newly declared real-provider/local-PostgreSQL diagnostic at clean
+source `6970a07177573576e2dd22882ed30c1d5d097bc6`, completed at 22:18:29 UTC.
+The full source identity matched after cleanup. V4 remains an unchanged NOT RUN
+preparation; V5 is NOT GATED and does not substitute for corrected Harbor trials
+or deployed acceptance.
+
+The later [fresh verified HTTP decision](baselines/agent-flow-2026-10-16-harness-mcp-discovery-verified-http.json)
+records seven attempts and five scoreable Codex trials at clean source
+`5f682a33`: 0/5 objective passes, with two infrastructure attempts excluded
+and retained. The registered Codex-only decision is PRIMITIVES INSUFFICIENT;
+status remains NOT GATED. Earlier NOT RUN preparations and defective-verifier
+results remain unchanged, and scores are not pooled. The
+[evidence](../docs/testing/evidence/discovery-harness-verified-20261016/README.md)
+distinguishes build receipts, direct runtime snapshots and suite-gate limits.
+
+
+### Discovery provenance amendment (2026-10-17)
+
+The current harness discovery task uses an isolated real-bridge service with a
+private gateway credential, server-derived attribution and per-search paper
+record validation. Historical rewards remain bound to their original source
+and task digest. See the [hardening evidence](../docs/testing/evidence/discovery-hardening-20261017/README.md)
+for the reproduced false passes, current calibration and execution limits.
+
+
+### 2026-10-17 final host-verification protocol
+
+The current task requires three pipe-separated paper fields (title,
+identifier(s), source), one record per row, including nested list items.
+Source labels cannot be borrowed from identifier prefixes. All IDs in a row
+must belong to that record and come from its required search. The current
+construction matrix is 65 host cases with 19 in-image calibrations. Earlier
+construction phases and historical model scores are separate and unpooled.
+
+A registered host controller must invoke `evals/verify_discovery_trial.py`
+from Harbor 0.6.6's `VERIFICATION_START` hook, with an answer snapshot outside
+agent mounts and the actual mock's full Docker identity/project. Native
+rewards alone do not gate this task. Require host/native agreement and the
+existing provider/infrastructure exclusions; missing host evidence or a
+mismatch is infrastructure. Capture before verifier upload and cleanup:
+`--no-delete` still removes running containers through Compose down.
+
+The two Oracle lifecycle controls are unscored authoring checks, not model
+trials. Fresh model contexts must exclude their solution folder. Current
+hardened model/provider measurements remain NOT RUN pending clean source and
+new declarations. Source, task/dataset/harness/controller/configuration hashes
+and all three runtime services must be bound before collecting model scores.
+
+
+### 2026-10-17 completed host-verified measurement amendment
+
+The [new dated evidence](../docs/testing/evidence/discovery-current-20261017/README.md) records 5/5 scoreable Codex passes
+across six attempts, one provider-error exclusion, and a separate fresh
+provider V7 completion after a retained V6 infrastructure timeout. Both
+executed at clean `7d8e9ebb`; later evidence commits do not change that identity.
+The fixed-task decision is PRIMITIVES SUFFICIENT for Codex only, NOT GATED.
+Old scores remain unpooled; Oracle controls are unscored. Deployed quality,
+agent variants, Fable benchmark and independent human acceptance remain open.

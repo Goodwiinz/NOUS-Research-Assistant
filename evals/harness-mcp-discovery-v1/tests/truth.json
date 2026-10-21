@@ -1,0 +1,91 @@
+{
+  "benchmark_id": "harness-mcp-discovery-v1",
+  "answer_path": "/app/answer.md",
+  "mock_events_url": "http://mock-nous:8080/events",
+  "catalog_path": "/api/v1/integrations/tools",
+  "read_path": "/api/v1/integrations/tools/read",
+  "required_search_tools": [
+    "search_documents",
+    "search_arxiv",
+    "search_external_database"
+  ],
+  "corpus": {
+    "document_ids": [
+      "4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19",
+      "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73"
+    ],
+    "titles": [
+      "Ward-Round Notes on Citation-Grounded RAG for Clinical Question Answering",
+      "Hallucination Audit of a Hospital Formulary RAG Assistant"
+    ]
+  },
+  "arxiv": {
+    "ids": [
+      "2509.17001",
+      "2509.17002"
+    ]
+  },
+  "pubmed": {
+    "pmids": [
+      "40517001",
+      "40517002"
+    ],
+    "dois": [
+      "10.5555/nouseval.2025.40517001",
+      "10.5555/nouseval.2025.40517002"
+    ]
+  },
+  "served_titles": [
+    "Ward-Round Notes on Citation-Grounded RAG for Clinical Question Answering",
+    "Hallucination Audit of a Hospital Formulary RAG Assistant",
+    "Chart-Aware Retrieval-Augmented Generation for Clinical Question Answering over Electronic Health Records",
+    "Guideline Graph Re-Ranking Reduces Hallucination in Medical Retrieval-Augmented Question Answering",
+    "Retrieval-augmented large language models for answering clinicians' drug-dosing questions: a prospective evaluation",
+    "Citation fidelity of retrieval-augmented generation in emergency medicine question answering"
+  ],
+  "served_uuids": [
+    "4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19",
+    "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73",
+    "e51a8d27-6c4f-4b93-a0d8-3f7b2c9e6a40"
+  ],
+  "papers": [
+    {
+      "returned_id": "4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19",
+      "document_id": "4c0e7a52-91d3-4b6f-8e2a-6d5f0b7c3a19",
+      "title": "Ward-Round Notes on Citation-Grounded RAG for Clinical Question Answering",
+      "tool_name": "search_documents"
+    },
+    {
+      "returned_id": "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73",
+      "document_id": "9b3d1f68-2e7c-4a05-b4d9-0f8e6c2a5d73",
+      "title": "Hallucination Audit of a Hospital Formulary RAG Assistant",
+      "tool_name": "search_documents"
+    },
+    {
+      "returned_id": "2509.17001",
+      "arxiv_id": "2509.17001",
+      "title": "Chart-Aware Retrieval-Augmented Generation for Clinical Question Answering over Electronic Health Records",
+      "tool_name": "search_arxiv"
+    },
+    {
+      "returned_id": "2509.17002",
+      "arxiv_id": "2509.17002",
+      "title": "Guideline Graph Re-Ranking Reduces Hallucination in Medical Retrieval-Augmented Question Answering",
+      "tool_name": "search_arxiv"
+    },
+    {
+      "returned_id": "40517001",
+      "pmid": "40517001",
+      "doi": "10.5555/nouseval.2025.40517001",
+      "title": "Retrieval-augmented large language models for answering clinicians' drug-dosing questions: a prospective evaluation",
+      "tool_name": "search_external_database"
+    },
+    {
+      "returned_id": "40517002",
+      "pmid": "40517002",
+      "doi": "10.5555/nouseval.2025.40517002",
+      "title": "Citation fidelity of retrieval-augmented generation in emergency medicine question answering",
+      "tool_name": "search_external_database"
+    }
+  ]
+}
