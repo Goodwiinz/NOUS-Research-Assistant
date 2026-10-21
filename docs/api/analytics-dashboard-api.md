@@ -1,5 +1,7 @@
 # Analytics Dashboard API Specification
 
+> **Stale / historical (2026-10-17):** It covers only part of the API and its paths and schemas may have drifted. The source of truth is the generated `backend/openapi.json` (also served at `/docs` when `DEBUG` is on). Current contracts: [`docs/engineering/`](../engineering/README.md).
+
 ## Overview
 
 This document provides the comprehensive API specification for the Knowledge Graph Analytics Dashboard in the Multimodal Enterprise RAG System. The API supports real-time metrics, historical analysis, custom reporting, and dashboard configuration.

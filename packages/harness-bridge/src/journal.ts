@@ -50,7 +50,10 @@ export class Journal {
   private consumers = new WeakSet<HarnessAdapter>();
   constructor(
     path: string,
-    private optionsFor: (workspaceId: string) => SessionOptions,
+    private optionsFor: (
+      workspaceId: string,
+      projectId?: string,
+    ) => SessionOptions,
     // Trusted local composition/test hooks; never deserialize from bridge input.
     private local: {
       readBootIdentity?: () => BootIdentity;
@@ -412,7 +415,7 @@ export class Journal {
     let retainInterruptClaim = false;
     try {
       if (b.kind === "start") {
-        const options = this.optionsFor(command.workspaceId);
+        const options = this.optionsFor(command.workspaceId, command.projectId);
         const session = b.sessionId
           ? await adapter.resumeSession(b.sessionId, options)
           : await adapter.startSession(options);
@@ -511,7 +514,13 @@ export class Journal {
       // NOUS refused this run (see reject): nothing more of it is uploaded.
       if (row.state === "denied") return undefined;
       const command: BridgeCommand = JSON.parse(row.command);
-      const { expiresAt, body: ignored, ...identity } = command;
+      // projectId selects the run's NOUS project locally; NOUS events never carry it.
+      const {
+        expiresAt,
+        body: ignored,
+        projectId: _project,
+        ...identity
+      } = command;
       const event: BridgeEvent = {
         ...identity,
         ...(eventCommandId ? { commandId: eventCommandId } : {}),

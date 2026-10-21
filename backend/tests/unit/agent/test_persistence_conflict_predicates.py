@@ -48,7 +48,7 @@ async def test_assistant_conflict_predicate_uses_literal_role() -> None:
     select_result = MagicMock()
     select_result.scalar_one_or_none.return_value = None
     db = SimpleNamespace(
-        execute=AsyncMock(side_effect=[insert_result, select_result]),
+        execute=AsyncMock(side_effect=[select_result, insert_result, select_result]),
         commit=AsyncMock(),
     )
 
@@ -61,6 +61,6 @@ async def test_assistant_conflict_predicate_uses_literal_role() -> None:
         client_message_id=str(uuid4()),
     )
 
-    target = _conflict_target_sql(db.execute.await_args_list[0].args[0])
+    target = _conflict_target_sql(db.execute.await_args_list[1].args[0])
     assert "role = 'assistant'" in target
     assert "$" not in target

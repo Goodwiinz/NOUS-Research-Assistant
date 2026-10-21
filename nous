@@ -6,9 +6,10 @@
 # NOUS_API_URL before invocation (e.g. NOUS_API_URL=http://localhost:8000/api/v1
 # ./nous) or by setting it in your shell rc.
 #
-# `nous --rc` pairs the current folder with a NOUS project for Local Codex
-# (packages/harness-bridge). Symlink this file into ~/.local/bin from a
-# checkout that tracks origin/develop to run it from any folder.
+# `nous --rc` pairs this computer with your whole NOUS account for Local Codex
+# and registers the current folder (packages/harness-bridge). Symlink this file
+# into ~/.local/bin from a checkout that tracks origin/develop to run it from
+# any folder.
 set -euo pipefail
 unset CDPATH
 export NOUS_DEFAULT_API_URL="https://dev-api.goodwiinz.tech/api/v1"

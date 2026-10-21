@@ -1,5 +1,7 @@
 # A/B Testing System Architecture
 
+> **Stale / historical (2026-10-17):** It is a design document for a subsystem; the described service layout may not match the current code. Verify against `backend/src/` and `backend/openapi.json` before relying on it. Current contracts: [`docs/engineering/`](../../docs/engineering/README.md).
+
 ## Overview
 
 This document describes the comprehensive A/B testing system designed for the Multimodal Enterprise RAG System. The system provides real-time experiment assignment, high-volume metrics collection, statistical analysis, and reporting capabilities with a focus on performance and reliability.

@@ -22,7 +22,7 @@ from src.schemas.harness import BridgeEvent, NativeRequest, NativeResponseAck
 from src.schemas.integration_context import IntegrationContext
 from src.services.agent.run_event_store import append_event
 from src.services.agent.run_event_types import RunEventType
-from src.services.harness.delivery import TERMINAL, _authorize, now
+from src.services.harness.delivery import TERMINAL, _authorize, grant_context, now
 from src.services.integrations.context import (
     IntegrationAccessDenied,
     IntegrationConflict,
@@ -414,7 +414,11 @@ async def resolve_native_request(
         if (
             request.actor_id != context.user_id
             or request.organization_id != context.organization_id
-            or request.project_id != context.project_id
+            or (
+                context.project_id is not None
+                if context.binding_kind == "account"
+                else request.project_id != context.project_id
+            )
             or request.run_id
             != (str(context.run_id) if context.run_id else request.run_id)
         ):
@@ -433,6 +437,10 @@ async def resolve_native_request(
             .execution_options(populate_existing=True)
         )
         if run is None or session is None:
+            raise IntegrationAccessDenied()
+        if context.binding_kind == "account" and request.project_id != run.project_id:
+            # An account pairing grant names no project: the request must name
+            # its run's own, which _authorize then checks against the account.
             raise IntegrationAccessDenied()
         current_grant = await _validate_grant(
             db, await db.get(IntegrationGrant, session.grant_id, populate_existing=True)
@@ -632,14 +640,13 @@ async def native_request_context(
         grant is None
         or grant.user_id != actor_id
         or grant.organization_id != request.organization_id
-        or grant.project_id != request.project_id
     ):
         raise IntegrationAccessDenied()
-    return IntegrationContext(
-        user_id=grant.user_id,
-        organization_id=grant.organization_id,
-        project_id=grant.project_id,
-        thread_id=grant.thread_id,
-        run_id=UUID(grant.run_id) if grant.run_id else None,
-        grant_id=grant.id,
-    )
+    if grant.binding_kind == "account":
+        # The bridge's account pairing grant after the long-run swap names no
+        # project: the request must name its run's own.
+        if request.project_id is None or request.project_id != run.project_id:
+            raise IntegrationAccessDenied()
+    elif grant.project_id != request.project_id:
+        raise IntegrationAccessDenied()
+    return grant_context(grant)

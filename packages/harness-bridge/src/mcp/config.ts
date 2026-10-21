@@ -12,6 +12,11 @@ function mcpArgs(session: McpSession): string[] {
     throw new Error("MCP state directory must be absolute");
   if (session.outputRoot !== undefined && !isAbsolute(session.outputRoot))
     throw new Error("MCP output root must be absolute");
+  if (
+    session.project !== undefined &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session.project)
+  )
+    throw new Error("MCP project must be a project UUID");
   const tsxLoader = fileURLToPath(import.meta.resolve("tsx"));
   return [
     "--import",
@@ -29,6 +34,7 @@ function mcpArgs(session: McpSession): string[] {
     ...(session.actions ? ["--actions"] : []),
     ...(session.handoff ? ["--handoff"] : []),
     ...(session.library ? ["--library"] : []),
+    ...(session.project ? ["--project", session.project] : []),
   ];
 }
 /** Session-scoped Codex MCP configuration; only opaque handles reach argv. */

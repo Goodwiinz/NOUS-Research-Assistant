@@ -89,6 +89,26 @@ class Thread(BaseModel):
         nullable=True,
         comment='Document IDs for RAG filtering. Format: {"document_ids": ["uuid1", "uuid2"]}',
     )
+    message_branching = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    branch_document_id = Column(
+        GUID(),
+        ForeignKey(
+            "documents.id", name="fk_threads_branch_document_id", ondelete="SET NULL"
+        ),
+        nullable=True,
+    )
+    selected_message_id = Column(
+        GUID(),
+        ForeignKey(
+            "chat_messages.id",
+            name="fk_threads_selected_message_id",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
 
     # Database indexes for performance optimization
     __table_args__ = (
@@ -104,6 +124,7 @@ class Thread(BaseModel):
         back_populates="thread",
         cascade="all, delete-orphan",
         order_by="ChatMessage.created_at.asc()",
+        foreign_keys="ChatMessage.thread_id",
     )
     source_project = relationship("Collection", foreign_keys=[source_project_id])
 

@@ -154,9 +154,11 @@ LEAF_TXN: Dict[str, Dict[str, FrozenSet[str]]] = {
         "thread_viewer_is_trusted": frozenset(),
         "message_viewer_is_trusted": frozenset(),
         "member_or_owner_workspace_clause": frozenset(),
+        "accessible_workspace_clause": frozenset(),
         "get_workspace": frozenset(),
         "get_conversation": frozenset(),
         "get_thread": frozenset(),
+        "get_thread_lean": frozenset(),
         "get_message": frozenset(),
         "get_collection": frozenset(),
         "get_accessible_document_or_none": frozenset(),
@@ -186,6 +188,7 @@ LEAF_TXN: Dict[str, Dict[str, FrozenSet[str]]] = {
         "delete_conversation": frozenset({"flush"}),
     },
     "thread_service": {
+        "get_thread_detail": frozenset(),  # selected-branch read, caller owns session
         "last_message_preview_expression": frozenset(),  # query builder, no db
         # PR 3 Task 3.2 (threads flip): commit -> flush; the ``commit`` flag on
         # create_thread was DELETED (now unconditional flush + refresh). The
@@ -223,6 +226,8 @@ LEAF_TXN: Dict[str, Dict[str, FrozenSet[str]]] = {
 # DELETES these flags as ownership moves up — when a flag is removed, delete
 # its row here in the same PR.
 LEAF_FLAG_DEFAULTS: Dict[Tuple[str, str, str], bool] = {
+    ("workspace_access", "get_thread", "authorize_bound_document"): False,
+    ("workspace_access", "get_message", "authorize_bound_document"): False,
     ("workspace_service", "create_workspace", "enforce_org_match"): True,
     ("workspace_service", "list_workspaces", "filter_deleted_memberships"): True,
     ("workspace_service", "delete_workspace", "stamp_deleted_at"): False,
@@ -394,6 +399,7 @@ CHAT_PURE_DELEGATES: FrozenSet[str] = frozenset(
         "list_threads",
         "bulk_summarize_threads",
         "_filter_owned_document_ids",
+        "_lock_linear_thread",
         "get_message",
         "list_messages",
         "get_collection",

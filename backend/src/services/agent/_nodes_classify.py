@@ -262,6 +262,29 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         return_exceptions=True,
     )
 
+    if state.get("branch_document_id"):
+        # Compatibility inputs explicitly promise all supplied files. A
+        # revoked/unready/blank file must terminate this accepted run rather
+        # than turn into a partial answer from other files or prior history.
+        rag_result = results[0]
+        if isinstance(rag_result, asyncio.CancelledError):
+            raise rag_result
+        expected = set(state.get("attachment_ids") or [])
+        statuses = (
+            rag_result.get("attachment_status", [])
+            if isinstance(rag_result, dict)
+            else []
+        )
+        ready = {
+            item.get("document_id")
+            for item in statuses
+            if isinstance(item, dict) and item.get("status") == "ready"
+        }
+        if not expected or ready != expected:
+            from src.services.threads.message_branches import BranchAccessError
+
+            raise BranchAccessError(409, "PDF chat files are unavailable")
+
     defaults = [
         {"retrieved_contexts": []},
         {"intent": "general", "intent_confidence": 0.0},
@@ -282,6 +305,7 @@ async def preprocessing_node(state: AgentState, config: RunnableConfig) -> dict:
         "last_error_info": {},
         "user_confirmed": False,
         "pending_confirmation": {},
+        "page_filter": None,
         "turn_index": int(state.get("turn_index") or 0) + 1,
         # compaction_count is documented "reset per turn" (state.py) but was
         # omitted, so it accumulated for the life of the thread. _force_-

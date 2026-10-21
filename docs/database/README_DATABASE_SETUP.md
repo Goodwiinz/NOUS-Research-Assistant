@@ -2,23 +2,23 @@
 
 ## Quick Start
 
-The NOUS platform uses a multi-database architecture: PostgreSQL (primary), Neo4j (knowledge graph), Redis (cache/sessions), and DO Knowledge Base (vector/RAG retrieval).
+The NOUS platform uses a multi-database architecture: PostgreSQL (primary), Neo4j (knowledge graph), Redis (cache/sessions), and, optionally, DO Knowledge Base (off by default). Live retrieval is PostgreSQL full-text search.
 
 ### Prerequisites
 
 - Docker and Docker Compose installed (for local dev)
-- Python 3.8+ for initialization scripts
+- Python 3.11 (the version CI uses; see `PYTHON_VERSION` in `.github/workflows/test-pipeline.yml`)
 
 ### Current Status
 
 | Service           | Status | Role                   | Connection                                    |
 | ----------------- | ------ | ---------------------- | --------------------------------------------- |
-| PostgreSQL        | Active | Primary DB             | Dev: `rag-postgres-1` / Prod: Supabase        |
+| PostgreSQL        | Active | Primary DB             | Local: `rag-postgres-1`; AWS dev: RDS PostgreSQL |
 | Neo4j             | Active | Knowledge graph        | `bolt://localhost:7687` (dev)                 |
 | Redis             | Active | Cache / sessions       | Dev: local port 6379 / Prod: DO Managed Redis |
-| DO Knowledge Base | Active | Vector / RAG retrieval | Managed via `DO_KB_*` env vars                |
+| DO Knowledge Base | Flag-off (`DO_KB_ENABLED=False` by default) | Optional retrieval backend | `DO_KB_*` env vars |
 
-> **Note:** Qdrant has been removed. The retrieval backend is DO Knowledge Base — configure via `DO_KB_*` env vars (see Environment Variables below).
+> **Note (2026-10-17):** Qdrant has been removed. DO Knowledge Base is an optional backend behind `DO_KB_ENABLED`, which defaults to `False` (`backend/src/core/config.py`). Live retrieval is PostgreSQL full-text search; pgvector semantic search is flag-gated (`SEMANTIC_SEARCH_ENABLED`, `DOCUMENT_EMBEDDINGS_ENABLED`, both default off). AWS application SQL uses RDS PostgreSQL; Supabase remains an auth/auxiliary service (see `docs/engineering/gotchas.md`). Production sections below that mention Supabase as the application database are historical.
 
 ## Database Files
 

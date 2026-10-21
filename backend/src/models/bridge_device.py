@@ -34,7 +34,9 @@ class WorkspaceBinding(BaseModel):
         GUID(), ForeignKey("bridge_devices.id"), nullable=False
     )
     workspace_id: Mapped[UUID] = mapped_column(GUID(), nullable=False)
-    project_id: Mapped[UUID] = mapped_column(
-        GUID(), ForeignKey("collections.id"), nullable=False
+    # NULL: an account folder, usable from any chat whose project the device's
+    # account approval covers (services/integrations/context.bind_account_workspace).
+    project_id: Mapped[UUID | None] = mapped_column(
+        GUID(), ForeignKey("collections.id"), nullable=True
     )
     label: Mapped[str] = mapped_column(String(120), nullable=False)

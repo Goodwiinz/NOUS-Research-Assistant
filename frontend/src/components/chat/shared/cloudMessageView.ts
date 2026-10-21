@@ -112,6 +112,8 @@ export interface ChatPageMessage {
    * for legacy rows — edit-and-resend needs the unambiguous value because the
    * backend looks the superseded turn up BY client_message_id. */
   clientMessageId?: string;
+  parentMessageId?: string | null;
+  siblingUserMessageIds?: string[];
   /** Transient edit/regenerate ownership marker. The server's canonical rows
    * remain untouched while this replacement is in flight. */
   replacesClientMessageId?: string;
@@ -186,6 +188,8 @@ export function mapDbMessageToChatPageMessage(
       ? { clientMessageId: dbMsg.client_message_id }
       : {}),
     source: 'canonical',
+    parentMessageId: dbMsg.parent_message_id,
+    siblingUserMessageIds: dbMsg.sibling_user_message_ids,
     role:
       dbMsg.role === MessageRole.USER
         ? ('user' as const)
@@ -239,6 +243,7 @@ interface SelectDisplayedMessagesParams {
   localMessages: ChatPageMessage[];
   storeMessages?: ChatMessage[];
   messageFreshness?: 'fresh' | 'stale' | 'refreshing';
+  branching?: boolean;
 }
 
 /**
@@ -322,15 +327,56 @@ function mergeLocalProvenance(
   });
 }
 
+/** A local-only row the user still has to act on: a failure bubble with its
+ * Retry control, or a pending approval card. */
+function isRetainedLocalOnly(message: ChatPageMessage): boolean {
+  return (
+    message.source === 'local-only' &&
+    (message.error !== undefined || message.pendingApproval !== undefined)
+  );
+}
+
+/**
+ * Clears the transcript overlay when the user selects another branch. The
+ * previous branch's optimistic rows and failure bubbles belong to a path that
+ * is no longer displayed. A pending approval stays: its run is still waiting
+ * on the user, and only the confirmation flow may remove it.
+ */
+export function dropBranchOverlays(
+  localMessages: ChatPageMessage[]
+): ChatPageMessage[] {
+  const kept = localMessages.filter(
+    (message) =>
+      message.source === 'canonical' || message.pendingApproval !== undefined
+  );
+  return kept.length === localMessages.length ? localMessages : kept;
+}
+
 export function selectDisplayedMessages({
   localMessages,
   storeMessages = [],
   messageFreshness,
+  branching = false,
 }: SelectDisplayedMessagesParams): ChatPageMessage[] {
   const canonical = mergeLocalProvenance(
     mapStoreMessagesToChatMessages(storeMessages),
     localMessages
   );
+  // A selected branch is a complete canonical path, so a fresh page drops
+  // optimistic rows and any replacement marker. Sibling overlays are cleared
+  // when the user switches branch (dropBranchOverlays); what remains here is
+  // this branch's own failure bubbles and approval cards, which have no
+  // canonical row and must survive the refresh that follows them.
+  if (branching && messageFreshness === 'fresh') {
+    const canonicalIds = new Set(canonical.map((message) => message.runtimeId));
+    return [
+      ...canonical,
+      ...localMessages.filter(
+        (message) =>
+          isRetainedLocalOnly(message) && !canonicalIds.has(message.runtimeId)
+      ),
+    ];
+  }
   const replacement = [...localMessages]
     .reverse()
     .find(

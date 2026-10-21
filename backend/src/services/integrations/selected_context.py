@@ -45,6 +45,11 @@ CONTEXT_SCOPE = "context:read"
 MAX_OPTIONS = 100
 # Wire budget for one read, measured as UTF-8 bytes of the JSON result.
 MAX_RESULT_BYTES = 64 * 1024
+MORE_MEMORIES_NOTICE = (
+    "More selected memories remain: call read_selected_context again with "
+    "offset={offset}. If this tool takes no offset, update nous-harness to "
+    "read the rest."
+)
 
 
 class ContextNotFound(Exception):
@@ -56,7 +61,7 @@ class ContextSelectionInvalid(Exception):
 
 
 class ContextSelectionTooLarge(Exception):
-    """The selected memories would not fit in one read."""
+    """A selected memory would not fit whole in one read page."""
 
 
 def _identity(user: User) -> tuple[UUID, UUID]:
@@ -191,6 +196,80 @@ def _skill_option(item: dict[str, Any]) -> SkillOption:
         version=item["version"],
         content_hash=item["content_hash"],
     )
+
+
+def _frozen_skills(snapshot: Any) -> list[dict[str, Any]]:
+    if snapshot is None:
+        return []
+    return [
+        _skill_option(item).model_dump(mode="json") for item in snapshot.skill_catalog
+    ]
+
+
+def _memory_item(memory: ProjectMemory) -> dict[str, Any]:
+    return {"memory_id": str(memory.id), "content": str(memory.content)}
+
+
+def _page_result(
+    memories: list[dict[str, Any]],
+    skills: list[dict[str, Any]],
+    next_offset: int | None,
+) -> ToolResult:
+    """One read page. The read and the save's size check both build it here."""
+    page: dict[str, Any] = {"memories": memories}
+    if skills:
+        page["skills"] = skills
+    page["next_offset"] = next_offset
+    if next_offset is not None:
+        # A client that cannot send an offset still learns that more remains.
+        page["truncated"] = True
+        page["notice"] = MORE_MEMORIES_NOTICE.format(offset=next_offset)
+    return ToolResult(
+        content=[page],
+        is_error=False,
+        source_refs=[{"memory_id": m["memory_id"]} for m in memories]
+        + [
+            {"version_id": item["version_id"], "content_hash": item["content_hash"]}
+            for item in skills
+        ],
+    )
+
+
+def _page_bytes(
+    memories: list[dict[str, Any]],
+    skills: list[dict[str, Any]],
+    next_offset: int | None,
+) -> int:
+    page = _page_result(memories, skills, next_offset)
+    return _wire_bytes(page.model_dump(mode="json"))
+
+
+def _cut_page(
+    item: dict[str, Any], skills: list[dict[str, Any]], next_offset: int | None
+) -> ToolResult | None:
+    """A page of `item` alone, its content cut to the longest prefix that fits."""
+    content = str(item["content"])
+
+    def cut(length: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "memory_id": item["memory_id"],
+                "content": content[:length],
+                "content_truncated": True,
+            }
+        ]
+
+    if _page_bytes(cut(0), skills, next_offset) > MAX_RESULT_BYTES:
+        return None
+    # Every character costs at least one byte, so no longer prefix can fit.
+    low, high = 0, min(len(content), MAX_RESULT_BYTES)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _page_bytes(cut(middle), skills, next_offset) <= MAX_RESULT_BYTES:
+            low = middle
+        else:
+            high = middle - 1
+    return _page_result(cut(low), skills, next_offset)
 
 
 async def _skill_snapshot(
@@ -475,8 +554,6 @@ async def _write_selection(
     memories = await _valid_selected(db, ordered, project_id, user_id, organization_id)
     if len(memories) != len(ordered):
         raise ContextSelectionInvalid()
-    if _wire_bytes([str(m.content) for m in memories]) > MAX_RESULT_BYTES:
-        raise ContextSelectionTooLarge()
     values = [str(i) for i in ordered]
     row = await _selection(db, consent_id, user_id, organization_id)
     if row is not None:
@@ -492,6 +569,16 @@ async def _write_selection(
         )
         db.add(row)
     await _select_skills(db, row, skill_version_ids, refresh_skills)
+    # The read pages, so only a memory that no page can hold whole is refused.
+    # Measure each in its worst case: first on page 0, beside the whole frozen
+    # catalog (live or not, since flags and expiry change without a save), with
+    # the longest next_offset that could follow it. save_selection rolls back.
+    skills = _frozen_skills(await _skill_snapshot(db, row, include_expired=True))
+    last = len(memories) - 1
+    for position, memory in enumerate(memories):
+        following = last if position < last else None
+        if _page_bytes([_memory_item(memory)], skills, following) > MAX_RESULT_BYTES:
+            raise ContextSelectionTooLarge()
     await db.commit()
 
 
@@ -510,29 +597,33 @@ async def save_selection(
     if len(ordered) > MAX_SELECTED_MEMORIES:
         raise ContextSelectionInvalid()
     try:
-        await _write_selection(
-            db,
-            user_id,
-            organization_id,
-            request_id,
-            ordered,
-            skill_version_ids,
-            refresh_skills,
-        )
-    except IntegrityError:
-        # A concurrent first save inserted the row; rerun the whole validated
-        # write once, now as an update. Only plain ids survive the rollback.
-        await db.rollback()
-        await _write_selection(
-            db,
-            user_id,
-            organization_id,
-            request_id,
-            ordered,
-            skill_version_ids,
-            refresh_skills,
-        )
+        try:
+            await _write_selection(
+                db,
+                user_id,
+                organization_id,
+                request_id,
+                ordered,
+                skill_version_ids,
+                refresh_skills,
+            )
+        except IntegrityError:
+            # A concurrent first save inserted the row; rerun the whole
+            # validated write once, now as an update. Only plain ids survive
+            # the rollback.
+            await db.rollback()
+            await _write_selection(
+                db,
+                user_id,
+                organization_id,
+                request_id,
+                ordered,
+                skill_version_ids,
+                refresh_skills,
+            )
     except Exception:
+        # Any failure, the rerun's included (a size refusal can follow a
+        # snapshot it already wrote), leaves nothing half-written.
         await db.rollback()
         raise
     return await _options(db, user_id, organization_id, request_id)
@@ -543,9 +634,17 @@ def _unavailable(code: str) -> ToolResult:
 
 
 async def read_selected_context(
-    db: AsyncSession, context: IntegrationContext
+    db: AsyncSession, context: IntegrationContext, offset: int = 0
 ) -> ToolResult:
-    """Only the selected memories that still belong to the authorized project."""
+    """One page of the selected memories that still belong to the project.
+
+    `offset` is a position in the saved selection, so a memory deleted
+    between two reads never shifts the next page. A page holds the memories
+    from there that fit whole, the frozen skills only at offset 0, and the
+    position to read next.
+    """
+    # The route and the MCP tool bound offset too; never trust that here.
+    offset = max(offset, 0)
     # The project comes from the grant and never from the caller. A workspace
     # grant has none (and cannot hold context:read), so it reads nothing, and
     # the answer does not depend on which grant row it names.
@@ -576,62 +675,33 @@ async def read_selected_context(
     snapshot = await _skill_snapshot(db, selection)
     if selection.skill_version_ids and snapshot is None:
         return _unavailable("skill_snapshot_unavailable")
-    skills = (
-        [_skill_option(item).model_dump(mode="json") for item in snapshot.skill_catalog]
-        if snapshot is not None
-        else []
-    )
-    selected = await _valid_selected(
-        db,
-        [UUID(i) for i in selection.memory_ids],
-        project_id,
-        context.user_id,
-        context.organization_id,
-    )
-    # Memories can grow after they were selected; share the leading ones that
-    # fit and say so, rather than nothing at all.
-    memories: list[dict[str, str]] = []
-    truncated = False
-    for memory in selected:
-        item = {"memory_id": str(memory.id), "content": str(memory.content)}
-        if (
-            _wire_bytes(
-                {
-                    "memories": [*memories, item],
-                    **({"skills": skills} if skills else {}),
-                }
-            )
-            > MAX_RESULT_BYTES
-        ):
-            truncated = True
-            break
-        memories.append(item)
-
-    def outcome() -> ToolResult:
-        return ToolResult(
-            content=[
-                {
-                    "memories": memories,
-                    **({"skills": skills} if skills else {}),
-                    **({"truncated": True} if truncated else {}),
-                }
-            ],
-            is_error=False,
-            source_refs=[{"memory_id": m["memory_id"]} for m in memories]
-            + [
-                {"version_id": item["version_id"], "content_hash": item["content_hash"]}
-                for item in skills
-            ],
+    skills = _frozen_skills(snapshot) if offset == 0 else []
+    ids = [UUID(i) for i in selection.memory_ids]
+    valid: dict[UUID, ProjectMemory] = {
+        cast(UUID, memory.id): memory
+        for memory in await _valid_selected(
+            db, ids[offset:], project_id, context.user_id, context.organization_id
         )
-
-    result = outcome()
-    while _wire_bytes(result.model_dump(mode="json")) > MAX_RESULT_BYTES:
-        if not memories:
-            return _unavailable("context_result_too_large")
-        memories.pop()
-        truncated = True
-        result = outcome()
-    return result
+    }
+    # Saved positions whose memory is still valid; the others are consumed.
+    positions = [p for p in range(offset, len(ids)) if ids[p] in valid]
+    memories: list[dict[str, Any]] = []
+    next_offset: int | None = None
+    for index, position in enumerate(positions):
+        # Measure the page exactly as it would go out if it ended here.
+        following = positions[index + 1] if index + 1 < len(positions) else None
+        item = _memory_item(valid[ids[position]])
+        if _page_bytes([*memories, item], skills, following) > MAX_RESULT_BYTES:
+            if memories:
+                break  # next_offset already names this position
+            # It cannot fit even alone (it grew after the save, or the save
+            # predates this check): cut it and still move past it, so the read
+            # can never loop.
+            cut = _cut_page(item, skills, following)
+            return cut if cut is not None else _unavailable("context_result_too_large")
+        memories.append(item)
+        next_offset = following
+    return _page_result(memories, skills, next_offset)
 
 
 async def load_selected_skill(

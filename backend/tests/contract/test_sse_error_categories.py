@@ -52,6 +52,7 @@ _EXPECTED_CATEGORY_VALUES = [
     "conflict",
     "internal",
     "device_bound_to_another_chat",
+    "device_not_connected_to_project",
 ]
 
 
