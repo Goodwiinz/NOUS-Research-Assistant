@@ -219,24 +219,26 @@ def _entity_document_ids_expr(alias: str) -> str:
 
 
 def _append_entity_document_id_clause(
-    alias: str, doc_expr: str, carry: Tuple[str, ...] = ()
+    alias: str, docs_expr: str, carry: Tuple[str, ...] = ()
 ) -> str:
-    """``WITH … SET`` that idempotently appends ``doc_expr`` to the entity's
-    ``document_ids`` (KN2 reference count).
+    """``WITH … SET`` that idempotently appends the ids in ``docs_expr`` to the
+    entity's ``document_ids`` (KN2 reference count).
 
-    ``doc_expr`` is a bound parameter or row field (never interpolated user
-    text). A null document id leaves the list unchanged (but still
-    materialises it from the legacy fallback); an id already present is not
-    duplicated. ``carry`` names extra variables the WITH must keep in scope
-    (e.g. the UNWIND row). Callers append their own RETURN.
+    ``docs_expr`` is a Cypher list built from bound parameters or row fields
+    (never interpolated user text). Null ids are skipped, leaving the list
+    unchanged (but still materialised from the legacy fallback); ids already
+    present are not duplicated. Appending a whole list rather than one id makes
+    the result independent of write order, so batch rows that merge into the
+    same node can each carry every document that names it. ``carry`` names
+    extra variables the WITH must keep in scope (e.g. the UNWIND row). Callers
+    append their own RETURN.
     """
     kept = ", ".join((*carry, alias))
     return (
         f"WITH {kept}, {_entity_document_ids_expr(alias)} AS existing_document_ids\n"
-        f"SET {alias}.document_ids = CASE\n"
-        f"    WHEN {doc_expr} IS NULL OR {doc_expr} IN existing_document_ids\n"
-        f"        THEN existing_document_ids\n"
-        f"    ELSE existing_document_ids + [{doc_expr}] END"
+        f"SET {alias}.document_ids = existing_document_ids + [\n"
+        f"    d IN {docs_expr}\n"
+        f"    WHERE d IS NOT NULL AND NOT d IN existing_document_ids]"
     )
 
 
@@ -572,7 +574,7 @@ class KnowledgeGraphService:
                     e.confidence_score = CASE
                         WHEN $confidence_score > e.confidence_score THEN $confidence_score
                         ELSE e.confidence_score END
-                {_append_entity_document_id_clause("e", "$source_document_id")}
+                {_append_entity_document_id_clause("e", "[$source_document_id]")}
                 RETURN e.id AS resolved_id, e.created_at AS created_at, e.updated_at AS updated_at
                 """
 
@@ -831,7 +833,11 @@ class KnowledgeGraphService:
         ``source_document_id`` may then point at a deleted document — harmless
         for reads. Legacy nodes (no ``document_ids``) behave exactly as before
         this change: they die only when this doc created them and they are
-        orphaned. No data migration is attempted here.
+        orphaned. A node created without any document (``POST /entities`` with
+        no source, the arXiv path) has a null ``source_document_id`` and is never
+        deleted here, even after a document later named it and was deleted —
+        the same protection the old creator-anchored match gave it. No data
+        migration is attempted here.
 
         ``source_document_id`` is globally unique to one document in one org, so
         both steps are already tenant-isolated; the ``organization_id``
@@ -869,10 +875,11 @@ class KnowledgeGraphService:
                     RETURN count(r) as deleted_count
                     """
         # Step 2: drop this doc from every member node's reference count, then
-        # delete only nodes left with NO document AND no relationships. Both
-        # guards are load-bearing: the membership guard keeps nodes other docs
-        # still mention (KN2); the COUNT { (e)--() } = 0 orphan guard keeps
-        # nodes other docs' edges still touch.
+        # delete only nodes left with NO document AND no relationships. All
+        # three guards are load-bearing: the membership guard keeps nodes other
+        # docs still mention (KN2); the non-null source_document_id guard keeps
+        # nodes that were created without any document; the COUNT { (e)--() }
+        # = 0 orphan guard keeps nodes other docs' edges still touch.
         member_ids = _entity_document_ids_expr("e")
         node_query = f"""
                     MATCH (e:Entity)
@@ -886,7 +893,9 @@ class KnowledgeGraphService:
                             ELSE e.source_document_id END,
                         e.updated_at = datetime()
                     WITH e, remaining_document_ids
-                    WHERE size(remaining_document_ids) = 0 AND COUNT {{ (e)--() }} = 0
+                    WHERE size(remaining_document_ids) = 0
+                      AND e.source_document_id IS NOT NULL
+                      AND COUNT {{ (e)--() }} = 0
                     DELETE e
                     RETURN count(e) as deleted_count
                     """
@@ -2165,13 +2174,27 @@ class KnowledgeGraphService:
                     },
                 }
             )
+        # Every document in this batch that names a node, keyed like the
+        # apoc.merge identity map below (de-duplicated, first-seen order).
+        docs_by_node: Dict[Tuple[str, str, str], List[str]] = {}
+        for row, e in zip(rows, valid):
+            key = (row["etype"], row["canonical_key"], row["org_key"])
+            node_docs = docs_by_node.setdefault(key, [])
+            if e.source_document_id and e.source_document_id not in node_docs:
+                node_docs.append(e.source_document_id)
+        for row in rows:
+            row["document_ids"] = docs_by_node[
+                (row["etype"], row["canonical_key"], row["org_key"])
+            ]
         # organization_id is part of the apoc.merge identity map (matches the
         # entity_canonical_org_unique constraint) so two orgs' same name+type
         # entities are separate nodes. Coalesced to "" since the key can't be null.
         # row.props.source_document_id is the ON CREATE creator stamp; the
-        # trailing WITH/SET appends it to node.document_ids on create AND match
-        # (KN2 reference count). Two rows for the same node in one batch read
-        # the pre-batch list, so a batch is expected to carry ONE document.
+        # trailing WITH/SET appends row.document_ids to node.document_ids on
+        # create AND match (KN2 reference count). Rows that merge into the same
+        # node may read the pre-batch list, so each row carries EVERY document
+        # in this batch that names its node: whichever row writes last, the
+        # node ends up with all of them.
         query = f"""
         UNWIND $rows AS row
         CALL apoc.merge.node(['Entity', row.etype],
@@ -2183,7 +2206,7 @@ class KnowledgeGraphService:
             node.confidence_score = CASE
                 WHEN row.props.confidence_score > coalesce(node.confidence_score, 0.0)
                 THEN row.props.confidence_score ELSE node.confidence_score END
-        {_append_entity_document_id_clause("node", "row.props.source_document_id", ("row",))}
+        {_append_entity_document_id_clause("node", "row.document_ids", ("row",))}
         RETURN row.idx AS idx, node.id AS id
         """
         try:
@@ -2248,7 +2271,7 @@ class KnowledgeGraphService:
             e.confidence_score = CASE
                 WHEN $confidence_score > e.confidence_score THEN $confidence_score
                 ELSE e.confidence_score END
-        {_append_entity_document_id_clause("e", "$source_document_id")}
+        {_append_entity_document_id_clause("e", "[$source_document_id]")}
         RETURN e.id AS resolved_id
         """
 

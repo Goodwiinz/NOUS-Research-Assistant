@@ -181,7 +181,10 @@ def test_delete_document_graph_shared_node_semantics_documented(mock_session):
     assert ORPHAN_GUARD in node_query
     where = node_query.split("WHERE", 1)[1].split("DELETE", 1)[0]
     assert "AND" in where and ORPHAN_GUARD in where
-    assert f"{MEMBERSHIP_GUARD} AND {ORPHAN_GUARD}" in where
+    final_where = where.rsplit("WHERE", 1)[1]
+    assert " OR " not in final_where
+    assert MEMBERSHIP_GUARD in final_where and ORPHAN_GUARD in final_where
+    assert "AND e.source_document_id IS NOT NULL" in final_where
 
 
 @pytest.mark.unit

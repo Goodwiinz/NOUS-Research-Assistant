@@ -29,13 +29,15 @@ Mutation verification (docs/engineering/testing.md), focused command from
         tests/services/knowledge_graph/test_entity_document_ids_refcount.py \\
         tests/services/knowledge_graph/test_delete_document_graph.py
 
-- Membership guard: in ``delete_document_graph``'s ``node_query`` replace
-  ``WHERE size(remaining_document_ids) = 0 AND COUNT { (e)--() } = 0`` with
-  ``WHERE COUNT { (e)--() } = 0`` → ``test_delete_keeps_nodes_with_remaining_
+- Membership guard: in ``delete_document_graph``'s ``node_query`` drop
+  ``size(remaining_document_ids) = 0`` from the final WHERE → ``test_delete_keeps_nodes_with_remaining_
   documents`` (and 3 more) fail.
-- Idempotent append: in ``_append_entity_document_id_clause`` replace the
-  CASE with ``SET {alias}.document_ids = existing_document_ids + [{doc_expr}]``
-  → the six write-path tests fail.
+- Idempotent append: in ``_append_entity_document_id_clause`` drop
+  ``AND NOT d IN existing_document_ids`` → the write-path tests fail.
+- Mixed-document batch: in ``_batch_merge_entities`` set each row's
+  ``document_ids`` to only its own entity's id → the mixed-batch test fails.
+- Document-less nodes: drop ``AND e.source_document_id IS NOT NULL`` from the
+  delete → the global-node test fails.
 - Whole fix reverted (HEAD service file): all 12 tests here fail.
 """
 
@@ -57,6 +59,13 @@ GET_SESSION = (
 )
 
 
+DELETE_GUARD = (
+    "WHERE size(remaining_document_ids) = 0\n"
+    "                      AND e.source_document_id IS NOT NULL\n"
+    "                      AND COUNT { (e)--() } = 0"
+)
+
+
 def _member_ids(alias: str) -> str:
     """Effective membership list: document_ids, or the legacy creator stamp."""
     return (
@@ -65,13 +74,12 @@ def _member_ids(alias: str) -> str:
     )
 
 
-def _append_clause(alias: str, doc_expr: str) -> str:
+def _append_clause(alias: str, docs_expr: str) -> str:
     """The idempotent append every write path must emit."""
     return (
-        f"SET {alias}.document_ids = CASE\n"
-        f"    WHEN {doc_expr} IS NULL OR {doc_expr} IN existing_document_ids\n"
-        f"        THEN existing_document_ids\n"
-        f"    ELSE existing_document_ids + [{doc_expr}] END"
+        f"SET {alias}.document_ids = existing_document_ids + [\n"
+        f"    d IN {docs_expr}\n"
+        f"    WHERE d IS NOT NULL AND NOT d IN existing_document_ids]"
     )
 
 
@@ -188,7 +196,7 @@ def test_create_entity_appends_document_id_idempotently() -> None:
     assert "source_document_id" not in on_match
     # Membership is appended AFTER the MERGE so it runs for both branches.
     assert f"WITH e, {_member_ids('e')} AS existing_document_ids" in query
-    assert _append_clause("e", "$source_document_id") in query
+    assert _append_clause("e", "[$source_document_id]") in query
     assert query.index("ON MATCH SET") < query.index("SET e.document_ids")
     assert query.index("SET e.document_ids") < query.index("RETURN e.id")
     assert capture.params["source_document_id"] == doc_id
@@ -205,10 +213,8 @@ def test_create_entity_null_document_id_leaves_list_unchanged() -> None:
     _svc_with_session(capture).create_entity(_request(None))
 
     assert capture.params["source_document_id"] is None
-    assert (
-        "WHEN $source_document_id IS NULL OR $source_document_id IN "
-        "existing_document_ids\n        THEN existing_document_ids"
-    ) in capture.query
+    assert "d IN [$source_document_id]" in capture.query
+    assert "WHERE d IS NOT NULL AND NOT d IN existing_document_ids" in capture.query
 
 
 @pytest.mark.unit
@@ -229,7 +235,7 @@ def test_create_entity_node_adapter_threads_document_id() -> None:
         == "e1"
     )
     assert capture.params["source_document_id"] == doc_id
-    assert _append_clause("e", "$source_document_id") in capture.query
+    assert _append_clause("e", "[$source_document_id]") in capture.query
 
 
 @pytest.mark.unit
@@ -243,7 +249,7 @@ def test_create_entity_in_transaction_appends_document_id() -> None:
 
     query = capture.query
     assert f"WITH e, {_member_ids('e')} AS existing_document_ids" in query
-    assert _append_clause("e", "$source_document_id") in query
+    assert _append_clause("e", "[$source_document_id]") in query
     assert query.index("ON MATCH SET") < query.index("SET e.document_ids")
     assert capture.params["source_document_id"] == doc_id
     assert "organization_id: $org_key" in query
@@ -262,7 +268,7 @@ def test_batch_merge_appends_document_id_per_row() -> None:
     query = capture.query
     assert "apoc.merge.node" in query
     assert f"WITH row, node, {_member_ids('node')} AS existing_document_ids" in query
-    assert _append_clause("node", "row.props.source_document_id") in query
+    assert _append_clause("node", "row.document_ids") in query
     assert query.index("YIELD node") < query.index("SET node.document_ids")
     assert query.index("SET node.document_ids") < query.index("RETURN row.idx")
     assert capture.params["rows"][0]["props"]["source_document_id"] == doc_id
@@ -293,11 +299,44 @@ def test_create_entities_batch_stamps_every_entity_with_its_document() -> None:
 
     assert not response.errors
     query, params = tx.run.call_args_list[0].args
-    assert _append_clause("node", "row.props.source_document_id") in query
+    assert _append_clause("node", "row.document_ids") in query
     assert [row["props"]["source_document_id"] for row in params["rows"]] == [
         doc_id,
         doc_id,
     ]
+
+
+@pytest.mark.unit
+def test_mixed_document_batch_gives_each_row_every_document_for_its_node() -> None:
+    """Two documents naming the same entity in one /batch request: rows that
+    merge into one node may both read the pre-batch list, so each row must
+    carry both ids or the last writer would drop the other document."""
+    ctx, tx = _delete_session()
+
+    def _run(query: str, params: Dict[str, Any]) -> Any:
+        return _Result({"idx": 0, "id": "e1"})
+
+    tx.run.side_effect = _run
+    doc_a, doc_b = str(uuid.uuid4()), str(uuid.uuid4())
+    other = _request(doc_a)
+    other.name = "Transformer"
+    with patch(GET_SESSION, return_value=ctx):
+        KnowledgeGraphService().create_entities_batch(
+            BatchEntityRequest(
+                entities=[_request(doc_a), _request(doc_b), _request(None), other],
+                relationships=[],
+            )
+        )
+
+    query, params = tx.run.call_args_list[0].args
+    rows = params["rows"]
+    assert [row["document_ids"] for row in rows] == [
+        [doc_a, doc_b],
+        [doc_a, doc_b],
+        [doc_a, doc_b],
+        [doc_a],
+    ]
+    assert _append_clause("node", "row.document_ids") in query
 
 
 # --------------------------------------------------------------------------
@@ -333,6 +372,23 @@ def test_delete_removes_only_the_deleted_doc_from_membership(
 
 @pytest.mark.unit
 @patch(GET_SESSION)
+def test_delete_never_removes_nodes_created_without_a_document(
+    mock_session: MagicMock,
+) -> None:
+    """A node created with no document (POST /entities without a source, the
+    arXiv path) has a null source_document_id. If a document later names it and
+    is then deleted, the node must survive, as it did before KN2."""
+    ctx, tx = _delete_session()
+    mock_session.return_value = ctx
+    KnowledgeGraphService().delete_document_graph("doc-A", "org-1")
+
+    tail = _node_query(tx).split("WITH e, remaining_document_ids", 1)[1]
+    assert "AND e.source_document_id IS NOT NULL" in tail
+    assert tail.index("e.source_document_id IS NOT NULL") < tail.index("DELETE e")
+
+
+@pytest.mark.unit
+@patch(GET_SESSION)
 def test_delete_keeps_nodes_with_remaining_documents(mock_session: MagicMock) -> None:
     """THE KN2 guard: a node is deleted only when no document remains AND it
     has no relationships. Shared node E with document_ids [A, B]: deleting A
@@ -343,7 +399,7 @@ def test_delete_keeps_nodes_with_remaining_documents(mock_session: MagicMock) ->
 
     query = _node_query(tx)
     tail = query.split("WITH e, remaining_document_ids", 1)[1]
-    assert "WHERE size(remaining_document_ids) = 0 AND COUNT { (e)--() } = 0" in tail
+    assert DELETE_GUARD in tail
     assert tail.index("WHERE size(remaining_document_ids) = 0") < tail.index("DELETE e")
     # Plain DELETE behind both guards, never DETACH.
     assert "DETACH" not in query
@@ -433,7 +489,7 @@ def test_delete_org_predicates_unchanged_and_anded_with_membership(
     assert "organization_id" not in query2
     assert "organization_id" not in _node_params(tx2)
     assert f"WHERE $source_document_id IN {_member_ids('e')}" in query2
-    assert "size(remaining_document_ids) = 0 AND COUNT { (e)--() } = 0" in query2
+    assert DELETE_GUARD in query2
 
 
 @pytest.mark.unit
