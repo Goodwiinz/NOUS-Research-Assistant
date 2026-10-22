@@ -216,6 +216,45 @@ def create_entity(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+# Registered before /entities/{entity_id}: FastAPI matches in registration
+# order, so the path parameter would otherwise capture "search" and 404.
+@router.get("/entities/search", response_model=List[EntityResponse])
+def search_entities(
+    query: str = Query(..., description="Search query"),
+    entity_types: Optional[List[EntityType]] = Query(
+        None, description="Filter by entity types"
+    ),
+    limit: int = Query(default=50, ge=1, le=200, description="Maximum results"),
+    project_id: Optional[UUID] = Query(
+        None, description="Scope to documents attached to a project (collection)"
+    ),
+    current_user: User = Depends(get_current_user),
+    db=Depends(get_db_sync),
+):
+    """Search for entities by name or properties"""
+    try:
+        # Org-wide → indexed organization_id (no doc-id list). Project → doc-ids.
+        if project_id is None:
+            org_scope = str(current_user.organization_id)
+            scope_doc_ids = None
+        else:
+            org_scope = None
+            scope_doc_ids = _scope_doc_ids(db, current_user, project_id)
+            if not scope_doc_ids:
+                return []
+        entities = knowledge_graph_service.search_entities(
+            query,
+            entity_types,
+            limit,
+            source_document_ids=scope_doc_ids,
+            organization_id=org_scope,
+        )
+        return entities
+    except Exception as e:
+        logger.error(f"Error searching entities: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.get("/entities/{entity_id}", response_model=EntityResponse)
 def get_entity(
     entity_id: str,
@@ -329,43 +368,6 @@ def get_all_entities(
             raise HTTPException(
                 status_code=503, detail="Knowledge graph temporarily unavailable"
             )
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@router.get("/entities/search", response_model=List[EntityResponse])
-def search_entities(
-    query: str = Query(..., description="Search query"),
-    entity_types: Optional[List[EntityType]] = Query(
-        None, description="Filter by entity types"
-    ),
-    limit: int = Query(default=50, ge=1, le=200, description="Maximum results"),
-    project_id: Optional[UUID] = Query(
-        None, description="Scope to documents attached to a project (collection)"
-    ),
-    current_user: User = Depends(get_current_user),
-    db=Depends(get_db_sync),
-):
-    """Search for entities by name or properties"""
-    try:
-        # Org-wide → indexed organization_id (no doc-id list). Project → doc-ids.
-        if project_id is None:
-            org_scope = str(current_user.organization_id)
-            scope_doc_ids = None
-        else:
-            org_scope = None
-            scope_doc_ids = _scope_doc_ids(db, current_user, project_id)
-            if not scope_doc_ids:
-                return []
-        entities = knowledge_graph_service.search_entities(
-            query,
-            entity_types,
-            limit,
-            source_document_ids=scope_doc_ids,
-            organization_id=org_scope,
-        )
-        return entities
-    except Exception as e:
-        logger.error(f"Error searching entities: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
