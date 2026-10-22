@@ -98,6 +98,7 @@ def _run(
     from src.tasks import reconcile_jobs
 
     with (
+        patch("src.tasks.reconcile_jobs.datetime", _FrozenDatetime),
         patch("src.tasks.reconcile_jobs.SessionLocal", factory),
         patch("src.core.config.get_settings", return_value=settings),
         patch.object(reconcile_jobs.celery_app, "send_task") as send_task,
@@ -109,6 +110,19 @@ def _run(
 NAIVE_NOW = datetime.utcnow()
 OLD = NAIVE_NOW - timedelta(minutes=30)
 RECENT = NAIVE_NOW - timedelta(minutes=2)
+
+
+class _FrozenDatetime(datetime):
+    """Pins the reconciler's cutoff clock to NAIVE_NOW.
+
+    NAIVE_NOW is taken at import. Under xdist a test can run 8+ minutes after
+    collection, which would push RECENT past the 10-minute cutoff and make the
+    "recent" row look lost.
+    """
+
+    @classmethod
+    def utcnow(cls) -> datetime:
+        return NAIVE_NOW
 
 
 def test_lost_document_job_reenqueued_with_default_routing(
