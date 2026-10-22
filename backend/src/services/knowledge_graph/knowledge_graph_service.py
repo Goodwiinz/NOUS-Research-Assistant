@@ -197,6 +197,49 @@ def _two_endpoint_scope(
     return "", {}
 
 
+def _entity_document_ids_expr(alias: str) -> str:
+    """Cypher for the *effective* per-document membership list of an Entity.
+
+    :Entity nodes are shared by every document in an org that names the entity
+    (the MERGE key has no document component), so ``source_document_id`` (set
+    only ON CREATE) records merely the FIRST creator. ``document_ids`` is the
+    reference-count list every entity write path appends to (KN2) and
+    ``delete_document_graph`` subtracts from.
+
+    Legacy nodes written before the property existed have no ``document_ids``;
+    they are read as ``[source_document_id]`` — exactly the pre-KN2 semantics —
+    or ``[]`` when that is also null (Cypher cannot store a list containing
+    null, and a null-doc node never matched the old creator anchor either).
+    """
+    return (
+        f"coalesce({alias}.document_ids, "
+        f"CASE WHEN {alias}.source_document_id IS NULL THEN [] "
+        f"ELSE [{alias}.source_document_id] END)"
+    )
+
+
+def _append_entity_document_id_clause(
+    alias: str, doc_expr: str, carry: Tuple[str, ...] = ()
+) -> str:
+    """``WITH … SET`` that idempotently appends ``doc_expr`` to the entity's
+    ``document_ids`` (KN2 reference count).
+
+    ``doc_expr`` is a bound parameter or row field (never interpolated user
+    text). A null document id leaves the list unchanged (but still
+    materialises it from the legacy fallback); an id already present is not
+    duplicated. ``carry`` names extra variables the WITH must keep in scope
+    (e.g. the UNWIND row). Callers append their own RETURN.
+    """
+    kept = ", ".join((*carry, alias))
+    return (
+        f"WITH {kept}, {_entity_document_ids_expr(alias)} AS existing_document_ids\n"
+        f"SET {alias}.document_ids = CASE\n"
+        f"    WHEN {doc_expr} IS NULL OR {doc_expr} IN existing_document_ids\n"
+        f"        THEN existing_document_ids\n"
+        f"    ELSE existing_document_ids + [{doc_expr}] END"
+    )
+
+
 def _safe_relationship_type(value: Optional[str]) -> RelationshipType:
     """Safely convert string to RelationshipType, falling back to RELATED_TO"""
     if not value:
@@ -507,6 +550,9 @@ class KnowledgeGraphService:
                 # stored property therefore equals the key (never re-set to null
                 # in ON CREATE/ON MATCH, which would desync key and property and
                 # cause duplicate nodes on the next MERGE).
+                # source_document_id stays the ON CREATE creator stamp (reads
+                # key on it); document_ids is the per-document reference count
+                # that every write — create or match — appends to (KN2).
                 query = f"""
                 MERGE (e:Entity:{request.entity_type.value} {{canonical_key: $canonical_key, type: $entity_type, organization_id: $org_key}})
                 ON CREATE SET
@@ -526,6 +572,7 @@ class KnowledgeGraphService:
                     e.confidence_score = CASE
                         WHEN $confidence_score > e.confidence_score THEN $confidence_score
                         ELSE e.confidence_score END
+                {_append_entity_document_id_clause("e", "$source_document_id")}
                 RETURN e.id AS resolved_id, e.created_at AS created_at, e.updated_at AS updated_at
                 """
 
@@ -754,22 +801,37 @@ class KnowledgeGraphService:
         the node's creator. Only RELATED_TO relationships carry true per-document
         provenance (``r.source_document_id`` is part of their MERGE key).
 
+        Since the spaCy ingestion fan-out writes nodes only (never edges), the
+        creator stamp alone was not enough: with docs A and B both naming
+        "BERT" and A ingested first, deleting A deleted the shared node and B
+        silently lost the entity while its ``neo4j_index_status`` stayed
+        ``completed`` (audit KN2). Every entity write path therefore also
+        appends the writing document to ``e.document_ids`` — a per-document
+        reference count — and this method subtracts from it.
+
         So this deletes in two steps, inside one transaction:
 
         1. DELETE this document's *relationships* (``r.source_document_id`` =
            the doc id) — the per-document part of the graph.
-        2. DELETE only entity *nodes* that this document created
-           (``e.source_document_id``) AND that are now fully orphaned
-           (``COUNT { (e)--() } = 0`` — no remaining relationships from any
-           document; Neo4j 5.x syntax, dev runs 5.26). Plain ``DELETE`` (not
-           ``DETACH``) so if the orphan guard ever regresses, Neo4j raises on a
-           still-connected node instead of silently destroying shared data.
+        2. For every entity node whose effective membership list
+           (``_entity_document_ids_expr``: ``document_ids``, or
+           ``[source_document_id]`` on legacy nodes) contains this doc, remove
+           the doc id from ``document_ids``. If the node's creator stamp was
+           this doc and other documents remain, re-point
+           ``source_document_id`` to one of them so doc-scoped reads keep
+           finding it. Then DELETE only the nodes with NO remaining document
+           AND no relationships (``COUNT { (e)--() } = 0`` — Neo4j 5.x syntax,
+           dev runs 5.26). Plain ``DELETE`` (not ``DETACH``) so if the orphan
+           guard ever regresses, Neo4j raises on a still-connected node instead
+           of silently destroying shared data.
 
-        A node created by this doc but still connected via another doc survives
-        (that doc still references it) — its ``source_document_id`` then points
-        at a deleted document; harmless for reads, and a future reconciler can
-        re-stamp it. A node created by another doc keeps living even if all of
-        this doc's relationships to it are removed in step 1.
+        A node still referenced by another document survives (its membership
+        list is non-empty). A node with no remaining document but still
+        connected via another doc's edges survives too; its
+        ``source_document_id`` may then point at a deleted document — harmless
+        for reads. Legacy nodes (no ``document_ids``) behave exactly as before
+        this change: they die only when this doc created them and they are
+        orphaned. No data migration is attempted here.
 
         ``source_document_id`` is globally unique to one document in one org, so
         both steps are already tenant-isolated; the ``organization_id``
@@ -778,7 +840,9 @@ class KnowledgeGraphService:
         is still reaped. They are AND'd with the doc anchor (never OR — that
         would widen the delete to the whole org's graph); this deliberately does
         NOT reuse ``_entity_scope_predicate``, whose OR semantics are for read
-        breadth.
+        breadth. List containment is not index-backed, so step 2 is an
+        org-index-narrowed scan (a label scan when ``organization_id`` is
+        None); document deletes are rare enough for that.
 
         Returns ``(deleted_relationships, deleted_nodes)``. Raises on driver /
         circuit breaker failure; callers isolate it (best-effort at the delete
@@ -804,12 +868,25 @@ class KnowledgeGraphService:
                     DELETE r
                     RETURN count(r) as deleted_count
                     """
-        # Step 2: nodes this doc created that no document references any more.
-        # The COUNT {{ (e)--() }} = 0 orphan guard is load-bearing: without it,
-        # deleting a creator doc destroys nodes still wired to other docs.
+        # Step 2: drop this doc from every member node's reference count, then
+        # delete only nodes left with NO document AND no relationships. Both
+        # guards are load-bearing: the membership guard keeps nodes other docs
+        # still mention (KN2); the COUNT { (e)--() } = 0 orphan guard keeps
+        # nodes other docs' edges still touch.
+        member_ids = _entity_document_ids_expr("e")
         node_query = f"""
-                    MATCH (e:Entity {{source_document_id: $source_document_id}})
-                    WHERE{node_org_filter} COUNT {{ (e)--() }} = 0
+                    MATCH (e:Entity)
+                    WHERE{node_org_filter} $source_document_id IN {member_ids}
+                    WITH e, [d IN {member_ids} WHERE d <> $source_document_id] AS remaining_document_ids
+                    SET e.document_ids = remaining_document_ids,
+                        e.source_document_id = CASE
+                            WHEN e.source_document_id = $source_document_id
+                                 AND size(remaining_document_ids) > 0
+                            THEN remaining_document_ids[0]
+                            ELSE e.source_document_id END,
+                        e.updated_at = datetime()
+                    WITH e, remaining_document_ids
+                    WHERE size(remaining_document_ids) = 0 AND COUNT {{ (e)--() }} = 0
                     DELETE e
                     RETURN count(e) as deleted_count
                     """
@@ -2091,10 +2168,14 @@ class KnowledgeGraphService:
         # organization_id is part of the apoc.merge identity map (matches the
         # entity_canonical_org_unique constraint) so two orgs' same name+type
         # entities are separate nodes. Coalesced to "" since the key can't be null.
-        query = """
+        # row.props.source_document_id is the ON CREATE creator stamp; the
+        # trailing WITH/SET appends it to node.document_ids on create AND match
+        # (KN2 reference count). Two rows for the same node in one batch read
+        # the pre-batch list, so a batch is expected to carry ONE document.
+        query = f"""
         UNWIND $rows AS row
         CALL apoc.merge.node(['Entity', row.etype],
-            {canonical_key: row.canonical_key, type: row.etype, organization_id: row.org_key},
+            {{canonical_key: row.canonical_key, type: row.etype, organization_id: row.org_key}},
             row.props) YIELD node
         SET node.created_at = coalesce(node.created_at, datetime()),
             node.updated_at = datetime(),
@@ -2102,6 +2183,7 @@ class KnowledgeGraphService:
             node.confidence_score = CASE
                 WHEN row.props.confidence_score > coalesce(node.confidence_score, 0.0)
                 THEN row.props.confidence_score ELSE node.confidence_score END
+        {_append_entity_document_id_clause("node", "row.props.source_document_id", ("row",))}
         RETURN row.idx AS idx, node.id AS id
         """
         try:
@@ -2145,7 +2227,8 @@ class KnowledgeGraphService:
         # ingest of the same entity dedup onto one node (backed by the
         # entity_canonical_org_unique constraint) while keeping two orgs'
         # same-name entities separate. org_key coalesced to "" (Cypher can't
-        # MERGE on null); the stored property equals the key.
+        # MERGE on null); the stored property equals the key. document_ids is
+        # the per-document reference count appended on create AND match (KN2).
         query = f"""
         MERGE (e:Entity:{request.entity_type.value} {{canonical_key: $canonical_key, type: $entity_type, organization_id: $org_key}})
         ON CREATE SET
@@ -2165,6 +2248,7 @@ class KnowledgeGraphService:
             e.confidence_score = CASE
                 WHEN $confidence_score > e.confidence_score THEN $confidence_score
                 ELSE e.confidence_score END
+        {_append_entity_document_id_clause("e", "$source_document_id")}
         RETURN e.id AS resolved_id
         """
 
