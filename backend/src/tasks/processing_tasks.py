@@ -27,7 +27,10 @@ from src.models.graph import ExtractionMethod as GraphExtractionMethod
 from src.models.graph import RelationshipType as GraphRelationshipType
 from src.models.processing import JobStatus, JobType, ProcessingJob
 from src.services.documents.satellite_state import begin_write, finish_write
-from src.services.knowledge_graph.knowledge_graph_service import knowledge_graph_service
+from src.services.knowledge_graph.knowledge_graph_service import (
+    GraphExtractor,
+    knowledge_graph_service,
+)
 from src.services.processing.llm_entity_extraction import LLMEntityExtractionService
 from src.services.processing.processing_service import ProcessingPipeline
 from src.services.search.fulltext_search_service import fulltext_search_service
@@ -221,6 +224,7 @@ def _index_entities_to_graph(document, entities) -> int:
                 ),
                 document_id=str(document.id),
                 confidence=entity.confidence or 0.8,
+                extractor=GraphExtractor.SPACY,
                 organization_id=(
                     str(document.organization_id) if document.organization_id else None
                 ),
@@ -1170,7 +1174,8 @@ def kg_extract_entities_job(self, job_id: str):
                     relationships=[],
                     upsert=True,
                     document_id=str(document.id),
-                )
+                ),
+                extractor=GraphExtractor.LLM,
             )
 
             entities_created_total += len(entity_result.created_entities)
@@ -1229,7 +1234,8 @@ def kg_extract_entities_job(self, job_id: str):
                         relationships=relationship_requests,
                         upsert=True,
                         document_id=str(document.id),
-                    )
+                    ),
+                    extractor=GraphExtractor.LLM,
                 )
                 relationships_created_total += len(
                     relationship_result.created_relationships
@@ -1254,6 +1260,7 @@ def kg_extract_entities_job(self, job_id: str):
                             if document.organization_id
                             else None
                         ),
+                        extractor=GraphExtractor.LLM,
                         entities=create_requests,
                         relationships=relationship_requests,
                     )

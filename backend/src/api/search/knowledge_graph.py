@@ -43,6 +43,7 @@ from src.models.processing import JobPriority, JobStatus, JobType, ProcessingJob
 from src.models.user import User, UserRole
 from src.models.workspace import Workspace
 from src.services.knowledge_graph.knowledge_graph_service import (
+    GraphExtractor,
     RelationshipScopeError,
     knowledge_graph_service,
 )
@@ -983,7 +984,7 @@ def extract_entities_from_document(
             entities=create_requests, upsert=True, document_id=document_id
         )
         entity_result = knowledge_graph_service.create_entities_batch(
-            entity_batch_request
+            entity_batch_request, extractor=GraphExtractor.SPACY
         )
 
         # Build lookup for relationship endpoint resolution.
@@ -1052,7 +1053,8 @@ def extract_entities_from_document(
                     relationships=relationship_requests,
                     upsert=True,
                     document_id=document_id,
-                )
+                ),
+                extractor=GraphExtractor.SPACY,
             )
             relationship_result_count = len(relationship_result.created_relationships)
             relationship_error_count = len(relationship_result.errors)
@@ -1070,6 +1072,7 @@ def extract_entities_from_document(
                         if current_user.organization_id
                         else None
                     ),
+                    extractor=GraphExtractor.SPACY,
                     entities=create_requests,
                     relationships=relationship_requests,
                 )

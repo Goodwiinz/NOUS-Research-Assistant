@@ -38,7 +38,10 @@ from src.models.graph import (
     ExtractionMethod,
     RelationshipType,
 )
-from src.services.knowledge_graph.knowledge_graph_service import knowledge_graph_service
+from src.services.knowledge_graph.knowledge_graph_service import (
+    GraphExtractor,
+    knowledge_graph_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +246,8 @@ def repair_document_graph(
                 relationships=[],
                 upsert=True,
                 document_id=doc_id,
-            )
+            ),
+            extractor=GraphExtractor.SPACY,
         )
     except Exception as exc:  # noqa: BLE001 - report, never raise
         logger.warning("graph repair: entity batch failed for %s: %s", doc_id, exc)
@@ -276,7 +280,8 @@ def repair_document_graph(
                     relationships=relationship_requests,
                     upsert=True,
                     document_id=doc_id,
-                )
+                ),
+                extractor=GraphExtractor.SPACY,
             )
             relationships_created = len(rel_result.created_relationships)
             errors += len(rel_result.errors)
@@ -302,6 +307,7 @@ def repair_document_graph(
             kg.reconcile_document_graph(
                 doc_id,
                 org_id,
+                extractor=GraphExtractor.SPACY,
                 entities=entity_requests,
                 relationships=relationship_requests,
             )
