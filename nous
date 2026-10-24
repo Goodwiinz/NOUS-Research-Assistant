@@ -59,8 +59,7 @@ if [[ "${1:-}" == "--rc" ]]; then
   exec "$node_bin" --import tsx src/cli.ts rc "$@" \
     --api "${NOUS_API_URL:-$NOUS_DEFAULT_API_URL}" --root "$root"
 fi
-if [[ $# -eq 0 || "${1:-}" == "--ink" || "${1:-}" == "--new" || "${1:-}" == "--help" ]]; then
-  if [[ "${1:-}" == "--ink" ]]; then shift; fi
-  exec pnpm --prefix "$repo/terminal" start "$@"
-fi
-exec pnpm --prefix "$repo/frontend" cli "$@"
+# Everything else goes to the Ink terminal app. `--ink` is accepted for older
+# muscle memory; the terminal app is now the only interactive client.
+if [[ "${1:-}" == "--ink" ]]; then shift; fi
+exec pnpm --prefix "$repo/terminal" start "$@"
