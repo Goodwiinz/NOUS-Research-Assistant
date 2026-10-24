@@ -55,7 +55,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from types import SimpleNamespace
-from typing import Any, Dict, Iterator, List, Tuple, cast
+from typing import Any, Dict, Iterator, List, Sequence, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -527,7 +527,11 @@ def test_single_relationship_write_records_unknown_by_default() -> None:
 # --------------------------------------------------------------------------
 
 
-def _batch_result(created=(), errors=(), relationships=()) -> SimpleNamespace:
+def _batch_result(
+    created: Sequence[Any] = (),
+    errors: Sequence[Any] = (),
+    relationships: Sequence[Any] = (),
+) -> SimpleNamespace:
     return SimpleNamespace(
         created_entities=list(created),
         created_relationships=list(relationships),
@@ -607,7 +611,10 @@ def test_extract_endpoint_survives_reconcile_failure(
 
 
 def _run_llm_job(
-    monkeypatch: pytest.MonkeyPatch, kg: MagicMock, *, extraction_error=None
+    monkeypatch: pytest.MonkeyPatch,
+    kg: MagicMock,
+    *,
+    extraction_error: str | None = None,
 ) -> Dict[str, Any]:
     from src.models.processing import JobStatus
     from src.tasks import processing_tasks as pt
@@ -693,7 +700,7 @@ def test_llm_job_counts_reconcile_failure_as_error(
     assert captured["result"]["entities_created"] == 1
 
 
-def _repair(kg: MagicMock):
+def _repair(kg: MagicMock) -> Tuple[Any, Any]:
     from src.services.knowledge_graph.repair import repair_document_graph
 
     doc = SimpleNamespace(
