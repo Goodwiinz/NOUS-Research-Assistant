@@ -293,6 +293,30 @@ def repair_document_graph(
                 error_message=str(exc),
             )
 
+    # Upserts only append; drop the membership/edges this document no longer
+    # emits (KN2 follow-up). Skipped after write errors (the outcome is
+    # already not ok, so the document is retried); a failed reconcile also
+    # keeps the document reconcilable.
+    if not errors:
+        try:
+            kg.reconcile_document_graph(
+                doc_id,
+                org_id,
+                entities=entity_requests,
+                relationships=relationship_requests,
+            )
+        except Exception as exc:  # noqa: BLE001 - report, never raise
+            logger.warning("graph repair: reconcile failed for %s: %s", doc_id, exc)
+            return GraphRepairOutcome(
+                document_id=doc_id,
+                entities_found=len(entities),
+                relationships_found=len(relationships),
+                entities_created=len(entity_result.created_entities),
+                relationships_created=relationships_created,
+                errors=errors,
+                error_message=str(exc),
+            )
+
     return GraphRepairOutcome(
         document_id=doc_id,
         entities_found=len(entities),

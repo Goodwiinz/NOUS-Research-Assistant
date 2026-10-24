@@ -1221,6 +1221,7 @@ def kg_extract_entities_job(self, job_id: str):
                     )
                 )
 
+            relationship_errors = 0
             if relationship_requests:
                 relationship_result = knowledge_graph_service.create_entities_batch(
                     BatchEntityRequest(
@@ -1233,7 +1234,36 @@ def kg_extract_entities_job(self, job_id: str):
                 relationships_created_total += len(
                     relationship_result.created_relationships
                 )
-                errors_total += len(relationship_result.errors)
+                relationship_errors = len(relationship_result.errors)
+                errors_total += relationship_errors
+
+            # Drop the membership/edges this document no longer emits (KN2
+            # follow-up), but only for a complete extraction written without
+            # errors: a partial (timed-out) LLM result or a failed write would
+            # read as "no longer emitted" and strip valid entities.
+            if (
+                not extraction_result.error
+                and not entity_result.errors
+                and not relationship_errors
+            ):
+                try:
+                    knowledge_graph_service.reconcile_document_graph(
+                        str(document.id),
+                        (
+                            str(document.organization_id)
+                            if document.organization_id
+                            else None
+                        ),
+                        entities=create_requests,
+                        relationships=relationship_requests,
+                    )
+                except Exception as reconcile_error:
+                    errors_total += 1
+                    logger.warning(
+                        "Graph reconcile failed for document %s in KG job: %s",
+                        document.id,
+                        reconcile_error,
+                    )
 
         job.update_progress("Finalizing extraction job", 90)
 

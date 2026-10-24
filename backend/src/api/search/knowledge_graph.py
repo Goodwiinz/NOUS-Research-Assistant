@@ -1057,6 +1057,29 @@ def extract_entities_from_document(
             relationship_result_count = len(relationship_result.created_relationships)
             relationship_error_count = len(relationship_result.errors)
 
+        # Re-extraction appends only; drop the membership/edges this document
+        # no longer emits (KN2 follow-up). Only after an error-free write: a
+        # failed entity write leaves edges unresolved, which would read as
+        # stale. Best-effort — the extraction itself already succeeded.
+        if not entity_result.errors and not relationship_error_count:
+            try:
+                knowledge_graph_service.reconcile_document_graph(
+                    document_id,
+                    (
+                        str(current_user.organization_id)
+                        if current_user.organization_id
+                        else None
+                    ),
+                    entities=create_requests,
+                    relationships=relationship_requests,
+                )
+            except Exception as reconcile_error:
+                logger.warning(
+                    "Graph reconcile failed for document %s: %s",
+                    document_id,
+                    reconcile_error,
+                )
+
         return {
             "document_id": document_id,
             "entities_found": len(entities_data),

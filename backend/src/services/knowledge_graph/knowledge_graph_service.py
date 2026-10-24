@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from neo4j import Driver, GraphDatabase, Session
 from neo4j.exceptions import ServiceUnavailable, SessionExpired
@@ -240,6 +240,85 @@ def _append_entity_document_id_clause(
         f"    d IN {docs_expr}\n"
         f"    WHERE d IS NOT NULL AND NOT d IN existing_document_ids]"
     )
+
+
+def _document_graph_queries(
+    document_id: str,
+    organization_id: Optional[str],
+    kept_entities: Optional[List[List[str]]] = None,
+    kept_relationships: Optional[List[List[str]]] = None,
+) -> Tuple[str, str, Dict[str, Any]]:
+    """The two statements that remove a document from the graph.
+
+    Shared by ``delete_document_graph`` (everything of the document goes) and
+    ``reconcile_document_graph``, which passes the ``kept_*`` keys a
+    re-extraction still emitted so only the rest is removed. Both lists are
+    bound parameters, never interpolated. Returns
+    ``(rel_query, node_query, params)``.
+    """
+    reconcile = kept_entities is not None
+    params: Dict[str, Any] = {"source_document_id": str(document_id)}
+    rel_org_filter = ""
+    node_org_filter = ""
+    if organization_id is not None:
+        params["organization_id"] = str(organization_id)
+        rel_org_filter = (
+            "\n                    WHERE (r.organization_id = $organization_id"
+            "\n                        OR r.organization_id IS NULL)"
+        )
+        node_org_filter = (
+            "\n                          (e.organization_id = $organization_id"
+            "\n                        OR e.organization_id IS NULL)"
+            "\n                      AND"
+        )
+    rel_pattern = "()-[r:RELATED_TO {source_document_id: $source_document_id}]->()"
+    rel_kept_filter = ""
+    node_kept_filter = ""
+    if reconcile:
+        params["kept_entities"] = kept_entities
+        params["kept_relationships"] = kept_relationships or []
+        rel_pattern = (
+            "(source)-[r:RELATED_TO {source_document_id: $source_document_id}]"
+            "->(target)"
+        )
+        rel_kept_filter = (
+            "\n                      AND"
+            if rel_org_filter
+            else "\n                    WHERE"
+        ) + " NOT [source.id, target.id, r.type] IN $kept_relationships"
+        node_kept_filter = "\n                      AND NOT [e.type, e.canonical_key] IN $kept_entities"
+    # Step 1: this document's relationships (per-document provenance edges).
+    rel_query = f"""
+                    MATCH {rel_pattern}{rel_org_filter}{rel_kept_filter}
+                    DELETE r
+                    RETURN count(r) as deleted_count
+                    """
+    # Step 2: drop this doc from every member node's reference count, then
+    # delete only nodes left with NO document AND no relationships. All
+    # three guards are load-bearing: the membership guard keeps nodes other
+    # docs still mention (KN2); the non-null source_document_id guard keeps
+    # nodes that were created without any document; the COUNT { (e)--() }
+    # = 0 orphan guard keeps nodes other docs' edges still touch.
+    member_ids = _entity_document_ids_expr("e")
+    node_query = f"""
+                    MATCH (e:Entity)
+                    WHERE{node_org_filter} $source_document_id IN {member_ids}{node_kept_filter}
+                    WITH e, [d IN {member_ids} WHERE d <> $source_document_id] AS remaining_document_ids
+                    SET e.document_ids = remaining_document_ids,
+                        e.source_document_id = CASE
+                            WHEN e.source_document_id = $source_document_id
+                                 AND size(remaining_document_ids) > 0
+                            THEN remaining_document_ids[0]
+                            ELSE e.source_document_id END,
+                        e.updated_at = datetime()
+                    WITH e, remaining_document_ids
+                    WHERE size(remaining_document_ids) = 0
+                      AND e.source_document_id IS NOT NULL
+                      AND COUNT {{ (e)--() }} = 0
+                    DELETE e
+                    RETURN count(e) as deleted_count
+                    """
+    return rel_query, node_query, params
 
 
 def _safe_relationship_type(value: Optional[str]) -> RelationshipType:
@@ -854,52 +933,95 @@ class KnowledgeGraphService:
         circuit breaker failure; callers isolate it (best-effort at the delete
         endpoint).
         """
-        params: Dict[str, Any] = {"source_document_id": str(document_id)}
-        rel_org_filter = ""
-        node_org_filter = ""
-        if organization_id is not None:
-            params["organization_id"] = str(organization_id)
-            rel_org_filter = (
-                "\n                    WHERE (r.organization_id = $organization_id"
-                "\n                        OR r.organization_id IS NULL)"
-            )
-            node_org_filter = (
-                "\n                          (e.organization_id = $organization_id"
-                "\n                        OR e.organization_id IS NULL)"
-                "\n                      AND"
-            )
-        # Step 1: this document's relationships (per-document provenance edges).
-        rel_query = f"""
-                    MATCH ()-[r:RELATED_TO {{source_document_id: $source_document_id}}]->(){rel_org_filter}
-                    DELETE r
-                    RETURN count(r) as deleted_count
-                    """
-        # Step 2: drop this doc from every member node's reference count, then
-        # delete only nodes left with NO document AND no relationships. All
-        # three guards are load-bearing: the membership guard keeps nodes other
-        # docs still mention (KN2); the non-null source_document_id guard keeps
-        # nodes that were created without any document; the COUNT { (e)--() }
-        # = 0 orphan guard keeps nodes other docs' edges still touch.
-        member_ids = _entity_document_ids_expr("e")
-        node_query = f"""
-                    MATCH (e:Entity)
-                    WHERE{node_org_filter} $source_document_id IN {member_ids}
-                    WITH e, [d IN {member_ids} WHERE d <> $source_document_id] AS remaining_document_ids
-                    SET e.document_ids = remaining_document_ids,
-                        e.source_document_id = CASE
-                            WHEN e.source_document_id = $source_document_id
-                                 AND size(remaining_document_ids) > 0
-                            THEN remaining_document_ids[0]
-                            ELSE e.source_document_id END,
-                        e.updated_at = datetime()
-                    WITH e, remaining_document_ids
-                    WHERE size(remaining_document_ids) = 0
-                      AND e.source_document_id IS NOT NULL
-                      AND COUNT {{ (e)--() }} = 0
-                    DELETE e
-                    RETURN count(e) as deleted_count
-                    """
+        rel_query, node_query, params = _document_graph_queries(
+            document_id, organization_id
+        )
+        deleted_relationships, deleted_nodes = self._run_document_graph_queries(
+            rel_query, node_query, params
+        )
+        logger.info(
+            "Deleted %d graph relationships and %d orphaned entities "
+            "for document %s (org=%s)",
+            deleted_relationships,
+            deleted_nodes,
+            document_id,
+            organization_id,
+        )
+        return deleted_relationships, deleted_nodes
 
+    def reconcile_document_graph(
+        self,
+        document_id: str,
+        organization_id: Optional[str],
+        *,
+        entities: Sequence[CreateEntityRequest],
+        relationships: Sequence[CreateRelationshipRequest],
+    ) -> Tuple[int, int]:
+        """Drop a re-extracted document's graph membership it no longer emits.
+
+        Entity writes only append to ``e.document_ids`` (KN2), so re-extracting
+        a document that stopped naming X left the document in X's membership
+        and its per-document X edges in place: X stayed alive and, when this
+        document created it, visible in the document's scoped graph. Call this
+        after a *complete, error-free* re-extraction has been written, passing
+        the requests that were written. It diffs instead of replacing, so
+        entities still emitted keep their ids and creator stamps; in one
+        transaction it:
+
+        1. DELETEs this document's RELATED_TO edges whose
+           ``[source.id, target.id, type]`` is not among ``relationships``;
+        2. for member entities whose ``[type, canonical_key]`` is not among
+           ``entities``, applies exactly ``delete_document_graph``'s step 2
+           (strip the doc, re-point the creator stamp, delete only nodes with
+           no document, a non-null stamp and no edges).
+
+        Legacy nodes/edges missing a key compare as null and are kept. An empty
+        ``entities`` list is a no-op: an extraction that found nothing is far
+        more likely an extractor fault than a document that names nothing, and
+        reconciling it would strip the whole document.
+
+        Returns ``(deleted_relationships, deleted_nodes)``. Raises on driver /
+        circuit breaker failure; callers isolate it (the document then keeps
+        its stale membership, i.e. the pre-reconcile behaviour).
+        """
+        kept_entities: List[List[str]] = []
+        for entity in entities:
+            key = [entity.entity_type.value, (entity.name or "").strip().lower()]
+            if key[1] and key not in kept_entities:
+                kept_entities.append(key)
+        if not kept_entities:
+            logger.info(
+                "Skipping graph reconcile for document %s: extraction emitted "
+                "no entities",
+                document_id,
+            )
+            return 0, 0
+        kept_relationships = [
+            [rel.source_entity_id, rel.target_entity_id, rel.relationship_type.value]
+            for rel in relationships
+        ]
+        rel_query, node_query, params = _document_graph_queries(
+            document_id,
+            organization_id,
+            kept_entities=kept_entities,
+            kept_relationships=kept_relationships,
+        )
+        deleted_relationships, deleted_nodes = self._run_document_graph_queries(
+            rel_query, node_query, params
+        )
+        logger.info(
+            "Reconciled document %s graph (org=%s): removed %d stale "
+            "relationships and %d orphaned entities",
+            document_id,
+            organization_id,
+            deleted_relationships,
+            deleted_nodes,
+        )
+        return deleted_relationships, deleted_nodes
+
+    def _run_document_graph_queries(
+        self, rel_query: str, node_query: str, params: Dict[str, Any]
+    ) -> Tuple[int, int]:
         with self.get_session() as session:
             # One explicit transaction: step 2's orphan check must observe
             # step 1's deletions, and a failure between steps must not strand
@@ -910,16 +1032,7 @@ class KnowledgeGraphService:
                 deleted_relationships = rel_record["deleted_count"] if rel_record else 0
                 node_record = tx.run(node_query, params).single()
                 deleted_nodes = node_record["deleted_count"] if node_record else 0
-
-            logger.info(
-                "Deleted %d graph relationships and %d orphaned entities "
-                "for document %s (org=%s)",
-                deleted_relationships,
-                deleted_nodes,
-                document_id,
-                organization_id,
-            )
-            return deleted_relationships, deleted_nodes
+        return deleted_relationships, deleted_nodes
 
     def search_entities(
         self,
