@@ -189,6 +189,11 @@ backend:
       value: "true"
     - name: NOUS_MCP_ENABLED
       value: "true"
+    # Whole-account approvals for `nous --rc` (docs/engineering/harness-bridge.md):
+    # default-off in code. Off blocks new account approval requests (503);
+    # existing ones keep working until revoked under Connected devices.
+    - name: ACCOUNT_CONNECTIONS_ENABLED
+      value: "true"
     # Phase 1 of docs/testing/harness-live-proof.md keeps artifact
     # publication off; Phase 2 sets it to "true".
     - name: ARTIFACTS_ENABLED
