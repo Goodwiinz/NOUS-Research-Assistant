@@ -88,11 +88,17 @@ def _usage_text(command: str) -> str:
     return f"Usage error for {command}. Type /help for available commands."
 
 
-def _clone_state_nested_data(state: CLISessionState) -> dict[str, dict[str, object]]:
-    return {
-        "page_context": deepcopy(state.page_context),
-        "latest_trace": deepcopy(state.latest_trace),
-    }
+def _transition(state: CLISessionState, **changes: Any) -> CLISessionState:
+    """Copy ``state`` with fresh nested dicts, clearing quit unless overridden."""
+    return replace(
+        state,
+        **{
+            "page_context": deepcopy(state.page_context),
+            "latest_trace": deepcopy(state.latest_trace),
+            "should_quit": False,
+            **changes,
+        },
+    )
 
 
 def _normalize_page_context(page_context: Any) -> dict[str, object]:
@@ -419,25 +425,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    auth_kwargs = {
+        "base_url": args.base_url,
+        "token": args.token,
+        "organization_id": args.organization_id,
+        "auth_file": args.auth_file,
+    }
     if args.command == "login":
-        return asyncio.run(
-            login_main(
-                base_url=args.base_url,
-                token=args.token,
-                organization_id=args.organization_id,
-                auth_file=args.auth_file,
-            )
-        )
-
+        return asyncio.run(login_main(**auth_kwargs))
     return asyncio.run(
-        async_main(
-            base_url=args.base_url,
-            token=args.token,
-            organization_id=args.organization_id,
-            auth_file=args.auth_file,
-            project_id=args.project_id,
-            debug=args.debug,
-        )
+        async_main(**auth_kwargs, project_id=args.project_id, debug=args.debug)
     )
 
 
@@ -448,23 +445,15 @@ def apply_command(
     if not text.startswith("/"):
         return state, ""
 
-    parts = text.split()
-    command = parts[0].lower()
-    args = parts[1:]
+    command, *args = text.split()
+    command = command.lower()
 
     if command == "/help":
         return state, HELP_TEXT
 
     if command == "/new":
-        nested = _clone_state_nested_data(state)
         return (
-            replace(
-                state,
-                thread_id="",
-                page_context=nested["page_context"],
-                latest_trace={},
-                should_quit=False,
-            ),
+            _transition(state, thread_id="", latest_trace={}),
             "Started a new thread for this CLI session.",
         )
 
@@ -473,15 +462,8 @@ def apply_command(
             return state, f"Current thread: {state.thread_id or '(empty)'}."
         if len(args) != 1:
             return state, _usage_text("/thread [<id>]")
-        nested = _clone_state_nested_data(state)
         return (
-            replace(
-                state,
-                thread_id=args[0],
-                page_context=nested["page_context"],
-                latest_trace={},
-                should_quit=False,
-            ),
+            _transition(state, thread_id=args[0], latest_trace={}),
             f"Active thread set to {args[0]}.",
         )
 
@@ -490,28 +472,14 @@ def apply_command(
 
     if command == "/context":
         if len(args) == 2 and args[0].lower() == "project":
-            project_id = args[1]
-            nested = _clone_state_nested_data(state)
-            nested["page_context"] = {"type": "project", "project_id": project_id}
+            project_context = {"type": "project", "project_id": args[1]}
             return (
-                replace(
-                    state,
-                    page_context=nested["page_context"],
-                    latest_trace=nested["latest_trace"],
-                    should_quit=False,
-                ),
-                f"Project context set to {project_id}.",
+                _transition(state, page_context=project_context),
+                f"Project context set to {args[1]}.",
             )
         if len(args) == 1 and args[0].lower() == "clear":
-            nested = _clone_state_nested_data(state)
-            nested["page_context"] = {"type": "unknown"}
             return (
-                replace(
-                    state,
-                    page_context=nested["page_context"],
-                    latest_trace=nested["latest_trace"],
-                    should_quit=False,
-                ),
+                _transition(state, page_context={"type": "unknown"}),
                 "Page context cleared.",
             )
         return state, _usage_text("/context project <id> | /context clear")
@@ -522,16 +490,9 @@ def apply_command(
         if len(args) != 1:
             return state, _usage_text("/model [<name>] | /model clear")
         choice = args[0]
-        nested = _clone_state_nested_data(state)
         if choice.lower() == "clear":
             return (
-                replace(
-                    state,
-                    model="",
-                    page_context=nested["page_context"],
-                    latest_trace=nested["latest_trace"],
-                    should_quit=False,
-                ),
+                _transition(state, model=""),
                 "Model cleared. Server default will be used.",
             )
         message = f"Model set to {choice}."
@@ -540,58 +501,20 @@ def apply_command(
             message += (
                 f" Note: not in suggested list ({suggested}); the server may reject it."
             )
-        return (
-            replace(
-                state,
-                model=choice,
-                page_context=nested["page_context"],
-                latest_trace=nested["latest_trace"],
-                should_quit=False,
-            ),
-            message,
-        )
+        return _transition(state, model=choice), message
 
     if command == "/debug":
-        if len(args) != 1:
+        setting = args[0].lower() if len(args) == 1 else ""
+        if setting not in ("on", "off"):
             return state, _usage_text("/debug on | /debug off")
-        setting = args[0].lower()
-        if setting == "on":
-            nested = _clone_state_nested_data(state)
-            return (
-                replace(
-                    state,
-                    debug=True,
-                    page_context=nested["page_context"],
-                    latest_trace=nested["latest_trace"],
-                    should_quit=False,
-                ),
-                "Debug output enabled.",
-            )
-        if setting == "off":
-            nested = _clone_state_nested_data(state)
-            return (
-                replace(
-                    state,
-                    debug=False,
-                    page_context=nested["page_context"],
-                    latest_trace=nested["latest_trace"],
-                    should_quit=False,
-                ),
-                "Debug output disabled.",
-            )
-        return state, _usage_text("/debug on | /debug off")
+        enabled = setting == "on"
+        return (
+            _transition(state, debug=enabled),
+            f"Debug output {'enabled' if enabled else 'disabled'}.",
+        )
 
     if command == "/quit":
-        nested = _clone_state_nested_data(state)
-        return (
-            replace(
-                state,
-                page_context=nested["page_context"],
-                latest_trace=nested["latest_trace"],
-                should_quit=True,
-            ),
-            "Quit requested.",
-        )
+        return _transition(state, should_quit=True), "Quit requested."
 
     return state, f"Unknown command: {command}. Type /help."
 
