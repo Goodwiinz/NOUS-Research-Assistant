@@ -61,9 +61,9 @@ backend:
     # 267685730035 = terraform output account_id; repos pushed to ECR in Task 2.
     # Immutable source tag and ECR digest for the AWS image build.
     repository: "267685730035.dkr.ecr.us-east-1.amazonaws.com/nous/backend"
-    tag: "304acca44beb88857881a02c28c2583589305506"
-    digest: "sha256:4caaece53de7ac2f7e4f077148697b5467f162574f9b0da634d0077bb088f559"
-    sourceSha: "304acca44beb88857881a02c28c2583589305506"
+    tag: "9bca950a52e0ab383ff0f5da338bf5c2ee3f67c9"
+    digest: "sha256:0134124fc283302a2a7ae5ee01514d519a1d690fa3707e7f353d07ee943e89ef"
+    sourceSha: "9bca950a52e0ab383ff0f5da338bf5c2ee3f67c9"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
