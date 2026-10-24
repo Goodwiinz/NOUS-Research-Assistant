@@ -615,6 +615,7 @@ def _run_llm_job(
     kg: MagicMock,
     *,
     extraction_error: str | None = None,
+    chunks_failed: int = 0,
 ) -> Dict[str, Any]:
     from src.models.processing import JobStatus
     from src.tasks import processing_tasks as pt
@@ -644,6 +645,7 @@ def _run_llm_job(
         ],
         relationships=[],
         error=extraction_error,
+        chunks_failed=chunks_failed,
     )
     service = MagicMock()
     service.extract_entities = MagicMock(return_value=extraction)
@@ -683,6 +685,20 @@ def test_llm_job_skips_reconcile_on_partial_extraction(
         created=[SimpleNamespace(id="n1", name="BERT")]
     )
     _run_llm_job(monkeypatch, kg, extraction_error="timeout after 300s")
+    kg.reconcile_document_graph.assert_not_called()
+
+
+@pytest.mark.unit
+def test_llm_job_skips_reconcile_when_some_chunks_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial chunk failure is reported only via chunks_failed (error stays
+    None); the entities of the failed chunks are missing, not dropped."""
+    kg = MagicMock()
+    kg.create_entities_batch.return_value = _batch_result(
+        created=[SimpleNamespace(id="n1", name="BERT")]
+    )
+    _run_llm_job(monkeypatch, kg, chunks_failed=1)
     kg.reconcile_document_graph.assert_not_called()
 
 

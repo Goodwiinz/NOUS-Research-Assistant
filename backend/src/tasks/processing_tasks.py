@@ -1245,10 +1245,12 @@ def kg_extract_entities_job(self, job_id: str):
 
             # Drop the membership/edges this document no longer emits (KN2
             # follow-up), but only for a complete extraction written without
-            # errors: a partial (timed-out) LLM result or a failed write would
+            # errors: a partial LLM result (timed out, or some chunks failed —
+            # partial chunk failure leaves .error unset) or a failed write would
             # read as "no longer emitted" and strip valid entities.
             if (
                 not extraction_result.error
+                and not extraction_result.chunks_failed
                 and not entity_result.errors
                 and not relationship_errors
             ):
