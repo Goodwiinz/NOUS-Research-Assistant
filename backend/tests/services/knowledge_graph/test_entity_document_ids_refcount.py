@@ -422,6 +422,7 @@ def test_delete_repoints_creator_stamp_to_a_remaining_document(
     assert (
         "e.source_document_id = CASE\n"
         "                            WHEN e.source_document_id = $source_document_id\n"
+        "                                 AND NOT $source_document_id IN remaining_document_ids\n"
         "                                 AND size(remaining_document_ids) > 0\n"
         "                            THEN remaining_document_ids[0]\n"
         "                            ELSE e.source_document_id END"
