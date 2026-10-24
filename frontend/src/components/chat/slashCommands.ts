@@ -1,8 +1,8 @@
 /**
  * Slash-command registry for the chat composer.
  *
- * Mirrors the command names the user already has in the CLI
- * (`cli/repl.ts` `handleSlashCommand`) so the web chat and the terminal share
+ * Mirrors the command names the user already has in the terminal app
+ * (`cli/hooks/useSlashCommands.ts`) so the web chat and the terminal share
  * one vocabulary. Running a command prints its result into the chat transcript
  * (see `commandOutput.ts` / `CommandOutputBubble`), CLI-style; nothing
  * navigates away.
