@@ -2748,16 +2748,32 @@ class KnowledgeGraphService:
                 has_more=False,
             )
 
-        # Tenant scope is the indexed ``e.organization_id`` equality. The
-        # former per-query ``SELECT id FROM documents WHERE organization_id``
-        # enumeration (to build a ``source_document_id IN [...]`` list) is
-        # redundant with it and scaled with the tenant's document count on
-        # every search, so it is gone. ``db`` is accepted for signature
-        # compatibility only.
+        # Tenant scope: the indexed ``e.organization_id`` equality, OR'd with
+        # the org's document ids so entities in an environment whose
+        # organization_id backfill has not run still match (see
+        # _entity_scope_predicate). A failed lookup is logged and leaves the
+        # org equality as the only scope; it never widens to unscoped.
+        source_document_ids: Optional[List[str]] = None
+        if db is not None:
+            try:
+                from src.models.document import Document
+
+                source_document_ids = [
+                    str(doc_id)
+                    for (doc_id,) in db.query(Document.id)
+                    .filter(Document.organization_id == organization_id)
+                    .all()
+                ]
+            except Exception as e:
+                logger.warning(
+                    "Knowledge graph search: org document lookup failed, "
+                    "scoping by organization_id only: %s",
+                    e,
+                )
         entities = self.search_entities(
             query_text,
             limit=limit,
-            source_document_ids=None,
+            source_document_ids=source_document_ids,
             organization_id=organization_id,
             # Filter source-less entities in the query, before LIMIT, so they
             # cannot crowd document-backed matches out of the page.

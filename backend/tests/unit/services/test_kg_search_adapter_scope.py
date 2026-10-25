@@ -1,12 +1,11 @@
-"""F3: the KG search adapter must not enumerate the org's documents per query
-and must not invent document ids for entities without a source document.
+"""The KG search adapter scopes by organization (plus the org's document
+ids, for environments whose organization_id backfill has not run), never
+widens to unscoped, and never invents document ids for entities without a
+source document.
 
-``KnowledgeGraphService.search`` used to ``SELECT id FROM documents WHERE
-organization_id = ?`` on every call (full per-tenant enumeration) just to
-build a ``source_document_id IN [...]`` list, even though the indexed
-``organization_id`` equality is already the primary scope. It also stamped
-``uuid.uuid4()`` as the ``document_id`` for entities with no
-``source_document_id`` — a random id that 404s as an "open document" target.
+It used to stamp ``uuid.uuid4()`` as the ``document_id`` for entities with
+no ``source_document_id``: a random id that 404s as an "open document"
+target.
 """
 
 from __future__ import annotations
@@ -37,36 +36,63 @@ def _entity(entity_id: str, source_document_id: str | None) -> SimpleNamespace:
     )
 
 
-def _db_that_must_not_enumerate() -> MagicMock:
+def _db_that_must_not_be_queried() -> MagicMock:
     db = MagicMock()
-    db.query.side_effect = AssertionError("documents must not be enumerated")
+    db.query.side_effect = AssertionError("no query may run without an org")
     return db
 
 
-def test_search_uses_indexed_org_filter_without_document_enumeration() -> None:
-    svc = KnowledgeGraphService()
-    captured: dict = {}
+def _db_with_org_documents(*doc_ids: str) -> MagicMock:
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [(d,) for d in doc_ids]
+    return db
 
+
+def _capturing(captured: dict) -> Any:
     def _search_entities(query: Any, **kwargs: Any) -> Any:
         captured.update(kwargs)
         return [_entity("e1", "doc-1")]
 
-    svc.search_entities = _search_entities  # type: ignore[method-assign,assignment]
-    db = _db_that_must_not_enumerate()
+    return _search_entities
+
+
+def test_search_scopes_by_org_and_org_documents() -> None:
+    svc = KnowledgeGraphService()
+    captured: dict = {}
+    svc.search_entities = _capturing(captured)  # type: ignore[method-assign]
 
     response = svc.search(
+        search_request=SimpleNamespace(query="alice", limit=10, offset=0),
+        user_id="user-1",
+        organization_id="org-1",
+        db=_db_with_org_documents("doc-1", "doc-2"),
+    )
+
+    assert captured["organization_id"] == "org-1"
+    assert captured["source_document_ids"] == ["doc-1", "doc-2"]
+    # Source-less entities are filtered in the query, before LIMIT.
+    assert captured["require_source_document"] is True
+    assert [r.document_id for r in response.results] == ["doc-1"]
+
+
+def test_document_lookup_failure_keeps_org_scope() -> None:
+    """A failed document lookup leaves the indexed org equality in place; it
+    must never drop to an unscoped query."""
+    svc = KnowledgeGraphService()
+    captured: dict = {}
+    svc.search_entities = _capturing(captured)  # type: ignore[method-assign]
+    db = MagicMock()
+    db.query.side_effect = RuntimeError("db down")
+
+    svc.search(
         search_request=SimpleNamespace(query="alice", limit=10, offset=0),
         user_id="user-1",
         organization_id="org-1",
         db=db,
     )
 
-    db.query.assert_not_called()
     assert captured["organization_id"] == "org-1"
-    assert captured.get("source_document_ids") is None
-    # Source-less entities are filtered in the query, before LIMIT.
-    assert captured["require_source_document"] is True
-    assert [r.document_id for r in response.results] == ["doc-1"]
+    assert captured["source_document_ids"] is None
 
 
 def test_entities_without_source_document_are_omitted_not_fabricated() -> None:
@@ -102,7 +128,7 @@ def test_search_without_organization_fails_closed() -> None:
         search_request=SimpleNamespace(query="alice", limit=10, offset=0),
         user_id="user-1",
         organization_id=None,  # type: ignore[arg-type]
-        db=_db_that_must_not_enumerate(),
+        db=_db_that_must_not_be_queried(),
     )
 
     assert response.results == []
