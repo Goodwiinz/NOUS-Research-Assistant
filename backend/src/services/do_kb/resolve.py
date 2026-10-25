@@ -175,6 +175,9 @@ async def resolve_and_filter_chunks(
                     select(CollectionDocument.document_id).where(
                         CollectionDocument.collection_id == pid,
                         CollectionDocument.document_id.in_(resolved_doc_ids),
+                        # A document removed from the project leaves a
+                        # soft-deleted membership row; it is not membership.
+                        CollectionDocument.is_deleted == False,  # noqa: E712
                     )
                 )
                 in_project = {str(r[0]) for r in membership_rows}

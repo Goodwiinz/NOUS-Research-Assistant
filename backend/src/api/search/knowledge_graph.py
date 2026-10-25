@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from neo4j.exceptions import ServiceUnavailable as Neo4jServiceUnavailable
 from pydantic import BaseModel, Field
 
+from src.api.search._tenancy import require_org_id as _require_org_id
 from src.core.circuit_breaker import ServiceUnavailableError as CircuitBreakerError
 from src.core.database import get_db_sync
 from src.core.dependencies import get_current_user
@@ -55,21 +56,6 @@ from src.tasks.processing_tasks import kg_extract_entities_job, kg_merge_entitie
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/knowledge-graph", tags=["knowledge-graph"])
-
-
-def _require_org_id(current_user: User) -> str:
-    """Resolve the caller's organization id, or 403.
-
-    Destructive/maintenance KG writes must be tenant-scoped; never fall through
-    to an unscoped, cross-tenant operation when the caller has no organization.
-    """
-    org_id = getattr(current_user, "organization_id", None)
-    if not org_id:
-        raise HTTPException(
-            status_code=403,
-            detail="No organization associated with this account",
-        )
-    return str(org_id)
 
 
 def _get_org_document_ids(db, organization_id) -> List[str]:
@@ -208,6 +194,8 @@ def create_entity(
     db=Depends(get_db_sync),
 ):
     """Create a new entity in the knowledge graph"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     # Tenant guard: the client supplies source_document_id; without this check a
     # caller could attach an entity to (and thus read/inject into) another org's
     # document. Validate membership against the caller's org documents.
@@ -216,12 +204,10 @@ def create_entity(
     # only other guard) and stamp the new node with another tenant's org, so it
     # surfaces in that tenant's org-scoped entity list / search / analytics
     # (cross-tenant graph poisoning). Mirrors create_relationship.
-    request.organization_id = (
-        str(current_user.organization_id) if current_user.organization_id else None
-    )
+    request.organization_id = org_id
     if request.source_document_id:
         _require_org_source_documents(
-            _get_org_document_ids(db, current_user.organization_id),
+            _get_org_document_ids(db, org_id),
             [request.source_document_id],
         )
     try:
@@ -248,10 +234,12 @@ def search_entities(
     db=Depends(get_db_sync),
 ):
     """Search for entities by name or properties"""
+    # Before the try: 403 for an org-less caller, never a phantom "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # Org-wide → indexed organization_id (no doc-id list). Project → doc-ids.
         if project_id is None:
-            org_scope = str(current_user.organization_id)
+            org_scope = org_id
             scope_doc_ids = None
         else:
             org_scope = None
@@ -278,11 +266,12 @@ def get_entity(
     db=Depends(get_db_sync),
 ):
     """Get an entity by ID"""
+    org_id = _require_org_id(current_user)
     # Org-wide scope: filter by the indexed organization_id (stamped on every
     # entity by write-path + backfill), no per-request document-id list needed.
     entity = knowledge_graph_service.get_entity(
         entity_id,
-        organization_id=str(current_user.organization_id),
+        organization_id=org_id,
     )
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
@@ -297,10 +286,11 @@ def update_entity(
     db=Depends(get_db_sync),
 ):
     """Update an existing entity"""
+    org_id = _require_org_id(current_user)
     entity = knowledge_graph_service.update_entity(
         entity_id,
         request,
-        organization_id=str(current_user.organization_id),
+        organization_id=org_id,
     )
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
@@ -314,9 +304,10 @@ def delete_entity(
     db=Depends(get_db_sync),
 ):
     """Delete an entity and all its relationships"""
+    org_id = _require_org_id(current_user)
     success = knowledge_graph_service.delete_entity(
         entity_id,
-        organization_id=str(current_user.organization_id),
+        organization_id=org_id,
     )
     if not success:
         raise HTTPException(status_code=404, detail="Entity not found")
@@ -342,12 +333,15 @@ def get_all_entities(
     db=Depends(get_db_sync),
 ):
     """Get all entities with pagination and optional filtering"""
+    # Before the try: an org-less caller gets a 403, not a 500 via the
+    # generic handler, and no DB/service work runs.
+    org_id = _require_org_id(current_user)
     try:
         # Org-wide scope → indexed organization_id, no doc-id list (and no
         # Postgres lookup). Project scope → keep the project doc-id list, since
         # entities carry no project_id (org_id would broaden to the whole org).
         if project_id is None:
-            org_scope = str(current_user.organization_id)
+            org_scope = org_id
             scope_doc_ids = None
         else:
             org_scope = None
@@ -399,11 +393,12 @@ def get_entity_relationships(
     db=Depends(get_db_sync),
 ):
     """Get all relationships for an entity"""
+    org_id = _require_org_id(current_user)
     try:
         relationships = knowledge_graph_service.get_relationships(
             entity_id,
             relationship_types,
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
         )
         return relationships
     except Exception as e:
@@ -425,13 +420,14 @@ def get_related_entities(
     db=Depends(get_db_sync),
 ):
     """Find entities related to a given entity"""
+    org_id = _require_org_id(current_user)
     try:
         entities = knowledge_graph_service.find_related_entities(
             entity_id,
             max_depth,
             min_strength,
             limit,
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
         )
         return entities
     except Exception as e:
@@ -453,13 +449,14 @@ def get_entity_neighborhood(
     db=Depends(get_db_sync),
 ):
     """Get neighborhood entities and relationships in a single call"""
+    org_id = _require_org_id(current_user)
     try:
         data = knowledge_graph_service.get_neighborhood(
             entity_id,
             max_depth,
             min_strength,
             limit,
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
         )
         return data
     except Exception as e:
@@ -484,6 +481,7 @@ def get_all_relationships(
     db=Depends(get_db_sync),
 ):
     """Get all relationships with pagination and optional filtering"""
+    org_id = _require_org_id(current_user)
     try:
         scope_doc_ids = _scope_doc_ids(db, current_user, project_id)
         if project_id is not None and not scope_doc_ids:
@@ -494,11 +492,7 @@ def get_all_relationships(
             relationship_types,
             source_document_ids=scope_doc_ids,
             # Tenant-scope by org when not narrowing to a project's documents.
-            organization_id=(
-                str(current_user.organization_id)
-                if project_id is None and current_user.organization_id
-                else None
-            ),
+            organization_id=org_id if project_id is None else None,
         )
         return relationships
     except Exception as e:
@@ -513,13 +507,13 @@ def create_relationship(
     db=Depends(get_db_sync),
 ):
     """Create a new relationship between entities"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     # Force the caller's org onto the request (never trust a client-supplied
     # value — a tenantless caller must not be able to set one). Both
     # endpoints are then org-scoped; the org-doc-id list stays as a fallback.
-    request.organization_id = (
-        str(current_user.organization_id) if current_user.organization_id else None
-    )
-    org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+    request.organization_id = org_id
+    org_doc_ids = _get_org_document_ids(db, org_id)
     # The edge's own source_document_id must be the caller's too: project
     # relationship reads filter on r.source_document_id alone.
     _require_org_source_documents(org_doc_ids, [request.source_document_id])
@@ -542,10 +536,11 @@ def get_relationship(
     db=Depends(get_db_sync),
 ):
     """Get a relationship by ID"""
+    org_id = _require_org_id(current_user)
     try:
         relationship = knowledge_graph_service.get_relationship(
             relationship_id,
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
         )
         if not relationship:
             raise HTTPException(
@@ -566,15 +561,16 @@ def delete_relationship(
     db=Depends(get_db_sync),
 ):
     """Delete a relationship"""
+    org_id = _require_org_id(current_user)
     try:
-        org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+        org_doc_ids = _get_org_document_ids(db, org_id)
         success = knowledge_graph_service.delete_relationship(
             relationship_id,
             source_document_ids=org_doc_ids,
             # Prefer the indexed org partition: arXiv-ingested entities carry
             # no source_document_id, so the legacy doc-id list alone 404'd
             # forever on relationships the same org could list.
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
         )
         if not success:
             raise HTTPException(status_code=404, detail="Relationship not found")
@@ -592,11 +588,11 @@ def search_graph(
     db=Depends(get_db_sync),
 ):
     """Perform a comprehensive graph search"""
+    org_id = _require_org_id(current_user)
     try:
         import time
 
         start_time = time.time()
-        org_id = str(current_user.organization_id)
 
         # Search entities
         entities = knowledge_graph_service.search_entities(
@@ -673,13 +669,14 @@ def find_paths(
     db=Depends(get_db_sync),
 ):
     """Find paths between two entities"""
+    org_id = _require_org_id(current_user)
     try:
         paths = knowledge_graph_service.find_paths(
             source_id,
             target_id,
             max_depth,
             min_strength,
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
         )
         return paths
     except Exception as e:
@@ -695,17 +692,16 @@ def batch_create_entities(
     db=Depends(get_db_sync),
 ):
     """Create multiple entities and relationships in a batch"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     # Force the caller's org onto every item — never trust client-supplied
     # organization_id on batch entities/relationships (same cross-tenant
     # poisoning vector as the single create_entity endpoint).
-    caller_org = (
-        str(current_user.organization_id) if current_user.organization_id else None
-    )
     for entity in request.entities:
-        entity.organization_id = caller_org
+        entity.organization_id = org_id
     for relationship in request.relationships:
-        relationship.organization_id = caller_org
-    org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+        relationship.organization_id = org_id
+    org_doc_ids = _get_org_document_ids(db, org_id)
     # Every item's source_document_id is stamped as-is by the service, so reject
     # the whole batch if any of them names another org's document.
     _require_org_source_documents(
@@ -840,6 +836,8 @@ def create_extraction_job(
     db=Depends(get_db_sync),
 ):
     """Queue a background entity extraction job for one or more documents."""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     if not request.document_ids:
         raise HTTPException(
             status_code=400, detail="At least one document ID is required"
@@ -850,7 +848,7 @@ def create_extraction_job(
         db.query(Document)
         .filter(
             Document.id.in_(request.document_ids),
-            Document.organization_id == current_user.organization_id,
+            Document.organization_id == org_id,
             Document.is_deleted == False,
         )
         .all()
@@ -866,7 +864,7 @@ def create_extraction_job(
         job_type=JobType.ENTITY_EXTRACTION,
         status=JobStatus.PENDING,
         priority=JobPriority.NORMAL,
-        organization_id=current_user.organization_id,
+        organization_id=org_id,
         created_by_user_id=current_user.id,
         parameters={
             "operation": "document_entity_extraction",
@@ -903,6 +901,8 @@ def extract_entities_from_document(
     db=Depends(get_db_sync),
 ):
     """Extract entities from a document and add them to the knowledge graph"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # Get document from database — scoped to the caller's organization so a
         # user cannot extract/attach entities to another org's document.
@@ -910,7 +910,7 @@ def extract_entities_from_document(
             db.query(Document)
             .filter(
                 Document.id == document_id,
-                Document.organization_id == current_user.organization_id,
+                Document.organization_id == org_id,
             )
             .first()
         )
@@ -970,11 +970,7 @@ def extract_entities_from_document(
                     # org_key and never appear in the caller's own org-scoped
                     # entity list / search — the relationships below already do
                     # this; the entity requests were missed.
-                    organization_id=(
-                        str(current_user.organization_id)
-                        if current_user.organization_id
-                        else None
-                    ),
+                    organization_id=org_id,
                 )
             )
 
@@ -1035,11 +1031,7 @@ def extract_entities_from_document(
                         "pattern_matched": relationship.get("pattern_matched"),
                     },
                     source_document_id=document_id,
-                    organization_id=(
-                        str(current_user.organization_id)
-                        if current_user.organization_id
-                        else None
-                    ),
+                    organization_id=org_id,
                 )
             )
 
@@ -1080,12 +1072,13 @@ def get_document_entities(
     db=Depends(get_db_sync),
 ):
     """Get all entities extracted from a specific document"""
+    org_id = _require_org_id(current_user)
     try:
         # Verify the document belongs to the caller's org, then scope the query
         # to that single document. The old path fetched up to 1000 org-wide
         # entities and filtered in Python — silently truncating (and leaking
         # work) once an org had >1000 entities.
-        org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+        org_doc_ids = _get_org_document_ids(db, org_id)
         if document_id not in org_doc_ids:
             raise HTTPException(status_code=404, detail="Document not found")
         document_entities = knowledge_graph_service.search_entities(
@@ -1111,6 +1104,7 @@ def get_graph_analytics(
     db=Depends(get_db_sync),
 ):
     """Get comprehensive graph analytics"""
+    org_id = _require_org_id(current_user)
     try:
         scope_doc_ids = _scope_doc_ids(db, current_user, project_id)
         if project_id is not None and not scope_doc_ids:
@@ -1122,7 +1116,7 @@ def get_graph_analytics(
             # ANDed onto the org predicate so the counts actually narrow to the
             # project instead of silently staying org-wide.
             source_document_ids=scope_doc_ids if project_id is not None else None,
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
         )
         return analytics
     except Exception as e:
@@ -1133,15 +1127,12 @@ def get_graph_analytics(
 @router.get("/health", response_model=GraphHealthStatus)
 def get_graph_health(current_user: User = Depends(get_current_user)):
     """Get health status of the graph database (counts scoped to caller's org)"""
+    # An org-less caller is rejected up front. Never pass None here: that takes
+    # get_health_status's global (unscoped) branch and re-leaks the whole
+    # multi-tenant graph size.
+    org_id = _require_org_id(current_user)
     try:
-        # Always pass the org string unconditionally. Do NOT rewrite this to
-        # `str(org) if org else None` like the sibling endpoints — a None here
-        # takes get_health_status's global (unscoped) branch and re-leaks the
-        # whole multi-tenant graph size. An orgless user (org deleted → SET NULL)
-        # stringifies to 'None', which matches no node → shows zeros. Safe.
-        health = knowledge_graph_service.get_health_status(
-            organization_id=str(current_user.organization_id)
-        )
+        health = knowledge_graph_service.get_health_status(organization_id=org_id)
         return health
     except Exception as e:
         logger.error(f"Error getting graph health: {e}")
@@ -1160,9 +1151,8 @@ def get_entity_visualization(
     db=Depends(get_db_sync),
 ):
     """Get graph data for visualizing an entity's neighborhood"""
+    org_id = _require_org_id(current_user)
     try:
-        org_id = str(current_user.organization_id)
-
         # Get the central entity
         central_entity = knowledge_graph_service.get_entity(
             entity_id, organization_id=org_id
@@ -1348,8 +1338,10 @@ def reset_graph_schema(
     """Reset the CALLER'S organization graph (DESTRUCTIVE OPERATION).
 
     Deletes every Entity node owned by the caller's organization (and, via
-    DETACH DELETE, their relationships). Global schema constraints/indexes are
-    (idempotently) re-ensured.
+    DETACH DELETE, their relationships). Deleting nodes does not drop the
+    global constraints/indexes; those are owned by the startup bootstrap
+    (``_connect`` → ``_maybe_ensure_schema``, retried from ``get_session``),
+    so a tenant request must not re-run that global DDL.
     """
     # Admin-only AND org-scoped: previously this ran `MATCH (n) DETACH DELETE n`
     # — an unscoped wipe of ALL nodes/relationships across EVERY tenant, gated
@@ -1377,9 +1369,6 @@ def reset_graph_schema(
                 {"org_id": org_id},
             )
             deleted = result.single()["deleted"]
-
-            # Re-ensure global constraints/indexes (idempotent, IF NOT EXISTS).
-            knowledge_graph_service._ensure_schema()
 
         logger.info(f"Reset graph for org {org_id}: deleted {deleted} entities")
         return {

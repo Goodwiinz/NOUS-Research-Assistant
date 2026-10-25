@@ -9,9 +9,11 @@ full-text.
 import inspect
 import logging
 import statistics
+import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -39,6 +41,40 @@ if TYPE_CHECKING:
     from src.services.diagnostics.retrieval_diagnostics import RetrievalTrace
 
 logger = logging.getLogger(__name__)
+
+# Source failures that mean "out of capacity / out of time", as opposed to a
+# source erroring. A request that hit these must not start more work.
+SOURCE_CAPACITY_EXHAUSTED = "search capacity exhausted"
+SOURCE_TIMED_OUT = "search timed out"
+
+
+class HybridSearchUnavailableError(RuntimeError):
+    """Every source was refused admission or ran out of the request deadline.
+
+    Raised instead of returning an empty page (indistinguishable from a real
+    NO_MATCH) and instead of the full-text fallback (which would run outside
+    the admission limit while the service is saturated). Routes map it to 503.
+    """
+
+
+def _raise_if_all_sources_failed(source_results: Dict[Any, Any]) -> None:
+    """Refuse to fuse an empty page that would read as a genuine NO_MATCH.
+
+    Every source out of capacity/time → HybridSearchUnavailableError (callers
+    re-raise it past their full-text fallback, so a saturated pool gets no
+    extra work). Every source failed otherwise → RuntimeError, which the
+    callers' handlers turn into the full-text fallback.
+    """
+    if not source_results or any(r.success for r in source_results.values()):
+        return
+    if any(
+        r.error in (SOURCE_CAPACITY_EXHAUSTED, SOURCE_TIMED_OUT)
+        for r in source_results.values()
+    ):
+        raise HybridSearchUnavailableError(
+            "hybrid search sources exhausted capacity or deadline"
+        )
+    raise RuntimeError("all hybrid search sources failed")
 
 
 class SearchSourceType(Enum):
@@ -87,8 +123,18 @@ class HybridSearchService:
         self.diversity_boost = 0.1
         self.recency_boost_hours = 24
 
-        # Thread pool for parallel search execution
+        # Thread pool for parallel search execution. The pool's own queue is
+        # unbounded, so admission is gated by ``_search_slots`` below: a source
+        # search is only submitted when a slot is free, and the slot is held
+        # until the worker actually finishes (even after the request stopped
+        # waiting for it). A saturated pool therefore fails fast instead of
+        # stacking stalled searches behind each other.
         self.executor = ThreadPoolExecutor(max_workers=3)
+        # One deadline for the whole source-collection phase of a request.
+        self.request_timeout_seconds = 10.0
+        # Running + queued source searches allowed across the process.
+        self.max_inflight_searches = 12
+        self._search_slots = threading.BoundedSemaphore(self.max_inflight_searches)
 
     async def search_documents(
         self,
@@ -181,6 +227,7 @@ class HybridSearchService:
             source_results = self._execute_parallel_searches(
                 search_request, search_sources, user_id, organization_id, db
             )
+            _raise_if_all_sources_failed(source_results)
 
             # Fuse and rank results
             fused_results = self._fuse_search_results(source_results, search_request)
@@ -231,6 +278,8 @@ class HybridSearchService:
                 deterministic_status="SUPPORTED" if final_results else "NO_MATCH",
             )
 
+        except HybridSearchUnavailableError:
+            raise
         except Exception as e:
             logger.error(f"Error performing hybrid search: {e}")
             # Fallback to full-text search if hybrid fails
@@ -296,6 +345,7 @@ class HybridSearchService:
             source_results = self._execute_parallel_searches(
                 search_request, search_sources, user_id, organization_id, db
             )
+            _raise_if_all_sources_failed(source_results)
 
             for source_type, source_result in source_results.items():
                 scores = [r.relevance_score for r in source_result.results]
@@ -437,6 +487,8 @@ class HybridSearchService:
 
             return response, trace
 
+        except HybridSearchUnavailableError:
+            raise
         except Exception as e:
             logger.error(f"Error in search_with_diagnostics: {e}")
             trace.total_time_ms = round((time.time() - start_time) * 1000, 2)
@@ -536,31 +588,67 @@ class HybridSearchService:
                     )
                 )
 
-        # Execute searches in parallel
-        future_to_source = {
-            self.executor.submit(search_func, *args): source_type
-            for source_type, search_func, *args in search_tasks
-        }
+        def _failed(source_type: SearchSourceType, error: str) -> SearchSourceResult:
+            return SearchSourceResult(
+                source_type=source_type,
+                results=[],
+                search_time_ms=0,
+                total_available=0,
+                success=False,
+                error=error,
+            )
 
-        # Collect results
-        for future in future_to_source:
-            source_type = future_to_source[future]
+        # Submit each source only when an in-flight slot is free. The slot is
+        # released by a done-callback, i.e. when the worker finishes (or the
+        # future is cancelled while still queued) — not when this request
+        # stops waiting — so stalled searches cannot pile up without bound.
+        deadline = time.monotonic() + self.request_timeout_seconds
+        ordered: List[Tuple[SearchSourceType, Optional[Future]]] = []
+        for source_type, search_func, *args in search_tasks:
+            if not self._search_slots.acquire(blocking=False):
+                logger.error(
+                    "Hybrid search pool saturated; %s source not submitted",
+                    source_type.value,
+                )
+                results[source_type] = _failed(source_type, SOURCE_CAPACITY_EXHAUSTED)
+                ordered.append((source_type, None))
+                continue
             try:
-                results[source_type] = future.result(
-                    timeout=10
-                )  # 10 second timeout per source
+                future = self.executor.submit(search_func, *args)
+            except Exception as e:
+                self._search_slots.release()
+                logger.error(f"Error submitting {source_type.value} search: {e}")
+                results[source_type] = _failed(source_type, "search unavailable")
+                ordered.append((source_type, None))
+                continue
+            future.add_done_callback(lambda _f: self._search_slots.release())
+            ordered.append((source_type, future))
+
+        # Collect results against the single shared deadline, in submission
+        # order so the response is deterministic for a given set of sources.
+        for source_type, future in ordered:
+            if future is None:
+                continue
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                results[source_type] = future.result(timeout=remaining)
+            except FutureTimeoutError:
+                # Cancel if still queued; a running search keeps its slot
+                # until it returns, which is exactly the backpressure we want.
+                future.cancel()
+                logger.error(
+                    "Hybrid search %s source exceeded the %.1fs request budget",
+                    source_type.value,
+                    self.request_timeout_seconds,
+                )
+                results[source_type] = _failed(source_type, SOURCE_TIMED_OUT)
             except Exception as e:
                 logger.error(f"Error in {source_type.value} search: {e}")
-                results[source_type] = SearchSourceResult(
-                    source_type=source_type,
-                    results=[],
-                    search_time_ms=0,
-                    total_available=0,
-                    success=False,
-                    error=str(e),
-                )
+                results[source_type] = _failed(source_type, str(e))
 
-        return results
+        # Preserve source order regardless of which entries were filled at
+        # submit time vs. collect time (suggestions iterate this dict).
+        return {source_type: results[source_type] for source_type, _ in ordered}
 
     def _execute_fulltext_search(
         self,

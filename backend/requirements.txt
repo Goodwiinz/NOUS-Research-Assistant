@@ -64,6 +64,10 @@ tabula-py>=2.9.0
 
 # NLP
 spacy==3.8.16
+# preshed 3.0.14 (transitive, via spacy) crashes spaCy model load with
+# "OverflowError: Python int too large to convert to C ssize_t" in
+# Tokenizer._flush_specials. Hold 3.0.13 until a fixed release.
+preshed==3.0.13
 
 # Multi-Agent Framework (temporarily disabled due to dependency conflicts)
 # crewai==0.80.0

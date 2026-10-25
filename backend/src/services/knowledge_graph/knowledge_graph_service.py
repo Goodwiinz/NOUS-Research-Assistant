@@ -928,8 +928,14 @@ class KnowledgeGraphService:
         limit: int = 50,
         source_document_ids: Optional[List[str]] = None,
         organization_id: Optional[str] = None,
+        require_source_document: bool = False,
     ) -> List[EntityResponse]:
-        """Search for entities by name or properties, optionally scoped to organization documents"""
+        """Search for entities by name or properties, optionally scoped to organization documents
+
+        ``require_source_document`` keeps only entities that carry a
+        ``source_document_id``, applied in the query so ``limit`` counts only
+        those (callers that map entities to documents need it).
+        """
         try:
             with self.get_session() as session:
                 query_str = (query or "").strip()
@@ -944,6 +950,11 @@ class KnowledgeGraphService:
                 if entity_types:
                     filters.append("e.type IN $entity_types")
                     params["entity_types"] = [t.value for t in entity_types]
+                if require_source_document:
+                    filters.append(
+                        "e.source_document_id IS NOT NULL"
+                        " AND e.source_document_id <> ''"
+                    )
 
                 result = None
                 if query_str:
@@ -2711,9 +2722,39 @@ class KnowledgeGraphService:
 
         start_time = time.time()
 
-        # Derive tenant scope
-        source_document_ids = None
-        if organization_id and db:
+        query_text = search_request.query if search_request else ""
+        limit = getattr(search_request, "limit", 20)
+        offset = getattr(search_request, "offset", 0)
+        search_type = (
+            SearchTypeEnum.KNOWLEDGE_GRAPH
+            if hasattr(SearchTypeEnum, "KNOWLEDGE_GRAPH")
+            else "knowledge_graph"
+        )
+
+        if not organization_id:
+            # Fail closed: without a tenant, search_entities would run the
+            # unscoped branch of _entity_scope_predicate across every org.
+            logger.error("Knowledge graph search refused: no organization_id")
+            return SearchResponse(
+                query=query_text,
+                search_id=str(uuid.uuid4()),
+                search_type=search_type,
+                results=[],
+                total_results=0,
+                returned_results=0,
+                search_time_ms=(time.time() - start_time) * 1000,
+                limit=limit,
+                offset=offset,
+                has_more=False,
+            )
+
+        # Tenant scope: the indexed ``e.organization_id`` equality, OR'd with
+        # the org's document ids so entities in an environment whose
+        # organization_id backfill has not run still match (see
+        # _entity_scope_predicate). A failed lookup is logged and leaves the
+        # org equality as the only scope; it never widens to unscoped.
+        source_document_ids: Optional[List[str]] = None
+        if db is not None:
             try:
                 from src.models.document import Document
 
@@ -2723,29 +2764,33 @@ class KnowledgeGraphService:
                     .filter(Document.organization_id == organization_id)
                     .all()
                 ]
-            except Exception:
-                pass
-
-        query_text = search_request.query if search_request else ""
-        limit = getattr(search_request, "limit", 20)
-
-        # Pass organization_id directly, not only the derived doc-id list: if the
-        # doc-id lookup above threw, source_document_ids is None and passing only
-        # that would run unscoped across all tenants. The indexed organization_id
-        # equality is the primary scope.
+            except Exception as e:
+                logger.warning(
+                    "Knowledge graph search: org document lookup failed, "
+                    "scoping by organization_id only: %s",
+                    e,
+                )
         entities = self.search_entities(
             query_text,
             limit=limit,
             source_document_ids=source_document_ids,
             organization_id=organization_id,
+            # Filter source-less entities in the query, before LIMIT, so they
+            # cannot crowd document-backed matches out of the page.
+            require_source_document=True,
         )
 
         results = []
         now = datetime.utcnow()
         for entity in entities:
+            # Entities live in a different id space than Document rows. Only an
+            # entity carrying its source document can be returned as a
+            # document-level result; never fabricate a document_id.
+            if not entity.source_document_id:
+                continue
             results.append(
                 SearchResultModel(
-                    document_id=entity.source_document_id or str(uuid.uuid4()),
+                    document_id=str(entity.source_document_id),
                     title=entity.name,
                     document_type=DocumentType.TEXT,
                     content_preview=entity.context or "",
@@ -2770,17 +2815,13 @@ class KnowledgeGraphService:
         return SearchResponse(
             query=query_text,
             search_id=str(uuid.uuid4()),
-            search_type=(
-                SearchTypeEnum.KNOWLEDGE_GRAPH
-                if hasattr(SearchTypeEnum, "KNOWLEDGE_GRAPH")
-                else "knowledge_graph"
-            ),
+            search_type=search_type,
             results=results,
             total_results=len(results),
             returned_results=len(results),
             search_time_ms=search_time_ms,
             limit=limit,
-            offset=getattr(search_request, "offset", 0),
+            offset=offset,
             has_more=False,
         )
 
