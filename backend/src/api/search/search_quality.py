@@ -25,6 +25,22 @@ from src.services.search.search_quality_service import (
 
 logger = logging.getLogger(__name__)
 
+
+def _require_org_id(current_user: User) -> str:
+    """Resolve the caller's organization id, or 403.
+
+    ``User.organization_id`` is nullable and ``str(None)`` is ``"None"``,
+    which the quality services would treat as a tenant bucket.
+    """
+    org_id = getattr(current_user, "organization_id", None)
+    if not org_id:
+        raise HTTPException(
+            status_code=403,
+            detail="No organization associated with this account",
+        )
+    return str(org_id)
+
+
 router = APIRouter(prefix="/search-quality", tags=["search-quality"])
 
 
@@ -112,12 +128,14 @@ async def evaluate_search_quality(
     This endpoint analyzes search results and calculates various quality metrics
     including relevancy, precision, recall, response time, and diversity.
     """
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         evaluation = search_quality_service.evaluate_search(
             search_query=request.search_query,
             search_response=request.search_response,
             user_id=str(current_user.id),
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
             ground_truth_docs=request.ground_truth_docs,
         )
 
@@ -170,6 +188,8 @@ async def submit_user_feedback(
     This endpoint records user satisfaction ratings and feedback text,
     which are used to improve search quality metrics.
     """
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # R6-F3a: the service opens a sync session and commits inline —
         # calling it directly from this async handler blocked the event loop.
@@ -180,7 +200,7 @@ async def submit_user_feedback(
             rating=request.rating,
             feedback_text=request.feedback_text,
             document_id=request.document_id,
-            organization_id=str(current_user.organization_id or ""),
+            organization_id=org_id,
             search_type=request.search_type,
         )
 
@@ -219,11 +239,13 @@ async def get_quality_analytics(
     Returns aggregated quality metrics, trends, and improvement recommendations
     for the specified time period.
     """
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # R6-F3a: sync session work — off the event loop.
         analytics = await run_in_threadpool(
             search_quality_service.get_quality_analytics,
-            organization_id=str(current_user.organization_id),
+            organization_id=org_id,
             days=days,
             search_type=search_type,
         )
@@ -232,7 +254,7 @@ async def get_quality_analytics(
             # The service puts str(e) under "error"; keep it in logs only.
             logger.error(
                 "Quality analytics failed for organization %s: %s",
-                current_user.organization_id,
+                org_id,
                 analytics["error"],
             )
             raise HTTPException(status_code=500, detail="Internal server error")

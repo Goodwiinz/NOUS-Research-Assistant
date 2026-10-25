@@ -214,6 +214,8 @@ def create_entity(
     db=Depends(get_db_sync),
 ):
     """Create a new entity in the knowledge graph"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     # Tenant guard: the client supplies source_document_id; without this check a
     # caller could attach an entity to (and thus read/inject into) another org's
     # document. Validate membership against the caller's org documents.
@@ -222,12 +224,10 @@ def create_entity(
     # only other guard) and stamp the new node with another tenant's org, so it
     # surfaces in that tenant's org-scoped entity list / search / analytics
     # (cross-tenant graph poisoning). Mirrors create_relationship.
-    request.organization_id = (
-        str(current_user.organization_id) if current_user.organization_id else None
-    )
+    request.organization_id = org_id
     if request.source_document_id:
         _require_org_source_documents(
-            _get_org_document_ids(db, current_user.organization_id),
+            _get_org_document_ids(db, org_id),
             [request.source_document_id],
         )
     try:
@@ -527,13 +527,13 @@ def create_relationship(
     db=Depends(get_db_sync),
 ):
     """Create a new relationship between entities"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     # Force the caller's org onto the request (never trust a client-supplied
     # value — a tenantless caller must not be able to set one). Both
     # endpoints are then org-scoped; the org-doc-id list stays as a fallback.
-    request.organization_id = (
-        str(current_user.organization_id) if current_user.organization_id else None
-    )
-    org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+    request.organization_id = org_id
+    org_doc_ids = _get_org_document_ids(db, org_id)
     # The edge's own source_document_id must be the caller's too: project
     # relationship reads filter on r.source_document_id alone.
     _require_org_source_documents(org_doc_ids, [request.source_document_id])
@@ -712,17 +712,16 @@ def batch_create_entities(
     db=Depends(get_db_sync),
 ):
     """Create multiple entities and relationships in a batch"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     # Force the caller's org onto every item — never trust client-supplied
     # organization_id on batch entities/relationships (same cross-tenant
     # poisoning vector as the single create_entity endpoint).
-    caller_org = (
-        str(current_user.organization_id) if current_user.organization_id else None
-    )
     for entity in request.entities:
-        entity.organization_id = caller_org
+        entity.organization_id = org_id
     for relationship in request.relationships:
-        relationship.organization_id = caller_org
-    org_doc_ids = _get_org_document_ids(db, current_user.organization_id)
+        relationship.organization_id = org_id
+    org_doc_ids = _get_org_document_ids(db, org_id)
     # Every item's source_document_id is stamped as-is by the service, so reject
     # the whole batch if any of them names another org's document.
     _require_org_source_documents(
@@ -857,6 +856,8 @@ def create_extraction_job(
     db=Depends(get_db_sync),
 ):
     """Queue a background entity extraction job for one or more documents."""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     if not request.document_ids:
         raise HTTPException(
             status_code=400, detail="At least one document ID is required"
@@ -867,7 +868,7 @@ def create_extraction_job(
         db.query(Document)
         .filter(
             Document.id.in_(request.document_ids),
-            Document.organization_id == current_user.organization_id,
+            Document.organization_id == org_id,
             Document.is_deleted == False,
         )
         .all()
@@ -883,7 +884,7 @@ def create_extraction_job(
         job_type=JobType.ENTITY_EXTRACTION,
         status=JobStatus.PENDING,
         priority=JobPriority.NORMAL,
-        organization_id=current_user.organization_id,
+        organization_id=org_id,
         created_by_user_id=current_user.id,
         parameters={
             "operation": "document_entity_extraction",
@@ -920,6 +921,8 @@ def extract_entities_from_document(
     db=Depends(get_db_sync),
 ):
     """Extract entities from a document and add them to the knowledge graph"""
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # Get document from database — scoped to the caller's organization so a
         # user cannot extract/attach entities to another org's document.
@@ -927,7 +930,7 @@ def extract_entities_from_document(
             db.query(Document)
             .filter(
                 Document.id == document_id,
-                Document.organization_id == current_user.organization_id,
+                Document.organization_id == org_id,
             )
             .first()
         )
@@ -987,11 +990,7 @@ def extract_entities_from_document(
                     # org_key and never appear in the caller's own org-scoped
                     # entity list / search — the relationships below already do
                     # this; the entity requests were missed.
-                    organization_id=(
-                        str(current_user.organization_id)
-                        if current_user.organization_id
-                        else None
-                    ),
+                    organization_id=org_id,
                 )
             )
 
@@ -1052,11 +1051,7 @@ def extract_entities_from_document(
                         "pattern_matched": relationship.get("pattern_matched"),
                     },
                     source_document_id=document_id,
-                    organization_id=(
-                        str(current_user.organization_id)
-                        if current_user.organization_id
-                        else None
-                    ),
+                    organization_id=org_id,
                 )
             )
 

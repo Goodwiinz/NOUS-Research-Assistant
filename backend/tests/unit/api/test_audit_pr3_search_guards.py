@@ -193,7 +193,8 @@ def test_search_indexes_document_count_is_org_scoped() -> None:
     src = _read("src/api/search/search.py")
     block = src[src.find("def get_search_indexes") :][:2500]
     assert "d.organization_id = :org" in block
-    assert '{"org": str(current_user.organization_id)}' in block
+    assert "org_id = _require_org_id(current_user)" in block
+    assert '{"org": org_id}' in block
     assert "NOT d.is_deleted" in block
     # sync handler -> FastAPI threadpool, no event-loop block on get_db_sync
     assert "\nasync def get_search_indexes" not in src

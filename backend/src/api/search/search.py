@@ -410,6 +410,8 @@ async def get_search_suggestions(
     """
     Get search suggestions for auto-completion
     """
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # `_get_search_suggestions` returns [] unless it is scoped to the
         # caller's org (title suggestions would otherwise leak across tenants).
@@ -419,11 +421,7 @@ async def get_search_suggestions(
         suggestions = fulltext_search_service._get_search_suggestions(
             q,
             db,
-            organization_id=(
-                str(current_user.organization_id)
-                if current_user.organization_id
-                else None
-            ),
+            organization_id=org_id,
         )
 
         # Convert to SearchSuggestion models
@@ -486,10 +484,12 @@ async def get_search_analytics(
     """
     Get search analytics data
     """
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         analytics_data = await run_in_threadpool(
             _load_search_analytics,
-            str(current_user.organization_id),
+            org_id,
             days,
         )
         return SearchAnalytics(**analytics_data)
@@ -558,6 +558,8 @@ def get_search_indexes(
     """
     Get information about search indexes
     """
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # Get index information from PostgreSQL.
         # R6-M2: the previous string held a Python-style '#' comment (a PG
@@ -585,7 +587,7 @@ def get_search_indexes(
             AND ix.indexname LIKE '%search%'
         """)
 
-        result = db.execute(index_query, {"org": str(current_user.organization_id)})
+        result = db.execute(index_query, {"org": org_id})
         indexes = []
 
         for row in result:
@@ -617,6 +619,8 @@ async def reindex_document(
     """
     Rebuild search vector for a specific document
     """
+    # 403 for an org-less caller (before any try), never a "None" tenant.
+    org_id = _require_org_id(current_user)
     try:
         # Verify user has access to the document
         from src.models.document import Document
@@ -625,7 +629,7 @@ async def reindex_document(
             db.query(Document)
             .filter(
                 Document.id == document_id,
-                Document.organization_id == current_user.organization_id,
+                Document.organization_id == org_id,
                 Document.is_deleted == False,
             )
             .first()

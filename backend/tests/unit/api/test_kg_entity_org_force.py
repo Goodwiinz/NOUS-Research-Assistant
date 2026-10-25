@@ -60,16 +60,19 @@ def test_batch_overwrites_client_org_on_all_items(monkeypatch):
     assert all(r.organization_id == "org-A" for r in captured["req"].relationships)
 
 
-def test_create_entity_tenantless_caller_gets_none(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(
-        kg.knowledge_graph_service,
-        "create_entity",
-        lambda req: captured.setdefault("req", req) or SimpleNamespace(),
-    )
+def test_create_entity_tenantless_caller_is_rejected(monkeypatch):
+    # A tenantless caller is refused (403) before any write; it can neither
+    # keep a client-supplied org nor create an unowned (org=None) node.
+    from fastapi import HTTPException
+
+    def _must_not_create(req):
+        raise AssertionError("create_entity must not run for a tenantless caller")
+
+    monkeypatch.setattr(kg.knowledge_graph_service, "create_entity", _must_not_create)
     req = SimpleNamespace(organization_id="org-B", source_document_id=None)
-    kg.create_entity(request=req, current_user=_caller(None), db=MagicMock())
-    assert captured["req"].organization_id is None
+    with pytest.raises(HTTPException) as exc:
+        kg.create_entity(request=req, current_user=_caller(None), db=MagicMock())
+    assert exc.value.status_code == 403
 
 
 def test_create_entity_with_real_model_instance(monkeypatch):
