@@ -10,12 +10,14 @@ pnpm install --frozen-lockfile
 ./nous --new
 ```
 
-The terminal shares the existing CLI login, backend URL, selected model,
-project/paper context, and thread. `NOUS_API_URL` overrides the backend URL.
+The terminal stores its login, backend URL, selected model, project/paper
+context, and thread in `~/.nous/config.json`. `NOUS_API_URL` overrides the
+backend URL.
 
-Interactive `./nous` now starts Ink. Project, paper, thread and settings menus
-use Ink controls; no Clack menu is mounted. `./nous --ink` remains an alias.
-Login and one-shot queries continue through the existing CLI entry point.
+The terminal app is the only NOUS client CLI: `./nous` starts Ink and
+`./nous login` signs in through the browser. Project, paper, thread and settings
+menus use Ink controls. `./nous --ink` remains an alias. There is no one-shot or
+non-interactive mode; Ink needs a TTY.
 The existing prompt-history and draft files are reused; unsent text is restored.
 Prompt history migrates to JSON records on the next append, preserving new
 multiline prompts as single entries. Old entries already split into lines cannot
@@ -237,7 +239,8 @@ Removing local graph files loses those navigation links, not the server threads.
 
 Web and terminal share `@nous/chat-runtime` message mapping, queue lifecycle,
 attachment IDs, quotes, and approval callback wiring. Node transport and Ink UI
-live here; authenticated streaming/services are reused from `frontend/cli`.
+live here; sign-in, the config store and authenticated streaming/services
+are shared modules under `frontend/cli` (it has no entry point of its own).
 React 18 remains the web dependency; Ink owns React 19. The terminal-only Node
 module hook deduplicates React and assistant-ui contexts under pnpm's hoisted
 layout. One root lockfile is authoritative.

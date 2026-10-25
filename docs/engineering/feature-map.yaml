@@ -20,7 +20,7 @@ features:
     surfaces:
       web: ["/chat", "/chat?thread=<id>"]
       api: ["POST /api/v1/agent/stream", "GET /api/v2/threads/{id}/messages"]
-      cli: ["./nous \"<prompt>\""]
+      cli: ["./nous"]
     states: [empty, streaming, done, error]
     pass_criteria:
       - "A message typed in the composer appears as a user transcript row."

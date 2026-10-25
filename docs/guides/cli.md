@@ -2,7 +2,7 @@
 
 An Ink terminal chat client for the NOUS agent. It talks to a NOUS backend over HTTPS — auth via browser-based device flow, then streams agent responses (tokens + tool events + HITL confirmations) straight into your terminal.
 
-Interactive `./nous` now launches Ink. See [the terminal guide](../../terminal/README.md) for native menus, keyboard controls, attachments, branches, and migrated commands. Login and one-shot queries continue to use the shared CLI services.
+`./nous` launches the Ink terminal app, the only NOUS client CLI. See [the terminal guide](../../terminal/README.md) for native menus, keyboard controls, slash commands, attachments, and branches. There is no one-shot or non-interactive mode.
 
 This guide targets the hosted dev API at **`https://dev-api.goodwiinz.tech/`**.
 
@@ -59,7 +59,7 @@ If the browser doesn't open automatically, the URL is printed — paste it manua
 
 ### Re-auth
 
-When a session expires, any command prints `Session expired. Run: ./nous login`. Just run `./nous login` again.
+When a session expires, `./nous` prints `Login required. Run ./nous login first.` Just run `./nous login` again.
 
 ### Logout
 
@@ -73,73 +73,12 @@ rm ~/.nous/config.json
 
 ## Run the agent
 
-### Interactive REPL
-
 ```bash
-./nous
+./nous          # resume the saved thread
+./nous --new    # start a fresh thread
 ```
 
-You get a prompt:
-
-```
-NOUS  ·  no thread
-
->
-```
-
-Type a question, hit Enter, and the agent streams back — tool calls appear as inline spinners, tokens stream in real time, and destructive actions pause for confirmation.
-
-```
-> find me three arxiv papers on retrieval-augmented generation
-```
-
-### One-shot (non-interactive)
-
-Pass the query as arguments — useful for scripts and pipes:
-
-```bash
-./nous "summarize the latest paper on diffusion transformers"
-./nous "export my citations as BibTeX" > refs.bib
-```
-
----
-
-## Slash commands
-
-Available inside the REPL:
-
-| Command                        | Purpose                                                 |
-| ------------------------------ | ------------------------------------------------------- |
-| `/help`                        | List commands                                           |
-| `/new`                         | Start a fresh thread (clears conversation history)      |
-| `/thread`                      | Show the current thread ID                              |
-| `/context project <id> [name]` | Scope subsequent queries to a specific research project |
-| `/context clear`               | Drop project scoping, go back to generic chat           |
-| `/quit`                        | Exit the REPL (Ctrl+C also works)                       |
-
-### Example session — project-scoped drafting
-
-```
-> /context project 3f7e8a2c-... "Diffusion Survey"
-project: Diffusion Survey  ·  thread: 8a1b2c3d
-
-> ingest the latest 5 papers on classifier-free guidance
-✓ arxiv_search
-⏸  ingest_papers (paused — awaiting confirmation)
-  Ingest 5 papers into "Diffusion Survey"? [yes/no] yes
-✓ ingest_papers
-
-> draft a literature-review section on classifier-free guidance
-✓ search_documents
-✓ create_draft
-(streaming draft with inline [cite:N] markers...)
-```
-
----
-
-## Human-in-the-loop confirmations
-
-Destructive tools (document ingest, draft creation, note writes) pause via LangGraph `interrupt()`. The CLI surfaces them inline as `⏸ <tool> (paused — awaiting confirmation)` and requires an explicit `yes` or `no` followed by Enter. Approve → `Command(resume=True)` is sent and the agent continues. Reject → the tool call is discarded and the agent gets control back.
+Type a question and press Enter; the agent streams back with tool activity inline. Destructive tools (document ingest, draft creation, note writes) pause via LangGraph `interrupt()` and wait for your approval before continuing. Slash commands, menus and keyboard controls are documented in [the terminal guide](../../terminal/README.md).
 
 ---
 
@@ -157,8 +96,8 @@ Destructive tools (document ingest, draft creation, note writes) pause via LangG
 | Symptom                              | Fix                                                                         |
 | ------------------------------------ | --------------------------------------------------------------------------- |
 | `Failed to start CLI auth: 404`      | Double-check `NOUS_API_URL` ends with `/api/v1` and the host is reachable   |
-| `Not logged in. Run: ./nous login`   | First-time setup or config wiped — just run `./nous login`                  |
-| `Session expired. Run: ./nous login` | Token past `expires_at` — re-login                                          |
+| `Login required. Run ./nous login first.` | First-time setup, config wiped, or token past `expires_at` — run `./nous login` |
+| `Ink requires an interactive terminal.`   | `./nous` was run without a TTY (pipe, script, CI); run it in a terminal     |
 | Browser didn't open                  | Copy the printed URL manually; login flow works the same way                |
 | `Poll failed: 403`                   | Your account may not be authorized for this environment — contact the admin |
 | Connection refused                   | `dev-api.goodwiinz.tech` may be down; retry or check status                   |
@@ -177,12 +116,11 @@ Should return `{"status":"ok"}` (or similar).
 
 ## Under the hood
 
-- Entrypoint: [`frontend/cli/index.ts`](../../frontend/cli/index.ts)
+- Entrypoint: [`terminal/src/index.tsx`](../../terminal/src/index.tsx)
 - Auth flow: [`frontend/cli/auth/deviceFlow.ts`](../../frontend/cli/auth/deviceFlow.ts)
 - Token store: [`frontend/cli/auth/store.ts`](../../frontend/cli/auth/store.ts)
-- REPL + one-shot: [`frontend/cli/repl.ts`](../../frontend/cli/repl.ts)
 - SSE streaming: [`frontend/cli/stream.ts`](../../frontend/cli/stream.ts)
-- Wrapper script: [`nous`](../../nous) → `exec pnpm --prefix frontend cli "$@"`
+- Wrapper script: [`nous`](../../nous) → `exec pnpm --prefix terminal start "$@"`
 
 ### Endpoints the CLI calls
 

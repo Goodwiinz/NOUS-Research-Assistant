@@ -1,5 +1,5 @@
 // frontend/cli/__tests__/auth/deviceFlow.test.ts
-import { expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { pollForApproval } from '../../auth/deviceFlow';
 
 test('resolves with token when status becomes approved', async () => {
@@ -129,4 +129,107 @@ test('login prints the verification code for the user to type in the browser', a
     vi.doUnmock('open');
     vi.doUnmock('../../auth/store');
   }
+});
+
+describe('login backend fallback', () => {
+  const DEAD = 'https://dead.test/api/v1';
+  const DEV = 'https://dev.test/api/v1';
+  const startOk = {
+    ok: true,
+    json: () =>
+      Promise.resolve({
+        session_id: 's',
+        poll_token: 'p',
+        browser_url: 'https://nous.test/cli-auth?session_id=s',
+        verification_code: 'ABCD-1234',
+        poll_interval_seconds: 0,
+      }),
+  };
+  const approved = {
+    ok: true,
+    json: () =>
+      Promise.resolve({
+        status: 'approved',
+        token: 't',
+        user_email: 'a@b.com',
+        organization_id: 'o',
+        expires_at: '2099-01-01T00:00:00Z',
+      }),
+  };
+
+  async function loadLogin(savedApiUrl: string) {
+    vi.resetModules();
+    const saveConfig = vi.fn();
+    vi.doMock('open', () => ({ default: vi.fn() }));
+    vi.doMock('../../auth/store', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../../auth/store')>()),
+      loadConfig: () => ({
+        token: 'old',
+        user_email: 'a@b.com',
+        organization_id: 'o',
+        expires_at: '2000-01-01T00:00:00Z',
+        thread_id: null,
+        api_url: savedApiUrl,
+      }),
+      saveConfig,
+    }));
+    const { login } = await import('../../auth/deviceFlow');
+    return { login, saveConfig };
+  }
+
+  let log: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.stubEnv('NOUS_API_URL', '');
+    vi.stubEnv('NOUS_DEFAULT_API_URL', DEV);
+    log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    log.mockRestore();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.doUnmock('open');
+    vi.doUnmock('../../auth/store');
+  });
+
+  test('signs in to the default API when the saved api_url is unreachable', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(startOk)
+      .mockResolvedValueOnce(approved);
+    vi.stubGlobal('fetch', fetchMock);
+    const { login, saveConfig } = await loadLogin(DEAD);
+
+    await login();
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls[0]).toBe(`${DEAD}/cli-auth/start`);
+    expect(urls[1]).toBe(`${DEV}/cli-auth/start`);
+    expect(urls[2].startsWith(`${DEV}/cli-auth/status/`)).toBe(true);
+    expect(saveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ api_url: DEV })
+    );
+    const printed = log.mock.calls.flat().join('\n');
+    expect(printed).toContain(DEAD);
+    expect(printed).toContain(DEV);
+  });
+
+  test('does not fall back when NOUS_API_URL is set explicitly', async () => {
+    vi.stubEnv('NOUS_API_URL', DEAD);
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    vi.stubGlobal('fetch', fetchMock);
+    const { login } = await loadLogin(DEAD);
+
+    await expect(login()).rejects.toThrow('fetch failed');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not fall back when the saved backend answers with an HTTP error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { login } = await loadLogin(DEAD);
+
+    await expect(login()).rejects.toThrow('Failed to start CLI auth: 500');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
