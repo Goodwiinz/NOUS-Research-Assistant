@@ -60,9 +60,9 @@ router = APIRouter(prefix="/knowledge-graph", tags=["knowledge-graph"])
 def _require_org_id(current_user: User) -> str:
     """Resolve the caller's organization id, or 403.
 
-    Every tenant-scoped graph route — retrieval (entity listing/search) as
-    well as destructive/maintenance writes — must call this before touching
-    the database or ``knowledge_graph_service``. ``User.organization_id`` is
+    Retrieval routes (entity listing/search/traversal) and update/delete and
+    maintenance writes call this before touching the database or
+    ``knowledge_graph_service``. ``User.organization_id`` is
     nullable and ``str(None)`` is the literal ``"None"``, which the service
     would otherwise treat as a tenant; never fall through to an unscoped or
     phantom-tenant operation when the caller has no organization. Call it

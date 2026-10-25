@@ -107,8 +107,8 @@ def _message_is_accessible(message: object, current_user: User) -> bool:
 def _citation_is_accessible(citation: Citation, current_user: User) -> bool:
     if getattr(citation, "is_deleted", False) is True:
         return False
-    # Mirror list_citations' SQL: a citation that names a document is governed
-    # by that document alone. Owning the chat message must not re-open a
+    # Same rule as list_citations' SQL: a citation that names a document is
+    # governed by that document alone. Owning the chat message must not re-open a
     # citation whose document is foreign or soft-deleted.
     document = getattr(citation, "document", None)
     if getattr(citation, "document_id", None) is not None or document is not None:
@@ -330,13 +330,15 @@ async def list_citations(
         if needs_review is not None:
             filters.append(Citation.needs_review == needs_review)
 
-        # SQL equivalent of _citation_is_accessible: accessible via the
-        # document (caller's org, not deleted) OR via the message's
-        # thread → conversation → workspace ownership chain. All joins are
-        # many-to-one from Citation, so no row multiplication.
+        # SQL equivalent of _citation_is_accessible: a citation that names a
+        # document is accessible only via that document (caller's org, not
+        # deleted); a documentless citation only via the message's thread →
+        # conversation → workspace ownership chain. All joins are many-to-one
+        # from Citation, so no row multiplication.
         access_filter = or_(
             _document_access_clause(current_user),
             and_(
+                Citation.document_id.is_(None),
                 ChatMessage.is_deleted.is_(False),
                 Thread.is_deleted.is_(False),
                 Conversation.is_deleted.is_(False),

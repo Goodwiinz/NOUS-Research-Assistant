@@ -4990,8 +4990,10 @@ export interface paths {
          * @description Reset the CALLER'S organization graph (DESTRUCTIVE OPERATION).
          *
          *     Deletes every Entity node owned by the caller's organization (and, via
-         *     DETACH DELETE, their relationships). Global schema constraints/indexes are
-         *     (idempotently) re-ensured.
+         *     DETACH DELETE, their relationships). Deleting nodes does not drop the
+         *     global constraints/indexes; those are owned by the startup bootstrap
+         *     (``_connect`` → ``_maybe_ensure_schema``, retried from ``get_session``),
+         *     so a tenant request must not re-run that global DDL.
          */
         post: operations["reset_graph_schema_api_v1_knowledge_graph_schema_reset_post"];
         delete?: never;
@@ -9276,7 +9278,12 @@ export interface paths {
         put?: never;
         /**
          * Rebuild Search Indexes
-         * @description Rebuild full-text search indexes (admin only)
+         * @description Rebuild full-text search vectors for the caller's organization (admin only)
+         *
+         *     Index DDL is deployment-owned (Alembic ``p3q4r5s6t7u8`` creates the GIN
+         *     index on ``documents.search_vector``); a tenant admin's request must not
+         *     run ``CREATE INDEX`` against the shared ``documents`` table. This endpoint
+         *     only recomputes ``search_vector`` for the caller's organization.
          */
         post: operations["rebuild_search_indexes_api_v1_search_indexes_rebuild_post"];
         delete?: never;

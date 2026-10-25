@@ -48458,7 +48458,7 @@
     },
     "/api/v1/knowledge-graph/schema/reset": {
       "post": {
-        "description": "Reset the CALLER'S organization graph (DESTRUCTIVE OPERATION).\n\nDeletes every Entity node owned by the caller's organization (and, via\nDETACH DELETE, their relationships). Global schema constraints/indexes are\n(idempotently) re-ensured.",
+        "description": "Reset the CALLER'S organization graph (DESTRUCTIVE OPERATION).\n\nDeletes every Entity node owned by the caller's organization (and, via\nDETACH DELETE, their relationships). Deleting nodes does not drop the\nglobal constraints/indexes; those are owned by the startup bootstrap\n(``_connect`` → ``_maybe_ensure_schema``, retried from ``get_session``),\nso a tenant request must not re-run that global DDL.",
         "operationId": "reset_graph_schema_api_v1_knowledge_graph_schema_reset_post",
         "parameters": [
           {
@@ -62529,7 +62529,7 @@
     },
     "/api/v1/search/indexes/rebuild": {
       "post": {
-        "description": "Rebuild full-text search indexes (admin only)",
+        "description": "Rebuild full-text search vectors for the caller's organization (admin only)\n\nIndex DDL is deployment-owned (Alembic ``p3q4r5s6t7u8`` creates the GIN\nindex on ``documents.search_vector``); a tenant admin's request must not\nrun ``CREATE INDEX`` against the shared ``documents`` table. This endpoint\nonly recomputes ``search_vector`` for the caller's organization.",
         "operationId": "rebuild_search_indexes_api_v1_search_indexes_rebuild_post",
         "responses": {
           "200": {

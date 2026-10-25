@@ -193,6 +193,12 @@ class HybridSearchService:
             source_results = self._execute_parallel_searches(
                 search_request, search_sources, user_id, organization_id, db
             )
+            # Every source refused, timed out or errored: an empty fused page
+            # would read as a genuine NO_MATCH. Take the full-text fallback
+            # below instead, so the caller gets real results or a logged
+            # failure rather than a silent empty 200.
+            if source_results and not any(r.success for r in source_results.values()):
+                raise RuntimeError("all hybrid search sources failed")
 
             # Fuse and rank results
             fused_results = self._fuse_search_results(source_results, search_request)

@@ -24,6 +24,8 @@ from src.services.search.hybrid_search_service import (
 
 pytestmark = pytest.mark.unit
 
+ORG_ID = "11111111-1111-1111-1111-111111111111"
+
 
 def _ok(source: SearchSourceType) -> SearchSourceResult:
     return SearchSourceResult(
@@ -199,3 +201,35 @@ def test_knowledge_graph_leg_fails_closed_without_organization(
 
     # GOO-399 semantics: an empty, successful leg (no cross-tenant rows).
     assert result.results == []
+
+
+def test_all_sources_failed_takes_fulltext_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When every source is refused/timed out, search() must not return an
+    empty page as NO_MATCH; it degrades to the full-text fallback."""
+    svc = HybridSearchService()
+    failed = SearchSourceResult(
+        source_type=SearchSourceType.FULLTEXT,
+        results=[],
+        search_time_ms=0,
+        total_available=0,
+        success=False,
+        error="search capacity exhausted",
+    )
+    monkeypatch.setattr(
+        svc,
+        "_execute_parallel_searches",
+        lambda *_a, **_k: {SearchSourceType.FULLTEXT: failed},
+    )
+    sentinel = object()
+    calls: list[Any] = []
+
+    def _fallback(*args: Any, **_k: Any) -> Any:
+        calls.append(args)
+        return sentinel
+
+    monkeypatch.setattr(svc, "_fallback_to_fulltext", _fallback)
+
+    assert svc.search(_request(), "user-1", ORG_ID) is sentinel
+    assert len(calls) == 1
