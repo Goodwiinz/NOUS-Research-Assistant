@@ -2711,41 +2711,56 @@ class KnowledgeGraphService:
 
         start_time = time.time()
 
-        # Derive tenant scope
-        source_document_ids = None
-        if organization_id and db:
-            try:
-                from src.models.document import Document
-
-                source_document_ids = [
-                    str(doc_id)
-                    for (doc_id,) in db.query(Document.id)
-                    .filter(Document.organization_id == organization_id)
-                    .all()
-                ]
-            except Exception:
-                pass
-
         query_text = search_request.query if search_request else ""
         limit = getattr(search_request, "limit", 20)
+        offset = getattr(search_request, "offset", 0)
+        search_type = (
+            SearchTypeEnum.KNOWLEDGE_GRAPH
+            if hasattr(SearchTypeEnum, "KNOWLEDGE_GRAPH")
+            else "knowledge_graph"
+        )
 
-        # Pass organization_id directly, not only the derived doc-id list: if the
-        # doc-id lookup above threw, source_document_ids is None and passing only
-        # that would run unscoped across all tenants. The indexed organization_id
-        # equality is the primary scope.
+        if not organization_id:
+            # Fail closed: without a tenant, search_entities would run the
+            # unscoped branch of _entity_scope_predicate across every org.
+            logger.error("Knowledge graph search refused: no organization_id")
+            return SearchResponse(
+                query=query_text,
+                search_id=str(uuid.uuid4()),
+                search_type=search_type,
+                results=[],
+                total_results=0,
+                returned_results=0,
+                search_time_ms=(time.time() - start_time) * 1000,
+                limit=limit,
+                offset=offset,
+                has_more=False,
+            )
+
+        # Tenant scope is the indexed ``e.organization_id`` equality. The
+        # former per-query ``SELECT id FROM documents WHERE organization_id``
+        # enumeration (to build a ``source_document_id IN [...]`` list) is
+        # redundant with it and scaled with the tenant's document count on
+        # every search, so it is gone. ``db`` is accepted for signature
+        # compatibility only.
         entities = self.search_entities(
             query_text,
             limit=limit,
-            source_document_ids=source_document_ids,
+            source_document_ids=None,
             organization_id=organization_id,
         )
 
         results = []
         now = datetime.utcnow()
         for entity in entities:
+            # Entities live in a different id space than Document rows. Only an
+            # entity carrying its source document can be returned as a
+            # document-level result; never fabricate a document_id.
+            if not entity.source_document_id:
+                continue
             results.append(
                 SearchResultModel(
-                    document_id=entity.source_document_id or str(uuid.uuid4()),
+                    document_id=str(entity.source_document_id),
                     title=entity.name,
                     document_type=DocumentType.TEXT,
                     content_preview=entity.context or "",
@@ -2770,17 +2785,13 @@ class KnowledgeGraphService:
         return SearchResponse(
             query=query_text,
             search_id=str(uuid.uuid4()),
-            search_type=(
-                SearchTypeEnum.KNOWLEDGE_GRAPH
-                if hasattr(SearchTypeEnum, "KNOWLEDGE_GRAPH")
-                else "knowledge_graph"
-            ),
+            search_type=search_type,
             results=results,
             total_results=len(results),
             returned_results=len(results),
             search_time_ms=search_time_ms,
             limit=limit,
-            offset=getattr(search_request, "offset", 0),
+            offset=offset,
             has_more=False,
         )
 

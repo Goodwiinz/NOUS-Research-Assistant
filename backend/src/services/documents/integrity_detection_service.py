@@ -69,7 +69,9 @@ class IntegrityDetectionService:
             with torch.no_grad():
                 outputs = self._model(**inputs)
             probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-            ai_prob = probs[0][1].item()
+            # roberta-base-openai-detector maps class 0 to Fake (AI-generated)
+            # and class 1 to Real (human-authored).
+            ai_prob = probs[0][0].item()
             segment_scores.append(
                 {
                     "text_preview": segment[:200],

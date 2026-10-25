@@ -50,6 +50,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 
 
+def _require_org_id(current_user: User) -> str:
+    """Resolve the caller's organization id, or 403.
+
+    ``User.organization_id`` is nullable; ``str(None)`` is the literal
+    ``"None"``, which the search services either treat as a shared tenant
+    bucket or (where they filter only ``if organization_id:``) cannot tell
+    apart from a real scope. Reject before any search service runs.
+    """
+    org_id = getattr(current_user, "organization_id", None)
+    if not org_id:
+        raise HTTPException(
+            status_code=403,
+            detail="No organization associated with this account",
+        )
+    return str(org_id)
+
+
 def _ensure_deterministic_response_fields(result: Any) -> SearchResponse:
     """Ensure deterministic response fields are present for hybrid endpoints."""
     response = (
@@ -193,6 +210,7 @@ async def search_documents(
     """
     Perform search on documents with multiple search modalities
     """
+    organization_id = _require_org_id(current_user)
     try:
         # Route search to appropriate service based on search type.
         # R6-H1: every pipeline below is fully synchronous (PG ts_rank_cd +
@@ -204,7 +222,7 @@ async def search_documents(
                 hybrid_search_service.search,
                 search_request=search_request,
                 user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=organization_id,
                 db=db,
             )
         elif search_request.search_type == SearchType.FULLTEXT:
@@ -213,7 +231,7 @@ async def search_documents(
                 fulltext_search_service.search,
                 search_request=search_request,
                 user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=organization_id,
                 db=db,
             )
         elif search_request.search_type == SearchType.VECTOR:
@@ -241,7 +259,7 @@ async def search_documents(
                 knowledge_graph_service.search,
                 search_request=search_request,
                 user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=organization_id,
                 db=db,
             )
         else:
@@ -251,7 +269,7 @@ async def search_documents(
                 hybrid_search_service.search,
                 search_request=search_request,
                 user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=organization_id,
                 db=db,
             )
 
@@ -260,7 +278,7 @@ async def search_documents(
             log_search_query,
             str(result.search_id),
             str(current_user.id),
-            str(current_user.organization_id),
+            organization_id,
             search_request.query,
             len(result.results),
             result.search_time_ms,
@@ -288,6 +306,7 @@ async def hybrid_search(
     """
     Perform hybrid search combining vector, full-text, and knowledge graph search
     """
+    organization_id = _require_org_id(current_user)
     try:
         # Force hybrid search type
         search_request.search_type = SearchType.HYBRID
@@ -297,7 +316,7 @@ async def hybrid_search(
             hybrid_search_service.search,
             search_request=search_request,
             user_id=str(current_user.id),
-            organization_id=str(current_user.organization_id),
+            organization_id=organization_id,
         )
         result = _ensure_deterministic_response_fields(result)
 
@@ -347,7 +366,7 @@ async def hybrid_search(
             log_search_query,
             str(result.search_id),
             str(current_user.id),
-            str(current_user.organization_id),
+            organization_id,
             search_request.query,
             len(result.results),
             result.search_time_ms,
@@ -470,26 +489,24 @@ async def rebuild_search_indexes(
     current_user: User = Depends(get_current_user), db=Depends(get_db_sync)
 ):
     """
-    Rebuild full-text search indexes (admin only)
+    Rebuild full-text search vectors for the caller's organization (admin only)
+
+    Index DDL is deployment-owned (Alembic ``p3q4r5s6t7u8`` creates the GIN
+    index on ``documents.search_vector``); a tenant admin's request must not
+    run ``CREATE INDEX`` against the shared ``documents`` table. This endpoint
+    only recomputes ``search_vector`` for the caller's organization.
     """
     # Check if user has admin privileges
     if current_user.role.value != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    # Admin is a role boundary, not a tenant boundary: refuse an org-less
+    # caller rather than rebuilding against ``organization_id = NULL``.
+    _require_org_id(current_user)
 
     try:
-        # Create indexes
-        fulltext_search_service.create_search_indexes(db)
-
-        # Update all document search vectors
-        from src.models.document import Document, ProcessingStatus
-
-        documents = (
-            db.query(Document)
-            .filter(
-                Document.processing_status == ProcessingStatus.COMPLETED,
-                Document.is_deleted == False,
-            )
-            .all()
+        # Update only the caller's organization.
+        documents = fulltext_search_service.get_rebuild_documents(
+            current_user.organization_id, db
         )
 
         updated_count = 0
@@ -505,8 +522,11 @@ async def rebuild_search_indexes(
                 )
 
         return {
-            "message": "Search indexes rebuilt successfully",
-            "indexes_created": True,
+            "message": (
+                "Search vectors rebuilt for this organization; search indexes "
+                "are managed by deployment migrations and were not created"
+            ),
+            "indexes_created": False,
             "documents_updated": updated_count,
             "total_documents": len(documents),
         }
@@ -703,6 +723,7 @@ async def search_health_check(
     """
     Health check for all search functionality including hybrid search
     """
+    organization_id = _require_org_id(current_user)
     try:
         health_status = {
             "status": "healthy",
@@ -720,7 +741,7 @@ async def search_health_check(
             ft_result = fulltext_search_service.search(
                 search_request=ft_query,
                 user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=organization_id,
             )
             ft_time_ms = (time.time() - start_time) * 1000
             health_status["services"]["fulltext"] = {
@@ -745,7 +766,7 @@ async def search_health_check(
                 hybrid_search_service.search,
                 search_request=hybrid_query,
                 user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=organization_id,
             )
             hybrid_time_ms = (time.time() - start_time) * 1000
             health_status["services"]["hybrid"] = {
@@ -802,7 +823,7 @@ async def search_health_check(
                 knowledge_graph_service.search,
                 search_request=kg_query,
                 user_id=str(current_user.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=organization_id,
             )
             kg_time_ms = (time.time() - start_time) * 1000
             health_status["external_services"]["neo4j"] = {

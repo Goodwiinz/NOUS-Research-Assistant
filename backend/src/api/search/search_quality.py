@@ -229,7 +229,13 @@ async def get_quality_analytics(
         )
 
         if "error" in analytics:
-            raise HTTPException(status_code=500, detail=analytics["error"])
+            # The service puts str(e) under "error"; keep it in logs only.
+            logger.error(
+                "Quality analytics failed for organization %s: %s",
+                current_user.organization_id,
+                analytics["error"],
+            )
+            raise HTTPException(status_code=500, detail="Internal server error")
 
         return QualityAnalyticsResponse(**analytics)
 
@@ -258,6 +264,13 @@ async def run_quality_benchmark(
         # could DoS the whole service. Admin-only + hard-capped + threadpool.
         if current_user.role.value != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
+        # Admin is a role boundary, not a tenant boundary: an org-less caller
+        # would benchmark against the literal "None" tenant.
+        if not current_user.organization_id:
+            raise HTTPException(
+                status_code=403,
+                detail="No organization associated with this account",
+            )
         if len(request.test_queries) > 10:
             raise HTTPException(
                 status_code=400, detail="Maximum 10 test queries allowed per benchmark"
@@ -407,7 +420,8 @@ async def health_check():
             content={
                 "status": "unhealthy",
                 "service": "search_quality_evaluation",
-                "error": str(e),
+                # Unauthenticated endpoint: internals stay in logs, not bodies.
+                "error": "search quality service unavailable",
                 "timestamp": datetime.utcnow().isoformat(),
             },
         )

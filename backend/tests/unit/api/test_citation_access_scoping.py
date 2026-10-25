@@ -7,11 +7,13 @@ writes (linking arbitrary citations).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from starlette.routing import Match
 
 from src.api.research import citations as cit
 
@@ -57,6 +59,66 @@ async def test_load_accessible_citation_returns_when_owned(monkeypatch):
     assert await cit._load_accessible_citation(uuid4(), _user(), db) is citation
 
 
+def test_public_document_from_foreign_organization_is_not_accessible():
+    caller = _user()
+    document = SimpleNamespace(
+        is_deleted=False,
+        is_public=True,
+        uploaded_by_user_id=uuid4(),
+        organization_id=uuid4(),
+    )
+
+    assert not cit._document_is_accessible(document, caller)
+
+
+def test_message_visibility_does_not_bypass_foreign_citation_document():
+    caller = _user()
+    workspace = SimpleNamespace(is_deleted=False, owner_id=caller.id)
+    message = SimpleNamespace(
+        is_deleted=False,
+        thread=SimpleNamespace(
+            is_deleted=False,
+            conversation=SimpleNamespace(is_deleted=False, workspace=workspace),
+        ),
+    )
+    foreign_document = SimpleNamespace(
+        id=uuid4(),
+        is_deleted=False,
+        is_public=True,
+        uploaded_by_user_id=uuid4(),
+        organization_id=uuid4(),
+    )
+    citation = SimpleNamespace(
+        is_deleted=False,
+        document_id=foreign_document.id,
+        document=foreign_document,
+        message=message,
+    )
+
+    assert not cit._citation_is_accessible(citation, caller)
+
+
+def test_documentless_citation_keeps_visible_message_access():
+    caller = _user()
+    citation = SimpleNamespace(
+        is_deleted=False,
+        document_id=None,
+        document=None,
+        message=SimpleNamespace(
+            is_deleted=False,
+            thread=SimpleNamespace(
+                is_deleted=False,
+                conversation=SimpleNamespace(
+                    is_deleted=False,
+                    workspace=SimpleNamespace(is_deleted=False, owner_id=caller.id),
+                ),
+            ),
+        ),
+    )
+
+    assert cit._citation_is_accessible(citation, caller)
+
+
 async def test_list_relationships_requires_anchor():
     db = _db_returning(None)
     with pytest.raises(HTTPException) as exc:
@@ -82,3 +144,19 @@ async def test_citation_graph_requires_anchor():
             db=db,
         )
     assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize("endpoint", ["relationships", "graph"])
+async def test_static_citation_routes_are_not_shadowed_by_citation_id(endpoint):
+    scope = {
+        "type": "http",
+        "path": f"/api/v1/citations/{endpoint}",
+        "method": "GET",
+        "root_path": "",
+    }
+
+    first_match = next(
+        route for route in cit.router.routes if route.matches(scope)[0] == Match.FULL
+    )
+
+    assert first_match.path == f"/api/v1/citations/{endpoint}"

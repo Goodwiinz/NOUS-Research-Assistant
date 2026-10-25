@@ -107,9 +107,13 @@ def _message_is_accessible(message: object, current_user: User) -> bool:
 def _citation_is_accessible(citation: Citation, current_user: User) -> bool:
     if getattr(citation, "is_deleted", False) is True:
         return False
-    return _document_is_accessible(
-        getattr(citation, "document", None), current_user
-    ) or _message_is_accessible(getattr(citation, "message", None), current_user)
+    # Mirror list_citations' SQL: a citation that names a document is governed
+    # by that document alone. Owning the chat message must not re-open a
+    # citation whose document is foreign or soft-deleted.
+    document = getattr(citation, "document", None)
+    if getattr(citation, "document_id", None) is not None or document is not None:
+        return _document_is_accessible(document, current_user)
+    return _message_is_accessible(getattr(citation, "message", None), current_user)
 
 
 async def _load_accessible_citation(
@@ -390,7 +394,9 @@ async def list_citations(
         )
 
 
-@router.get("/{citation_id}", response_model=CitationResponse)
+# ``:uuid`` keeps this from shadowing GET /relationships and /graph,
+# which are declared later in this module.
+@router.get("/{citation_id:uuid}", response_model=CitationResponse)
 async def get_citation(
     citation_id: UUID,
     current_user: User = Depends(get_current_user),
