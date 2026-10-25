@@ -265,3 +265,36 @@ def test_saturated_sources_raise_unavailable_without_fallback(
 
     with pytest.raises(HybridSearchUnavailableError):
         svc.search(_request(), "user-1", ORG_ID)
+
+
+def test_diagnostics_search_raises_unavailable_when_saturated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Research chat uses search_with_diagnostics: overload must not come
+    back as a NO_MATCH (zero-context) answer or start the fallback."""
+    from src.services.search.hybrid_search_service import HybridSearchUnavailableError
+
+    svc = HybridSearchService()
+    failed = SearchSourceResult(
+        source_type=SearchSourceType.FULLTEXT,
+        results=[],
+        search_time_ms=0,
+        total_available=0,
+        success=False,
+        error="search capacity exhausted",
+    )
+    monkeypatch.setattr(
+        svc,
+        "_execute_parallel_searches",
+        lambda *_a, **_k: {SearchSourceType.FULLTEXT: failed},
+    )
+
+    def _no_fallback(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("fallback must not run while saturated")
+
+    monkeypatch.setattr(svc, "_fallback_to_fulltext", _no_fallback)
+
+    with pytest.raises(HybridSearchUnavailableError):
+        svc.search_with_diagnostics(
+            search_request=_request(), user_id="user-1", organization_id=ORG_ID
+        )

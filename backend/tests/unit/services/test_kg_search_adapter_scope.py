@@ -64,6 +64,8 @@ def test_search_uses_indexed_org_filter_without_document_enumeration() -> None:
     db.query.assert_not_called()
     assert captured["organization_id"] == "org-1"
     assert captured.get("source_document_ids") is None
+    # Source-less entities are filtered in the query, before LIMIT.
+    assert captured["require_source_document"] is True
     assert [r.document_id for r in response.results] == ["doc-1"]
 
 
@@ -105,3 +107,23 @@ def test_search_without_organization_fails_closed() -> None:
 
     assert response.results == []
     assert response.total_results == 0
+
+
+@pytest.mark.parametrize("query", ["alice", ""])
+def test_require_source_document_filters_before_limit(query: str) -> None:
+    """The filter is in the Cypher WHERE, so LIMIT counts only entities that
+    can be mapped to a document (fulltext and list/CONTAINS paths)."""
+    from unittest.mock import patch
+
+    session = MagicMock()
+    session.__enter__.return_value = session
+    session.run.return_value = []
+
+    with patch.object(KnowledgeGraphService, "get_session", return_value=session):
+        KnowledgeGraphService().search_entities(
+            query, limit=5, organization_id="org-1", require_source_document=True
+        )
+
+    cypher = session.run.call_args.args[0]
+    where = cypher[: cypher.index("LIMIT")]
+    assert "e.source_document_id IS NOT NULL" in where

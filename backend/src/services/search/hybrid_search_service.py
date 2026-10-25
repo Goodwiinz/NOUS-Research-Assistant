@@ -57,6 +57,26 @@ class HybridSearchUnavailableError(RuntimeError):
     """
 
 
+def _raise_if_all_sources_failed(source_results: Dict[Any, Any]) -> None:
+    """Refuse to fuse an empty page that would read as a genuine NO_MATCH.
+
+    Every source out of capacity/time → HybridSearchUnavailableError (callers
+    re-raise it past their full-text fallback, so a saturated pool gets no
+    extra work). Every source failed otherwise → RuntimeError, which the
+    callers' handlers turn into the full-text fallback.
+    """
+    if not source_results or any(r.success for r in source_results.values()):
+        return
+    if any(
+        r.error in (SOURCE_CAPACITY_EXHAUSTED, SOURCE_TIMED_OUT)
+        for r in source_results.values()
+    ):
+        raise HybridSearchUnavailableError(
+            "hybrid search sources exhausted capacity or deadline"
+        )
+    raise RuntimeError("all hybrid search sources failed")
+
+
 class SearchSourceType(Enum):
     """Source types for search results"""
 
@@ -207,18 +227,7 @@ class HybridSearchService:
             source_results = self._execute_parallel_searches(
                 search_request, search_sources, user_id, organization_id, db
             )
-            # Every source failed: an empty fused page would read as a genuine
-            # NO_MATCH. Out of capacity/time → surface it (no extra work while
-            # saturated). Any other failure → the full-text fallback below.
-            if source_results and not any(r.success for r in source_results.values()):
-                if any(
-                    r.error in (SOURCE_CAPACITY_EXHAUSTED, SOURCE_TIMED_OUT)
-                    for r in source_results.values()
-                ):
-                    raise HybridSearchUnavailableError(
-                        "hybrid search sources exhausted capacity or deadline"
-                    )
-                raise RuntimeError("all hybrid search sources failed")
+            _raise_if_all_sources_failed(source_results)
 
             # Fuse and rank results
             fused_results = self._fuse_search_results(source_results, search_request)
@@ -336,6 +345,7 @@ class HybridSearchService:
             source_results = self._execute_parallel_searches(
                 search_request, search_sources, user_id, organization_id, db
             )
+            _raise_if_all_sources_failed(source_results)
 
             for source_type, source_result in source_results.items():
                 scores = [r.relevance_score for r in source_result.results]
@@ -477,6 +487,8 @@ class HybridSearchService:
 
             return response, trace
 
+        except HybridSearchUnavailableError:
+            raise
         except Exception as e:
             logger.error(f"Error in search_with_diagnostics: {e}")
             trace.total_time_ms = round((time.time() - start_time) * 1000, 2)
