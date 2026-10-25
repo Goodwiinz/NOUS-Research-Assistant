@@ -130,3 +130,27 @@ async def test_search_documents_forwards_real_org(
         db=MagicMock(),
     )
     assert seen["organization_id"] == "org-1"
+
+
+@pytest.mark.parametrize("route", ["search_documents", "hybrid_search"])
+async def test_saturated_hybrid_search_returns_503(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    """Out-of-capacity hybrid search is a retryable 503, not a 500 or an
+    empty 200 that looks like NO_MATCH."""
+    from src.services.search.hybrid_search_service import HybridSearchUnavailableError
+
+    def _saturated(*_a: Any, **_k: Any) -> Any:
+        raise HybridSearchUnavailableError("saturated")
+
+    monkeypatch.setattr(search_api.hybrid_search_service, "search", _saturated)
+
+    with pytest.raises(HTTPException) as exc:
+        await getattr(search_api, route)(
+            search_request=SearchQuery(query="hello", search_type=SearchType.HYBRID),
+            background_tasks=BackgroundTasks(),
+            current_user=_user("org-1"),
+            db=MagicMock(),
+        )
+    assert exc.value.status_code == 503
+    assert exc.value.headers == {"Retry-After": "5"}

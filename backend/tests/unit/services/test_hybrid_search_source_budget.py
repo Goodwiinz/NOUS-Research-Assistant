@@ -215,7 +215,7 @@ def test_all_sources_failed_takes_fulltext_fallback(
         search_time_ms=0,
         total_available=0,
         success=False,
-        error="search capacity exhausted",
+        error="neo4j driver error",
     )
     monkeypatch.setattr(
         svc,
@@ -233,3 +233,35 @@ def test_all_sources_failed_takes_fulltext_fallback(
 
     assert svc.search(_request(), "user-1", ORG_ID) is sentinel
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("error", ["search capacity exhausted", "search timed out"])
+def test_saturated_sources_raise_unavailable_without_fallback(
+    monkeypatch: pytest.MonkeyPatch, error: str
+) -> None:
+    """Out of capacity/deadline must not start the unbounded full-text
+    fallback; it surfaces as HybridSearchUnavailableError (route → 503)."""
+    from src.services.search.hybrid_search_service import HybridSearchUnavailableError
+
+    svc = HybridSearchService()
+    failed = SearchSourceResult(
+        source_type=SearchSourceType.FULLTEXT,
+        results=[],
+        search_time_ms=0,
+        total_available=0,
+        success=False,
+        error=error,
+    )
+    monkeypatch.setattr(
+        svc,
+        "_execute_parallel_searches",
+        lambda *_a, **_k: {SearchSourceType.FULLTEXT: failed},
+    )
+
+    def _no_fallback(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("fallback must not run while saturated")
+
+    monkeypatch.setattr(svc, "_fallback_to_fulltext", _no_fallback)
+
+    with pytest.raises(HybridSearchUnavailableError):
+        svc.search(_request(), "user-1", ORG_ID)

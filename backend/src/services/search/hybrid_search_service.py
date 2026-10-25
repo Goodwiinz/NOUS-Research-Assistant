@@ -42,6 +42,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Source failures that mean "out of capacity / out of time", as opposed to a
+# source erroring. A request that hit these must not start more work.
+SOURCE_CAPACITY_EXHAUSTED = "search capacity exhausted"
+SOURCE_TIMED_OUT = "search timed out"
+
+
+class HybridSearchUnavailableError(RuntimeError):
+    """Every source was refused admission or ran out of the request deadline.
+
+    Raised instead of returning an empty page (indistinguishable from a real
+    NO_MATCH) and instead of the full-text fallback (which would run outside
+    the admission limit while the service is saturated). Routes map it to 503.
+    """
+
 
 class SearchSourceType(Enum):
     """Source types for search results"""
@@ -193,11 +207,17 @@ class HybridSearchService:
             source_results = self._execute_parallel_searches(
                 search_request, search_sources, user_id, organization_id, db
             )
-            # Every source refused, timed out or errored: an empty fused page
-            # would read as a genuine NO_MATCH. Take the full-text fallback
-            # below instead, so the caller gets real results or a logged
-            # failure rather than a silent empty 200.
+            # Every source failed: an empty fused page would read as a genuine
+            # NO_MATCH. Out of capacity/time → surface it (no extra work while
+            # saturated). Any other failure → the full-text fallback below.
             if source_results and not any(r.success for r in source_results.values()):
+                if any(
+                    r.error in (SOURCE_CAPACITY_EXHAUSTED, SOURCE_TIMED_OUT)
+                    for r in source_results.values()
+                ):
+                    raise HybridSearchUnavailableError(
+                        "hybrid search sources exhausted capacity or deadline"
+                    )
                 raise RuntimeError("all hybrid search sources failed")
 
             # Fuse and rank results
@@ -249,6 +269,8 @@ class HybridSearchService:
                 deterministic_status="SUPPORTED" if final_results else "NO_MATCH",
             )
 
+        except HybridSearchUnavailableError:
+            raise
         except Exception as e:
             logger.error(f"Error performing hybrid search: {e}")
             # Fallback to full-text search if hybrid fails
@@ -576,7 +598,7 @@ class HybridSearchService:
                     "Hybrid search pool saturated; %s source not submitted",
                     source_type.value,
                 )
-                results[source_type] = _failed(source_type, "search capacity exhausted")
+                results[source_type] = _failed(source_type, SOURCE_CAPACITY_EXHAUSTED)
                 ordered.append((source_type, None))
                 continue
             try:
@@ -607,7 +629,7 @@ class HybridSearchService:
                     source_type.value,
                     self.request_timeout_seconds,
                 )
-                results[source_type] = _failed(source_type, "search timed out")
+                results[source_type] = _failed(source_type, SOURCE_TIMED_OUT)
             except Exception as e:
                 logger.error(f"Error in {source_type.value} search: {e}")
                 results[source_type] = _failed(source_type, str(e))

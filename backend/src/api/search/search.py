@@ -43,7 +43,10 @@ from src.models.search_schemas import (
 from src.models.user import User
 from src.services.infrastructure.azure_openai_service import azure_openai_service
 from src.services.search.fulltext_search_service import fulltext_search_service
-from src.services.search.hybrid_search_service import hybrid_search_service
+from src.services.search.hybrid_search_service import (
+    HybridSearchUnavailableError,
+    hybrid_search_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +294,12 @@ async def search_documents(
         # R2-M18: the VECTOR 400 above is an intentional client error — the
         # blanket except used to re-wrap it as a 500.
         raise
+    except HybridSearchUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Search is temporarily overloaded; please retry",
+            headers={"Retry-After": "5"},
+        )
     except Exception as e:
         logger.error(f"Error performing search: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -375,6 +384,12 @@ async def hybrid_search(
 
         return result
 
+    except HybridSearchUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Search is temporarily overloaded; please retry",
+            headers={"Retry-After": "5"},
+        )
     except Exception as e:
         logger.error(f"Error performing hybrid search: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
