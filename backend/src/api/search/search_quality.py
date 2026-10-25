@@ -11,6 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.api.search._tenancy import require_org_id as _require_org_id
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.models.search_schemas import SearchQuery, SearchResponse, SearchType
@@ -24,21 +25,6 @@ from src.services.search.search_quality_service import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _require_org_id(current_user: User) -> str:
-    """Resolve the caller's organization id, or 403.
-
-    ``User.organization_id`` is nullable and ``str(None)`` is ``"None"``,
-    which the quality services would treat as a tenant bucket.
-    """
-    org_id = getattr(current_user, "organization_id", None)
-    if not org_id:
-        raise HTTPException(
-            status_code=403,
-            detail="No organization associated with this account",
-        )
-    return str(org_id)
 
 
 router = APIRouter(prefix="/search-quality", tags=["search-quality"])
@@ -288,11 +274,7 @@ async def run_quality_benchmark(
             raise HTTPException(status_code=403, detail="Admin access required")
         # Admin is a role boundary, not a tenant boundary: an org-less caller
         # would benchmark against the literal "None" tenant.
-        if not current_user.organization_id:
-            raise HTTPException(
-                status_code=403,
-                detail="No organization associated with this account",
-            )
+        _require_org_id(current_user)
         if len(request.test_queries) > 10:
             raise HTTPException(
                 status_code=400, detail="Maximum 10 test queries allowed per benchmark"

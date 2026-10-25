@@ -25,6 +25,7 @@ from src.api.research.chat import (
     RetrievedContext,
     build_context_prompt,
 )
+from src.api.search._tenancy import require_org_id as _require_org_id
 from src.core.api_key_auth import APIKeyData, APIKeyUsageLog, get_api_key_data
 from src.core.database import get_db_sync
 from src.core.dependencies import get_current_user
@@ -51,23 +52,6 @@ from src.services.search.hybrid_search_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/search", tags=["search"])
-
-
-def _require_org_id(current_user: User) -> str:
-    """Resolve the caller's organization id, or 403.
-
-    ``User.organization_id`` is nullable; ``str(None)`` is the literal
-    ``"None"``, which the search services either treat as a shared tenant
-    bucket or (where they filter only ``if organization_id:``) cannot tell
-    apart from a real scope. Reject before any search service runs.
-    """
-    org_id = getattr(current_user, "organization_id", None)
-    if not org_id:
-        raise HTTPException(
-            status_code=403,
-            detail="No organization associated with this account",
-        )
-    return str(org_id)
 
 
 def _ensure_deterministic_response_fields(result: Any) -> SearchResponse:

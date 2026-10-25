@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from neo4j.exceptions import ServiceUnavailable as Neo4jServiceUnavailable
 from pydantic import BaseModel, Field
 
+from src.api.search._tenancy import require_org_id as _require_org_id
 from src.core.circuit_breaker import ServiceUnavailableError as CircuitBreakerError
 from src.core.database import get_db_sync
 from src.core.dependencies import get_current_user
@@ -55,27 +56,6 @@ from src.tasks.processing_tasks import kg_extract_entities_job, kg_merge_entitie
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/knowledge-graph", tags=["knowledge-graph"])
-
-
-def _require_org_id(current_user: User) -> str:
-    """Resolve the caller's organization id, or 403.
-
-    Retrieval routes (entity listing/search/traversal) and update/delete and
-    maintenance writes call this before touching the database or
-    ``knowledge_graph_service``. ``User.organization_id`` is
-    nullable and ``str(None)`` is the literal ``"None"``, which the service
-    would otherwise treat as a tenant; never fall through to an unscoped or
-    phantom-tenant operation when the caller has no organization. Call it
-    outside the handler's generic ``except Exception`` block (or re-raise
-    ``HTTPException``) so the 403 is not rewritten as a 500.
-    """
-    org_id = getattr(current_user, "organization_id", None)
-    if not org_id:
-        raise HTTPException(
-            status_code=403,
-            detail="No organization associated with this account",
-        )
-    return str(org_id)
 
 
 def _get_org_document_ids(db, organization_id) -> List[str]:
